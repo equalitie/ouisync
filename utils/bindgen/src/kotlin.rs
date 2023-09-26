@@ -35,15 +35,12 @@ fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()
     // decode
     writeln!(out, "    companion object {{")?;
 
-    writeln!(
-        out,
-        "        fun decode(n: {repr}): {name} = when (n.toInt()) {{"
-    )?;
+    writeln!(out, "        fun decode(n: {repr}): {name} = when (n) {{")?;
 
     for variant in &value.variants {
         writeln!(
             out,
-            "            {} -> {}",
+            "            {}.to{repr}() -> {}",
             variant.value,
             AsShoutySnakeCase(&variant.name)
         )?;

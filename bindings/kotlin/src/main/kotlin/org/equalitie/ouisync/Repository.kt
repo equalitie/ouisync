@@ -1,6 +1,6 @@
 package org.equalitie.ouisync
 
-class Repository private constructor(private val handle: Long, private val client: Client) {
+class Repository private constructor(internal val handle: Long, internal val client: Client) {
     companion object {
         suspend fun create(
             session: Session,
@@ -110,4 +110,11 @@ class Repository private constructor(private val handle: Long, private val clien
             return null
         }
     }
+
+    /**
+     * Move the entry (file or directory) from src to dst
+     */
+    suspend fun moveEntry(src: String, dst: String) =
+        client.invoke(RepositoryMoveEntry(handle, src, dst))
+
 }

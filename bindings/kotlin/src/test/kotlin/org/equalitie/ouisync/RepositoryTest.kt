@@ -1,7 +1,7 @@
 package org.equalitie.ouisync
 
 import kotlinx.coroutines.test.runTest
-import java.io.File
+import java.io.File as JFile
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -12,12 +12,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class RepositoryTest {
-    lateinit var tempDir: File
+    lateinit var tempDir: JFile
     lateinit var session: Session
 
     @BeforeTest
     fun setup() {
-        tempDir = File(createTempDirectory().toString())
+        tempDir = JFile(createTempDirectory().toString())
         session = Session.create(
             configsPath = "$tempDir/config",
             logPath = "$tempDir/test.log",
@@ -143,6 +143,79 @@ class RepositoryTest {
         withRepo {
             assertEquals(EntryType.DIRECTORY, it.entryType("/"))
             assertNull(it.entryType("missing.txt"))
+        }
+    }
+
+    @Test
+    fun moveEntry() = runTest {
+        withRepo { repo ->
+            File.create(repo, "foo.txt").close()
+
+            repo.moveEntry("foo.txt", "bar.txt")
+            assertEquals(EntryType.FILE, repo.entryType("bar.txt"))
+            assertNull(repo.entryType("foo.txt"))
+        }
+    }
+
+    @Test
+    fun fileWriteRead() = runTest {
+        val charset = Charsets.UTF_8
+        val contentW = "hello world"
+
+        withRepo { repo ->
+            val fileW = File.create(repo, "test.txt")
+            fileW.write(0, contentW.toByteArray(charset))
+            fileW.flush()
+            fileW.close()
+
+            val fileR = File.open(repo, "test.txt")
+            val length = fileR.length()
+            val contentR = fileR.read(0, length).toString(charset)
+
+            assertEquals(contentW, contentR)
+        }
+    }
+
+    @Test
+    fun fileRemove() = runTest {
+        val name = "test.txt"
+
+        withRepo { repo ->
+            assertNull(repo.entryType(name))
+
+            val file = File.create(repo, name)
+            file.close()
+            assertEquals(EntryType.FILE, repo.entryType(name))
+
+            File.remove(repo, name)
+            assertNull(repo.entryType(name))
+        }
+    }
+
+    @Test
+    fun fileTruncate() = runTest {
+        withRepo { repo ->
+            val file = File.create(repo, "test.txt")
+            file.write(0, "hello world".toByteArray(Charsets.UTF_8))
+            file.flush()
+            assertEquals(11, file.length())
+
+            file.truncate(5)
+            assertEquals(5, file.length())
+            assertEquals("hello", file.read(0, 5).toString(Charsets.UTF_8))
+        }
+    }
+
+    @Test
+    fun fileProgress() = runTest {
+        withRepo { repo ->
+            val file = File.create(repo, "test.txt")
+            file.write(0, "hello world".toByteArray(Charsets.UTF_8))
+            file.flush()
+
+            val length = file.length()
+            val progress = file.progress()
+            assertEquals(length, progress)
         }
     }
 

@@ -162,11 +162,12 @@ internal class Failure(val error: Error) : Response {
             }
 
             try {
-                val code = ErrorCode.decode(unpacker.unpackShort())
+                val code = ErrorCode.decode(unpacker.unpackInt().toShort())
                 val message = unpacker.unpackString()
 
                 return Failure(Error(code, message))
             } catch (e: Exception) {
+                println("Failure.unpack e $e")
                 return Failure(INVALID_ERROR)
             }
         }
@@ -213,5 +214,4 @@ internal class InvalidNotification : InvalidMessage("invalid notification")
 // pub(crate) enum Response {
 //     Directory(Directory),
 //     StateMonitor(StateMonitor),
-//     Progress(Progress),
 // }

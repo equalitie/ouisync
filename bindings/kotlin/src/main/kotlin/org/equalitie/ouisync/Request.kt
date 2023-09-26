@@ -159,13 +159,17 @@ internal class RepositoryEntryType(val repository: Long, val path: String) : Req
             ),
         )
 }
-/*
-    RepositoryMoveEntry {
-        repository: Handle<RepositoryHolder>,
-        src: Utf8PathBuf,
-        dst: Utf8PathBuf,
-    },
-*/
+
+internal class RepositoryMoveEntry(val repository: Long, val src: String, val dst: String) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "src" to src,
+                "dst" to dst,
+            ),
+        )
+}
 
 internal class RepositoryIsDhtEnabled : ValueRequest<Long> {
     constructor(value: Long) : super(value)
@@ -236,38 +240,53 @@ internal class RepositoryMountAll : ValueRequest<String> {
         path: Utf8PathBuf,
         recursive: bool,
     },
-    FileOpen {
-        repository: Handle<RepositoryHolder>,
-        path: Utf8PathBuf,
-    },
-    FileCreate {
-        repository: Handle<RepositoryHolder>,
-        path: Utf8PathBuf,
-    },
-    FileRemove {
-        repository: Handle<RepositoryHolder>,
-        path: Utf8PathBuf,
-    },
-    FileRead {
-        file: Handle<FileHolder>,
-        offset: u64,
-        len: u64,
-    },
-    FileWrite {
-        file: Handle<FileHolder>,
-        offset: u64,
-        #[serde(with = "serde_bytes")]
-        data: Vec<u8>,
-    },
-    FileTruncate {
-        file: Handle<FileHolder>,
-        len: u64,
-    },
-    FileLen(Handle<FileHolder>),
-    FileProgress(Handle<FileHolder>),
-    FileFlush(Handle<FileHolder>),
-    FileClose(Handle<FileHolder>),
 */
+
+internal class FileOpen(val repository: Long, val path: String) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(mapOf("repository" to repository, "path" to path))
+}
+
+internal class FileCreate(val repository: Long, val path: String) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(mapOf("repository" to repository, "path" to path))
+}
+
+internal class FileRemove(val repository: Long, val path: String) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(mapOf("repository" to repository, "path" to path))
+}
+
+internal class FileRead(val file: Long, val offset: Long, val len: Long) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(mapOf("file" to file, "offset" to offset, "len" to len))
+}
+
+internal class FileWrite(val file: Long, val offset: Long, val data: ByteArray) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(mapOf("file" to file, "offset" to offset, "data" to data))
+}
+
+internal class FileTruncate(val file: Long, val len: Long) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(mapOf("file" to file, "len" to len))
+}
+
+internal class FileLen : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class FileProgress : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class FileFlush : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class FileClose : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
 
 internal class NetworkInit(
     val portForwardingEnabled: Boolean,
