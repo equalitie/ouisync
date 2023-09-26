@@ -19,23 +19,21 @@ mod transport;
 use crate::{
     dart::{Port, PortSender},
     error::{ErrorCode, ToErrorCode},
+    file::FileHolder,
     handler::Handler,
+    registry::Handle,
     state::State,
     transport::{ClientSender, Server},
     utils::UniqueHandle,
 };
-#[cfg(unix)]
-use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_bridge::logger::{LogFormat, Logger};
 use ouisync_lib::StateMonitor;
-#[cfg(unix)]
-use std::os::raw::c_int;
 use std::{
     ffi::CString,
     io, mem,
-    os::raw::{c_char, c_void},
+    os::raw::{c_char, c_int, c_void},
     path::PathBuf,
     ptr, slice,
     str::Utf8Error,
@@ -197,6 +195,28 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
 
         port_sender.send_result(port, result);
     });
+}
+
+/// Always returns `OperationNotSupported` error. Defined to avoid lookup errors on non-unix
+/// platforms. Do not use.
+///
+/// # Safety
+///
+/// - `session` must be a valid session handle.
+/// - `port` must be a valid dart native port.
+/// - `handle` and `fd` are not actually used and so have no safety requirements.
+#[cfg(not(unix))]
+#[no_mangle]
+pub unsafe extern "C" fn file_copy_to_raw_fd(
+    session: SessionHandle,
+    _handle: Handle<FileHolder>,
+    _fd: c_int,
+    port: Port<Result<(), ouisync_lib::Error>>,
+) {
+    session
+        .get()
+        .port_sender
+        .send_result(port, Err(ouisync_lib::Error::OperationNotSupported))
 }
 
 /// Deallocate string that has been allocated on the rust side
