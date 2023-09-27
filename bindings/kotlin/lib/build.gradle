@@ -1,61 +1,70 @@
 plugins {
-    // Apply the org.jetbrains.kotlin.jvm Plugin to add support for Kotlin.
-    id 'org.jetbrains.kotlin.jvm' version '1.9.0'
-
-    // Apply the java-library plugin for API and implementation separation.
-    id 'java-library'
-
-    // Formatter and linter
-    id 'com.diffplug.spotless' version '6.21.0'
+    id 'com.android.library'
+    id 'kotlin-android'
+    id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.3'
 }
 
-repositories {
-    // Use Maven Central for resolving dependencies.
-    mavenCentral()
+android {
+    compileSdkVersion 33
+    ndkVersion '25.2.9519653'
+
+    namespace 'org.equalitie.ouisync'
+
+    sourceSets {
+        main {
+            kotlin {
+                // Add directory with generated source files
+                srcDir layout.buildDirectory.dir('gen')
+            }
+        }
+    }
+
+    defaultConfig {
+        targetSdkVersion 33
+        minSdkVersion 21
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
 }
 
 dependencies {
-    implementation 'net.java.dev.jna:jna:5.13.0'
+    implementation 'net.java.dev.jna:jna:5.13.0@aar'
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
     implementation 'org.msgpack:msgpack-core:0.9.5'
 
-    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit5'
-    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
-    testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.9.3'
 
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // testImplementation 'org.jetbrains.kotlin:kotlin-test-junit5'
+    // testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    // testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.9.3'
+
+    // testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
-sourceSets {
-    main {
-        kotlin {
-            srcDir layout.buildDirectory.dir('gen')
-        }
-    }
-}
+// test {
+//     useJUnitPlatform()
 
-// Apply a specific Java toolchain to ease working on different environments.
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(11)
-    }
-}
+//     testLogging {
+//         showStandardStreams true
+//         exceptionFormat "full"
+//     }
+// }
 
-test {
-    useJUnitPlatform()
+cargo {
+    module = "$rootDir/../.."
+    libname = 'ouisync_ffi'
+    targets = ['arm', 'arm64', /* 'x86', */ 'x86_64']
+    profile = 'release'
 
-    testLogging {
-        showStandardStreams true
-        exceptionFormat "full"
-    }
-}
-
-spotless {
-    kotlin {
-        ktfmt()
-        ktlint()
-        // diktat()
-    }
+    extraCargoBuildArguments = ['--package', 'ouisync-ffi']
 }
 
 tasks.register('generateBindings', Exec) {
@@ -70,18 +79,19 @@ tasks.register('generateBindings', Exec) {
     }
 }
 
-tasks.named('compileKotlin') {
+tasks.named('preBuild') {
+    dependsOn 'cargoBuild'
     dependsOn 'generateBindings'
 }
 
-tasks.register('buildTestNative', Exec) {
-    description 'Build the native library'
-    workingDir "$rootDir/../.."
-    commandLine 'cargo', 'build', '--package', 'ouisync-ffi', '--lib'
-}
+// tasks.register('buildTestNative', Exec) {
+//     description 'Build the native library'
+//     workingDir "$rootDir/../.."
+//     commandLine 'cargo', 'build', '--package', 'ouisync-ffi', '--lib'
+// }
 
-tasks.named('test') {
-    dependsOn 'buildTestNative'
-    systemProperty('jna.library.path', "$rootDir/../../target/debug")
-}
+// tasks.named('test') {
+//     dependsOn 'buildTestNative'
+//     systemProperty('jna.library.path', "$rootDir/../../target/debug")
+// }
 

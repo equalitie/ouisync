@@ -9,7 +9,7 @@ class Session private constructor(private val handle: Long, internal val client:
     companion object {
         internal val bindings = Bindings.INSTANCE
 
-        fun create(configsPath: String, logPath: String): Session {
+        fun create(configsPath: String, logPath: String? = null): Session {
             val client = Client()
 
             val callback = object : Callback {
