@@ -58,23 +58,15 @@ spotless {
     }
 }
 
-tasks.register('prepareGeneratedDir') {
-    description 'Create directory for generated source files'
-
-    doLast {
-        mkdir layout.buildDirectory.dir('gen')
-    }
-}
-
 tasks.register('generateBindings', Exec) {
     description 'Generate bindings'
-    workingDir '../..'
+    workingDir "$rootDir/../.."
     commandLine 'cargo', 'run', '--package', 'ouisync-bindgen', '--', '--language', 'kotlin'
 
-    dependsOn 'prepareGeneratedDir'
-
     doFirst {
-        standardOutput = new FileOutputStream(layout.buildDirectory.file('gen/Bindings.kt').get().getAsFile())
+        def dir = layout.buildDirectory.dir('gen').get().getAsFile()
+        mkdir(dir)
+        standardOutput = new FileOutputStream("$dir/Bindings.kt")
     }
 }
 
@@ -84,12 +76,12 @@ tasks.named('compileKotlin') {
 
 tasks.register('buildTestNative', Exec) {
     description 'Build the native library'
-    workingDir '../..'
+    workingDir "$rootDir/../.."
     commandLine 'cargo', 'build', '--package', 'ouisync-ffi', '--lib'
 }
 
 tasks.named('test') {
     dependsOn 'buildTestNative'
-    systemProperty('jna.library.path', '../../target/debug')
+    systemProperty('jna.library.path', "$rootDir/../../target/debug")
 }
 
