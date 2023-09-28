@@ -35,7 +35,3 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 rmp-serde = { workspace = true }
-
-[features]
-# Use dart-specific API (ports instead of callbacks)
-dart = []

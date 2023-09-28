@@ -5,7 +5,7 @@
 
 use crate::sender::Sender;
 use bytes::Bytes;
-use std::{mem, os::raw::c_char};
+use std::mem;
 
 pub(crate) struct PortSender {
     post_c_object_fn: PostDartCObjectFn,
@@ -103,22 +103,43 @@ pub(crate) enum DartCObjectType {
     // ExternalTypedData = 8,
     // SendPort = 9,
     // Capability = 10,
-    // Unsupported = 11,
-    // NumberOfTypes = 12,
+    // NativePointer = 11,
+    // Unsupported = 12,
+    // NumberOfTypes = 13,
 }
 
 #[repr(C)]
 pub(crate) union DartCObjectValue {
-    as_bool: bool,
-    as_int32: i32,
-    as_int64: i64,
+    // as_bool: bool,
+    // as_int32: i32,
+    // as_int64: i64,
     // as_double: f64,
-    as_string: *mut c_char,
-    // ...
+    // as_string: *mut c_char,
+    // as_send_port: DartSendPort,
+    // as_capability: DartCapability,
+    // as_array: DartArray,
     as_typed_data: DartTypedData,
-    // NOTE: some variants omitted because we don't currently need them.
+    // as_external_typed_data: DartExternalTypedData,
+    // as_native_pointer: DartPointer,
     _align: [u64; 5usize],
 }
+
+// #[repr(C)]
+// struct DartSendPort {
+//     id: Port,
+//     origin_id: Port,
+// }
+
+// #[repr(C)]
+// struct DartCapability {
+//     id: i64,
+// }
+
+// #[repr(C)]
+// struct DartArray {
+//     length: isize,
+//     values: *mut *mut DartCObject,
+// }
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -146,3 +167,22 @@ pub(crate) enum DartTypedDataType {
     // Float32x4 = 12,
     // Invalid = 13,
 }
+
+// #[repr(C)]
+// struct DartExternalTypedData {
+//     ty: DartTypedDataType,
+//     length: isize, // in elements, not bytes
+//     data: *mut u8,
+//     peer: *mut c_void,
+//     callback: DartHandleFinalizer,
+// }
+
+// #[repr(C)]
+// struct DartPointer {
+//     ptr: isize,
+//     size: isize,
+//     callback: DartHandleFinalizer,
+// }
+
+// type DartHandleFinalizer =
+//     unsafe extern "C" fn(isolate_callback_data: *mut c_void, peer: *mut c_void);

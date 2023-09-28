@@ -2,9 +2,7 @@
 
 #[macro_use]
 mod utils;
-#[cfg(not(feature = "dart"))]
 mod c;
-#[cfg(feature = "dart")]
 mod dart;
 mod directory;
 mod error;
@@ -23,27 +21,22 @@ mod state_monitor;
 mod transport;
 
 use crate::{
+    c::{Callback, CallbackSender},
+    dart::{Port, PortSender},
+    error::Error,
+    file::FileHolder,
     log::LogLevel,
+    registry::Handle,
+    sender::Sender,
     session::{SessionCreateResult, SessionHandle},
 };
-use std::{ffi::CString, os::raw::c_char, slice};
-
-#[cfg(feature = "dart")]
-use {
-    crate::{
-        dart::{Port, PortSender},
-        error::Error,
-        file::FileHolder,
-        registry::Handle,
-        sender::Sender,
-    },
-    std::os::raw::{c_int, c_void},
+use std::{
+    ffi::CString,
+    os::raw::{c_char, c_int, c_void},
+    slice,
 };
 
-#[cfg(not(feature = "dart"))]
-use crate::c::{Callback, CallbackSender};
-
-/// Creates a ouisync session
+/// Creates a ouisync session (common C-like API)
 ///
 /// # Safety
 ///
@@ -51,7 +44,6 @@ use crate::c::{Callback, CallbackSender};
 /// - `context` must be a valid pointer to a value that outlives the `Session` and that is safe
 ///   to be sent to other threads or null.
 /// - `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
-#[cfg(not(feature = "dart"))]
 #[no_mangle]
 pub unsafe extern "C" fn session_create(
     configs_path: *const c_char,
@@ -63,7 +55,7 @@ pub unsafe extern "C" fn session_create(
     session::create(configs_path, log_path, sender)
 }
 
-/// Creates a ouisync session
+/// Creates a ouisync session (dart-specific API)
 ///
 /// # Safety
 ///
@@ -71,9 +63,8 @@ pub unsafe extern "C" fn session_create(
 /// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function cast to
 ///   `Pointer<void>` (the casting is necessary to work around limitations of the binding
 ///   generators)
-#[cfg(feature = "dart")]
 #[no_mangle]
-pub unsafe extern "C" fn session_create(
+pub unsafe extern "C" fn session_create_dart(
     configs_path: *const c_char,
     log_path: *const c_char,
     post_c_object_fn: *const c_void,
@@ -125,7 +116,7 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
     session.release().shutdown_network_and_close();
 }
 
-/// Copy the file contents into the provided raw file descriptor.
+/// Copy the file contents into the provided raw file descriptor (dart-specific API).
 ///
 /// This function takes ownership of the file descriptor and closes it when it finishes. If the
 /// caller needs to access the descriptor afterwards (or while the function is running), he/she
@@ -138,9 +129,9 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
 /// - `fd` must be a valid and open file descriptor
 /// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
 /// - `port` must be a valid dart native port
-#[cfg(all(unix, feature = "dart"))]
+#[cfg(unix)]
 #[no_mangle]
-pub unsafe extern "C" fn file_copy_to_raw_fd(
+pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     session: SessionHandle,
     handle: Handle<FileHolder>,
     fd: c_int,
@@ -177,9 +168,9 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
 /// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
 /// - `port` must be a valid dart native port.
 /// - `session`, `handle` and `fd` are not actually used and so have no safety requirements.
-#[cfg(all(not(unix), feature = "dart"))]
+#[cfg(not(unix))]
 #[no_mangle]
-pub unsafe extern "C" fn file_copy_to_raw_fd(
+pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     _session: SessionHandle,
     _handle: Handle<FileHolder>,
     _fd: c_int,
@@ -192,7 +183,6 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
     ))
 }
 
-#[cfg(feature = "dart")]
 fn encode_error(error: &Error) -> bytes::Bytes {
     use bytes::{BufMut, BytesMut};
 
