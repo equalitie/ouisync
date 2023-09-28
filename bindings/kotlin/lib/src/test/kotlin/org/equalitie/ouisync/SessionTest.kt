@@ -1,22 +1,22 @@
 package org.equalitie.ouisync
 
-import kotlinx.coroutines.test.runTest
 import java.io.File
 import kotlin.io.path.createTempDirectory
-import kotlin.test.AfterTest
-import kotlin.test.BeforeTest
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
 
 class SessionTest {
     lateinit var tempDir: File
     lateinit var session: Session
 
-    @BeforeTest
+    @Before
     fun setup() {
         tempDir = File(createTempDirectory().toString())
         session = Session.create(
@@ -25,7 +25,7 @@ class SessionTest {
         )
     }
 
-    @AfterTest
+    @After
     fun teardown() {
         session.close()
         tempDir.deleteRecursively()

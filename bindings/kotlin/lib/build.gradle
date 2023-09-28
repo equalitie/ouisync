@@ -32,31 +32,33 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+
+    testOptions {
+        unitTests.all {
+            testLogging {
+                showStandardStreams true
+                exceptionFormat "full"
+            }
+        }
+    }
 }
 
 dependencies {
-    implementation 'net.java.dev.jna:jna:5.13.0@aar'
+    def jna = 'net.java.dev.jna:jna:5.13.0'
+
+    // We want the 'aar' version so the 'jnidispatch' lib gets bundled into the resulting aar.
+    implementation "${jna}@aar"
+
+    // For test we also want the non-aar version so the 'jnidispatch' lib gets put on the classpath
+    testImplementation jna
+
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
     implementation 'org.msgpack:msgpack-core:0.9.5'
 
-
-
-    // testImplementation 'org.jetbrains.kotlin:kotlin-test-junit5'
-    // testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
-    // testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.9.3'
-
-    // testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation "junit:junit:4.13"
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
 }
-
-// test {
-//     useJUnitPlatform()
-
-//     testLogging {
-//         showStandardStreams true
-//         exceptionFormat "full"
-//     }
-// }
 
 cargo {
     module = "$rootDir/../.."
@@ -79,19 +81,33 @@ tasks.register('generateBindings', Exec) {
     }
 }
 
-tasks.named('preBuild') {
-    dependsOn 'cargoBuild'
-    dependsOn 'generateBindings'
+tasks.register('cargoBuildUnitTest', Exec) {
+    description 'Build the native library for unit tests'
+    workingDir "$rootDir/../.."
+    commandLine 'cargo', 'build', '--package', 'ouisync-ffi', '--lib'
 }
 
-// tasks.register('buildTestNative', Exec) {
-//     description 'Build the native library'
-//     workingDir "$rootDir/../.."
-//     commandLine 'cargo', 'build', '--package', 'ouisync-ffi', '--lib'
-// }
+afterEvaluate {
+    android.libraryVariants.each {
+        def variant  = it.name.capitalize()
 
-// tasks.named('test') {
-//     dependsOn 'buildTestNative'
-//     systemProperty('jna.library.path', "$rootDir/../../target/debug")
-// }
+        // Generate bindings before compiling the kotlin sources. This happens during both
+        // 'assemble' and 'test'.
+        tasks.named("compile${variant}Kotlin") {
+            dependsOn 'generateBindings'
+        }
 
+        // Build the native library for tha target android platforms. This happens only during
+        // 'assemble'
+        tasks.named("merge${variant}JniLibFolders") {
+            dependsOn 'cargoBuild'
+        }
+
+        // Built the native library for the host platform and set 'jna.library.path' to point to
+        // it. This happens only during 'test'.
+        tasks.named("test${variant}UnitTest") {
+            dependsOn 'cargoBuildUnitTest'
+            systemProperty('jna.library.path', "$rootDir/../../target/debug")
+        }
+    }
+}
