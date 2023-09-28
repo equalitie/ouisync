@@ -98,3 +98,62 @@ jobs:
           command: clippy
           args: --package ouisync --target aarch64-linux-android --all-targets --no-deps -- -Dwarnings
           use-cross: true
+
+  build_and_test_kotlin_bindings:
+    name: build and test kolin bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+
+      - name: Add rust targets
+        run: rustup target add x86_64-linux-android armv7-linux-androideabi aarch64-linux-android
+
+      - name: Setup java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup gradle
+        uses: gradle/gradle-build-action@v2
+
+      - name: Install dependencies
+        # NOTE: fuse isn't used by the bindings themselves but it's required for the unit tests
+        # because they use the linux version of the ouisync_ffi library, not the android one and
+        # the linux version does currently unconditionally depend on fuse.
+        run: sudo apt-get install libfuse-dev
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: Cache gradle artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+
+      - name: Run unit tests
+        run: cd bindings/kotlin; ./gradlew lib:test
+
+      - name: Build the example app
+        run: cd bindings/kotlin; ./gradlew example:assembleDebug
+
