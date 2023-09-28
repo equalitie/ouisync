@@ -22,7 +22,7 @@ mod transport;
 
 use crate::{
     c::{Callback, CallbackSender},
-    dart::{Port, PortSender},
+    dart::{Port, PortSender, PostDartCObjectFn},
     error::Error,
     file::FileHolder,
     log::LogLevel,
@@ -32,7 +32,7 @@ use crate::{
 };
 use std::{
     ffi::CString,
-    os::raw::{c_char, c_int, c_void},
+    os::raw::{c_char, c_int},
     slice,
 };
 
@@ -60,17 +60,15 @@ pub unsafe extern "C" fn session_create(
 /// # Safety
 ///
 /// - `configs_path` and `log_path` must be pointers to nul-terminated utf-8 encoded strings.
-/// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function cast to
-///   `Pointer<void>` (the casting is necessary to work around limitations of the binding
-///   generators)
+/// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
 #[no_mangle]
 pub unsafe extern "C" fn session_create_dart(
     configs_path: *const c_char,
     log_path: *const c_char,
-    post_c_object_fn: *const c_void,
+    post_c_object_fn: PostDartCObjectFn,
     port: Port,
 ) -> SessionCreateResult {
-    let sender = PortSender::new(std::mem::transmute(post_c_object_fn), port);
+    let sender = PortSender::new(post_c_object_fn, port);
     session::create(configs_path, log_path, sender)
 }
 
@@ -135,7 +133,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     session: SessionHandle,
     handle: Handle<FileHolder>,
     fd: c_int,
-    post_c_object_fn: *const c_void,
+    post_c_object_fn: PostDartCObjectFn,
     port: Port,
 ) {
     use bytes::Bytes;
@@ -143,7 +141,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     use tokio::fs;
 
     let session = session.get();
-    let sender = PortSender::new(std::mem::transmute(post_c_object_fn), port);
+    let sender = PortSender::new(post_c_object_fn, port);
 
     let src = session.state.files.get(handle);
     let mut dst = fs::File::from_raw_fd(fd);
@@ -174,10 +172,10 @@ pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     _session: SessionHandle,
     _handle: Handle<FileHolder>,
     _fd: c_int,
-    post_c_object_fn: *const c_void,
+    post_c_object_fn: PostDartCObjectFn,
     port: Port,
 ) {
-    let sender = PortSender::new(std::mem::transmute(post_c_object_fn), port);
+    let sender = PortSender::new(post_c_object_fn, port);
     sender.send(encode_error(
         &ouisync_lib::Error::OperationNotSupported.into(),
     ))

@@ -34,11 +34,11 @@ impl Sender for PortSender {
     }
 }
 
-pub(crate) type Port = i64;
-pub(crate) type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;
+pub type Port = i64;
+pub type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;
 
 #[repr(C)]
-pub(crate) struct DartCObject {
+pub struct DartCObject {
     type_: DartCObjectType,
     value: DartCObjectValue,
 }
