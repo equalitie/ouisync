@@ -5,7 +5,11 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import java.io.Closeable
 
-class Session private constructor(private val handle: Long, internal val client: Client) : Closeable {
+class Session private constructor(
+    private val handle: Long,
+    internal val client: Client,
+    private val callback: Callback,
+) : Closeable {
     companion object {
         internal val bindings = Bindings.INSTANCE
 
@@ -32,7 +36,10 @@ class Session private constructor(private val handle: Long, internal val client:
             val errorCode = ErrorCode.decode(result.error_code)
 
             if (errorCode == ErrorCode.OK) {
-                return Session(result.handle, client)
+                // Keep a reference to the callback in this session to ensure it doesn't get
+                // garbage collected prematurely. More info:
+                // https://github.com/java-native-access/jna/blob/master/www/CallbacksAndClosures.md
+                return Session(result.handle, client, callback)
             } else {
                 val message = result.error_message?.getString(0) ?: "unknown error"
                 bindings.free_string(result.error_message)
