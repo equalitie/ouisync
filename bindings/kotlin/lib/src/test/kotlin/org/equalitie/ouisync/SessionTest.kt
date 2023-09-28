@@ -1,16 +1,16 @@
 package org.equalitie.ouisync
 
-import java.io.File
-import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
-import org.junit.Assert.assertFalse
 import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.File
+import kotlin.io.path.createTempDirectory
 
 class SessionTest {
     lateinit var tempDir: File
