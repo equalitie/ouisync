@@ -1,0 +1,5 @@
+rootProject.name = 'ouisync-kotlin'
+
+include 'lib'
+include 'example'
+

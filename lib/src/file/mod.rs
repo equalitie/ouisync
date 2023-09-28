@@ -254,6 +254,7 @@ impl File {
 
         loop {
             let len = self.read(&mut buffer).await?;
+
             dst.write_all(&buffer[..len]).await.map_err(Error::Writer)?;
 
             if len < buffer.len() {
@@ -433,6 +434,29 @@ mod tests {
         file0.write_all(b"yip-yap").await.unwrap();
         assert_matches!(file1.write_all(b"ring-ding-ding").await, Err(Error::Locked));
         assert_matches!(file1.truncate(0), Err(Error::Locked));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn copy_to_writer() {
+        use tokio::{fs, io::AsyncReadExt};
+
+        let (base_dir, [branch]) = setup().await;
+        let src_content = b"hello world";
+
+        let mut src = branch.ensure_file_exists("src.txt".into()).await.unwrap();
+        src.write_all(src_content).await.unwrap();
+
+        let dst_path = base_dir.path().join("dst.txt");
+        let mut dst = fs::File::create(&dst_path).await.unwrap();
+        src.seek(SeekFrom::Start(0));
+        src.copy_to_writer(&mut dst).await.unwrap();
+        drop(dst);
+
+        let mut dst = fs::File::open(&dst_path).await.unwrap();
+        let mut dst_content = Vec::new();
+        dst.read_to_end(&mut dst_content).await.unwrap();
+
+        assert_eq!(dst_content, src_content);
     }
 
     async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {

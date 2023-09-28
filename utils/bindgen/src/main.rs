@@ -1,4 +1,5 @@
 mod dart;
+mod kotlin;
 mod parse;
 
 use clap::{Parser, ValueEnum};
@@ -22,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match options.language {
         Language::Dart => dart::generate(&source, &mut io::stdout())?,
-        Language::Kotlin => todo!(),
+        Language::Kotlin => kotlin::generate(&source, &mut io::stdout())?,
     }
 
     Ok(())

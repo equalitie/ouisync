@@ -20,6 +20,8 @@ impl Source {
 
 #[derive(Debug)]
 pub(crate) struct Enum {
+    // TODO: remove this `allow`
+    #[allow(unused)]
     pub repr: EnumRepr,
     pub variants: Vec<EnumVariant>,
 }

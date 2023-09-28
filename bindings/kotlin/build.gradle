@@ -1,0 +1,48 @@
+buildscript {
+    ext {
+        kotlin_version = '1.9.10'
+        compose_version = '1.5.1'
+    }
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.1'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+plugins {
+    id 'com.diffplug.spotless' version '6.21.0'
+}
+
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+subprojects {
+    layout.buildDirectory.set(rootProject.layout.buildDirectory.dir(name))
+}
+
+spotless {
+    kotlin {
+        target("**/*.kt")
+        targetExclude("**/build/**/*.kt")
+
+        ktfmt()
+        ktlint()
+    }
+}
+
+tasks.named('clean') {
+    doLast {
+        delete rootProject.layout.buildDirectory.get()
+    }
+}

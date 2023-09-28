@@ -1,100 +1,52 @@
 //! Dart API
 
-// Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
+// Part of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
-use crate::error::{ErrorCode, ToErrorCode};
+use crate::sender::Sender;
 use bytes::Bytes;
-use std::{ffi::CString, marker::PhantomData, mem, os::raw::c_char, result::Result};
+use std::mem;
+
+pub(crate) struct PortSender {
+    post_c_object_fn: PostDartCObjectFn,
+    port: Port,
+}
+
+impl PortSender {
+    /// # Safety
+    ///
+    /// `post_c_object_fn` must be a valid pointer to the `NativeApi.postCObject` dart function.
+    pub unsafe fn new(post_c_object_fn: PostDartCObjectFn, port: Port) -> Self {
+        Self {
+            post_c_object_fn,
+            port,
+        }
+    }
+}
+
+impl Sender for PortSender {
+    fn send(&self, msg: Bytes) {
+        // Safety: `self` must be created via `PortSender::new` and its safety instructions must be
+        // followed and `self.post_c_object_fn` can't be modified afterwards.
+        unsafe {
+            (self.post_c_object_fn)(self.port, &mut msg.into());
+        }
+    }
+}
+
+pub type Port = i64;
+pub type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;
 
 #[repr(C)]
-pub(crate) struct DartCObject {
+pub struct DartCObject {
     type_: DartCObjectType,
     value: DartCObjectValue,
 }
 
-impl From<()> for DartCObject {
-    fn from(_: ()) -> Self {
-        // Using `false` as a dummy value which should be ignored anyway when type is `Null`.
-        DartCObject {
-            type_: DartCObjectType::Null,
-            value: DartCObjectValue { as_bool: false },
-        }
-    }
-}
-
-impl From<u32> for DartCObject {
-    fn from(value: u32) -> Self {
-        DartCObject {
-            type_: DartCObjectType::Int32,
-            value: DartCObjectValue {
-                as_int32: value as i32,
-            },
-        }
-    }
-}
-
-impl From<u64> for DartCObject {
-    fn from(value: u64) -> Self {
-        DartCObject {
-            type_: DartCObjectType::Int64,
-            value: DartCObjectValue {
-                as_int64: value as i64,
-            },
-        }
-    }
-}
-
-impl From<u8> for DartCObject {
-    fn from(value: u8) -> Self {
-        DartCObject {
-            type_: DartCObjectType::Int32,
-            value: DartCObjectValue {
-                as_int32: value as i32,
-            },
-        }
-    }
-}
-
-impl From<u16> for DartCObject {
-    fn from(value: u16) -> Self {
-        DartCObject {
-            type_: DartCObjectType::Int32,
-            value: DartCObjectValue {
-                as_int32: value as i32,
-            },
-        }
-    }
-}
-
-impl From<bool> for DartCObject {
-    fn from(value: bool) -> Self {
-        DartCObject {
-            type_: DartCObjectType::Bool,
-            value: DartCObjectValue { as_bool: value },
-        }
-    }
-}
-
-impl From<String> for DartCObject {
-    fn from(value: String) -> Self {
-        DartCObject {
-            type_: DartCObjectType::String,
-            value: DartCObjectValue {
-                as_string: CString::new(value).unwrap_or_default().into_raw(),
-            },
-        }
-    }
-}
-
-impl From<ErrorCode> for DartCObject {
-    fn from(value: ErrorCode) -> Self {
-        Self::from(value as u32)
-    }
-}
-
-impl From<Vec<u8>> for DartCObject {
-    fn from(value: Vec<u8>) -> Self {
+// TODO: consider using `ExternallyTypedData` to avoid copies
+impl From<Bytes> for DartCObject {
+    fn from(value: Bytes) -> Self {
+        let value = Vec::from(value);
         let mut slice = value.into_boxed_slice();
         let ptr = slice.as_mut_ptr();
         let len = slice.len() as u64;
@@ -113,26 +65,9 @@ impl From<Vec<u8>> for DartCObject {
     }
 }
 
-impl From<Bytes> for DartCObject {
-    fn from(value: Bytes) -> Self {
-        Self::from(Vec::from(value))
-    }
-}
-
 impl Drop for DartCObject {
     fn drop(&mut self) {
         match self.type_ {
-            DartCObjectType::Null
-            | DartCObjectType::Bool
-            | DartCObjectType::Int32
-            | DartCObjectType::Int64 => (),
-            DartCObjectType::String => {
-                // SAFETY: When `type_` is `String` then `value` is a pointer to `CString`. This is
-                // guaranteed by construction.
-                unsafe {
-                    let _ = CString::from_raw(self.value.as_string);
-                }
-            }
             DartCObjectType::TypedData => {
                 // SAFETY: When `type_` is `TypedData` then `value` is a `DartTypedData`. This is
                 // guaranteed by construction.
@@ -157,33 +92,54 @@ impl Drop for DartCObject {
 #[repr(i32)]
 #[derive(Copy, Clone)]
 pub(crate) enum DartCObjectType {
-    Null = 0,
-    Bool = 1,
-    Int32 = 2,
-    Int64 = 3,
+    // Null = 0,
+    // Bool = 1,
+    // Int32 = 2,
+    // Int64 = 3,
     // Double = 4,
-    String = 5,
+    // String = 5,
     // Array = 6,
     TypedData = 7,
     // ExternalTypedData = 8,
     // SendPort = 9,
     // Capability = 10,
-    // Unsupported = 11,
-    // NumberOfTypes = 12,
+    // NativePointer = 11,
+    // Unsupported = 12,
+    // NumberOfTypes = 13,
 }
 
 #[repr(C)]
 pub(crate) union DartCObjectValue {
-    as_bool: bool,
-    as_int32: i32,
-    as_int64: i64,
+    // as_bool: bool,
+    // as_int32: i32,
+    // as_int64: i64,
     // as_double: f64,
-    as_string: *mut c_char,
-    // ...
+    // as_string: *mut c_char,
+    // as_send_port: DartSendPort,
+    // as_capability: DartCapability,
+    // as_array: DartArray,
     as_typed_data: DartTypedData,
-    // NOTE: some variants omitted because we don't currently need them.
+    // as_external_typed_data: DartExternalTypedData,
+    // as_native_pointer: DartPointer,
     _align: [u64; 5usize],
 }
+
+// #[repr(C)]
+// struct DartSendPort {
+//     id: Port,
+//     origin_id: Port,
+// }
+
+// #[repr(C)]
+// struct DartCapability {
+//     id: i64,
+// }
+
+// #[repr(C)]
+// struct DartArray {
+//     length: isize,
+//     values: *mut *mut DartCObject,
+// }
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -212,78 +168,21 @@ pub(crate) enum DartTypedDataType {
     // Invalid = 13,
 }
 
-pub(crate) type RawPort = i64;
-pub(crate) type PostDartCObjectFn = unsafe extern "C" fn(RawPort, *mut DartCObject) -> bool;
+// #[repr(C)]
+// struct DartExternalTypedData {
+//     ty: DartTypedDataType,
+//     length: isize, // in elements, not bytes
+//     data: *mut u8,
+//     peer: *mut c_void,
+//     callback: DartHandleFinalizer,
+// }
 
-/// Type-safe wrapper over native dart SendPort.
-#[repr(transparent)]
-pub struct Port<T>(RawPort, PhantomData<T>);
+// #[repr(C)]
+// struct DartPointer {
+//     ptr: isize,
+//     size: isize,
+//     callback: DartHandleFinalizer,
+// }
 
-impl<T> From<Port<T>> for RawPort {
-    fn from(typed: Port<T>) -> Self {
-        typed.0
-    }
-}
-
-// `Port` is `Send`, `Copy` and `Clone` regardless of whether `T` is because it doesn't
-// actually contain `T`:
-
-unsafe impl<T> Send for Port<T> {}
-
-impl<T> Clone for Port<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for Port<T> {}
-
-/// Utility for sending values to dart.
-#[derive(Copy, Clone)]
-pub(crate) struct PortSender {
-    post_c_object_fn: PostDartCObjectFn,
-}
-
-impl PortSender {
-    /// # Safety
-    ///
-    /// `post_c_object_fn` must be a valid pointer to the `NativeApi.postCObject` dart function.
-    pub unsafe fn new(post_c_object_fn: PostDartCObjectFn) -> Self {
-        Self { post_c_object_fn }
-    }
-
-    pub fn send<T>(&self, port: Port<T>, value: T)
-    where
-        T: Into<DartCObject>,
-    {
-        self.send_raw(port.into(), &mut value.into())
-    }
-
-    pub fn send_result<T, E>(&self, port: Port<Result<T, E>>, value: Result<T, E>)
-    where
-        T: Into<DartCObject>,
-        E: ToErrorCode + std::error::Error,
-    {
-        let port = port.into();
-
-        match value {
-            Ok(value) => {
-                self.send_raw(port, &mut ErrorCode::Ok.into());
-                self.send_raw(port, &mut value.into());
-            }
-            Err(error) => {
-                tracing::error!("ffi error: {:?}", error);
-                self.send_raw(port, &mut error.to_error_code().into());
-                self.send_raw(port, &mut error.to_string().into());
-            }
-        }
-    }
-
-    fn send_raw(&self, port: RawPort, value: &mut DartCObject) {
-        // Safety: `self` must ben created via `PortSender::new` and its safety instructions must
-        // be followed and `self.post_c_object_fn` can't be modified afterwards.
-        unsafe {
-            (self.post_c_object_fn)(port, value);
-        }
-    }
-}
+// type DartHandleFinalizer =
+//     unsafe extern "C" fn(isolate_callback_data: *mut c_void, peer: *mut c_void);

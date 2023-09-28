@@ -1,4 +1,4 @@
-use crate::SessionError;
+use crate::session::SessionError;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_bridge::{
     protocol::remote::ServerError,

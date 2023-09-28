@@ -2,111 +2,74 @@
 
 #[macro_use]
 mod utils;
+mod c;
 mod dart;
 mod directory;
 mod error;
 mod file;
 mod handler;
+mod log;
 mod network;
 mod protocol;
 mod registry;
 mod repository;
+mod sender;
+mod session;
 mod share_token;
 mod state;
 mod state_monitor;
 mod transport;
 
 use crate::{
-    dart::{Port, PortSender},
-    error::{ErrorCode, ToErrorCode},
+    c::{Callback, CallbackSender},
+    dart::{Port, PortSender, PostDartCObjectFn},
+    error::Error,
     file::FileHolder,
-    handler::Handler,
+    log::LogLevel,
     registry::Handle,
-    state::State,
-    transport::{ClientSender, Server},
-    utils::UniqueHandle,
+    sender::Sender,
+    session::{SessionCreateResult, SessionHandle},
 };
-use bytes::Bytes;
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-use ouisync_bridge::logger::{LogFormat, Logger};
-use ouisync_lib::StateMonitor;
 use std::{
     ffi::CString,
-    io, mem,
-    os::raw::{c_char, c_int, c_void},
-    path::PathBuf,
-    ptr, slice,
-    str::Utf8Error,
-    sync::Arc,
-    time::Duration,
-};
-use thiserror::Error;
-use tokio::{
-    runtime::{self, Runtime},
-    time,
+    os::raw::{c_char, c_int},
+    slice,
 };
 
-#[repr(C)]
-pub struct SessionCreateResult {
-    session: SessionHandle,
-    error_code: ErrorCode,
-    error_message: *const c_char,
-}
-
-impl From<Result<Session, SessionError>> for SessionCreateResult {
-    fn from(result: Result<Session, SessionError>) -> Self {
-        match result {
-            Ok(session) => Self {
-                session: SessionHandle::new(Box::new(session)),
-                error_code: ErrorCode::Ok,
-                error_message: ptr::null(),
-            },
-            Err(error) => Self {
-                session: SessionHandle::NULL,
-                error_code: error.to_error_code(),
-                error_message: utils::str_to_ptr(&error.to_string()),
-            },
-        }
-    }
-}
-
-/// Creates a ouisync session. `post_c_object_fn` should be a pointer to the dart's
-/// `NativeApi.postCObject` function cast to `Pointer<Void>` (the casting is necessary to work
-/// around limitations of the binding generators).
+/// Creates a ouisync session (common C-like API)
 ///
 /// # Safety
 ///
-/// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
-/// - `configs_path` must be a pointer to a nul-terminated utf-8 encoded string
+/// - `configs_path` and `log_path` must be pointers to nul-terminated utf-8 encoded strings.
+/// - `context` must be a valid pointer to a value that outlives the `Session` and that is safe
+///   to be sent to other threads or null.
+/// - `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
 #[no_mangle]
 pub unsafe extern "C" fn session_create(
-    post_c_object_fn: *const c_void,
     configs_path: *const c_char,
     log_path: *const c_char,
-    server_tx_port: Port<Bytes>,
+    context: *mut (),
+    callback: Callback,
 ) -> SessionCreateResult {
-    let port_sender = PortSender::new(mem::transmute(post_c_object_fn));
+    let sender = CallbackSender::new(context, callback);
+    session::create(configs_path, log_path, sender)
+}
 
-    let configs_path = match utils::ptr_to_str(configs_path) {
-        Ok(configs_path) => PathBuf::from(configs_path),
-        Err(error) => return Err(SessionError::from(error)).into(),
-    };
-
-    let log_path = match utils::ptr_to_maybe_str(log_path) {
-        Ok(log_path) => log_path.map(PathBuf::from),
-        Err(error) => return Err(SessionError::from(error)).into(),
-    };
-
-    let (server, client_tx) = Server::new(port_sender, server_tx_port);
-    let result = Session::create(configs_path, log_path, port_sender, client_tx);
-
-    if let Ok(session) = &result {
-        session
-            .runtime
-            .spawn(server.run(Handler::new(session.state.clone())));
-    }
-
-    result.into()
+/// Creates a ouisync session (dart-specific API)
+///
+/// # Safety
+///
+/// - `configs_path` and `log_path` must be pointers to nul-terminated utf-8 encoded strings.
+/// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
+#[no_mangle]
+pub unsafe extern "C" fn session_create_dart(
+    configs_path: *const c_char,
+    log_path: *const c_char,
+    post_c_object_fn: PostDartCObjectFn,
+    port: Port,
+) -> SessionCreateResult {
+    let sender = PortSender::new(post_c_object_fn, port);
+    session::create(configs_path, log_path, sender)
 }
 
 /// Closes the ouisync session.
@@ -148,21 +111,10 @@ pub unsafe extern "C" fn session_channel_send(
 /// `session` must be a valid session handle.
 #[no_mangle]
 pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHandle) {
-    let Session {
-        runtime,
-        state,
-        _logger,
-        ..
-    } = *session.release();
-
-    runtime.block_on(async move {
-        time::timeout(Duration::from_millis(500), state.network.shutdown())
-            .await
-            .unwrap_or(())
-    });
+    session.release().shutdown_network_and_close();
 }
 
-/// Copy the file contents into the provided raw file descriptor.
+/// Copy the file contents into the provided raw file descriptor (dart-specific API).
 ///
 /// This function takes ownership of the file descriptor and closes it when it finishes. If the
 /// caller needs to access the descriptor afterwards (or while the function is running), he/she
@@ -170,30 +122,39 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
 ///
 /// # Safety
 ///
-/// `session` must be a valid session handle, `handle` must be a valid file holder handle, `fd`
-/// must be a valid and open file descriptor and `port` must be a valid dart native port.
+/// - `session` must be a valid session handle
+/// - `handle` must be a valid file holder handle
+/// - `fd` must be a valid and open file descriptor
+/// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
+/// - `port` must be a valid dart native port
 #[cfg(unix)]
 #[no_mangle]
-pub unsafe extern "C" fn file_copy_to_raw_fd(
+pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     session: SessionHandle,
     handle: Handle<FileHolder>,
     fd: c_int,
-    port: Port<Result<(), ouisync_lib::Error>>,
+    post_c_object_fn: PostDartCObjectFn,
+    port: Port,
 ) {
-    use std::os::unix::io::FromRawFd;
+    use bytes::Bytes;
+    use std::{io::SeekFrom, os::fd::FromRawFd};
     use tokio::fs;
 
     let session = session.get();
-    let port_sender = session.port_sender;
+    let sender = PortSender::new(post_c_object_fn, port);
 
     let src = session.state.files.get(handle);
     let mut dst = fs::File::from_raw_fd(fd);
 
     session.runtime.spawn(async move {
         let mut src = src.file.lock().await;
+        src.seek(SeekFrom::Start(0));
         let result = src.copy_to_writer(&mut dst).await;
 
-        port_sender.send_result(port, result);
+        match result {
+            Ok(()) => sender.send(Bytes::new()),
+            Err(error) => sender.send(encode_error(&error.into())),
+        }
     });
 }
 
@@ -202,21 +163,31 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
 ///
 /// # Safety
 ///
-/// - `session` must be a valid session handle.
+/// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
 /// - `port` must be a valid dart native port.
-/// - `handle` and `fd` are not actually used and so have no safety requirements.
+/// - `session`, `handle` and `fd` are not actually used and so have no safety requirements.
 #[cfg(not(unix))]
 #[no_mangle]
-pub unsafe extern "C" fn file_copy_to_raw_fd(
-    session: SessionHandle,
+pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
+    _session: SessionHandle,
     _handle: Handle<FileHolder>,
     _fd: c_int,
-    port: Port<Result<(), ouisync_lib::Error>>,
+    post_c_object_fn: PostDartCObjectFn,
+    port: Port,
 ) {
-    session
-        .get()
-        .port_sender
-        .send_result(port, Err(ouisync_lib::Error::OperationNotSupported))
+    let sender = PortSender::new(post_c_object_fn, port);
+    sender.send(encode_error(
+        &ouisync_lib::Error::OperationNotSupported.into(),
+    ))
+}
+
+fn encode_error(error: &Error) -> bytes::Bytes {
+    use bytes::{BufMut, BytesMut};
+
+    let mut buffer = BytesMut::new();
+    buffer.put_u16(error.code as u16);
+    buffer.put_slice(error.message.as_bytes());
+    buffer.freeze()
 }
 
 /// Deallocate string that has been allocated on the rust side
@@ -270,71 +241,4 @@ pub unsafe extern "C" fn log_print(
         Ok(LogLevel::Trace) => tracing::trace!("{}", message),
         Err(_) => tracing::error!(level, "invalid log level"),
     }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
-#[repr(u8)]
-pub enum LogLevel {
-    Error = 1,
-    Warn = 2,
-    Info = 3,
-    Debug = 4,
-    Trace = 5,
-}
-
-pub struct Session {
-    pub(crate) runtime: Runtime,
-    pub(crate) state: Arc<State>,
-    client_sender: ClientSender,
-    pub(crate) port_sender: PortSender,
-    _logger: Logger,
-}
-
-impl Session {
-    pub(crate) fn create(
-        configs_path: PathBuf,
-        log_path: Option<PathBuf>,
-        port_sender: PortSender,
-        client_sender: ClientSender,
-    ) -> Result<Self, SessionError> {
-        let root_monitor = StateMonitor::make_root();
-
-        // Init logger
-        let logger = Logger::new(
-            log_path.as_deref(),
-            Some(root_monitor.clone()),
-            LogFormat::Human,
-        )
-        .map_err(SessionError::InitializeLogger)?;
-
-        // Create runtime
-        let runtime = runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(SessionError::InitializeRuntime)?;
-        let _enter = runtime.enter(); // runtime context is needed for some of the following calls
-
-        let state = Arc::new(State::new(configs_path, root_monitor));
-        let session = Session {
-            runtime,
-            state,
-            client_sender,
-            port_sender,
-            _logger: logger,
-        };
-
-        Ok(session)
-    }
-}
-
-pub type SessionHandle = UniqueHandle<Session>;
-
-#[derive(Debug, Error)]
-pub enum SessionError {
-    #[error("failed to initialize logger")]
-    InitializeLogger(#[source] io::Error),
-    #[error("failed to initialize runtime")]
-    InitializeRuntime(#[source] io::Error),
-    #[error("invalid utf8 string")]
-    InvalidUtf8(#[from] Utf8Error),
 }
