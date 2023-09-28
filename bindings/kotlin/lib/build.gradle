@@ -1,6 +1,7 @@
 plugins {
     id 'com.android.library'
     id 'kotlin-android'
+    id 'org.jetbrains.dokka' version '1.9.0'
     id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.3'
 }
 
