@@ -33,9 +33,7 @@ jobs:
         run: sudo apt-get install libfuse-dev
 
       - name: "Run clippy"
-        run: |
-          cargo clippy --all-targets --no-deps -- -Dwarnings
-          cargo clippy --package ouisync-ffi --features dart --no-deps -- -Dwarnings
+        run: cargo clippy --all-targets --no-deps -- -Dwarnings
 
       - name: "Run unit tests"
         run: cargo test --lib
