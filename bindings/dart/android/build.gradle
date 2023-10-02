@@ -1,0 +1,91 @@
+group 'ie.equalit.ouisync_plugin'
+version '1.0-SNAPSHOT'
+
+buildscript {
+    ext.kotlin_version = '1.8.20'
+    repositories {
+        google()
+        jcenter()
+
+        maven {
+            url "https://plugins.gradle.org/m2/"
+        }
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:7.4.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath "org.mozilla.rust-android-gradle:plugin:0.9.3"
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        jcenter()
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+apply plugin: 'org.mozilla.rust-android-gradle.rust-android'
+
+android {
+    compileSdkVersion 31
+    ndkVersion '25.2.9519653'
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+    defaultConfig {
+        minSdkVersion 21
+    }
+    buildTypes {
+        debug {
+            android.packagingOptions.doNotStrip '**.so'
+        }
+        profile {
+        }
+    }
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+    implementation 'androidx.annotation:annotation:1.0.2'
+}
+
+def abiTargets = {
+    if (project.hasProperty("target-platform")) {
+        // https://github.com/flutter/flutter/blob/37dbe030feb47cdf15f3d4c1921857dbbac8aedf/packages/flutter_tools/gradle/flutter.gradle#L78-L82
+        return project.property("target-platform").split(',').collect{
+            if (it == "android-arm") {
+                return "arm"
+            } else if (it == "android-arm64") {
+                return "arm64"
+            } else if (it == "android-x86") {
+                return "x86"
+            } else if (it == "android-x64") {
+                return "x86_64"
+            } else {
+                println("Unknown target platform: " + it)
+                System.exit(1)
+            }
+        }
+    }
+    else {
+        // NOTE: x86 is not added by default when invoking `flutter build aar`
+        // so we don't include it here neither.
+        return ["arm", "arm64", /* "x86", */ "x86_64"]
+    }
+}()
+
+cargo {
+    module = "../../.."
+    libname = "ouisync_ffi"
+    targets = abiTargets
+    profile = gradle.startParameter.taskNames.any{it.toLowerCase().contains("debug")} ? "debug" : "release"
+
+    extraCargoBuildArguments = ['-p', 'ouisync-ffi']
+}
+
+preBuild.dependsOn 'cargoBuild'

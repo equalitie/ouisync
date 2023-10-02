@@ -1,0 +1,17 @@
+.dart_tool/
+.packages
+.pub/
+build/
+ios/ouisync_bin/
+pubspec.lock
+
+.vscode/settings.json
+.vscode/launch.json
+.vscode/c_cpp_properties.json
+
+.idea/
+.idea/vcs.xml
+.idea/libraries/Flutter_Plugins.xml
+.idea/workspace.xml
+
+.DS_Store

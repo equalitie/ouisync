@@ -6,9 +6,27 @@ env:
   PROPTEST_CASES: 32
 
 jobs:
-  check_and_test_on_linux:
-    name: check and test (linux)
-    runs-on: ubuntu-latest
+  check_rust_crates:
+    name: check rust crates on ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        name: [android, linux, windows]
+        include:
+          - name: android
+            os: ubuntu-latest
+            cargo-dir: ~/.cargo
+            target: aarch64-linux-android
+
+          - name: linux
+            os: ubuntu-latest
+            cargo-dir: ~/.cargo
+
+          - name: windows
+            os: windows-latest
+            cargo-dir: ~\cargo
+
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
@@ -16,89 +34,67 @@ jobs:
           profile: minimal
           toolchain: stable
           components: clippy
+
+      - name: Add rust target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+
       - uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
+            ${{ matrix.cargo-dir }}/bin/
+            ${{ matrix.cargo-dir }}/registry/index/
+            ${{ matrix.cargo-dir }}/registry/cache/
+            ${{ matrix.cargo-dir }}/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
-      - name: "Install dependencies"
+      - name: Install system dependencies
+        if: matrix.name == 'linux'
         # NOTE: libfuse-dev is required only to build and run the ouisync
         # application. It is not required for building and using the ouisync
         # library.
         run: sudo apt-get install libfuse-dev
 
-      - name: "Run clippy"
-        run: cargo clippy --all-targets --no-deps -- -Dwarnings
+      - name: Run clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: >
+            --package ouisync
+            --package ouisync-bridge
+            --package ouisync-ffi
+            ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
+            --all-targets
+            --no-deps
+            -- -Dwarnings
+          use-cross: ${{ matrix.target != '' && 'true' || 'false' }}
 
-      - name: "Run unit tests"
-        run: cargo test --lib
+      - name: Run unit tests
+        if: matrix.name == 'linux'
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --lib
 
-      - name: "Run lib integration tests"
+      - name: Run lib integration tests
+        if: matrix.name == 'linux'
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --package ouisync --test gc --test network --test sync
         env:
           RUST_LOG: ouisync=debug,gc=debug,network=debug,sync=debug
-        run: cargo test -p ouisync --test gc --test network --test sync
 
-      - name: "Run cli integration tests"
-        run: cargo test -p ouisync-cli --test cli
+      - name: Run cli integration tests
+        if: matrix.name == 'linux'
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --package ouisync-cli --test cli
 
-  check_on_windows:
-    name: check (windows)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          components: clippy
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~\cargo\bin
-            ~\cargo\registry\index
-            ~\cargo\registry\cache
-            ~\cargo\git\db
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-      - uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --all-targets --no-deps -- -Dwarnings
-
-  check_on_android:
-    name: check (android)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          components: clippy
-          target: aarch64-linux-android
-          override: true
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-android-cargo-${{ hashFiles('**/Cargo.toml') }}
-      - uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --package ouisync --target aarch64-linux-android --all-targets --no-deps -- -Dwarnings
-          use-cross: true
-
-  build_and_test_kotlin_bindings:
-    name: build and test kolin bindings
+  check_kotlin_bindings:
+    name: check kolin bindings
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -121,7 +117,7 @@ jobs:
       - name: Setup gradle
         uses: gradle/gradle-build-action@v2
 
-      - name: Install dependencies
+      - name: Install system dependencies
         # NOTE: fuse isn't used by the bindings themselves but it's required for the unit tests
         # because they use the linux version of the ouisync_ffi library, not the android one and
         # the linux version does currently unconditionally depend on fuse.
@@ -144,14 +140,69 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('bindings/kotlin/**/*.gradle*', 'bindings/kotlin/**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      - name: Run spotless
+        working-directory: bindings/kotlin
+        run: ./gradlew spotlessCheck
+
+      - name: Run lint
+        working-directory: bindings/kotlin
+        run: ./gradlew lint
 
       - name: Run unit tests
-        run: cd bindings/kotlin; ./gradlew lib:test
+        working-directory: bindings/kotlin
+        run: ./gradlew lib:testDebugUnitTest
 
       - name: Build the example app
-        run: cd bindings/kotlin; ./gradlew example:assembleDebug
+        working-directory: bindings/kotlin
+        run: ./gradlew example:assembleDebug
+
+  check_dart_bindings:
+    name: check dart bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+            channel: 'stable'
+            cache: true
+
+      # Cache rust artifacts
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ouisync/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: Install system dependencies
+        run: sudo apt-get install libfuse-dev
+
+      - name: Get dart dependencies
+        working-directory: bindings/dart
+        run: flutter pub get
+
+      - name: Generate bindings
+        working-directory: bindings/dart
+        run: dart run util/bindgen.dart
+
+      - name: Analyze
+        working-directory: bindings/dart
+        run: flutter analyze
+
+      - name: Building the ouisync library for tests
+        run: cargo build -p ouisync-ffi --lib
+
+      - name: Run tests
+        working-directory: bindings/dart
+        env:
+          RUST_LOG: ouisync=debug,sqlx=warn
+        run: flutter test
 

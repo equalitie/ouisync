@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  package="ie.equalit.ouisync_plugin"
+  xmlns:tools="http://schemas.android.com/tools">
+
+  <application>
+    <provider
+      tools:replace="android:authorities"
+      android:name=".PipeProvider"
+      android:authorities="${applicationId}.pipe"
+      android:exported="true"/>
+  </application>
+</manifest>

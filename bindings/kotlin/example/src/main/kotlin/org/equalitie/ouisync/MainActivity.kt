@@ -8,12 +8,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import org.equalitie.ouisync.Session
 
 class MainActivity : ComponentActivity() {
@@ -60,10 +59,9 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ProtocolVersion(session: Session) {
-    val scope = rememberCoroutineScope()
     val (version, setVersion) = remember { mutableStateOf(0) }
 
-    scope.launch {
+    LaunchedEffect(true) {
         setVersion(session.currentProtocolVersion())
     }
 
