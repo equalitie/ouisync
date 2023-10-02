@@ -8,8 +8,6 @@ import 'package:flutter/foundation.dart' show kReleaseMode;
 
 export 'bindings.g.dart';
 
-import 'package:path/path.dart' as p;
-
 final bindings = Bindings(_defaultLib());
 
 typedef PostCObject = Int8 Function(Int64, Pointer<Dart_CObject>);
