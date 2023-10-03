@@ -28,7 +28,7 @@ blake3 = { version = "1.5.0", features = ["traits-preview"] }
 btdht = { workspace = true }
 camino = { workspace = true }
 chacha20 = "0.9.1"
-chrono = "0.4.24"
+chrono = "0.4.31"
 crossbeam-channel = "0.5.8"
 ed25519-dalek = { version = "1", features = ["serde"] }
 either = { version = "1.6.1", default-features = false }
