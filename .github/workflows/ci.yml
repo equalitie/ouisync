@@ -16,24 +16,22 @@ jobs:
         include:
           - name: android
             os: ubuntu-latest
+            cargo-command: cross
             cargo-dir: ~/.cargo
             target: aarch64-linux-android
 
           - name: linux
             os: ubuntu-latest
+            cargo-command: cargo
             cargo-dir: ~/.cargo
 
           - name: windows
             os: windows-latest
+            cargo-command: cargo
             cargo-dir: ~\cargo
 
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          components: clippy
+      - uses: actions/checkout@v4
 
       - name: Add rust target
         if: matrix.target != ''
@@ -57,53 +55,33 @@ jobs:
         run: sudo apt-get install libfuse-dev
 
       - name: Run clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: >
-            --package ouisync
-            --package ouisync-bridge
-            --package ouisync-ffi
-            ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
-            --all-targets
-            --no-deps
-            -- -Dwarnings
-          use-cross: ${{ matrix.target != '' && 'true' || 'false' }}
+        run: >
+          ${{ matrix.cargo-command }} clippy
+          --package ouisync --package ouisync-bridge --package ouisync-ffi
+          ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
+          --all-targets
+          --no-deps
+          -- -Dwarnings
 
       - name: Run unit tests
         if: matrix.name == 'linux'
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --lib
+        run: ${{ matrix.cargo-command }} test --lib
 
       - name: Run lib integration tests
         if: matrix.name == 'linux'
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --package ouisync --test gc --test network --test sync
+        run: ${{ matrix.cargo-command }} test --package ouisync --test gc --test network --test sync
         env:
           RUST_LOG: ouisync=debug,gc=debug,network=debug,sync=debug
 
       - name: Run cli integration tests
         if: matrix.name == 'linux'
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --package ouisync-cli --test cli
+        run: ${{ matrix.cargo-command }} test --package ouisync-cli --test cli
 
   check_kotlin_bindings:
-    name: check kolin bindings
+    name: check kotlin bindings
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
+      - uses: actions/checkout@v4
 
       - name: Add rust targets
         run: rustup target add x86_64-linux-android armv7-linux-androideabi aarch64-linux-android
@@ -195,7 +173,9 @@ jobs:
 
       - name: Analyze
         working-directory: bindings/dart
-        run: flutter analyze
+        run: |
+          dart analyze lib
+          dart analyze example
 
       - name: Building the ouisync library for tests
         run: cargo build -p ouisync-ffi --lib

@@ -41,7 +41,7 @@ typedef log_print_dart = void Function(int, Pointer<Char>, Pointer<Char>);
 typedef _free_string_c = Void Function(Pointer<Char>);
 typedef free_string_dart = void Function(Pointer<Char>);
 
-class SessionCreateResult extends Struct {
+final class SessionCreateResult extends Struct {
   @Uint64()
   external int session;
 

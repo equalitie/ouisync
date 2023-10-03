@@ -16,10 +16,7 @@ FetchContent_Declare(
 # Set any global configuration variables such as `Rust_TOOLCHAIN` before this line!
 FetchContent_MakeAvailable(Corrosion)
 
-# Need to resolve any symlinks in ${CMAKE_CURRENT_SOURCE_DIR} so the subsequent relative path
-# points to the correct location.
-file(REAL_PATH "" CMAKE_CURRENT_SOURCE_DIR_REAL BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-file(REAL_PATH "../../.." OUISYNC_DIR BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR_REAL})
+set(OUISYNC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ouisync")
 
 corrosion_import_crate(
   MANIFEST_PATH "${OUISYNC_DIR}/Cargo.toml"
