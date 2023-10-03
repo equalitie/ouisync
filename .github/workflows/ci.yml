@@ -54,6 +54,10 @@ jobs:
         # library.
         run: sudo apt-get install libfuse-dev
 
+      - name: Install cross
+        if: matrix.cargo-command == 'cross'
+        run: cargo install cross --force --git https://github.com/cross-rs/cross
+
       - name: Run clippy
         run: >
           ${{ matrix.cargo-command }} clippy
