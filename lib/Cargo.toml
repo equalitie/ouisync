@@ -27,7 +27,7 @@ bincode = "1.3"
 blake3 = { version = "1.5.0", features = ["traits-preview"] }
 btdht = { workspace = true }
 camino = { workspace = true }
-chacha20 = "0.9.0"
+chacha20 = "0.9.1"
 chrono = "0.4.24"
 crossbeam-channel = "0.5.8"
 ed25519-dalek = { version = "1", features = ["serde"] }
