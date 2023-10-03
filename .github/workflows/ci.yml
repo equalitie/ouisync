@@ -93,7 +93,7 @@ jobs:
           java-version: '17'
 
       - name: Setup gradle
-        uses: gradle/gradle-build-action@v2
+        uses: gradle/gradle-build-action@v2.4.2
 
       - name: Install system dependencies
         # NOTE: fuse isn't used by the bindings themselves but it's required for the unit tests
