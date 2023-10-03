@@ -25,7 +25,7 @@ rust-version = "1.65.0"
 
 [workspace.dependencies]
 async-trait = "0.1.73"
-btdht = { git = "https://github.com/equalitie/btdht.git", rev = "4b8dc478e3e5f011a45b8f50c424519019f7b70d" }
+btdht = { git = "https://github.com/equalitie/btdht.git", rev = "1d114b2" }
 bytes = "1.4.0"
 camino = "1.0.9"
 clap = { version = "4.1.8", features = ["derive"] }
@@ -40,7 +40,7 @@ tokio-rustls = "0.24.1"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_bytes = "0.11.8"
 thiserror = "1.0.31"
-tokio = { version = "1.28.2", default-features = false }
+tokio = { version = "1.32.0", default-features = false }
 tokio-stream = { version = "0.1.9", default-features = false }
 tokio-util = "0.7.4"
 tracing = { version = "0.1.37" }
