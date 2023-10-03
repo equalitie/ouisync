@@ -28,7 +28,7 @@ async-trait = "0.1.73"
 btdht = { git = "https://github.com/equalitie/btdht.git", rev = "1d114b2" }
 bytes = "1.5.0"
 camino = "1.1.6"
-clap = { version = "4.1.8", features = ["derive"] }
+clap = { version = "4.4.6", features = ["derive"] }
 futures-util = { version = "0.3.27", default-features = false }
 num_enum = { version = "0.5.11", default-features = false }
 once_cell = "1.12.0"
