@@ -305,8 +305,6 @@ async fn move_file_over_tombstone() {
     assert_matches!(repo.open_file("dst.txt").await, Ok(_));
 }
 
-// FIXME
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn move_file_over_existing_file() {
     let (_base_dir, repo) = setup().await;
@@ -383,8 +381,6 @@ async fn move_directory_over_directory_tombstone() {
     assert_matches!(repo.open_directory("dst").await, Ok(_));
 }
 
-// FIXME
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn move_directory_over_existing_empty_directory() {
     let (_base_dir, repo) = setup().await;
@@ -398,8 +394,6 @@ async fn move_directory_over_existing_empty_directory() {
     assert_matches!(repo.open_directory("dst").await, Ok(_));
 }
 
-// FIXME
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn move_directory_over_existing_non_empty_directory() {
     let (_base_dir, repo) = setup().await;
@@ -412,6 +406,31 @@ async fn move_directory_over_existing_non_empty_directory() {
     assert_matches!(
         repo.move_entry("/", "src", "/", "dst").await,
         Err(Error::DirectoryNotEmpty)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_directory_over_existing_file() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_directory("src").await.unwrap();
+    repo.create_file("dst").await.unwrap();
+
+    assert_matches!(
+        repo.move_entry("/", "src", "/", "dst").await,
+        Err(Error::EntryExists)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_file_to_non_existing_directory() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_file("src.txt").await.unwrap();
+
+    assert_matches!(
+        repo.move_entry("/", "src.txt", "/missing", "dst.txt").await,
+        Err(Error::EntryNotFound)
     );
 }
 

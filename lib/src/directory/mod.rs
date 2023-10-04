@@ -557,11 +557,11 @@ impl Directory {
         if matches!(tombstone.cause, TombstoneCause::Removed) {
             match self.lookup(name) {
                 Ok(EntryRef::Directory(entry)) => {
-                    if entry
+                    if !entry
                         .open_snapshot(tx, DirectoryFallback::Disabled)
                         .await?
                         .iter()
-                        .any(|(_, data)| !matches!(data, EntryData::Tombstone(_)))
+                        .all(|(_, data)| matches!(data, EntryData::Tombstone(_)))
                     {
                         return Err(Error::DirectoryNotEmpty);
                     }
