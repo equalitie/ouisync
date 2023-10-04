@@ -2,7 +2,6 @@
 
 use super::entry_data::EntryData;
 use crate::{
-    blob::lock::UniqueLock,
     blob::BlobId,
     branch::Branch,
     error::{Error, Result},
@@ -61,45 +60,22 @@ impl Content {
     }
 
     /// Inserts an entry into this directory.
-    pub fn insert(
-        &mut self,
-        branch: &Branch,
-        name: String,
-        new_data: EntryData,
-        lock: Option<UniqueLock>,
-    ) -> Result<Option<UniqueLock>, InsertError> {
+    pub fn insert(&mut self, name: String, new_data: EntryData) -> Result<(), EntryExists> {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
-                assert!(lock.is_none());
                 entry.insert(new_data);
-                Ok(None)
+                Ok(())
             }
             Entry::Occupied(mut entry) => {
-                let old_id = check_replace(entry.get(), &new_data).map_err(InsertError::Exists)?;
-
-                let lock = match (old_id, lock) {
-                    (Some(old_id), Some(lock)) => {
-                        assert_eq!(lock.blob_id(), &old_id);
-                        assert_eq!(lock.branch_id(), branch.id());
-                        Some(lock)
-                    }
-                    (Some(old_id), None) => Some(
-                        branch
-                            .locker()
-                            .try_unique(old_id)
-                            .map_err(|_| InsertError::Locked)?,
-                    ),
-                    (None, None) => None,
-                    (None, Some(_)) => panic!("unexpected lock for non-existing entry"),
-                };
-
+                check_replace(entry.get(), &new_data)?;
                 entry.insert(new_data);
-                Ok(lock)
+                Ok(())
             }
         }
     }
 
-    /// Check whether an entry can be inserted into this directory without actually inserting it.
+    /// Checks whether an entry can be inserted into this directory without actually inserting it.
+    /// If so, returns the blob_id of the existing entry (if any).
     pub fn check_insert(
         &self,
         name: &str,
@@ -144,24 +120,13 @@ pub(crate) enum EntryExists {
     /// The existing entry is more up-to-date and points to the same blob than the one being
     /// inserted
     Same,
-    /// The existing entry is either points to a different blob or is concurrent
+    /// The existing entry either points to a different blob or is concurrent
     Different,
 }
 
-#[derive(Debug)]
-pub(crate) enum InsertError {
-    /// The entry exists
-    Exists(EntryExists),
-    /// The existing entry is locked
-    Locked,
-}
-
-impl From<InsertError> for Error {
-    fn from(error: InsertError) -> Self {
-        match error {
-            InsertError::Exists(_) => Self::EntryExists,
-            InsertError::Locked => Self::Locked,
-        }
+impl From<EntryExists> for Error {
+    fn from(_: EntryExists) -> Self {
+        Self::EntryExists
     }
 }
 

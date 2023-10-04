@@ -435,6 +435,16 @@ async fn move_file_to_non_existing_directory() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn remove_open_file() {
+    let (_base_dir, repo) = setup().await;
+
+    let _file = repo.create_file("foo.txt").await.unwrap();
+
+    repo.remove_entry("foo.txt").await.unwrap();
+    assert_matches!(repo.open_file("foo.txt").await, Err(Error::EntryNotFound));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn blind_access_non_empty_repo() {
     test_utils::init_log();
 

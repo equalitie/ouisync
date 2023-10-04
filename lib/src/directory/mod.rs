@@ -17,10 +17,7 @@ pub(crate) use self::{
 
 use self::content::Content;
 use crate::{
-    blob::{
-        lock::{ReadLock, UniqueLock},
-        Blob, BlobId,
-    },
+    blob::{lock::ReadLock, Blob, BlobId},
     branch::Branch,
     crypto::sign::PublicKey,
     debug::DebugPrinter,
@@ -132,7 +129,7 @@ impl Directory {
         let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
         let mut content = self.content.clone();
 
-        let _old_lock = content.insert(self.branch(), name, data, None)?;
+        content.insert(name, data)?;
         file.save(&mut tx, &mut changeset).await?;
         self.save(&mut tx, &mut changeset, &content).await?;
         self.bump(&mut tx, &mut changeset, &VersionVector::new())
@@ -176,7 +173,7 @@ impl Directory {
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
         let mut content = self.content.clone();
 
-        let _old_lock = content.insert(self.branch(), name, data, None)?;
+        content.insert(name, data)?;
         dir.save(&mut tx, &mut changeset, &Content::empty()).await?;
         self.save(&mut tx, &mut changeset, &content).await?;
         self.bump(&mut tx, &mut changeset, merge).await?;
@@ -257,7 +254,7 @@ impl Directory {
         let mut tx = self.branch().store().begin_write().await?;
         let mut changeset = Changeset::new();
 
-        let (content, _old_lock) = match self
+        let content = match self
             .begin_remove_entry(&mut tx, &mut changeset, name, branch_id, tombstone)
             .await
         {
@@ -307,7 +304,7 @@ impl Directory {
         let mut tx = self.branch().store().begin_write().await?;
 
         let mut changeset = Changeset::new();
-        let (dst_content, _old_dst_lock) = dst_dir
+        let dst_content = dst_dir
             .begin_insert_entry(&mut tx, &mut changeset, dst_name.to_owned(), dst_data)
             .await?;
 
@@ -326,7 +323,7 @@ impl Directory {
 
         let branch_id = *self.branch().id();
         let mut changeset = Changeset::new();
-        let (src_content, _old_src_lock) = self
+        let src_content = self
             .begin_remove_entry(
                 &mut tx,
                 &mut changeset,
@@ -551,7 +548,7 @@ impl Directory {
         name: &str,
         branch_id: &PublicKey,
         mut tombstone: EntryTombstoneData,
-    ) -> Result<(Content, Option<UniqueLock>)> {
+    ) -> Result<Content> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
         if matches!(tombstone.cause, TombstoneCause::Removed) {
@@ -603,15 +600,15 @@ impl Directory {
         changeset: &mut Changeset,
         name: String,
         data: EntryData,
-    ) -> Result<(Content, Option<UniqueLock>)> {
+    ) -> Result<Content> {
         self.refresh_in(tx).await?;
 
         let mut content = self.content.clone();
-        let old_lock = content.insert(self.branch(), name, data, None)?;
+        content.insert(name, data)?;
         self.save(tx, changeset, &content).await?;
         self.bump(tx, changeset, &VersionVector::new()).await?;
 
-        Ok((content, old_lock))
+        Ok(content)
     }
 
     async fn refresh_in(&mut self, tx: &mut ReadTransaction) -> Result<()> {
