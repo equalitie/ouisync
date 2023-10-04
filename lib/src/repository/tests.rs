@@ -276,7 +276,7 @@ async fn append_to_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_file_over_non_existing_entry() {
+async fn move_file_onto_non_existing_entry() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_file("src.txt").await.unwrap();
@@ -289,7 +289,7 @@ async fn move_file_over_non_existing_entry() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_file_over_tombstone() {
+async fn move_file_onto_tombstone() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_file("src.txt").await.unwrap();
@@ -306,7 +306,7 @@ async fn move_file_over_tombstone() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_file_over_existing_file() {
+async fn move_file_onto_existing_file() {
     let (_base_dir, repo) = setup().await;
 
     let mut file = repo.create_file("src.txt").await.unwrap();
@@ -330,7 +330,7 @@ async fn move_file_over_existing_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_file_over_existing_directory() {
+async fn move_file_onto_existing_directory() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_file("src.txt").await.unwrap();
@@ -343,7 +343,7 @@ async fn move_file_over_existing_directory() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_directory_over_non_existing_entry() {
+async fn move_directory_onto_non_existing_entry() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_directory("src").await.unwrap();
@@ -354,7 +354,7 @@ async fn move_directory_over_non_existing_entry() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_directory_over_file_tombstone() {
+async fn move_directory_onto_file_tombstone() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_directory("src").await.unwrap();
@@ -368,7 +368,7 @@ async fn move_directory_over_file_tombstone() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_directory_over_directory_tombstone() {
+async fn move_directory_onto_directory_tombstone() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_directory("src").await.unwrap();
@@ -382,7 +382,7 @@ async fn move_directory_over_directory_tombstone() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_directory_over_existing_empty_directory() {
+async fn move_directory_onto_existing_empty_directory() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_directory("src").await.unwrap();
@@ -395,7 +395,7 @@ async fn move_directory_over_existing_empty_directory() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_directory_over_existing_non_empty_directory() {
+async fn move_directory_onto_existing_non_empty_directory() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_directory("src").await.unwrap();
@@ -410,7 +410,7 @@ async fn move_directory_over_existing_non_empty_directory() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_directory_over_existing_file() {
+async fn move_directory_onto_existing_file() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_directory("src").await.unwrap();
@@ -423,7 +423,7 @@ async fn move_directory_over_existing_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn move_file_to_non_existing_directory() {
+async fn move_file_into_non_existing_directory() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_file("src.txt").await.unwrap();
@@ -443,6 +443,45 @@ async fn remove_open_file() {
     repo.remove_entry("foo.txt").await.unwrap();
     assert_matches!(repo.open_file("foo.txt").await, Err(Error::EntryNotFound));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_from_open_file() {
+    let (_base_dir, repo) = setup().await;
+
+    let _file = repo.create_file("src.txt").await.unwrap();
+
+    repo.move_entry("/", "src.txt", "/", "dst.txt")
+        .await
+        .unwrap();
+
+    assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
+    assert_matches!(repo.open_file("dst.txt").await, Ok(_));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_onto_open_file() {
+    let (_base_dir, repo) = setup().await;
+
+    let mut file = repo.create_file("src.txt").await.unwrap();
+    file.write(b"src").await.unwrap();
+    file.flush().await.unwrap();
+    drop(file);
+
+    let mut file = repo.create_file("dst.txt").await.unwrap();
+    file.write(b"dst").await.unwrap();
+    file.flush().await.unwrap();
+
+    repo.move_entry("/", "src.txt", "/", "dst.txt")
+        .await
+        .unwrap();
+
+    assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
+
+    let mut file = repo.open_file("dst.txt").await.unwrap();
+    assert_eq!(file.read_to_end().await.unwrap(), b"src");
+}
+
+// TODO: test reading / writing file that's been removed / moved from / moved onto
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access_non_empty_repo() {
