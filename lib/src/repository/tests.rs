@@ -17,8 +17,6 @@ use tokio::{
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_directory_always_exists() {
-    test_utils::init_log();
-
     let (_base_dir, repo) = setup().await;
     let _ = repo.open_directory("/").await.unwrap();
 }
@@ -39,7 +37,6 @@ async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn count_leaf_nodes_sanity_checks() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let file_name = "test.txt";
@@ -86,7 +83,6 @@ async fn count_leaf_nodes_sanity_checks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     // Create remote branch and create a file in it.
@@ -120,7 +116,6 @@ async fn merge() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_previously_deleted_file() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     // Create file
@@ -150,7 +145,6 @@ async fn recreate_previously_deleted_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_previously_deleted_directory() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     // Create dir
@@ -173,7 +167,6 @@ async fn recreate_previously_deleted_directory() {
 // This one used to deadlock
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_read_and_create_dir() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let path = "/dir";
@@ -210,7 +203,6 @@ async fn concurrent_read_and_create_dir() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_write_and_read_file() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
     let repo = Arc::new(repo);
 
@@ -263,7 +255,6 @@ async fn concurrent_write_and_read_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append_to_file() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let mut file = repo.create_file("foo.txt").await.unwrap();
@@ -282,6 +273,146 @@ async fn append_to_file() {
     let mut file = repo.open_file("foo.txt").await.unwrap();
     let content = file.read_to_end().await.unwrap();
     assert_eq!(content, b"foobar");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_file_over_non_existing_entry() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_file("src.txt").await.unwrap();
+    repo.move_entry("/", "src.txt", "/", "dst.txt")
+        .await
+        .unwrap();
+
+    assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
+    assert_matches!(repo.open_file("dst.txt").await, Ok(_));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_file_over_tombstone() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_file("src.txt").await.unwrap();
+
+    repo.create_file("dst.txt").await.unwrap();
+    repo.remove_entry("dst.txt").await.unwrap();
+
+    repo.move_entry("/", "src.txt", "/", "dst.txt")
+        .await
+        .unwrap();
+
+    assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
+    assert_matches!(repo.open_file("dst.txt").await, Ok(_));
+}
+
+// FIXME
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn move_file_over_existing_file() {
+    let (_base_dir, repo) = setup().await;
+
+    let mut file = repo.create_file("src.txt").await.unwrap();
+    file.write_all(b"src").await.unwrap();
+    file.flush().await.unwrap();
+    drop(file);
+
+    let mut file = repo.create_file("dst.txt").await.unwrap();
+    file.write_all(b"dst").await.unwrap();
+    file.flush().await.unwrap();
+    drop(file);
+
+    repo.move_entry("/", "src.txt", "/", "dst.txt")
+        .await
+        .unwrap();
+
+    assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
+
+    let mut file = repo.open_file("dst.txt").await.unwrap();
+    assert_eq!(file.read_to_end().await.unwrap(), b"src");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_file_over_existing_directory() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_file("src.txt").await.unwrap();
+    repo.create_directory("dst").await.unwrap();
+
+    assert_matches!(
+        repo.move_entry("/", "src.txt", "/", "dst").await,
+        Err(Error::EntryExists)
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_directory_over_non_existing_entry() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_directory("src").await.unwrap();
+    repo.move_entry("/", "src", "/", "dst").await.unwrap();
+
+    assert_matches!(repo.open_directory("src").await, Err(Error::EntryNotFound));
+    assert_matches!(repo.open_directory("dst").await, Ok(_));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_directory_over_file_tombstone() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_directory("src").await.unwrap();
+    repo.create_file("dst").await.unwrap();
+    repo.remove_entry("dst").await.unwrap();
+
+    repo.move_entry("/", "src", "/", "dst").await.unwrap();
+
+    assert_matches!(repo.open_directory("src").await, Err(Error::EntryNotFound));
+    assert_matches!(repo.open_directory("dst").await, Ok(_));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn move_directory_over_directory_tombstone() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_directory("src").await.unwrap();
+    repo.create_directory("dst").await.unwrap();
+    repo.remove_entry("dst").await.unwrap();
+
+    repo.move_entry("/", "src", "/", "dst").await.unwrap();
+
+    assert_matches!(repo.open_directory("src").await, Err(Error::EntryNotFound));
+    assert_matches!(repo.open_directory("dst").await, Ok(_));
+}
+
+// FIXME
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn move_directory_over_existing_empty_directory() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_directory("src").await.unwrap();
+    repo.create_directory("dst").await.unwrap();
+
+    repo.move_entry("/", "src", "/", "dst").await.unwrap();
+
+    assert_matches!(repo.open_directory("src").await, Err(Error::EntryNotFound));
+    assert_matches!(repo.open_directory("dst").await, Ok(_));
+}
+
+// FIXME
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn move_directory_over_existing_non_empty_directory() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_directory("src").await.unwrap();
+
+    repo.create_directory("dst").await.unwrap();
+    repo.create_file("dst/file.txt").await.unwrap();
+
+    assert_matches!(
+        repo.move_entry("/", "src", "/", "dst").await,
+        Err(Error::DirectoryNotEmpty)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -473,7 +604,6 @@ async fn read_access_different_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_forked_remote_file() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let remote_id = PublicKey::random();
@@ -489,7 +619,6 @@ async fn truncate_forked_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_create_file() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
     let local_branch = repo.local_branch().unwrap();
 
@@ -537,7 +666,6 @@ async fn version_vector_create_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_deep_hierarchy() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
     let local_branch = repo.local_branch().unwrap();
     let local_id = *local_branch.id();
@@ -567,7 +695,6 @@ async fn version_vector_deep_hierarchy() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_recreate_deleted_file() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_id = *repo.local_branch().unwrap().id();
@@ -591,7 +718,6 @@ async fn version_vector_fork() {
     // TODO: this test would be more precise without merger. Consider converting it to a
     // joint_directory test.
 
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
@@ -671,7 +797,6 @@ async fn version_vector_fork() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_empty_directory() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
@@ -683,7 +808,6 @@ async fn version_vector_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_moved_non_empty_directory() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     repo.create_directory("foo").await.unwrap();
@@ -718,7 +842,6 @@ async fn version_vector_moved_non_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_file_moved_over_tombstone() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let mut file = repo.create_file("old.txt").await.unwrap();
@@ -755,7 +878,6 @@ async fn version_vector_file_moved_over_tombstone() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn file_conflict_modify_local() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
@@ -809,7 +931,6 @@ async fn file_conflict_modify_local() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn file_conflict_attempt_to_fork_and_modify_remote() {
-    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
@@ -861,6 +982,8 @@ async fn size() {
 }
 
 async fn setup() -> (TempDir, Repository) {
+    test_utils::init_log();
+
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
         &RepositoryParams::new(base_dir.path().join("repo.db")),
