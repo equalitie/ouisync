@@ -249,14 +249,14 @@ impl Shared {
                 assert!(self
                     .blocks_by_expiration
                     .entry(ts)
-                    .or_insert_with(Default::default)
+                    .or_default()
                     .insert(*block));
             }
             hash_map::Entry::Vacant(entry) => {
                 assert!(self
                     .blocks_by_expiration
                     .entry(ts)
-                    .or_insert_with(Default::default)
+                    .or_default()
                     .insert(*block));
 
                 entry.insert(Entry {

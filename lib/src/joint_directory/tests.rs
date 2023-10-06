@@ -313,9 +313,9 @@ async fn conflict_identical_versions() {
     root.lookup_version("file.txt", branch0.id()).unwrap();
 }
 
-//// TODO: test conflict_forked_directories
-//// TODO: test conflict_multiple_files_and_directories
-//// TODO: test conflict_file_with_name_containing_branch_prefix
+// TODO: test conflict_forked_directories
+// TODO: test conflict_multiple_files_and_directories
+// TODO: test conflict_file_with_name_containing_branch_prefix
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cd_into_concurrent_directory() {

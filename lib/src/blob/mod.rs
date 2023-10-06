@@ -269,9 +269,7 @@ impl Blob {
                 if self.position.get() >= self.len_modified
                     || self.position.offset == 0 && buffer.len() >= BLOCK_SIZE
                 {
-                    self.cache
-                        .entry(self.position.block)
-                        .or_insert_with(CachedBlock::new)
+                    self.cache.entry(self.position.block).or_default()
                 } else {
                     return Err(ReadWriteError::CacheMiss);
                 }
