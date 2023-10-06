@@ -161,7 +161,10 @@ impl Encoder {
     fn is_sending(&self) -> bool {
         match &self.state {
             EncodeState::Idle => false,
-            EncodeState::Sending { phase, .. } if matches!(phase, SendingPhase::Done) => false,
+            EncodeState::Sending {
+                phase: SendingPhase::Done,
+                ..
+            } => false,
             EncodeState::Sending { .. } => true,
         }
     }
