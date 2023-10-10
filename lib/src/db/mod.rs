@@ -4,10 +4,16 @@ mod macros;
 mod connection;
 mod id;
 mod migrations;
+mod mutex;
+mod transaction;
 
 pub use id::DatabaseId;
 use tracing::Span;
 
+use self::{
+    mutex::{CommittedMutexTransaction, ConnectionMutex},
+    transaction::TransactionWrapper,
+};
 use crate::deadlock::ExpectShortLifetime;
 use ref_cast::RefCast;
 use sqlx::{
@@ -23,17 +29,12 @@ use std::{
     ops::{Deref, DerefMut},
     panic::Location,
     path::Path,
-    sync::Arc,
     time::Duration,
 };
 #[cfg(test)]
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::{
-    fs,
-    sync::{OwnedSemaphorePermit, Semaphore},
-    task,
-};
+use tokio::{fs, task};
 
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
 
@@ -44,14 +45,8 @@ pub(crate) use self::connection::Connection;
 pub(crate) struct Pool {
     // Pool with multiple read-only connections
     reads: SqlitePool,
-    // Pool with a single writable connection.
-    write: SqlitePool,
-    // Additional semaphore protecting the write transaction. Needed to ensure the callback passed
-    // to [`WriteTransaction::commit_and_then`] is called atomically with the transaction.
-    // NOTE: This means there are now two semaphores - one inside the `SqlitePool` and one here.
-    // This is unfortunate but the sqlx API doesn't seem to be flexible enough to allow us to write
-    // our own pool implementation.
-    write_semaphore: Arc<Semaphore>,
+    // Single writable connection.
+    write: ConnectionMutex,
 }
 
 impl Pool {
@@ -63,12 +58,7 @@ impl Pool {
             .optimize_on_close(true, Some(1000));
 
         let write_options = common_options.clone();
-        let write = SqlitePoolOptions::new()
-            .min_connections(1)
-            .max_connections(1)
-            .test_before_acquire(false)
-            .connect_with(write_options)
-            .await?;
+        let write = ConnectionMutex::connect(write_options).await?;
 
         let read_options = common_options.read_only(true);
         let reads = SqlitePoolOptions::new()
@@ -77,11 +67,7 @@ impl Pool {
             .connect_with(read_options)
             .await?;
 
-        Ok(Self {
-            reads,
-            write,
-            write_semaphore: Arc::new(Semaphore::new(1)),
-        })
+        Ok(Self { reads, write })
     }
 
     /// Acquire a read-only database connection.
@@ -114,7 +100,7 @@ impl Pool {
                 ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
 
             Ok(ReadTransaction {
-                inner: tx,
+                inner: TransactionWrapper::Pool(tx),
                 _track_lifetime: Some(track_lifetime),
             })
         }
@@ -134,8 +120,6 @@ impl Pool {
         let location = Location::caller();
 
         async move {
-            // unwrap ok because we never `close` the semaphore
-            let permit = self.write_semaphore.clone().acquire_owned().await.unwrap();
             let tx = self.write.begin().await?;
 
             let track_lifetime =
@@ -143,16 +127,17 @@ impl Pool {
 
             Ok(WriteTransaction {
                 inner: ReadTransaction {
-                    inner: tx,
+                    inner: TransactionWrapper::Mutex(tx),
                     _track_lifetime: Some(track_lifetime),
                 },
-                permit,
             })
         }
     }
 
     pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
-        self.write.close().await;
+        // TODO:
+        // self.write.close().await;
+
         self.reads.close().await;
 
         Ok(())
@@ -187,7 +172,7 @@ impl DerefMut for PoolConnection {
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
 pub(crate) struct ReadTransaction {
-    inner: sqlx::Transaction<'static, Sqlite>,
+    inner: TransactionWrapper,
     _track_lifetime: Option<ExpectShortLifetime>,
 }
 
@@ -216,7 +201,6 @@ impl_executor_by_deref!(ReadTransaction);
 /// Transaction that allows both reading and writing.
 pub(crate) struct WriteTransaction {
     inner: ReadTransaction,
-    permit: OwnedSemaphorePermit,
 }
 
 impl WriteTransaction {
@@ -228,7 +212,7 @@ impl WriteTransaction {
     /// is guaranteed to be either committed or rolled back but there is no way to tell in advance
     /// which of the two operations happens.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
-        let _permit = self.commit_inner().await?;
+        self.commit_inner().await?;
         Ok(())
     }
 
@@ -278,8 +262,8 @@ impl WriteTransaction {
         let span = Span::current();
 
         task::spawn(async move {
-            // Make sure `permit` is held until `f` completes.
-            let _permit = self.commit_inner().await?;
+            // Make sure `_committed_tx` is alive until `f` completes,
+            let _committed_tx = self.commit_inner().await?;
             let result = span.in_scope(f);
             Ok(result)
         })
@@ -287,9 +271,13 @@ impl WriteTransaction {
         .unwrap()
     }
 
-    async fn commit_inner(self) -> Result<OwnedSemaphorePermit, sqlx::Error> {
-        self.inner.inner.commit().await?;
-        Ok(self.permit)
+    async fn commit_inner(self) -> Result<CommittedMutexTransaction, sqlx::Error> {
+        let tx = match self.inner.inner {
+            TransactionWrapper::Mutex(tx) => tx.commit().await?,
+            TransactionWrapper::Pool(_) => unreachable!(),
+        };
+
+        Ok(tx)
     }
 }
 
