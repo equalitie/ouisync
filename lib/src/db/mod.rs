@@ -31,7 +31,7 @@ use tempfile::TempDir;
 use thiserror::Error;
 use tokio::{
     fs,
-    sync::{OwnedMutexGuard as AsyncOwnedMutexGuard, OwnedSemaphorePermit, Semaphore},
+    sync::{OwnedSemaphorePermit, Semaphore},
     task,
 };
 
@@ -118,7 +118,7 @@ impl Pool {
 
             Ok(ReadTransaction {
                 inner: tx,
-                track_lifetime: Some(track_lifetime),
+                _track_lifetime: Some(track_lifetime),
             })
         }
     }
@@ -147,7 +147,7 @@ impl Pool {
             Ok(WriteTransaction {
                 inner: ReadTransaction {
                     inner: tx,
-                    track_lifetime: Some(track_lifetime),
+                    _track_lifetime: Some(track_lifetime),
                 },
                 #[cfg(test)]
                 break_on_commit: None,
@@ -193,7 +193,7 @@ impl DerefMut for PoolConnection {
 /// when the `ReadTransaction` instance drops.
 pub(crate) struct ReadTransaction {
     inner: sqlx::Transaction<'static, Sqlite>,
-    track_lifetime: Option<ExpectShortLifetime>,
+    _track_lifetime: Option<ExpectShortLifetime>,
 }
 
 impl Deref for ReadTransaction {
@@ -336,40 +336,6 @@ impl std::fmt::Debug for WriteTransaction {
 }
 
 impl_executor_by_deref!(WriteTransaction);
-
-/// Shared write transaction
-///
-/// See [Pool::begin_shared_write] for more details.
-
-// NOTE: The `Option` is never `None` except after `commit` or `rollback` but those methods take
-// `self` by value so the `None` is never observable. So it's always OK to call `unwrap` on it.
-pub(crate) struct SharedWriteTransaction(AsyncOwnedMutexGuard<Option<WriteTransaction>>);
-
-impl Deref for SharedWriteTransaction {
-    type Target = WriteTransaction;
-
-    fn deref(&self) -> &Self::Target {
-        // `unwrap` is ok, see the NOTE above.
-        self.0.as_ref().unwrap()
-    }
-}
-
-impl DerefMut for SharedWriteTransaction {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // `unwrap` is ok, see the NOTE above.
-        self.0.as_mut().unwrap()
-    }
-}
-
-impl Drop for SharedWriteTransaction {
-    fn drop(&mut self) {
-        // The shared transaction is being released to the pool. We need to destroy the lifetime
-        // tracker otherwise it could trigger warning while being idle in the pool.
-        if let Some(tx) = &mut *self.0 {
-            tx.inner.track_lifetime = None;
-        }
-    }
-}
 
 /// Creates a new database and opens a connection to it.
 pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
