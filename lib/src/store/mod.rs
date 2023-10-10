@@ -271,7 +271,7 @@ impl Reader {
 
         if let Some(expiration_tracker) = &self.block_expiration_tracker {
             let is_missing = matches!(result, Err(Error::BlockNotFound));
-            expiration_tracker.handle_block_update(id, is_missing, None);
+            expiration_tracker.handle_block_update(id, is_missing);
         }
 
         result
@@ -598,10 +598,9 @@ impl WriteTransaction {
     ) -> Result<BlockReceiveStatus, Error> {
         let (db, cache) = self.db_and_cache();
         let result = block::receive(db, cache, block).await;
-        let transaction_id = db.id();
 
         if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_update(&block.id, false, Some(transaction_id));
+            tracker.handle_block_update(&block.id, false);
         }
 
         result
@@ -612,29 +611,31 @@ impl WriteTransaction {
         let cache = self.inner.inner.cache;
 
         match (cache.is_dirty(), self.untrack_blocks) {
-            (true, Some(tx)) => {
+            (true, Some(untrack)) => {
                 inner
-                    .commit_and_then(move |commit_id| {
+                    .commit_and_then(move || {
                         cache.commit();
-                        tx.commit(commit_id);
+                        untrack.commit();
                     })
                     .await?
             }
-            (false, Some(tx)) => {
+            (false, Some(untrack)) => {
                 inner
-                    .commit_and_then(move |commit_id| {
-                        tx.commit(commit_id);
+                    .commit_and_then(move || {
+                        untrack.commit();
                     })
                     .await?
             }
             (true, None) => {
                 inner
-                    .commit_and_then(move |_| {
+                    .commit_and_then(move || {
                         cache.commit();
                     })
                     .await?
             }
-            (false, None) => inner.commit().await.map(|_| ())?,
+            (false, None) => {
+                inner.commit().await?;
+            }
         };
 
         Ok(())
@@ -686,32 +687,32 @@ impl WriteTransaction {
         let cache = self.inner.inner.cache;
 
         Ok(match (cache.is_dirty(), self.untrack_blocks) {
-            (true, Some(tx)) => {
+            (true, Some(untrack)) => {
                 inner
-                    .commit_and_then(move |commit_id| {
+                    .commit_and_then(move || {
                         cache.commit();
-                        tx.commit(commit_id);
+                        untrack.commit();
                         f()
                     })
                     .await?
             }
-            (false, Some(tx)) => {
+            (false, Some(untrack)) => {
                 inner
-                    .commit_and_then(move |commit_id| {
-                        tx.commit(commit_id);
+                    .commit_and_then(move || {
+                        untrack.commit();
                         f()
                     })
                     .await?
             }
             (true, None) => {
                 inner
-                    .commit_and_then(move |_| {
+                    .commit_and_then(move || {
                         cache.commit();
                         f()
                     })
                     .await?
             }
-            (false, None) => inner.commit_and_then(|_| f()).await?,
+            (false, None) => inner.commit_and_then(f).await?,
         })
 
         //Ok(inner.commit_and_then(then).await?)

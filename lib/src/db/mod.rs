@@ -23,10 +23,7 @@ use std::{
     ops::{Deref, DerefMut},
     panic::Location,
     path::Path,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
     time::Duration,
 };
 #[cfg(test)]
@@ -52,8 +49,12 @@ pub(crate) struct Pool {
     reads: SqlitePool,
     // Pool with a single writable connection.
     write: SqlitePool,
+    // Additional semaphore protecting the write transaction. Needed to ensure the callback passed
+    // to [`WriteTransaction::commit_and_then`] is called atomically with the transaction.
+    // NOTE: This means there are now two semaphores - one inside the `SqlitePool` and one here.
+    // This is unfortunate but the sqlx API doesn't seem to be flexible enough to allow us to write
+    // our own pool implementation.
     write_semaphore: Arc<Semaphore>,
-    next_transaction_id: Arc<AtomicU64>,
 }
 
 impl Pool {
@@ -83,7 +84,6 @@ impl Pool {
             reads,
             write,
             write_semaphore: Arc::new(Semaphore::new(1)),
-            next_transaction_id: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -141,8 +141,6 @@ impl Pool {
             let permit = self.write_semaphore.clone().acquire_owned().await.unwrap();
             let tx = self.write.begin().await?;
 
-            let transaction_id =
-                TransactionId(self.next_transaction_id.fetch_add(1, Ordering::Relaxed));
             let track_lifetime =
                 ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
 
@@ -151,7 +149,6 @@ impl Pool {
                     inner: tx,
                     track_lifetime: Some(track_lifetime),
                 },
-                id: transaction_id,
                 #[cfg(test)]
                 break_on_commit: None,
                 permit,
@@ -224,7 +221,6 @@ impl_executor_by_deref!(ReadTransaction);
 /// Transaction that allows both reading and writing.
 pub(crate) struct WriteTransaction {
     inner: ReadTransaction,
-    id: TransactionId,
     #[cfg(test)]
     break_on_commit: Option<BreakPoint>,
     permit: OwnedSemaphorePermit,
@@ -238,8 +234,9 @@ impl WriteTransaction {
     /// If the future returned by this function is cancelled before completion, the transaction
     /// is guaranteed to be either committed or rolled back but there is no way to tell in advance
     /// which of the two operations happens.
-    pub async fn commit(self) -> Result<CommitId, sqlx::Error> {
-        self.commit_inner().await.map(|(commit_id, _)| commit_id)
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        let _permit = self.commit_inner().await?;
+        Ok(())
     }
 
     /// Commits the transaction and if (and only if) the commit completes successfully, runs the
@@ -282,23 +279,19 @@ impl WriteTransaction {
     /// case and disabling the guard but there is nothing to do about number 4.
     pub async fn commit_and_then<F, R>(self, f: F) -> Result<R, sqlx::Error>
     where
-        F: FnOnce(CommitId) -> R + Send + 'static,
+        F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
         let span = Span::current();
 
         task::spawn(async move {
             // Make sure `permit` is held until `f` completes.
-            let (commit_id, _permit) = self.commit_inner().await?;
-            let result = span.in_scope(|| f(commit_id));
+            let _permit = self.commit_inner().await?;
+            let result = span.in_scope(f);
             Ok(result)
         })
         .await
         .unwrap()
-    }
-
-    pub fn id(&self) -> TransactionId {
-        self.id
     }
 
     #[cfg(test)]
@@ -306,7 +299,7 @@ impl WriteTransaction {
         self.break_on_commit = Some(break_point);
     }
 
-    async fn commit_inner(self) -> Result<(CommitId, OwnedSemaphorePermit), sqlx::Error> {
+    async fn commit_inner(self) -> Result<OwnedSemaphorePermit, sqlx::Error> {
         let result = self.inner.inner.commit().await;
 
         #[cfg(test)]
@@ -316,7 +309,9 @@ impl WriteTransaction {
             break_point.hit().await.unwrap();
         }
 
-        result.map(|_| (CommitId(self.id.0), self.permit))
+        result?;
+
+        Ok(self.permit)
     }
 }
 
@@ -337,30 +332,6 @@ impl DerefMut for WriteTransaction {
 impl std::fmt::Debug for WriteTransaction {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         write!(f, "WriteTransaction{{ inner:{:?} }}", self.inner)
-    }
-}
-
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Copy, Clone)]
-pub(crate) struct TransactionId(u64);
-
-impl TransactionId {
-    #[cfg(test)]
-    pub fn new(n: u64) -> Self {
-        Self(n)
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct CommitId(u64);
-
-impl CommitId {
-    pub fn as_transaction_id(&self) -> TransactionId {
-        TransactionId(self.0)
-    }
-
-    #[cfg(test)]
-    pub fn new(n: u64) -> Self {
-        Self(n)
     }
 }
 
