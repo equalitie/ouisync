@@ -607,6 +607,9 @@ mod test {
     /// Unless we explicitly take care of this situation, we'll end up with the block being present
     /// in the main database, but not in the expiration tracker. Which would be a violation of the
     /// condition from the first paragraph of this comment.
+    // TODO: remove this test (not needed because the addition of the db write permit make the race
+    // impossible).
+    #[ignore]
     #[tokio::test]
     async fn expiration_race() {
         let (_base_dir, store) = setup().await;

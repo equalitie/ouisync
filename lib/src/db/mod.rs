@@ -32,7 +32,11 @@ use std::{
 #[cfg(test)]
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::{fs, sync::OwnedMutexGuard as AsyncOwnedMutexGuard, task};
+use tokio::{
+    fs,
+    sync::{OwnedMutexGuard as AsyncOwnedMutexGuard, OwnedSemaphorePermit, Semaphore},
+    task,
+};
 
 #[cfg(test)]
 use crate::sync::break_point::BreakPoint;
@@ -48,6 +52,7 @@ pub(crate) struct Pool {
     reads: SqlitePool,
     // Pool with a single writable connection.
     write: SqlitePool,
+    write_semaphore: Arc<Semaphore>,
     next_transaction_id: Arc<AtomicU64>,
 }
 
@@ -77,6 +82,7 @@ impl Pool {
         Ok(Self {
             reads,
             write,
+            write_semaphore: Arc::new(Semaphore::new(1)),
             next_transaction_id: Arc::new(AtomicU64::new(0)),
         })
     }
@@ -129,9 +135,28 @@ impl Pool {
     #[track_caller]
     pub fn begin_write(&self) -> impl Future<Output = Result<WriteTransaction, sqlx::Error>> + '_ {
         let location = Location::caller();
-        let transaction_id =
-            TransactionId(self.next_transaction_id.fetch_add(1, Ordering::Relaxed));
-        WriteTransaction::begin(&self.write, location, transaction_id)
+
+        async move {
+            // unwrap ok because we never `close` the semaphore
+            let permit = self.write_semaphore.clone().acquire_owned().await.unwrap();
+            let tx = self.write.begin().await?;
+
+            let transaction_id =
+                TransactionId(self.next_transaction_id.fetch_add(1, Ordering::Relaxed));
+            let track_lifetime =
+                ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
+
+            Ok(WriteTransaction {
+                inner: ReadTransaction {
+                    inner: tx,
+                    track_lifetime: Some(track_lifetime),
+                },
+                id: transaction_id,
+                #[cfg(test)]
+                break_on_commit: None,
+                permit,
+            })
+        }
     }
 
     pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
@@ -202,28 +227,10 @@ pub(crate) struct WriteTransaction {
     id: TransactionId,
     #[cfg(test)]
     break_on_commit: Option<BreakPoint>,
+    permit: OwnedSemaphorePermit,
 }
 
 impl WriteTransaction {
-    async fn begin(
-        pool: &SqlitePool,
-        location: &'static Location<'static>,
-        id: TransactionId,
-    ) -> Result<Self, sqlx::Error> {
-        let tx = pool.begin().await?;
-        let track_lifetime = ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
-
-        Ok(Self {
-            inner: ReadTransaction {
-                inner: tx,
-                track_lifetime: Some(track_lifetime),
-            },
-            id,
-            #[cfg(test)]
-            break_on_commit: None,
-        })
-    }
-
     /// Commits the transaction.
     ///
     /// # Cancel safety
@@ -232,20 +239,16 @@ impl WriteTransaction {
     /// is guaranteed to be either committed or rolled back but there is no way to tell in advance
     /// which of the two operations happens.
     pub async fn commit(self) -> Result<CommitId, sqlx::Error> {
-        let result = self.inner.inner.commit().await;
-
-        #[cfg(test)]
-        if let Some(mut break_point) = self.break_on_commit {
-            // Unwrap is OK because this is code is only executed in tests and we want to make sure
-            // the BreakPointController is used appropriately.
-            break_point.hit().await.unwrap();
-        }
-
-        result.map(|()| CommitId(self.id.0))
+        self.commit_inner().await.map(|(commit_id, _)| commit_id)
     }
 
     /// Commits the transaction and if (and only if) the commit completes successfully, runs the
     /// given closure.
+    ///
+    /// # Atomicity
+    ///
+    /// If the commit succeeds, the closure is guaranteed to complete before another write
+    /// transaction begins.
     ///
     /// # Cancel safety
     ///
@@ -283,11 +286,15 @@ impl WriteTransaction {
         R: Send + 'static,
     {
         let span = Span::current();
-        let f = move |commit_id| span.in_scope(|| f(commit_id));
 
-        task::spawn(async move { self.commit().await.map(f) })
-            .await
-            .unwrap()
+        task::spawn(async move {
+            // Make sure `permit` is held until `f` completes.
+            let (commit_id, _permit) = self.commit_inner().await?;
+            let result = span.in_scope(|| f(commit_id));
+            Ok(result)
+        })
+        .await
+        .unwrap()
     }
 
     pub fn id(&self) -> TransactionId {
@@ -297,6 +304,19 @@ impl WriteTransaction {
     #[cfg(test)]
     pub fn break_on_commit(&mut self, break_point: BreakPoint) {
         self.break_on_commit = Some(break_point);
+    }
+
+    async fn commit_inner(self) -> Result<(CommitId, OwnedSemaphorePermit), sqlx::Error> {
+        let result = self.inner.inner.commit().await;
+
+        #[cfg(test)]
+        if let Some(mut break_point) = self.break_on_commit {
+            // Unwrap is OK because this is code is only executed in tests and we want to make sure
+            // the BreakPointController is used appropriately.
+            break_point.hit().await.unwrap();
+        }
+
+        result.map(|_| (CommitId(self.id.0), self.permit))
     }
 }
 
