@@ -35,9 +35,6 @@ use tokio::{
     task,
 };
 
-#[cfg(test)]
-use crate::sync::break_point::BreakPoint;
-
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
 
 pub(crate) use self::connection::Connection;
@@ -149,8 +146,6 @@ impl Pool {
                     inner: tx,
                     _track_lifetime: Some(track_lifetime),
                 },
-                #[cfg(test)]
-                break_on_commit: None,
                 permit,
             })
         }
@@ -221,8 +216,6 @@ impl_executor_by_deref!(ReadTransaction);
 /// Transaction that allows both reading and writing.
 pub(crate) struct WriteTransaction {
     inner: ReadTransaction,
-    #[cfg(test)]
-    break_on_commit: Option<BreakPoint>,
     permit: OwnedSemaphorePermit,
 }
 
@@ -294,23 +287,8 @@ impl WriteTransaction {
         .unwrap()
     }
 
-    #[cfg(test)]
-    pub fn break_on_commit(&mut self, break_point: BreakPoint) {
-        self.break_on_commit = Some(break_point);
-    }
-
     async fn commit_inner(self) -> Result<OwnedSemaphorePermit, sqlx::Error> {
-        let result = self.inner.inner.commit().await;
-
-        #[cfg(test)]
-        if let Some(mut break_point) = self.break_on_commit {
-            // Unwrap is OK because this is code is only executed in tests and we want to make sure
-            // the BreakPointController is used appropriately.
-            break_point.hit().await.unwrap();
-        }
-
-        result?;
-
+        self.inner.inner.commit().await?;
         Ok(self.permit)
     }
 }

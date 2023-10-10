@@ -14,8 +14,6 @@ mod root_node;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-use crate::sync::break_point::BreakPoint;
 
 pub use error::Error;
 
@@ -728,11 +726,6 @@ impl WriteTransaction {
             self.inner.inner.inner.as_write(),
             &mut self.inner.inner.cache,
         )
-    }
-
-    #[cfg(test)]
-    pub fn break_on_commit(&mut self, break_point: BreakPoint) {
-        self.db().break_on_commit(break_point)
     }
 }
 

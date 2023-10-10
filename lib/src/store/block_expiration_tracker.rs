@@ -446,7 +446,12 @@ mod test {
     use super::super::*;
     use super::*;
     use crate::crypto::sign::Keypair;
+    use futures_util::future;
+    use rand::distributions::Standard;
+    use rand::seq::SliceRandom;
+    use rand::Rng;
     use tempfile::TempDir;
+    use tokio::task;
 
     #[test]
     fn shared_state() {
@@ -536,28 +541,14 @@ mod test {
     }
 
     /// This test checks the condition that "if there is a block in the main database, then it must
-    /// be in the expiration tracker" in the presence of a race condition as described in the
-    /// following example:
-    ///
-    /// When adding a block (`add`), we do "add the block into the main database" (`add.db`), and then
-    /// "add the block into the expiration tracker" (`add.ex`). Similarly, when removing a block (`rm`)
-    /// we do "remove the block from the main database" (`rm.db`) and then "remove the block from the
-    /// expiration tracker" (`rm.ex`).
-    ///
-    /// As such calling `rm` and `add` concurrently could result in the `{add.db, add.ex, rm.db,
-    /// rm.ex}` operations to be executed in the following order:
-    ///
-    /// rm.db -> add.db -> add.ex -> rm.ex
-    ///
-    /// Unless we explicitly take care of this situation, we'll end up with the block being present
-    /// in the main database, but not in the expiration tracker. Which would be a violation of the
-    /// condition from the first paragraph of this comment.
-    // TODO: remove this test (not needed because the addition of the db write permit make the race
-    // impossible).
-    #[ignore]
+    /// be in the expiration tracker" in the presence of concurrent block insertions and removals.
     #[tokio::test]
-    async fn expiration_race() {
+    async fn atomicity() {
+        let count = 100;
+
         let (_base_dir, store) = setup().await;
+        let mut rng = rand::thread_rng();
+
         store
             .set_block_expiration(
                 // Setting expiration time to something big, we don't care about blocks actually
@@ -574,60 +565,75 @@ mod test {
         let store = store.clone();
         let write_keys = write_keys.clone();
 
-        let block: Block = rand::random();
-        add_block(block.clone(), &write_keys, &branch_id, &store).await;
+        // Create blocks
+        let blocks: Vec<Block> = (&mut rng).sample_iter(Standard).take(count).collect();
 
-        let (on_rm, mut on_rm_controll) = crate::sync::break_point::new();
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
 
-        let task_rm = tokio::task::spawn({
-            let block_id = block.id;
-            let store = store.clone();
+        for block in &blocks {
+            changeset.link_block(rand::random(), block.id, SingleBlockPresence::Present);
+        }
 
-            async move {
-                let mut tx = store.begin_write().await.unwrap();
-                tx.break_on_commit(on_rm);
-                tx.remove_block(&block_id).await.unwrap();
-                tx.commit().await.unwrap();
-            }
-        });
-
-        let task_add = tokio::task::spawn({
-            let block = block.clone();
-            let store = store.clone();
-
-            async move {
-                on_rm_controll.on_hit().await.unwrap();
-
-                // At this point the other task has already committed the removal from database
-                // action (`rm.db`), but not yet the removal from the expiration tracker (`rm.ex`).
-
-                // Perform the `add.db` and `add.ex` actions.
-                let mut tx = store.begin_write().await.unwrap();
-                tx.receive_block(&block).await.unwrap();
-                tx.commit().await.unwrap();
-
-                // Resume the `rm.ex` action in `task_rm`.
-                on_rm_controll.release();
-            }
-        });
-
-        task_rm.await.unwrap();
-        task_add.await.unwrap();
-
-        let is_in_exp_tracker = store
-            .block_expiration_tracker()
-            .await
-            .unwrap()
-            .has_block(&block.id);
-
-        let is_in_db = block::exists(&mut store.db().acquire().await.unwrap(), &block.id)
+        changeset
+            .apply(&mut tx, &branch_id, &write_keys)
             .await
             .unwrap();
 
-        assert!(
-            !is_in_db || is_in_exp_tracker,
-            "is_in_db:{is_in_db:?} is_in_exp_tracker:{is_in_exp_tracker:?}"
-        );
+        tx.commit().await.unwrap();
+
+        // Run ops concurrently
+        enum Op {
+            Receive(Block),
+            Remove(BlockId),
+        }
+
+        let mut ops: Vec<_> = blocks
+            .iter()
+            .flat_map(|block| [Op::Receive(block.clone()), Op::Remove(block.id)])
+            .collect();
+        ops.shuffle(&mut rng);
+
+        let handles: Vec<_> = ops
+            .into_iter()
+            .map(|op| {
+                let store = store.clone();
+
+                task::spawn(async move {
+                    let mut tx = store.begin_write().await.unwrap();
+                    match op {
+                        Op::Receive(block) => {
+                            tx.receive_block(&block).await.unwrap();
+                        }
+                        Op::Remove(id) => {
+                            tx.remove_block(&id).await.unwrap();
+                        }
+                    }
+                    tx.commit().await.unwrap();
+                })
+            })
+            .collect();
+
+        // Wait for all the ops to complete.
+        future::try_join_all(handles).await.unwrap();
+
+        // Verify
+        for block in &blocks {
+            let is_in_expiration_tracker = store
+                .block_expiration_tracker()
+                .await
+                .unwrap()
+                .has_block(&block.id);
+
+            let is_in_db = block::exists(&mut store.db().acquire().await.unwrap(), &block.id)
+                .await
+                .unwrap();
+
+            assert!(
+                !is_in_db || is_in_expiration_tracker,
+                "is_in_db:{is_in_db:?} is_in_expiration_tracker:{is_in_expiration_tracker:?}"
+            );
+        }
     }
 
     async fn add_block(
