@@ -33,7 +33,7 @@ use crate::{
     deadlock::BlockingMutex,
     debug::DebugPrinter,
     device_id::DeviceId,
-    directory::{Directory, DirectoryFallback, DirectoryLocking, EntryType},
+    directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef, EntryType},
     error::{Error, Result},
     event::{Event, EventSender},
     file::File,
@@ -45,6 +45,7 @@ use crate::{
     storage_size::StorageSize,
     store,
     sync::stream::Throttle,
+    version_vector::VersionVector,
 };
 use camino::Utf8Path;
 use futures_util::{future, TryStreamExt};
@@ -562,14 +563,15 @@ impl Repository {
         let local_branch = self.local_branch()?;
         let src_joint_dir = self.cd(src_dir_path).await?;
 
-        let (mut src_dir, src_name) = match src_joint_dir.lookup_unique(src_name)? {
+        // If the src is in a remote branch, need to merge it into the local one first:
+        let (mut src_dir, src_name, src_type) = match src_joint_dir.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
 
                 let mut file = entry.open().await?;
                 file.fork(local_branch.clone()).await?;
 
-                (file.parent().await?, Cow::Owned(src_name))
+                (file.parent().await?, Cow::Owned(src_name), EntryType::File)
             }
             JointEntryRef::Directory(entry) => {
                 let mut dir_to_move = entry
@@ -582,39 +584,52 @@ impl Repository {
                     .await?
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
 
-                (src_dir, Cow::Borrowed(src_name))
+                (src_dir, Cow::Borrowed(src_name), EntryType::Directory)
             }
         };
 
-        drop(src_joint_dir);
-
-        // Get the entry here before we release the lock to the directory. This way the entry shall
-        // contain version vector that we want to delete and if someone updates the entry between
-        // now and when the entry is actually to be removed, the concurrent updates shall remain.
         let src_entry = src_dir.lookup(&src_name)?.clone_data();
 
-        let dst_joint_dir = self.cd(&dst_dir_path).await?;
+        let mut dst_joint_dir = self.cd(&dst_dir_path).await?;
+        let dst_dir = dst_joint_dir
+            .local_version_mut()
+            .ok_or(Error::PermissionDenied)?;
 
-        let dst_vv = match dst_joint_dir.lookup_unique(dst_name) {
-            Err(Error::EntryNotFound) => {
-                // Even if there is no regular entry, there still may be tombstones and so the
-                // destination version vector must be "happened after" those.
-                dst_joint_dir
-                    .merge_entry_version_vectors(dst_name)
-                    .merged(src_entry.version_vector())
-                    .incremented(*local_branch.id())
+        let dst_old_entry = dst_dir.lookup(dst_name);
+
+        // Emulating the behaviour of the libc's `rename` function
+        // (https://www.man7.org/linux/man-pages/man2/rename.2.html)
+        let dst_old_vv = match (src_type, dst_old_entry) {
+            (EntryType::File | EntryType::Directory, Ok(EntryRef::Tombstone(old_entry))) => {
+                old_entry.version_vector().clone()
             }
-            Ok(_) => return Err(Error::EntryExists),
-            Err(e) => return Err(e),
+            (EntryType::File | EntryType::Directory, Err(Error::EntryNotFound)) => {
+                VersionVector::new()
+            }
+            (EntryType::File | EntryType::Directory, Err(error)) => return Err(error),
+            (EntryType::File, Ok(EntryRef::File(old_entry))) => old_entry.version_vector().clone(),
+            (EntryType::Directory, Ok(EntryRef::Directory(old_entry))) => {
+                if old_entry
+                    .open(DirectoryFallback::Disabled)
+                    .await?
+                    .entries()
+                    .all(|entry| entry.is_tombstone())
+                {
+                    old_entry.version_vector().clone()
+                } else {
+                    return Err(Error::DirectoryNotEmpty);
+                }
+            }
+            (EntryType::File, Ok(EntryRef::Directory(_))) => return Err(Error::EntryIsDirectory),
+            (EntryType::Directory, Ok(EntryRef::File(_))) => return Err(Error::EntryIsFile),
         };
 
-        drop(dst_joint_dir);
+        let dst_vv = dst_old_vv
+            .merged(src_entry.version_vector())
+            .incremented(*local_branch.id());
 
-        let mut dst_dir = local_branch
-            .ensure_directory_exists(dst_dir_path.as_ref())
-            .await?;
         src_dir
-            .move_entry(&src_name, src_entry, &mut dst_dir, dst_name, dst_vv)
+            .move_entry(&src_name, src_entry, dst_dir, dst_name, dst_vv)
             .await?;
 
         Ok(())

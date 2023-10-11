@@ -1,4 +1,4 @@
-use super::{content::InsertError, DirectoryFallback, Error};
+use super::{DirectoryFallback, Error};
 use crate::{
     blob::BlobId,
     blob::{
@@ -137,7 +137,7 @@ impl ParentContext {
             Err(EntryExists::Different) => return Err(Error::EntryExists),
         }
 
-        let lock = lock?;
+        let _lock = lock?;
 
         // Fork the blob first without inserting it into the dst directory. This is because
         // `blob::fork` is not atomic and in case it's interrupted, we don't want overwrite the dst
@@ -157,13 +157,8 @@ impl ParentContext {
 
         let mut content = directory.content.clone();
 
-        match content.insert(
-            directory.branch(),
-            self.entry_name.clone(),
-            src_entry_data,
-            old_blob_id.map(|_| lock),
-        ) {
-            Ok(_lock) => {
+        match content.insert(self.entry_name.clone(), src_entry_data) {
+            Ok(()) => {
                 directory.save(&mut tx, &mut changeset, &content).await?;
                 directory.bump(&mut tx, &mut changeset, &src_vv).await?;
                 directory.commit(tx, changeset).await?;
@@ -171,7 +166,7 @@ impl ParentContext {
                 tracing::trace!("fork complete");
                 Ok(new_context)
             }
-            Err(InsertError::Exists(EntryExists::Same)) => {
+            Err(EntryExists::Same) => {
                 tracing::trace!("already forked");
                 Ok(new_context)
             }

@@ -251,12 +251,14 @@ impl<'a> Monitor<'a> {
     }
 
     async fn run(self) -> Result<()> {
-        self.handle_all_branches_changed().await?;
-
+        // Important: make sure to create the event subscription first, before calling
+        // `handle_all_branches_changed` otherwise we might miss some events.
         let mut events = pin!(Throttle::new(
             events(self.vault.event_tx.subscribe()),
             Duration::from_secs(1)
         ));
+
+        self.handle_all_branches_changed().await?;
 
         while let Some(event) = events.next().await {
             match event {
