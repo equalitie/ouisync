@@ -106,15 +106,7 @@ impl Pool {
         }
     }
 
-    /// Begin a regular ("unique") write transaction. At most one task can hold a write transaction
-    /// at any time. Any other tasks are blocked on calling `begin_write` until the task that
-    /// currently holds it is done with it (commits it or rolls it back). Performing read-only
-    /// operations concurrently while a write transaction is in use is still allowed. Those
-    /// operations will not see the writes performed via the write transaction until that
-    /// transaction is committed however.
-    ///
-    /// If an idle `SharedTransaction` exists in the pool when `begin_write` is called, it is
-    /// automatically committed before the regular write transaction is created.
+    /// Begin a write transaction. See [`WriteTransaction`] for more details.
     #[track_caller]
     pub fn begin_write(&self) -> impl Future<Output = Result<WriteTransaction, sqlx::Error>> + '_ {
         let location = Location::caller();
@@ -197,6 +189,12 @@ impl fmt::Debug for ReadTransaction {
 impl_executor_by_deref!(ReadTransaction);
 
 /// Transaction that allows both reading and writing.
+///
+/// At most one task can hold a write transaction at any time. Any other tasks are blocked on
+/// calling `begin_write` until the task that currently holds it is done with it (commits it or
+/// rolls it back). Performing read-only operations concurrently while a write transaction is in
+/// use is still allowed. Those operations will not see the writes performed via the write
+/// transaction until that transaction is committed however.
 pub(crate) struct WriteTransaction {
     inner: ReadTransaction,
 }
