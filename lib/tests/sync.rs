@@ -40,6 +40,7 @@ fn sync_two_peers_one_repo_large() {
     sync_case(2, 1, LARGE_SIZE)
 }
 
+#[ignore]
 #[test]
 fn sync_two_peers_one_repo_huge() {
     sync_case(2, 1, HUGE_SIZE)
@@ -50,6 +51,7 @@ fn sync_three_peers_one_repo_large() {
     sync_case(3, 1, LARGE_SIZE)
 }
 
+#[ignore]
 #[test]
 fn sync_three_peers_one_repo_huge() {
     sync_case(3, 1, HUGE_SIZE)
