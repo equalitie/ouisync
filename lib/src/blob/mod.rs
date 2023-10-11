@@ -523,7 +523,9 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
         }
     }
 
-    let batch_size = 32;
+    // Based on some benchmarking it seems that batch values don't hurt the syncing performance too
+    // much. https://github.com/equalitie/ouisync/issues/143#issuecomment-1757951167
+    let batch_size = 2048;
     let mut opt_batch = None;
 
     let locators = Locator::head(blob_id).sequence().take(end as usize);
