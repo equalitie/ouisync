@@ -13,7 +13,10 @@ use self::position::Position;
 use crate::{
     branch::Branch,
     collections::{hash_map::Entry, HashMap},
-    crypto::cipher::{self, Nonce, SecretKey},
+    crypto::{
+        cipher::{self, Nonce, SecretKey},
+        sign::{Keypair, PublicKey},
+    },
     error::{Error, Result},
     protocol::{
         Block, BlockContent, BlockId, BlockNonce, Locator, RootNode, SingleBlockPresence,
@@ -506,10 +509,33 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
         load_block_count_hint(&mut tx, &root_node, blob_id, src_branch.keys().read()).await?
     };
 
+    struct Batch {
+        tx: crate::store::WriteTransaction,
+        changeset: Changeset,
+    }
+
+    impl Batch {
+        async fn apply(self, dst_branch_id: &PublicKey, write_keys: &Keypair) -> Result<()> {
+            let Batch { mut tx, changeset } = self;
+            changeset.apply(&mut tx, dst_branch_id, write_keys).await?;
+            tx.commit().await?;
+            Ok(())
+        }
+    }
+
+    let batch_size = 32;
+    let mut opt_batch = None;
+
     let locators = Locator::head(blob_id).sequence().take(end as usize);
+
     for locator in locators {
-        let mut tx = src_branch.store().begin_write().await?;
-        let mut changeset = Changeset::new();
+        if opt_batch.is_none() {
+            let tx = src_branch.store().begin_write().await?;
+            let changeset = Changeset::new();
+            opt_batch = Some(Batch { tx, changeset });
+        }
+
+        let Batch { tx, changeset } = opt_batch.as_mut().unwrap();
 
         let encoded_locator = locator.encode(read_key);
 
@@ -529,10 +555,15 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
         };
 
         changeset.link_block(encoded_locator, block_id, block_presence);
-        changeset
-            .apply(&mut tx, dst_branch.id(), write_keys)
-            .await?;
-        tx.commit().await?;
+
+        // The `+ 1` is there to not hit on the first run.
+        if (locator.number() + 1) % batch_size == 0 {
+            opt_batch
+                .take()
+                .unwrap()
+                .apply(dst_branch.id(), write_keys)
+                .await?;
+        }
 
         tracing::trace!(
             num = locator.number(),
@@ -540,6 +571,10 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
             ?block_presence,
             "fork block",
         );
+    }
+
+    if let Some(batch) = opt_batch {
+        batch.apply(dst_branch.id(), write_keys).await?;
     }
 
     Ok(())
