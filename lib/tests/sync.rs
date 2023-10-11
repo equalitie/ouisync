@@ -23,6 +23,7 @@ use tracing::{instrument, Instrument};
 
 const SMALL_SIZE: usize = 1024;
 const LARGE_SIZE: usize = 2 * 1024 * 1024;
+const HUGE_SIZE: usize = 30 * 1024 * 1024;
 
 #[test]
 fn sync_two_peers_one_repo_small() {
@@ -40,8 +41,18 @@ fn sync_two_peers_one_repo_large() {
 }
 
 #[test]
+fn sync_two_peers_one_repo_huge() {
+    sync_case(2, 1, HUGE_SIZE)
+}
+
+#[test]
 fn sync_three_peers_one_repo_large() {
     sync_case(3, 1, LARGE_SIZE)
+}
+
+#[test]
+fn sync_three_peers_one_repo_huge() {
+    sync_case(3, 1, HUGE_SIZE)
 }
 
 #[test]
