@@ -135,9 +135,7 @@ impl Pool {
     }
 
     pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
-        // TODO:
-        // self.write.close().await;
-
+        self.write.close().await;
         self.reads.close().await;
 
         Ok(())
