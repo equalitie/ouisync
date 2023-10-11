@@ -52,6 +52,18 @@ impl JointDirectory {
         }
     }
 
+    pub(crate) fn local_version(&self) -> Option<&Directory> {
+        self.local_branch
+            .as_ref()
+            .and_then(|branch| self.versions.get(branch.id()))
+    }
+
+    pub(crate) fn local_version_mut(&mut self) -> Option<&mut Directory> {
+        self.local_branch
+            .as_ref()
+            .and_then(|branch| self.versions.get_mut(branch.id()))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries().next().is_none()
     }
@@ -136,14 +148,6 @@ impl JointDirectory {
             .ok_or(Error::EntryNotFound)
             .and_then(|dir| dir.lookup(name))
             .and_then(|entry| entry.file())
-    }
-
-    pub(crate) fn merge_entry_version_vectors(&self, name: &str) -> VersionVector {
-        self.entry_versions(name)
-            .fold(VersionVector::new(), |mut vv, entry| {
-                vv.merge(entry.version_vector());
-                vv
-            })
     }
 
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
@@ -370,18 +374,6 @@ impl JointDirectory {
 
         // `unwrap` is ok because we just ensured the entry exists in the code above.
         Ok(self.versions.get_mut(local_branch.id()).unwrap())
-    }
-
-    fn local_version(&self) -> Option<&Directory> {
-        self.local_branch
-            .as_ref()
-            .and_then(|branch| self.versions.get(branch.id()))
-    }
-
-    fn local_version_mut(&mut self) -> Option<&mut Directory> {
-        self.local_branch
-            .as_ref()
-            .and_then(|branch| self.versions.get_mut(branch.id()))
     }
 
     fn entry_versions<'a>(&'a self, name: &'a str) -> impl Iterator<Item = EntryRef<'a>> {

@@ -261,16 +261,6 @@ pub(crate) struct UniqueLock {
     blob_id: BlobId,
 }
 
-impl UniqueLock {
-    pub fn blob_id(&self) -> &BlobId {
-        &self.blob_id
-    }
-
-    pub fn branch_id(&self) -> &PublicKey {
-        &self.branch_id
-    }
-}
-
 impl Drop for UniqueLock {
     fn drop(&mut self) {
         let mut shared = self.shared.lock().unwrap();

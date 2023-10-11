@@ -1,15 +1,15 @@
 mod entry_map;
+mod flags;
 mod inode;
 mod multi_repo_vfs;
-mod open_flags;
 mod utils;
 
 pub use multi_repo_vfs::MultiRepoVFS;
 
 use self::{
     entry_map::{EntryMap, FileHandle},
+    flags::{OpenFlags, RenameFlags},
     inode::{Inode, InodeMap, InodeView, Representation},
-    open_flags::OpenFlags,
     utils::{FormatOptionScope, MaybeOwnedMut},
 };
 use fuser::{
@@ -194,8 +194,7 @@ impl fuser::Filesystem for VirtualFilesystem {
 
     fn opendir(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
         let handle = try_request!(
-            self.rt
-                .block_on(self.inner.opendir(inode, OpenFlags::from(flags))),
+            self.rt.block_on(self.inner.opendir(inode, flags.into())),
             reply
         );
         // TODO: what about `flags`?
@@ -210,10 +209,7 @@ impl fuser::Filesystem for VirtualFilesystem {
         flags: i32,
         reply: ReplyEmpty,
     ) {
-        try_request!(
-            self.inner.releasedir(inode, handle, OpenFlags::from(flags)),
-            reply
-        );
+        try_request!(self.inner.releasedir(inode, handle, flags.into()), reply);
         reply.ok();
     }
 
@@ -287,10 +283,8 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply: ReplyCreate,
     ) {
         let (attr, handle, flags) = try_request!(
-            self.rt.block_on(
-                self.inner
-                    .create(parent, name, mode, umask, OpenFlags::from(flags))
-            ),
+            self.rt
+                .block_on(self.inner.create(parent, name, mode, umask, flags.into())),
             reply
         );
         reply.created(&TTL, &attr, 0, handle, flags);
@@ -298,8 +292,7 @@ impl fuser::Filesystem for VirtualFilesystem {
 
     fn open(&mut self, _req: &Request, inode: Inode, flags: i32, reply: ReplyOpen) {
         let (handle, flags) = try_request!(
-            self.rt
-                .block_on(self.inner.open(inode, OpenFlags::from(flags))),
+            self.rt.block_on(self.inner.open(inode, flags.into())),
             reply
         );
         reply.opened(handle, flags);
@@ -316,10 +309,8 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply: ReplyEmpty,
     ) {
         try_request!(
-            self.rt.block_on(
-                self.inner
-                    .release(inode, handle, OpenFlags::from(flags), flush)
-            ),
+            self.rt
+                .block_on(self.inner.release(inode, handle, flags.into(), flush)),
             reply
         );
         reply.ok()
@@ -337,10 +328,8 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply: ReplyData,
     ) {
         let data = try_request!(
-            self.rt.block_on(
-                self.inner
-                    .read(inode, handle, offset, size, OpenFlags::from(flags))
-            ),
+            self.rt
+                .block_on(self.inner.read(inode, handle, offset, size, flags.into())),
             reply
         );
         reply.data(&data);
@@ -361,10 +350,8 @@ impl fuser::Filesystem for VirtualFilesystem {
         // TODO: what about `write_flags` and `lock_owner`?
 
         let size = try_request!(
-            self.rt.block_on(
-                self.inner
-                    .write(inode, handle, offset, data, OpenFlags::from(flags))
-            ),
+            self.rt
+                .block_on(self.inner.write(inode, handle, offset, data, flags.into())),
             reply
         );
         reply.written(size);
@@ -408,10 +395,13 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply: ReplyEmpty,
     ) {
         try_request!(
-            self.rt.block_on(
-                self.inner
-                    .rename(src_parent, src_name, dst_parent, dst_name, flags)
-            ),
+            self.rt.block_on(self.inner.rename(
+                src_parent,
+                src_name,
+                dst_parent,
+                dst_name,
+                flags.into()
+            )),
             reply
         );
         reply.ok()
@@ -548,7 +538,7 @@ impl Inner {
         Ok(make_file_attr(inode, EntryType::File, file.len()))
     }
 
-    #[instrument(skip(self, inode, flags), fields(path, %flags), err(Debug))]
+    #[instrument(skip(self, inode, flags), fields(path, ?flags), err(Debug))]
     async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {
         self.record_path(inode, None);
 
@@ -558,7 +548,7 @@ impl Inner {
         Ok(handle)
     }
 
-    #[instrument(skip(self, inode, flags), fields(path, handle, %flags), err(Debug))]
+    #[instrument(skip(self, inode, flags), fields(path, handle, ?flags), err(Debug))]
     fn releasedir(&mut self, inode: Inode, handle: FileHandle, flags: OpenFlags) -> Result<()> {
         self.record_path(inode, None);
 
@@ -677,7 +667,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(skip(self, parent, name, flags), fields(path, %flags), err(Debug))]
+    #[instrument(skip_all, fields(path, mode, umask, ?flags), err(Debug))]
     async fn create(
         &mut self,
         parent: Inode,
@@ -707,13 +697,13 @@ impl Inner {
         Ok((attr, handle, 0))
     }
 
-    #[instrument(skip(self, inode, flags), fields(path, %flags), err(Debug))]
+    #[instrument(skip_all, fields(path, ?flags), err(Debug))]
     async fn open(&mut self, inode: Inode, flags: OpenFlags) -> Result<(FileHandle, u32)> {
         self.record_path(inode, None);
 
         let mut file = self.open_file_by_inode(inode).await?;
 
-        if flags.contains(libc::O_TRUNC) {
+        if flags.contains(OpenFlags::TRUNC) {
             let local_branch = self.repository.local_branch()?;
 
             file.fork(local_branch).await?;
@@ -730,7 +720,7 @@ impl Inner {
         Ok((handle, 0))
     }
 
-    #[instrument(skip(self, inode, flags), fields(path, %flags), err(Debug))]
+    #[instrument(skip(self, inode, flags), fields(path, ?flags), err(Debug))]
     async fn release(
         &mut self,
         inode: Inode,
@@ -752,7 +742,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(skip(self, inode, flags), fields(path, %flags), err(Debug))]
+    #[instrument(skip(self, inode, flags), fields(path, ?flags), err(Debug))]
     async fn read(
         &mut self,
         inode: Inode,
@@ -786,7 +776,7 @@ impl Inner {
 
     #[instrument(
         skip(self, inode, data, flags),
-        fields(path, data.len = data.len(), %flags),
+        fields(path, data.len = data.len(), ?flags),
         err(Debug)
     )]
     async fn write(
@@ -852,9 +842,12 @@ impl Inner {
         src_name: &OsStr,
         dst_parent: Inode,
         dst_name: &OsStr,
-        flags: u32,
+        flags: RenameFlags,
     ) -> Result<()> {
-        record_fmt!("flags", "{:#x}", flags);
+        if !flags.is_empty() {
+            tracing::error!("flag(s) not supported");
+            return Err(Error::OperationNotSupported);
+        }
 
         let src_name = src_name.to_str().ok_or(Error::NonUtf8FileName)?;
         record_fmt!(
