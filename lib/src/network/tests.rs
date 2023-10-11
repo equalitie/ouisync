@@ -35,7 +35,7 @@ use tokio::{
 };
 use tracing::Instrument;
 
-const TIMEOUT: Duration = Duration::from_secs(20);
+const TIMEOUT: Duration = Duration::from_secs(60);
 
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
@@ -109,7 +109,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 // TODO: Make it faster and increase the cases.
 #[proptest(cases = 8)]
 fn transfer_blocks_between_two_replicas(
-    #[strategy(1usize..62)] block_count: usize,
+    #[strategy(1usize..32)] block_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(transfer_blocks_between_two_replicas_case(

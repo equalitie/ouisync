@@ -4,10 +4,16 @@ mod macros;
 mod connection;
 mod id;
 mod migrations;
+mod mutex;
+mod transaction;
 
 pub use id::DatabaseId;
 use tracing::Span;
 
+use self::{
+    mutex::{CommittedMutexTransaction, ConnectionMutex},
+    transaction::TransactionWrapper,
+};
 use crate::deadlock::ExpectShortLifetime;
 use ref_cast::RefCast;
 use sqlx::{
@@ -23,19 +29,12 @@ use std::{
     ops::{Deref, DerefMut},
     panic::Location,
     path::Path,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
     time::Duration,
 };
 #[cfg(test)]
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::{fs, sync::OwnedMutexGuard as AsyncOwnedMutexGuard, task};
-
-#[cfg(test)]
-use crate::sync::break_point::BreakPoint;
+use tokio::{fs, task};
 
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
 
@@ -46,9 +45,8 @@ pub(crate) use self::connection::Connection;
 pub(crate) struct Pool {
     // Pool with multiple read-only connections
     reads: SqlitePool,
-    // Pool with a single writable connection.
-    write: SqlitePool,
-    next_transaction_id: Arc<AtomicU64>,
+    // Single writable connection.
+    write: ConnectionMutex,
 }
 
 impl Pool {
@@ -60,12 +58,7 @@ impl Pool {
             .optimize_on_close(true, Some(1000));
 
         let write_options = common_options.clone();
-        let write = SqlitePoolOptions::new()
-            .min_connections(1)
-            .max_connections(1)
-            .test_before_acquire(false)
-            .connect_with(write_options)
-            .await?;
+        let write = ConnectionMutex::connect(write_options).await?;
 
         let read_options = common_options.read_only(true);
         let reads = SqlitePoolOptions::new()
@@ -74,11 +67,7 @@ impl Pool {
             .connect_with(read_options)
             .await?;
 
-        Ok(Self {
-            reads,
-            write,
-            next_transaction_id: Arc::new(AtomicU64::new(0)),
-        })
+        Ok(Self { reads, write })
     }
 
     /// Acquire a read-only database connection.
@@ -111,27 +100,30 @@ impl Pool {
                 ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
 
             Ok(ReadTransaction {
-                inner: tx,
-                track_lifetime: Some(track_lifetime),
+                inner: TransactionWrapper::Pool(tx),
+                _track_lifetime: Some(track_lifetime),
             })
         }
     }
 
-    /// Begin a regular ("unique") write transaction. At most one task can hold a write transaction
-    /// at any time. Any other tasks are blocked on calling `begin_write` until the task that
-    /// currently holds it is done with it (commits it or rolls it back). Performing read-only
-    /// operations concurrently while a write transaction is in use is still allowed. Those
-    /// operations will not see the writes performed via the write transaction until that
-    /// transaction is committed however.
-    ///
-    /// If an idle `SharedTransaction` exists in the pool when `begin_write` is called, it is
-    /// automatically committed before the regular write transaction is created.
+    /// Begin a write transaction. See [`WriteTransaction`] for more details.
     #[track_caller]
     pub fn begin_write(&self) -> impl Future<Output = Result<WriteTransaction, sqlx::Error>> + '_ {
         let location = Location::caller();
-        let transaction_id =
-            TransactionId(self.next_transaction_id.fetch_add(1, Ordering::Relaxed));
-        WriteTransaction::begin(&self.write, location, transaction_id)
+
+        async move {
+            let tx = self.write.begin().await?;
+
+            let track_lifetime =
+                ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
+
+            Ok(WriteTransaction {
+                inner: ReadTransaction {
+                    inner: TransactionWrapper::Mutex(tx),
+                    _track_lifetime: Some(track_lifetime),
+                },
+            })
+        }
     }
 
     pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
@@ -170,8 +162,8 @@ impl DerefMut for PoolConnection {
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
 pub(crate) struct ReadTransaction {
-    inner: sqlx::Transaction<'static, Sqlite>,
-    track_lifetime: Option<ExpectShortLifetime>,
+    inner: TransactionWrapper,
+    _track_lifetime: Option<ExpectShortLifetime>,
 }
 
 impl Deref for ReadTransaction {
@@ -197,33 +189,17 @@ impl fmt::Debug for ReadTransaction {
 impl_executor_by_deref!(ReadTransaction);
 
 /// Transaction that allows both reading and writing.
+///
+/// At most one task can hold a write transaction at any time. Any other tasks are blocked on
+/// calling `begin_write` until the task that currently holds it is done with it (commits it or
+/// rolls it back). Performing read-only operations concurrently while a write transaction is in
+/// use is still allowed. Those operations will not see the writes performed via the write
+/// transaction until that transaction is committed however.
 pub(crate) struct WriteTransaction {
     inner: ReadTransaction,
-    id: TransactionId,
-    #[cfg(test)]
-    break_on_commit: Option<BreakPoint>,
 }
 
 impl WriteTransaction {
-    async fn begin(
-        pool: &SqlitePool,
-        location: &'static Location<'static>,
-        id: TransactionId,
-    ) -> Result<Self, sqlx::Error> {
-        let tx = pool.begin().await?;
-        let track_lifetime = ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
-
-        Ok(Self {
-            inner: ReadTransaction {
-                inner: tx,
-                track_lifetime: Some(track_lifetime),
-            },
-            id,
-            #[cfg(test)]
-            break_on_commit: None,
-        })
-    }
-
     /// Commits the transaction.
     ///
     /// # Cancel safety
@@ -231,21 +207,18 @@ impl WriteTransaction {
     /// If the future returned by this function is cancelled before completion, the transaction
     /// is guaranteed to be either committed or rolled back but there is no way to tell in advance
     /// which of the two operations happens.
-    pub async fn commit(self) -> Result<CommitId, sqlx::Error> {
-        let result = self.inner.inner.commit().await;
-
-        #[cfg(test)]
-        if let Some(mut break_point) = self.break_on_commit {
-            // Unwrap is OK because this is code is only executed in tests and we want to make sure
-            // the BreakPointController is used appropriately.
-            break_point.hit().await.unwrap();
-        }
-
-        result.map(|()| CommitId(self.id.0))
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        self.commit_inner().await?;
+        Ok(())
     }
 
     /// Commits the transaction and if (and only if) the commit completes successfully, runs the
     /// given closure.
+    ///
+    /// # Atomicity
+    ///
+    /// If the commit succeeds, the closure is guaranteed to complete before another write
+    /// transaction begins.
     ///
     /// # Cancel safety
     ///
@@ -279,24 +252,28 @@ impl WriteTransaction {
     /// case and disabling the guard but there is nothing to do about number 4.
     pub async fn commit_and_then<F, R>(self, f: F) -> Result<R, sqlx::Error>
     where
-        F: FnOnce(CommitId) -> R + Send + 'static,
+        F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
         let span = Span::current();
-        let f = move |commit_id| span.in_scope(|| f(commit_id));
 
-        task::spawn(async move { self.commit().await.map(f) })
-            .await
-            .unwrap()
+        task::spawn(async move {
+            // Make sure `_committed_tx` is alive until `f` completes,
+            let _committed_tx = self.commit_inner().await?;
+            let result = span.in_scope(f);
+            Ok(result)
+        })
+        .await
+        .unwrap()
     }
 
-    pub fn id(&self) -> TransactionId {
-        self.id
-    }
+    async fn commit_inner(self) -> Result<CommittedMutexTransaction, sqlx::Error> {
+        let tx = match self.inner.inner {
+            TransactionWrapper::Mutex(tx) => tx.commit().await?,
+            TransactionWrapper::Pool(_) => unreachable!(),
+        };
 
-    #[cfg(test)]
-    pub fn break_on_commit(&mut self, break_point: BreakPoint) {
-        self.break_on_commit = Some(break_point);
+        Ok(tx)
     }
 }
 
@@ -320,65 +297,7 @@ impl std::fmt::Debug for WriteTransaction {
     }
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Copy, Clone)]
-pub(crate) struct TransactionId(u64);
-
-impl TransactionId {
-    #[cfg(test)]
-    pub fn new(n: u64) -> Self {
-        Self(n)
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct CommitId(u64);
-
-impl CommitId {
-    pub fn as_transaction_id(&self) -> TransactionId {
-        TransactionId(self.0)
-    }
-
-    #[cfg(test)]
-    pub fn new(n: u64) -> Self {
-        Self(n)
-    }
-}
-
 impl_executor_by_deref!(WriteTransaction);
-
-/// Shared write transaction
-///
-/// See [Pool::begin_shared_write] for more details.
-
-// NOTE: The `Option` is never `None` except after `commit` or `rollback` but those methods take
-// `self` by value so the `None` is never observable. So it's always OK to call `unwrap` on it.
-pub(crate) struct SharedWriteTransaction(AsyncOwnedMutexGuard<Option<WriteTransaction>>);
-
-impl Deref for SharedWriteTransaction {
-    type Target = WriteTransaction;
-
-    fn deref(&self) -> &Self::Target {
-        // `unwrap` is ok, see the NOTE above.
-        self.0.as_ref().unwrap()
-    }
-}
-
-impl DerefMut for SharedWriteTransaction {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // `unwrap` is ok, see the NOTE above.
-        self.0.as_mut().unwrap()
-    }
-}
-
-impl Drop for SharedWriteTransaction {
-    fn drop(&mut self) {
-        // The shared transaction is being released to the pool. We need to destroy the lifetime
-        // tracker otherwise it could trigger warning while being idle in the pool.
-        if let Some(tx) = &mut *self.0 {
-            tx.inner.track_lifetime = None;
-        }
-    }
-}
 
 /// Creates a new database and opens a connection to it.
 pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
