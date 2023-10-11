@@ -338,7 +338,7 @@ async fn move_file_onto_existing_directory() {
 
     assert_matches!(
         repo.move_entry("/", "src.txt", "/", "dst").await,
-        Err(Error::EntryExists)
+        Err(Error::EntryIsDirectory)
     )
 }
 
@@ -418,7 +418,7 @@ async fn move_directory_onto_existing_file() {
 
     assert_matches!(
         repo.move_entry("/", "src", "/", "dst").await,
-        Err(Error::EntryExists)
+        Err(Error::EntryIsFile)
     );
 }
 

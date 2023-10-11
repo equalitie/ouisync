@@ -620,8 +620,8 @@ impl Repository {
                     return Err(Error::DirectoryNotEmpty);
                 }
             }
-            (EntryType::File, Ok(EntryRef::Directory(_)))
-            | (EntryType::Directory, Ok(EntryRef::File(_))) => return Err(Error::EntryExists),
+            (EntryType::File, Ok(EntryRef::Directory(_))) => return Err(Error::EntryIsDirectory),
+            (EntryType::Directory, Ok(EntryRef::File(_))) => return Err(Error::EntryIsFile),
         };
 
         let dst_vv = dst_old_vv
