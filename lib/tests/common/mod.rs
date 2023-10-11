@@ -439,6 +439,11 @@ pub(crate) async fn check_file_version_content(
         return false;
     };
 
+    // For large files this is faster than reading the file content and compare.
+    if expected_content.len() as u64 != file.len() {
+        return false;
+    }
+
     let actual_content = match read_in_chunks(&mut file, 4096).await {
         Ok(content) => content,
         // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
