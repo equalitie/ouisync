@@ -127,13 +127,23 @@ fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
                 }
 
                 for (repo_index, content) in contents.iter().enumerate() {
-                    common::expect_file_content(&repos[repo_index].0, file_name, content)
-                        .instrument(tracing::info_span!(
-                            "read",
-                            repo = repo_index,
-                            file = file_name
-                        ))
-                        .await;
+                    let repo = &repos[repo_index].0;
+                    common::expect_file_version_content(
+                        repo,
+                        file_name,
+                        // By specifying local branch we ensure forking has finished successfully.
+                        // This makes the stats printed at the end of the test more deterministic
+                        // because without it sometimes the fork would not finish and thus wouldn't
+                        // contribute to the stats. This was observed mainly in the two node test.
+                        Some(repo.local_branch().unwrap().id()),
+                        content,
+                    )
+                    .instrument(tracing::info_span!(
+                        "read",
+                        repo = repo_index,
+                        file = file_name
+                    ))
+                    .await;
                 }
 
                 barrier.wait().await;
