@@ -18,7 +18,11 @@ name = "bench_large_file"
 harness = false
 
 [dependencies]
-argon2 = "0.5.2"
+# NOTE: There is a newer version of argon2, but that one is not backward
+# compatible with 0.4.1. Thus before we can bump the argon2 version, we need to
+# start versioning the metadata table as well as perform migrations. Discussion
+# on the topic is here https://github.com/equalitie/ouisync/issues/144
+argon2 = "0.4.1"
 async-recursion = "1.0.0"
 async-trait = { workspace = true }
 backoff = "0.4.0"
