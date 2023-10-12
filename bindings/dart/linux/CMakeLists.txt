@@ -14,6 +14,9 @@ project(${PROJECT_NAME} LANGUAGES CXX)
 
 include(FetchContent)
 
+# CMAKE_SOURCE_DIR points to `.../ouisync-app/linux` (absolute path)
+file(CREATE_LINK ${CMAKE_SOURCE_DIR}/../ouisync ${CMAKE_SOURCE_DIR}/../ouisync/bindings/dart/ouisync SYMBOLIC)
+
 FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git

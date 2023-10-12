@@ -8,6 +8,10 @@ project(${PROJECT_NAME} LANGUAGES CXX)
 
 include(FetchContent)
 
+# CMAKE_SOURCE_DIR points to `.../ouisync-app/windows` (absolute path)
+# For some reason, this doesn't work if the link is relative.
+file(CREATE_LINK ${CMAKE_SOURCE_DIR}/../ouisync ${CMAKE_SOURCE_DIR}/../ouisync/bindings/dart/ouisync SYMBOLIC)
+
 FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
