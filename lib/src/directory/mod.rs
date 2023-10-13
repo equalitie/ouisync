@@ -42,7 +42,6 @@ pub struct Directory {
 #[allow(clippy::len_without_is_empty)]
 impl Directory {
     /// Opens the root directory.
-    /// For internal use only. Use [`Branch::open_root`] instead.
     pub(crate) async fn open_root(
         branch: Branch,
         locking: DirectoryLocking,
@@ -51,10 +50,13 @@ impl Directory {
         Self::open(branch, Locator::ROOT, None, locking, fallback).await
     }
 
-    /// Opens the root directory or creates it if it doesn't exist.
-    /// For internal use only. Use [`Branch::open_or_create_root`] instead.
-    #[instrument(skip_all, fields(branch_id = ?branch.id()))]
-    pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
+    /// Opens the root directory or creates it if it doesn't exists and merges the given version
+    /// vector to it.
+    #[instrument(skip(branch), fields(branch_id = ?branch.id()))]
+    pub(crate) async fn open_or_create_root(
+        branch: Branch,
+        merge_vv: &VersionVector,
+    ) -> Result<Self> {
         let locator = Locator::ROOT;
 
         let lock = branch.locker().read(*locator.blob_id()).await;
@@ -76,13 +78,17 @@ impl Directory {
             Err(error) => return Err(error),
         };
 
-        let dir = if let Some(dir) = dir {
+        let dir = if let Some(mut dir) = dir {
+            if !merge_vv.is_empty() {
+                dir.bump(&mut tx, &mut changeset, merge_vv).await?;
+                dir.commit(tx, changeset).await?;
+            }
+
             dir
         } else {
             let mut dir = Self::create(branch, locator, None);
             dir.save(&mut tx, &mut changeset, &Content::empty()).await?;
-            dir.bump(&mut tx, &mut changeset, &VersionVector::new())
-                .await?;
+            dir.bump(&mut tx, &mut changeset, merge_vv).await?;
             dir.commit(tx, changeset).await?;
             dir
         };
@@ -146,6 +152,7 @@ impl Directory {
             .await
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn create_directory_with_version_vector(
         &mut self,
         name: String,
@@ -191,29 +198,30 @@ impl Directory {
         name: &str,
         merge_vv: &VersionVector,
     ) -> Result<Self> {
-        if let Some(mut dir) = self.try_open_directory(name).await? {
-            dir.merge_version_vector(merge_vv).await?;
-            Ok(dir)
+        let mut dir = if let Some(dir) = self.try_open_directory(name).await? {
+            dir
         } else {
             match self
                 .create_directory_with_version_vector(name.to_owned(), merge_vv)
                 .await
             {
-                Ok(dir) => Ok(dir),
+                Ok(dir) => return Ok(dir),
                 Err(Error::EntryExists) => {
                     // The entry have been created in the meantime by some other task. Try to open
                     // it again (this time it must exist).
-                    let mut dir = self
-                        .try_open_directory(name)
+                    self.try_open_directory(name)
                         .await?
-                        .expect("entry must exist");
-                    dir.merge_version_vector(merge_vv).await?;
-
-                    Ok(dir)
+                        .expect("entry must exist")
                 }
-                Err(error) => Err(error),
+                Err(error) => return Err(error),
             }
+        };
+
+        if !merge_vv.is_empty() {
+            dir.merge_version_vector(merge_vv).await?;
         }
+
+        Ok(dir)
     }
 
     async fn try_open_directory(&self, name: &str) -> Result<Option<Self>> {
@@ -359,15 +367,16 @@ impl Directory {
             None
         };
 
+        // Because we are transferring only the directory but not its content, we reflect that
+        // by setting its version vector to what the version vector of the source directory was
+        // at the time it was initially created.
+        let vv = VersionVector::first(*self.branch().id());
+
         if let Some((parent_dir, entry_name)) = parent {
-            // Because we are transferring only the directory but not its content, we reflect that
-            // by setting its version vector to what the version vector of the source directory was
-            // at the time it was initially created.
-            let vv = VersionVector::first(*self.branch().id());
             let mut parent_dir = parent_dir.fork(local_branch).await?;
             parent_dir.open_or_create_directory(entry_name, &vv).await
         } else {
-            local_branch.open_or_create_root().await
+            Self::open_or_create_root(local_branch.clone(), &vv).await
         }
     }
 

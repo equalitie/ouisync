@@ -5,10 +5,12 @@ use crate::{
     db,
     event::EventSender,
     store::Store,
+    test_utils,
 };
 use assert_matches::assert_matches;
 use std::collections::BTreeSet;
 use tempfile::TempDir;
+use tracing::Instrument;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
@@ -379,36 +381,37 @@ async fn remove_subdirectory() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn fork() {
-    let (_base_dir, branches) = setup_multiple::<2>().await;
+async fn fork_sanity_check() {
+    test_utils::init_log();
+
+    let (_base_dir, [branch0, branch1]) = setup_multiple().await;
+
+    tracing::info!(branch0 = ?branch0.id(), branch1 = ?branch1.id());
 
     // Create a nested directory by branch 0
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
-    root0.create_directory("dir".into()).await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
+    let dir0 = root0.create_directory("dir".into()).await.unwrap();
 
-    // Fork it by branch 1 and modify it
-    let dir0 = {
-        branches[0]
-            .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
-            .await
-            .unwrap()
-            .lookup("dir")
-            .unwrap()
-            .directory()
-            .unwrap()
-            .open(DirectoryFallback::Disabled)
-            .await
-            .unwrap()
-    };
+    // Fork it into branch 1
+    let mut dir1 = dir0
+        .fork(&branch1)
+        .instrument(tracing::info_span!("fork"))
+        .await
+        .unwrap();
+    assert_eq!(dir1.branch().id(), branch1.id());
 
-    let mut dir1 = dir0.fork(&branches[1]).await.unwrap();
+    // Verify the root dir got forked as well
+    let root1 = branch1
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
+    assert_eq!(root1.branch().id(), branch1.id());
 
+    // Modify it
     dir1.create_file("dog.jpg".into()).await.unwrap();
 
-    assert_eq!(dir1.branch().id(), branches[1].id());
-
     // Reopen orig dir and verify it's unchanged
-    let dir = branches[0]
+    let dir = branch0
         .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
@@ -423,7 +426,7 @@ async fn fork() {
     assert_eq!(dir.entries().count(), 0);
 
     // Reopen forked dir and verify it contains the new file
-    let dir = branches[1]
+    let dir = branch1
         .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
@@ -439,12 +442,6 @@ async fn fork() {
         dir.entries().map(|entry| entry.name()).next(),
         Some("dog.jpg")
     );
-
-    // Verify the root dir got forked as well
-    branches[1]
-        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
-        .await
-        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -2,9 +2,7 @@ use super::*;
 use crate::{
     blob, db,
     protocol::{BlockId, BLOCK_NONCE_SIZE, BLOCK_SIZE},
-    test_utils,
-    version_vector::VersionVector,
-    WriteSecrets,
+    test_utils, WriteSecrets,
 };
 use assert_matches::assert_matches;
 use rand::Rng;
@@ -14,6 +12,7 @@ use tokio::{
     sync::broadcast::Receiver,
     time::{self, timeout, Duration},
 };
+use tracing::instrument;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_directory_always_exists() {
@@ -89,11 +88,17 @@ async fn merge() {
     let remote_id = PublicKey::random();
     create_remote_file(&repo, remote_id, "test.txt", b"hello").await;
 
+    let remote_vv = repo
+        .get_branch(remote_id)
+        .unwrap()
+        .version_vector()
+        .await
+        .unwrap();
+
     // Open the local root.
     let local_branch = repo.local_branch().unwrap();
     let mut local_root = local_branch.open_or_create_root().await.unwrap();
 
-    let remote_vv = VersionVector::first(remote_id);
     wait_for(&repo, || async {
         local_branch.version_vector().await.unwrap() > remote_vv
     })
@@ -1070,6 +1075,7 @@ async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
     file.read_to_end().await.unwrap()
 }
 
+#[instrument(skip(repo, content), fields(content.len = content.len()))]
 async fn create_remote_file(
     repo: &Repository,
     remote_id: PublicKey,

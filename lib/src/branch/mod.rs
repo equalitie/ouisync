@@ -84,7 +84,7 @@ impl Branch {
     }
 
     pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
-        Directory::open_or_create_root(self.clone()).await
+        Directory::open_or_create_root(self.clone(), &VersionVector::new()).await
     }
 
     /// Ensures that the directory at the specified path exists including all its ancestors.
