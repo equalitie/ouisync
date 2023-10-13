@@ -3,10 +3,10 @@ use super::{
     message::{Request, Response, ResponseDisambiguator},
 };
 use crate::{
-    block_tracker::BlockPromise,
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
+    missing_parts::PartPromise,
     protocol::{Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::RepositoryMonitor,
     sync::uninitialized_watch,
@@ -24,7 +24,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) enum PendingRequest {
     RootNode(PublicKey, DebugRequest),
     ChildNodes(Hash, ResponseDisambiguator, DebugRequest),
-    Block(BlockPromise, DebugRequest),
+    Block(PartPromise, DebugRequest),
 }
 
 impl PendingRequest {
@@ -33,7 +33,7 @@ impl PendingRequest {
         match self {
             Self::RootNode(public_key, _) => Key::RootNode(*public_key),
             Self::ChildNodes(hash, disambiguator, _) => Key::ChildNodes(*hash, *disambiguator),
-            Self::Block(block_promise, _) => Key::Block(*block_promise.block_id()),
+            Self::Block(part_promise, _) => Key::Block(*part_promise.block_id()),
         }
     }
 
@@ -43,8 +43,8 @@ impl PendingRequest {
             Self::ChildNodes(hash, disambiguator, debug) => {
                 Request::ChildNodes(*hash, *disambiguator, debug.send())
             }
-            Self::Block(block_promise, debug) => {
-                Request::Block(*block_promise.block_id(), debug.send())
+            Self::Block(part_promise, debug) => {
+                Request::Block(*part_promise.block_id(), debug.send())
             }
         }
     }
@@ -71,7 +71,7 @@ pub(super) enum PendingResponse {
         block: Block,
         // This will be `None` if the request timeouted but we still received the response
         // afterwards.
-        block_promise: Option<BlockPromise>,
+        part_promise: Option<PartPromise>,
         permit: Option<ClientPermit>,
         debug: DebugReceivedResponse,
     },
@@ -114,15 +114,15 @@ impl PendingRequests {
             Entry::Vacant(entry) => {
                 let msg = pending_request.to_key();
 
-                let block_promise = match pending_request {
+                let part_promise = match pending_request {
                     PendingRequest::RootNode(_, _) => None,
                     PendingRequest::ChildNodes(_, _, _) => None,
-                    PendingRequest::Block(block_promise, _) => Some(block_promise),
+                    PendingRequest::Block(part_promise, _) => Some(part_promise),
                 };
 
                 entry.insert(RequestData {
                     timestamp: Instant::now(),
-                    block_promise,
+                    part_promise,
                     _peer_permit: peer_permit,
                     client_permit,
                 });
@@ -178,7 +178,7 @@ impl PendingRequests {
                                 block,
                                 permit,
                                 debug,
-                                block_promise: request_data.block_promise,
+                                part_promise: request_data.part_promise,
                             }
                         }
                     };
@@ -257,7 +257,7 @@ fn run_tracker(
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|(_, data)| data.block_promise.is_some())
+                .filter(|(_, data)| data.part_promise.is_some())
                 .min_by(|(_, lhs), (_, rhs)| lhs.timestamp.cmp(&rhs.timestamp))
                 .map(|(k, v)| (*k, v.timestamp));
 
@@ -273,7 +273,7 @@ fn run_tracker(
                         // Check it hasn't been removed in a meanwhile for cancel safety.
                         if let Some(data) = request_map.lock().unwrap().get_mut(&key) {
                             *monitor.request_timeouts.get() += 1;
-                            data.block_promise = None;
+                            data.part_promise = None;
                         }
                     }
                 };
@@ -299,7 +299,7 @@ impl Drop for PendingRequests {
 
 struct RequestData {
     timestamp: Instant,
-    block_promise: Option<BlockPromise>,
+    part_promise: Option<PartPromise>,
     _peer_permit: OwnedSemaphorePermit,
     client_permit: OwnedSemaphorePermit,
 }

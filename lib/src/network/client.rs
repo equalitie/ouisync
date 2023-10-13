@@ -5,9 +5,9 @@ use super::{
     pending::{PendingRequest, PendingRequests, PendingResponse},
 };
 use crate::{
-    block_tracker::{BlockPromise, BlockTrackerClient, OfferState},
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
+    missing_parts::{OfferState, PartPromise, TrackerClient},
     protocol::{Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::{BlockRequestMode, RepositoryMonitor, Vault},
     store::{self, ReceiveFilter},
@@ -25,7 +25,7 @@ pub(super) struct Client {
     pending_requests: Arc<PendingRequests>,
     request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
     receive_filter: ReceiveFilter,
-    block_tracker: BlockTrackerClient,
+    parts_tracker: TrackerClient,
     _request_sender: ScopedJoinHandle<()>,
 }
 
@@ -36,7 +36,7 @@ impl Client {
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let receive_filter = vault.store().receive_filter();
-        let block_tracker = vault.block_tracker.client();
+        let parts_tracker = vault.parts_tracker.client();
 
         let pending_requests = Arc::new(PendingRequests::new(vault.monitor.clone()));
 
@@ -54,7 +54,7 @@ impl Client {
             pending_requests,
             request_tx,
             receive_filter,
-            block_tracker,
+            parts_tracker,
             _request_sender: request_sender,
         }
     }
@@ -64,7 +64,7 @@ impl Client {
 
         let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
 
-        let mut block_promise_acceptor = self.block_tracker.acceptor();
+        let mut block_promise_acceptor = self.parts_tracker.acceptor();
 
         // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
         // some unsolicited responses and also the peer may be malicious and send us too many
@@ -99,9 +99,9 @@ impl Client {
 
         loop {
             select! {
-                block_promise = block_promise_acceptor.accept() => {
+                part_promise = block_promise_acceptor.accept() => {
                     let debug = DebugRequest::start();
-                    self.enqueue_request(PendingRequest::Block(block_promise, debug));
+                    self.enqueue_request(PendingRequest::Block(part_promise, debug));
                 }
                 _ = &mut move_from_pending_into_queued => break,
                 result = &mut handle_queued_responses => {
@@ -182,14 +182,14 @@ impl Client {
             }
             PendingResponse::Block {
                 block,
-                block_promise,
+                part_promise,
                 permit: _permit,
                 debug,
             } => {
                 self.vault
                     .monitor
                     .handle_block_metric
-                    .measure_ok(self.handle_block(block, block_promise, debug))
+                    .measure_ok(self.handle_block(block, part_promise, debug))
                     .await
             }
             PendingResponse::BlockNotFound {
@@ -324,13 +324,13 @@ impl Client {
         match self.vault.block_request_mode {
             BlockRequestMode::Lazy => {
                 for node in status.request_blocks {
-                    self.block_tracker.offer(node.block_id, offer_state);
+                    self.parts_tracker.offer(node.block_id, offer_state);
                 }
             }
             BlockRequestMode::Greedy => {
                 for node in status.request_blocks {
-                    if self.block_tracker.offer(node.block_id, offer_state) {
-                        self.vault.block_tracker.require(node.block_id);
+                    if self.parts_tracker.offer(node.block_id, offer_state) {
+                        self.vault.parts_tracker.require(node.block_id);
                     }
                 }
             }
@@ -352,10 +352,10 @@ impl Client {
     async fn handle_block(
         &self,
         block: Block,
-        block_promise: Option<BlockPromise>,
+        part_promise: Option<PartPromise>,
         _debug: DebugReceivedResponse,
     ) -> Result<()> {
-        match self.vault.receive_block(&block, block_promise).await {
+        match self.vault.receive_block(&block, part_promise).await {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
             Ok(()) | Err(Error::Store(store::Error::BlockNotReferenced)) => Ok(()),

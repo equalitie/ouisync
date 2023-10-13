@@ -7,20 +7,20 @@ use slab::Slab;
 use std::{fmt, sync::Arc};
 use tokio::sync::watch;
 
-/// Helper for tracking required missing blocks.
+/// Helper for tracking required missing parts (blocks and index nodes).
 #[derive(Clone)]
-pub(crate) struct BlockTracker {
+pub(crate) struct Tracker {
     shared: Arc<Shared>,
 }
 
-impl BlockTracker {
+impl Tracker {
     pub fn new() -> Self {
         let (notify_tx, _) = watch::channel(());
 
         Self {
             shared: Arc::new(Shared {
                 inner: BlockingMutex::new(Inner {
-                    missing_blocks: HashMap::default(),
+                    missing_parts: HashMap::default(),
                     clients: Slab::new(),
                 }),
                 notify_tx,
@@ -32,8 +32,8 @@ impl BlockTracker {
     pub fn require(&self, block_id: BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let missing_block = inner
-            .missing_blocks
+        let missing_part = inner
+            .missing_parts
             .entry(block_id)
             .or_insert_with(|| MissingBlock {
                 clients: HashSet::default(),
@@ -42,43 +42,43 @@ impl BlockTracker {
                 approved: false,
             });
 
-        if missing_block.required {
+        if missing_part.required {
             return;
         }
 
         tracing::trace!(?block_id, "require");
 
-        missing_block.required = true;
+        missing_part.required = true;
 
-        if !missing_block.clients.is_empty() {
+        if !missing_part.clients.is_empty() {
             self.shared.notify();
         }
     }
 
     /// Approve the block request if offered. This is called when `quota` is not `None`, otherwise
-    /// blocks are pre-approved from `BlockTrackerClient::offer(block_id, OfferState::Approved)`.
+    /// blocks are pre-approved from `TrackerClient::offer(block_id, OfferState::Approved)`.
     pub fn approve(&self, block_id: &BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let Some(missing_block) = inner.missing_blocks.get_mut(block_id) else {
+        let Some(missing_part) = inner.missing_parts.get_mut(block_id) else {
             return;
         };
 
-        if missing_block.approved {
+        if missing_part.approved {
             return;
         }
 
         tracing::trace!(?block_id, "approve");
 
-        missing_block.approved = true;
+        missing_part.approved = true;
 
         // If required and offered, notify the waiting acceptors.
-        if missing_block.required && !missing_block.clients.is_empty() {
+        if missing_part.required && !missing_part.clients.is_empty() {
             self.shared.notify();
         }
     }
 
-    pub fn client(&self) -> BlockTrackerClient {
+    pub fn client(&self) -> TrackerClient {
         let client_id = self
             .shared
             .inner
@@ -89,7 +89,7 @@ impl BlockTracker {
 
         let notify_rx = self.shared.notify_tx.subscribe();
 
-        BlockTrackerClient {
+        TrackerClient {
             shared: self.shared.clone(),
             client_id,
             notify_rx,
@@ -103,13 +103,13 @@ pub(crate) enum OfferState {
     Approved,
 }
 
-pub(crate) struct BlockTrackerClient {
+pub(crate) struct TrackerClient {
     shared: Arc<Shared>,
     client_id: ClientId,
     notify_rx: watch::Receiver<()>,
 }
 
-impl BlockTrackerClient {
+impl TrackerClient {
     pub fn acceptor(&self) -> BlockPromiseAcceptor {
         BlockPromiseAcceptor {
             shared: self.shared.clone(),
@@ -131,8 +131,8 @@ impl BlockTrackerClient {
 
         tracing::trace!(?block_id, ?state, "offer");
 
-        let missing_block = inner
-            .missing_blocks
+        let missing_part = inner
+            .missing_parts
             .entry(block_id)
             .or_insert_with(|| MissingBlock {
                 clients: HashSet::default(),
@@ -141,11 +141,11 @@ impl BlockTrackerClient {
                 approved: false,
             });
 
-        missing_block.clients.insert(self.client_id);
+        missing_part.clients.insert(self.client_id);
 
         match state {
             OfferState::Approved => {
-                missing_block.approved = true;
+                missing_part.approved = true;
                 self.shared.notify();
             }
             OfferState::Pending => (),
@@ -155,7 +155,7 @@ impl BlockTrackerClient {
     }
 }
 
-impl Drop for BlockTrackerClient {
+impl Drop for TrackerClient {
     fn drop(&mut self) {
         let mut inner = self.shared.inner.lock().unwrap();
         let block_ids = inner.clients.remove(self.client_id);
@@ -163,11 +163,11 @@ impl Drop for BlockTrackerClient {
 
         for block_id in block_ids {
             // unwrap is ok because of the invariant in `Inner`
-            let missing_block = inner.missing_blocks.get_mut(&block_id).unwrap();
+            let missing_part = inner.missing_parts.get_mut(&block_id).unwrap();
 
-            missing_block.clients.remove(&self.client_id);
+            missing_part.clients.remove(&self.client_id);
 
-            if missing_block.unaccept_by(self.client_id) {
+            if missing_part.unaccept_by(self.client_id) {
                 notify = true;
             }
 
@@ -197,7 +197,7 @@ impl BlockPromiseAcceptor {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn accept(&mut self) -> BlockPromise {
+    pub async fn accept(&mut self) -> PartPromise {
         loop {
             if let Some(block_promise) = self.try_accept() {
                 tracing::trace!(block_id = ?block_promise.block_id, "accept");
@@ -211,22 +211,20 @@ impl BlockPromiseAcceptor {
 
     /// Returns the next required and offered block request or `None` if there is no such request
     /// currently.
-    pub fn try_accept(&self) -> Option<BlockPromise> {
+    pub fn try_accept(&self) -> Option<PartPromise> {
         let mut inner = self.shared.inner.lock().unwrap();
         let inner = &mut *inner;
 
         // TODO: OPTIMIZE (but profile first) this linear lookup
         for block_id in &inner.clients[self.client_id] {
             // unwrap is ok because of the invariant in `Inner`
-            let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
+            let missing_part = inner.missing_parts.get_mut(block_id).unwrap();
 
-            if missing_block.required
-                && missing_block.approved
-                && missing_block.accepted_by.is_none()
+            if missing_part.required && missing_part.approved && missing_part.accepted_by.is_none()
             {
-                missing_block.accepted_by = Some(self.client_id);
+                missing_part.accepted_by = Some(self.client_id);
 
-                return Some(BlockPromise {
+                return Some(PartPromise {
                     shared: self.shared.clone(),
                     client_id: self.client_id,
                     block_id: *block_id,
@@ -240,14 +238,14 @@ impl BlockPromiseAcceptor {
 }
 
 /// Represents an accepted block request.
-pub(crate) struct BlockPromise {
+pub(crate) struct PartPromise {
     shared: Arc<Shared>,
     client_id: ClientId,
     block_id: BlockId,
     complete: bool,
 }
 
-impl BlockPromise {
+impl PartPromise {
     pub(crate) fn block_id(&self) -> &BlockId {
         &self.block_id
     }
@@ -256,11 +254,11 @@ impl BlockPromise {
     pub fn complete(mut self) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let Some(missing_block) = inner.missing_blocks.remove(&self.block_id) else {
+        let Some(missing_part) = inner.missing_parts.remove(&self.block_id) else {
             return;
         };
 
-        for client_id in missing_block.clients {
+        for client_id in missing_part.clients {
             if let Some(block_ids) = inner.clients.get_mut(client_id) {
                 block_ids.remove(&self.block_id);
             }
@@ -272,16 +270,16 @@ impl BlockPromise {
     }
 }
 
-impl fmt::Debug for BlockPromise {
+impl fmt::Debug for PartPromise {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("BlockPromise")
+        f.debug_struct("PartPromise")
             .field("client_id", &self.client_id)
             .field("block_id", &self.block_id)
             .finish()
     }
 }
 
-impl Drop for BlockPromise {
+impl Drop for PartPromise {
     fn drop(&mut self) {
         if self.complete {
             return;
@@ -299,10 +297,10 @@ impl Drop for BlockPromise {
         }
 
         // unwrap is ok because of the invariant in `Inner`
-        let missing_block = inner.missing_blocks.get_mut(&self.block_id).unwrap();
-        missing_block.clients.remove(&self.client_id);
+        let missing_part = inner.missing_parts.get_mut(&self.block_id).unwrap();
+        missing_part.clients.remove(&self.client_id);
 
-        if missing_block.unaccept_by(self.client_id) {
+        if missing_part.unaccept_by(self.client_id) {
             self.shared.notify();
         }
     }
@@ -321,7 +319,7 @@ impl Shared {
 
 // Invariant: for all `block_id` and `client_id` such that
 //
-//     missing_blocks[block_id].clients.contains(client_id)
+//     missing_parts[block_id].clients.contains(client_id)
 //
 // it must hold that
 //
@@ -329,7 +327,7 @@ impl Shared {
 //
 // and vice-versa.
 struct Inner {
-    missing_blocks: HashMap<BlockId, MissingBlock>,
+    missing_parts: HashMap<BlockId, MissingBlock>,
     clients: Slab<HashSet<BlockId>>,
 }
 
@@ -368,7 +366,7 @@ mod tests {
 
     #[test]
     fn simple() {
-        let tracker = BlockTracker::new();
+        let tracker = Tracker::new();
 
         let client = tracker.client();
 
@@ -392,7 +390,7 @@ mod tests {
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(BlockPromise::block_id),
+                .map(PartPromise::block_id),
             Some(&block0.id)
         );
 
@@ -402,7 +400,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn simple_async() {
-        let tracker = BlockTracker::new();
+        let tracker = Tracker::new();
 
         let block: Block = rand::random();
         let client = tracker.client();
@@ -440,7 +438,7 @@ mod tests {
 
     #[test]
     fn fallback_on_cancel_after_accept() {
-        let tracker = BlockTracker::new();
+        let tracker = Tracker::new();
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -453,7 +451,7 @@ mod tests {
 
         let block_promise = client0.acceptor().try_accept();
         assert_eq!(
-            block_promise.as_ref().map(BlockPromise::block_id),
+            block_promise.as_ref().map(PartPromise::block_id),
             Some(&block.id)
         );
         assert!(client1.acceptor().try_accept().is_none());
@@ -466,14 +464,14 @@ mod tests {
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(BlockPromise::block_id),
+                .map(PartPromise::block_id),
             Some(&block.id)
         );
     }
 
     #[test]
     fn fallback_on_client_drop_after_require_before_accept() {
-        let tracker = BlockTracker::new();
+        let tracker = Tracker::new();
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -492,14 +490,14 @@ mod tests {
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(BlockPromise::block_id),
+                .map(PartPromise::block_id),
             Some(&block.id)
         );
     }
 
     #[test]
     fn fallback_on_client_drop_after_require_after_accept() {
-        let tracker = BlockTracker::new();
+        let tracker = Tracker::new();
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -514,7 +512,7 @@ mod tests {
         let block_promise = client0.acceptor().try_accept();
 
         assert_eq!(
-            block_promise.as_ref().map(BlockPromise::block_id),
+            block_promise.as_ref().map(PartPromise::block_id),
             Some(&block.id)
         );
         assert!(client1.acceptor().try_accept().is_none());
@@ -526,14 +524,14 @@ mod tests {
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(BlockPromise::block_id),
+                .map(PartPromise::block_id),
             Some(&block.id)
         );
     }
 
     #[test]
     fn fallback_on_client_drop_before_request() {
-        let tracker = BlockTracker::new();
+        let tracker = Tracker::new();
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -552,14 +550,14 @@ mod tests {
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(BlockPromise::block_id),
+                .map(PartPromise::block_id),
             Some(&block.id)
         );
     }
 
     #[test]
     fn approve() {
-        let tracker = BlockTracker::new();
+        let tracker = Tracker::new();
         let client = tracker.client();
 
         let block: Block = rand::random();
@@ -574,7 +572,7 @@ mod tests {
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(BlockPromise::block_id),
+                .map(PartPromise::block_id),
             Some(&block.id)
         );
     }
@@ -583,7 +581,7 @@ mod tests {
     async fn race() {
         let num_clients = 10;
 
-        let tracker = BlockTracker::new();
+        let tracker = Tracker::new();
         let clients: Vec<_> = (0..num_clients).map(|_| tracker.client()).collect();
 
         let block: Block = rand::random();
@@ -604,7 +602,7 @@ mod tests {
                 let barrier = barrier.clone();
                 async move {
                     let block_promise = client.acceptor().try_accept();
-                    let result = block_promise.as_ref().map(BlockPromise::block_id).cloned();
+                    let result = block_promise.as_ref().map(PartPromise::block_id).cloned();
                     barrier.wait().await;
                     result
                 }
@@ -630,7 +628,7 @@ mod tests {
     fn stress_case(num_blocks: usize, rng_seed: u64) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
-        let tracker = BlockTracker::new();
+        let tracker = Tracker::new();
         let client = tracker.client();
 
         let block_ids: Vec<BlockId> = (&mut rng).sample_iter(Standard).take(num_blocks).collect();
@@ -664,7 +662,7 @@ mod tests {
             .acceptor()
             .try_accept()
             .as_ref()
-            .map(BlockPromise::block_id)
+            .map(PartPromise::block_id)
         {
             block_promise.insert(*block_id);
         }

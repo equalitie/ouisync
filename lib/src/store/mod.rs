@@ -30,11 +30,11 @@ use self::{
     index::UpdateSummaryReason,
 };
 use crate::{
-    block_tracker::BlockTracker as BlockDownloadTracker,
     collections::HashSet,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
     debug::DebugPrinter,
+    missing_parts::Tracker as PartsDownloadTracker,
     progress::Progress,
     protocol::{
         get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet,
@@ -77,7 +77,7 @@ impl Store {
     pub async fn set_block_expiration(
         &self,
         expiration_time: Option<Duration>,
-        block_download_tracker: BlockDownloadTracker,
+        parts_download_tracker: PartsDownloadTracker,
     ) -> Result<(), Error> {
         let mut tracker_lock = self.block_expiration_tracker.write().await;
 
@@ -97,7 +97,7 @@ impl Store {
         let tracker = BlockExpirationTracker::enable_expiration(
             self.db.clone(),
             expiration_time,
-            block_download_tracker,
+            parts_download_tracker,
             self.client_reload_index_tx.clone(),
             self.cache.clone(),
         )

@@ -15,7 +15,6 @@ pub mod path;
 
 mod access_control;
 mod blob;
-mod block_tracker;
 mod branch;
 mod collections;
 mod conflict;
@@ -31,6 +30,7 @@ mod future;
 mod iterator;
 mod joint_directory;
 mod joint_entry;
+mod missing_parts;
 mod progress;
 mod protocol;
 mod repository;

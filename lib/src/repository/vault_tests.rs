@@ -1,7 +1,6 @@
 use super::{vault::*, RepositoryId, RepositoryMonitor};
 use crate::{
     access_control::WriteSecrets,
-    block_tracker::OfferState,
     collections::HashSet,
     crypto::{
         sign::{Keypair, PublicKey},
@@ -11,6 +10,7 @@ use crate::{
     error::Error,
     event::EventSender,
     metrics::Metrics,
+    missing_parts::OfferState,
     progress::Progress,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
@@ -591,12 +591,12 @@ async fn receive_orphaned_block() {
     let (_base_dir, vault, _secrets) = setup().await;
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
-    let block_tracker = vault.block_tracker.client();
+    let parts_tracker = vault.parts_tracker.client();
 
     for block in snapshot.blocks().values() {
-        vault.block_tracker.require(block.id);
-        block_tracker.offer(block.id, OfferState::Approved);
-        let promise = block_tracker.acceptor().try_accept().unwrap();
+        vault.parts_tracker.require(block.id);
+        parts_tracker.offer(block.id, OfferState::Approved);
+        let promise = parts_tracker.acceptor().try_accept().unwrap();
 
         assert_matches!(
             vault.receive_block(block, Some(promise)).await,

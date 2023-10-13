@@ -5,11 +5,11 @@ use super::{
     server::Server,
 };
 use crate::{
-    block_tracker::OfferState,
     crypto::sign::{Keypair, PublicKey},
     db,
     event::{Event, EventSender, Payload},
     metrics::Metrics,
+    missing_parts::OfferState,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
         Block, BlockId, RootNode, SingleBlockPresence,
@@ -133,15 +133,15 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let mut server = create_server(a_vault.clone());
     let mut client = create_client(b_vault.clone());
 
-    let a_block_tracker = a_vault.block_tracker.client();
+    let a_parts_tracker = a_vault.parts_tracker.client();
 
     // Keep adding the blocks to replica A and verify they get received by replica B as well.
     let drive = async {
         for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
-            a_vault.block_tracker.require(*id);
-            a_block_tracker.offer(*id, OfferState::Approved);
-            let promise = a_block_tracker.acceptor().try_accept().unwrap();
+            a_vault.parts_tracker.require(*id);
+            a_parts_tracker.offer(*id, OfferState::Approved);
+            let promise = a_parts_tracker.acceptor().try_accept().unwrap();
 
             a_vault.receive_block(block, Some(promise)).await.unwrap();
             tracing::info!(?id, "write block");

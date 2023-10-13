@@ -1,11 +1,11 @@
 use super::{proof::Proof, MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 use crate::{
-    block_tracker::OfferState,
     collections::HashMap,
     crypto::{
         sign::{Keypair, PublicKey},
         Hash, Hashable,
     },
+    missing_parts::OfferState,
     protocol::{
         get_bucket, Block, BlockId, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
         INNER_LAYER_COUNT,
@@ -163,11 +163,11 @@ pub(crate) async fn receive_nodes(
 }
 
 pub(crate) async fn receive_blocks(repo: &Vault, snapshot: &Snapshot) {
-    let client = repo.block_tracker.client();
+    let client = repo.parts_tracker.client();
     let acceptor = client.acceptor();
 
     for block in snapshot.blocks().values() {
-        repo.block_tracker.require(block.id);
+        repo.parts_tracker.require(block.id);
         client.offer(block.id, OfferState::Approved);
         let promise = acceptor.try_accept().unwrap();
 

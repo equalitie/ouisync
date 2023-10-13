@@ -285,7 +285,7 @@ mod scan {
                 .block_exists(&block_id)
                 .await?
             {
-                shared.vault.block_tracker.require(block_id);
+                shared.vault.parts_tracker.require(block_id);
 
                 if !file_progress_cache_reset {
                     file_progress_cache_reset = true;

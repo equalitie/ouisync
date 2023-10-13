@@ -6,12 +6,12 @@ use super::{
     leaf_node, root_node,
 };
 use crate::{
-    block_tracker::BlockTracker as BlockDownloadTracker,
     collections::{hash_map, HashMap, HashSet},
     crypto::sign::PublicKey,
     db,
     deadlock::BlockingMutex,
     future::try_collect_into,
+    missing_parts::Tracker as PartsDownloadTracker,
     protocol::{BlockId, SingleBlockPresence},
     sync::{broadcast_hash_set, uninitialized_watch},
 };
@@ -63,7 +63,7 @@ impl BlockExpirationTracker {
     pub(super) async fn enable_expiration(
         pool: db::Pool,
         expiration_time: Duration,
-        block_download_tracker: BlockDownloadTracker,
+        parts_download_tracker: PartsDownloadTracker,
         client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
         cache: Arc<Cache>,
     ) -> Result<Self, Error> {
@@ -101,7 +101,7 @@ impl BlockExpirationTracker {
                     pool,
                     watch_rx,
                     expiration_time_rx,
-                    block_download_tracker,
+                    parts_download_tracker,
                     client_reload_index_tx,
                     cache,
                 )
@@ -287,7 +287,7 @@ async fn run_task(
     pool: db::Pool,
     mut watch_rx: uninitialized_watch::Receiver<()>,
     mut expiration_time_rx: watch::Receiver<Duration>,
-    block_download_tracker: BlockDownloadTracker,
+    parts_download_tracker: PartsDownloadTracker,
     client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
     cache: Arc<Cache>,
 ) -> Result<(), Error> {
@@ -325,7 +325,7 @@ async fn run_task(
                     set_as_missing_if_expired(
                         &pool,
                         to_missing_if_expired,
-                        &block_download_tracker,
+                        &parts_download_tracker,
                         &client_reload_index_tx,
                         cache.begin(),
                     )
@@ -396,7 +396,7 @@ async fn run_task(
 async fn set_as_missing_if_expired(
     pool: &db::Pool,
     block_ids: HashSet<BlockId>,
-    block_download_tracker: &BlockDownloadTracker,
+    parts_download_tracker: &PartsDownloadTracker,
     client_reload_index_tx: &broadcast_hash_set::Sender<PublicKey>,
     mut cache: CacheTransaction,
 ) -> Result<(), Error> {
@@ -413,7 +413,7 @@ async fn set_as_missing_if_expired(
             continue;
         }
 
-        block_download_tracker.require(*block_id);
+        parts_download_tracker.require(*block_id);
 
         let nodes: Vec<_> = leaf_node::load_parent_hashes(&mut tx, block_id)
             .try_collect()
@@ -517,7 +517,7 @@ mod test {
         let tracker = BlockExpirationTracker::enable_expiration(
             store.db().clone(),
             Duration::from_secs(1),
-            BlockDownloadTracker::new(),
+            PartsDownloadTracker::new(),
             broadcast_hash_set::channel().0,
             Arc::new(Cache::new()),
         )
@@ -554,7 +554,7 @@ mod test {
                 // Setting expiration time to something big, we don't care about blocks actually
                 // expiring in this test.
                 Some(Duration::from_secs(60 * 60 /* one hour */)),
-                BlockDownloadTracker::new(),
+                PartsDownloadTracker::new(),
             )
             .await
             .unwrap();

@@ -2,12 +2,12 @@
 
 use super::{quota, LocalId, Metadata, RepositoryId, RepositoryMonitor};
 use crate::{
-    block_tracker::{BlockPromise, BlockTracker},
     crypto::{sign::PublicKey, CacheHash},
     db,
     debug::DebugPrinter,
     error::{Error, Result},
     event::{EventSender, Payload},
+    missing_parts::{PartPromise, Tracker},
     protocol::{
         Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError, UntrustedProof,
     },
@@ -26,7 +26,7 @@ pub(crate) struct Vault {
     repository_id: RepositoryId,
     store: Store,
     pub event_tx: EventSender,
-    pub block_tracker: BlockTracker,
+    pub parts_tracker: Tracker,
     pub block_request_mode: BlockRequestMode,
     pub local_id: LocalId,
     pub monitor: Arc<RepositoryMonitor>,
@@ -46,7 +46,7 @@ impl Vault {
             repository_id,
             store,
             event_tx,
-            block_tracker: BlockTracker::new(),
+            parts_tracker: Tracker::new(),
             block_request_mode,
             local_id: LocalId::new(),
             monitor: Arc::new(monitor),
@@ -120,7 +120,7 @@ impl Vault {
     }
 
     /// Receive a block from other replica.
-    pub async fn receive_block(&self, block: &Block, promise: Option<BlockPromise>) -> Result<()> {
+    pub async fn receive_block(&self, block: &Block, promise: Option<PartPromise>) -> Result<()> {
         let block_id = block.id;
         let event_tx = self.event_tx.clone();
 
@@ -224,7 +224,7 @@ impl Vault {
     pub async fn set_block_expiration(&self, duration: Option<Duration>) -> Result<()> {
         Ok(self
             .store
-            .set_block_expiration(duration, self.block_tracker.clone())
+            .set_block_expiration(duration, self.parts_tracker.clone())
             .await?)
     }
 
@@ -237,7 +237,7 @@ impl Vault {
         let mut block_ids = tx.missing_block_ids_in_branch(branch_id);
 
         while let Some(block_id) = block_ids.try_next().await? {
-            self.block_tracker.approve(&block_id);
+            self.parts_tracker.approve(&block_id);
         }
 
         Ok(())
