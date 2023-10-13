@@ -55,7 +55,8 @@ impl BlockTracker {
         }
     }
 
-    /// Approve the block request if offered.
+    /// Approve the block request if offered. This is called when `quota` is not `None`, otherwise
+    /// blocks are pre-approved from `BlockTrackerClient::offer(block_id, OfferState::Approved)`.
     pub fn approve(&self, block_id: &BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
@@ -186,8 +187,12 @@ pub(crate) struct BlockPromiseAcceptor {
 }
 
 impl BlockPromiseAcceptor {
-    /// Returns the next required and offered block request. If there is no such request at the
-    /// moment this function is called, waits until one appears.
+    /// Returns the next required, offered and approved block request. If there is no such request
+    /// at the moment this function is called, waits until one appears.
+    ///
+    /// When the client receives this promise, it can request the block from the peer. The peer
+    /// either responds and the client can fullfill the promise, or the promise can time out (or be
+    /// dropped). If the latter, another will `accept` the promise.
     ///
     /// # Cancel safety
     ///
