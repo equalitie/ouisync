@@ -23,7 +23,7 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
-    protocol::{Locator, RootNode},
+    protocol::{Locator, RootNode, RootNodeFilter},
     store::{self, Changeset, ReadTransaction, WriteTransaction},
     version_vector::VersionVector,
 };
@@ -728,7 +728,7 @@ async fn load(
     blob_id: BlobId,
     fallback: DirectoryFallback,
 ) -> Result<(Blob, Content)> {
-    let mut root_node = tx.load_root_node(branch.id()).await?;
+    let mut root_node = tx.load_root_node(branch.id(), RootNodeFilter::Any).await?;
 
     loop {
         let error = match load_at(tx, &root_node, branch.clone(), blob_id).await {

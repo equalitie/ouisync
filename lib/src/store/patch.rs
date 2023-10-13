@@ -6,12 +6,12 @@ use crate::{
     },
     protocol::{
         get_bucket, BlockId, InnerNode, InnerNodeMap, LeafNodeSet, NodeState, Proof,
-        SingleBlockPresence, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH, INNER_LAYER_COUNT,
+        RootNodeFilter, RootNodeKind, SingleBlockPresence, Summary, EMPTY_INNER_HASH,
+        EMPTY_LEAF_HASH, INNER_LAYER_COUNT,
     },
     version_vector::VersionVector,
 };
 use std::{
-    cmp::Ordering,
     collections::{btree_map::Entry, BTreeMap},
     fmt,
     ops::Range,
@@ -30,16 +30,17 @@ pub(super) struct Patch {
 
 impl Patch {
     pub async fn new(tx: &mut ReadTransaction, branch_id: PublicKey) -> Result<Self, Error> {
-        let (old_vv, root_hash, root_summary) = match tx.load_root_node(&branch_id).await {
-            Ok(node) => {
-                let hash = node.proof.hash;
-                (node.proof.into_version_vector(), hash, node.summary)
-            }
-            Err(Error::BranchNotFound) => {
-                (VersionVector::new(), *EMPTY_INNER_HASH, Summary::INCOMPLETE)
-            }
-            Err(error) => return Err(error),
-        };
+        let (old_vv, root_hash, root_summary) =
+            match tx.load_root_node(&branch_id, RootNodeFilter::Any).await {
+                Ok(node) => {
+                    let hash = node.proof.hash;
+                    (node.proof.into_version_vector(), hash, node.summary)
+                }
+                Err(Error::BranchNotFound) => {
+                    (VersionVector::new(), *EMPTY_INNER_HASH, Summary::INCOMPLETE)
+                }
+                Err(error) => return Err(error),
+            };
 
         Ok(Self {
             branch_id,
@@ -211,15 +212,21 @@ impl Patch {
     ) -> Result<(), Error> {
         let db = tx.db();
 
-        let new_vv = match self.old_vv.partial_cmp(vv) {
-            Some(Ordering::Less) | None => self.old_vv.merged(vv),
-            Some(Ordering::Equal | Ordering::Greater) => self.old_vv.incremented(self.branch_id),
+        let new_vv = if vv.is_empty() {
+            self.old_vv.incremented(self.branch_id)
+        } else {
+            self.old_vv.merged(vv)
         };
 
         let new_proof = Proof::new(self.branch_id, new_vv, self.root_hash, write_keys);
 
-        let root_node = root_node::create(db, new_proof, self.root_summary).await?;
-        root_node::remove_older(db, &root_node).await?;
+        let (root_node, kind) =
+            root_node::create(db, new_proof, self.root_summary, RootNodeFilter::Any).await?;
+
+        match kind {
+            RootNodeKind::Published => root_node::remove_older(db, &root_node).await?,
+            RootNodeKind::Draft => (),
+        }
 
         tracing::trace!(
             vv = ?root_node.proof.version_vector,

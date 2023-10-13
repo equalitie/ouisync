@@ -173,7 +173,8 @@ mod tests {
         },
         protocol::{
             test_utils::Snapshot, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
-            MultiBlockPresence, Proof, RootNode, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH,
+            MultiBlockPresence, Proof, RootNode, RootNodeFilter, Summary, EMPTY_INNER_HASH,
+            EMPTY_LEAF_HASH,
         },
         test_utils,
         version_vector::VersionVector,
@@ -415,7 +416,7 @@ mod tests {
         let write_keys = Keypair::generate(&mut rng);
         let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
-        let mut root_node = root_node::create(
+        let (mut root_node, _) = root_node::create(
             &mut write_tx,
             Proof::new(
                 writer_id,
@@ -424,6 +425,7 @@ mod tests {
                 &write_keys,
             ),
             Summary::INCOMPLETE,
+            RootNodeFilter::Published,
         )
         .await
         .unwrap();
@@ -518,7 +520,7 @@ mod tests {
         let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
         // Save the snapshot initially with all nodes missing.
-        let mut root_node = root_node::create(
+        let (mut root_node, _) = root_node::create(
             &mut write_tx,
             Proof::new(
                 writer_id,
@@ -527,6 +529,7 @@ mod tests {
                 &write_keys,
             ),
             Summary::INCOMPLETE,
+            RootNodeFilter::Any,
         )
         .await
         .unwrap();

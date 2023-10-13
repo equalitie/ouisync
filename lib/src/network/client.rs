@@ -8,7 +8,10 @@ use crate::{
     block_tracker::{BlockPromise, BlockTrackerClient, OfferState},
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    protocol::{Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
+    protocol::{
+        Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, RootNodeFilter,
+        UntrustedProof,
+    },
     repository::{BlockRequestMode, RepositoryMonitor, Vault},
     store::{self, ReceiveFilter},
 };
@@ -417,7 +420,7 @@ impl Client {
         };
 
         for branch_id in branches {
-            let root_node = match reader.load_root_node(branch_id).await {
+            let root_node = match reader.load_root_node(branch_id, RootNodeFilter::Any).await {
                 Ok(root_node) => root_node,
                 Err(error) => {
                     tracing::error!(?branch_id, ?error, "Failed to load root node");

@@ -110,7 +110,7 @@ mod tests {
     use super::*;
     use crate::{
         crypto::sign::{Keypair, PublicKey},
-        protocol::SingleBlockPresence,
+        protocol::{RootNodeFilter, SingleBlockPresence},
         store::{Changeset, Store},
     };
     use tempfile::TempDir;
@@ -140,7 +140,12 @@ mod tests {
         tx.commit().await.unwrap();
 
         let mut r = store.acquire_read().await.unwrap();
-        let root_hash = r.load_root_node(&branch_id).await.unwrap().proof.hash;
+        let root_hash = r
+            .load_root_node(&branch_id, RootNodeFilter::Any)
+            .await
+            .unwrap()
+            .proof
+            .hash;
 
         assert_eq!(
             count_referenced_blocks(r.db(), &[root_hash]).await.unwrap(),
@@ -180,8 +185,18 @@ mod tests {
                 .unwrap();
         }
 
-        let root_hash_a = tx.load_root_node(&branch_a_id).await.unwrap().proof.hash;
-        let root_hash_b = tx.load_root_node(&branch_b_id).await.unwrap().proof.hash;
+        let root_hash_a = tx
+            .load_root_node(&branch_a_id, RootNodeFilter::Any)
+            .await
+            .unwrap()
+            .proof
+            .hash;
+        let root_hash_b = tx
+            .load_root_node(&branch_b_id, RootNodeFilter::Any)
+            .await
+            .unwrap()
+            .proof
+            .hash;
 
         assert_eq!(count_referenced_blocks(tx.db(), &[]).await.unwrap(), 0);
         assert_eq!(

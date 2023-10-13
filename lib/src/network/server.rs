@@ -8,7 +8,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    protocol::{BlockContent, BlockId, RootNode},
+    protocol::{BlockContent, BlockId, RootNode, RootNodeFilter},
     repository::Vault,
     store,
     sync::stream::Throttle,
@@ -121,7 +121,7 @@ impl<'a> Responder<'a> {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(&branch_id)
+            .load_root_node(&branch_id, RootNodeFilter::Published)
             .await;
 
         match root_node {
@@ -303,6 +303,8 @@ impl<'a> Monitor<'a> {
             return Ok(());
         }
 
+        // TODO: Do not send drafts
+
         tracing::trace!(
             branch_id = ?root_node.proof.writer_id,
             hash = ?root_node.proof.hash,
@@ -339,7 +341,7 @@ impl<'a> Monitor<'a> {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(branch_id)
+            .load_root_node(branch_id, RootNodeFilter::Any)
             .await?)
     }
 }

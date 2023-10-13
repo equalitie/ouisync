@@ -8,7 +8,7 @@ use crate::{
     event::{EventScope, EventSender, Payload},
     file::{File, FileProgressCache},
     path,
-    protocol::{BlockId, Locator},
+    protocol::{BlockId, Locator, RootNodeFilter},
     store::{self, Store},
     version_vector::VersionVector,
 };
@@ -62,7 +62,7 @@ impl Branch {
             .store
             .acquire_read()
             .await?
-            .load_root_node(self.id())
+            .load_root_node(self.id(), RootNodeFilter::Any)
             .await
         {
             Ok(root_node) => Ok(root_node.proof.into_version_vector()),

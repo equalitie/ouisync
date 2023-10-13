@@ -20,7 +20,7 @@ pub(crate) use self::{
     leaf_node::{LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
     locator::Locator,
     proof::{Proof, ProofError, UntrustedProof},
-    root_node::RootNode,
+    root_node::{RootNode, RootNodeFilter, RootNodeKind},
     summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
 };
 

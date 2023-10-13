@@ -3,7 +3,10 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
     debug::DebugPrinter,
-    protocol::{MultiBlockPresence, NodeState, Proof, RootNode, SingleBlockPresence, Summary},
+    protocol::{
+        MultiBlockPresence, NodeState, Proof, RootNode, RootNodeFilter, RootNodeKind,
+        SingleBlockPresence, Summary,
+    },
     version_vector::VersionVector,
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
@@ -29,15 +32,24 @@ pub(super) struct ReceiveAction {
     pub request_children: bool,
 }
 
-/// Creates a root node with the specified proof.
+/// Creates a root node with the specified proof and summary.
 ///
-/// The version vector must be greater than the version vector of any currently existing root
-/// node in the same branch, otherwise no node is created and an error is returned.
+/// A root node can be either "published" or "draft". A published node is one whose version vector
+/// is strictly greater than the version vector of any previous node in the same branch.
+/// A draft node is one whose version vector is equal to the version vector of the previous node.
+///
+/// The `filter` parameter determines what kind of node can be created.
+///
+/// Attempt to create a node whose version vector is less than or concurrent to the previous one is
+/// not allowed.
+///
+/// Returns also the kind of node (published or draft) that was actually created.
 pub(super) async fn create(
     tx: &mut db::WriteTransaction,
     proof: Proof,
     mut summary: Summary,
-) -> Result<RootNode, Error> {
+    filter: RootNodeFilter,
+) -> Result<(RootNode, RootNodeKind), Error> {
     // Check that the root node to be created is newer than the latest existing root node in
     // the same branch.
     let old_vv: VersionVector = sqlx::query(
@@ -55,15 +67,13 @@ pub(super) async fn create(
     .await?
     .unwrap_or_else(VersionVector::new);
 
-    match proof.version_vector.partial_cmp(&old_vv) {
-        Some(Ordering::Greater) => (),
-        Some(Ordering::Equal | Ordering::Less) => {
-            return Err(Error::OutdatedRootNode);
-        }
-        None => {
-            return Err(Error::ConcurrentRootNode);
-        }
-    }
+    let kind = match (proof.version_vector.partial_cmp(&old_vv), filter) {
+        (Some(Ordering::Greater), _) => RootNodeKind::Published,
+        (Some(Ordering::Equal), RootNodeFilter::Any) => RootNodeKind::Draft,
+        (Some(Ordering::Equal), RootNodeFilter::Published) => return Err(Error::OutdatedRootNode),
+        (Some(Ordering::Less), _) => return Err(Error::OutdatedRootNode),
+        (None, _) => return Err(Error::ConcurrentRootNode),
+    };
 
     // Inherit non-incomplete state from existing nodes with the same hash.
     // (All nodes with the same hash have the same state so it's enough to fetch only the first one)
@@ -104,11 +114,13 @@ pub(super) async fn create(
     .fetch_one(tx)
     .await?;
 
-    Ok(RootNode {
+    let node = RootNode {
         snapshot_id,
         proof,
         summary,
-    })
+    };
+
+    Ok((node, kind))
 }
 
 /// Returns the latest approved root node of the specified branch.
@@ -616,7 +628,7 @@ mod tests {
 
         let mut tx = pool.begin_write().await.unwrap();
 
-        let node0 = create(
+        let (node0, _) = create(
             &mut tx,
             Proof::new(
                 writer_id,
@@ -625,6 +637,7 @@ mod tests {
                 &write_keys,
             ),
             Summary::INCOMPLETE,
+            RootNodeFilter::Any,
         )
         .await
         .unwrap();
@@ -636,6 +649,46 @@ mod tests {
             .unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0], node0);
+    }
+
+    #[tokio::test]
+    async fn create_draft() {
+        let (_base_dir, pool) = setup().await;
+
+        let writer_id = PublicKey::random();
+        let write_keys = Keypair::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let (node0, kind) = create(
+            &mut tx,
+            Proof::new(
+                writer_id,
+                VersionVector::first(writer_id),
+                rand::random(),
+                &write_keys,
+            ),
+            Summary::INCOMPLETE,
+            RootNodeFilter::Any,
+        )
+        .await
+        .unwrap();
+        assert_eq!(kind, RootNodeKind::Published);
+
+        let (_node1, kind) = create(
+            &mut tx,
+            Proof::new(
+                writer_id,
+                node0.proof.version_vector.clone(),
+                rand::random(),
+                &write_keys,
+            ),
+            Summary::INCOMPLETE,
+            RootNodeFilter::Any,
+        )
+        .await
+        .unwrap();
+        assert_eq!(kind, RootNodeKind::Draft);
     }
 
     #[tokio::test]
@@ -655,6 +708,7 @@ mod tests {
             &mut tx,
             Proof::new(writer_id, vv1.clone(), hash, &write_keys),
             Summary::INCOMPLETE,
+            RootNodeFilter::Any,
         )
         .await
         .unwrap();
@@ -665,6 +719,7 @@ mod tests {
                 &mut tx,
                 Proof::new(writer_id, vv1, hash, &write_keys),
                 Summary::INCOMPLETE,
+                RootNodeFilter::Published, // With `RootNodeFilter::Any` this would be allowed
             )
             .await,
             Err(Error::OutdatedRootNode)
@@ -676,6 +731,7 @@ mod tests {
                 &mut tx,
                 Proof::new(writer_id, vv0, hash, &write_keys),
                 Summary::INCOMPLETE,
+                RootNodeFilter::Any,
             )
             .await,
             Err(Error::OutdatedRootNode)

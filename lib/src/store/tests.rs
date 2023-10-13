@@ -262,7 +262,7 @@ async fn fallback() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&branch_0_id)
+        .load_root_node(&branch_0_id, RootNodeFilter::Any)
         .await
         .unwrap();
     store.remove_outdated_snapshots(&root_node).await.unwrap();
@@ -406,7 +406,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                     .acquire_read()
                     .await
                     .unwrap()
-                    .load_root_node(&branch_id)
+                    .load_root_node(&branch_id, RootNodeFilter::Any)
                     .await
                 {
                     Ok(root_node) => root_node,
@@ -427,7 +427,12 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
         }
 
         // Verify the snapshot is still complete
-        let root_hash = tx.load_root_node(&branch_id).await.unwrap().proof.hash;
+        let root_hash = tx
+            .load_root_node(&branch_id, RootNodeFilter::Any)
+            .await
+            .unwrap()
+            .proof
+            .hash;
         check_complete(&mut tx, &root_hash).await;
     }
 }

@@ -38,7 +38,7 @@ use crate::{
     progress::Progress,
     protocol::{
         get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet,
-        MultiBlockPresence, Proof, RootNode, Summary, INNER_LAYER_COUNT,
+        MultiBlockPresence, Proof, RootNode, RootNodeFilter, Summary, INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
     sync::broadcast_hash_set,
@@ -174,8 +174,12 @@ impl Store {
         })
     }
 
-    /// Remove outdated older snapshots. Note this preserves older snapshots that can be used as
-    /// fallback for the latest snapshot and only removes those that can't.
+    /// Remove outdated older snapshots.
+    ///
+    /// This preserves older snapshots that can be used as fallback for the latest snapshot and
+    /// only removes those that can't.
+    /// This also preserves all older snapshots that have the same version vector as the latest
+    /// one (that is, when the latest snapshot is a draft).
     pub async fn remove_outdated_snapshots(&self, root_node: &RootNode) -> Result<(), Error> {
         // First remove all incomplete snapshots as they can never serve as fallback.
         let mut tx = self.begin_write().await?;
@@ -188,6 +192,19 @@ impl Store {
         let mut new = Cow::Borrowed(root_node);
 
         while let Some(old) = reader.load_prev_root_node(&new).await? {
+            if old.proof.version_vector == new.proof.version_vector {
+                // `new` is a draft and so we can't remove `old`. Try the previous snapshot.
+                tracing::trace!(
+                    branch_id = ?old.proof.writer_id,
+                    hash = ?old.proof.hash,
+                    vv = ?old.proof.version_vector,
+                    "outdated snapshot not removed - draft"
+                );
+
+                new = Cow::Owned(old);
+                continue;
+            }
+
             if root_node::check_fallback(reader.db(), &old, &new).await? {
                 // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
                 // previous snapshot.
@@ -199,19 +216,20 @@ impl Store {
                 );
 
                 new = Cow::Owned(old);
-            } else {
-                // `old` can't serve as fallback for `self` and so we can safely remove it
-                let mut tx = self.begin_write().await?;
-                root_node::remove(tx.db(), &old).await?;
-                tx.commit().await?;
-
-                tracing::trace!(
-                    branch_id = ?old.proof.writer_id,
-                    hash = ?old.proof.hash,
-                    vv = ?old.proof.version_vector,
-                    "outdated snapshot removed"
-                );
+                continue;
             }
+
+            // `old` can't serve as fallback for `self` and so we can safely remove it
+            let mut tx = self.begin_write().await?;
+            root_node::remove(tx.db(), &old).await?;
+            tx.commit().await?;
+
+            tracing::trace!(
+                branch_id = ?old.proof.writer_id,
+                hash = ?old.proof.hash,
+                vv = ?old.proof.version_vector,
+                "outdated snapshot removed"
+            );
         }
 
         Ok(())
@@ -294,17 +312,42 @@ impl Reader {
         &mut self,
         branch_id: &PublicKey,
     ) -> Result<usize, Error> {
-        let root_hash = self.load_root_node(branch_id).await?.proof.hash;
+        let root_hash = self
+            .load_root_node(branch_id, RootNodeFilter::Any)
+            .await?
+            .proof
+            .hash;
         leaf_node::count_in(self.db(), 0, &root_hash).await
     }
 
     /// Load the latest approved root node of the given branch.
-    pub async fn load_root_node(&mut self, branch_id: &PublicKey) -> Result<RootNode, Error> {
-        if let Some(node) = self.cache.get_root(branch_id) {
-            return Ok(node);
-        }
+    pub async fn load_root_node(
+        &mut self,
+        branch_id: &PublicKey,
+        filter: RootNodeFilter,
+    ) -> Result<RootNode, Error> {
+        let node = if let Some(node) = self.cache.get_root(branch_id) {
+            node
+        } else {
+            root_node::load(self.db(), branch_id).await?
+        };
 
-        root_node::load(self.db(), branch_id).await
+        match filter {
+            RootNodeFilter::Any => Ok(node),
+            RootNodeFilter::Published => {
+                let mut new = node;
+
+                while let Some(old) = self.load_prev_root_node(&new).await? {
+                    if new.proof.version_vector > old.proof.version_vector {
+                        break;
+                    } else {
+                        new = old;
+                    }
+                }
+
+                Ok(new)
+            }
+        }
     }
 
     pub async fn load_prev_root_node(
@@ -373,7 +416,7 @@ impl ReadTransaction {
         branch_id: &PublicKey,
         encoded_locator: &Hash,
     ) -> Result<BlockId, Error> {
-        let root_node = self.load_root_node(branch_id).await?;
+        let root_node = self.load_root_node(branch_id, RootNodeFilter::Any).await?;
         self.find_block_at(&root_node, encoded_locator).await
     }
 
@@ -509,7 +552,7 @@ impl WriteTransaction {
         let action = root_node::decide_action(db, &proof, &block_presence).await?;
 
         if action.insert {
-            root_node::create(db, proof, Summary::INCOMPLETE).await?;
+            root_node::create(db, proof, Summary::INCOMPLETE, RootNodeFilter::Published).await?;
 
             // Ignoring quota here because if the snapshot became complete by receiving this root
             // node it means that we already have all the other nodes and so the quota validation
