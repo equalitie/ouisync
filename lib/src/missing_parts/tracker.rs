@@ -21,7 +21,7 @@ impl Tracker {
             shared: Arc::new(Shared {
                 inner: BlockingMutex::new(Inner {
                     missing_parts: HashMap::default(),
-                    clients: Slab::new(),
+                    offering_clients: Slab::new(),
                 }),
                 notify_tx,
             }),
@@ -36,7 +36,7 @@ impl Tracker {
             .missing_parts
             .entry(block_id)
             .or_insert_with(|| MissingBlock {
-                clients: HashSet::default(),
+                offering_clients: HashSet::default(),
                 accepted_by: None,
                 required: false,
                 approved: false,
@@ -50,7 +50,7 @@ impl Tracker {
 
         missing_part.required = true;
 
-        if !missing_part.clients.is_empty() {
+        if !missing_part.offering_clients.is_empty() {
             self.shared.notify();
         }
     }
@@ -73,7 +73,7 @@ impl Tracker {
         missing_part.approved = true;
 
         // If required and offered, notify the waiting acceptors.
-        if missing_part.required && !missing_part.clients.is_empty() {
+        if missing_part.required && !missing_part.offering_clients.is_empty() {
             self.shared.notify();
         }
     }
@@ -84,7 +84,7 @@ impl Tracker {
             .inner
             .lock()
             .unwrap()
-            .clients
+            .offering_clients
             .insert(HashSet::default());
 
         let notify_rx = self.shared.notify_tx.subscribe();
@@ -119,12 +119,12 @@ impl TrackerClient {
     }
 
     /// Offer to request the given block by the client with `client_id` if it is, or will become,
-    /// required. Returns `true` if this block was offered for the first time (by any client), `false` if it was
-    /// already offered before but not yet accepted or cancelled.
+    /// required and approved. Returns `true` if this block was offered for the first time (by any
+    /// client), `false` if it was already offered before but not yet accepted or cancelled.
     pub fn offer(&self, block_id: BlockId, state: OfferState) -> bool {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        if !inner.clients[self.client_id].insert(block_id) {
+        if !inner.offering_clients[self.client_id].insert(block_id) {
             // Already offered
             return false;
         }
@@ -135,13 +135,13 @@ impl TrackerClient {
             .missing_parts
             .entry(block_id)
             .or_insert_with(|| MissingBlock {
-                clients: HashSet::default(),
+                offering_clients: HashSet::default(),
                 accepted_by: None,
                 required: false,
                 approved: false,
             });
 
-        missing_part.clients.insert(self.client_id);
+        missing_part.offering_clients.insert(self.client_id);
 
         match state {
             OfferState::Approved => {
@@ -158,14 +158,14 @@ impl TrackerClient {
 impl Drop for TrackerClient {
     fn drop(&mut self) {
         let mut inner = self.shared.inner.lock().unwrap();
-        let block_ids = inner.clients.remove(self.client_id);
+        let block_ids = inner.offering_clients.remove(self.client_id);
         let mut notify = false;
 
         for block_id in block_ids {
             // unwrap is ok because of the invariant in `Inner`
             let missing_part = inner.missing_parts.get_mut(&block_id).unwrap();
 
-            missing_part.clients.remove(&self.client_id);
+            missing_part.offering_clients.remove(&self.client_id);
 
             if missing_part.unaccept_by(self.client_id) {
                 notify = true;
@@ -216,7 +216,7 @@ impl BlockPromiseAcceptor {
         let inner = &mut *inner;
 
         // TODO: OPTIMIZE (but profile first) this linear lookup
-        for block_id in &inner.clients[self.client_id] {
+        for block_id in &inner.offering_clients[self.client_id] {
             // unwrap is ok because of the invariant in `Inner`
             let missing_part = inner.missing_parts.get_mut(block_id).unwrap();
 
@@ -258,8 +258,8 @@ impl PartPromise {
             return;
         };
 
-        for client_id in missing_part.clients {
-            if let Some(block_ids) = inner.clients.get_mut(client_id) {
+        for client_id in missing_part.offering_clients {
+            if let Some(block_ids) = inner.offering_clients.get_mut(client_id) {
                 block_ids.remove(&self.block_id);
             }
         }
@@ -287,7 +287,7 @@ impl Drop for PartPromise {
 
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let client = match inner.clients.get_mut(self.client_id) {
+        let client = match inner.offering_clients.get_mut(self.client_id) {
             Some(client) => client,
             None => return,
         };
@@ -298,7 +298,7 @@ impl Drop for PartPromise {
 
         // unwrap is ok because of the invariant in `Inner`
         let missing_part = inner.missing_parts.get_mut(&self.block_id).unwrap();
-        missing_part.clients.remove(&self.client_id);
+        missing_part.offering_clients.remove(&self.client_id);
 
         if missing_part.unaccept_by(self.client_id) {
             self.shared.notify();
@@ -319,21 +319,21 @@ impl Shared {
 
 // Invariant: for all `block_id` and `client_id` such that
 //
-//     missing_parts[block_id].clients.contains(client_id)
+//     missing_parts[block_id].offering_clients.contains(client_id)
 //
 // it must hold that
 //
-//     clients[client_id].contains(block_id)
+//     offering_clients[client_id].contains(block_id)
 //
 // and vice-versa.
 struct Inner {
     missing_parts: HashMap<BlockId, MissingBlock>,
-    clients: Slab<HashSet<BlockId>>,
+    offering_clients: Slab<HashSet<BlockId>>,
 }
 
 #[derive(Debug)]
 struct MissingBlock {
-    clients: HashSet<ClientId>,
+    offering_clients: HashSet<ClientId>,
     accepted_by: Option<ClientId>,
     required: bool,
     approved: bool,
