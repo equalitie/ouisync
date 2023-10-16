@@ -8,7 +8,7 @@ use crate::{
     branch::Branch,
     directory::{content::EntryExists, Directory},
     error::Result,
-    protocol::Locator,
+    protocol::{Bump, Locator},
     store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
@@ -43,19 +43,21 @@ impl ParentContext {
         }
     }
 
-    /// This updates the version vector of this entry and all its ancestors.
+    /// Updates the version vector of this entry and all its ancestors.
+    ///
+    /// Note: If `bump` is empty, it increments the version corresponding to `branch`.
     pub async fn bump(
         &self,
         tx: &mut ReadTransaction,
         changeset: &mut Changeset,
         branch: Branch,
-        merge: &VersionVector,
+        bump: Bump,
     ) -> Result<()> {
         let mut directory = self.open_in(tx, branch).await?;
         let mut content = directory.content.clone();
-        content.bump(directory.branch(), &self.entry_name, merge)?;
+        content.bump(&self.entry_name, &bump)?;
         directory.save(tx, changeset, &content).await?;
-        directory.bump(tx, changeset, merge).await?;
+        directory.bump(tx, changeset, bump).await?;
 
         Ok(())
     }
@@ -153,14 +155,15 @@ impl ParentContext {
         let mut changeset = Changeset::new();
 
         directory.refresh_in(&mut tx).await?;
-        let src_vv = src_entry_data.version_vector().clone();
 
         let mut content = directory.content.clone();
 
         match content.insert(self.entry_name.clone(), src_entry_data) {
-            Ok(()) => {
+            Ok(diff) => {
                 directory.save(&mut tx, &mut changeset, &content).await?;
-                directory.bump(&mut tx, &mut changeset, &src_vv).await?;
+                directory
+                    .bump(&mut tx, &mut changeset, Bump::Add(diff))
+                    .await?;
                 directory.commit(tx, changeset).await?;
                 directory.finalize(content);
                 tracing::trace!("fork complete");

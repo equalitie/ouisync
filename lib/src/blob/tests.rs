@@ -6,7 +6,7 @@ use crate::{
     db,
     error::Error,
     event::EventSender,
-    protocol::BLOCK_SIZE,
+    protocol::{Bump, BLOCK_SIZE},
     store::Store,
     test_utils,
 };
@@ -425,6 +425,7 @@ async fn modify_blob() {
         .await
         .unwrap();
     blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset.bump(Bump::increment(*branch.id()));
     changeset
         .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
@@ -446,6 +447,7 @@ async fn modify_blob() {
         .await
         .unwrap();
     blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset.bump(Bump::increment(*branch.id()));
     changeset
         .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await

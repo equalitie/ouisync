@@ -624,7 +624,9 @@ fn transfer_directory_with_subdirectory() {
         let (_network, repo, _reg) = actor::setup().await;
 
         let mut dir = repo.create_directory("food").await.unwrap();
-        dir.create_directory("mediterranean".into()).await.unwrap();
+        dir.create_directory("mediterranean".into(), &VersionVector::new())
+            .await
+            .unwrap();
 
         rx.recv().await;
     });

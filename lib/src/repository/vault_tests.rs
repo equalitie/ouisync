@@ -240,6 +240,8 @@ async fn receive_root_node_with_existing_hash() {
 mod receive_and_create_root_node {
     use tokio::task;
 
+    use crate::protocol::Bump;
+
     use super::*;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -340,6 +342,7 @@ mod receive_and_create_root_node {
 
             let mut changeset = Changeset::new();
             changeset.link_block(locator_0, block_id_0_1, SingleBlockPresence::Present);
+            changeset.bump(Bump::increment(local_id));
             changeset
                 .apply(&mut tx, &local_id, &secrets.write_keys)
                 .await

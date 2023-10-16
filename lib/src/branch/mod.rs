@@ -84,7 +84,7 @@ impl Branch {
     }
 
     pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
-        Directory::open_or_create_root(self.clone(), &VersionVector::new()).await
+        Directory::open_or_create_root(self.clone(), VersionVector::new()).await
     }
 
     /// Ensures that the directory at the specified path exists including all its ancestors.
@@ -109,7 +109,8 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(name.to_string()).await?
+                        curr.create_directory(name.to_string(), &VersionVector::new())
+                            .await?
                     };
 
                     curr = next;

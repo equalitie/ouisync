@@ -6,7 +6,7 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{cmp::Ordering, collections::BTreeMap, fmt};
+use std::{cmp::Ordering, collections::BTreeMap, fmt, ops::AddAssign};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
 ///
@@ -71,6 +71,14 @@ impl VersionVector {
         self
     }
 
+    /// Saturating subtraction.
+    pub fn saturating_sub(&self, rhs: &Self) -> Self {
+        self.0
+            .iter()
+            .filter_map(|(id, version)| Some((*id, version.checked_sub(rhs.get(id))?)))
+            .collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.values().all(|version| *version == 0)
     }
@@ -129,6 +137,20 @@ impl FromIterator<(PublicKey, u64)> for VersionVector {
                 vv.insert(key, version);
                 vv
             })
+    }
+}
+
+impl<'a> AddAssign<&'a VersionVector> for VersionVector {
+    fn add_assign(&mut self, rhs: &'a VersionVector) {
+        for (id, version) in &rhs.0 {
+            *self.0.entry(*id).or_default() += version;
+        }
+    }
+}
+
+impl AddAssign for VersionVector {
+    fn add_assign(&mut self, rhs: VersionVector) {
+        *self += &rhs
     }
 }
 
@@ -333,5 +355,38 @@ mod tests {
         let mut vv = vv![id0 => 1, id1 => 2];
         vv.merge(&vv![id0 => 2, id1 => 1]);
         assert_eq!(vv, vv![id0 => 2, id1 => 2]);
+    }
+
+    #[test]
+    fn add() {
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
+
+        let mut vv = vv![];
+        vv += vv![];
+        assert_eq!(vv, vv![]);
+
+        let mut vv = vv![id0 => 1];
+        vv += vv![id1 => 1];
+        assert_eq!(vv, vv![id0 =>1, id1 => 1]);
+
+        let mut vv = vv![id0 => 1, id1 => 2];
+        vv += vv![id0 => 3];
+        assert_eq!(vv, vv![id0 => 4, id1 => 2]);
+
+        let mut vv = vv![id0 => 3];
+        vv += vv![id0 => 1, id1 => 2];
+        assert_eq!(vv, vv![id0 => 4, id1 => 2]);
+    }
+
+    #[test]
+    fn saturating_sub() {
+        let id0 = PublicKey::random();
+
+        assert_eq!(vv![].saturating_sub(&vv![]), vv![]);
+        assert_eq!(vv![id0 => 1].saturating_sub(&vv![id0 => 1]), vv![]);
+        assert_eq!(vv![id0 => 2].saturating_sub(&vv![id0 => 1]), vv![id0 => 1]);
+        assert_eq!(vv![].saturating_sub(&vv![id0 => 1]), vv![]);
+        assert_eq!(vv![id0 => 1].saturating_sub(&vv![id0 => 2]), vv![]);
     }
 }

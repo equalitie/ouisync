@@ -23,7 +23,7 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
-    protocol::{Locator, RootNode, RootNodeFilter},
+    protocol::{Bump, Locator, RootNode, RootNodeFilter},
     store::{self, Changeset, ReadTransaction, WriteTransaction},
     version_vector::VersionVector,
 };
@@ -50,13 +50,11 @@ impl Directory {
         Self::open(branch, Locator::ROOT, None, locking, fallback).await
     }
 
-    /// Opens the root directory or creates it if it doesn't exists and merges the given version
-    /// vector to it.
+    /// Opens the root directory or creates it if it doesn't exists.
+    ///
+    /// See [`Self::create_directory`] for info about the `merge` parameter.
     #[instrument(skip(branch), fields(branch_id = ?branch.id()))]
-    pub(crate) async fn open_or_create_root(
-        branch: Branch,
-        merge_vv: &VersionVector,
-    ) -> Result<Self> {
+    pub(crate) async fn open_or_create_root(branch: Branch, merge: VersionVector) -> Result<Self> {
         let locator = Locator::ROOT;
 
         let lock = branch.locker().read(*locator.blob_id()).await;
@@ -79,16 +77,23 @@ impl Directory {
         };
 
         let dir = if let Some(mut dir) = dir {
-            if !merge_vv.is_empty() {
-                dir.bump(&mut tx, &mut changeset, merge_vv).await?;
+            if !merge.is_empty() {
+                let bump = Bump::Merge(merge);
+                dir.bump(&mut tx, &mut changeset, bump).await?;
                 dir.commit(tx, changeset).await?;
             }
 
             dir
         } else {
+            let bump = if merge.is_empty() {
+                Bump::increment(*branch.id())
+            } else {
+                Bump::Merge(merge)
+            };
+
             let mut dir = Self::create(branch, locator, None);
             dir.save(&mut tx, &mut changeset, &Content::empty()).await?;
-            dir.bump(&mut tx, &mut changeset, merge_vv).await?;
+            dir.bump(&mut tx, &mut changeset, bump).await?;
             dir.commit(tx, changeset).await?;
             dir
         };
@@ -135,11 +140,11 @@ impl Directory {
         let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
         let mut content = self.content.clone();
 
-        content.insert(name, data)?;
+        let diff = content.insert(name, data)?;
+
         file.save(&mut tx, &mut changeset).await?;
         self.save(&mut tx, &mut changeset, &content).await?;
-        self.bump(&mut tx, &mut changeset, &VersionVector::new())
-            .await?;
+        self.bump(&mut tx, &mut changeset, Bump::Add(diff)).await?;
         self.commit(tx, changeset).await?;
         self.finalize(content);
 
@@ -147,17 +152,16 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
-    pub async fn create_directory(&mut self, name: String) -> Result<Self> {
-        self.create_directory_with_version_vector(name, &VersionVector::new())
-            .await
-    }
-
+    ///
+    /// The version vector of the created subdirectory depends on the `merge` parameter:
+    ///
+    /// - if it is empty, it's `old_vv` with the local version incremented,
+    /// - if it is non-empty, it's the `old_vv` merged with `merge`,
+    ///
+    /// where `old_vv` is the version vector of the existing entry or `VersionVector::new()` if not
+    /// such exists yet.
     #[instrument(level = "trace", skip(self))]
-    async fn create_directory_with_version_vector(
-        &mut self,
-        name: String,
-        merge: &VersionVector,
-    ) -> Result<Self> {
+    pub async fn create_directory(&mut self, name: String, merge: &VersionVector) -> Result<Self> {
         let mut tx = self.branch().store().begin_write().await?;
         let mut changeset = Changeset::new();
 
@@ -180,10 +184,11 @@ impl Directory {
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
         let mut content = self.content.clone();
 
-        content.insert(name, data)?;
+        let diff = content.insert(name, data)?;
+
         dir.save(&mut tx, &mut changeset, &Content::empty()).await?;
         self.save(&mut tx, &mut changeset, &content).await?;
-        self.bump(&mut tx, &mut changeset, merge).await?;
+        self.bump(&mut tx, &mut changeset, Bump::Add(diff)).await?;
         self.commit(tx, changeset).await?;
         self.finalize(content);
 
@@ -196,15 +201,12 @@ impl Directory {
     pub async fn open_or_create_directory(
         &mut self,
         name: &str,
-        merge_vv: &VersionVector,
+        merge: VersionVector,
     ) -> Result<Self> {
         let mut dir = if let Some(dir) = self.try_open_directory(name).await? {
             dir
         } else {
-            match self
-                .create_directory_with_version_vector(name.to_owned(), merge_vv)
-                .await
-            {
+            match self.create_directory(name.to_owned(), &merge).await {
                 Ok(dir) => return Ok(dir),
                 Err(Error::EntryExists) => {
                     // The entry have been created in the meantime by some other task. Try to open
@@ -217,8 +219,12 @@ impl Directory {
             }
         };
 
-        if !merge_vv.is_empty() {
-            dir.merge_version_vector(merge_vv).await?;
+        if !merge.is_empty() {
+            let mut tx = self.branch().store().begin_write().await?;
+            let mut changeset = Changeset::new();
+            let bump = Bump::Merge(merge);
+            dir.bump(&mut tx, &mut changeset, bump).await?;
+            dir.commit(tx, changeset).await?;
         }
 
         Ok(dir)
@@ -249,10 +255,27 @@ impl Directory {
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
     /// directory, it needs to be empty or a `DirectoryNotEmpty` error is returned.
     ///
-    /// Note: This operation does not simply remove the entry, instead, version vector of the local
-    /// entry with the same name is increased to be "happens after" `vv`. If the local version does
-    /// not exist, or if it is the one being removed (branch_id == self.branch_id), then a
-    /// tombstone is created.
+    /// This doesn't simply remove the entry because then there would be no record of the entry
+    /// being deleted and so there would be no way for the remote replicas to know about it.
+    /// Instead, the entry is in most cases replaced with a "tombstone". The one special case is
+    /// described in the following section.
+    ///
+    /// # Removing entries from remote branches
+    ///
+    /// The `branch_id` identifies the branch the entry to be removed is in. This is to allow
+    /// removing remote entries. It doesn't actually modify the remote branch itself (remote
+    /// branches are immutable) but instead places a tombstone into the local branch which is
+    /// happens-after the remote entry. However, if the entry exists also in the local branch,
+    /// instead of replacing it with a tombstone (which would effectively remove it from both
+    /// branches), it's version vector is updated so that the entry is happens-after the remote one.
+    /// This way it removes only the remote entry and keeps the local one.
+    ///
+    /// # Version vector requirements
+    ///
+    /// This function is used both when removing entries locally and when merging removed entries
+    /// from remote branches. To support both use cases, the version vector in `tombstone` must be
+    /// happens-after the one of the currently existing entry, if any. If this is not the case,
+    /// `Error::EntryExists` is returned.
     pub(crate) async fn remove_entry(
         &mut self,
         name: &str,
@@ -262,16 +285,9 @@ impl Directory {
         let mut tx = self.branch().store().begin_write().await?;
         let mut changeset = Changeset::new();
 
-        let content = match self
+        let content = self
             .begin_remove_entry(&mut tx, &mut changeset, name, branch_id, tombstone)
-            .await
-        {
-            Ok(content) => content,
-            // `EntryExists` in this case means the tombstone already exists which means the entry
-            // is already removed.
-            Err(Error::EntryExists) => return Ok(()),
-            Err(error) => return Err(error),
-        };
+            .await?;
 
         self.commit(tx, changeset).await?;
         self.finalize(content);
@@ -337,7 +353,7 @@ impl Directory {
                 &mut changeset,
                 src_name,
                 &branch_id,
-                EntryTombstoneData::moved(src_vv),
+                EntryTombstoneData::moved(src_vv.incremented(branch_id)),
             )
             .await?;
 
@@ -370,24 +386,15 @@ impl Directory {
         // Because we are transferring only the directory but not its content, we reflect that
         // by setting its version vector to what the version vector of the source directory was
         // at the time it was initially created.
+        // TODO: Change this to `self.vv - self.entries.map(vv).sum()`
         let vv = VersionVector::first(*self.branch().id());
 
         if let Some((parent_dir, entry_name)) = parent {
             let mut parent_dir = parent_dir.fork(local_branch).await?;
-            parent_dir.open_or_create_directory(entry_name, &vv).await
+            parent_dir.open_or_create_directory(entry_name, vv).await
         } else {
-            Self::open_or_create_root(local_branch.clone(), &vv).await
+            Self::open_or_create_root(local_branch.clone(), vv).await
         }
-    }
-
-    /// Updates the version vector of this directory by merging it with `vv`.
-    #[instrument(skip(self), err(Debug))]
-    pub(crate) async fn merge_version_vector(&mut self, vv: &VersionVector) -> Result<()> {
-        let mut tx = self.branch().store().begin_write().await?;
-        let mut changeset = Changeset::new();
-
-        self.bump(&mut tx, &mut changeset, vv).await?;
-        self.commit(tx, changeset).await
     }
 
     pub async fn parent(&self) -> Result<Option<Directory>> {
@@ -556,7 +563,7 @@ impl Directory {
         changeset: &mut Changeset,
         name: &str,
         branch_id: &PublicKey,
-        mut tombstone: EntryTombstoneData,
+        tombstone: EntryTombstoneData,
     ) -> Result<Content> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
@@ -580,20 +587,16 @@ impl Directory {
         let new_data = match self.lookup(name) {
             Ok(old_entry @ (EntryRef::File(_) | EntryRef::Directory(_))) => {
                 if branch_id == self.branch().id() {
-                    tombstone.version_vector.increment(*self.branch().id());
                     EntryData::Tombstone(tombstone)
                 } else {
                     let mut new_data = old_entry.clone_data();
                     new_data
                         .version_vector_mut()
                         .merge(&tombstone.version_vector);
-                    new_data.version_vector_mut().increment(*self.branch().id());
                     new_data
                 }
             }
-            Ok(EntryRef::Tombstone(_)) => EntryData::Tombstone(tombstone),
-            Err(Error::EntryNotFound) => {
-                tombstone.version_vector.increment(*self.branch().id());
+            Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
                 EntryData::Tombstone(tombstone)
             }
             Err(e) => return Err(e),
@@ -613,9 +616,9 @@ impl Directory {
         self.refresh_in(tx).await?;
 
         let mut content = self.content.clone();
-        content.insert(name, data)?;
+        let diff = content.insert(name, data)?;
         self.save(tx, changeset, &content).await?;
-        self.bump(tx, changeset, &VersionVector::new()).await?;
+        self.bump(tx, changeset, Bump::Add(diff)).await?;
 
         Ok(content)
     }
@@ -673,22 +676,20 @@ impl Directory {
     }
 
     /// Updates the version vectors of this directory and all its ancestors.
-    /// If `merge` is non-empty, the resulting vv is computed by mergin the original vv with it,
-    /// otherwise by incrementing the local version.
     #[async_recursion]
     async fn bump(
         &mut self,
         tx: &mut ReadTransaction,
         changeset: &mut Changeset,
-        merge: &VersionVector,
+        bump: Bump,
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
             parent
-                .bump(tx, changeset, self.blob.branch().clone(), merge)
+                .bump(tx, changeset, self.blob.branch().clone(), bump)
                 .await
         } else {
-            changeset.bump(merge);
+            changeset.bump(bump);
             Ok(())
         }
     }

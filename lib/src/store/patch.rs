@@ -5,7 +5,7 @@ use crate::{
         Hash, Hashable,
     },
     protocol::{
-        get_bucket, BlockId, InnerNode, InnerNodeMap, LeafNodeSet, NodeState, Proof,
+        get_bucket, BlockId, Bump, InnerNode, InnerNodeMap, LeafNodeSet, NodeState, Proof,
         RootNodeFilter, RootNodeKind, SingleBlockPresence, Summary, EMPTY_INNER_HASH,
         EMPTY_LEAF_HASH, INNER_LAYER_COUNT,
     },
@@ -21,7 +21,7 @@ use std::{
 /// are different compared to the current snapshot.
 pub(super) struct Patch {
     branch_id: PublicKey,
-    old_vv: VersionVector,
+    vv: VersionVector,
     root_hash: Hash,
     root_summary: Summary,
     inners: BTreeMap<Key, InnerNodeMap>,
@@ -30,7 +30,7 @@ pub(super) struct Patch {
 
 impl Patch {
     pub async fn new(tx: &mut ReadTransaction, branch_id: PublicKey) -> Result<Self, Error> {
-        let (old_vv, root_hash, root_summary) =
+        let (vv, root_hash, root_summary) =
             match tx.load_root_node(&branch_id, RootNodeFilter::Any).await {
                 Ok(node) => {
                     let hash = node.proof.hash;
@@ -44,7 +44,7 @@ impl Patch {
 
         Ok(Self {
             branch_id,
-            old_vv,
+            vv,
             root_hash,
             root_summary,
             inners: BTreeMap::new(),
@@ -85,12 +85,12 @@ impl Patch {
     pub async fn save(
         mut self,
         tx: &mut WriteTransaction,
-        vv: &VersionVector,
+        bump: &Bump,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
         self.recalculate();
         self.save_children(tx).await?;
-        self.save_root(tx, vv, write_keys).await?;
+        self.save_root(tx, bump, write_keys).await?;
 
         Ok(())
     }
@@ -205,20 +205,16 @@ impl Patch {
     }
 
     async fn save_root(
-        self,
+        mut self,
         tx: &mut WriteTransaction,
-        vv: &VersionVector,
+        bump: &Bump,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
         let db = tx.db();
 
-        let new_vv = if vv.is_empty() {
-            self.old_vv.incremented(self.branch_id)
-        } else {
-            self.old_vv.merged(vv)
-        };
+        bump.apply(&mut self.vv);
 
-        let new_proof = Proof::new(self.branch_id, new_vv, self.root_hash, write_keys);
+        let new_proof = Proof::new(self.branch_id, self.vv, self.root_hash, write_keys);
 
         let (root_node, kind) =
             root_node::create(db, new_proof, self.root_summary, RootNodeFilter::Any).await?;

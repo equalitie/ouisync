@@ -4,8 +4,7 @@ use crate::{
         sign::{Keypair, PublicKey},
         Hash,
     },
-    protocol::{Block, BlockId, SingleBlockPresence},
-    version_vector::VersionVector,
+    protocol::{Block, BlockId, Bump, SingleBlockPresence},
 };
 
 /// Recorded changes to be applied to the store as a single unit.
@@ -14,7 +13,7 @@ pub(crate) struct Changeset {
     links: Vec<(Hash, BlockId, SingleBlockPresence)>,
     unlinks: Vec<(Hash, Option<BlockId>)>,
     blocks: Vec<Block>,
-    bump: VersionVector,
+    bump: Bump,
 }
 
 impl Changeset {
@@ -76,7 +75,7 @@ impl Changeset {
     }
 
     /// Update the root version vector.
-    pub fn bump(&mut self, merge: &VersionVector) {
-        self.bump.merge(merge);
+    pub fn bump(&mut self, bump: Bump) {
+        self.bump = bump;
     }
 }

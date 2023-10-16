@@ -3,8 +3,8 @@
 use super::entry_data::EntryData;
 use crate::{
     blob::BlobId,
-    branch::Branch,
     error::{Error, Result},
+    protocol::Bump,
     version_vector::VersionVector,
 };
 use serde::Deserialize;
@@ -59,17 +59,26 @@ impl Content {
         self.entries.get_key_value(name)
     }
 
-    /// Inserts an entry into this directory.
-    pub fn insert(&mut self, name: String, new_data: EntryData) -> Result<(), EntryExists> {
+    /// Inserts an entry into this directory. Returns the difference between the old and the new
+    /// version vectors.
+    pub fn insert(
+        &mut self,
+        name: String,
+        new_data: EntryData,
+    ) -> Result<VersionVector, EntryExists> {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
+                let diff = new_data.version_vector().clone();
                 entry.insert(new_data);
-                Ok(())
+                Ok(diff)
             }
             Entry::Occupied(mut entry) => {
                 check_replace(entry.get(), &new_data)?;
+                let diff = new_data
+                    .version_vector()
+                    .saturating_sub(entry.get().version_vector());
                 entry.insert(new_data);
-                Ok(())
+                Ok(diff)
             }
         }
     }
@@ -89,18 +98,13 @@ impl Content {
     }
 
     /// Updates the version vector of entry at `name`.
-    pub fn bump(&mut self, branch: &Branch, name: &str, merge: &VersionVector) -> Result<()> {
-        let vv = self
-            .entries
-            .get_mut(name)
-            .ok_or(Error::EntryNotFound)?
-            .version_vector_mut();
-
-        if merge.is_empty() {
-            vv.increment(*branch.id());
-        } else {
-            vv.merge(merge);
-        }
+    pub fn bump(&mut self, name: &str, bump: &Bump) -> Result<()> {
+        bump.apply(
+            self.entries
+                .get_mut(name)
+                .ok_or(Error::EntryNotFound)?
+                .version_vector_mut(),
+        );
 
         Ok(())
     }
@@ -146,16 +150,37 @@ fn deserialize_entries<'a, T: Deserialize<'a>>(input: &'a [u8]) -> Result<T, Err
 fn check_replace(old: &EntryData, new: &EntryData) -> Result<Option<BlobId>, EntryExists> {
     // Replace entries only if the new version is more up to date than the old version.
 
-    match new.version_vector().partial_cmp(old.version_vector()) {
-        Some(Ordering::Greater) => Ok(old.blob_id().copied()),
-        Some(Ordering::Equal | Ordering::Less) => {
-            if new.blob_id() == old.blob_id() {
-                Err(EntryExists::Same)
-            } else {
-                Err(EntryExists::Different)
-            }
+    match (
+        new.version_vector().partial_cmp(old.version_vector()),
+        new,
+        old,
+    ) {
+        (Some(Ordering::Greater), _, _) => Ok(old.blob_id().copied()),
+        (Some(Ordering::Equal | Ordering::Less), EntryData::File(new), EntryData::File(old))
+            if new.blob_id == old.blob_id =>
+        {
+            Err(EntryExists::Same)
         }
-        None => Err(EntryExists::Different),
+        (
+            Some(Ordering::Equal | Ordering::Less),
+            EntryData::Directory(new),
+            EntryData::Directory(old),
+        ) if new.blob_id == old.blob_id => Err(EntryExists::Same),
+        (Some(Ordering::Equal), EntryData::Tombstone(new), EntryData::Tombstone(old))
+            if new.cause == old.cause =>
+        {
+            // Replacing a tombstone with the same tombstone is a no-op, and OK.
+            Ok(None)
+        }
+        (Some(Ordering::Less), EntryData::Tombstone(_), EntryData::Tombstone(_)) => {
+            Err(EntryExists::Different)
+        }
+        (
+            Some(Ordering::Equal | Ordering::Less),
+            EntryData::File(_) | EntryData::Directory(_) | EntryData::Tombstone(_),
+            EntryData::File(_) | EntryData::Directory(_) | EntryData::Tombstone(_),
+        ) => Err(EntryExists::Different),
+        (None, _, _) => Err(EntryExists::Different),
     }
 }
 
