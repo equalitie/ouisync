@@ -413,7 +413,7 @@ async fn set_as_missing_if_expired(
             continue;
         }
 
-        parts_download_tracker.require(*block_id);
+        parts_download_tracker.require_block(*block_id);
 
         let nodes: Vec<_> = leaf_node::load_parent_hashes(&mut tx, block_id)
             .try_collect()

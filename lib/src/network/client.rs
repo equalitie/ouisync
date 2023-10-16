@@ -64,7 +64,7 @@ impl Client {
 
         let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
 
-        let mut block_promise_acceptor = self.parts_tracker.acceptor();
+        let mut part_promise_acceptor = self.parts_tracker.acceptor();
 
         // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
         // some unsolicited responses and also the peer may be malicious and send us too many
@@ -99,7 +99,7 @@ impl Client {
 
         loop {
             select! {
-                part_promise = block_promise_acceptor.accept() => {
+                part_promise = part_promise_acceptor.accept() => {
                     let debug = DebugRequest::start();
                     self.enqueue_request(PendingRequest::Block(part_promise, debug));
                 }
@@ -324,13 +324,13 @@ impl Client {
         match self.vault.block_request_mode {
             BlockRequestMode::Lazy => {
                 for node in status.request_blocks {
-                    self.parts_tracker.offer(node.block_id, offer_state);
+                    self.parts_tracker.offer_block(node.block_id, offer_state);
                 }
             }
             BlockRequestMode::Greedy => {
                 for node in status.request_blocks {
-                    if self.parts_tracker.offer(node.block_id, offer_state) {
-                        self.vault.parts_tracker.require(node.block_id);
+                    if self.parts_tracker.offer_block(node.block_id, offer_state) {
+                        self.vault.parts_tracker.require_block(node.block_id);
                     }
                 }
             }

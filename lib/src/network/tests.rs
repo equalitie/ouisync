@@ -9,7 +9,7 @@ use crate::{
     db,
     event::{Event, EventSender, Payload},
     metrics::Metrics,
-    missing_parts::OfferState,
+    missing_parts::{MissingPartId, OfferState},
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
         Block, BlockId, RootNode, SingleBlockPresence,
@@ -139,8 +139,9 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let drive = async {
         for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
-            a_vault.parts_tracker.require(*id);
-            a_parts_tracker.offer(*id, OfferState::Approved);
+            let part_id = MissingPartId::Block(*id);
+            a_vault.parts_tracker.require(part_id);
+            a_parts_tracker.offer(part_id, OfferState::Approved);
             let promise = a_parts_tracker.acceptor().try_accept().unwrap();
 
             a_vault.receive_block(block, Some(promise)).await.unwrap();

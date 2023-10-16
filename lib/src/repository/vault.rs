@@ -237,7 +237,7 @@ impl Vault {
         let mut block_ids = tx.missing_block_ids_in_branch(branch_id);
 
         while let Some(block_id) = block_ids.try_next().await? {
-            self.parts_tracker.approve(&block_id);
+            self.parts_tracker.approve_block(block_id);
         }
 
         Ok(())

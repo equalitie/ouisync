@@ -167,8 +167,8 @@ pub(crate) async fn receive_blocks(repo: &Vault, snapshot: &Snapshot) {
     let acceptor = client.acceptor();
 
     for block in snapshot.blocks().values() {
-        repo.parts_tracker.require(block.id);
-        client.offer(block.id, OfferState::Approved);
+        repo.parts_tracker.require_block(block.id);
+        client.offer_block(block.id, OfferState::Approved);
         let promise = acceptor.try_accept().unwrap();
 
         repo.receive_block(block, Some(promise)).await.unwrap();

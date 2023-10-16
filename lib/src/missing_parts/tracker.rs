@@ -1,3 +1,4 @@
+use super::MissingPartId;
 use crate::{
     collections::{HashMap, HashSet},
     deadlock::BlockingMutex,
@@ -28,14 +29,18 @@ impl Tracker {
         }
     }
 
+    pub fn require_block(&self, block_id: BlockId) {
+        self.require(MissingPartId::Block(block_id))
+    }
+
     /// Mark the block with the given id as required.
-    pub fn require(&self, block_id: BlockId) {
+    pub fn require(&self, part_id: MissingPartId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
         let missing_part = inner
             .missing_parts
-            .entry(block_id)
-            .or_insert_with(|| MissingBlock {
+            .entry(part_id)
+            .or_insert_with(|| MissingPartState {
                 offering_clients: HashSet::default(),
                 accepted_by: None,
                 required: false,
@@ -46,7 +51,7 @@ impl Tracker {
             return;
         }
 
-        tracing::trace!(?block_id, "require");
+        tracing::trace!(?part_id, "require");
 
         missing_part.required = true;
 
@@ -55,12 +60,16 @@ impl Tracker {
         }
     }
 
-    /// Approve the block request if offered. This is called when `quota` is not `None`, otherwise
-    /// blocks are pre-approved from `TrackerClient::offer(block_id, OfferState::Approved)`.
-    pub fn approve(&self, block_id: &BlockId) {
+    pub fn approve_block(&self, block_id: BlockId) {
+        self.approve(MissingPartId::Block(block_id))
+    }
+
+    /// Approve the part request if offered. This is called when `quota` is not `None`, otherwise
+    /// blocks are pre-approved from `TrackerClient::offer(part_id, OfferState::Approved)`.
+    pub fn approve(&self, part_id: MissingPartId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let Some(missing_part) = inner.missing_parts.get_mut(block_id) else {
+        let Some(missing_part) = inner.missing_parts.get_mut(&part_id) else {
             return;
         };
 
@@ -68,7 +77,7 @@ impl Tracker {
             return;
         }
 
-        tracing::trace!(?block_id, "approve");
+        tracing::trace!(?part_id, "approve");
 
         missing_part.approved = true;
 
@@ -110,31 +119,35 @@ pub(crate) struct TrackerClient {
 }
 
 impl TrackerClient {
-    pub fn acceptor(&self) -> BlockPromiseAcceptor {
-        BlockPromiseAcceptor {
+    pub fn acceptor(&self) -> PartPromiseAcceptor {
+        PartPromiseAcceptor {
             shared: self.shared.clone(),
             client_id: self.client_id,
             notify_rx: self.notify_rx.clone(),
         }
     }
 
+    pub fn offer_block(&self, block_id: BlockId, state: OfferState) -> bool {
+        self.offer(MissingPartId::Block(block_id), state)
+    }
+
     /// Offer to request the given block by the client with `client_id` if it is, or will become,
     /// required and approved. Returns `true` if this block was offered for the first time (by any
     /// client), `false` if it was already offered before but not yet accepted or cancelled.
-    pub fn offer(&self, block_id: BlockId, state: OfferState) -> bool {
+    pub fn offer(&self, part_id: MissingPartId, state: OfferState) -> bool {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        if !inner.offering_clients[self.client_id].insert(block_id) {
+        if !inner.offering_clients[self.client_id].insert(part_id) {
             // Already offered
             return false;
         }
 
-        tracing::trace!(?block_id, ?state, "offer");
+        tracing::trace!(?part_id, ?state, "offer");
 
         let missing_part = inner
             .missing_parts
-            .entry(block_id)
-            .or_insert_with(|| MissingBlock {
+            .entry(part_id)
+            .or_insert_with(|| MissingPartState {
                 offering_clients: HashSet::default(),
                 accepted_by: None,
                 required: false,
@@ -158,12 +171,12 @@ impl TrackerClient {
 impl Drop for TrackerClient {
     fn drop(&mut self) {
         let mut inner = self.shared.inner.lock().unwrap();
-        let block_ids = inner.offering_clients.remove(self.client_id);
+        let part_ids = inner.offering_clients.remove(self.client_id);
         let mut notify = false;
 
-        for block_id in block_ids {
+        for part_id in part_ids {
             // unwrap is ok because of the invariant in `Inner`
-            let missing_part = inner.missing_parts.get_mut(&block_id).unwrap();
+            let missing_part = inner.missing_parts.get_mut(&part_id).unwrap();
 
             missing_part.offering_clients.remove(&self.client_id);
 
@@ -180,13 +193,13 @@ impl Drop for TrackerClient {
     }
 }
 
-pub(crate) struct BlockPromiseAcceptor {
+pub(crate) struct PartPromiseAcceptor {
     shared: Arc<Shared>,
     client_id: ClientId,
     notify_rx: watch::Receiver<()>,
 }
 
-impl BlockPromiseAcceptor {
+impl PartPromiseAcceptor {
     /// Returns the next required, offered and approved block request. If there is no such request
     /// at the moment this function is called, waits until one appears.
     ///
@@ -200,7 +213,7 @@ impl BlockPromiseAcceptor {
     pub async fn accept(&mut self) -> PartPromise {
         loop {
             if let Some(block_promise) = self.try_accept() {
-                tracing::trace!(block_id = ?block_promise.block_id, "accept");
+                tracing::trace!(part_id = ?block_promise.part_id, "accept");
                 return block_promise;
             }
 
@@ -216,9 +229,9 @@ impl BlockPromiseAcceptor {
         let inner = &mut *inner;
 
         // TODO: OPTIMIZE (but profile first) this linear lookup
-        for block_id in &inner.offering_clients[self.client_id] {
+        for part_id in &inner.offering_clients[self.client_id] {
             // unwrap is ok because of the invariant in `Inner`
-            let missing_part = inner.missing_parts.get_mut(block_id).unwrap();
+            let missing_part = inner.missing_parts.get_mut(part_id).unwrap();
 
             if missing_part.required && missing_part.approved && missing_part.accepted_by.is_none()
             {
@@ -227,7 +240,7 @@ impl BlockPromiseAcceptor {
                 return Some(PartPromise {
                     shared: self.shared.clone(),
                     client_id: self.client_id,
-                    block_id: *block_id,
+                    part_id: *part_id,
                     complete: false,
                 });
             }
@@ -241,30 +254,37 @@ impl BlockPromiseAcceptor {
 pub(crate) struct PartPromise {
     shared: Arc<Shared>,
     client_id: ClientId,
-    block_id: BlockId,
+    part_id: MissingPartId,
     complete: bool,
 }
 
 impl PartPromise {
+    #[cfg(test)]
+    pub(crate) fn part_id(&self) -> &MissingPartId {
+        &self.part_id
+    }
+
     pub(crate) fn block_id(&self) -> &BlockId {
-        &self.block_id
+        match &self.part_id {
+            MissingPartId::Block(block_id) => block_id,
+        }
     }
 
     /// Mark the block request as successfully completed.
     pub fn complete(mut self) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let Some(missing_part) = inner.missing_parts.remove(&self.block_id) else {
+        let Some(missing_part) = inner.missing_parts.remove(&self.part_id) else {
             return;
         };
 
         for client_id in missing_part.offering_clients {
-            if let Some(block_ids) = inner.offering_clients.get_mut(client_id) {
-                block_ids.remove(&self.block_id);
+            if let Some(part_ids) = inner.offering_clients.get_mut(client_id) {
+                part_ids.remove(&self.part_id);
             }
         }
 
-        tracing::trace!(block_id = ?self.block_id, "complete");
+        tracing::trace!(part_id = ?self.part_id, "complete");
 
         self.complete = true;
     }
@@ -274,7 +294,7 @@ impl fmt::Debug for PartPromise {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("PartPromise")
             .field("client_id", &self.client_id)
-            .field("block_id", &self.block_id)
+            .field("part_id", &self.part_id)
             .finish()
     }
 }
@@ -292,12 +312,12 @@ impl Drop for PartPromise {
             None => return,
         };
 
-        if !client.remove(&self.block_id) {
+        if !client.remove(&self.part_id) {
             return;
         }
 
         // unwrap is ok because of the invariant in `Inner`
-        let missing_part = inner.missing_parts.get_mut(&self.block_id).unwrap();
+        let missing_part = inner.missing_parts.get_mut(&self.part_id).unwrap();
         missing_part.offering_clients.remove(&self.client_id);
 
         if missing_part.unaccept_by(self.client_id) {
@@ -317,29 +337,29 @@ impl Shared {
     }
 }
 
-// Invariant: for all `block_id` and `client_id` such that
+// Invariant: for all `part_id` and `client_id` such that
 //
-//     missing_parts[block_id].offering_clients.contains(client_id)
+//     missing_parts[part_id].offering_clients.contains(client_id)
 //
 // it must hold that
 //
-//     offering_clients[client_id].contains(block_id)
+//     offering_clients[client_id].contains(part_id)
 //
 // and vice-versa.
 struct Inner {
-    missing_parts: HashMap<BlockId, MissingBlock>,
-    offering_clients: Slab<HashSet<BlockId>>,
+    missing_parts: HashMap<MissingPartId, MissingPartState>,
+    offering_clients: Slab<HashSet<MissingPartId>>,
 }
 
 #[derive(Debug)]
-struct MissingBlock {
+struct MissingPartState {
     offering_clients: HashSet<ClientId>,
     accepted_by: Option<ClientId>,
     required: bool,
     approved: bool,
 }
 
-impl MissingBlock {
+impl MissingPartState {
     fn unaccept_by(&mut self, client_id: ClientId) -> bool {
         if let Some(accepted_by) = &self.accepted_by {
             if accepted_by == &client_id {
@@ -375,23 +395,23 @@ mod tests {
 
         // Offered but not required blocks are not returned
         let block0: Block = rand::random();
-        client.offer(block0.id, OfferState::Approved);
+        client.offer(MissingPartId::Block(block0.id), OfferState::Approved);
         assert!(client.acceptor().try_accept().is_none());
 
         // Required but not offered blocks are not returned
         let block1: Block = rand::random();
-        tracker.require(block1.id);
+        tracker.require_block(block1.id);
         assert!(client.acceptor().try_accept().is_none());
 
         // Required + offered blocks are returned...
-        tracker.require(block0.id);
+        tracker.require_block(block0.id);
         assert_eq!(
             client
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(PartPromise::block_id),
-            Some(&block0.id)
+                .map(PartPromise::part_id),
+            Some(&MissingPartId::Block(block0.id))
         );
 
         // ...but only once.
@@ -406,7 +426,7 @@ mod tests {
         let client = tracker.client();
         let mut acceptor = client.acceptor();
 
-        tracker.require(block.id);
+        tracker.require_block(block.id);
 
         let (tx, mut rx) = mpsc::channel(1);
 
@@ -416,7 +436,7 @@ mod tests {
             loop {
                 select! {
                     block_promise = &mut accept_task => {
-                        return *block_promise.block_id();
+                        return *block_promise.part_id();
                     },
                     _ = tx.send(()) => {}
                 }
@@ -426,14 +446,14 @@ mod tests {
         // Make sure acceptor started accepting.
         rx.recv().await.unwrap();
 
-        client.offer(block.id, OfferState::Approved);
+        client.offer(MissingPartId::Block(block.id), OfferState::Approved);
 
-        let accepted_block_id = time::timeout(Duration::from_secs(5), handle)
+        let accepted_part_id = time::timeout(Duration::from_secs(5), handle)
             .await
             .expect("timeout")
             .unwrap();
 
-        assert_eq!(block.id, accepted_block_id);
+        assert_eq!(MissingPartId::Block(block.id), accepted_part_id);
     }
 
     #[test]
@@ -445,14 +465,14 @@ mod tests {
 
         let block: Block = rand::random();
 
-        tracker.require(block.id);
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
+        tracker.require_block(block.id);
+        client0.offer(MissingPartId::Block(block.id), OfferState::Approved);
+        client1.offer(MissingPartId::Block(block.id), OfferState::Approved);
 
         let block_promise = client0.acceptor().try_accept();
         assert_eq!(
-            block_promise.as_ref().map(PartPromise::block_id),
-            Some(&block.id)
+            block_promise.as_ref().map(PartPromise::part_id),
+            Some(&MissingPartId::Block(block.id))
         );
         assert!(client1.acceptor().try_accept().is_none());
 
@@ -464,8 +484,8 @@ mod tests {
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(PartPromise::block_id),
-            Some(&block.id)
+                .map(PartPromise::part_id),
+            Some(&MissingPartId::Block(block.id))
         );
     }
 
@@ -478,10 +498,10 @@ mod tests {
 
         let block: Block = rand::random();
 
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
+        client0.offer(MissingPartId::Block(block.id), OfferState::Approved);
+        client1.offer(MissingPartId::Block(block.id), OfferState::Approved);
 
-        tracker.require(block.id);
+        tracker.require_block(block.id);
 
         drop(client0);
 
@@ -490,8 +510,8 @@ mod tests {
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(PartPromise::block_id),
-            Some(&block.id)
+                .map(PartPromise::part_id),
+            Some(&MissingPartId::Block(block.id))
         );
     }
 
@@ -504,16 +524,16 @@ mod tests {
 
         let block: Block = rand::random();
 
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
+        client0.offer(MissingPartId::Block(block.id), OfferState::Approved);
+        client1.offer(MissingPartId::Block(block.id), OfferState::Approved);
 
-        tracker.require(block.id);
+        tracker.require_block(block.id);
 
         let block_promise = client0.acceptor().try_accept();
 
         assert_eq!(
-            block_promise.as_ref().map(PartPromise::block_id),
-            Some(&block.id)
+            block_promise.as_ref().map(PartPromise::part_id),
+            Some(&MissingPartId::Block(block.id))
         );
         assert!(client1.acceptor().try_accept().is_none());
 
@@ -524,8 +544,8 @@ mod tests {
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(PartPromise::block_id),
-            Some(&block.id)
+                .map(PartPromise::part_id),
+            Some(&MissingPartId::Block(block.id))
         );
     }
 
@@ -538,20 +558,20 @@ mod tests {
 
         let block: Block = rand::random();
 
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
+        client0.offer(MissingPartId::Block(block.id), OfferState::Approved);
+        client1.offer(MissingPartId::Block(block.id), OfferState::Approved);
 
         drop(client0);
 
-        tracker.require(block.id);
+        tracker.require_block(block.id);
 
         assert_eq!(
             client1
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(PartPromise::block_id),
-            Some(&block.id)
+                .map(PartPromise::part_id),
+            Some(&MissingPartId::Block(block.id))
         );
     }
 
@@ -561,19 +581,19 @@ mod tests {
         let client = tracker.client();
 
         let block: Block = rand::random();
-        tracker.require(block.id);
+        tracker.require_block(block.id);
 
-        client.offer(block.id, OfferState::Pending);
+        client.offer(MissingPartId::Block(block.id), OfferState::Pending);
         assert!(client.acceptor().try_accept().is_none());
 
-        tracker.approve(&block.id);
+        tracker.approve_block(block.id);
         assert_eq!(
             client
                 .acceptor()
                 .try_accept()
                 .as_ref()
-                .map(PartPromise::block_id),
-            Some(&block.id)
+                .map(PartPromise::part_id),
+            Some(&MissingPartId::Block(block.id))
         );
     }
 
@@ -586,10 +606,10 @@ mod tests {
 
         let block: Block = rand::random();
 
-        tracker.require(block.id);
+        tracker.require_block(block.id);
 
         for client in &clients {
-            client.offer(block.id, OfferState::Approved);
+            client.offer(MissingPartId::Block(block.id), OfferState::Approved);
         }
 
         // Make sure all clients stay alive until we are done so that any accepted requests are not
@@ -602,19 +622,19 @@ mod tests {
                 let barrier = barrier.clone();
                 async move {
                     let block_promise = client.acceptor().try_accept();
-                    let result = block_promise.as_ref().map(PartPromise::block_id).cloned();
+                    let result = block_promise.as_ref().map(PartPromise::part_id).cloned();
                     barrier.wait().await;
                     result
                 }
             })
         });
 
-        let block_ids = future::try_join_all(handles).await.unwrap();
+        let part_ids = future::try_join_all(handles).await.unwrap();
 
         // Exactly one client gets the block id
-        let mut block_ids = block_ids.into_iter().flatten();
-        assert_eq!(block_ids.next(), Some(block.id));
-        assert_eq!(block_ids.next(), None);
+        let mut part_ids = part_ids.into_iter().flatten();
+        assert_eq!(part_ids.next(), Some(MissingPartId::Block(block.id)));
+        assert_eq!(part_ids.next(), None);
     }
 
     #[proptest]
@@ -648,10 +668,10 @@ mod tests {
         for (op, block_id) in ops {
             match op {
                 Op::Require => {
-                    tracker.require(block_id);
+                    tracker.require_block(block_id);
                 }
                 Op::Offer => {
-                    client.offer(block_id, OfferState::Approved);
+                    client.offer_block(block_id, OfferState::Approved);
                 }
             }
         }
