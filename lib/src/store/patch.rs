@@ -87,12 +87,16 @@ impl Patch {
         tx: &mut WriteTransaction,
         bump: &Bump,
         write_keys: &Keypair,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
+        if self.inners.is_empty() && self.leaves.is_empty() && !bump.changes(&self.vv) {
+            return Ok(false);
+        }
+
         self.recalculate();
         self.save_children(tx).await?;
         self.save_root(tx, bump, write_keys).await?;
 
-        Ok(())
+        Ok(true)
     }
 
     async fn fetch<'a>(

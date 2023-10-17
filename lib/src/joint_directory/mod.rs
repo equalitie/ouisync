@@ -6,7 +6,7 @@ use crate::{
     conflict,
     crypto::sign::PublicKey,
     directory::{
-        Directory, DirectoryFallback, DirectoryRef, EntryRef, EntryTombstoneData, EntryType,
+        self, Directory, DirectoryFallback, DirectoryRef, EntryRef, EntryTombstoneData, EntryType,
         FileRef,
     },
     error::{Error, Result},
@@ -336,6 +336,12 @@ impl JointDirectory {
             local_version
                 .remove_entry(&name, local_branch.id(), tombstone)
                 .await?;
+        }
+
+        // Need to bump the root version vector to reflect any non-filesystem changes (e.g.,
+        // removal of nodes during garbage collection).
+        if !conflict && local_version.is_root() {
+            directory::bump_root(&local_branch, new_version_vector).await?;
         }
 
         if tracing::enabled!(tracing::Level::TRACE) {

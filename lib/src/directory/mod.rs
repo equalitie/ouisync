@@ -403,12 +403,16 @@ impl Directory {
         }
     }
 
-    pub async fn parent(&self) -> Result<Option<Directory>> {
+    pub(crate) async fn parent(&self) -> Result<Option<Directory>> {
         if let Some(parent) = &self.parent {
             Ok(Some(parent.open(self.branch().clone()).await?))
         } else {
             Ok(None)
         }
+    }
+
+    pub(crate) fn is_root(&self) -> bool {
+        self.parent.is_none()
     }
 
     async fn open_in(
@@ -663,22 +667,8 @@ impl Directory {
     }
 
     /// Atomically commits the transaction and sends notification event.
-    async fn commit(&mut self, mut tx: WriteTransaction, changeset: Changeset) -> Result<()> {
-        changeset
-            .apply(
-                &mut tx,
-                self.branch().id(),
-                self.branch()
-                    .keys()
-                    .write()
-                    .ok_or(Error::PermissionDenied)?,
-            )
-            .await?;
-
-        let event_tx = self.branch().notify();
-        tx.commit_and_then(move || event_tx.send()).await?;
-
-        Ok(())
+    async fn commit(&mut self, tx: WriteTransaction, changeset: Changeset) -> Result<()> {
+        commit(tx, changeset, self.branch()).await
     }
 
     /// Updates the version vectors of this directory and all its ancestors.
@@ -737,6 +727,15 @@ pub(crate) enum DirectoryLocking {
     Disabled,
 }
 
+/// Update the root version vector of the given branch by merging it with `merge`.
+/// If `merge` is less that or equal to the current root version vector, this is s no-op.
+pub(crate) async fn bump_root(branch: &Branch, merge: VersionVector) -> Result<()> {
+    let tx = branch.store().begin_write().await?;
+    let mut changeset = Changeset::new();
+    changeset.bump(Bump::Merge(merge));
+    commit(tx, changeset, branch).await
+}
+
 // Load directory content. On missing block, fallback to previous snapshot (if any).
 async fn load(
     tx: &mut ReadTransaction,
@@ -777,4 +776,24 @@ async fn load_at(
     let content = Content::deserialize(&buffer)?;
 
     Ok((blob, content))
+}
+
+/// Apply the changeset, commit the transaction and send a notification event.
+async fn commit(mut tx: WriteTransaction, changeset: Changeset, branch: &Branch) -> Result<()> {
+    let changed = changeset
+        .apply(
+            &mut tx,
+            branch.id(),
+            branch.keys().write().ok_or(Error::PermissionDenied)?,
+        )
+        .await?;
+
+    if !changed {
+        return Ok(());
+    }
+
+    let event_tx = branch.notify();
+    tx.commit_and_then(move || event_tx.send()).await?;
+
+    Ok(())
 }

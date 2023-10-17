@@ -505,6 +505,8 @@ mod attempt_to_merge_concurrent_file {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn in_root() {
+        test_utils::init_log();
+
         let (_base_dir, [local_branch, remote_branch]) = setup().await;
 
         let local_dir = local_branch.open_or_create_root().await.unwrap();

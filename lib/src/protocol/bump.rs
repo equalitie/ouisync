@@ -1,4 +1,5 @@
 use crate::{crypto::sign::PublicKey, version_vector::VersionVector};
+use std::cmp::Ordering;
 
 /// Operation on version vectors
 ///
@@ -19,6 +20,14 @@ impl Bump {
         match self {
             Self::Add(rhs) => *lhs += rhs,
             Self::Merge(rhs) => lhs.merge(rhs),
+        }
+    }
+
+    /// Checkes whether this bump would change the given version vector if applied to it.
+    pub fn changes(&self, lhs: &VersionVector) -> bool {
+        match self {
+            Self::Add(rhs) => !rhs.is_empty(),
+            Self::Merge(rhs) => matches!(lhs.partial_cmp(rhs), Some(Ordering::Less) | None),
         }
     }
 }
