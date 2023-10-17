@@ -147,7 +147,7 @@ pub(super) async fn finalize(
 
             root_node::approve(write_tx, &hash).await?;
             try_collect_into(
-                root_node::load_writer_ids(write_tx, &hash),
+                root_node::load_writer_ids_by_hash(write_tx, &hash),
                 &mut new_approved,
             )
             .await?;

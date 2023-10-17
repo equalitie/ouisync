@@ -867,7 +867,6 @@ async fn receive_existing_snapshot() {
         .await
         .unwrap();
 
-    // TODO: eventually we want this to also return false
     assert!(status.request_children);
 
     for layer in snapshot.inner_layers() {

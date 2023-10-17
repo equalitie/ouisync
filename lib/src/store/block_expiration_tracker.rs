@@ -427,7 +427,11 @@ async fn set_as_missing_if_expired(
         )
         .await?
         {
-            try_collect_into(root_node::load_writer_ids(&mut tx, &hash), &mut branches).await?;
+            try_collect_into(
+                root_node::load_writer_ids_by_hash(&mut tx, &hash),
+                &mut branches,
+            )
+            .await?;
         }
     }
 

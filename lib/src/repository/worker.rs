@@ -417,7 +417,7 @@ mod prune {
 mod trash {
     use super::*;
     use crate::{
-        protocol::{BlockId, Bump},
+        protocol::BlockId,
         store::{Changeset, ReadTransaction, WriteTransaction},
     };
     use futures_util::TryStreamExt;

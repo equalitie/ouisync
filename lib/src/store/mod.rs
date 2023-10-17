@@ -357,6 +357,10 @@ impl Reader {
         root_node::load_prev(self.db(), node).await
     }
 
+    pub fn load_writer_ids(&mut self) -> impl Stream<Item = Result<PublicKey, Error>> + '_ {
+        root_node::load_writer_ids(self.db())
+    }
+
     pub fn load_root_nodes(&mut self) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
         root_node::load_all(self.db())
     }

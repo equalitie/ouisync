@@ -43,7 +43,11 @@ pub(super) async fn receive(
             continue;
         }
 
-        try_collect_into(root_node::load_writer_ids(write_tx, &hash), &mut branches).await?;
+        try_collect_into(
+            root_node::load_writer_ids_by_hash(write_tx, &hash),
+            &mut branches,
+        )
+        .await?;
     }
 
     write(write_tx, block).await?;
