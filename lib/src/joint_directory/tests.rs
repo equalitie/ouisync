@@ -725,52 +725,31 @@ mod merge_is_associative {
         .await
     }
 
+    case!(empty_and_empty_and_empty, &[], &[], &[]);
+    case!(file_and_empty_and_empty, &["file.txt"], &[], &[]);
+    case!(empty_and_file_and_empty, &[], &["file.txt"], &[]);
+    case!(empty_and_empty_and_file, &[], &[], &["file.txt"]);
     case!(
-        #[ignore] // FIXME
-        empty_and_empty_and_empty,
-        &[],
-        &[],
-        &[]
-    );
-    case!(
-        #[ignore] // FIXME
-        file_and_empty_and_empty,
-        &["file.txt"],
-        &[],
-        &[]
-    );
-    case!(
-        #[ignore] // FIXME
-        empty_and_file_and_empty,
-        &[],
-        &["file.txt"],
-        &[]
-    );
-    case!(
-        #[ignore] // FIXME
-        empty_and_empty_and_file,
-        &[],
-        &[],
-        &["file.txt"]
-    );
-    case!(
-        #[ignore] // FIXME
         file_a_and_file_b_and_empty,
         &["file-a.txt"],
         &["file-b.txt"],
         &[],
     );
     case!(
-        #[ignore] // FIXME
         file_a_and_empty_and_file_c,
         &["file-a.txt"],
         &[],
         &["file-c.txt"],
     );
     case!(
-        #[ignore] // FIXME
         empty_and_file_b_and_file_c,
         &[],
+        &["file-b.txt"],
+        &["file-c.txt"],
+    );
+    case!(
+        file_a_and_file_b_and_file_c,
+        &["file-a.txt"],
         &["file-b.txt"],
         &["file-c.txt"],
     );
