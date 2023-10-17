@@ -595,41 +595,54 @@ mod merge_is_commutative {
         let rng0 = StdRng::from_entropy();
         let rng1 = rng0.clone();
 
-        let vv0 = run_one(rng0, content_a, content_b)
-            .instrument(tracing::info_span!("a<-b"))
+        let vv0 = run_one(rng0, content_a, content_b, [0, 1])
+            .instrument(tracing::info_span!("a->b"))
             .await;
-        let vv1 = run_one(rng1, content_b, content_a)
-            .instrument(tracing::info_span!("b<-a"))
+        let vv1 = run_one(rng1, content_a, content_b, [1, 0])
+            .instrument(tracing::info_span!("b->a"))
             .await;
 
         (vv0, vv1)
     }
 
-    async fn run_one(rng: StdRng, content_a: &[&str], content_b: &[&str]) -> VersionVector {
-        let (_base_dir, [branch_a, branch_b]) = setup_with_rng(rng).await;
+    async fn run_one(
+        rng: StdRng,
+        content_a: &[&str],
+        content_b: &[&str],
+        order: [usize; 2],
+    ) -> VersionVector {
+        let (_base_dir, [a, b]) = setup_with_rng(rng).await;
 
         async {
-            generate(&branch_a, content_a).await.unwrap();
-            generate(&branch_b, content_b).await.unwrap();
+            generate(&a, content_a).await.unwrap();
+            generate(&b, content_b).await.unwrap();
         }
         .instrument(tracing::info_span!("arrange"))
         .await;
 
-        merge(&[&branch_a, &branch_b])
+        let branch_0 = [&a, &b][order[0]];
+        let branch_1 = [&a, &b][order[1]];
+
+        merge(&[branch_1, branch_0])
             .instrument(tracing::info_span!("act"))
             .await
             .unwrap()
     }
 
     case!(empty_and_empty, &[], &[]);
+    case!(file_and_empty, &["file.txt"], &[]);
+    case!(file_a_and_file_b, &["file-a.txt"], &["file-b.txt"]);
+    case!(dir_and_empty, &["dir"], &[]);
     case!(
         #[ignore] // FIXME
-        file_and_empty,
-        &["file.txt"],
-        &[]
+        dir_and_dir,
+        &["dir"],
+        &["dir"]
     );
-
-    // TODO: more cases
+    case!(dir_a_and_dir_b, &["dir-a"], &["dir-b"]);
+    case!(dir_and_file, &["dir"], &["file.txt"]);
+    case!(dir_with_file_and_empty, &["dir/file.txt"], &[]);
+    case!(dir_with_file_and_file, &["dir/file-a.txt"], &["file-b.txt"]);
 }
 
 mod merge_is_associative {
@@ -648,21 +661,6 @@ mod merge_is_associative {
         };
     }
 
-    async fn prepare(
-        rng: StdRng,
-        content_a: &[&str],
-        content_b: &[&str],
-        content_c: &[&str],
-    ) -> (TempDir, [Branch; 3]) {
-        let (base_dir, [a, b, c]) = setup_with_rng(rng).await;
-
-        generate(&a, content_a).await.unwrap();
-        generate(&b, content_b).await.unwrap();
-        generate(&c, content_c).await.unwrap();
-
-        (base_dir, [a, b, c])
-    }
-
     async fn run(
         content_a: &[&str],
         content_b: &[&str],
@@ -674,50 +672,55 @@ mod merge_is_associative {
         let rng0 = StdRng::from_entropy();
         let rng1 = rng0.clone();
 
-        let vv0 = run_a_to_b_then_b_to_c(rng0, content_a, content_b, content_c).await;
-        let vv1 = run_b_to_c_then_a_to_c(rng1, content_a, content_b, content_c).await;
+        let vv0 = run_one(rng0, content_a, content_b, content_c, [(0, 1), (1, 2)])
+            .instrument(tracing::info_span!("((a, b), c)"))
+            .await;
+        let vv1 = run_one(rng1, content_a, content_b, content_c, [(1, 2), (0, 2)])
+            .instrument(tracing::info_span!("(a, (b, c))"))
+            .await;
 
         (vv0, vv1)
     }
 
-    // ((a, b), c)
-    #[instrument(name = "((a, b), c)", skip(rng))]
-    async fn run_a_to_b_then_b_to_c(
+    async fn run_one(
         rng: StdRng,
         content_a: &[&str],
         content_b: &[&str],
         content_c: &[&str],
+        order: [(usize, usize); 2],
     ) -> VersionVector {
-        let (_base_dir, [a, b, c]) = prepare(rng, content_a, content_b, content_c).await;
+        let (_base_dir, [a, b, c]) = setup_with_rng(rng).await;
 
-        merge(&[&b, &a])
-            .instrument(tracing::info_span!("(a, b)"))
-            .await
-            .unwrap();
-        merge(&[&c, &b])
-            .instrument(tracing::info_span!("(b, c)"))
-            .await
-            .unwrap()
-    }
+        async {
+            generate(&a, content_a).await.unwrap();
+            generate(&b, content_b).await.unwrap();
+            generate(&c, content_c).await.unwrap();
+        }
+        .instrument(tracing::info_span!("arange"))
+        .await;
 
-    // (a, (b, c))
-    #[instrument(name = "(a, (b, c))", skip(rng))]
-    async fn run_b_to_c_then_a_to_c(
-        rng: StdRng,
-        content_a: &[&str],
-        content_b: &[&str],
-        content_c: &[&str],
-    ) -> VersionVector {
-        let (_base_dir, [a, b, c]) = prepare(rng, content_a, content_b, content_c).await;
+        async {
+            let letters = ["a", "b", "c"];
+            let mut out = VersionVector::new();
 
-        merge(&[&c, &b])
-            .instrument(tracing::info_span!("(b, c)"))
-            .await
-            .unwrap();
-        merge(&[&c, &a])
-            .instrument(tracing::info_span!("(a, c)"))
-            .await
-            .unwrap()
+            for (src, dst) in order {
+                let branch_0 = [&a, &b, &c][src];
+                let branch_1 = [&a, &b, &c][dst];
+
+                out = merge(&[branch_1, branch_0])
+                    .instrument(tracing::info_span!(
+                        "merge",
+                        src = letters[src],
+                        dst = letters[dst]
+                    ))
+                    .await
+                    .unwrap();
+            }
+
+            out
+        }
+        .instrument(tracing::info_span!("act"))
+        .await
     }
 
     case!(
