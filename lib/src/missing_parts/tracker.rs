@@ -42,7 +42,8 @@ impl Tracker {
             .entry(part_id)
             .or_insert_with(|| MissingPartState {
                 offering_clients: HashSet::default(),
-                accepted_by: None,
+                currently_accepted_by: None,
+                previously_accepted_by: Default::default(),
                 required: false,
                 approved: false,
             });
@@ -149,12 +150,17 @@ impl TrackerClient {
             .entry(part_id)
             .or_insert_with(|| MissingPartState {
                 offering_clients: HashSet::default(),
-                accepted_by: None,
+                currently_accepted_by: None,
+                previously_accepted_by: Default::default(),
                 required: false,
                 approved: false,
             });
 
         missing_part.offering_clients.insert(self.client_id);
+
+        // The peer could have previously lied about having the part (e.g. expired block). Now it's
+        // claiming to have it again so we need to reconsider loading from it again.
+        missing_part.previously_accepted_by.remove(&self.client_id);
 
         match state {
             OfferState::Approved => {
@@ -183,6 +189,9 @@ impl Drop for TrackerClient {
             if missing_part.unaccept_by(self.client_id) {
                 notify = true;
             }
+
+            // When the client reconnects, we allow it to accept the again.
+            missing_part.previously_accepted_by.remove(&self.client_id);
 
             // TODO: if the block hasn't other offers and isn't required, remove it
         }
@@ -233,9 +242,15 @@ impl PartPromiseAcceptor {
             // unwrap is ok because of the invariant in `Inner`
             let missing_part = inner.missing_parts.get_mut(part_id).unwrap();
 
-            if missing_part.required && missing_part.approved && missing_part.accepted_by.is_none()
+            if missing_part.required
+                && missing_part.approved
+                && missing_part.currently_accepted_by.is_none()
+                && !missing_part
+                    .previously_accepted_by
+                    .contains(&self.client_id)
             {
-                missing_part.accepted_by = Some(self.client_id);
+                missing_part.currently_accepted_by = Some(self.client_id);
+                missing_part.previously_accepted_by.insert(self.client_id);
 
                 return Some(PartPromise {
                     shared: self.shared.clone(),
@@ -354,16 +369,17 @@ struct Inner {
 #[derive(Debug)]
 struct MissingPartState {
     offering_clients: HashSet<ClientId>,
-    accepted_by: Option<ClientId>,
+    currently_accepted_by: Option<ClientId>,
+    previously_accepted_by: HashSet<ClientId>,
     required: bool,
     approved: bool,
 }
 
 impl MissingPartState {
     fn unaccept_by(&mut self, client_id: ClientId) -> bool {
-        if let Some(accepted_by) = &self.accepted_by {
-            if accepted_by == &client_id {
-                self.accepted_by = None;
+        if let Some(currently_accepted_by) = &self.currently_accepted_by {
+            if currently_accepted_by == &client_id {
+                self.currently_accepted_by = None;
                 return true;
             }
         }
