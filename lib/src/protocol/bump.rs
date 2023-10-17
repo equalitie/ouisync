@@ -3,6 +3,7 @@ use crate::{crypto::sign::PublicKey, version_vector::VersionVector};
 /// Operation on version vectors
 ///
 /// Note: `Bump::default()` constructs a `Bump` whose `apply` is a no-op.
+#[derive(Debug)]
 pub(crate) enum Bump {
     Add(VersionVector),
     Merge(VersionVector),

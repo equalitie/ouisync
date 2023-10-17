@@ -6,7 +6,13 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{cmp::Ordering, collections::BTreeMap, fmt, ops::AddAssign};
+use std::{
+    cmp::Ordering,
+    collections::BTreeMap,
+    fmt,
+    iter::Sum,
+    ops::{Add, AddAssign},
+};
 
 /// [Version vector](https://en.wikipedia.org/wiki/Version_vector).
 ///
@@ -140,6 +146,16 @@ impl FromIterator<(PublicKey, u64)> for VersionVector {
     }
 }
 
+impl<'a> Add for &'a VersionVector {
+    type Output = VersionVector;
+
+    fn add(self, other: Self) -> Self::Output {
+        let mut output = self.clone();
+        output += other;
+        output
+    }
+}
+
 impl<'a> AddAssign<&'a VersionVector> for VersionVector {
     fn add_assign(&mut self, rhs: &'a VersionVector) {
         for (id, version) in &rhs.0 {
@@ -151,6 +167,18 @@ impl<'a> AddAssign<&'a VersionVector> for VersionVector {
 impl AddAssign for VersionVector {
     fn add_assign(&mut self, rhs: VersionVector) {
         *self += &rhs
+    }
+}
+
+impl<'a> Sum<&'a VersionVector> for VersionVector {
+    fn sum<I>(iter: I) -> Self
+    where
+        I: Iterator<Item = &'a VersionVector>,
+    {
+        iter.fold(Self::new(), |mut sum, v| {
+            sum += v;
+            sum
+        })
     }
 }
 

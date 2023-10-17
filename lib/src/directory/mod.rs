@@ -385,9 +385,15 @@ impl Directory {
 
         // Because we are transferring only the directory but not its content, we reflect that
         // by setting its version vector to what the version vector of the source directory was
-        // at the time it was initially created.
-        // TODO: Change this to `self.vv - self.entries.map(vv).sum()`
-        let vv = VersionVector::first(*self.branch().id());
+        // at the time it was initially created - that is, it's current version vector minus the
+        // version vectors of all its entries.
+        //
+        // FIXME: potential race condition - the content and the version vector are loaded
+        // separately - they can get out of sync.
+        let vv = self
+            .version_vector()
+            .await?
+            .saturating_sub(&self.entries().map(|entry| entry.version_vector()).sum());
 
         if let Some((parent_dir, entry_name)) = parent {
             let mut parent_dir = parent_dir.fork(local_branch).await?;

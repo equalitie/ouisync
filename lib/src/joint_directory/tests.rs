@@ -416,6 +416,8 @@ async fn merge_locally_older_file() {
     // Create a file in the remote root
     create_file(&mut remote_root, "cat.jpg", content_v0).await;
 
+    remote_root.refresh().await.unwrap();
+
     // Merge to transfer the file to the local branch
     JointDirectory::new(
         Some(branch0.clone()),
@@ -872,9 +874,9 @@ async fn merge_create_file_roundtrip() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_create_and_remove_file() {
-    crate::test_utils::init_log();
-
     let (_base_dir, [branch_l, branch_r]) = setup().await;
+
+    tracing::info!(local = ?branch_l.id(), remote = ?branch_r.id());
 
     let mut root_l = branch_l.open_or_create_root().await.unwrap();
     let mut root_r = branch_r.open_or_create_root().await.unwrap();
@@ -882,9 +884,12 @@ async fn merge_create_and_remove_file() {
     // local: create the file
     create_file(&mut root_l, "monkey.jpg", b"v0").await;
 
+    root_l.refresh().await.unwrap();
+
     // remote: merge from local
     JointDirectory::new(Some(branch_r.clone()), [root_l.clone(), root_r.clone()])
         .merge()
+        .instrument(tracing::info_span!("merge local -> remote"))
         .await
         .unwrap();
 
@@ -902,12 +907,14 @@ async fn merge_create_and_remove_file() {
             branch_r.id(),
             EntryTombstoneData::removed(file_vv.incremented(*branch_r.id())),
         )
+        .instrument(tracing::info_span!("remove"))
         .await
         .unwrap();
 
     // local: merge from remote
     JointDirectory::new(Some(branch_l.clone()), [root_l.clone(), root_r.clone()])
         .merge()
+        .instrument(tracing::info_span!("merge remote -> local"))
         .await
         .unwrap();
 
