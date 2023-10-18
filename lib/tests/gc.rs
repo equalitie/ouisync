@@ -107,8 +107,9 @@ fn remote_delete_remote_file() {
 
         common::expect_entry_not_found(&repo, "test.dat").await;
 
-        // The remote file is removed but the remote root remains to track the tombstone
-        expect_block_count(&repo, 1).await;
+        // 1 block for the local root directory + 1 block for the remote root directory (see the
+        // note at the top of this file for details about why the remote root is there)
+        expect_block_count(&repo, 2).await;
         tx.send(()).await.unwrap();
     });
 }
@@ -218,13 +219,15 @@ fn remote_truncate_remote_file() {
 
             common::expect_file_content(&repo, "test.dat", &content).await;
 
-            // 2 blocks for the file + 1 block for the remote root
-            expect_block_count(&repo, 3).await;
+            // 2 blocks for the file + 1 block for the local root + 1 block for the remote root
+            // (see the note at the top of this file for details about why the remote root is
+            // there)
+            expect_block_count(&repo, 4).await;
             tx.send(()).await.unwrap();
 
             common::expect_file_content(&repo, "test.dat", &[]).await;
 
-            // 1 block for the file + 1 block for the remote root
+            // 1 block for the file + 1 block for the local root
             expect_block_count(&repo, 2).await;
             tx.send(()).await.unwrap();
         }

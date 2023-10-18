@@ -558,7 +558,10 @@ pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
         let parent = repo.open_directory(parent).await.unwrap();
 
         match parent.lookup_unique(name) {
-            Ok(_) => false,
+            Ok(_) => {
+                tracing::debug!(%path, "still exists");
+                false
+            }
             Err(Error::EntryNotFound) => true,
             Err(error) => {
                 tracing::error!(%path, ?error);
