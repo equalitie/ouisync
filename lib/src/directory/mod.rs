@@ -256,7 +256,7 @@ impl Directory {
     /// directory, it needs to be empty or a `DirectoryNotEmpty` error is returned.
     ///
     /// This doesn't simply remove the entry because then there would be no record of the entry
-    /// being deleted and so there would be no way for the remote replicas to know about it.
+    /// being removed and so there would be no way for the remote replicas to know about it.
     /// Instead, the entry is in most cases replaced with a "tombstone". The one special case is
     /// described in the following section.
     ///
@@ -267,7 +267,7 @@ impl Directory {
     /// branches are immutable) but instead places a tombstone into the local branch which is
     /// happens-after the remote entry. However, if the entry exists also in the local branch,
     /// instead of replacing it with a tombstone (which would effectively remove it from both
-    /// branches), it's version vector is updated so that the entry is happens-after the remote one.
+    /// branches), its version vector is updated so that the entry is happens-after the remote one.
     /// This way it removes only the remote entry and keeps the local one.
     ///
     /// # Version vector requirements
@@ -276,6 +276,14 @@ impl Directory {
     /// from remote branches. To support both use cases, the version vector in `tombstone` must be
     /// happens-after the one of the currently existing entry, if any. If this is not the case,
     /// `Error::EntryExists` is returned.
+    ///
+    /// # Idempotency
+    ///
+    /// To support merging removed entries, removing a non-existing entry is not an error and it
+    /// results in creation of a new tombstone. Removing an already removed entry is also not an
+    /// error. If `tombstone.version vector` is lower or the same as the existing one, then it is
+    /// a no-op. This makes merging removed entries idempotent.
+    #[instrument(skip(self, tombstone), fields(?tombstone.version_vector))]
     pub(crate) async fn remove_entry(
         &mut self,
         name: &str,
@@ -295,14 +303,16 @@ impl Directory {
         Ok(())
     }
 
-    /// Adds a tombstone to where the entry is being moved from and creates a new entry at the
+    /// Moves an entry at `src_name` from this directory to the `dst_dir` directory at `dst_name`.
+    ///
+    /// It adds a tombstone to where the entry is being moved from and creates a new entry at the
     /// destination.
     ///
     /// Note on why we're passing the `src_data` to the function instead of just looking it up
     /// using `src_name`: it's because the version vector inside of the `src_data` is expected to
     /// be the one the caller of this function is trying to move. It could, in theory, happen that
-    /// the source entry has been modified between when the caller last released the lock to the
-    /// entry and when we would do the lookup.
+    /// the source entry has been modified between when the caller obtained the entry and when we
+    /// would do the lookup.
     ///
     /// Thus using the "caller provided" version vector, we ensure that we don't accidentally
     /// delete data.
@@ -606,9 +616,16 @@ impl Directory {
                     new_data
                 }
             }
-            Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
-                EntryData::Tombstone(tombstone)
+            Ok(EntryRef::Tombstone(old_entry)) => {
+                // Attempt to replace a tombstone with another tombstone whose version vector is
+                // the same or lower is a no-op.
+                if &tombstone.version_vector > old_entry.version_vector() {
+                    EntryData::Tombstone(tombstone)
+                } else {
+                    return Ok(self.content.clone());
+                }
             }
+            Err(Error::EntryNotFound) => EntryData::Tombstone(tombstone),
             Err(e) => return Err(e),
         };
 
@@ -729,6 +746,7 @@ pub(crate) enum DirectoryLocking {
 
 /// Update the root version vector of the given branch by merging it with `merge`.
 /// If `merge` is less that or equal to the current root version vector, this is s no-op.
+#[instrument(skip(branch), fields(writer_id = ?branch.id()))]
 pub(crate) async fn bump_root(branch: &Branch, merge: VersionVector) -> Result<()> {
     let tx = branch.store().begin_write().await?;
     let mut changeset = Changeset::new();

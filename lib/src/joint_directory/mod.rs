@@ -267,12 +267,12 @@ impl JointDirectory {
 
         if !old_version_vector.is_empty() && old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
+            tracing::trace!(old = ?old_version_vector, "Merge not started - already up to date");
             // unwrap is ok because if old_version_vector is non-empty it means the local version
             // must exist.
-            tracing::trace!("merge not started - already up to date");
             return Ok(self.local_version().unwrap().clone());
         } else {
-            tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "merge started");
+            tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "Merge started");
         }
 
         let local_version = self.fork().await?;
@@ -346,7 +346,7 @@ impl JointDirectory {
 
         if tracing::enabled!(tracing::Level::TRACE) {
             let vv = local_version.version_vector().await?;
-            tracing::trace!(?vv, ?conflict, "merge completed");
+            tracing::trace!(?vv, ?conflict, "Merge completed");
         }
 
         if conflict {

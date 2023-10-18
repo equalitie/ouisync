@@ -610,6 +610,77 @@ async fn remove_concurrent_remote_file() {
     assert!(*local_vv > remote_vv);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_non_existing_entry() {
+    let (_base_dir, local_branch) = setup().await;
+    let mut root = local_branch.open_or_create_root().await.unwrap();
+    let name = "foo.txt";
+
+    let vv0 = local_branch.version_vector().await.unwrap();
+
+    // This is not an error and a new tombstone must be created. This is to support merging removed
+    // entries from remote branches.
+    root.remove_entry(
+        name,
+        local_branch.id(),
+        EntryTombstoneData::removed(VersionVector::first(*local_branch.id())),
+    )
+    .await
+    .unwrap();
+
+    let vv1 = local_branch.version_vector().await.unwrap();
+    assert!(vv1 > vv0);
+
+    assert_matches!(root.lookup(name), Ok(EntryRef::Tombstone(_)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_is_idempotent() {
+    let (_base_dir, local_branch) = setup().await;
+    let mut root = local_branch.open_or_create_root().await.unwrap();
+    let name = "foo.txt";
+
+    root.create_file(name.to_owned())
+        .await
+        .unwrap()
+        .flush()
+        .await
+        .unwrap();
+
+    let proof0 = local_branch.proof().await.unwrap();
+
+    root.refresh().await.unwrap();
+
+    let tombstone_vv = root
+        .lookup(name)
+        .unwrap()
+        .version_vector()
+        .clone()
+        .incremented(*local_branch.id());
+
+    root.remove_entry(
+        name,
+        local_branch.id(),
+        EntryTombstoneData::removed(tombstone_vv.clone()),
+    )
+    .await
+    .unwrap();
+
+    let proof1 = local_branch.proof().await.unwrap();
+    assert!(proof1.version_vector > proof0.version_vector);
+
+    root.remove_entry(
+        name,
+        local_branch.id(),
+        EntryTombstoneData::removed(tombstone_vv),
+    )
+    .await
+    .unwrap();
+
+    let proof2 = local_branch.proof().await.unwrap();
+    assert_eq!(proof2, proof1);
+}
+
 async fn setup() -> (TempDir, Branch) {
     let (base_dir, [branch]) = setup_multiple().await;
     (base_dir, branch)

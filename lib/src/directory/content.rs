@@ -165,15 +165,11 @@ fn check_replace(old: &EntryData, new: &EntryData) -> Result<Option<BlobId>, Ent
             EntryData::Directory(new),
             EntryData::Directory(old),
         ) if new.blob_id == old.blob_id => Err(EntryExists::Same),
-        (Some(Ordering::Equal), EntryData::Tombstone(new), EntryData::Tombstone(old))
-            if new.cause == old.cause =>
-        {
-            // Replacing a tombstone with the same tombstone is a no-op, and OK.
-            Ok(None)
-        }
-        (Some(Ordering::Less), EntryData::Tombstone(_), EntryData::Tombstone(_)) => {
-            Err(EntryExists::Different)
-        }
+        (
+            Some(Ordering::Equal | Ordering::Less),
+            EntryData::Tombstone(new),
+            EntryData::Tombstone(old),
+        ) if new.cause == old.cause => Err(EntryExists::Same),
         (
             Some(Ordering::Equal | Ordering::Less),
             EntryData::File(_) | EntryData::Directory(_) | EntryData::Tombstone(_),

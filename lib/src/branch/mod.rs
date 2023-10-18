@@ -8,7 +8,7 @@ use crate::{
     event::{EventScope, EventSender, Payload},
     file::{File, FileProgressCache},
     path,
-    protocol::{BlockId, Locator, RootNodeFilter},
+    protocol::{BlockId, Locator, Proof, RootNodeFilter},
     store::{self, Store},
     version_vector::VersionVector,
 };
@@ -58,17 +58,21 @@ impl Branch {
     }
 
     pub async fn version_vector(&self) -> Result<VersionVector> {
-        match self
+        match self.proof().await {
+            Ok(proof) => Ok(proof.into_version_vector()),
+            Err(Error::Store(store::Error::BranchNotFound)) => Ok(VersionVector::new()),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) async fn proof(&self) -> Result<Proof> {
+        Ok(self
             .store
             .acquire_read()
             .await?
             .load_root_node(self.id(), RootNodeFilter::Any)
-            .await
-        {
-            Ok(root_node) => Ok(root_node.proof.into_version_vector()),
-            Err(store::Error::BranchNotFound) => Ok(VersionVector::new()),
-            Err(error) => Err(error.into()),
-        }
+            .await?
+            .proof)
     }
 
     pub(crate) fn keys(&self) -> &AccessKeys {
