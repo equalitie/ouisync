@@ -45,7 +45,7 @@ impl Changeset {
 
         let mut changed = false;
 
-        if patch.save(tx, &self.bump, write_keys).await? {
+        if patch.save(tx, self.bump, write_keys).await? {
             changed = true;
         }
 

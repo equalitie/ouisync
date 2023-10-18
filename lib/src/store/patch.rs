@@ -85,7 +85,7 @@ impl Patch {
     pub async fn save(
         mut self,
         tx: &mut WriteTransaction,
-        bump: &Bump,
+        bump: Bump,
         write_keys: &Keypair,
     ) -> Result<bool, Error> {
         if self.inners.is_empty() && self.leaves.is_empty() && !bump.changes(&self.vv) {
@@ -211,7 +211,7 @@ impl Patch {
     async fn save_root(
         mut self,
         tx: &mut WriteTransaction,
-        bump: &Bump,
+        bump: Bump,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
         let db = tx.db();

@@ -59,7 +59,7 @@ impl Content {
         self.entries.get_key_value(name)
     }
 
-    /// Inserts an entry into this directory. Returns the difference between the old and the new
+    /// Inserts an entry into this directory. Returns the difference between the new and the old
     /// version vectors.
     pub fn insert(
         &mut self,
@@ -97,16 +97,15 @@ impl Content {
         }
     }
 
-    /// Updates the version vector of entry at `name`.
-    pub fn bump(&mut self, name: &str, bump: &Bump) -> Result<()> {
-        bump.apply(
+    /// Updates the version vector of entry at `name`. Returns the difference between the old and
+    /// the new version vectors.
+    pub fn bump(&mut self, name: &str, bump: Bump) -> Result<VersionVector> {
+        Ok(bump.apply(
             self.entries
                 .get_mut(name)
                 .ok_or(Error::EntryNotFound)?
                 .version_vector_mut(),
-        );
-
-        Ok(())
+        ))
     }
 
     /// Initial version vector for a new entry to be inserted.

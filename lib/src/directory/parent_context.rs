@@ -55,9 +55,9 @@ impl ParentContext {
     ) -> Result<()> {
         let mut directory = self.open_in(tx, branch).await?;
         let mut content = directory.content.clone();
-        content.bump(&self.entry_name, &bump)?;
+        let diff = content.bump(&self.entry_name, bump)?;
         directory.save(tx, changeset, &content).await?;
-        directory.bump(tx, changeset, bump).await?;
+        directory.bump(tx, changeset, Bump::Add(diff)).await?;
 
         Ok(())
     }
