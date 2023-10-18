@@ -11,6 +11,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
+use camino::Utf8PathBuf;
 use futures_util::future;
 use rand::{rngs::StdRng, SeedableRng};
 use tempfile::TempDir;
@@ -586,27 +587,27 @@ mod merge_is_commutative {
             $(#[$attr])?
             #[tokio::test]
             async fn $name() {
-                let (vv0, vv1) = run($content_a, $content_b).await;
-                assert_eq!(vv0, vv1);
+                let (d0, d1) = run($content_a, $content_b).await;
+                assert_eq!(d0, d1);
             }
         };
     }
 
-    async fn run(content_a: &[&str], content_b: &[&str]) -> (VersionVector, VersionVector) {
+    async fn run(content_a: &[&str], content_b: &[&str]) -> (Dump, Dump) {
         test_utils::init_log();
 
         // Use the same rng for both sub-cases to generate the same branch ids.
         let rng0 = StdRng::from_entropy();
         let rng1 = rng0.clone();
 
-        let vv0 = run_one(rng0, content_a, content_b, [0, 1])
+        let d0 = run_one(rng0, content_a, content_b, [0, 1])
             .instrument(tracing::info_span!("a->b"))
             .await;
-        let vv1 = run_one(rng1, content_a, content_b, [1, 0])
+        let d1 = run_one(rng1, content_a, content_b, [1, 0])
             .instrument(tracing::info_span!("b->a"))
             .await;
 
-        (vv0, vv1)
+        (d0, d1)
     }
 
     async fn run_one(
@@ -614,7 +615,7 @@ mod merge_is_commutative {
         content_a: &[&str],
         content_b: &[&str],
         order: [usize; 2],
-    ) -> VersionVector {
+    ) -> Dump {
         let (_base_dir, [a, b]) = setup_with_rng(rng).await;
 
         async {
@@ -630,23 +631,26 @@ mod merge_is_commutative {
         merge(&[branch_1, branch_0])
             .instrument(tracing::info_span!("act"))
             .await
-            .unwrap()
+            .unwrap();
+
+        dump_branch(branch_1).await.unwrap()
     }
 
     case!(empty_and_empty, &[], &[]);
     case!(file_and_empty, &["file.txt"], &[]);
     case!(file_a_and_file_b, &["file-a.txt"], &["file-b.txt"]);
     case!(dir_and_empty, &["dir"], &[]);
-    case!(
-        #[ignore] // FIXME
-        dir_and_dir,
-        &["dir"],
-        &["dir"]
-    );
+    case!(dir_and_dir, &["dir"], &["dir"]);
     case!(dir_a_and_dir_b, &["dir-a"], &["dir-b"]);
     case!(dir_and_file, &["dir"], &["file.txt"]);
     case!(dir_with_file_and_empty, &["dir/file.txt"], &[]);
     case!(dir_with_file_and_file, &["dir/file-a.txt"], &["file-b.txt"]);
+    case!(
+        #[ignore] // FIXME
+        dir_with_subdir_and_dir_with_subdir,
+        &["dir/subdir"],
+        &["dir/subdir"]
+    );
 }
 
 mod merge_is_associative {
@@ -665,25 +669,21 @@ mod merge_is_associative {
         };
     }
 
-    async fn run(
-        content_a: &[&str],
-        content_b: &[&str],
-        content_c: &[&str],
-    ) -> (VersionVector, VersionVector) {
+    async fn run(content_a: &[&str], content_b: &[&str], content_c: &[&str]) -> (Dump, Dump) {
         test_utils::init_log();
 
         // Use the same rng for both sub-cases to generate the same branch ids.
         let rng0 = StdRng::from_entropy();
         let rng1 = rng0.clone();
 
-        let vv0 = run_one(rng0, content_a, content_b, content_c, [(0, 1), (1, 2)])
+        let d0 = run_one(rng0, content_a, content_b, content_c, [(0, 1), (1, 2)])
             .instrument(tracing::info_span!("((a, b), c)"))
             .await;
-        let vv1 = run_one(rng1, content_a, content_b, content_c, [(1, 2), (0, 2)])
+        let d1 = run_one(rng1, content_a, content_b, content_c, [(1, 2), (0, 2)])
             .instrument(tracing::info_span!("(a, (b, c))"))
             .await;
 
-        (vv0, vv1)
+        (d0, d1)
     }
 
     async fn run_one(
@@ -692,7 +692,7 @@ mod merge_is_associative {
         content_b: &[&str],
         content_c: &[&str],
         order: [(usize, usize); 2],
-    ) -> VersionVector {
+    ) -> Dump {
         let (_base_dir, [a, b, c]) = setup_with_rng(rng).await;
 
         async {
@@ -705,13 +705,13 @@ mod merge_is_associative {
 
         async {
             let letters = ["a", "b", "c"];
-            let mut out = VersionVector::new();
+            let mut out = Dump::new();
 
             for (src, dst) in order {
                 let branch_0 = [&a, &b, &c][src];
                 let branch_1 = [&a, &b, &c][dst];
 
-                out = merge(&[branch_1, branch_0])
+                merge(&[branch_1, branch_0])
                     .instrument(tracing::info_span!(
                         "merge",
                         src = letters[src],
@@ -719,6 +719,8 @@ mod merge_is_associative {
                     ))
                     .await
                     .unwrap();
+
+                out = dump_branch(branch_1).await.unwrap();
             }
 
             out
@@ -768,22 +770,25 @@ mod merge_is_idempotent {
         ($name:ident, $content_a:expr, $content_b:expr) => {
             #[tokio::test]
             async fn $name() {
-                let (vv0, vv1) = run($content_a, $content_b).await;
-                assert_eq!(vv0, vv1);
+                let (d0, d1) = run($content_a, $content_b).await;
+                assert_eq!(d0, d1);
             }
         };
     }
 
-    async fn run(content_a: &[&str], content_b: &[&str]) -> (VersionVector, VersionVector) {
+    async fn run(content_a: &[&str], content_b: &[&str]) -> (Dump, Dump) {
         let (_base_dir, [branch_a, branch_b]) = setup().await;
 
         generate(&branch_a, content_a).await.unwrap();
         generate(&branch_b, content_b).await.unwrap();
 
-        let vv0 = merge(&[&branch_a, &branch_b]).await.unwrap();
-        let vv1 = merge(&[&branch_a, &branch_b]).await.unwrap();
+        merge(&[&branch_a, &branch_b]).await.unwrap();
+        let d0 = dump_branch(&branch_a).await.unwrap();
 
-        (vv0, vv1)
+        merge(&[&branch_a, &branch_b]).await.unwrap();
+        let d1 = dump_branch(&branch_a).await.unwrap();
+
+        (d0, d1)
     }
 
     case!(empty_and_empty, &[], &[]);
@@ -1300,7 +1305,7 @@ async fn generate(branch: &Branch, content: &[&str]) -> Result<()> {
 }
 
 /// Merge all branches into the first one.
-async fn merge(branches: &[&Branch]) -> Result<VersionVector> {
+async fn merge(branches: &[&Branch]) -> Result<()> {
     let roots = future::try_join_all(branches.iter().map(|branch| branch.open_or_create_root()))
         .await
         .unwrap();
@@ -1309,5 +1314,33 @@ async fn merge(branches: &[&Branch]) -> Result<VersionVector> {
         .merge()
         .await?;
 
-    Ok(branches[0].version_vector().await.unwrap())
+    Ok(())
+}
+
+type Dump = Vec<(Utf8PathBuf, VersionVector)>;
+
+async fn dump_branch(branch: &Branch) -> Result<Dump> {
+    let root = branch.open_or_create_root().await?;
+    let path = Utf8Path::new("/");
+
+    let mut out = vec![(path.to_owned(), branch.version_vector().await?)];
+
+    dump_directory_into(&root, path, &mut out).await?;
+
+    Ok(out)
+}
+
+#[async_recursion]
+async fn dump_directory_into(dir: &Directory, path: &Utf8Path, out: &mut Dump) -> Result<()> {
+    for entry in dir.entries() {
+        let path = path.join(entry.name());
+        out.push((path.clone(), entry.version_vector().clone()));
+
+        if let Ok(entry) = entry.directory() {
+            let dir = entry.open(DirectoryFallback::Disabled).await?;
+            dump_directory_into(&dir, &path, out).await?;
+        }
+    }
+
+    Ok(())
 }
