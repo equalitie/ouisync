@@ -332,10 +332,17 @@ impl<'a> Monitor<'a> {
         let mut root_nodes = Vec::with_capacity(writer_ids.len());
 
         for writer_id in writer_ids {
-            root_nodes.push(
-                tx.load_root_node(&writer_id, RootNodeFilter::Published)
-                    .await?,
-            );
+            match tx
+                .load_root_node(&writer_id, RootNodeFilter::Published)
+                .await
+            {
+                Ok(node) => root_nodes.push(node),
+                Err(store::Error::BranchNotFound) => {
+                    // A branch exists, but has no approved root node.
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
 
         Ok(root_nodes)
