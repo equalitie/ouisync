@@ -3,7 +3,7 @@ use crate::{
     blob::BlobId,
     branch::Branch,
     error::{Error, Result},
-    protocol::{BlockId, Locator, RootNode},
+    protocol::{BlockId, Locator, RootNode, RootNodeFilter},
     store,
 };
 
@@ -18,7 +18,7 @@ pub(crate) struct BlockIds {
 impl BlockIds {
     pub async fn open(branch: Branch, blob_id: BlobId) -> Result<Self> {
         let mut tx = branch.store().begin_read().await?;
-        let root_node = tx.load_root_node(branch.id()).await?;
+        let root_node = tx.load_root_node(branch.id(), RootNodeFilter::Any).await?;
 
         // If the first block of the blob is available, we read the blob length from it and use it
         // to know how far to iterate. If it's not, we iterate until we hit `EntryNotFound`.

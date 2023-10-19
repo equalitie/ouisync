@@ -8,7 +8,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    protocol::{BlockContent, BlockId, RootNode},
+    protocol::{BlockContent, BlockId, RootNode, RootNodeFilter},
     repository::Vault,
     store,
     sync::stream::Throttle,
@@ -121,7 +121,7 @@ impl<'a> Responder<'a> {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(&branch_id)
+            .load_root_node(&branch_id, RootNodeFilter::Published)
             .await;
 
         match root_node {
@@ -323,23 +323,38 @@ impl<'a> Monitor<'a> {
     }
 
     async fn load_root_nodes(&self) -> Result<Vec<RootNode>> {
-        self.vault
-            .store()
-            .acquire_read()
-            .await?
-            .load_root_nodes()
-            .err_into()
-            .try_collect()
-            .await
+        // TODO: Consider finding a way to do this in a single query. Not high priority because
+        // this function is not called often.
+
+        let mut tx = self.vault.store().begin_read().await?;
+
+        let writer_ids: Vec<_> = tx.load_writer_ids().try_collect().await?;
+        let mut root_nodes = Vec::with_capacity(writer_ids.len());
+
+        for writer_id in writer_ids {
+            match tx
+                .load_root_node(&writer_id, RootNodeFilter::Published)
+                .await
+            {
+                Ok(node) => root_nodes.push(node),
+                Err(store::Error::BranchNotFound) => {
+                    // A branch exists, but has no approved root node.
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        Ok(root_nodes)
     }
 
-    async fn load_root_node(&self, branch_id: &PublicKey) -> Result<RootNode> {
+    async fn load_root_node(&self, writer_id: &PublicKey) -> Result<RootNode> {
         Ok(self
             .vault
             .store()
             .acquire_read()
             .await?
-            .load_root_node(branch_id)
+            .load_root_node(writer_id, RootNodeFilter::Published)
             .await?)
     }
 }

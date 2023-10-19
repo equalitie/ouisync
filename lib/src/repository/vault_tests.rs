@@ -15,7 +15,7 @@ use crate::{
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
         Block, BlockContent, BlockId, Locator, MultiBlockPresence, NodeState, Proof,
-        SingleBlockPresence, EMPTY_INNER_HASH,
+        RootNodeFilter, SingleBlockPresence, EMPTY_INNER_HASH,
     },
     state_monitor::StateMonitor,
     store::{self, Changeset, ReadTransaction},
@@ -208,7 +208,7 @@ async fn receive_root_node_with_existing_hash() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&local_id)
+        .load_root_node(&local_id, RootNodeFilter::Any)
         .await
         .unwrap();
 
@@ -229,7 +229,7 @@ async fn receive_root_node_with_existing_hash() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&local_id)
+        .load_root_node(&local_id, RootNodeFilter::Any)
         .await
         .unwrap()
         .summary
@@ -239,6 +239,8 @@ async fn receive_root_node_with_existing_hash() {
 
 mod receive_and_create_root_node {
     use tokio::task;
+
+    use crate::protocol::Bump;
 
     use super::*;
 
@@ -340,6 +342,7 @@ mod receive_and_create_root_node {
 
             let mut changeset = Changeset::new();
             changeset.link_block(locator_0, block_id_0_1, SingleBlockPresence::Present);
+            changeset.bump(Bump::increment(local_id));
             changeset
                 .apply(&mut tx, &local_id, &secrets.write_keys)
                 .await
@@ -411,7 +414,7 @@ async fn receive_bumped_root_node() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&branch_id)
+        .load_root_node(&branch_id, RootNodeFilter::Any)
         .await
         .unwrap();
     assert_eq!(node.proof.version_vector, vv0);
@@ -438,7 +441,7 @@ async fn receive_bumped_root_node() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&branch_id)
+        .load_root_node(&branch_id, RootNodeFilter::Any)
         .await
         .unwrap();
     assert_eq!(node.proof.version_vector, vv1);
@@ -864,7 +867,6 @@ async fn receive_existing_snapshot() {
         .await
         .unwrap();
 
-    // TODO: eventually we want this to also return false
     assert!(status.request_children);
 
     for layer in snapshot.inner_layers() {
@@ -1165,7 +1167,7 @@ async fn receive_snapshot(
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&writer_id)
+        .load_root_node(&writer_id, RootNodeFilter::Any)
         .await
     {
         Ok(node) => node.proof.into_version_vector(),
@@ -1214,7 +1216,7 @@ async fn prune_snapshots(vault: &Vault, writer_id: &PublicKey) {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(writer_id)
+        .load_root_node(writer_id, RootNodeFilter::Any)
         .await
         .unwrap();
     vault

@@ -6,7 +6,7 @@ use crate::{
     conflict,
     crypto::sign::PublicKey,
     directory::{
-        Directory, DirectoryFallback, DirectoryRef, EntryRef, EntryTombstoneData, EntryType,
+        self, Directory, DirectoryFallback, DirectoryRef, EntryRef, EntryTombstoneData, EntryType,
         FileRef,
     },
     error::{Error, Result},
@@ -223,9 +223,7 @@ impl JointDirectory {
         let local_version = self.fork().await?;
 
         for (name, branch_id, vv) in entries {
-            local_version
-                .remove_entry(&name, &branch_id, EntryTombstoneData::removed(vv))
-                .await?;
+            local_version.remove_entry(&name, &branch_id, vv).await?;
         }
 
         Ok(())
@@ -254,20 +252,26 @@ impl JointDirectory {
     /// by returning `Error::AmbiguousEntry`.
     #[async_recursion]
     pub async fn merge(&mut self) -> Result<Directory> {
-        let local_version = self.fork().await?;
-        let local_branch = local_version.branch().clone();
+        let old_version_vector = if let Some(local_version) = self.local_version() {
+            local_version.version_vector().await?
+        } else {
+            VersionVector::new()
+        };
 
-        let old_version_vector = local_version.version_vector().await?;
         let new_version_vector = self.merge_version_vectors().await?;
 
-        if old_version_vector >= new_version_vector {
+        if !old_version_vector.is_empty() && old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
-            // unwrap is ok because we ensured the local version exists by calling `fork` above.
-            tracing::trace!("merge not started - already up to date");
+            tracing::trace!(old = ?old_version_vector, "Merge not started - already up to date");
+            // unwrap is ok because if old_version_vector is non-empty it means the local version
+            // must exist.
             return Ok(self.local_version().unwrap().clone());
         } else {
-            tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "merge started");
+            tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "Merge started");
         }
+
+        let local_version = self.fork().await?;
+        let local_branch = local_version.branch().clone();
 
         let mut conflict = false;
         let mut check_for_removal = Vec::new();
@@ -324,20 +328,18 @@ impl JointDirectory {
         local_version.refresh().await?;
 
         for (name, tombstone) in check_for_removal {
-            local_version
-                .remove_entry(&name, local_branch.id(), tombstone)
-                .await?;
+            local_version.create_tombstone(&name, tombstone).await?;
         }
 
-        if !conflict {
-            local_version
-                .merge_version_vector(&new_version_vector)
-                .await?;
+        // Need to bump the root version vector to reflect any non-filesystem changes (e.g.,
+        // removal of nodes during garbage collection).
+        if !conflict && local_version.is_root() {
+            directory::bump_root(&local_branch, new_version_vector).await?;
         }
 
         if tracing::enabled!(tracing::Level::TRACE) {
             let vv = local_version.version_vector().await?;
-            tracing::trace!(?vv, ?conflict, "merge completed");
+            tracing::trace!(?vv, ?conflict, "Merge completed");
         }
 
         if conflict {
@@ -361,19 +363,27 @@ impl JointDirectory {
     async fn fork(&mut self) -> Result<&mut Directory> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
 
-        // Note the triple lookup (`contains_key`, `insert` and `get_mut`) is unfortunate but
-        // necessary to satisfy the borrow checker.
+        let mut local_version = None;
 
-        if !self.versions.contains_key(local_branch.id()) {
-            // Grab any version and fork it to create the local one.
-            let version = self.versions.values().next().ok_or(Error::EntryNotFound)?;
-            let version = version.fork(local_branch).await?;
+        // Need to `fork` from each branch individually so that the local version vector is
+        // properly updated.
+        for (branch_id, version) in &self.versions {
+            if branch_id == local_branch.id() {
+                continue;
+            }
 
-            self.versions.insert(*local_branch.id(), version);
+            local_version = Some(version.fork(local_branch).await?);
         }
 
-        // `unwrap` is ok because we just ensured the entry exists in the code above.
-        Ok(self.versions.get_mut(local_branch.id()).unwrap())
+        if let Some(local_version) = local_version {
+            self.versions.insert(*local_branch.id(), local_version);
+        }
+
+        // TODO: This can return error only if this `JointDirectory` contains no versions which should
+        // never happen. Consider making it an invariant and doing `unwrap` / `expect` here instead.
+        self.versions
+            .get_mut(local_branch.id())
+            .ok_or(Error::EntryNotFound)
     }
 
     fn entry_versions<'a>(&'a self, name: &'a str) -> impl Iterator<Item = EntryRef<'a>> {

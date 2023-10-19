@@ -309,7 +309,14 @@ mod merge {
         let branches: Vec<_> = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
 
-        for branch in branches {
+        for branch in &branches {
+            // Use the `local_branch` instance to use the correct event scope.
+            let branch = if branch.id() == local_branch.id() {
+                local_branch
+            } else {
+                branch
+            };
+
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
                 .await
@@ -410,7 +417,7 @@ mod prune {
 mod trash {
     use super::*;
     use crate::{
-        protocol::BlockId,
+        protocol::{BlockId, Bump},
         store::{Changeset, ReadTransaction, WriteTransaction},
     };
     use futures_util::TryStreamExt;
@@ -609,6 +616,7 @@ mod trash {
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
                 let mut changeset = Changeset::new();
                 remove_local_nodes(&mut tx, &mut changeset, &batch).await?;
+                changeset.bump(Bump::increment(*local_branch.id()));
                 changeset
                     .apply(&mut tx, local_branch.id(), write_keys)
                     .await?;

@@ -88,18 +88,9 @@ pub(crate) struct EntryTombstoneData {
 }
 
 impl EntryTombstoneData {
-    /// Create tombstone date with `Removed` cause
-    pub fn removed(version_vector: VersionVector) -> Self {
+    pub fn new(cause: TombstoneCause, version_vector: VersionVector) -> Self {
         Self {
-            cause: TombstoneCause::Removed,
-            version_vector,
-        }
-    }
-
-    /// Create tombstone date with `Moved` cause
-    pub fn moved(version_vector: VersionVector) -> Self {
-        Self {
-            cause: TombstoneCause::Moved,
+            cause,
             version_vector,
         }
     }

@@ -8,7 +8,7 @@ use crate::{
     event::{EventScope, EventSender, Payload},
     file::{File, FileProgressCache},
     path,
-    protocol::{BlockId, Locator},
+    protocol::{BlockId, Locator, Proof, RootNodeFilter},
     store::{self, Store},
     version_vector::VersionVector,
 };
@@ -58,17 +58,21 @@ impl Branch {
     }
 
     pub async fn version_vector(&self) -> Result<VersionVector> {
-        match self
+        match self.proof().await {
+            Ok(proof) => Ok(proof.into_version_vector()),
+            Err(Error::Store(store::Error::BranchNotFound)) => Ok(VersionVector::new()),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) async fn proof(&self) -> Result<Proof> {
+        Ok(self
             .store
             .acquire_read()
             .await?
-            .load_root_node(self.id())
-            .await
-        {
-            Ok(root_node) => Ok(root_node.proof.into_version_vector()),
-            Err(store::Error::BranchNotFound) => Ok(VersionVector::new()),
-            Err(error) => Err(error.into()),
-        }
+            .load_root_node(self.id(), RootNodeFilter::Any)
+            .await?
+            .proof)
     }
 
     pub(crate) fn keys(&self) -> &AccessKeys {
@@ -84,7 +88,7 @@ impl Branch {
     }
 
     pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
-        Directory::open_or_create_root(self.clone()).await
+        Directory::open_or_create_root(self.clone(), VersionVector::new()).await
     }
 
     /// Ensures that the directory at the specified path exists including all its ancestors.
@@ -109,7 +113,8 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(name.to_string()).await?
+                        curr.create_directory(name.to_string(), &VersionVector::new())
+                            .await?
                     };
 
                     curr = next;

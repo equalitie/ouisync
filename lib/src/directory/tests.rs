@@ -5,10 +5,12 @@ use crate::{
     db,
     event::EventSender,
     store::Store,
+    test_utils,
 };
 use assert_matches::assert_matches;
 use std::collections::BTreeSet;
 use tempfile::TempDir;
+use tracing::Instrument;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
@@ -94,7 +96,7 @@ async fn remove_file() {
         .await
         .unwrap();
     parent_dir
-        .remove_entry(name, branch.id(), EntryTombstoneData::removed(file_vv))
+        .remove_entry(name, branch.id(), file_vv)
         .await
         .unwrap();
 
@@ -190,7 +192,10 @@ async fn move_file_within_branch() {
 
     // Create a directory with a single file.
     let mut root_dir = branch.open_or_create_root().await.unwrap();
-    let mut aux_dir = root_dir.create_directory("aux".into()).await.unwrap();
+    let mut aux_dir = root_dir
+        .create_directory("aux".into(), &VersionVector::new())
+        .await
+        .unwrap();
 
     let mut file = root_dir.create_file(file_name.into()).await.unwrap();
     file.write_all(content).await.unwrap();
@@ -291,7 +296,10 @@ async fn move_non_empty_directory() {
 
     // Create a directory with a single file.
     let mut root_dir = branch.open_or_create_root().await.unwrap();
-    let mut dir = root_dir.create_directory(dir_name.into()).await.unwrap();
+    let mut dir = root_dir
+        .create_directory(dir_name.into(), &VersionVector::new())
+        .await
+        .unwrap();
 
     let mut file = dir.create_file(file_name.into()).await.unwrap();
     file.write_all(content).await.unwrap();
@@ -302,7 +310,7 @@ async fn move_non_empty_directory() {
     drop(dir);
 
     let mut dst_dir = root_dir
-        .create_directory(dst_dir_name.into())
+        .create_directory(dst_dir_name.into(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -356,7 +364,10 @@ async fn remove_subdirectory() {
 
     // Create a directory with a single subdirectory.
     let mut parent_dir = branch.open_or_create_root().await.unwrap();
-    let dir = parent_dir.create_directory(name.into()).await.unwrap();
+    let dir = parent_dir
+        .create_directory(name.into(), &VersionVector::new())
+        .await
+        .unwrap();
     let dir_vv = dir.version_vector().await.unwrap();
     drop(dir);
 
@@ -366,7 +377,7 @@ async fn remove_subdirectory() {
         .await
         .unwrap();
     parent_dir
-        .remove_entry(name, branch.id(), EntryTombstoneData::removed(dir_vv))
+        .remove_entry(name, branch.id(), dir_vv)
         .await
         .unwrap();
 
@@ -379,36 +390,40 @@ async fn remove_subdirectory() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn fork() {
-    let (_base_dir, branches) = setup_multiple::<2>().await;
+async fn fork_sanity_check() {
+    test_utils::init_log();
+
+    let (_base_dir, [branch0, branch1]) = setup_multiple().await;
+
+    tracing::info!(branch0 = ?branch0.id(), branch1 = ?branch1.id());
 
     // Create a nested directory by branch 0
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
-    root0.create_directory("dir".into()).await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
+    let dir0 = root0
+        .create_directory("dir".into(), &VersionVector::new())
+        .await
+        .unwrap();
 
-    // Fork it by branch 1 and modify it
-    let dir0 = {
-        branches[0]
-            .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
-            .await
-            .unwrap()
-            .lookup("dir")
-            .unwrap()
-            .directory()
-            .unwrap()
-            .open(DirectoryFallback::Disabled)
-            .await
-            .unwrap()
-    };
+    // Fork it into branch 1
+    let mut dir1 = dir0
+        .fork(&branch1)
+        .instrument(tracing::info_span!("fork"))
+        .await
+        .unwrap();
+    assert_eq!(dir1.branch().id(), branch1.id());
 
-    let mut dir1 = dir0.fork(&branches[1]).await.unwrap();
+    // Verify the root dir got forked as well
+    let root1 = branch1
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
+    assert_eq!(root1.branch().id(), branch1.id());
 
+    // Modify it
     dir1.create_file("dog.jpg".into()).await.unwrap();
 
-    assert_eq!(dir1.branch().id(), branches[1].id());
-
     // Reopen orig dir and verify it's unchanged
-    let dir = branches[0]
+    let dir = branch0
         .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
@@ -423,7 +438,7 @@ async fn fork() {
     assert_eq!(dir.entries().count(), 0);
 
     // Reopen forked dir and verify it contains the new file
-    let dir = branches[1]
+    let dir = branch1
         .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
@@ -439,12 +454,6 @@ async fn fork() {
         dir.entries().map(|entry| entry.name()).next(),
         Some("dog.jpg")
     );
-
-    // Verify the root dir got forked as well
-    branches[1]
-        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
-        .await
-        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -453,17 +462,23 @@ async fn fork_over_tombstone() {
 
     // Create a directory in branch 0 and delete it.
     let mut root0 = branches[0].open_or_create_root().await.unwrap();
-    root0.create_directory("dir".into()).await.unwrap();
-    let vv = root0.lookup("dir").unwrap().version_vector().clone();
-
     root0
-        .remove_entry("dir", branches[0].id(), EntryTombstoneData::removed(vv))
+        .create_directory("dir".into(), &VersionVector::new())
+        .await
+        .unwrap();
+
+    let vv = root0.lookup("dir").unwrap().version_vector().clone();
+    root0
+        .remove_entry("dir", branches[0].id(), vv)
         .await
         .unwrap();
 
     // Create a directory with the same name in branch 1.
     let mut root1 = branches[1].open_or_create_root().await.unwrap();
-    root1.create_directory("dir".into()).await.unwrap();
+    root1
+        .create_directory("dir".into(), &VersionVector::new())
+        .await
+        .unwrap();
 
     // Open it by branch 0 and fork it.
     let root1_on_0 = branches[1]
@@ -494,7 +509,10 @@ async fn modify_directory_concurrently() {
     // Obtain two instances of the same directory, create a new file in one of them and verify
     // the file also exists in the other after refresh.
 
-    let mut dir0 = root.create_directory("dir".to_owned()).await.unwrap();
+    let mut dir0 = root
+        .create_directory("dir".to_owned(), &VersionVector::new())
+        .await
+        .unwrap();
     let mut dir1 = root
         .lookup("dir")
         .unwrap()
@@ -521,7 +539,7 @@ async fn modify_directory_concurrently() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn remove_unique_remote_file() {
+async fn remove_remote_only_entry() {
     let (_base_dir, local_branch) = setup().await;
 
     let mut root = local_branch.open_or_create_root().await.unwrap();
@@ -529,54 +547,142 @@ async fn remove_unique_remote_file() {
     let name = "foo.txt";
 
     let remote_id = PublicKey::random();
-    let remote_vv = vv![remote_id => 1];
+    let remote_vv = vv![remote_id => 1]; // pretend there is a remote file with this vv
 
-    root.remove_entry(
-        name,
-        &remote_id,
-        EntryTombstoneData::removed(remote_vv.clone()),
-    )
-    .await
-    .unwrap();
-
-    let local_vv = assert_matches!(
-        root.lookup(name),
-        Ok(EntryRef::Tombstone(entry)) => entry.version_vector().clone()
-    );
-
-    assert!(local_vv > remote_vv);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn remove_concurrent_remote_file() {
-    let (_base_dir, local_branch) = setup().await;
-    let mut root = local_branch.open_or_create_root().await.unwrap();
-
-    let name = "foo.txt";
-    root.create_file(name.to_owned())
-        .await
-        .unwrap()
-        .flush()
+    root.remove_entry(name, &remote_id, remote_vv.clone())
         .await
         .unwrap();
 
-    let remote_id = PublicKey::random();
-    let remote_vv = vv![remote_id => 1];
+    let local_vv = assert_matches!(
+        root.lookup(name),
+        Ok(EntryRef::Tombstone(entry)) => entry.version_vector()
+    );
 
-    root.remove_entry(
+    assert!(*local_vv > remote_vv);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_concurrent_entry() {
+    let (_base_dir, local_branch) = setup().await;
+    let mut root = local_branch.open_or_create_root().await.unwrap();
+
+    let name = "foo.txt";
+    root.create_file(name.to_owned()).await.unwrap();
+
+    let remote_id = PublicKey::random();
+    let remote_vv = vv![remote_id => 1]; // pretend there is a remote file with this vv
+
+    root.remove_entry(name, &remote_id, remote_vv.clone())
+        .await
+        .unwrap();
+
+    let local_vv = assert_matches!(
+        root.lookup(name),
+        Ok(EntryRef::File(entry)) => entry.version_vector()
+    );
+
+    assert!(*local_vv > remote_vv);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_non_existing_local_entry() {
+    let (_base_dir, local_branch) = setup().await;
+    let mut root = local_branch.open_or_create_root().await.unwrap();
+    let name = "foo.txt";
+
+    let vv0 = local_branch.version_vector().await.unwrap();
+
+    root.remove_entry(name, local_branch.id(), VersionVector::new())
+        .await
+        .unwrap();
+
+    let vv1 = local_branch.version_vector().await.unwrap();
+    assert!(vv1 > vv0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_tombstone_over_non_existing_entry() {
+    let (_base_dir, local_branch) = setup().await;
+    let mut root = local_branch.open_or_create_root().await.unwrap();
+    let name = "foo.txt";
+
+    let vv0 = local_branch.version_vector().await.unwrap();
+
+    let remote_id = PublicKey::random();
+    root.create_tombstone(
         name,
-        &remote_id,
-        EntryTombstoneData::removed(remote_vv.clone()),
+        EntryTombstoneData::new(TombstoneCause::Removed, VersionVector::first(remote_id)),
     )
     .await
     .unwrap();
 
-    let local_vv = assert_matches!(
-        root.lookup(name),
-        Ok(EntryRef::File(entry)) => entry.version_vector().clone()
-    );
+    let vv1 = local_branch.version_vector().await.unwrap();
+    assert!(vv1 > vv0);
+    assert_matches!(root.lookup(name), Ok(EntryRef::Tombstone(_)));
+}
 
-    assert!(local_vv > remote_vv);
+#[tokio::test(flavor = "multi_thread")]
+async fn create_tombstone_over_existing_entry() {
+    let (_base_dir, local_branch) = setup().await;
+    let mut root = local_branch.open_or_create_root().await.unwrap();
+    let name = "foo.txt";
+
+    root.create_file(name.to_owned()).await.unwrap();
+    let file_vv = root.lookup(name).unwrap().version_vector().clone();
+
+    let vv0 = local_branch.version_vector().await.unwrap();
+
+    let remote_id = PublicKey::random();
+
+    root.create_tombstone(
+        name,
+        EntryTombstoneData::new(TombstoneCause::Removed, file_vv.incremented(remote_id)),
+    )
+    .await
+    .unwrap();
+
+    let vv1 = local_branch.version_vector().await.unwrap();
+    assert!(vv1 > vv0);
+    assert_matches!(root.lookup(name), Ok(EntryRef::Tombstone(_)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_tombstone_is_idempotent() {
+    let (_base_dir, local_branch) = setup().await;
+    let mut root = local_branch.open_or_create_root().await.unwrap();
+    let name = "foo.txt";
+
+    root.create_file(name.to_owned()).await.unwrap();
+
+    let proof0 = local_branch.proof().await.unwrap();
+
+    let remote_id = PublicKey::random();
+    let tombstone_vv = root
+        .lookup(name)
+        .unwrap()
+        .version_vector()
+        .clone()
+        .incremented(remote_id);
+
+    root.create_tombstone(
+        name,
+        EntryTombstoneData::new(TombstoneCause::Removed, tombstone_vv.clone()),
+    )
+    .await
+    .unwrap();
+
+    let proof1 = local_branch.proof().await.unwrap();
+    assert!(proof1.version_vector > proof0.version_vector);
+
+    root.create_tombstone(
+        name,
+        EntryTombstoneData::new(TombstoneCause::Removed, tombstone_vv),
+    )
+    .await
+    .unwrap();
+
+    let proof2 = local_branch.proof().await.unwrap();
+    assert_eq!(proof2, proof1);
 }
 
 async fn setup() -> (TempDir, Branch) {

@@ -5,13 +5,13 @@ use crate::{
         Hash, Hashable,
     },
     protocol::{
-        get_bucket, BlockId, InnerNode, InnerNodeMap, LeafNodeSet, NodeState, Proof,
-        SingleBlockPresence, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH, INNER_LAYER_COUNT,
+        get_bucket, BlockId, Bump, InnerNode, InnerNodeMap, LeafNodeSet, NodeState, Proof,
+        RootNodeFilter, RootNodeKind, SingleBlockPresence, Summary, EMPTY_INNER_HASH,
+        EMPTY_LEAF_HASH, INNER_LAYER_COUNT,
     },
     version_vector::VersionVector,
 };
 use std::{
-    cmp::Ordering,
     collections::{btree_map::Entry, BTreeMap},
     fmt,
     ops::Range,
@@ -21,7 +21,7 @@ use std::{
 /// are different compared to the current snapshot.
 pub(super) struct Patch {
     branch_id: PublicKey,
-    old_vv: VersionVector,
+    vv: VersionVector,
     root_hash: Hash,
     root_summary: Summary,
     inners: BTreeMap<Key, InnerNodeMap>,
@@ -30,20 +30,21 @@ pub(super) struct Patch {
 
 impl Patch {
     pub async fn new(tx: &mut ReadTransaction, branch_id: PublicKey) -> Result<Self, Error> {
-        let (old_vv, root_hash, root_summary) = match tx.load_root_node(&branch_id).await {
-            Ok(node) => {
-                let hash = node.proof.hash;
-                (node.proof.into_version_vector(), hash, node.summary)
-            }
-            Err(Error::BranchNotFound) => {
-                (VersionVector::new(), *EMPTY_INNER_HASH, Summary::INCOMPLETE)
-            }
-            Err(error) => return Err(error),
-        };
+        let (vv, root_hash, root_summary) =
+            match tx.load_root_node(&branch_id, RootNodeFilter::Any).await {
+                Ok(node) => {
+                    let hash = node.proof.hash;
+                    (node.proof.into_version_vector(), hash, node.summary)
+                }
+                Err(Error::BranchNotFound) => {
+                    (VersionVector::new(), *EMPTY_INNER_HASH, Summary::INCOMPLETE)
+                }
+                Err(error) => return Err(error),
+            };
 
         Ok(Self {
             branch_id,
-            old_vv,
+            vv,
             root_hash,
             root_summary,
             inners: BTreeMap::new(),
@@ -84,14 +85,18 @@ impl Patch {
     pub async fn save(
         mut self,
         tx: &mut WriteTransaction,
-        vv: &VersionVector,
+        bump: Bump,
         write_keys: &Keypair,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
+        if self.inners.is_empty() && self.leaves.is_empty() && !bump.changes(&self.vv) {
+            return Ok(false);
+        }
+
         self.recalculate();
         self.save_children(tx).await?;
-        self.save_root(tx, vv, write_keys).await?;
+        self.save_root(tx, bump, write_keys).await?;
 
-        Ok(())
+        Ok(true)
     }
 
     async fn fetch<'a>(
@@ -204,22 +209,24 @@ impl Patch {
     }
 
     async fn save_root(
-        self,
+        mut self,
         tx: &mut WriteTransaction,
-        vv: &VersionVector,
+        bump: Bump,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
         let db = tx.db();
 
-        let new_vv = match self.old_vv.partial_cmp(vv) {
-            Some(Ordering::Less) | None => self.old_vv.merged(vv),
-            Some(Ordering::Equal | Ordering::Greater) => self.old_vv.incremented(self.branch_id),
-        };
+        bump.apply(&mut self.vv);
 
-        let new_proof = Proof::new(self.branch_id, new_vv, self.root_hash, write_keys);
+        let new_proof = Proof::new(self.branch_id, self.vv, self.root_hash, write_keys);
 
-        let root_node = root_node::create(db, new_proof, self.root_summary).await?;
-        root_node::remove_older(db, &root_node).await?;
+        let (root_node, kind) =
+            root_node::create(db, new_proof, self.root_summary, RootNodeFilter::Any).await?;
+
+        match kind {
+            RootNodeKind::Published => root_node::remove_older(db, &root_node).await?,
+            RootNodeKind::Draft => (),
+        }
 
         tracing::trace!(
             vv = ?root_node.proof.version_vector,

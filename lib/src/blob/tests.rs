@@ -6,7 +6,7 @@ use crate::{
     db,
     error::Error,
     event::EventSender,
-    protocol::BLOCK_SIZE,
+    protocol::{Bump, BLOCK_SIZE},
     store::Store,
     test_utils,
 };
@@ -425,6 +425,7 @@ async fn modify_blob() {
         .await
         .unwrap();
     blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset.bump(Bump::increment(*branch.id()));
     changeset
         .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
@@ -446,6 +447,7 @@ async fn modify_blob() {
         .await
         .unwrap();
     blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset.bump(Bump::increment(*branch.id()));
     changeset
         .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
@@ -681,7 +683,10 @@ async fn fork_then_remove_src_branch() {
     let mut tx = store.begin_write().await.unwrap();
 
     // Remove the src branch
-    let root_node = tx.load_root_node(src_branch.id()).await.unwrap();
+    let root_node = tx
+        .load_root_node(src_branch.id(), RootNodeFilter::Any)
+        .await
+        .unwrap();
     tx.remove_branch(&root_node).await.unwrap();
 
     // The forked blob still exists

@@ -12,7 +12,7 @@ use crate::{
     metrics::Metrics,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
-        Block, BlockId, RootNode, SingleBlockPresence,
+        Block, BlockId, Bump, RootNode, SingleBlockPresence,
     },
     repository::{BlockRequestMode, RepositoryId, RepositoryMonitor, Vault},
     state_monitor::StateMonitor,
@@ -486,32 +486,26 @@ async fn create_changeset(
 ) {
     assert!(size > 0);
 
-    for _ in 0..size {
-        create_block(rng, vault, writer_id, write_keys).await;
-    }
-
-    vault.event_tx.send(Payload::BranchChanged(*writer_id));
-}
-
-async fn create_block(
-    rng: &mut StdRng,
-    vault: &Vault,
-    branch_id: &PublicKey,
-    write_keys: &Keypair,
-) {
-    let encoded_locator = rng.gen();
-    let block: Block = rng.gen();
-
     let mut tx = vault.store().begin_write().await.unwrap();
     let mut changeset = Changeset::new();
 
-    changeset.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
-    changeset.write_block(block);
+    for _ in 0..size {
+        let encoded_locator = rng.gen();
+        let block: Block = rng.gen();
+
+        changeset.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
+        changeset.write_block(block);
+    }
+
+    changeset.bump(Bump::increment(*writer_id));
     changeset
-        .apply(&mut tx, branch_id, write_keys)
+        .apply(&mut tx, writer_id, write_keys)
         .await
         .unwrap();
+
     tx.commit().await.unwrap();
+
+    vault.event_tx.send(Payload::BranchChanged(*writer_id));
 }
 
 async fn load_latest_root_node(vault: &Vault, writer_id: &PublicKey) -> Option<RootNode> {

@@ -2,9 +2,7 @@ use super::*;
 use crate::{
     blob, db,
     protocol::{BlockId, BLOCK_NONCE_SIZE, BLOCK_SIZE},
-    test_utils,
-    version_vector::VersionVector,
-    WriteSecrets,
+    test_utils, WriteSecrets,
 };
 use assert_matches::assert_matches;
 use rand::Rng;
@@ -14,6 +12,7 @@ use tokio::{
     sync::broadcast::Receiver,
     time::{self, timeout, Duration},
 };
+use tracing::instrument;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_directory_always_exists() {
@@ -82,30 +81,26 @@ async fn count_leaf_nodes_sanity_checks() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn merge() {
+async fn merge_file() {
     let (_base_dir, repo) = setup().await;
 
-    // Create remote branch and create a file in it.
     let remote_id = PublicKey::random();
+
     create_remote_file(&repo, remote_id, "test.txt", b"hello").await;
 
-    // Open the local root.
-    let local_branch = repo.local_branch().unwrap();
-    let mut local_root = local_branch.open_or_create_root().await.unwrap();
+    let remote_branch = repo.get_branch(remote_id).unwrap();
+    let remote_vv = remote_branch.version_vector().await.unwrap();
 
-    let remote_vv = VersionVector::first(remote_id);
+    let local_branch = repo.local_branch().unwrap();
+
     wait_for(&repo, || async {
-        local_branch.version_vector().await.unwrap() > remote_vv
+        let local_vv = local_branch.version_vector().await.unwrap();
+        local_vv == remote_vv
     })
     .await;
 
-    local_root.refresh().await.unwrap();
-    let content = local_root
-        .lookup("test.txt")
-        .unwrap()
-        .file()
-        .unwrap()
-        .open()
+    let content = repo
+        .open_file_version("test.txt", &remote_id)
         .await
         .unwrap()
         .read_to_end()
@@ -746,7 +741,7 @@ async fn version_vector_deep_hierarchy() {
         let dir = dirs
             .last_mut()
             .unwrap()
-            .create_directory(format!("dir-{}", i))
+            .create_directory(format!("dir-{}", i), &VersionVector::new())
             .await
             .unwrap();
         dirs.push(dir);
@@ -798,7 +793,10 @@ async fn version_vector_fork() {
 
     time::timeout(Duration::from_secs(5), async move {
         let mut remote_root = remote_branch.open_or_create_root().await.unwrap();
-        let mut remote_parent = remote_root.create_directory("parent".into()).await.unwrap();
+        let mut remote_parent = remote_root
+            .create_directory("parent".into(), &VersionVector::new())
+            .await
+            .unwrap();
         let mut file = create_file_in_directory(&mut remote_parent, "foo.txt", &[]).await;
 
         remote_parent.refresh().await.unwrap();
@@ -1070,6 +1068,7 @@ async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
     file.read_to_end().await.unwrap()
 }
 
+#[instrument(skip(repo, content), fields(content.len = content.len()))]
 async fn create_remote_file(
     repo: &Repository,
     remote_id: PublicKey,

@@ -7,7 +7,7 @@ use crate::{
     branch::Branch,
     directory::{Directory, ParentContext},
     error::{Error, Result},
-    protocol::{Locator, BLOCK_SIZE},
+    protocol::{Bump, Locator, BLOCK_SIZE},
     store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
@@ -215,7 +215,7 @@ impl File {
                 &mut tx,
                 &mut changeset,
                 self.branch().clone(),
-                &VersionVector::new(),
+                Bump::increment(*self.branch().id()),
             )
             .await?;
 
