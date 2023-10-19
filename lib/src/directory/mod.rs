@@ -415,32 +415,51 @@ impl Directory {
             return Ok(self.clone());
         }
 
-        let parent = if let Some(parent) = &self.parent {
-            let dir = parent.open(self.branch().clone()).await?;
-            let entry_name = parent.entry_name();
-
-            Some((dir, entry_name))
-        } else {
-            None
-        };
-
         // Because we are transferring only the directory but not its content, we reflect that
         // by setting its version vector to what the version vector of the source directory was
         // at the time it was initially created - that is, it's current version vector minus the
         // version vectors of all its entries.
-        //
-        // FIXME: potential race condition - the content and the version vector are loaded
-        // separately - they can get out of sync.
-        let vv = self
-            .version_vector()
-            .await?
-            .saturating_sub(&self.entries().map(|entry| entry.version_vector()).sum());
+
+        let (parent, initial_vv) = {
+            // Running this in a read transaction to make sure the version vector fo this directory
+            // and the version vectors of its entries are in sync.
+
+            let mut tx = self.branch().store().begin_read().await?;
+
+            let (parent, self_vv) = if let Some(parent) = &self.parent {
+                let parent_dir = parent.open_in(&mut tx, self.branch().clone()).await?;
+                let entry_name = parent.entry_name();
+                let self_vv = parent_dir.lookup(entry_name)?.version_vector().clone();
+
+                (Some((parent_dir, entry_name)), self_vv)
+            } else {
+                let self_vv = tx
+                    .load_root_node(self.branch().id(), RootNodeFilter::Any)
+                    .await?
+                    .proof
+                    .into_version_vector();
+
+                (None, self_vv)
+            };
+
+            let (_, content) = self.load(&mut tx, DirectoryFallback::Disabled).await?;
+
+            let entries_vv = content
+                .iter()
+                .map(|(_, entry)| entry.version_vector())
+                .sum();
+            let initial_vv = self_vv.saturating_sub(&entries_vv);
+
+            (parent, initial_vv)
+        };
 
         if let Some((parent_dir, entry_name)) = parent {
             let mut parent_dir = parent_dir.fork(local_branch).await?;
-            parent_dir.open_or_create_directory(entry_name, vv).await
+            parent_dir
+                .open_or_create_directory(entry_name, initial_vv)
+                .await
         } else {
-            Self::open_or_create_root(local_branch.clone(), vv).await
+            Self::open_or_create_root(local_branch.clone(), initial_vv).await
         }
     }
 
@@ -681,18 +700,20 @@ impl Directory {
         if self.blob.is_dirty() {
             Ok(())
         } else {
-            let (blob, content) = load(
-                tx,
-                self.branch().clone(),
-                *self.blob_id(),
-                DirectoryFallback::Disabled,
-            )
-            .await?;
+            let (blob, content) = self.load(tx, DirectoryFallback::Disabled).await?;
             self.blob = blob;
             self.content = content;
 
             Ok(())
         }
+    }
+
+    async fn load(
+        &self,
+        tx: &mut ReadTransaction,
+        fallback: DirectoryFallback,
+    ) -> Result<(Blob, Content)> {
+        load(tx, self.branch().clone(), *self.blob_id(), fallback).await
     }
 
     async fn save(

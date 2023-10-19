@@ -198,7 +198,7 @@ impl ParentContext {
     }
 
     /// Opens the parent directory of this entry.
-    async fn open_in(&self, tx: &mut ReadTransaction, branch: Branch) -> Result<Directory> {
+    pub async fn open_in(&self, tx: &mut ReadTransaction, branch: Branch) -> Result<Directory> {
         Directory::open_in(
             self.directory_lock.as_ref().cloned(),
             tx,
