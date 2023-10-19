@@ -255,46 +255,76 @@ impl Directory {
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
     /// directory, it needs to be empty or a `DirectoryNotEmpty` error is returned.
     ///
-    /// This doesn't simply remove the entry because then there would be no record of the entry
-    /// being removed and so there would be no way for the remote replicas to know about it.
-    /// Instead, the entry is in most cases replaced with a "tombstone". The one special case is
-    /// described in the following section.
+    /// `branch_id` and `version_vector` specify the entry to be removed. This makes it possible to
+    /// remove entries from remote branches as well.
     ///
-    /// # Removing entries from remote branches
-    ///
-    /// The `branch_id` identifies the branch the entry to be removed is in. This is to allow
-    /// removing remote entries. It doesn't actually modify the remote branch itself (remote
-    /// branches are immutable) but instead places a tombstone into the local branch which is
-    /// happens-after the remote entry. However, if the entry exists also in the local branch,
-    /// instead of replacing it with a tombstone (which would effectively remove it from both
-    /// branches), its version vector is updated so that the entry is happens-after the remote one.
-    /// This way it removes only the remote entry and keeps the local one.
-    ///
-    /// # Version vector requirements
-    ///
-    /// This function is used both when removing entries locally and when merging removed entries
-    /// from remote branches. To support both use cases, the version vector in `tombstone` must be
-    /// happens-after the one of the currently existing entry, if any. If this is not the case,
-    /// `Error::EntryExists` is returned.
-    ///
-    /// # Idempotency
-    ///
-    /// To support merging removed entries, removing a non-existing entry is not an error and it
-    /// results in creation of a new tombstone. Removing an already removed entry is also not an
-    /// error. If `tombstone.version vector` is lower or the same as the existing one, then it is
-    /// a no-op. This makes merging removed entries idempotent.
-    #[instrument(skip(self, tombstone), fields(?tombstone.version_vector))]
+    /// In most cases the removal is implemented by inserting a "tombstone" in place of the entry.
+    /// One exception is when removing a remote entry which also has a concurrent local version. In
+    /// that case the version vector of the local entry is bumped to be happens-after the one to be
+    /// removed. This effectively removes the remote entry while keeping the local one.
+    #[instrument(skip(self))]
     pub(crate) async fn remove_entry(
         &mut self,
         name: &str,
         branch_id: &PublicKey,
+        version_vector: VersionVector,
+    ) -> Result<()> {
+        let mut tx = self.branch().store().begin_write().await?;
+        let mut changeset = Changeset::new();
+
+        // If we are removing a directory, ensure it's empty (recursive removal can still be
+        // implemented at the upper layers).
+        self.check_directory_empty(&mut tx, name).await?;
+
+        let content = self
+            .begin_remove_entry(
+                &mut tx,
+                &mut changeset,
+                name,
+                branch_id,
+                version_vector,
+                TombstoneCause::Removed,
+            )
+            .await?;
+
+        self.commit(tx, changeset).await?;
+        self.finalize(content);
+
+        Ok(())
+    }
+
+    /// Creates a tombstone for entry with the given name. If the entry exists, this effectively
+    /// removes it. If it doesn't exist, it still creates the tombstone. This method is meant to be
+    /// used for merging removed entries from other branches. For removing entries locally, use
+    /// [`Self::remove_entry`] instead.
+    #[instrument()]
+    pub(crate) async fn create_tombstone(
+        &mut self,
+        name: &str,
         tombstone: EntryTombstoneData,
     ) -> Result<()> {
         let mut tx = self.branch().store().begin_write().await?;
         let mut changeset = Changeset::new();
 
+        match self.lookup(name) {
+            Ok(EntryRef::File(_) | EntryRef::Directory(_)) | Err(Error::EntryNotFound) => (),
+            Ok(EntryRef::Tombstone(old_entry)) => {
+                // Attempt to replace a tombstone with another tombstone whose version vector is
+                // the same or lower is a no-op.
+                if &tombstone.version_vector <= old_entry.version_vector() {
+                    return Ok(());
+                }
+            }
+            Err(e) => return Err(e),
+        }
+
         let content = self
-            .begin_remove_entry(&mut tx, &mut changeset, name, branch_id, tombstone)
+            .begin_insert_entry(
+                &mut tx,
+                &mut changeset,
+                name.to_owned(),
+                EntryData::Tombstone(tombstone),
+            )
             .await?;
 
         self.commit(tx, changeset).await?;
@@ -363,7 +393,8 @@ impl Directory {
                 &mut changeset,
                 src_name,
                 &branch_id,
-                EntryTombstoneData::moved(src_vv.incremented(branch_id)),
+                src_vv,
+                TombstoneCause::Moved,
             )
             .await?;
 
@@ -583,54 +614,50 @@ impl Directory {
         changeset: &mut Changeset,
         name: &str,
         branch_id: &PublicKey,
-        tombstone: EntryTombstoneData,
+        version_vector: VersionVector,
+        cause: TombstoneCause,
     ) -> Result<Content> {
-        // If we are removing a directory, ensure it's empty (recursive removal can still be
-        // implemented at the upper layers).
-        if matches!(tombstone.cause, TombstoneCause::Removed) {
-            match self.lookup(name) {
-                Ok(EntryRef::Directory(entry)) => {
-                    if !entry
-                        .open_snapshot(tx, DirectoryFallback::Disabled)
-                        .await?
-                        .iter()
-                        .all(|(_, data)| matches!(data, EntryData::Tombstone(_)))
-                    {
-                        return Err(Error::DirectoryNotEmpty);
-                    }
-                }
-                Ok(_) | Err(Error::EntryNotFound) => (),
-                Err(error) => return Err(error),
+        let mut new_data = match self.lookup(name) {
+            Ok(old_entry)
+                if branch_id != self.branch().id()
+                    && old_entry
+                        .version_vector()
+                        .partial_cmp(&version_vector)
+                        .is_none() =>
+            {
+                let mut new_data = old_entry.clone_data();
+                new_data.version_vector_mut().merge(&version_vector);
+                new_data
             }
-        }
-
-        let new_data = match self.lookup(name) {
-            Ok(old_entry @ (EntryRef::File(_) | EntryRef::Directory(_))) => {
-                if branch_id == self.branch().id() {
-                    EntryData::Tombstone(tombstone)
-                } else {
-                    let mut new_data = old_entry.clone_data();
-                    new_data
-                        .version_vector_mut()
-                        .merge(&tombstone.version_vector);
-                    new_data
-                }
+            Ok(_) | Err(Error::EntryNotFound) => {
+                EntryData::Tombstone(EntryTombstoneData::new(cause, version_vector))
             }
-            Ok(EntryRef::Tombstone(old_entry)) => {
-                // Attempt to replace a tombstone with another tombstone whose version vector is
-                // the same or lower is a no-op.
-                if &tombstone.version_vector > old_entry.version_vector() {
-                    EntryData::Tombstone(tombstone)
-                } else {
-                    return Ok(self.content.clone());
-                }
-            }
-            Err(Error::EntryNotFound) => EntryData::Tombstone(tombstone),
-            Err(e) => return Err(e),
+            Err(error) => return Err(error),
         };
+
+        new_data.version_vector_mut().increment(*self.branch().id());
 
         self.begin_insert_entry(tx, changeset, name.to_owned(), new_data)
             .await
+    }
+
+    async fn check_directory_empty(&self, tx: &mut ReadTransaction, name: &str) -> Result<()> {
+        match self.lookup(name) {
+            Ok(EntryRef::Directory(entry)) => {
+                if entry
+                    .open_snapshot(tx, DirectoryFallback::Disabled)
+                    .await?
+                    .iter()
+                    .all(|(_, data)| matches!(data, EntryData::Tombstone(_)))
+                {
+                    Ok(())
+                } else {
+                    Err(Error::DirectoryNotEmpty)
+                }
+            }
+            Ok(_) | Err(Error::EntryNotFound) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     async fn begin_insert_entry(

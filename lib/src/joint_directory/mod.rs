@@ -223,12 +223,7 @@ impl JointDirectory {
         let local_version = self.fork().await?;
 
         for (name, branch_id, vv) in entries {
-            let vv = vv.incremented(*local_version.branch().id());
-            let tombstone = EntryTombstoneData::removed(vv);
-
-            local_version
-                .remove_entry(&name, &branch_id, tombstone)
-                .await?;
+            local_version.remove_entry(&name, &branch_id, vv).await?;
         }
 
         Ok(())
@@ -333,9 +328,7 @@ impl JointDirectory {
         local_version.refresh().await?;
 
         for (name, tombstone) in check_for_removal {
-            local_version
-                .remove_entry(&name, local_branch.id(), tombstone)
-                .await?;
+            local_version.create_tombstone(&name, tombstone).await?;
         }
 
         // Need to bump the root version vector to reflect any non-filesystem changes (e.g.,

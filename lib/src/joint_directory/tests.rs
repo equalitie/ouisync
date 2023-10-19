@@ -887,11 +887,7 @@ async fn merge_create_and_remove_file() {
         .version_vector()
         .clone();
     root_r
-        .remove_entry(
-            "monkey.jpg",
-            branch_r.id(),
-            EntryTombstoneData::removed(file_vv.incremented(*branch_r.id())),
-        )
+        .remove_entry("monkey.jpg", branch_r.id(), file_vv)
         .instrument(tracing::info_span!("remove"))
         .await
         .unwrap();
@@ -1046,11 +1042,7 @@ async fn merge_file_and_tombstone() {
 
     // Remove the file in the remote branch.
     root_r
-        .remove_entry(
-            "dog.jpg",
-            branch_r.id(),
-            EntryTombstoneData::removed(file_vv.incremented(*branch_r.id())),
-        )
+        .remove_entry("dog.jpg", branch_r.id(), file_vv)
         .await
         .unwrap();
 

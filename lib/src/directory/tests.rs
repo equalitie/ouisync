@@ -96,11 +96,7 @@ async fn remove_file() {
         .await
         .unwrap();
     parent_dir
-        .remove_entry(
-            name,
-            branch.id(),
-            EntryTombstoneData::removed(file_vv.incremented(*branch.id())),
-        )
+        .remove_entry(name, branch.id(), file_vv)
         .await
         .unwrap();
 
@@ -381,11 +377,7 @@ async fn remove_subdirectory() {
         .await
         .unwrap();
     parent_dir
-        .remove_entry(
-            name,
-            branch.id(),
-            EntryTombstoneData::removed(dir_vv.incremented(*branch.id())),
-        )
+        .remove_entry(name, branch.id(), dir_vv)
         .await
         .unwrap();
 
@@ -475,14 +467,9 @@ async fn fork_over_tombstone() {
         .await
         .unwrap();
 
-    let vv = root0
-        .lookup("dir")
-        .unwrap()
-        .version_vector()
-        .clone()
-        .incremented(*branches[0].id());
+    let vv = root0.lookup("dir").unwrap().version_vector().clone();
     root0
-        .remove_entry("dir", branches[0].id(), EntryTombstoneData::removed(vv))
+        .remove_entry("dir", branches[0].id(), vv)
         .await
         .unwrap();
 
@@ -552,7 +539,7 @@ async fn modify_directory_concurrently() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn remove_unique_remote_file() {
+async fn remove_remote_only_entry() {
     let (_base_dir, local_branch) = setup().await;
 
     let mut root = local_branch.open_or_create_root().await.unwrap();
@@ -562,13 +549,9 @@ async fn remove_unique_remote_file() {
     let remote_id = PublicKey::random();
     let remote_vv = vv![remote_id => 1]; // pretend there is a remote file with this vv
 
-    root.remove_entry(
-        name,
-        &remote_id,
-        EntryTombstoneData::removed(remote_vv.clone().incremented(*local_branch.id())),
-    )
-    .await
-    .unwrap();
+    root.remove_entry(name, &remote_id, remote_vv.clone())
+        .await
+        .unwrap();
 
     let local_vv = assert_matches!(
         root.lookup(name),
@@ -579,28 +562,19 @@ async fn remove_unique_remote_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn remove_concurrent_remote_file() {
+async fn remove_concurrent_entry() {
     let (_base_dir, local_branch) = setup().await;
     let mut root = local_branch.open_or_create_root().await.unwrap();
 
     let name = "foo.txt";
-    root.create_file(name.to_owned())
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    root.create_file(name.to_owned()).await.unwrap();
 
     let remote_id = PublicKey::random();
     let remote_vv = vv![remote_id => 1]; // pretend there is a remote file with this vv
 
-    root.remove_entry(
-        name,
-        &remote_id,
-        EntryTombstoneData::removed(remote_vv.clone().incremented(*local_branch.id())),
-    )
-    .await
-    .unwrap();
+    root.remove_entry(name, &remote_id, remote_vv.clone())
+        .await
+        .unwrap();
 
     let local_vv = assert_matches!(
         root.lookup(name),
@@ -611,57 +585,88 @@ async fn remove_concurrent_remote_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn remove_non_existing_entry() {
+async fn remove_non_existing_local_entry() {
     let (_base_dir, local_branch) = setup().await;
     let mut root = local_branch.open_or_create_root().await.unwrap();
     let name = "foo.txt";
 
     let vv0 = local_branch.version_vector().await.unwrap();
 
-    // This is not an error and a new tombstone must be created. This is to support merging removed
-    // entries from remote branches.
-    root.remove_entry(
+    root.remove_entry(name, local_branch.id(), VersionVector::new())
+        .await
+        .unwrap();
+
+    let vv1 = local_branch.version_vector().await.unwrap();
+    assert!(vv1 > vv0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_tombstone_over_non_existing_entry() {
+    let (_base_dir, local_branch) = setup().await;
+    let mut root = local_branch.open_or_create_root().await.unwrap();
+    let name = "foo.txt";
+
+    let vv0 = local_branch.version_vector().await.unwrap();
+
+    let remote_id = PublicKey::random();
+    root.create_tombstone(
         name,
-        local_branch.id(),
-        EntryTombstoneData::removed(VersionVector::first(*local_branch.id())),
+        EntryTombstoneData::new(TombstoneCause::Removed, VersionVector::first(remote_id)),
     )
     .await
     .unwrap();
 
     let vv1 = local_branch.version_vector().await.unwrap();
     assert!(vv1 > vv0);
-
     assert_matches!(root.lookup(name), Ok(EntryRef::Tombstone(_)));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn remove_is_idempotent() {
+async fn create_tombstone_over_existing_entry() {
     let (_base_dir, local_branch) = setup().await;
     let mut root = local_branch.open_or_create_root().await.unwrap();
     let name = "foo.txt";
 
-    root.create_file(name.to_owned())
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    root.create_file(name.to_owned()).await.unwrap();
+    let file_vv = root.lookup(name).unwrap().version_vector().clone();
+
+    let vv0 = local_branch.version_vector().await.unwrap();
+
+    let remote_id = PublicKey::random();
+
+    root.create_tombstone(
+        name,
+        EntryTombstoneData::new(TombstoneCause::Removed, file_vv.incremented(remote_id)),
+    )
+    .await
+    .unwrap();
+
+    let vv1 = local_branch.version_vector().await.unwrap();
+    assert!(vv1 > vv0);
+    assert_matches!(root.lookup(name), Ok(EntryRef::Tombstone(_)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_tombstone_is_idempotent() {
+    let (_base_dir, local_branch) = setup().await;
+    let mut root = local_branch.open_or_create_root().await.unwrap();
+    let name = "foo.txt";
+
+    root.create_file(name.to_owned()).await.unwrap();
 
     let proof0 = local_branch.proof().await.unwrap();
 
-    root.refresh().await.unwrap();
-
+    let remote_id = PublicKey::random();
     let tombstone_vv = root
         .lookup(name)
         .unwrap()
         .version_vector()
         .clone()
-        .incremented(*local_branch.id());
+        .incremented(remote_id);
 
-    root.remove_entry(
+    root.create_tombstone(
         name,
-        local_branch.id(),
-        EntryTombstoneData::removed(tombstone_vv.clone()),
+        EntryTombstoneData::new(TombstoneCause::Removed, tombstone_vv.clone()),
     )
     .await
     .unwrap();
@@ -669,10 +674,9 @@ async fn remove_is_idempotent() {
     let proof1 = local_branch.proof().await.unwrap();
     assert!(proof1.version_vector > proof0.version_vector);
 
-    root.remove_entry(
+    root.create_tombstone(
         name,
-        local_branch.id(),
-        EntryTombstoneData::removed(tombstone_vv),
+        EntryTombstoneData::new(TombstoneCause::Removed, tombstone_vv),
     )
     .await
     .unwrap();
