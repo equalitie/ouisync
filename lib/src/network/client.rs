@@ -5,7 +5,7 @@ use super::{
     pending::{PendingRequest, PendingRequests, PendingResponse},
 };
 use crate::{
-    block_tracker::{BlockPromise, BlockTrackerClient, OfferState},
+    block_tracker::{BlockPromise, OfferState, TrackerClient},
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
     protocol::{
@@ -28,7 +28,7 @@ pub(super) struct Client {
     pending_requests: Arc<PendingRequests>,
     request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
     receive_filter: ReceiveFilter,
-    block_tracker: BlockTrackerClient,
+    block_tracker: TrackerClient,
     _request_sender: ScopedJoinHandle<()>,
 }
 
