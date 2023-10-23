@@ -55,6 +55,3 @@ debug = 1
 [profile.dev.package."*"]
 opt-level = 3
 
-[patch.crates-io]
-# TODO: Remove this patch when sqlx 0.7.2 is released
-sqlx = { git = "https://github.com/launchbadge/sqlx.git", rev = "e80291b2a771bf66e9c03f068fd196c7a47c1967" }
