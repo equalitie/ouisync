@@ -79,6 +79,7 @@ impl Directory {
         let dir = if let Some(mut dir) = dir {
             if !merge.is_empty() {
                 let bump = Bump::Merge(merge);
+                changeset.force_bump(true);
                 dir.bump(&mut tx, &mut changeset, bump).await?;
                 dir.commit(tx, changeset).await?;
             }
@@ -798,6 +799,7 @@ pub(crate) enum DirectoryLocking {
 pub(crate) async fn bump_root(branch: &Branch, merge: VersionVector) -> Result<()> {
     let tx = branch.store().begin_write().await?;
     let mut changeset = Changeset::new();
+    changeset.force_bump(true);
     changeset.bump(Bump::Merge(merge));
     commit(tx, changeset, branch).await
 }

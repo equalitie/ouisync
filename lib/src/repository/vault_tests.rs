@@ -238,11 +238,9 @@ async fn receive_root_node_with_existing_hash() {
 }
 
 mod receive_and_create_root_node {
-    use tokio::task;
-
-    use crate::protocol::Bump;
-
     use super::*;
+    use crate::protocol::Bump;
+    use tokio::task;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn local_then_remove() {

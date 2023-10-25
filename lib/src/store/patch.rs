@@ -52,17 +52,21 @@ impl Patch {
         })
     }
 
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.vv
+    }
+
     pub async fn insert(
         &mut self,
         tx: &mut ReadTransaction,
         encoded_locator: Hash,
         block_id: BlockId,
         block_presence: SingleBlockPresence,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let nodes = self.fetch(tx, &encoded_locator).await?;
-        nodes.insert(encoded_locator, block_id, block_presence);
+        let changed = nodes.insert(encoded_locator, block_id, block_presence);
 
-        Ok(())
+        Ok(changed)
     }
 
     pub async fn remove(
@@ -70,16 +74,16 @@ impl Patch {
         tx: &mut ReadTransaction,
         encoded_locator: &Hash,
         expected_block_id: Option<&BlockId>,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let nodes = self.fetch(tx, encoded_locator).await?;
 
-        if let Some(block_id) = expected_block_id {
-            nodes.remove_if(encoded_locator, block_id);
+        let old = if let Some(block_id) = expected_block_id {
+            nodes.remove_if(encoded_locator, block_id)
         } else {
-            nodes.remove(encoded_locator);
-        }
+            nodes.remove(encoded_locator)
+        };
 
-        Ok(())
+        Ok(old.is_some())
     }
 
     pub async fn save(
@@ -87,16 +91,12 @@ impl Patch {
         tx: &mut WriteTransaction,
         bump: Bump,
         write_keys: &Keypair,
-    ) -> Result<bool, Error> {
-        if self.inners.is_empty() && self.leaves.is_empty() && !bump.changes(&self.vv) {
-            return Ok(false);
-        }
-
+    ) -> Result<(), Error> {
         self.recalculate();
         self.save_children(tx).await?;
         self.save_root(tx, bump, write_keys).await?;
 
-        Ok(true)
+        Ok(())
     }
 
     async fn fetch<'a>(

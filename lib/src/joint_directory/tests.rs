@@ -1233,9 +1233,8 @@ async fn create_file(parent: &mut Directory, name: &str, content: &[u8]) -> File
 
     if !content.is_empty() {
         file.write_all(content).await.unwrap();
+        file.flush().await.unwrap();
     }
-
-    file.flush().await.unwrap();
 
     file
 }

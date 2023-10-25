@@ -68,29 +68,31 @@ impl LeafNodeSet {
     }
 
     /// Inserts a new node
+    /// Returns whether this changed the node set.
     pub fn insert(
         &mut self,
         locator: Hash,
         block_id: BlockId,
         block_presence: SingleBlockPresence,
-    ) {
+    ) -> bool {
+        let new = LeafNode {
+            locator,
+            block_id,
+            block_presence,
+        };
+
         match self.lookup(&locator) {
             Ok(index) => {
-                self.0[index] = LeafNode {
-                    locator,
-                    block_id,
-                    block_presence,
-                };
+                if self.0[index] != new {
+                    self.0[index] = new;
+                    true
+                } else {
+                    false
+                }
             }
             Err(index) => {
-                self.0.insert(
-                    index,
-                    LeafNode {
-                        locator,
-                        block_id,
-                        block_presence,
-                    },
-                );
+                self.0.insert(index, new);
+                true
             }
         }
     }

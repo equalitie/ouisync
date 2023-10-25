@@ -653,7 +653,6 @@ mod trash {
             let locators: Vec<_> = tx.load_locators(block_id).try_collect().await?;
 
             for locator in locators {
-                tracing::trace!(?block_id, "unreachable local node removed");
                 changeset.unlink_block(locator, Some(*block_id));
             }
         }

@@ -14,6 +14,7 @@ pub(crate) struct Changeset {
     unlinks: Vec<(Hash, Option<BlockId>)>,
     blocks: Vec<Block>,
     bump: Bump,
+    bump_force: bool,
 }
 
 impl Changeset {
@@ -30,23 +31,32 @@ impl Changeset {
         write_keys: &Keypair,
     ) -> Result<bool, Error> {
         let mut patch = Patch::new(tx, *branch_id).await?;
+        let mut changed = false;
 
         for (encoded_locator, block_id, block_presence) in self.links {
-            patch
+            if patch
                 .insert(tx, encoded_locator, block_id, block_presence)
-                .await?;
+                .await?
+            {
+                changed = true;
+            }
         }
 
         for (encoded_locator, expected_block_id) in self.unlinks {
-            patch
+            if patch
                 .remove(tx, &encoded_locator, expected_block_id.as_ref())
-                .await?;
+                .await?
+            {
+                changed = true;
+            }
         }
 
-        let mut changed = false;
-
-        if patch.save(tx, self.bump, write_keys).await? {
+        if self.bump_force && self.bump.changes(patch.version_vector()) {
             changed = true;
+        }
+
+        if changed {
+            patch.save(tx, self.bump, write_keys).await?;
         }
 
         for block in self.blocks {
@@ -81,8 +91,16 @@ impl Changeset {
         self.blocks.push(block);
     }
 
-    /// Update the root version vector.
+    /// Update the root version vector. By default the vv is bumped only if this changeset actually
+    /// changes anything (i.e., links and/or unlinks blocks). To force the bump even if there are
+    /// no changes, call also `force_bump(true)`.
     pub fn bump(&mut self, bump: Bump) {
         self.bump = bump;
+    }
+
+    /// Set whether to update the root version vector even if there are no changes (i.e., no blocks
+    /// added or removed). Default is `false`.
+    pub fn force_bump(&mut self, force: bool) {
+        self.bump_force = force;
     }
 }

@@ -401,6 +401,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
             PruneTestOp::Bump => {
                 let mut tx = store.begin_write().await.unwrap();
                 let mut changeset = Changeset::new();
+                changeset.force_bump(true);
                 changeset.bump(Bump::increment(branch_id));
                 changeset
                     .apply(&mut tx, &branch_id, &write_keys)
