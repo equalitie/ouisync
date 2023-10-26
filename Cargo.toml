@@ -11,6 +11,7 @@ members = [
     "utils/bindgen",
     "utils/btdht",
     "utils/stress-test",
+    "utils/swarm",
     "vfs"
 ]
 resolver = "2"
