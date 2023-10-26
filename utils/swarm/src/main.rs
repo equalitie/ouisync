@@ -121,6 +121,8 @@ impl Replica {
             .arg("--store-dir")
             .arg(store_path)
             .arg("start")
+            .arg("--log-color")
+            .arg("always")
             .stdout(stdout_writer)
             .stderr(stderr_writer)
             .spawn()?;

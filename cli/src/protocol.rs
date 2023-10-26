@@ -1,5 +1,5 @@
 use clap::{builder::BoolishValueParser, Subcommand};
-use ouisync_bridge::logger::LogFormat;
+use ouisync_bridge::logger::{LogColor, LogFormat};
 use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{fmt, io, net::SocketAddr, path::PathBuf, time::Duration};
@@ -14,6 +14,13 @@ pub(crate) enum Request {
         /// Log format ("human" or "json")
         #[arg(long, default_value_t = LogFormat::Human)]
         log_format: LogFormat,
+
+        /// When to color log messages ("always", "never" or "auto")
+        ///
+        /// "auto" means colors are used when printing directly to a terminal but not when
+        /// redirected to a file or a pipe.
+        #[arg(long, default_value_t)]
+        log_color: LogColor,
     },
     /// Bind the remote API to the specified addresses.
     ///

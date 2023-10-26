@@ -1,4 +1,4 @@
-use super::{common, LogFormat};
+use super::{common, LogColor, LogFormat};
 use ouisync_tracing_fmt::Formatter;
 #[cfg(not(target_os = "windows"))]
 use std::io::IsTerminal;
@@ -17,22 +17,25 @@ use tracing_subscriber::{
 pub(super) struct Inner;
 
 impl Inner {
-    pub fn new(path: Option<&Path>, format: LogFormat) -> io::Result<Self> {
-        // Disable colors in output on Windows as `cmd` doesn't seem to support it.
-        //
-        // TODO: consider using `ansi_term::enable_ansi_support()`
-        // (see https://github.com/ogham/rust-ansi-term#basic-usage for more info)
-        #[cfg(target_os = "windows")]
-        let colors = false;
-        #[cfg(not(target_os = "windows"))]
-        let colors = io::stdout().is_terminal();
+    pub fn new(path: Option<&Path>, format: LogFormat, color: LogColor) -> io::Result<Self> {
+        let color = match color {
+            LogColor::Always => true,
+            LogColor::Never => false,
+            LogColor::Auto => {
+                // Disable colors in output on Windows as `cmd` doesn't seem to support it.
+                //
+                // TODO: consider using `ansi_term::enable_ansi_support()`
+                // (see https://github.com/ogham/rust-ansi-term#basic-usage for more info)
+                !cfg!(target_os = "windows") && io::stdout().is_terminal()
+            }
+        };
 
         // Log to stdout
         let stdout_layer = match format {
             LogFormat::Human => EitherLayer::A(
                 fmt::layer()
                     .event_format(Formatter::<SystemTime>::default())
-                    .with_ansi(colors),
+                    .with_ansi(color),
             ),
             LogFormat::Json => EitherLayer::B(
                 fmt::layer()
