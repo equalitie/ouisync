@@ -113,8 +113,12 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(name.to_string(), &VersionVector::new())
-                            .await?
+                        curr.create_directory(
+                            name.to_string(),
+                            rand::random(),
+                            &VersionVector::new(),
+                        )
+                        .await?
                     };
 
                     curr = next;

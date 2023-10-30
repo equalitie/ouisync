@@ -47,7 +47,7 @@ impl Directory {
         locking: DirectoryLocking,
         fallback: DirectoryFallback,
     ) -> Result<Self> {
-        Self::open(branch, Locator::ROOT, None, locking, fallback).await
+        Self::open(branch, BlobId::ROOT, None, locking, fallback).await
     }
 
     /// Opens the root directory or creates it if it doesn't exists.
@@ -55,17 +55,17 @@ impl Directory {
     /// See [`Self::create_directory`] for info about the `merge` parameter.
     #[instrument(skip(branch), fields(branch_id = ?branch.id()))]
     pub(crate) async fn open_or_create_root(branch: Branch, merge: VersionVector) -> Result<Self> {
-        let locator = Locator::ROOT;
+        let blob_id = BlobId::ROOT;
 
-        let lock = branch.locker().read(*locator.blob_id()).await;
+        let lock = branch.locker().read(blob_id).await;
         let mut tx = branch.store().begin_write().await?;
         let mut changeset = Changeset::new();
 
         let dir = match Self::open_in(
-            Some(lock),
+            Some(lock.clone()),
             &mut tx,
             branch.clone(),
-            locator,
+            blob_id,
             None,
             DirectoryFallback::Disabled,
         )
@@ -92,7 +92,7 @@ impl Directory {
                 Bump::Merge(merge)
             };
 
-            let mut dir = Self::create(branch, locator, None);
+            let mut dir = Self::create(lock, branch, blob_id, None);
             dir.save(&mut tx, &mut changeset, &Content::empty()).await?;
             dir.bump(&mut tx, &mut changeset, bump).await?;
             dir.commit(tx, changeset).await?;
@@ -154,6 +154,10 @@ impl Directory {
 
     /// Creates a new subdirectory of this directory.
     ///
+    /// `blob_id` is the blob id of the directory to be created. It must be unique. The easiest way
+    /// to achieve it is to generate it randomly (it has enough bits for collisions to be
+    /// astronomically unlikely).
+    ///
     /// The version vector of the created subdirectory depends on the `merge` parameter:
     ///
     /// - if it is empty, it's `old_vv` with the local version incremented,
@@ -162,13 +166,22 @@ impl Directory {
     /// where `old_vv` is the version vector of the existing entry or `VersionVector::new()` if not
     /// such exists yet.
     #[instrument(level = "trace", skip(self))]
-    pub async fn create_directory(&mut self, name: String, merge: &VersionVector) -> Result<Self> {
+    pub(crate) async fn create_directory(
+        &mut self,
+        name: String,
+        blob_id: BlobId,
+        merge: &VersionVector,
+    ) -> Result<Self> {
+        let lock = self
+            .branch()
+            .locker()
+            .try_read(blob_id)
+            .map_err(|_| Error::EntryExists)?;
+
         let mut tx = self.branch().store().begin_write().await?;
         let mut changeset = Changeset::new();
 
         self.refresh_in(&mut tx).await?;
-
-        let blob_id = rand::random();
 
         let mut version_vector = self.content.initial_version_vector(&name);
 
@@ -181,8 +194,7 @@ impl Directory {
         let data = EntryData::directory(blob_id, version_vector);
         let parent = self.create_parent_context(name.clone());
 
-        let mut dir =
-            Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
+        let mut dir = Directory::create(lock, self.branch().clone(), blob_id, Some(parent));
         let mut content = self.content.clone();
 
         let diff = content.insert(name, data)?;
@@ -199,15 +211,19 @@ impl Directory {
     /// Opens a subdirectory or creates it if it doesn't exists and merges the given version vector
     /// to it.
     #[instrument(skip(self))]
-    pub async fn open_or_create_directory(
+    async fn open_or_create_directory(
         &mut self,
         name: &str,
+        blob_id: BlobId,
         merge: VersionVector,
     ) -> Result<Self> {
         let mut dir = if let Some(dir) = self.try_open_directory(name).await? {
             dir
         } else {
-            match self.create_directory(name.to_owned(), &merge).await {
+            match self
+                .create_directory(name.to_owned(), blob_id, &merge)
+                .await
+            {
                 Ok(dir) => return Ok(dir),
                 Err(Error::EntryExists) => {
                     // The entry have been created in the meantime by some other task. Try to open
@@ -227,6 +243,11 @@ impl Directory {
             dir.bump(&mut tx, &mut changeset, bump).await?;
             dir.commit(tx, changeset).await?;
         }
+
+        // TODO:
+        // if blob_id != *dir.blob_id() {
+        //     todo!()
+        // }
 
         Ok(dir)
     }
@@ -456,8 +477,11 @@ impl Directory {
 
         if let Some((parent_dir, entry_name)) = parent {
             let mut parent_dir = parent_dir.fork(local_branch).await?;
+            // TODO: blob_id = *self.blob_id();
+            let blob_id = rand::random();
+
             parent_dir
-                .open_or_create_directory(entry_name, initial_vv)
+                .open_or_create_directory(entry_name, blob_id, initial_vv)
                 .await
         } else {
             Self::open_or_create_root(local_branch.clone(), initial_vv).await
@@ -480,11 +504,11 @@ impl Directory {
         lock: Option<ReadLock>,
         tx: &mut ReadTransaction,
         branch: Branch,
-        locator: Locator,
+        blob_id: BlobId,
         parent: Option<ParentContext>,
         fallback: DirectoryFallback,
     ) -> Result<Self> {
-        let (blob, content) = load(tx, branch, *locator.blob_id(), fallback).await?;
+        let (blob, content) = load(tx, branch, blob_id, fallback).await?;
 
         Ok(Self {
             blob,
@@ -506,27 +530,27 @@ impl Directory {
 
     async fn open(
         branch: Branch,
-        locator: Locator,
+        blob_id: BlobId,
         parent: Option<ParentContext>,
         locking: DirectoryLocking,
         fallback: DirectoryFallback,
     ) -> Result<Self> {
         let lock = match locking {
-            DirectoryLocking::Enabled => Some(branch.locker().read(*locator.blob_id()).await),
+            DirectoryLocking::Enabled => Some(branch.locker().read(blob_id).await),
             DirectoryLocking::Disabled => None,
         };
 
         let mut tx = branch.store().begin_read().await?;
-        Self::open_in(lock, &mut tx, branch, locator, parent, fallback).await
+        Self::open_in(lock, &mut tx, branch, blob_id, parent, fallback).await
     }
 
-    fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
-        let lock = branch
-            .locker()
-            .try_read(*locator.blob_id())
-            .ok()
-            .expect("blob_id collision");
-        let blob = Blob::create(branch, *locator.blob_id());
+    fn create(
+        lock: ReadLock,
+        branch: Branch,
+        blob_id: BlobId,
+        parent: Option<ParentContext>,
+    ) -> Self {
+        let blob = Blob::create(branch, blob_id);
 
         Directory {
             blob,
@@ -583,7 +607,7 @@ impl Directory {
                     let parent_context = self.create_parent_context(name.into());
                     let dir = Directory::open(
                         self.blob.branch().clone(),
-                        Locator::head(data.blob_id),
+                        data.blob_id,
                         Some(parent_context),
                         DirectoryLocking::Disabled,
                         DirectoryFallback::Disabled,
