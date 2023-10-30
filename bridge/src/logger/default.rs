@@ -1,8 +1,10 @@
 use super::{common, LogColor, LogFormat};
 use ouisync_tracing_fmt::Formatter;
-#[cfg(not(target_os = "windows"))]
-use std::io::IsTerminal;
-use std::{io, path::Path, sync::Mutex};
+use std::{
+    io::{self, IsTerminal},
+    path::Path,
+    sync::Mutex,
+};
 use tracing::{
     metadata::LevelFilter,
     span::{Attributes, Record},
