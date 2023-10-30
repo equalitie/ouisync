@@ -7,7 +7,7 @@ use crate::{
 use anyhow::Result;
 use ouisync_bridge::{
     config::{ConfigError, ConfigKey},
-    logger::{LogFormat, Logger},
+    logger::{LogColor, LogFormat, Logger},
     transport::RemoteServer,
 };
 use ouisync_lib::StateMonitor;
@@ -20,9 +20,14 @@ use std::{
 };
 use tokio::task;
 
-pub(crate) async fn run(dirs: Dirs, socket: PathBuf, log_format: LogFormat) -> Result<()> {
+pub(crate) async fn run(
+    dirs: Dirs,
+    socket: PathBuf,
+    log_format: LogFormat,
+    log_color: LogColor,
+) -> Result<()> {
     let monitor = StateMonitor::make_root();
-    let _logger = Logger::new(None, Some(monitor.clone()), log_format)?;
+    let _logger = Logger::new(None, Some(monitor.clone()), log_format, log_color)?;
 
     let state = State::init(&dirs, monitor).await?;
     let server = LocalServer::bind(socket.as_path())?;

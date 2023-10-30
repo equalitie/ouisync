@@ -429,8 +429,6 @@ mod trash {
         unlock_tx: &unlock::Sender,
     ) -> Result<()> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
-        // The first pass is used both for requiring missing blocks and collecting unreachable
-        // blocks. The subsequent passes (if any) for collecting only.
         const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
         let mut unreachable_block_ids_page =

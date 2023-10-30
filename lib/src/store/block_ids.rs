@@ -42,11 +42,15 @@ impl BlockIdsPage {
                  )
              SELECT DISTINCT block_id
                  FROM snapshot_leaf_nodes
-                 WHERE parent IN inner_nodes AND block_id > COALESCE(?, x'')
+                 WHERE
+                     parent IN inner_nodes
+                     AND block_presence = ?
+                     AND block_id > COALESCE(?, x'')
                  ORDER BY block_id
                  LIMIT ?",
         )
         .bind(NodeState::Approved)
+        .bind(SingleBlockPresence::Present)
         .bind(self.lower_bound.as_ref())
         .bind(self.page_size)
         .fetch(&mut *conn)

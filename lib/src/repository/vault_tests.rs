@@ -922,11 +922,34 @@ async fn block_ids_remote() {
         &snapshot,
     )
     .await;
+    receive_blocks(&vault, &snapshot).await;
 
     let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
     let expected = snapshot.blocks().keys().copied().collect();
 
     assert_eq!(actual, expected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn block_ids_excludes_missing_blocks() {
+    let (_base_dir, vault, secrets) = setup().await;
+    let receive_filter = vault.store().receive_filter();
+
+    let branch_id = PublicKey::random();
+    let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+
+    receive_nodes(
+        &vault,
+        &secrets.write_keys,
+        branch_id,
+        VersionVector::first(branch_id),
+        &receive_filter,
+        &snapshot,
+    )
+    .await;
+
+    let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
+    assert!(actual.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1013,6 +1036,9 @@ async fn block_ids_multiple_branches() {
     )
     .await;
 
+    receive_blocks(&vault, &snapshot_0).await;
+    receive_blocks(&vault, &snapshot_1).await;
+
     let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
     let expected = all_blocks
         .iter()
@@ -1040,6 +1066,7 @@ async fn block_ids_pagination() {
         &snapshot,
     )
     .await;
+    receive_blocks(&vault, &snapshot).await;
 
     let mut sorted_blocks: Vec<_> = snapshot.blocks().keys().copied().collect();
     sorted_blocks.sort();

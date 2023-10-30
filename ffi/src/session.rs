@@ -6,7 +6,7 @@ use crate::{
     transport::{ClientSender, Server},
     utils::{self, UniqueHandle},
 };
-use ouisync_bridge::logger::{LogFormat, Logger};
+use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
 use ouisync_lib::StateMonitor;
 use std::{ffi::c_char, io, path::PathBuf, ptr, str::Utf8Error, sync::Arc, time::Duration};
 use thiserror::Error;
@@ -32,6 +32,7 @@ impl Session {
             log_path.as_deref(),
             Some(root_monitor.clone()),
             LogFormat::Human,
+            LogColor::Auto,
         )
         .map_err(SessionError::InitializeLogger)?;
 
