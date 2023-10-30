@@ -16,6 +16,7 @@ use crate::{
     crypto::{
         cipher::{self, Nonce, SecretKey},
         sign::{Keypair, PublicKey},
+        Hashable,
     },
     error::{Error, Result},
     protocol::{
@@ -648,7 +649,7 @@ fn write_block(
     mut content: BlockContent,
     read_key: &cipher::SecretKey,
 ) -> BlockId {
-    let nonce = rand::random();
+    let nonce = make_block_nonce(locator, &content, read_key);
     encrypt_block(read_key, &nonce, &mut content);
 
     let block = Block::new(content, nonce);
@@ -674,4 +675,29 @@ fn decrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content
 fn encrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {
     let block_key = SecretKey::derive_from_key(blob_key.as_array(), block_nonce);
     block_key.encrypt_no_aead(&Nonce::default(), content);
+}
+
+/// Compute nonce for a block at the given locator and with the given plaintext content.
+///
+/// This function is deterministic so for a given block at a given locator it produces the same
+/// nonce. This is not a nonce reuse because the only way two blocks can have the same nonce is if
+/// they have the same content and are at the same locator which means they are in fact the same
+/// block, just referenced from two different branches.
+///
+/// The reason nonces are computed this way instead of randomly is to guarantee two blocks with the
+/// same content at the same locators but in different branches have the same nonce and thus the
+/// same block_id even if they were created independently (as opposed to linking an existing block
+/// from another branch). This in turn guarantees that two branches with identical content have the
+/// same hash.
+///
+/// Note: `read_key` is used as an additional secret hashing material to prevent known plaintext
+/// attacks.
+fn make_block_nonce(
+    locator: &Locator,
+    plaintext_content: &[u8],
+    read_key: &cipher::SecretKey,
+) -> BlockNonce {
+    (read_key.as_ref(), locator, plaintext_content)
+        .hash()
+        .into()
 }

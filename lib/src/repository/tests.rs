@@ -218,6 +218,7 @@ async fn concurrent_write_and_read_file() {
 
             file.flush().await.unwrap();
         }
+        .instrument(tracing::info_span!("write"))
     });
 
     let read = scoped_task::spawn({
@@ -242,6 +243,7 @@ async fn concurrent_write_and_read_file() {
                 wait_for_notification(&mut rx).await;
             }
         }
+        .instrument(tracing::info_span!("read"))
     });
 
     write.await.unwrap();
