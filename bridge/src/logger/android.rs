@@ -1,4 +1,4 @@
-use super::{common, LogFormat};
+use super::{common, LogColor, LogFormat};
 use ndk_sys::{
     __android_log_print, android_LogPriority as LogPriority,
     android_LogPriority_ANDROID_LOG_DEBUG as ANDROID_LOG_DEBUG,
@@ -35,7 +35,7 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    pub fn new(path: Option<&Path>, _format: LogFormat) -> io::Result<Self> {
+    pub fn new(path: Option<&Path>, _format: LogFormat, _color: LogColor) -> io::Result<Self> {
         let android_log_layer = fmt::layer()
             .event_format(Formatter::<()>::default())
             .with_ansi(false)
