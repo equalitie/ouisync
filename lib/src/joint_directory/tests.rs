@@ -509,50 +509,43 @@ mod attempt_to_merge_concurrent_file {
         test_utils::init_log();
 
         let (_base_dir, [local_branch, remote_branch]) = setup().await;
-
-        let local_dir = local_branch.open_or_create_root().await.unwrap();
-        let remote_dir = remote_branch.open_or_create_root().await.unwrap();
-
-        case(local_dir, remote_dir).await;
+        case(local_branch, remote_branch, "/").await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn in_subdirectory() {
+        test_utils::init_log();
+
         let (_base_dir, [local_branch, remote_branch]) = setup().await;
-
-        let dir_name = "dir";
-        let local_dir = local_branch
-            .open_or_create_root()
-            .await
-            .unwrap()
-            .create_directory(dir_name.into(), rand::random(), &VersionVector::new())
-            .await
-            .unwrap();
-        let remote_dir = remote_branch
-            .open_or_create_root()
-            .await
-            .unwrap()
-            .create_directory(dir_name.into(), rand::random(), &VersionVector::new())
-            .await
-            .unwrap();
-
-        case(local_dir, remote_dir).await;
+        case(local_branch, remote_branch, "dir").await;
     }
 
-    async fn case(mut local_dir: Directory, mut remote_dir: Directory) {
-        let local_branch = local_dir.branch().clone();
-        let remote_branch = remote_dir.branch().clone();
-
+    async fn case(local_branch: Branch, remote_branch: Branch, dir_path: &str) {
+        let mut remote_dir = remote_branch
+            .ensure_directory_exists(dir_path.into())
+            .await
+            .unwrap();
         create_file(&mut remote_dir, "cat.jpg", b"v0").await;
+        remote_dir.refresh().await.unwrap();
 
-        merge(&[&local_branch, &remote_branch]).await.unwrap();
+        merge(&[&local_branch, &remote_branch])
+            .instrument(tracing::info_span!("merge"))
+            .await
+            .unwrap();
 
-        local_dir.refresh().await.unwrap();
+        let mut local_dir = local_branch
+            .ensure_directory_exists(dir_path.into())
+            .await
+            .unwrap();
+
         remote_dir.refresh().await.unwrap();
 
         // Modify the file by both branches concurrently
         update_file(&local_dir, "cat.jpg", b"v1", &local_branch).await;
         update_file(&remote_dir, "cat.jpg", b"v2", &remote_branch).await;
+
+        local_dir.refresh().await.unwrap();
+        remote_dir.refresh().await.unwrap();
 
         assert_matches!(
             merge(&[&local_branch, &remote_branch]).await,

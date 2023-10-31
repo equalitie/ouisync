@@ -59,6 +59,10 @@ impl Content {
         self.entries.get_key_value(name)
     }
 
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut EntryData> {
+        self.entries.get_mut(name)
+    }
+
     /// Inserts an entry into this directory. Returns the difference between the new and the old
     /// version vectors.
     pub fn insert(

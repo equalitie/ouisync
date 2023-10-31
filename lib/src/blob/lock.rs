@@ -133,6 +133,10 @@ pub(crate) struct ReadLock {
 }
 
 impl ReadLock {
+    pub fn blob_id(&self) -> &BlobId {
+        &self.blob_id
+    }
+
     pub fn upgrade(&self) -> Option<WriteLock> {
         let mut shared = self.shared.lock().unwrap();
 

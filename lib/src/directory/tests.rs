@@ -411,9 +411,7 @@ async fn fork_sanity_check() {
         .await
         .unwrap();
     assert_eq!(dir1.branch().id(), branch1.id());
-
-    // TODO:
-    // assert_eq!(dir1.blob_id(), dir0.blob_id());
+    assert_eq!(dir1.blob_id(), dir0.blob_id());
 
     // Verify the root dir got forked as well
     let root1 = branch1
@@ -501,7 +499,6 @@ async fn fork_over_tombstone() {
     assert_matches!(root0.lookup("dir"), Ok(EntryRef::Directory(_)));
 }
 
-#[ignore] // FIXME
 #[tokio::test(flavor = "multi_thread")]
 async fn fork_over_existing_directory() {
     let (_base_dir, [branch0, branch1]) = setup_multiple().await;
@@ -516,14 +513,14 @@ async fn fork_over_existing_directory() {
         .unwrap();
 
     let mut root1 = branch1.open_or_create_root().await.unwrap();
-    let dir1 = root1
+    let _dir1 = root1
         .create_directory(name.into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
     // Fork back and forth. Afterwards both dirs should have the same blob id and vv.
-    dir0.fork(&branch1).await.unwrap();
-    dir1.fork(&branch0).await.unwrap();
+    let dir1 = dir0.fork(&branch1).await.unwrap();
+    let dir0 = dir1.fork(&branch0).await.unwrap();
 
     assert_eq!(dir0.blob_id(), dir1.blob_id());
     assert_eq!(
