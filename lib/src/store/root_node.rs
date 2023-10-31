@@ -495,43 +495,34 @@ pub(super) async fn decide_action(
                 action.request_children = false;
             }
             Some(Ordering::Equal) => {
-                if new_proof.hash != old_node.proof.hash {
-                    if new_proof.writer_id == old_node.proof.writer_id {
-                        // The incoming node has the same vv but different hash as an existing node
-                        // in the same branch. This means the peer sent us a draft node
-                        // (accidentally or maliciously). Discard it.
-                        action.insert = false;
+                if new_proof.hash == old_node.proof.hash {
+                    // The incoming node has the same version vector and the same hash as one of
+                    // the existing nodes which means its effectively the same node (except
+                    // possibly in a different branch). There is no point inserting it but if the
+                    // incoming summary is potentially more up-to-date than the exising one, we
+                    // still want to request the children. Otherwise we discard it.
+                    action.insert = false;
+
+                    // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
+                    // with `new_summary.is_outdated(&old_node.summary)`.
+                    if !old_node
+                        .summary
+                        .block_presence
+                        .is_outdated(new_block_presence)
+                    {
                         action.request_children = false;
-                        break;
-                    } else {
-                        // The branches are different. This is currently possible so we need to
-                        // accept it.
-                        // TODO: When https://github.com/equalitie/ouisync/issues/113 is fixed we
-                        // should reject it.
-                        tracing::trace!(
-                            vv = ?old_node.proof.version_vector,
-                            old_hash = ?old_node.proof.hash,
-                            new_hash = ?new_proof.hash,
-                            "received root node with same vv but different hash"
-                        );
-
-                        continue;
                     }
-                }
+                } else {
+                    tracing::warn!(
+                        vv = ?old_node.proof.version_vector,
+                        old_writer_id = ?old_node.proof.writer_id,
+                        new_writer_id = ?new_proof.writer_id,
+                        old_hash = ?old_node.proof.hash,
+                        new_hash = ?new_proof.hash,
+                        "Received root node invalid - broken invariant: same vv but different hash"
+                    );
 
-                // The incoming node has the same version vector and the same hash as one of
-                // the existing nodes. There is no point inserting it but if the incoming
-                // summary is potentially more up-to-date than the exising one, we still want
-                // to request the children. Otherwise we discard it.
-                action.insert = false;
-
-                // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
-                // with `new_summary.is_outdated(&old_node.summary)`.
-                if !old_node
-                    .summary
-                    .block_presence
-                    .is_outdated(new_block_presence)
-                {
+                    action.insert = false;
                     action.request_children = false;
                 }
             }
@@ -542,7 +533,7 @@ pub(super) async fn decide_action(
                         old_vv = ?old_node.proof.version_vector,
                         new_vv = ?new_proof.version_vector,
                         writer_id = ?new_proof.writer_id,
-                        "received root node invalid: broken invariant - concurrency within branch is not allowed"
+                        "Received root node invalid - broken invariant: concurrency within branch is not allowed"
                     );
 
                     action.insert = false;
