@@ -339,6 +339,8 @@ mod merge {
 
 /// Remove outdated branches and snapshots.
 mod prune {
+    use crate::versioned::PreferBranch;
+
     use super::*;
     use futures_util::TryStreamExt;
 
@@ -356,11 +358,8 @@ mod prune {
             .try_collect()
             .await?;
 
-        // Currently it's possible that multiple branches have the same vv but different hash.
-        // There is no good and simple way to pick one over the other so we currently keep all.
-        // TODO: When https://github.com/equalitie/ouisync/issues/113 is fixed, change this to use
-        // the `PreferBranch` tiebreaker using the local branch id.
-        let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, ());
+        let (uptodate, outdated): (Vec<_>, Vec<_>) =
+            versioned::partition(all, PreferBranch(Some(&shared.this_writer_id)));
 
         // Remove outdated branches
         for node in outdated {
