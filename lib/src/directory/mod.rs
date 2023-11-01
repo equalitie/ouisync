@@ -421,9 +421,7 @@ impl Directory {
     /// Returns the parent directory and entry name (unless root) and the current and initial
     /// version vectors of this directory (initial version vector is the version vector this
     /// directory had when it was initially created).
-    async fn prepare_fork<'a>(
-        &'a self,
-    ) -> Result<(Option<(Self, &'a str)>, VersionVector, VersionVector)> {
+    async fn prepare_fork(&self) -> Result<(Option<(Self, &str)>, VersionVector, VersionVector)> {
         // Running this in a read transaction to make sure the version vector of this directory
         // and the version vectors of its entries are in sync.
         let mut tx = self.branch().store().begin_read().await?;
