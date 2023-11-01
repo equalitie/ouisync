@@ -180,6 +180,32 @@ impl Branch {
     pub(crate) fn reopen(self, keys: AccessKeys) -> Self {
         Self { keys, ..self }
     }
+
+    /// Clones (the latest snapshot of) this branch into another branch and returns that branch.
+    #[cfg(test)]
+    pub(crate) async fn clone_into(&self, dst_id: PublicKey) -> Result<Self> {
+        let mut tx = self.store().begin_write().await?;
+
+        match tx.load_root_node(self.id(), RootNodeFilter::Any).await {
+            Ok(node) => {
+                tx.clone_root_node_into(
+                    node,
+                    dst_id,
+                    self.keys().write().ok_or(Error::PermissionDenied)?,
+                )
+                .await?;
+            }
+            Err(store::Error::BranchNotFound) => (),
+            Err(error) => return Err(error.into()),
+        }
+
+        tx.commit().await?;
+
+        Ok(Self {
+            id: dst_id,
+            ..self.clone()
+        })
+    }
 }
 
 /// State shared among all branches.
