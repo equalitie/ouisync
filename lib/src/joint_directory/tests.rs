@@ -637,18 +637,12 @@ mod merge_is_commutative {
     case!(file_and_empty, &["file.txt"], &[]);
     case!(file_a_and_file_b, &["file-a.txt"], &["file-b.txt"]);
     case!(dir_and_empty, &["dir"], &[]);
-    case!(
-        #[ignore] // FIXME
-        dir_and_dir,
-        &["dir"],
-        &["dir"]
-    );
+    case!(dir_and_dir, &["dir"], &["dir"]);
     case!(dir_a_and_dir_b, &["dir-a"], &["dir-b"]);
     case!(dir_and_file, &["dir"], &["file.txt"]);
     case!(dir_with_file_and_empty, &["dir/file.txt"], &[]);
     case!(dir_with_file_and_file, &["dir/file-a.txt"], &["file-b.txt"]);
     case!(
-        #[ignore] // FIXME
         dir_with_subdir_and_dir_with_subdir,
         &["dir/subdir"],
         &["dir/subdir"]

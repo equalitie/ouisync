@@ -385,6 +385,18 @@ impl Blob {
         Ok(())
     }
 
+    /// Remove this blob from the store.
+    pub(crate) fn remove(self, changeset: &mut Changeset) {
+        let locators = Locator::head(self.id)
+            .sequence()
+            .take(self.block_count() as usize);
+
+        for locator in locators {
+            let encoded = locator.encode(self.branch().keys().read());
+            changeset.unlink_block(encoded, None);
+        }
+    }
+
     fn check_cache_capacity(&mut self) -> bool {
         if self.cache.len() < CACHE_CAPACITY {
             return true;

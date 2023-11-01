@@ -598,7 +598,22 @@ impl Directory {
 
         // Change the blob id
         if new_blob_id != entry.blob_id {
-            dir.blob = Blob::create(self.branch().clone(), new_blob_id);
+            // Replace and remove the old blob.
+            //
+            // Note the removal is not strictly necessary because the old blob would be eventually
+            // removed by the garbage collector, but doing it this way improves merge performance:
+            //
+            // This way, when merging two branches, A and B, where A is happens-after B, both
+            // branches become identical (same vv, same hash) right after the merge. If we
+            // delegated the removal to the gc, they would not be immediatelly identical - because
+            // the orphaned blob would exist in one but not the other - and would only become so
+            // after the gc run. This avoids some unnecessary mesage exchanges during syncing.
+            mem::replace(
+                &mut dir.blob,
+                Blob::create(self.branch().clone(), new_blob_id),
+            )
+            .remove(changeset);
+
             dir.lock = Some(new_lock);
 
             let dir_content = mem::replace(&mut dir.content, Content::empty());
