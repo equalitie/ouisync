@@ -6,11 +6,6 @@ use self::common::{actor, Env, DEFAULT_REPO};
 use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use tokio::sync::mpsc;
 
-// NOTE: In some of these tests the expected number of blocks is higher that it seems it should be.
-// The reason for this is that we currently don't uphold the "same vv ⇔ same hash" invariant
-// (https://github.com/equalitie/ouisync/issues/113) and so remote branches that have the same vv
-// as the local one are not being pruned because they have different hash.
-
 #[test]
 fn local_delete_local_file() {
     let mut env = Env::new();
@@ -61,15 +56,12 @@ fn local_delete_remote_file() {
 
             common::expect_file_content(&repo, "test.dat", &content).await;
 
-            // 2 blocks for the file + 1 block for the local root directory + 1 block for the
-            // remote root directory (see the note at the top of this file for details about why
-            // the remote root is there).
-            expect_block_count(&repo, 4).await;
+            // 2 blocks for the file + 1 block for the local root directory.
+            expect_block_count(&repo, 3).await;
 
             repo.remove_entry("test.dat").await.unwrap();
 
-            // Both the file and the remote root are deleted, only the local root remains to track the
-            // tombstone.
+            // 1 block for the local root directory, to track the tombstone.
             expect_block_count(&repo, 1).await;
 
             tx.send(()).await.unwrap();
@@ -99,17 +91,14 @@ fn remote_delete_remote_file() {
 
         common::expect_file_content(&repo, "test.dat", &[]).await;
 
-        // 1 block for the file + 1 block for the local root directory + 1 block for the remote
-        // root directory (see the note at the top of this file for details about why the remote
-        // root is there).
-        expect_block_count(&repo, 3).await;
+        // 1 block for the file + 1 block for the local root directory.
+        expect_block_count(&repo, 2).await;
         tx.send(()).await.unwrap();
 
         common::expect_entry_not_found(&repo, "test.dat").await;
 
-        // 1 block for the local root directory + 1 block for the remote root directory (see the
-        // note at the top of this file for details about why the remote root is there)
-        expect_block_count(&repo, 2).await;
+        // 1 block for the local root directory.
+        expect_block_count(&repo, 1).await;
         tx.send(()).await.unwrap();
     });
 }
@@ -164,12 +153,10 @@ fn local_truncate_remote_file() {
             let peer_addr = actor::lookup_addr("remote").await;
             network.add_user_provided_peer(&peer_addr);
 
-            common::expect_file_content(&repo, "test.dat", &content).await;
+            common::expect_local_file_content(&repo, "test.dat", &content).await;
 
-            // 2 blocks for the file + 1 block for the local root directory + 1 block for the
-            // remote root directory (see the note at the top of this file for details about why
-            // the remote root is there)
-            expect_block_count(&repo, 4).await;
+            // 2 blocks for the file + 1 block for the local root directory.
+            expect_block_count(&repo, 3).await;
 
             let mut file = repo.open_file("test.dat").await.unwrap();
             file.fork(repo.local_branch().unwrap()).await.unwrap();
@@ -177,7 +164,7 @@ fn local_truncate_remote_file() {
             file.flush().await.unwrap();
 
             //   1 block for the file (the original 2 blocks were removed)
-            // + 1 block for the local root (created when the file was forked)
+            // + 1 block for the local root directory
             expect_block_count(&repo, 2).await;
 
             tx.send(()).await.unwrap();
@@ -219,10 +206,8 @@ fn remote_truncate_remote_file() {
 
             common::expect_file_content(&repo, "test.dat", &content).await;
 
-            // 2 blocks for the file + 1 block for the local root + 1 block for the remote root
-            // (see the note at the top of this file for details about why the remote root is
-            // there)
-            expect_block_count(&repo, 4).await;
+            // 2 blocks for the file + 1 block for the local root
+            expect_block_count(&repo, 3).await;
             tx.send(()).await.unwrap();
 
             common::expect_file_content(&repo, "test.dat", &[]).await;

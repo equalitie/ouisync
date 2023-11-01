@@ -208,7 +208,7 @@ impl<'a> DirectoryRef<'a> {
     pub(crate) async fn open(&self, fallback: DirectoryFallback) -> Result<Directory> {
         Directory::open(
             self.branch().clone(),
-            self.locator(),
+            *self.blob_id(),
             Some(self.inner.parent_context()),
             if self.inner.parent.lock.is_some() {
                 DirectoryLocking::Enabled

@@ -637,10 +637,7 @@ impl WriteTransaction {
     /// Write a block received from a remote replica and marks it as present in the index.
     /// The block must already be referenced by the index, otherwise an `BlockNotReferenced` error
     /// is returned.
-    pub(crate) async fn receive_block(
-        &mut self,
-        block: &Block,
-    ) -> Result<BlockReceiveStatus, Error> {
+    pub async fn receive_block(&mut self, block: &Block) -> Result<BlockReceiveStatus, Error> {
         let (db, cache) = self.db_and_cache();
         let result = block::receive(db, cache, block).await;
 
@@ -649,6 +646,23 @@ impl WriteTransaction {
         }
 
         result
+    }
+
+    #[cfg(test)]
+    pub async fn clone_root_node_into(
+        &mut self,
+        src: RootNode,
+        dst_writer_id: PublicKey,
+        write_keys: &crate::crypto::sign::Keypair,
+    ) -> Result<RootNode, Error> {
+        let hash = src.proof.hash;
+        let vv = src.proof.into_version_vector();
+        let proof = Proof::new(dst_writer_id, vv, hash, write_keys);
+
+        let (root_node, _) =
+            root_node::create(self.db(), proof, src.summary, RootNodeFilter::Any).await?;
+
+        Ok(root_node)
     }
 
     pub async fn commit(self) -> Result<(), Error> {

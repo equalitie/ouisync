@@ -218,6 +218,7 @@ async fn concurrent_write_and_read_file() {
 
             file.flush().await.unwrap();
         }
+        .instrument(tracing::info_span!("write"))
     });
 
     let read = scoped_task::spawn({
@@ -242,6 +243,7 @@ async fn concurrent_write_and_read_file() {
                 wait_for_notification(&mut rx).await;
             }
         }
+        .instrument(tracing::info_span!("read"))
     });
 
     write.await.unwrap();
@@ -741,7 +743,7 @@ async fn version_vector_deep_hierarchy() {
         let dir = dirs
             .last_mut()
             .unwrap()
-            .create_directory(format!("dir-{}", i), &VersionVector::new())
+            .create_directory(format!("dir-{}", i), rand::random(), &VersionVector::new())
             .await
             .unwrap();
         dirs.push(dir);
@@ -794,7 +796,7 @@ async fn version_vector_fork() {
     time::timeout(Duration::from_secs(5), async move {
         let mut remote_root = remote_branch.open_or_create_root().await.unwrap();
         let mut remote_parent = remote_root
-            .create_directory("parent".into(), &VersionVector::new())
+            .create_directory("parent".into(), rand::random(), &VersionVector::new())
             .await
             .unwrap();
         let mut file = create_file_in_directory(&mut remote_parent, "foo.txt", &[]).await;

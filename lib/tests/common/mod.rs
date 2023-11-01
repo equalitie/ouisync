@@ -415,6 +415,17 @@ pub(crate) async fn expect_file_content(repo: &Repository, path: &str, expected_
     expect_file_version_content(repo, path, None, expected_content).await
 }
 
+/// Wait until the file as `path` is in the local branch and has the expected content.
+#[allow(unused)]
+pub(crate) async fn expect_local_file_content(
+    repo: &Repository,
+    path: &str,
+    expected_content: &[u8],
+) {
+    let local_branch = repo.local_branch().unwrap();
+    expect_file_version_content(repo, path, Some(local_branch.id()), expected_content).await
+}
+
 #[instrument(skip(repo, expected_content))]
 pub(crate) async fn expect_file_version_content(
     repo: &Repository,

@@ -28,7 +28,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use std::{fmt, mem};
+use std::{cmp::Ordering, fmt, mem};
 use tracing::instrument;
 
 #[derive(Clone)]
@@ -47,7 +47,7 @@ impl Directory {
         locking: DirectoryLocking,
         fallback: DirectoryFallback,
     ) -> Result<Self> {
-        Self::open(branch, Locator::ROOT, None, locking, fallback).await
+        Self::open(branch, BlobId::ROOT, None, locking, fallback).await
     }
 
     /// Opens the root directory or creates it if it doesn't exists.
@@ -55,17 +55,17 @@ impl Directory {
     /// See [`Self::create_directory`] for info about the `merge` parameter.
     #[instrument(skip(branch), fields(branch_id = ?branch.id()))]
     pub(crate) async fn open_or_create_root(branch: Branch, merge: VersionVector) -> Result<Self> {
-        let locator = Locator::ROOT;
+        let blob_id = BlobId::ROOT;
 
-        let lock = branch.locker().read(*locator.blob_id()).await;
+        let lock = branch.locker().read(blob_id).await;
         let mut tx = branch.store().begin_write().await?;
         let mut changeset = Changeset::new();
 
         let dir = match Self::open_in(
-            Some(lock),
+            Some(lock.clone()),
             &mut tx,
             branch.clone(),
-            locator,
+            blob_id,
             None,
             DirectoryFallback::Disabled,
         )
@@ -92,7 +92,7 @@ impl Directory {
                 Bump::Merge(merge)
             };
 
-            let mut dir = Self::create(branch, locator, None);
+            let mut dir = Self::create(lock, branch, blob_id, None);
             dir.save(&mut tx, &mut changeset, &Content::empty()).await?;
             dir.bump(&mut tx, &mut changeset, bump).await?;
             dir.commit(tx, changeset).await?;
@@ -154,6 +154,10 @@ impl Directory {
 
     /// Creates a new subdirectory of this directory.
     ///
+    /// `blob_id` is the blob id of the directory to be created. It must be unique. The easiest way
+    /// to achieve it is to generate it randomly (it has enough bits for collisions to be
+    /// astronomically unlikely).
+    ///
     /// The version vector of the created subdirectory depends on the `merge` parameter:
     ///
     /// - if it is empty, it's `old_vv` with the local version incremented,
@@ -162,14 +166,42 @@ impl Directory {
     /// where `old_vv` is the version vector of the existing entry or `VersionVector::new()` if not
     /// such exists yet.
     #[instrument(level = "trace", skip(self))]
-    pub async fn create_directory(&mut self, name: String, merge: &VersionVector) -> Result<Self> {
+    pub(crate) async fn create_directory(
+        &mut self,
+        name: String,
+        blob_id: BlobId,
+        merge: &VersionVector,
+    ) -> Result<Self> {
+        let lock = self
+            .branch()
+            .locker()
+            .try_read(blob_id)
+            .map_err(|_| Error::EntryExists)?;
+
         let mut tx = self.branch().store().begin_write().await?;
         let mut changeset = Changeset::new();
 
         self.refresh_in(&mut tx).await?;
 
-        let blob_id = rand::random();
+        let (dir, content) = self
+            .create_directory_in(lock, &mut tx, &mut changeset, name, blob_id, merge)
+            .await?;
 
+        self.commit(tx, changeset).await?;
+        self.finalize(content);
+
+        Ok(dir)
+    }
+
+    async fn create_directory_in(
+        &mut self,
+        lock: ReadLock,
+        tx: &mut WriteTransaction,
+        changeset: &mut Changeset,
+        name: String,
+        blob_id: BlobId,
+        merge: &VersionVector,
+    ) -> Result<(Self, Content)> {
         let mut version_vector = self.content.initial_version_vector(&name);
 
         if merge.is_empty() {
@@ -181,67 +213,16 @@ impl Directory {
         let data = EntryData::directory(blob_id, version_vector);
         let parent = self.create_parent_context(name.clone());
 
-        let mut dir =
-            Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
+        let mut dir = Directory::create(lock, self.branch().clone(), blob_id, Some(parent));
         let mut content = self.content.clone();
 
         let diff = content.insert(name, data)?;
 
-        dir.save(&mut tx, &mut changeset, &Content::empty()).await?;
-        self.save(&mut tx, &mut changeset, &content).await?;
-        self.bump(&mut tx, &mut changeset, Bump::Add(diff)).await?;
-        self.commit(tx, changeset).await?;
-        self.finalize(content);
+        dir.save(tx, changeset, &Content::empty()).await?;
+        self.save(tx, changeset, &content).await?;
+        self.bump(tx, changeset, Bump::Add(diff)).await?;
 
-        Ok(dir)
-    }
-
-    /// Opens a subdirectory or creates it if it doesn't exists and merges the given version vector
-    /// to it.
-    #[instrument(skip(self))]
-    pub async fn open_or_create_directory(
-        &mut self,
-        name: &str,
-        merge: VersionVector,
-    ) -> Result<Self> {
-        let mut dir = if let Some(dir) = self.try_open_directory(name).await? {
-            dir
-        } else {
-            match self.create_directory(name.to_owned(), &merge).await {
-                Ok(dir) => return Ok(dir),
-                Err(Error::EntryExists) => {
-                    // The entry have been created in the meantime by some other task. Try to open
-                    // it again (this time it must exist).
-                    self.try_open_directory(name)
-                        .await?
-                        .expect("entry must exist")
-                }
-                Err(error) => return Err(error),
-            }
-        };
-
-        if !merge.is_empty() {
-            let mut tx = self.branch().store().begin_write().await?;
-            let mut changeset = Changeset::new();
-            let bump = Bump::Merge(merge);
-            dir.bump(&mut tx, &mut changeset, bump).await?;
-            dir.commit(tx, changeset).await?;
-        }
-
-        Ok(dir)
-    }
-
-    async fn try_open_directory(&self, name: &str) -> Result<Option<Self>> {
-        let entry = match self.lookup(name) {
-            Ok(EntryRef::Directory(entry)) => entry,
-            Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => return Ok(None),
-            Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
-            Err(error) => return Err(error),
-        };
-
-        let dir = entry.open(DirectoryFallback::Disabled).await?;
-
-        Ok(Some(dir))
+        Ok((dir, content))
     }
 
     fn create_parent_context(&self, entry_name: String) -> ParentContext {
@@ -406,62 +387,245 @@ impl Directory {
         Ok(())
     }
 
-    // Transfer this directory (but not its content) into the local branch. This effectively
-    // creates an empty directory in the loca branch at the same path as `self`. If the local
-    // directory already exists, it only updates it's version vector and otherwise does nothing.
-    // Note this implicitly forks all the ancestor directories first.
+    /// Forks this directory (but not its content) into `dst_branch`. This effectively creates an
+    /// empty directory in `dst_branch` at the same path as `self`. If the dst directory already
+    /// exists, it only updates it's version vector and possibly blob_id.
+    ///
+    /// Note this implicitly forks all the ancestor directories first.
+    #[instrument(name = "fork directory", skip_all)]
     #[async_recursion]
-    pub(crate) async fn fork(&self, local_branch: &Branch) -> Result<Directory> {
-        if local_branch.id() == self.branch().id() {
+    pub(crate) async fn fork(&self, dst_branch: &Branch) -> Result<Directory> {
+        if dst_branch.id() == self.branch().id() {
             return Ok(self.clone());
         }
 
         // Because we are transferring only the directory but not its content, we reflect that
         // by setting its version vector to what the version vector of the source directory was
-        // at the time it was initially created - that is, it's current version vector minus the
-        // version vectors of all its entries.
-
-        let (parent, initial_vv) = {
-            // Running this in a read transaction to make sure the version vector fo this directory
-            // and the version vectors of its entries are in sync.
-
-            let mut tx = self.branch().store().begin_read().await?;
-
-            let (parent, self_vv) = if let Some(parent) = &self.parent {
-                let parent_dir = parent.open_in(&mut tx, self.branch().clone()).await?;
-                let entry_name = parent.entry_name();
-                let self_vv = parent_dir.lookup(entry_name)?.version_vector().clone();
-
-                (Some((parent_dir, entry_name)), self_vv)
-            } else {
-                let self_vv = tx
-                    .load_root_node(self.branch().id(), RootNodeFilter::Any)
-                    .await?
-                    .proof
-                    .into_version_vector();
-
-                (None, self_vv)
-            };
-
-            let (_, content) = self.load(&mut tx, DirectoryFallback::Disabled).await?;
-
-            let entries_vv = content
-                .iter()
-                .map(|(_, entry)| entry.version_vector())
-                .sum();
-            let initial_vv = self_vv.saturating_sub(&entries_vv);
-
-            (parent, initial_vv)
-        };
+        // at the time it was initially created.
+        let (parent, current_vv, initial_vv) = self.prepare_fork().await?;
 
         if let Some((parent_dir, entry_name)) = parent {
-            let mut parent_dir = parent_dir.fork(local_branch).await?;
+            let mut parent_dir = parent_dir.fork(dst_branch).await?;
+            let blob_id = *self.blob_id();
+
             parent_dir
-                .open_or_create_directory(entry_name, initial_vv)
+                .fork_into(entry_name, blob_id, current_vv, initial_vv)
                 .await
         } else {
-            Self::open_or_create_root(local_branch.clone(), initial_vv).await
+            Self::open_or_create_root(dst_branch.clone(), initial_vv).await
         }
+    }
+
+    /// Prepares information needed to fork this directory.
+    ///
+    /// Returns the parent directory and entry name (unless root) and the current and initial
+    /// version vectors of this directory (initial version vector is the version vector this
+    /// directory had when it was initially created).
+    async fn prepare_fork<'a>(
+        &'a self,
+    ) -> Result<(Option<(Self, &'a str)>, VersionVector, VersionVector)> {
+        // Running this in a read transaction to make sure the version vector of this directory
+        // and the version vectors of its entries are in sync.
+        let mut tx = self.branch().store().begin_read().await?;
+
+        let (parent, current_vv) = if let Some(parent) = &self.parent {
+            let parent_dir = parent.open_in(&mut tx, self.branch().clone()).await?;
+            let entry_name = parent.entry_name();
+            let current_vv = parent_dir.lookup(entry_name)?.version_vector().clone();
+
+            (Some((parent_dir, entry_name)), current_vv)
+        } else {
+            let current_vv = tx
+                .load_root_node(self.branch().id(), RootNodeFilter::Any)
+                .await?
+                .proof
+                .into_version_vector();
+
+            (None, current_vv)
+        };
+
+        let (_, content) = self.load(&mut tx, DirectoryFallback::Disabled).await?;
+
+        let entries_vv = content
+            .iter()
+            .map(|(_, entry)| entry.version_vector())
+            .sum();
+        let initial_vv = current_vv.saturating_sub(&entries_vv);
+
+        Ok((parent, current_vv, initial_vv))
+    }
+
+    /// Forks a directory from a remote branch into the subdirectory at `name` in this directory.
+    async fn fork_into(
+        &mut self,
+        name: &str,
+        src_blob_id: BlobId,
+        src_current_vv: VersionVector,
+        src_initial_vv: VersionVector,
+    ) -> Result<Self> {
+        let new_lock = self.branch().locker().read(src_blob_id).await;
+        let (mut tx, old_lock, old_vv) = self.begin_fork(name).await?;
+        let mut changeset = Changeset::new();
+
+        let (dir, content) = if let Some(old_lock) = old_lock {
+            // Select which blob_id to use for the forked directory.
+            let new_lock = match src_current_vv.partial_cmp(&old_vv) {
+                Some(Ordering::Greater) => new_lock,
+                Some(Ordering::Less) => old_lock.clone(),
+                Some(Ordering::Equal) | None => {
+                    // Break ties by arbitrarily taking the greater on. This assures that every
+                    // replica picks the same blob_id.
+                    if new_lock.blob_id() > old_lock.blob_id() {
+                        new_lock
+                    } else {
+                        old_lock.clone()
+                    }
+                }
+            };
+
+            self.fork_update(
+                &mut tx,
+                &mut changeset,
+                name,
+                old_lock,
+                new_lock,
+                src_initial_vv,
+            )
+            .await?
+        } else {
+            self.create_directory_in(
+                new_lock,
+                &mut tx,
+                &mut changeset,
+                name.to_owned(),
+                src_blob_id,
+                &src_initial_vv,
+            )
+            .await?
+        };
+
+        self.commit(tx, changeset).await?;
+        self.finalize(content);
+
+        Ok(dir)
+    }
+
+    /// Begins the forking operation into the subdirectory at `name`.
+    /// Returns the write transaction, the read lock for the currently existing directory at `name`
+    /// (if any) and its current version vector.
+    async fn begin_fork(
+        &mut self,
+        name: &str,
+    ) -> Result<(WriteTransaction, Option<ReadLock>, VersionVector)> {
+        let mut old_blob_id = match self.lookup(name) {
+            Ok(EntryRef::Directory(entry)) => Some(*entry.blob_id()),
+            Ok(EntryRef::File(_) | EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
+            Err(error) => return Err(error),
+        };
+
+        loop {
+            let old_lock = if let Some(old_blob_id) = old_blob_id {
+                Some(self.branch().locker().read(old_blob_id).await)
+            } else {
+                None
+            };
+
+            let mut tx = self.branch().store().begin_write().await?;
+
+            self.refresh_in(&mut tx).await?;
+
+            match (self.lookup(name), old_lock) {
+                (Ok(EntryRef::Directory(entry)), Some(old_lock))
+                    if entry.blob_id() == old_lock.blob_id() =>
+                {
+                    return Ok((tx, Some(old_lock), entry.version_vector().clone()));
+                }
+                (Ok(EntryRef::Directory(entry)), _) => {
+                    old_blob_id = Some(*entry.blob_id());
+                    continue;
+                }
+                (Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound), None) => {
+                    return Ok((tx, None, VersionVector::new()))
+                }
+                (Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound), Some(_)) => {
+                    old_blob_id = None;
+                    continue;
+                }
+                (Ok(EntryRef::File(_)), _) => return Err(Error::EntryIsFile),
+                (Err(error), _) => return Err(error),
+            }
+        }
+    }
+
+    /// Forks into an existing subdirectory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the entry at `name` doesn't exist or is not a directory.
+    async fn fork_update(
+        &mut self,
+        tx: &mut WriteTransaction,
+        changeset: &mut Changeset,
+        name: &str,
+        old_lock: ReadLock,
+        new_lock: ReadLock,
+        initial_vv: VersionVector,
+    ) -> Result<(Self, Content)> {
+        let old_blob_id = *old_lock.blob_id();
+        let new_blob_id = *new_lock.blob_id();
+
+        let parent_context = self.create_parent_context(name.to_owned());
+
+        let mut dir = Self::open_in(
+            Some(old_lock),
+            tx,
+            self.branch().clone(),
+            old_blob_id,
+            Some(parent_context),
+            DirectoryFallback::Disabled,
+        )
+        .await?;
+
+        let mut self_content = self.content.clone();
+
+        let entry = match self_content.get_mut(name) {
+            Some(EntryData::Directory(entry)) => entry,
+            Some(EntryData::File(_) | EntryData::Tombstone(_)) | None => unreachable!(),
+        };
+
+        let bump = Bump::Merge(initial_vv);
+        let diff = bump.apply(&mut entry.version_vector);
+
+        // Change the blob id
+        if new_blob_id != entry.blob_id {
+            // Replace and remove the old blob.
+            //
+            // Note the removal is not strictly necessary because the old blob would be eventually
+            // removed by the garbage collector, but doing it this way improves merge performance:
+            //
+            // This way, when merging two branches, A and B, where A is happens-after B, both
+            // branches become identical (same vv, same hash) right after the merge. If we
+            // delegated the removal to the gc, they would not be immediatelly identical - because
+            // the orphaned blob would exist in one but not the other - and would only become so
+            // after the gc run. This avoids some unnecessary mesage exchanges during syncing.
+            mem::replace(
+                &mut dir.blob,
+                Blob::create(self.branch().clone(), new_blob_id),
+            )
+            .remove(changeset);
+
+            dir.lock = Some(new_lock);
+
+            let dir_content = mem::replace(&mut dir.content, Content::empty());
+            dir.save(tx, changeset, &dir_content).await?;
+
+            entry.blob_id = new_blob_id;
+        }
+
+        self.save(tx, changeset, &self_content).await?;
+        self.bump(tx, changeset, Bump::Add(diff)).await?;
+
+        Ok((dir, self_content))
     }
 
     pub(crate) async fn parent(&self) -> Result<Option<Directory>> {
@@ -480,11 +644,11 @@ impl Directory {
         lock: Option<ReadLock>,
         tx: &mut ReadTransaction,
         branch: Branch,
-        locator: Locator,
+        blob_id: BlobId,
         parent: Option<ParentContext>,
         fallback: DirectoryFallback,
     ) -> Result<Self> {
-        let (blob, content) = load(tx, branch, *locator.blob_id(), fallback).await?;
+        let (blob, content) = load(tx, branch, blob_id, fallback).await?;
 
         Ok(Self {
             blob,
@@ -506,27 +670,27 @@ impl Directory {
 
     async fn open(
         branch: Branch,
-        locator: Locator,
+        blob_id: BlobId,
         parent: Option<ParentContext>,
         locking: DirectoryLocking,
         fallback: DirectoryFallback,
     ) -> Result<Self> {
         let lock = match locking {
-            DirectoryLocking::Enabled => Some(branch.locker().read(*locator.blob_id()).await),
+            DirectoryLocking::Enabled => Some(branch.locker().read(blob_id).await),
             DirectoryLocking::Disabled => None,
         };
 
         let mut tx = branch.store().begin_read().await?;
-        Self::open_in(lock, &mut tx, branch, locator, parent, fallback).await
+        Self::open_in(lock, &mut tx, branch, blob_id, parent, fallback).await
     }
 
-    fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
-        let lock = branch
-            .locker()
-            .try_read(*locator.blob_id())
-            .ok()
-            .expect("blob_id collision");
-        let blob = Blob::create(branch, *locator.blob_id());
+    fn create(
+        lock: ReadLock,
+        branch: Branch,
+        blob_id: BlobId,
+        parent: Option<ParentContext>,
+    ) -> Self {
+        let blob = Blob::create(branch, blob_id);
 
         Directory {
             blob,
@@ -583,7 +747,7 @@ impl Directory {
                     let parent_context = self.create_parent_context(name.into());
                     let dir = Directory::open(
                         self.blob.branch().clone(),
-                        Locator::head(data.blob_id),
+                        data.blob_id,
                         Some(parent_context),
                         DirectoryLocking::Disabled,
                         DirectoryFallback::Disabled,

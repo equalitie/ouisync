@@ -8,7 +8,7 @@ use crate::{
     branch::Branch,
     directory::{content::EntryExists, Directory},
     error::Result,
-    protocol::{Bump, Locator},
+    protocol::Bump,
     store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
@@ -203,7 +203,7 @@ impl ParentContext {
             self.directory_lock.as_ref().cloned(),
             tx,
             branch,
-            Locator::head(self.directory_id),
+            self.directory_id,
             self.parent.as_deref().cloned(),
             DirectoryFallback::Disabled,
         )

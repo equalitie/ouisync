@@ -77,4 +77,20 @@ impl BlockIds {
             Err(error) => Err(error.into()),
         }
     }
+
+    #[cfg(test)]
+    pub async fn try_collect<B>(&mut self) -> Result<B>
+    where
+        B: Default + Extend<BlockId>,
+    {
+        use std::iter;
+
+        let mut collection = B::default();
+
+        while let Some(block_id) = self.try_next().await? {
+            collection.extend(iter::once(block_id));
+        }
+
+        Ok(collection)
+    }
 }

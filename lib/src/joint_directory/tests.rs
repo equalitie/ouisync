@@ -2,10 +2,11 @@ use super::*;
 use crate::{
     access_control::WriteSecrets,
     branch::{Branch, BranchShared},
-    crypto::sign::PublicKey,
+    crypto::{sign::PublicKey, Hash},
     db,
     directory::{DirectoryFallback, DirectoryLocking},
     event::EventSender,
+    protocol::RootNodeFilter,
     store::Store,
     test_utils,
     version_vector::VersionVector,
@@ -159,13 +160,13 @@ async fn conflict_directories() {
 
     let mut root0 = branch0.open_or_create_root().await.unwrap();
     root0
-        .create_directory("dir".to_owned(), &VersionVector::new())
+        .create_directory("dir".to_owned(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
     let mut root1 = branch1.open_or_create_root().await.unwrap();
     root1
-        .create_directory("dir".to_owned(), &VersionVector::new())
+        .create_directory("dir".to_owned(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -190,7 +191,7 @@ async fn conflict_file_and_single_version_directory() {
 
     let mut root1 = branch1.open_or_create_root().await.unwrap();
     root1
-        .create_directory("config".to_owned(), &VersionVector::new())
+        .create_directory("config".to_owned(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -250,13 +251,13 @@ async fn conflict_file_and_multi_version_directory() {
 
     let mut root1 = branch1.open_or_create_root().await.unwrap();
     root1
-        .create_directory("config".to_owned(), &VersionVector::new())
+        .create_directory("config".to_owned(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
     let mut root2 = branch2.open_or_create_root().await.unwrap();
     root2
-        .create_directory("config".to_owned(), &VersionVector::new())
+        .create_directory("config".to_owned(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -342,14 +343,14 @@ async fn cd_into_concurrent_directory() {
     let mut root0 = branch0.open_or_create_root().await.unwrap();
 
     let mut dir0 = root0
-        .create_directory("pics".to_owned(), &VersionVector::new())
+        .create_directory("pics".to_owned(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
     create_file(&mut dir0, "dog.jpg", &[]).await;
 
     let mut root1 = branch1.open_or_create_root().await.unwrap();
     let mut dir1 = root1
-        .create_directory("pics".to_owned(), &VersionVector::new())
+        .create_directory("pics".to_owned(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
     create_file(&mut dir1, "cat.jpg", &[]).await;
@@ -509,50 +510,43 @@ mod attempt_to_merge_concurrent_file {
         test_utils::init_log();
 
         let (_base_dir, [local_branch, remote_branch]) = setup().await;
-
-        let local_dir = local_branch.open_or_create_root().await.unwrap();
-        let remote_dir = remote_branch.open_or_create_root().await.unwrap();
-
-        case(local_dir, remote_dir).await;
+        case(local_branch, remote_branch, "/").await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn in_subdirectory() {
+        test_utils::init_log();
+
         let (_base_dir, [local_branch, remote_branch]) = setup().await;
-
-        let dir_name = "dir";
-        let local_dir = local_branch
-            .open_or_create_root()
-            .await
-            .unwrap()
-            .create_directory(dir_name.into(), &VersionVector::new())
-            .await
-            .unwrap();
-        let remote_dir = remote_branch
-            .open_or_create_root()
-            .await
-            .unwrap()
-            .create_directory(dir_name.into(), &VersionVector::new())
-            .await
-            .unwrap();
-
-        case(local_dir, remote_dir).await;
+        case(local_branch, remote_branch, "dir").await;
     }
 
-    async fn case(mut local_dir: Directory, mut remote_dir: Directory) {
-        let local_branch = local_dir.branch().clone();
-        let remote_branch = remote_dir.branch().clone();
-
+    async fn case(local_branch: Branch, remote_branch: Branch, dir_path: &str) {
+        let mut remote_dir = remote_branch
+            .ensure_directory_exists(dir_path.into())
+            .await
+            .unwrap();
         create_file(&mut remote_dir, "cat.jpg", b"v0").await;
+        remote_dir.refresh().await.unwrap();
 
-        merge(&[&local_branch, &remote_branch]).await.unwrap();
+        merge(&[&local_branch, &remote_branch])
+            .instrument(tracing::info_span!("merge"))
+            .await
+            .unwrap();
 
-        local_dir.refresh().await.unwrap();
+        let mut local_dir = local_branch
+            .ensure_directory_exists(dir_path.into())
+            .await
+            .unwrap();
+
         remote_dir.refresh().await.unwrap();
 
         // Modify the file by both branches concurrently
         update_file(&local_dir, "cat.jpg", b"v1", &local_branch).await;
         update_file(&remote_dir, "cat.jpg", b"v2", &remote_branch).await;
+
+        local_dir.refresh().await.unwrap();
+        remote_dir.refresh().await.unwrap();
 
         assert_matches!(
             merge(&[&local_branch, &remote_branch]).await,
@@ -580,8 +574,6 @@ mod merge_is_commutative {
     use super::*;
     use crate::test_utils;
 
-    // TODO: check also hashes are equal
-
     macro_rules! case {
         ($(#[$attr:meta])? $name:ident, $content_a:expr, $content_b:expr $(,)?) => {
             $(#[$attr])?
@@ -596,27 +588,7 @@ mod merge_is_commutative {
     async fn run(content_a: &[&str], content_b: &[&str]) -> (Dump, Dump) {
         test_utils::init_log();
 
-        // Use the same rng for both sub-cases to generate the same branch ids.
-        let rng0 = StdRng::from_entropy();
-        let rng1 = rng0.clone();
-
-        let d0 = run_one(rng0, content_a, content_b, [0, 1])
-            .instrument(tracing::info_span!("a->b"))
-            .await;
-        let d1 = run_one(rng1, content_a, content_b, [1, 0])
-            .instrument(tracing::info_span!("b->a"))
-            .await;
-
-        (d0, d1)
-    }
-
-    async fn run_one(
-        rng: StdRng,
-        content_a: &[&str],
-        content_b: &[&str],
-        order: [usize; 2],
-    ) -> Dump {
-        let (_base_dir, [a, b]) = setup_with_rng(rng).await;
+        let (_base_dir, [a, b]) = setup().await;
 
         async {
             generate(&a, content_a).await.unwrap();
@@ -625,15 +597,40 @@ mod merge_is_commutative {
         .instrument(tracing::info_span!("arrange"))
         .await;
 
-        let branch_0 = [&a, &b][order[0]];
-        let branch_1 = [&a, &b][order[1]];
+        // Run the test on staging branches (cloned from the original branches and wiped out before
+        // each subcase) to prevent the subcases from affecting each other.
+        let staging_id_a = PublicKey::random();
+        let staging_id_b = PublicKey::random();
 
-        merge(&[branch_1, branch_0])
-            .instrument(tracing::info_span!("act"))
-            .await
-            .unwrap();
+        // Subcase 0: merge(a, b)
+        let d0 = async {
+            let staging_a = a.clone_into(staging_id_a).await.unwrap();
+            let staging_b = b.clone_into(staging_id_b).await.unwrap();
 
-        dump_branch(branch_1).await.unwrap()
+            merge(&[&staging_b, &staging_a]).await.unwrap();
+
+            dump_branch(&staging_b).await.unwrap()
+        }
+        .instrument(tracing::info_span!("act: (a, b)"))
+        .await;
+
+        // Subcase 1: merge(b, a)
+        let d1 = async {
+            remove_branches(a.store(), &[staging_id_a, staging_id_b])
+                .await
+                .unwrap();
+
+            let staging_a = a.clone_into(staging_id_a).await.unwrap();
+            let staging_b = b.clone_into(staging_id_b).await.unwrap();
+
+            merge(&[&staging_a, &staging_b]).await.unwrap();
+
+            dump_branch(&staging_a).await.unwrap()
+        }
+        .instrument(tracing::info_span!("act: (b, a)"))
+        .await;
+
+        (d0, d1)
     }
 
     case!(empty_and_empty, &[], &[]);
@@ -655,8 +652,6 @@ mod merge_is_commutative {
 mod merge_is_associative {
     use super::*;
 
-    // TODO: check also hashes are equal
-
     macro_rules! case {
         ($(#[$attr:meta])? $name:ident, $content_a:expr, $content_b:expr, $content_c:expr $(,)?) => {
             $(#[$attr])?
@@ -671,28 +666,7 @@ mod merge_is_associative {
     async fn run(content_a: &[&str], content_b: &[&str], content_c: &[&str]) -> (Dump, Dump) {
         test_utils::init_log();
 
-        // Use the same rng for both sub-cases to generate the same branch ids.
-        let rng0 = StdRng::from_entropy();
-        let rng1 = rng0.clone();
-
-        let d0 = run_one(rng0, content_a, content_b, content_c, [(0, 1), (1, 2)])
-            .instrument(tracing::info_span!("((a, b), c)"))
-            .await;
-        let d1 = run_one(rng1, content_a, content_b, content_c, [(1, 2), (0, 2)])
-            .instrument(tracing::info_span!("(a, (b, c))"))
-            .await;
-
-        (d0, d1)
-    }
-
-    async fn run_one(
-        rng: StdRng,
-        content_a: &[&str],
-        content_b: &[&str],
-        content_c: &[&str],
-        order: [(usize, usize); 2],
-    ) -> Dump {
-        let (_base_dir, [a, b, c]) = setup_with_rng(rng).await;
+        let (_base_dir, [a, b, c]) = setup().await;
 
         async {
             generate(&a, content_a).await.unwrap();
@@ -702,30 +676,45 @@ mod merge_is_associative {
         .instrument(tracing::info_span!("arange"))
         .await;
 
-        async {
-            let letters = ["a", "b", "c"];
-            let mut out = Dump::new();
+        // Run the test on staging branches (cloned from the original branches and wiped out before
+        // each subcase) to prevent the subcases from affecting each other.
+        let staging_id_a = PublicKey::random();
+        let staging_id_b = PublicKey::random();
+        let staging_id_c = PublicKey::random();
 
-            for (src, dst) in order {
-                let branch_0 = [&a, &b, &c][src];
-                let branch_1 = [&a, &b, &c][dst];
+        // Subcase 0: merge(merge(a, b), c)
+        let d0 = async {
+            let staging_a = a.clone_into(staging_id_a).await.unwrap();
+            let staging_b = b.clone_into(staging_id_b).await.unwrap();
+            let staging_c = c.clone_into(staging_id_c).await.unwrap();
 
-                merge(&[branch_1, branch_0])
-                    .instrument(tracing::info_span!(
-                        "merge",
-                        src = letters[src],
-                        dst = letters[dst]
-                    ))
-                    .await
-                    .unwrap();
+            merge(&[&staging_b, &staging_a]).await.unwrap();
+            merge(&[&staging_c, &staging_b]).await.unwrap();
 
-                out = dump_branch(branch_1).await.unwrap();
-            }
-
-            out
+            dump_branch(&staging_a).await.unwrap()
         }
-        .instrument(tracing::info_span!("act"))
-        .await
+        .instrument(tracing::info_span!("act: ((a, b), c)"))
+        .await;
+
+        // Subcase 1: merge(a, merge(b, c))
+        let d1 = async {
+            remove_branches(a.store(), &[staging_id_a, staging_id_b, staging_id_c])
+                .await
+                .unwrap();
+
+            let staging_a = a.clone_into(staging_id_a).await.unwrap();
+            let staging_b = b.clone_into(staging_id_b).await.unwrap();
+            let staging_c = c.clone_into(staging_id_c).await.unwrap();
+
+            merge(&[&staging_c, &staging_b]).await.unwrap();
+            merge(&[&staging_c, &staging_a]).await.unwrap();
+
+            dump_branch(&staging_a).await.unwrap()
+        }
+        .instrument(tracing::info_span!("act: (a, (b, c))"))
+        .await;
+
+        (d0, d1)
     }
 
     case!(empty_and_empty_and_empty, &[], &[], &[]);
@@ -762,8 +751,6 @@ mod merge_is_associative {
 
 mod merge_is_idempotent {
     use super::*;
-
-    // TODO: check also hashes are equal
 
     macro_rules! case {
         ($name:ident, $content_a:expr, $content_b:expr) => {
@@ -979,7 +966,7 @@ async fn merge_concurrent_directories() {
 
     let mut local_root = branch0.open_or_create_root().await.unwrap();
     let mut local_dir = local_root
-        .create_directory("dir".into(), &VersionVector::new())
+        .create_directory("dir".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
     create_file(&mut local_dir, "dog.jpg", &[]).await;
@@ -989,7 +976,7 @@ async fn merge_concurrent_directories() {
 
     let mut remote_root = branch1.open_or_create_root().await.unwrap();
     let mut remote_dir = remote_root
-        .create_directory("dir".into(), &VersionVector::new())
+        .create_directory("dir".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
     create_file(&mut remote_dir, "cat.jpg", &[]).await;
@@ -1086,7 +1073,7 @@ async fn merge_moved_file() {
 
     // Create a new directory in the remote branch
     let mut dir = remote_root
-        .create_directory(dir_name.to_owned(), &VersionVector::new())
+        .create_directory(dir_name.to_owned(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -1142,27 +1129,27 @@ async fn remove_non_empty_subdirectory() {
 
     let mut local_root = branch0.open_or_create_root().await.unwrap();
     let mut local_dir = local_root
-        .create_directory("dir0".into(), &VersionVector::new())
+        .create_directory("dir0".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
     create_file(&mut local_dir, "foo.txt", &[]).await;
     drop(local_dir);
 
     local_root
-        .create_directory("dir1".into(), &VersionVector::new())
+        .create_directory("dir1".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
     let mut remote_root = branch1.open_or_create_root().await.unwrap();
     let mut remote_dir = remote_root
-        .create_directory("dir0".into(), &VersionVector::new())
+        .create_directory("dir0".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
     create_file(&mut remote_dir, "bar.txt", &[]).await;
     drop(remote_dir);
 
     remote_root
-        .create_directory("dir2".into(), &VersionVector::new())
+        .create_directory("dir2".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -1307,21 +1294,47 @@ async fn merge(branches: &[&Branch]) -> Result<()> {
     Ok(())
 }
 
-type Dump = Vec<(Utf8PathBuf, VersionVector)>;
+async fn remove_branches(store: &Store, ids: &[PublicKey]) -> Result<()> {
+    let mut tx = store.begin_write().await?;
+
+    for id in ids {
+        match tx.load_root_node(id, RootNodeFilter::Any).await {
+            Ok(node) => tx.remove_branch(&node).await?,
+            Err(store::Error::BranchNotFound) => (),
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+#[derive(Eq, PartialEq, Debug)]
+struct Dump {
+    hash: Hash,
+    entries: Vec<(Utf8PathBuf, VersionVector)>,
+}
 
 async fn dump_branch(branch: &Branch) -> Result<Dump> {
     let root = branch.open_or_create_root().await?;
     let path = Utf8Path::new("/");
 
-    let mut out = vec![(path.to_owned(), branch.version_vector().await?)];
+    let mut entries = vec![(path.to_owned(), branch.version_vector().await?)];
 
-    dump_directory_into(&root, path, &mut out).await?;
+    dump_directory_into(&root, path, &mut entries).await?;
 
-    Ok(out)
+    let hash = branch.proof().await?.hash;
+
+    Ok(Dump { hash, entries })
 }
 
 #[async_recursion]
-async fn dump_directory_into(dir: &Directory, path: &Utf8Path, out: &mut Dump) -> Result<()> {
+async fn dump_directory_into(
+    dir: &Directory,
+    path: &Utf8Path,
+    out: &mut Vec<(Utf8PathBuf, VersionVector)>,
+) -> Result<()> {
     for entry in dir.entries() {
         let path = path.join(entry.name());
         out.push((path.clone(), entry.version_vector().clone()));

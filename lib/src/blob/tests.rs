@@ -735,6 +735,150 @@ async fn block_ids_test() {
     store.close().await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn block_ids_of_identical_blobs_in_the_same_branch() {
+    let (mut rng, _base_dir, store, [branch]) = setup(0).await;
+
+    let blob_id_0: BlobId = rng.gen();
+    let mut blob_0 = Blob::create(branch.clone(), blob_id_0);
+
+    let blob_id_1: BlobId = rng.gen();
+    let mut blob_1 = Blob::create(branch.clone(), blob_id_1);
+
+    let content: Vec<_> = rng
+        .sample_iter(Standard)
+        .take(BLOCK_SIZE * 2 - HEADER_SIZE)
+        .collect();
+
+    for blob in [&mut blob_0, &mut blob_1] {
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
+        blob.write_all(&mut tx, &mut changeset, &content)
+            .await
+            .unwrap();
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        changeset
+            .apply(
+                &mut tx,
+                blob.branch().id(),
+                blob.branch().keys().write().unwrap(),
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    let block_ids_0: Vec<_> = BlockIds::open(branch.clone(), blob_id_0)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    let block_ids_1: Vec<_> = BlockIds::open(branch, blob_id_1)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+
+    for (block_id_0, block_id_1) in block_ids_0.into_iter().zip(block_ids_1) {
+        assert_ne!(block_id_0, block_id_1);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn block_ids_of_identical_blobs_in_different_branches() {
+    let (mut rng, _base_dir, store, [branch_0, branch_1]) = setup(0).await;
+
+    let blob_id: BlobId = rng.gen();
+    let mut blob_0 = Blob::create(branch_0.clone(), blob_id);
+    let mut blob_1 = Blob::create(branch_1.clone(), blob_id);
+
+    let content: Vec<_> = rng
+        .sample_iter(Standard)
+        .take(BLOCK_SIZE * 2 - HEADER_SIZE)
+        .collect();
+
+    for blob in [&mut blob_0, &mut blob_1] {
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
+        blob.write_all(&mut tx, &mut changeset, &content)
+            .await
+            .unwrap();
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        changeset
+            .apply(
+                &mut tx,
+                blob.branch().id(),
+                blob.branch().keys().write().unwrap(),
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    let block_ids_0: Vec<_> = BlockIds::open(branch_0, blob_id)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    let block_ids_1: Vec<_> = BlockIds::open(branch_1, blob_id)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+
+    assert_eq!(block_ids_0, block_ids_1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn block_ids_of_identical_blocks_in_the_same_blob() {
+    let (mut rng, _base_dir, store, [branch]) = setup(0).await;
+
+    let blob_id: BlobId = rng.gen();
+    let mut blob = Blob::create(branch.clone(), blob_id);
+
+    let content_block_0: Vec<_> = (&mut rng)
+        .sample_iter(Standard)
+        .take(BLOCK_SIZE - HEADER_SIZE)
+        .collect();
+    let content_block_1: Vec<_> = (&mut rng).sample_iter(Standard).take(BLOCK_SIZE).collect();
+
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
+    blob.write_all(&mut tx, &mut changeset, &content_block_0)
+        .await
+        .unwrap();
+    blob.write_all(&mut tx, &mut changeset, &content_block_1)
+        .await
+        .unwrap();
+    blob.write_all(&mut tx, &mut changeset, &content_block_1)
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(
+            &mut tx,
+            blob.branch().id(),
+            blob.branch().keys().write().unwrap(),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let block_ids: Vec<_> = BlockIds::open(branch, blob_id)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+
+    assert_eq!(block_ids.len(), 3);
+    assert_ne!(block_ids[1], block_ids[2]);
+}
+
 async fn setup<const N: usize>(rng_seed: u64) -> (StdRng, TempDir, Store, [Branch; N]) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let keys: AccessKeys = WriteSecrets::generate(&mut rng).into();

@@ -12,23 +12,21 @@ use std::{
 };
 
 const REPO_NAME: &str = "repo";
-const REPO_SHARE_TOKEN: &str =
+const REPO_SHARE_TOKEN_W: &str =
     "https://ouisync.net/r#AwIgzc1v57theh0Vfc7tEsu_KLcoYwXvHBTJKUK6_XcOORM";
+const REPO_SHARE_TOKEN_R: &str = "https://ouisync.net/r#AwEgH4o1Hl--wBhRXosR5I0fjkRZVsfCgnrnpRmzUSzDszogd31Fu6RF3hwgReJlsTimBMvPaJdPNc2rd23INs3goBk";
 
 fn main() -> Result<()> {
     let options = Options::parse();
 
     build()?;
 
-    for index in 0..options.count {
-        let name = make_name(index);
-        let working_directory = options.working_directory.clone();
+    for index in 0..options.writer_count {
+        spawn(index, Mode::Writer, &options.working_directory)
+    }
 
-        thread::spawn(move || {
-            if let Err(error) = Replica::new(name.clone(), working_directory).run() {
-                eprintln!("[{}] {}", name, error);
-            }
-        });
+    for index in 0..options.reader_count {
+        spawn(index, Mode::Reader, &options.working_directory)
     }
 
     let (tx, rx) = mpsc::sync_channel(0);
@@ -38,6 +36,17 @@ fn main() -> Result<()> {
     rx.recv().ok();
 
     Ok(())
+}
+
+fn spawn(index: u64, mode: Mode, working_directory: &Path) {
+    let name = make_name(index, mode);
+    let working_directory = working_directory.to_owned();
+
+    thread::spawn(move || {
+        if let Err(error) = Replica::new(name.clone(), mode, working_directory).run() {
+            eprintln!("[{}] {}", name, error);
+        }
+    });
 }
 
 /// Utility to run swarm of ouisync replicas on the local machine, for testing.
@@ -50,19 +59,29 @@ fn main() -> Result<()> {
 /// identifier of the replica that produced it.
 #[derive(Debug, Parser)]
 struct Options {
-    /// Number of replicas to spawn
+    /// Number of writer replicas to spawn
     #[arg(
-        short = 'c',
+        short,
         long,
-        value_parser = value_parser!(u64).range(1..),
-        default_value_t = 1,
+        value_parser = value_parser!(u64).range(0..),
+        default_value_t = 0,
         value_name = "NUMBER",
     )]
-    count: u64,
+    writer_count: u64,
+
+    /// Number of reader replicas to spawn
+    #[arg(
+        short,
+        long,
+        value_parser = value_parser!(u64).range(0..),
+        default_value_t = 0,
+        value_name = "NUMBER",
+    )]
+    reader_count: u64,
 
     /// Working directory. All files (config, repo databases, sockets) of all replicas are placed
     /// here. Configs and databases are wiped out before start.
-    #[arg(short = 'w', long)]
+    #[arg(short = 'd', long)]
     working_directory: PathBuf,
 }
 
@@ -83,12 +102,13 @@ fn build() -> Result<()> {
 
 struct Replica {
     name: String,
+    mode: Mode,
     working_directory: PathBuf,
     socket: PathBuf,
 }
 
 impl Replica {
-    fn new(name: String, working_directory: PathBuf) -> Self {
+    fn new(name: String, mode: Mode, working_directory: PathBuf) -> Self {
         let socket = working_directory
             .join("socks")
             .join(&name)
@@ -96,6 +116,7 @@ impl Replica {
 
         Self {
             name,
+            mode,
             working_directory,
             socket,
         }
@@ -145,7 +166,10 @@ impl Replica {
             self.client()
                 .arg("create")
                 .arg("--share-token")
-                .arg(REPO_SHARE_TOKEN)
+                .arg(match self.mode {
+                    Mode::Writer => REPO_SHARE_TOKEN_W,
+                    Mode::Reader => REPO_SHARE_TOKEN_R,
+                })
                 .arg("--name")
                 .arg(REPO_NAME)
                 .run()?;
@@ -224,8 +248,14 @@ impl Client {
     }
 }
 
-fn make_name(index: u64) -> String {
-    format!("{index}")
+fn make_name(index: u64, mode: Mode) -> String {
+    format!(
+        "{}{index}",
+        match mode {
+            Mode::Writer => "w",
+            Mode::Reader => "r",
+        }
+    )
 }
 
 fn remove_dir_all_if_exists(path: impl AsRef<Path>) -> io::Result<()> {
@@ -234,4 +264,10 @@ fn remove_dir_all_if_exists(path: impl AsRef<Path>) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+#[derive(Copy, Clone)]
+enum Mode {
+    Writer,
+    Reader,
 }

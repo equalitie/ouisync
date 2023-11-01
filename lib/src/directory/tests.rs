@@ -193,7 +193,7 @@ async fn move_file_within_branch() {
     // Create a directory with a single file.
     let mut root_dir = branch.open_or_create_root().await.unwrap();
     let mut aux_dir = root_dir
-        .create_directory("aux".into(), &VersionVector::new())
+        .create_directory("aux".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -297,7 +297,7 @@ async fn move_non_empty_directory() {
     // Create a directory with a single file.
     let mut root_dir = branch.open_or_create_root().await.unwrap();
     let mut dir = root_dir
-        .create_directory(dir_name.into(), &VersionVector::new())
+        .create_directory(dir_name.into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -310,7 +310,7 @@ async fn move_non_empty_directory() {
     drop(dir);
 
     let mut dst_dir = root_dir
-        .create_directory(dst_dir_name.into(), &VersionVector::new())
+        .create_directory(dst_dir_name.into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -365,7 +365,7 @@ async fn remove_subdirectory() {
     // Create a directory with a single subdirectory.
     let mut parent_dir = branch.open_or_create_root().await.unwrap();
     let dir = parent_dir
-        .create_directory(name.into(), &VersionVector::new())
+        .create_directory(name.into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
     let dir_vv = dir.version_vector().await.unwrap();
@@ -400,7 +400,7 @@ async fn fork_sanity_check() {
     // Create a nested directory by branch 0
     let mut root0 = branch0.open_or_create_root().await.unwrap();
     let dir0 = root0
-        .create_directory("dir".into(), &VersionVector::new())
+        .create_directory("dir".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
@@ -411,6 +411,7 @@ async fn fork_sanity_check() {
         .await
         .unwrap();
     assert_eq!(dir1.branch().id(), branch1.id());
+    assert_eq!(dir1.blob_id(), dir0.blob_id());
 
     // Verify the root dir got forked as well
     let root1 = branch1
@@ -458,30 +459,27 @@ async fn fork_sanity_check() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn fork_over_tombstone() {
-    let (_base_dir, branches) = setup_multiple::<2>().await;
+    let (_base_dir, [branch0, branch1]) = setup_multiple().await;
 
     // Create a directory in branch 0 and delete it.
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
     root0
-        .create_directory("dir".into(), &VersionVector::new())
+        .create_directory("dir".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
     let vv = root0.lookup("dir").unwrap().version_vector().clone();
-    root0
-        .remove_entry("dir", branches[0].id(), vv)
-        .await
-        .unwrap();
+    root0.remove_entry("dir", branch0.id(), vv).await.unwrap();
 
     // Create a directory with the same name in branch 1.
-    let mut root1 = branches[1].open_or_create_root().await.unwrap();
+    let mut root1 = branch1.open_or_create_root().await.unwrap();
     root1
-        .create_directory("dir".into(), &VersionVector::new())
+        .create_directory("dir".into(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
 
     // Open it by branch 0 and fork it.
-    let root1_on_0 = branches[1]
+    let root1_on_0 = branch1
         .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap();
@@ -494,11 +492,41 @@ async fn fork_over_tombstone() {
         .await
         .unwrap();
 
-    dir1.fork(&branches[0]).await.unwrap();
+    dir1.fork(&branch0).await.unwrap();
 
     // Check the forked dir now exists in branch 0.
     root0.refresh().await.unwrap();
     assert_matches!(root0.lookup("dir"), Ok(EntryRef::Directory(_)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fork_over_existing_directory() {
+    let (_base_dir, [branch0, branch1]) = setup_multiple().await;
+
+    let name = "dir";
+
+    // Create the directories with the same name but different blob id in each branch.
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
+    let dir0 = root0
+        .create_directory(name.into(), rand::random(), &VersionVector::new())
+        .await
+        .unwrap();
+
+    let mut root1 = branch1.open_or_create_root().await.unwrap();
+    let _dir1 = root1
+        .create_directory(name.into(), rand::random(), &VersionVector::new())
+        .await
+        .unwrap();
+
+    // Fork back and forth. Afterwards both dirs should have the same blob id and vv.
+    let dir1 = dir0.fork(&branch1).await.unwrap();
+    let dir0 = dir1.fork(&branch0).await.unwrap();
+
+    assert_eq!(dir0.blob_id(), dir1.blob_id());
+    assert_eq!(
+        dir0.version_vector().await.unwrap(),
+        dir1.version_vector().await.unwrap()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -510,7 +538,7 @@ async fn modify_directory_concurrently() {
     // the file also exists in the other after refresh.
 
     let mut dir0 = root
-        .create_directory("dir".to_owned(), &VersionVector::new())
+        .create_directory("dir".to_owned(), rand::random(), &VersionVector::new())
         .await
         .unwrap();
     let mut dir1 = root

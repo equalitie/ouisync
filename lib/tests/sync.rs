@@ -410,10 +410,8 @@ fn sync_during_file_write() {
             let (network, repo, _reg) = actor::setup().await;
             network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
-            let id_bob = *repo.local_branch().unwrap().id();
-
             // Wait until the file gets merged
-            common::expect_file_version_content(&repo, "foo.txt", Some(&id_bob), &[]).await;
+            common::expect_local_file_content(&repo, "foo.txt", &[]).await;
             tx.send(()).await.unwrap();
 
             // Write a file. Excluding the unflushed changes by Alice, this makes Bob's branch newer
@@ -572,11 +570,8 @@ fn recreate_local_branch() {
         let (network, repo, _reg) = actor::setup().await;
         network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
-        let id_b = *repo.local_branch().unwrap().id();
-
         // 5. Sync with Alice
-        common::expect_file_version_content(&repo, "foo.txt", Some(&id_b), b"hello from Alice\n")
-            .await;
+        common::expect_local_file_content(&repo, "foo.txt", b"hello from Alice\n").await;
 
         // 6. Modify the repo. This makes Bob's branch newer than Alice's
         let mut file = repo.open_file("foo.txt").await.unwrap();
@@ -623,10 +618,7 @@ fn transfer_directory_with_subdirectory() {
     env.actor("writer", async move {
         let (_network, repo, _reg) = actor::setup().await;
 
-        let mut dir = repo.create_directory("food").await.unwrap();
-        dir.create_directory("mediterranean".into(), &VersionVector::new())
-            .await
-            .unwrap();
+        repo.create_directory("food/mediterranean").await.unwrap();
 
         rx.recv().await;
     });
