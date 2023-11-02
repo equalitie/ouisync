@@ -17,7 +17,7 @@ built as a standalone binary or as a Docker image.
 
 ## Building (docker)
 
-See the instructions in `docker/README.md`
+See the instructions in [`docker/README.md`](https://github.com/equalitie/ouisync/blob/master/docker/README.md).
 
 ## Usage
 
