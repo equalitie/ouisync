@@ -212,7 +212,7 @@ pub(crate) enum Request {
     },
     /// Get or set block expiration
     BlockExpiration {
-        /// Name of the repository to get/set the quota for
+        /// Name of the repository to get/set the block expiration for
         #[arg(
             short,
             long,
@@ -221,7 +221,11 @@ pub(crate) enum Request {
         )]
         name: Option<String>,
 
-        /// Remove the quota
+        /// Get/set the default block expiration
+        #[arg(short, long)]
+        default: bool,
+
+        /// Remove the block expiration
         #[arg(short, long, conflicts_with = "value")]
         remove: bool,
 

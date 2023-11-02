@@ -363,6 +363,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
             }
             Request::BlockExpiration {
                 name,
+                default: _,
                 remove,
                 value,
             } => {
