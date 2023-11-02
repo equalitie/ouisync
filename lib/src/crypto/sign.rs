@@ -281,3 +281,37 @@ impl fmt::Debug for Signature {
 }
 
 derive_sqlx_traits_for_byte_array_wrapper!(Signature);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use insta::assert_snapshot;
+    use rand::{distributions::Standard, rngs::StdRng, SeedableRng};
+
+    // This test asserts that signatures from the same keys and input are identical between
+    // different versions.
+    #[test]
+    fn compatibility() {
+        let mut rng = StdRng::seed_from_u64(0);
+        let keypair = Keypair::generate(&mut rng);
+
+        assert_snapshot!(
+            dump_signature(&keypair.sign(b"")),
+            @"51ad17bc6bfbeeddd86c2a328d7a9b37197453244f4470a446ac9516acb4f243add7f93a5a6ba44bd21b9ed45c830dbbe28e2c40f7819d4c42c45b844258140a"
+        );
+
+        assert_snapshot!(
+            dump_signature(&keypair.sign(b"hello world")),
+            @"bcbd9b3aee0031f9616ed873106f2a0a136572fb5182c71e8d56c1308098c7c687367608e99bb64ace8de09544e8d87dc46e0cdaa7d188ee78bfbfb7d754a703"
+        );
+
+        assert_snapshot!(
+            dump_signature(&keypair.sign(&rng.sample_iter(Standard).take(32).collect::<Vec<_>>())),
+            @"3230b7f98529273c71f8af92b1581d290bf424fd7bd5015399c6213cbc461ca79ff932a7fcbb5e19d2ef6efa8ed9b833b6d17431793facf1b810c3b579570d0d"
+        );
+    }
+
+    fn dump_signature(signature: &Signature) -> String {
+        hex::encode(signature.as_ref())
+    }
+}
