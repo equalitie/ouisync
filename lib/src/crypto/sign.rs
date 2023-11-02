@@ -2,69 +2,78 @@ use crate::{
     crypto::{Digest, Hashable},
     format,
 };
-use ed25519_dalek as ext;
-use ed25519_dalek::Verifier;
+use ed25519_dalek::{self as ext, Signer, Verifier};
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
+use sqlx::{
+    sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
+    Sqlite,
+};
 use std::{
     cmp::Ordering,
     fmt,
     hash::{Hash as StdHash, Hasher},
     str::FromStr,
 };
-use zeroize::Zeroize;
-
-#[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
-#[repr(transparent)]
-pub struct PublicKey(ext::PublicKey);
 
 #[derive(Serialize, Deserialize)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct SecretKey(ext::SecretKey);
 
-pub struct Keypair {
-    pub secret: SecretKey,
-    pub public: PublicKey,
-}
-
-#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Signature(ext::Signature);
-
-pub type SignatureError = ext::SignatureError;
+#[serde(transparent)]
+pub struct Keypair(ext::SigningKey);
 
 impl Keypair {
-    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
-        let secret = SecretKey::generate(rng);
-        let public = PublicKey::from(&secret);
+    pub const SECRET_KEY_SIZE: usize = ext::SECRET_KEY_LENGTH;
 
-        Self { secret, public }
+    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+        Self(ext::SigningKey::generate(rng))
     }
 
     pub fn random() -> Self {
         Self::generate(&mut OsRng)
     }
 
+    pub fn to_bytes(&self) -> [u8; Self::SECRET_KEY_SIZE] {
+        self.0.to_bytes()
+    }
+
+    pub fn public_key(&self) -> PublicKey {
+        PublicKey(self.0.verifying_key())
+    }
+
     pub fn sign(&self, msg: &[u8]) -> Signature {
-        self.secret.sign(msg, &self.public)
+        Signature(self.0.sign(msg))
     }
 }
 
-impl From<SecretKey> for Keypair {
-    fn from(secret: SecretKey) -> Self {
-        let public = PublicKey::from(&secret);
-        Self { secret, public }
+impl From<&'_ [u8; Self::SECRET_KEY_SIZE]> for Keypair {
+    fn from(bytes: &'_ [u8; Self::SECRET_KEY_SIZE]) -> Self {
+        Self(ext::SigningKey::from(bytes))
     }
 }
+
+impl TryFrom<&'_ [u8]> for Keypair {
+    type Error = SignatureError;
+
+    fn try_from(bytes: &'_ [u8]) -> Result<Self, Self::Error> {
+        Ok(Self(ext::SigningKey::try_from(bytes)?))
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
+#[repr(transparent)]
+pub struct PublicKey(ext::VerifyingKey);
 
 impl PublicKey {
     pub const SIZE: usize = ext::PUBLIC_KEY_LENGTH;
 
-    // // TODO: Temporarily enabling for non tests as well.
-    // //#[cfg(test)]
+    #[cfg(test)]
     pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
-        (&SecretKey::generate(rng)).into()
+        Keypair::generate(rng).public_key()
     }
 
     #[cfg(test)]
@@ -123,25 +132,13 @@ impl TryFrom<&'_ [u8]> for PublicKey {
     type Error = ext::SignatureError;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        Ok(Self(ext::PublicKey::from_bytes(bytes)?))
-    }
-}
-
-impl From<[u8; Self::SIZE]> for PublicKey {
-    fn from(bytes: [u8; Self::SIZE]) -> Self {
-        Self::try_from(bytes.as_ref()).unwrap()
+        Ok(Self(bytes.try_into()?))
     }
 }
 
 impl From<PublicKey> for [u8; PublicKey::SIZE] {
     fn from(key: PublicKey) -> Self {
         key.0.to_bytes()
-    }
-}
-
-impl<'a> From<&'a SecretKey> for PublicKey {
-    fn from(sk: &'a SecretKey) -> Self {
-        Self((&sk.0).into())
     }
 }
 
@@ -157,6 +154,7 @@ impl fmt::Debug for PublicKey {
     }
 }
 
+// TODO: do we need this?
 impl FromStr for PublicKey {
     type Err = hex::FromHexError;
 
@@ -164,7 +162,7 @@ impl FromStr for PublicKey {
         let mut bytes = [0; ext::PUBLIC_KEY_LENGTH];
         hex::decode_to_slice(s, &mut bytes)?;
 
-        Ok(Self(ext::PublicKey::from_bytes(&bytes).unwrap()))
+        Ok(Self(ext::VerifyingKey::from_bytes(&bytes).unwrap()))
     }
 }
 
@@ -172,7 +170,7 @@ derive_sqlx_traits_for_byte_array_wrapper!(PublicKey);
 
 #[cfg(test)]
 mod test_utils {
-    use super::{PublicKey, SecretKey};
+    use super::{Keypair, PublicKey};
     use proptest::{
         arbitrary::{any, Arbitrary},
         array::UniformArrayStrategy,
@@ -183,64 +181,20 @@ mod test_utils {
     impl Arbitrary for PublicKey {
         type Parameters = ();
         type Strategy = Map<
-            NoShrink<UniformArrayStrategy<num::u8::Any, [u8; SecretKey::SIZE]>>,
-            fn([u8; SecretKey::SIZE]) -> Self,
+            NoShrink<UniformArrayStrategy<num::u8::Any, [u8; Keypair::SECRET_KEY_SIZE]>>,
+            fn([u8; Keypair::SECRET_KEY_SIZE]) -> Self,
         >;
 
         fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-            any::<[u8; SecretKey::SIZE]>()
+            any::<[u8; Keypair::SECRET_KEY_SIZE]>()
                 .no_shrink()
-                .prop_map(|array| (&SecretKey::try_from(&array[..]).unwrap()).into())
+                .prop_map(|array| Keypair::from(&array).public_key())
         }
     }
 }
 
 impl SecretKey {
     pub const SIZE: usize = ext::SECRET_KEY_LENGTH;
-
-    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
-        // TODO: Not using SecretKey::generate because `ed25519_dalek` uses an incompatible version
-        // of the `rand` dependency.
-        // https://stackoverflow.com/questions/65562447/the-trait-rand-corecryptorng-is-not-implemented-for-osrng
-        // https://github.com/dalek-cryptography/ed25519-dalek/issues/162
-
-        let mut bytes = [0u8; ext::SECRET_KEY_LENGTH];
-        rng.fill(&mut bytes[..]);
-
-        // The unwrap is ok because `bytes` has the correct length.
-        let sk = ext::SecretKey::from_bytes(&bytes).unwrap();
-
-        bytes.zeroize();
-
-        Self(sk)
-    }
-
-    pub fn random() -> Self {
-        Self::generate(&mut OsRng)
-    }
-
-    pub fn sign(&self, msg: &[u8], public_key: &PublicKey) -> Signature {
-        let expanded: ext::ExpandedSecretKey = (&self.0).into();
-        Signature(expanded.sign(msg, &public_key.0))
-    }
-
-    pub(crate) fn as_array(&self) -> &[u8; Self::SIZE] {
-        self.0.as_bytes()
-    }
-}
-
-impl TryFrom<&[u8]> for SecretKey {
-    type Error = ext::SignatureError;
-
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        Ok(Self(ext::SecretKey::from_bytes(bytes)?))
-    }
-}
-
-impl AsRef<[u8]> for SecretKey {
-    fn as_ref(&self) -> &[u8] {
-        &self.as_array()[..]
-    }
 }
 
 impl fmt::Debug for SecretKey {
@@ -248,20 +202,21 @@ impl fmt::Debug for SecretKey {
         write!(f, "SecretKey(****)")
     }
 }
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct Signature(ext::Signature);
 
 impl Signature {
     pub const SIZE: usize = ext::SIGNATURE_LENGTH;
-}
 
-impl AsRef<[u8]> for Signature {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        self.0.to_bytes()
     }
 }
 
-impl From<[u8; Self::SIZE]> for Signature {
-    fn from(bytes: [u8; Self::SIZE]) -> Self {
-        Self::try_from(bytes.as_ref()).unwrap()
+impl From<&'_ [u8; Self::SIZE]> for Signature {
+    fn from(bytes: &'_ [u8; Self::SIZE]) -> Self {
+        Self(ext::Signature::from(bytes))
     }
 }
 
@@ -269,8 +224,7 @@ impl TryFrom<&'_ [u8]> for Signature {
     type Error = ext::SignatureError;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let sig = ext::Signature::from_bytes(bytes)?;
-        Ok(Signature(sig))
+        Ok(Signature(ext::Signature::try_from(bytes)?))
     }
 }
 
@@ -280,7 +234,28 @@ impl fmt::Debug for Signature {
     }
 }
 
-derive_sqlx_traits_for_byte_array_wrapper!(Signature);
+impl sqlx::Type<Sqlite> for Signature {
+    fn type_info() -> SqliteTypeInfo {
+        <&[u8] as sqlx::Type<Sqlite>>::type_info()
+    }
+}
+
+impl<'q> sqlx::Encode<'q, Sqlite> for &'q Signature {
+    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> sqlx::encode::IsNull {
+        // It seems there is no way to avoid the allocation here because sqlx doesn't implement
+        // `Encode` for arrays.
+        sqlx::Encode::<Sqlite>::encode(self.to_bytes().to_vec(), args)
+    }
+}
+
+impl<'r> sqlx::Decode<'r, Sqlite> for Signature {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        let slice = <&[u8] as sqlx::Decode<Sqlite>>::decode(value)?;
+        Ok(slice.try_into()?)
+    }
+}
+
+pub type SignatureError = ext::SignatureError;
 
 #[cfg(test)]
 mod tests {
@@ -312,6 +287,6 @@ mod tests {
     }
 
     fn dump_signature(signature: &Signature) -> String {
-        hex::encode(signature.as_ref())
+        hex::encode(signature.to_bytes())
     }
 }

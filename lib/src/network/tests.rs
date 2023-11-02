@@ -371,7 +371,7 @@ async fn create_repository<R: Rng + CryptoRng>(
 ) -> (TempDir, Vault, PublicKey) {
     let (base_dir, db) = db::create_temp().await.unwrap();
     let writer_id = PublicKey::generate(rng);
-    let repository_id = RepositoryId::from(write_keys.public);
+    let repository_id = RepositoryId::from(write_keys.public_key());
     let event_tx = EventSender::new(1);
 
     let state = Vault::new(

@@ -1,8 +1,7 @@
 use crate::crypto::{
-    sign::{self, PublicKey, SecretKey},
+    sign::{self, PublicKey},
     Digest, Hash, Hashable,
 };
-use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -19,15 +18,16 @@ derive_sqlx_traits_for_byte_array_wrapper!(RepositoryId);
 impl RepositoryId {
     pub const SIZE: usize = PublicKey::SIZE;
 
-    // // TODO: Temporarily enabling for non tests as well.
-    // //#[cfg(test)]
-    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
-        let sk = SecretKey::generate(rng);
-        RepositoryId(PublicKey::from(&sk))
+    #[cfg(test)]
+    pub fn generate<R: rand::Rng + rand::CryptoRng>(rng: &mut R) -> Self {
+        crate::crypto::sign::Keypair::generate(rng)
+            .public_key()
+            .into()
     }
 
+    #[cfg(test)]
     pub fn random() -> Self {
-        Self::generate(&mut OsRng)
+        Self::generate(&mut rand::rngs::OsRng)
     }
 
     /// Hash of this id using the given salt.

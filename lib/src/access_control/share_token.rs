@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn to_string_from_string_writer() {
         let token_write_keys = sign::Keypair::random();
-        let token_id = RepositoryId::from(token_write_keys.public);
+        let token_id = RepositoryId::from(token_write_keys.public_key());
 
         let token =
             ShareToken::from(AccessSecrets::Write(token_write_keys.into())).with_name("foo");

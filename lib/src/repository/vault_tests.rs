@@ -1168,7 +1168,7 @@ async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Vault, WriteSecrets) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
 
     let secrets = WriteSecrets::generate(rng);
-    let repository_id = RepositoryId::from(secrets.write_keys.public);
+    let repository_id = RepositoryId::from(secrets.write_keys.public_key());
 
     let vault = Vault::new(
         repository_id,

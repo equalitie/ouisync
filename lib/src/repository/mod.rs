@@ -144,7 +144,7 @@ impl Repository {
                 generate_and_store_writer_id(&mut tx, &device_id, local_key.as_ref()).await?
             }
         } else {
-            PublicKey::from(&sign::SecretKey::random())
+            sign::Keypair::random().public_key()
         };
 
         tx.commit().await?;
@@ -854,8 +854,7 @@ impl Shared {
 // TODO: Writer IDs are currently practically just UUIDs with no real security (any replica with a
 // write access may impersonate any other replica).
 fn generate_writer_id() -> sign::PublicKey {
-    let writer_id = sign::SecretKey::random();
-    PublicKey::from(&writer_id)
+    sign::Keypair::random().public_key()
 }
 
 async fn generate_and_store_writer_id(

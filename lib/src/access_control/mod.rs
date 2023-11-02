@@ -157,8 +157,8 @@ impl Eq for WriteSecrets {}
 
 impl From<sign::Keypair> for WriteSecrets {
     fn from(keys: sign::Keypair) -> Self {
-        let id = keys.public.into();
-        let read_key = derive_read_key_from_write_key(&keys.secret);
+        let id = keys.public_key().into();
+        let read_key = derive_read_key_from_write_keys(&keys);
 
         Self {
             id,
@@ -173,8 +173,8 @@ impl Serialize for WriteSecrets {
     where
         S: Serializer,
     {
-        // Serialize only the write secret key because all the other keys can be derived from it
-        self.write_keys.secret.serialize(s)
+        // Serialize only the write keys because all the other fields can be derived from it
+        self.write_keys.serialize(s)
     }
 }
 
@@ -183,10 +183,7 @@ impl<'de> Deserialize<'de> for WriteSecrets {
     where
         D: Deserializer<'de>,
     {
-        let write_key = sign::SecretKey::deserialize(d)?;
-        let write_keys = sign::Keypair::from(write_key);
-
-        Ok(Self::from(write_keys))
+        Ok(Self::from(sign::Keypair::deserialize(d)?))
     }
 }
 
@@ -223,8 +220,8 @@ impl From<WriteSecrets> for AccessKeys {
     }
 }
 
-fn derive_read_key_from_write_key(write_key: &sign::SecretKey) -> cipher::SecretKey {
-    cipher::SecretKey::derive_from_key(write_key.as_array(), b"ouisync repository read key")
+fn derive_read_key_from_write_keys(write_keys: &sign::Keypair) -> cipher::SecretKey {
+    cipher::SecretKey::derive_from_key(&write_keys.to_bytes(), b"ouisync repository read key")
 }
 
 #[derive(Debug, Error)]
