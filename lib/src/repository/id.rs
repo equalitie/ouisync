@@ -41,7 +41,7 @@ impl RepositoryId {
 }
 
 impl FromStr for RepositoryId {
-    type Err = hex::FromHexError;
+    type Err = sign::ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(PublicKey::from_str(s)?))

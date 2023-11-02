@@ -15,11 +15,7 @@ use std::{
     hash::{Hash as StdHash, Hasher},
     str::FromStr,
 };
-
-#[derive(Serialize, Deserialize)]
-#[repr(transparent)]
-#[serde(transparent)]
-pub struct SecretKey(ext::SecretKey);
+use thiserror::Error;
 
 #[derive(Serialize, Deserialize)]
 #[repr(transparent)]
@@ -154,17 +150,19 @@ impl fmt::Debug for PublicKey {
     }
 }
 
-// TODO: do we need this?
 impl FromStr for PublicKey {
-    type Err = hex::FromHexError;
+    type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut bytes = [0; ext::PUBLIC_KEY_LENGTH];
-        hex::decode_to_slice(s, &mut bytes)?;
-
-        Ok(Self(ext::VerifyingKey::from_bytes(&bytes).unwrap()))
+        let mut bytes = [0; Self::SIZE];
+        hex::decode_to_slice(s, &mut bytes).map_err(|_| ParseError)?;
+        Self::try_from(&bytes[..]).map_err(|_| ParseError)
     }
 }
+
+#[derive(Debug, Error)]
+#[error("failed to parse public key")]
+pub struct ParseError;
 
 derive_sqlx_traits_for_byte_array_wrapper!(PublicKey);
 
@@ -193,15 +191,6 @@ mod test_utils {
     }
 }
 
-impl SecretKey {
-    pub const SIZE: usize = ext::SECRET_KEY_LENGTH;
-}
-
-impl fmt::Debug for SecretKey {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SecretKey(****)")
-    }
-}
 #[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Signature(ext::Signature);
