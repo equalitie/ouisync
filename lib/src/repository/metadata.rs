@@ -233,7 +233,7 @@ async fn remove_public_read_key(tx: &mut db::WriteTransaction) -> Result<()> {
 }
 
 async fn remove_secret_read_key(tx: &mut db::WriteTransaction) -> Result<()> {
-    let dummy_id = RepositoryId::random();
+    let dummy_id = RepositoryId::from(sign::Keypair::random().public_key());
     let dummy_local_key = cipher::SecretKey::random();
     let dummy_read_key = cipher::SecretKey::random();
 
@@ -257,7 +257,7 @@ pub(crate) async fn remove_read_key(tx: &mut db::WriteTransaction) -> Result<()>
 // ------------------------------
 
 async fn set_public_write_key(tx: &mut db::WriteTransaction, secrets: &WriteSecrets) -> Result<()> {
-    set_public_blob(tx, WRITE_KEY, &secrets.write_keys.secret).await
+    set_public_blob(tx, WRITE_KEY, secrets.write_keys.to_bytes()).await
 }
 
 async fn set_secret_write_key(
@@ -265,7 +265,7 @@ async fn set_secret_write_key(
     secrets: &WriteSecrets,
     local_key: &cipher::SecretKey,
 ) -> Result<()> {
-    set_secret_blob(tx, WRITE_KEY, &secrets.write_keys.secret, local_key).await
+    set_secret_blob(tx, WRITE_KEY, secrets.write_keys.to_bytes(), local_key).await
 }
 
 pub(crate) async fn set_write_key(
@@ -288,7 +288,7 @@ async fn remove_public_write_key(tx: &mut db::WriteTransaction) -> Result<()> {
 
 async fn remove_secret_write_key(tx: &mut db::WriteTransaction) -> Result<()> {
     let dummy_local_key = cipher::SecretKey::random();
-    let dummy_write_key = sign::SecretKey::random();
+    let dummy_write_key = sign::Keypair::random().to_bytes();
     set_secret_blob(tx, WRITE_KEY, &dummy_write_key, &dummy_local_key).await
 }
 
@@ -306,7 +306,7 @@ pub(crate) async fn requires_local_password_for_reading(conn: &mut db::Connectio
         Err(err) => return Err(err),
     }
 
-    match get_public_blob::<sign::SecretKey>(conn, WRITE_KEY).await {
+    match get_public_blob::<sign::Keypair>(conn, WRITE_KEY).await {
         Ok(_) => Ok(false),
         Err(Error::EntryNotFound) => Ok(true),
         Err(err) => Err(err),
@@ -314,7 +314,7 @@ pub(crate) async fn requires_local_password_for_reading(conn: &mut db::Connectio
 }
 
 pub(crate) async fn requires_local_password_for_writing(conn: &mut db::Connection) -> Result<bool> {
-    match get_public_blob::<sign::SecretKey>(conn, WRITE_KEY).await {
+    match get_public_blob::<sign::Keypair>(conn, WRITE_KEY).await {
         Ok(_) => Ok(false),
         Err(Error::EntryNotFound) => Ok(true),
         Err(err) => Err(err),
@@ -456,9 +456,9 @@ async fn get_write_key(
     local_key: Option<&cipher::SecretKey>,
     id: &RepositoryId,
 ) -> Result<sign::Keypair> {
-    // Try to interpret it first as the write key.
-    let write_key: sign::SecretKey = match get_blob(conn, WRITE_KEY, local_key).await {
-        Ok(write_key) => write_key,
+    // Try to interpret it first as the write keys.
+    let write_keys: sign::Keypair = match get_blob(conn, WRITE_KEY, local_key).await {
+        Ok(write_keys) => write_keys,
         Err(Error::EntryNotFound) => {
             // Let's be backward compatible.
             get_blob(conn, DEPRECATED_ACCESS_KEY, local_key).await?
@@ -466,9 +466,7 @@ async fn get_write_key(
         Err(error) => return Err(error),
     };
 
-    let write_keys = sign::Keypair::from(write_key);
-
-    let derived_id = RepositoryId::from(write_keys.public);
+    let derived_id = RepositoryId::from(write_keys.public_key());
 
     if &derived_id == id {
         Ok(write_keys)

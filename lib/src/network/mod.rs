@@ -110,7 +110,7 @@ impl Network {
 
         let user_provided_peers = SeenPeers::new();
 
-        let this_runtime_id = SecretRuntimeId::generate();
+        let this_runtime_id = SecretRuntimeId::random();
         let this_runtime_id_public = this_runtime_id.public();
 
         let connections_monitor = monitor.make_child("Connections");

@@ -1,5 +1,5 @@
 use crate::crypto::{
-    sign::{Keypair, PublicKey, SecretKey, Signature},
+    sign::{Keypair, PublicKey, Signature},
     Digest, Hashable,
 };
 use rand::{rngs::OsRng, Rng};
@@ -12,20 +12,19 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// claim to be another one.
 
 pub struct SecretRuntimeId {
-    secret: SecretKey,
-    public: PublicKey,
+    keypair: Keypair,
 }
 
 impl SecretRuntimeId {
-    pub fn generate() -> Self {
-        let Keypair { secret, public } = Keypair::random();
-
-        Self { secret, public }
+    pub fn random() -> Self {
+        Self {
+            keypair: Keypair::random(),
+        }
     }
 
     pub fn public(&self) -> PublicRuntimeId {
         PublicRuntimeId {
-            public: self.public,
+            public: self.keypair.public_key(),
         }
     }
 }
@@ -43,7 +42,10 @@ impl PublicRuntimeId {
     {
         let bytes = read_bytes::<{ PublicKey::SIZE }, R>(io).await?;
         Ok(Self {
-            public: PublicKey::from(bytes),
+            public: bytes
+                .as_slice()
+                .try_into()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
         })
     }
 
@@ -86,14 +88,12 @@ where
     let their_challenge = read_bytes::<32, IO>(io).await?;
     let their_runtime_id = PublicRuntimeId::read_from(io).await?;
 
-    let our_signature = our_runtime_id
-        .secret
-        .sign(&to_sign(&their_challenge), &our_runtime_id.public);
+    let our_signature = our_runtime_id.keypair.sign(&to_sign(&their_challenge));
 
-    io.write_all(our_signature.as_ref()).await?;
+    io.write_all(&our_signature.to_bytes()).await?;
 
     let their_signature = read_bytes::<{ Signature::SIZE }, IO>(io).await?;
-    let their_signature = Signature::from(their_signature);
+    let their_signature = Signature::from(&their_signature);
 
     if !their_runtime_id
         .public
