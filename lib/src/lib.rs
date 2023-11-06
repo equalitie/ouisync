@@ -48,7 +48,7 @@ pub use self::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret, ShareToken, WriteSecrets},
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
     branch::Branch,
-    db::schema_version,
+    db::SCHEMA_VERSION,
     debug::DebugPrinter,
     device_id::DeviceId,
     directory::{Directory, EntryRef, EntryType, DIRECTORY_VERSION},
@@ -66,6 +66,6 @@ pub use self::{
     },
     state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     storage_size::StorageSize,
-    store::Error as StoreError,
+    store::{Error as StoreError, DATA_VERSION},
     version_vector::VersionVector,
 };

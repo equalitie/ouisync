@@ -1,18 +1,16 @@
 use super::{get_pragma, set_pragma, Connection, Error, Pool};
 use include_dir::{include_dir, Dir, File};
+use once_cell::sync::Lazy;
 
-static MIGRATIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/db/migrations");
-
-/// Gets the expected schema version. If the database's schema version is lower than this,
-/// it's automatically migrated.
-pub fn schema_version() -> u32 {
+/// Latest schema version
+pub static SCHEMA_VERSION: Lazy<u32> = Lazy::new(|| {
     MIGRATIONS
         .files()
         .filter_map(get_migration)
         .map(|(version, _)| version)
         .max()
         .unwrap_or(0)
-}
+});
 
 /// Apply all pending migrations.
 pub(super) async fn run(pool: &Pool) -> Result<(), Error> {
@@ -25,6 +23,8 @@ pub(super) async fn run(pool: &Pool) -> Result<(), Error> {
 
     Ok(())
 }
+
+static MIGRATIONS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/db/migrations");
 
 fn get_migration<'a>(file: &'a File<'_>) -> Option<(u32, &'a str)> {
     if !file

@@ -178,6 +178,10 @@ impl Repository {
 
         let vault = Vault::new(*secrets.id(), event_tx, pool, block_request_mode, monitor);
 
+        if let Some(keys) = secrets.write_secrets().map(|secrets| &secrets.write_keys) {
+            vault.store().migrate_data(keys).await?;
+        }
+
         {
             let mut conn = vault.store().db().acquire().await?;
             if let Some(block_expiration) = metadata::block_expiration::get(&mut conn).await? {
