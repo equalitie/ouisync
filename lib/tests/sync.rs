@@ -399,7 +399,7 @@ fn sync_during_file_write() {
                 .instrument(tracing::info_span!("read", file = "foo.txt"))
                 .await
                 .unwrap();
-            common::assert_content_equal(&actual_content, &content);
+            similar_asserts::assert_eq!(&actual_content, &content);
 
             rx.recv().await;
         }

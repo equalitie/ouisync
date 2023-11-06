@@ -1,3 +1,5 @@
+#![allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+
 mod wait_map;
 
 use camino::Utf8Path;
@@ -250,7 +252,6 @@ pub(crate) mod actor {
         (repo, reg)
     }
 
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     /// Convenience function for the common case where the actor has one linked repository.
     pub(crate) async fn setup() -> (Network, Repository, Registration) {
         let network = create_network(Proto::Tcp).await;
@@ -333,9 +334,7 @@ impl Drop for TempDir {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Proto {
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     Tcp,
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     Quic,
 }
 
@@ -356,7 +355,7 @@ impl Proto {
 }
 
 // Keep calling `f` until it returns `true`. Wait for repo notification between calls.
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+
 pub(crate) async fn eventually<F, Fut>(repo: &Repository, mut f: F)
 where
     F: FnMut() -> Fut,
@@ -410,7 +409,7 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
 
 /// Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 /// file content matches.
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+
 pub(crate) async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
     expect_file_version_content(repo, path, None, expected_content).await
 }
@@ -526,7 +525,6 @@ pub(crate) async fn expect_entry_exists(repo: &Repository, path: &str, entry_typ
     eventually(repo, || check_entry_exists(repo, path, entry_type)).await
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn check_entry_exists(
     repo: &Repository,
     path: &str,
@@ -583,7 +581,6 @@ pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
     .await
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
         let end = (offset + chunk_size).min(content.len());
@@ -612,7 +609,6 @@ pub(crate) async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result
     Ok(content)
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) fn random_content(size: usize) -> Vec<u8> {
     let mut content = vec![0; size];
     rand::thread_rng().fill(&mut content[..]);
@@ -621,48 +617,6 @@ pub(crate) fn random_content(size: usize) -> Vec<u8> {
 
 fn to_megabytes(bytes: usize) -> usize {
     bytes / 1024 / 1024
-}
-
-/// Helper to assert two byte slices are equal which prints useful info if they are not.
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-#[track_caller]
-pub(crate) fn assert_content_equal(lhs: &[u8], rhs: &[u8]) {
-    let Some(snip_start) = lhs.iter().zip(rhs).position(|(lhs, rhs)| lhs != rhs) else {
-        return;
-    };
-
-    let snip_len = 32;
-    let snip_end = snip_start + snip_len;
-
-    let lhs_snip = &lhs[snip_start..snip_end.min(lhs.len())];
-    let rhs_snip = &rhs[snip_start..snip_end.min(rhs.len())];
-
-    let ellipsis_start = if snip_start > 0 { "…" } else { "" };
-    let lhs_ellipsis_end = if snip_end < lhs.len() { "…" } else { "" };
-    let rhs_ellipsis_end = if snip_end < rhs.len() { "…" } else { "" };
-
-    panic!(
-        "content not equal (differing offset: {})\n    lhs: {}{:x}{}\n    rhs: {}{:x}{}",
-        snip_start,
-        ellipsis_start,
-        HexFmt(lhs_snip),
-        lhs_ellipsis_end,
-        ellipsis_start,
-        HexFmt(rhs_snip),
-        rhs_ellipsis_end,
-    );
-
-    struct HexFmt<'a>(&'a [u8]);
-
-    impl fmt::LowerHex for HexFmt<'_> {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            for byte in self.0 {
-                write!(f, "{:02x}", byte)?;
-            }
-
-            Ok(())
-        }
-    }
 }
 
 pub(crate) fn init_log() {
