@@ -17,7 +17,7 @@ use std::{
 };
 
 /// Version of the Directory serialization format.
-pub(crate) const VERSION: u64 = 2;
+pub const VERSION: u64 = 2;
 
 #[derive(Clone, Debug)]
 pub(super) struct Content {

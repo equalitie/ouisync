@@ -40,6 +40,7 @@ futures-util = { workspace = true }
 generic-array = { version = "0.14.5", features = ["serde"] }
 hdrhistogram = { version = "7.5.2", default-features = false }
 hex = "0.4.3"
+include_dir = "0.7.3"
 indexmap = "1.9.3"
 lru = "0.11.0"
 net = { package = "ouisync-net", path = "../net" }

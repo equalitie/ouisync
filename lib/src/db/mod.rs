@@ -8,6 +8,8 @@ mod mutex;
 mod transaction;
 
 pub use id::DatabaseId;
+pub use migrations::schema_version;
+
 use tracing::Span;
 
 use self::{

@@ -7,6 +7,7 @@ mod parent_context;
 mod tests;
 
 pub use self::{
+    content::VERSION as DIRECTORY_VERSION,
     entry::{DirectoryRef, EntryRef, FileRef},
     entry_type::EntryType,
 };
