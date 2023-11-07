@@ -18,9 +18,17 @@ A new flutter plugin project.
   s.static_framework = true
   s.vendored_libraries = "**/*.a"
   s.dependency 'Flutter'
-  s.platform = :ios, '8.0'
+  s.platform = :ios, '11.0'
 
   # Flutter.framework does not contain a i386 slice.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
   s.swift_version = '5.0'
+
+  # Need more testing: sometimes it would not work.
+  # s.script_phase = { 
+  #   :name => 'Building ouisync library...',
+  #   :script => 'cd "${PODS_ROOT}/../../ouisync/" && cargo lipo --release && cd "${PODS_ROOT}/../../ouisync/bindings/dart/ios/" && ln -sf "${PODS_ROOT}/../../ouisync/target/universal/release/libouisync_ffi.a" .',
+  #   :execution_position => :before_compile,
+  #   :output_files => ['"${PODS_ROOT}/../../ouisync/target/universal/release/libouisync_ffi.a"']
+  # }
 end
