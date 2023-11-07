@@ -12,6 +12,12 @@ public class SwiftOuisyncPlugin: NSObject, FlutterPlugin {
     result("iOS " + UIDevice.current.systemVersion)
   }
 
+  /// This method is necessary to prevent the library symbols to be stripped when compiling the IPA
+  /// More info here: https://stackoverflow.com/questions/71133823/problems-publishing-a-flutter-app-with-a-binded-rust-binary-to-the-appstore
+  ///    - https://github.com/fzyzcjy/flutter_rust_bridge/issues/496
+  ///    - https://cjycode.com/flutter_rust_bridge/integrate/ios_headers.html
+  ///
+  /// The key is to dummy-call and use the result on every function (for debug, only one was enough)
   public func dummyMethodToEnforceBundling() {
     // This will never be executed
 
