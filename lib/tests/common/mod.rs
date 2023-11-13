@@ -279,6 +279,10 @@ pub(crate) mod actor {
         })
     }
 
+    pub(crate) fn get_repo_path(name: &str) -> PathBuf {
+        ACTOR.with(|actor| actor.repo_path(name))
+    }
+
     pub(crate) async fn create_repo_with_mode(name: &str, mode: AccessMode) -> Repository {
         let (params, secrets) = get_repo_params_and_secrets(name);
 

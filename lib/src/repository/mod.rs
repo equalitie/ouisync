@@ -40,7 +40,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
-    protocol::BLOCK_SIZE,
+    protocol::{RootNodeFilter, BLOCK_SIZE},
     state_monitor::StateMonitor,
     storage_size::StorageSize,
     store,
@@ -645,11 +645,25 @@ impl Repository {
         self.shared.local_branch()
     }
 
-    // Returns the branch corresponding to the given id.
-    // Currently test only.
+    /// Returns the branch corresponding to the given id or `Error::PermissionDenied. if this repo
+    /// doesn't have at least read access.
     #[cfg(test)]
-    pub(crate) fn get_branch(&self, id: PublicKey) -> Result<Branch> {
+    pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
         self.shared.get_branch(id)
+    }
+
+    /// Returns version vector of the given branch. Work in all access moded.
+    pub async fn get_branch_version_vector(&self, writer_id: &PublicKey) -> Result<VersionVector> {
+        Ok(self
+            .shared
+            .vault
+            .store()
+            .acquire_read()
+            .await?
+            .load_root_node(writer_id, RootNodeFilter::Any)
+            .await?
+            .proof
+            .into_version_vector())
     }
 
     /// Subscribe to event notifications.
