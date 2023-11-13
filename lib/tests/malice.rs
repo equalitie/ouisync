@@ -4,7 +4,7 @@
 mod common;
 
 use common::{actor, Env, Proto, DEFAULT_REPO};
-use ouisync::{AccessMode, Repository};
+use ouisync::{AccessMode, Error, Repository, StoreError};
 use tokio::sync::mpsc;
 
 #[ignore] // FIXME: https://github.com/equalitie/ouisync/issues/116
@@ -46,7 +46,7 @@ fn block_nonce_tamper() {
     env.actor("bob", async move {
         let (network, repo, _reg) = actor::setup().await;
 
-        let expected_vv = mallory_to_bob_rx.recv().await.unwrap();
+        let (alice_id, alice_expected_vv) = mallory_to_bob_rx.recv().await.unwrap();
 
         // Connect to Mallory and wait until index is synced (blocks should be rejected).
         network.add_user_provided_peer(&actor::lookup_addr("mallory").await);
@@ -54,8 +54,11 @@ fn block_nonce_tamper() {
         info!("syncing with Mallory");
 
         common::eventually(&repo, || async {
-            let local_vv = repo.local_branch().unwrap().version_vector().await.unwrap();
-            local_vv == expected_vv
+            match repo.get_branch_version_vector(&alice_id).await {
+                Ok(alice_actual_vv) => alice_actual_vv == alice_expected_vv,
+                Err(Error::Store(StoreError::BranchNotFound)) => false,
+                Err(error) => panic!("unexpected error: {:?}", error),
+            }
         })
         .await;
 
@@ -111,7 +114,10 @@ fn block_nonce_tamper() {
                 .unwrap();
         }
 
-        mallory_to_bob_tx.send(alice_expected_vv).await.unwrap();
+        mallory_to_bob_tx
+            .send((alice_id, alice_expected_vv))
+            .await
+            .unwrap();
         bob_to_mallory_rx.recv().await.unwrap();
     });
 }

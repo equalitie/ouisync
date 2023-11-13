@@ -250,14 +250,23 @@ impl Blob {
         tx: &mut ReadTransaction,
         root_node: &RootNode,
     ) -> Result<Vec<u8>> {
-        let mut buffer = vec![
-            0;
-            (self.len() - self.seek_position())
-                .try_into()
-                .unwrap_or(usize::MAX)
-        ];
+        // Allocate the buffer `CHUNK_SIZE` bytes at a time to prevent blowing up the memory in
+        // case the blob header was tampered with.
+        const CHUNK_SIZE: usize = 1024 * 1024;
 
-        self.read_all_at(tx, root_node, &mut buffer).await?;
+        let total = (self.len() - self.seek_position())
+            .try_into()
+            .unwrap_or(usize::MAX);
+
+        let mut buffer = Vec::new();
+        let mut offset = 0;
+
+        while offset < total {
+            buffer.resize(buffer.len() + CHUNK_SIZE.min(total - offset), 0);
+            offset += self
+                .read_all_at(tx, root_node, &mut buffer[offset..])
+                .await?;
+        }
 
         Ok(buffer)
     }
