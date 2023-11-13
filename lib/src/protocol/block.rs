@@ -26,8 +26,9 @@ pub struct BlockId(Hash);
 impl BlockId {
     pub(crate) const SIZE: usize = Hash::SIZE;
 
-    pub(crate) fn from_content(content: &BlockContent) -> Self {
-        Self(content.0[..].hash())
+    /// Computes `BlockId` from block ciphertext and nonce.
+    pub(crate) fn new(content: &BlockContent, nonce: &BlockNonce) -> Self {
+        Self((&content[..], &nonce[..]).hash())
     }
 }
 
@@ -77,7 +78,7 @@ pub(crate) struct Block {
 
 impl Block {
     pub fn new(content: BlockContent, nonce: BlockNonce) -> Self {
-        let id = BlockId::from_content(&content);
+        let id = BlockId::new(&content, &nonce);
         Self { id, content, nonce }
     }
 }

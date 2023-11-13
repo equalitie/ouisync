@@ -583,7 +583,7 @@ async fn receive_valid_blocks() {
 
         assert_eq!(&content[..], &block.content[..]);
         assert_eq!(nonce, block.nonce);
-        assert_eq!(BlockId::from_content(&content), *id);
+        assert_eq!(BlockId::new(&content, &nonce), *id);
     }
 }
 

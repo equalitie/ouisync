@@ -7,7 +7,6 @@ use common::{actor, Env, Proto, DEFAULT_REPO};
 use ouisync::{AccessMode, Error, Repository, StoreError};
 use tokio::sync::mpsc;
 
-#[ignore] // FIXME: https://github.com/equalitie/ouisync/issues/116
 #[test]
 fn block_nonce_tamper() {
     let mut env = Env::new();

@@ -181,7 +181,8 @@ mod tests {
         let (_base_dir, pool) = setup().await;
 
         let mut content = BlockContent::new();
-        let id = BlockId::from_content(&content);
+        let nonce = rand::random();
+        let id = BlockId::new(&content, &nonce);
 
         let mut conn = pool.acquire().await.unwrap();
 
