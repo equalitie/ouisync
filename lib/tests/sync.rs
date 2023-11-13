@@ -1,6 +1,8 @@
 //! Synchronization tests
 
+#[macro_use]
 mod common;
+
 #[path = "common/traffic_monitor.rs"]
 mod traffic_monitor;
 
@@ -120,11 +122,7 @@ fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
                         common::write_in_chunks(&mut file, &contents[repo_index], 4096).await;
                         file.flush().await.unwrap();
                     }
-                    .instrument(tracing::info_span!(
-                        "write",
-                        repo = repo_index,
-                        file = file_name
-                    ))
+                    .instrument(info_span!("write", repo = repo_index, file = file_name))
                     .await
                 }
 
@@ -140,11 +138,7 @@ fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
                         Some(repo.local_branch().unwrap().id()),
                         content,
                     )
-                    .instrument(tracing::info_span!(
-                        "read",
-                        repo = repo_index,
-                        file = file_name
-                    ))
+                    .instrument(info_span!("read", repo = repo_index, file = file_name))
                     .await;
                 }
 
@@ -378,7 +372,7 @@ fn sync_during_file_write() {
 
             // Write half of the file content but don't flush yet.
             common::write_in_chunks(&mut file, &content[..content.len() / 2], 4096)
-                .instrument(tracing::info_span!("write", file = "foo.txt", step = 1))
+                .instrument(info_span!("write", file = "foo.txt", step = 1))
                 .await;
 
             // Wait until we see the file created by B
@@ -389,14 +383,14 @@ fn sync_during_file_write() {
                 common::write_in_chunks(&mut file, &content[content.len() / 2..], 4096).await;
                 file.flush().await.unwrap();
             }
-            .instrument(tracing::info_span!("write", file = "foo.txt", step = 2))
+            .instrument(info_span!("write", file = "foo.txt", step = 2))
             .await;
 
             // Reopen the file and verify it has the expected full content
             let mut file = repo.open_file("foo.txt").await.unwrap();
             let actual_content = file
                 .read_to_end()
-                .instrument(tracing::info_span!("read", file = "foo.txt"))
+                .instrument(info_span!("read", file = "foo.txt"))
                 .await
                 .unwrap();
             similar_asserts::assert_eq!(&actual_content, &content);
@@ -421,7 +415,7 @@ fn sync_during_file_write() {
                 file.write_all(b"bar").await.unwrap();
                 file.flush().await.unwrap();
             }
-            .instrument(tracing::info_span!("write", file = "bar.txt"))
+            .instrument(info_span!("write", file = "bar.txt"))
             .await;
 
             // Wait until we see the file with the complete content from Alice
@@ -892,7 +886,7 @@ fn concurrent_update_and_delete_during_conflict() {
                 file.write_all(&content_v0).await.unwrap();
                 file.flush().await.unwrap();
             }
-            .instrument(tracing::info_span!("write", file = "data.txt", step = 1))
+            .instrument(info_span!("write", file = "data.txt", step = 1))
             .await;
 
             alice_rx.recv().await.unwrap();
@@ -906,7 +900,7 @@ fn concurrent_update_and_delete_during_conflict() {
                 file.write_all(&chunk).await.unwrap();
                 file.flush().await.unwrap();
             }
-            .instrument(tracing::info_span!("write", file = "data.txt", step = 2))
+            .instrument(info_span!("write", file = "data.txt", step = 2))
             .await;
 
             // 6b. Relink
@@ -1122,7 +1116,7 @@ fn quota_exceed() {
             let mut file = repo.create_file("0.dat").await.unwrap();
             common::write_in_chunks(&mut file, &content0, 4096).await;
             file.flush().await.unwrap();
-            tracing::info!("write 0.dat");
+            info!("write 0.dat");
 
             rx.recv().await.unwrap();
 
@@ -1130,17 +1124,17 @@ fn quota_exceed() {
             common::write_in_chunks(&mut file, &content1, 4096).await;
             file.flush().await.unwrap();
             drop(file);
-            tracing::info!("write 1.dat");
+            info!("write 1.dat");
 
             rx.recv().await.unwrap();
 
             repo.remove_entry("1.dat").await.unwrap();
-            tracing::info!("remove 1.dat");
+            info!("remove 1.dat");
 
             let mut file = repo.create_file("2.dat").await.unwrap();
             common::write_in_chunks(&mut file, &content2, 4096).await;
             file.flush().await.unwrap();
-            tracing::info!("write 2.dat");
+            info!("write 2.dat");
 
             rx.recv().await.unwrap();
         }
@@ -1163,7 +1157,7 @@ fn quota_exceed() {
             let size0 = repo.size().await.unwrap();
             assert!(size0 <= quota);
 
-            tracing::info!("read 0.dat");
+            info!("read 0.dat");
             tx.send(()).await.unwrap();
 
             // Wait for the traffic to settle
@@ -1174,7 +1168,7 @@ fn quota_exceed() {
             let size1 = repo.size().await.unwrap();
             assert_eq!(size1, size0);
 
-            tracing::info!("not read 1.dat");
+            info!("not read 1.dat");
             tx.send(()).await.unwrap();
 
             // Once the second file is deleted we accept the third file which is within the quota.
@@ -1182,7 +1176,7 @@ fn quota_exceed() {
             let size2 = repo.size().await.unwrap();
             assert!(size2 <= quota);
 
-            tracing::info!("read 2.dat");
+            info!("read 2.dat");
             tx.send(()).await.unwrap();
         }
     });
@@ -1274,7 +1268,7 @@ fn file_progress() {
                 let progress = file.progress().await.unwrap();
                 let len = file.len();
 
-                tracing::debug!(
+                debug!(
                     path,
                     "file progress: {}/{} ({:.1}%)",
                     progress,

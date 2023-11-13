@@ -1,5 +1,6 @@
 //! Migration tests
 
+#[macro_use]
 mod common;
 
 use async_recursion::async_recursion;
@@ -96,47 +97,47 @@ async fn suite() {
 async fn group(work_dir: &Path, input_dump: &Path) {
     let (schema_version, data_version, directory_version) = parse_versions(input_dump);
 
-    tracing::info!(schema_version, data_version, directory_version, "start");
+    info!(schema_version, data_version, directory_version, "start");
 
     test_load_writer(work_dir, input_dump).await;
     test_load_reader(work_dir, input_dump).await;
     test_sync(work_dir, input_dump).await;
 
-    tracing::info!(schema_version, data_version, directory_version, "done");
+    info!(schema_version, data_version, directory_version, "done");
 }
 
 #[instrument(skip_all)]
 async fn test_load_writer(work_dir: &Path, input_dump: &Path) {
-    tracing::info!("start");
+    info!("start");
 
     let repo = load_repo(work_dir, input_dump, AccessMode::Write).await;
     let dump = dump(&repo).await;
     similar_asserts::assert_eq!(dump, *DUMP);
 
-    tracing::info!("done");
+    info!("done");
 }
 
 #[instrument(skip_all)]
 async fn test_load_reader(work_dir: &Path, input_dump: &Path) {
-    tracing::info!("start");
+    info!("start");
 
     let repo = load_repo(work_dir, input_dump, AccessMode::Read).await;
     let dump = dump(&repo).await;
     similar_asserts::assert_eq!(dump, *DUMP);
 
-    tracing::info!("done");
+    info!("done");
 }
 
 #[instrument(skip_all)]
 async fn test_sync(work_dir: &Path, input_dump: &Path) {
-    tracing::info!("start");
+    info!("start");
 
     let (repo_a, network_a) = async {
         let repo = load_repo(work_dir, input_dump, AccessMode::Write).await;
         let network = create_network().await;
         (repo, network)
     }
-    .instrument(tracing::info_span!("a"))
+    .instrument(info_span!("a"))
     .await;
 
     let (repo_b, network_b) = async {
@@ -149,7 +150,7 @@ async fn test_sync(work_dir: &Path, input_dump: &Path) {
         let network = create_network().await;
         (repo, network)
     }
-    .instrument(tracing::info_span!("b"))
+    .instrument(info_span!("b"))
     .await;
 
     let _reg_a = network_a.register(repo_a.handle()).await;
@@ -162,7 +163,7 @@ async fn test_sync(work_dir: &Path, input_dump: &Path) {
     let dump = dump(&repo_b).await;
     similar_asserts::assert_eq!(dump, *DUMP);
 
-    tracing::info!("done");
+    info!("done");
 }
 
 async fn create_network() -> Network {
@@ -176,7 +177,7 @@ async fn create_network() -> Network {
 async fn wait_until_sync(a: &Repository, b: &Repository) {
     common::eventually(a, || async {
         let progress = a.sync_progress().await.unwrap();
-        tracing::debug!(progress = %progress.percent());
+        debug!(progress = %progress.percent());
 
         if progress.total == 0 || progress.value < progress.total {
             return false;
@@ -184,7 +185,7 @@ async fn wait_until_sync(a: &Repository, b: &Repository) {
 
         let vv_a = a.local_branch().unwrap().version_vector().await.unwrap();
         let vv_b = b.local_branch().unwrap().version_vector().await.unwrap();
-        tracing::debug!(?vv_a, ?vv_b);
+        debug!(?vv_a, ?vv_b);
 
         vv_a == vv_b
     })

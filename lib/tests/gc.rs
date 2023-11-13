@@ -1,5 +1,6 @@
 //! Garbage collection tests
 
+#[macro_use]
 mod common;
 
 use self::common::{actor, Env, DEFAULT_REPO};
@@ -230,7 +231,7 @@ async fn expect_block_count(repo: &Repository, expected: u64) {
         if actual == expected {
             true
         } else {
-            tracing::warn!(actual, expected, "block count");
+            warn!(actual, expected, "block count");
             false
         }
     })

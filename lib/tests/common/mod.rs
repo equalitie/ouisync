@@ -46,6 +46,55 @@ pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
 
 pub(crate) static TEST_TIMEOUT: Lazy<Duration> = Lazy::new(|| 4 * *EVENT_TIMEOUT);
 
+// Replacements for tracing macros that add "ouisync-test" as target:
+macro_rules! span {
+    ($($tokens:tt)*) => {
+        tracing::span!(target: "ouisync-test", $($tokens)*)
+    }
+}
+
+macro_rules! info_span {
+    ($($tokens:tt)*) => {
+        span!(tracing::Level::INFO, $($tokens)*)
+    }
+}
+
+macro_rules! event {
+    ($($tokens:tt)*) => {
+        tracing::event!(target: "ouisync-test", $($tokens)*)
+    }
+}
+
+macro_rules! error {
+    ($($tokens:tt)*) => {
+        event!(tracing::Level::ERROR, $($tokens)*)
+    }
+}
+
+macro_rules! warn {
+    ($($tokens:tt)*) => {
+        event!(tracing::Level::WARN, $($tokens)*)
+    }
+}
+
+macro_rules! info {
+    ($($tokens:tt)*) => {
+        event!(tracing::Level::INFO, $($tokens)*)
+    }
+}
+
+macro_rules! debug {
+    ($($tokens:tt)*) => {
+        event!(tracing::Level::DEBUG, $($tokens)*)
+    }
+}
+
+macro_rules! trace {
+    ($($tokens:tt)*) => {
+        event!(tracing::Level::TRACE, $($tokens)*)
+    }
+}
+
 #[cfg(not(feature = "simulation"))]
 pub(crate) mod env {
     use super::*;
@@ -84,7 +133,7 @@ pub(crate) mod env {
             Fut: Future<Output = ()> + Send + 'static,
         {
             let actor = Actor::new(name.to_owned(), self.context.clone());
-            let span = tracing::info_span!("actor", name);
+            let span = info_span!("actor", name);
 
             let f = ACTOR.scope(actor, f);
             let f = f.instrument(span);
@@ -141,7 +190,7 @@ pub(crate) mod env {
             Fut: Future<Output = ()> + 'static,
         {
             let actor = Actor::new(name.to_owned(), self.context.clone());
-            let span = tracing::info_span!("actor", name);
+            let span = info_span!("actor", name);
 
             let f = async move {
                 f.await;
@@ -327,7 +376,7 @@ impl Drop for TempDir {
         // failures.
         if thread::panicking() {
             let path = self.0.take().unwrap().into_path();
-            tracing::warn!("preserving temp dir in '{}'", path.display());
+            warn!("preserving temp dir in '{}'", path.display());
         }
     }
 }
@@ -380,7 +429,7 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
     loop {
         match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
             Ok(event) => {
-                tracing::debug!(?event);
+                debug!(?event);
 
                 match event {
                     Ok(Event {
@@ -400,7 +449,7 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
 
                 // NOTE: in release mode backtrace is useless so this trace helps us to locate the
                 // source of the panic:
-                tracing::error!("{}", MESSAGE);
+                error!("{}", MESSAGE);
                 panic!("{}", MESSAGE);
             }
         }
@@ -463,20 +512,20 @@ pub(crate) async fn check_file_version_content(
             error @ (Error::Store(StoreError::BlockNotFound)
             | Error::Store(StoreError::LocatorNotFound)),
         ) => {
-            tracing::warn!(path, ?error, "read failed");
+            warn!(path, ?error, "read failed");
             return false;
         }
         Err(error) => {
-            tracing::error!(path, ?error);
+            error!(path, ?error);
             panic!("unexpected error: {error:?}");
         }
     };
 
     if actual_content == expected_content {
-        tracing::debug!(path, "content matches");
+        debug!(path, "content matches");
         true
     } else {
-        tracing::warn!(path, "content does not match");
+        warn!(path, "content does not match");
         false
     }
 }
@@ -486,7 +535,7 @@ pub(crate) async fn open_file_version(
     path: &str,
     branch_id: Option<&PublicKey>,
 ) -> Option<File> {
-    tracing::debug!(path, "opening");
+    debug!(path, "opening");
 
     let result = if let Some(branch_id) = branch_id {
         repo.open_file_version(path, branch_id).await
@@ -506,16 +555,16 @@ pub(crate) async fn open_file_version(
             | Error::Store(StoreError::BlockNotFound)
             | Error::Store(StoreError::LocatorNotFound)),
         ) => {
-            tracing::warn!(path, ?branch_id, ?error, "open failed");
+            warn!(path, ?branch_id, ?error, "open failed");
             return None;
         }
         Err(error) => {
-            tracing::error!(path, ?branch_id, ?error);
+            error!(path, ?branch_id, ?error);
             panic!("unexpected error: {error:?}");
         }
     };
 
-    tracing::debug!(path, branch.id = ?file.branch().id(), "opened");
+    debug!(path, branch.id = ?file.branch().id(), "opened");
 
     Some(file)
 }
@@ -530,7 +579,7 @@ pub(crate) async fn check_entry_exists(
     path: &str,
     entry_type: EntryType,
 ) -> bool {
-    tracing::debug!(path, "opening");
+    debug!(path, "opening");
 
     let result = match entry_type {
         EntryType::File => repo.open_file(path).await.map(|_| ()),
@@ -539,7 +588,7 @@ pub(crate) async fn check_entry_exists(
 
     match result {
         Ok(()) => {
-            tracing::debug!(path, "opened");
+            debug!(path, "opened");
             true
         }
         Err(
@@ -547,11 +596,11 @@ pub(crate) async fn check_entry_exists(
             | Error::Store(StoreError::BlockNotFound)
             | Error::Store(StoreError::LocatorNotFound)),
         ) => {
-            tracing::warn!(path, ?error, "open failed");
+            warn!(path, ?error, "open failed");
             false
         }
         Err(error) => {
-            tracing::error!(path, ?error);
+            error!(path, ?error);
             panic!("unexpected error: {error:?}");
         }
     }
@@ -568,12 +617,12 @@ pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
 
         match parent.lookup_unique(name) {
             Ok(_) => {
-                tracing::debug!(%path, "still exists");
+                debug!(%path, "still exists");
                 false
             }
             Err(Error::EntryNotFound) => true,
             Err(error) => {
-                tracing::error!(%path, ?error);
+                error!(%path, ?error);
                 panic!("unexpected error: {error:?}");
             }
         }
@@ -587,7 +636,7 @@ pub(crate) async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size:
         file.write_all(&content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
-            tracing::debug!(
+            debug!(
                 "file write progress: {}/{} MB",
                 to_megabytes(end),
                 to_megabytes(content.len())
