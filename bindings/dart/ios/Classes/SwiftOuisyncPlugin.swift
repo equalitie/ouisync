@@ -20,22 +20,25 @@ public class SwiftOuisyncPlugin: NSObject, FlutterPlugin {
   /// The key is to dummy-call and use the result on every function (for debug, only one was enough)
   public func dummyMethodToEnforceBundling() {
     // This will never be executed
+    let context: UnsafeMutableRawPointer? = nil
+    let callback: Callback? = nil
 
-    let session: SessionHandle = 0
-    let port: Int64 = 0
-    let pointer: Int64 = 0
+    let resultCreateC = session_create("", "", context, callback)
+    print(resultCreateC)    
+
     let function: PostDartCObjectFn? = nil
-    let payload: UnsafeMutablePointer<UInt8>? = nil
-    let length: UInt64 = 0
-    let handle: UInt64 = 0
-    let stringPointer: UnsafeMutablePointer<Int>? = nil
-    let level: UInt8 = 0
+    let port: Int64 = 0
 
     let resultCreate = session_create_dart("", "", function, port)
     print(resultCreate)
 
+    let session: SessionHandle = 0
+
     let resultClose = session_close(session)
     print(resultClose)
+
+    let payload: UnsafeMutablePointer<UInt8>? = nil
+    let length: UInt64 = 0
     
     let resultSend = session_channel_send(session, payload, length)
     print(resultSend)
@@ -43,14 +46,20 @@ public class SwiftOuisyncPlugin: NSObject, FlutterPlugin {
     let resultShutdown = session_shutdown_network_and_close(session)
     print(resultShutdown)
 
+    let handle: UInt64 = 0
+
     let resultFileCopy = file_copy_to_raw_fd_dart(session, handle, 0, function, port)
     print(resultFileCopy)
 
-    let resultFileCopy2 = file_copy_to_raw_fd_dart(session, handle, 0, function, port)
-    print(resultFileCopy2)
+    let resultFileCopyNS = file_copy_to_raw_fd_dart(session, handle, 0, function, port)
+    print(resultFileCopyNS)
+    
+    let stringPointer: UnsafeMutablePointer<Int>? = nil
 
     let resultFreeString = free_string(stringPointer)
     print(resultFreeString)
+
+    let level: UInt8 = 0
 
     let resultLogPrint = log_print(level, "", "")
     print(resultLogPrint)
