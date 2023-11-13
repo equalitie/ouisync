@@ -137,8 +137,14 @@ impl Repository {
 
         // If we are writer, load the writer id from the db, otherwise use a dummy random one.
         let this_writer_id = if access_secrets.can_write() {
-            if metadata::check_device_id(&mut tx, &device_id).await? {
+            let writer_id = if metadata::check_device_id(&mut tx, &device_id).await? {
                 metadata::get_writer_id(&mut tx, local_key.as_ref()).await?
+            } else {
+                None
+            };
+
+            if let Some(writer_id) = writer_id {
+                writer_id
             } else {
                 // Replica id changed. Must generate new writer id.
                 generate_and_store_writer_id(&mut tx, &device_id, local_key.as_ref()).await?
@@ -229,17 +235,17 @@ impl Repository {
     }
 
     pub async fn database_id(&self) -> Result<DatabaseId> {
-        metadata::get_or_generate_database_id(self.db()).await
+        Ok(metadata::get_or_generate_database_id(self.db()).await?)
     }
 
     pub async fn requires_local_password_for_reading(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        metadata::requires_local_password_for_reading(&mut conn).await
+        Ok(metadata::requires_local_password_for_reading(&mut conn).await?)
     }
 
     pub async fn requires_local_password_for_writing(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        metadata::requires_local_password_for_writing(&mut conn).await
+        Ok(metadata::requires_local_password_for_writing(&mut conn).await?)
     }
 
     pub async fn set_access(&self, access: &Access) -> Result<()> {
@@ -352,8 +358,10 @@ impl Repository {
             let local_old_write_key = metadata::secret_to_key(tx, local_old_write_secret).await?;
             metadata::get_writer_id(tx, Some(&local_old_write_key)).await?
         } else {
-            generate_writer_id()
+            None
         };
+
+        let writer_id = writer_id.unwrap_or_else(generate_writer_id);
 
         metadata::set_write_key(
             tx,
@@ -407,7 +415,7 @@ impl Repository {
             LocalSecret::SecretKey(key) => key,
         };
 
-        metadata::get_access_secrets(&mut tx, Some(&local_key)).await
+        Ok(metadata::get_access_secrets(&mut tx, Some(&local_key)).await?)
     }
 
     /// Obtain the reopen token for this repository. The token can then be used to reopen this

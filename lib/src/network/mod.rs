@@ -256,8 +256,16 @@ impl Network {
             Some(repository_info_hash(handle.vault.repository_id()));
 
         let metadata = handle.vault.metadata();
-        let dht_enabled = metadata.get(DHT_ENABLED).await.unwrap_or(false);
-        let pex_enabled = metadata.get(PEX_ENABLED).await.unwrap_or(false);
+        let dht_enabled = metadata
+            .get(DHT_ENABLED)
+            .await
+            .unwrap_or(Some(false))
+            .unwrap_or(false);
+        let pex_enabled = metadata
+            .get(PEX_ENABLED)
+            .await
+            .unwrap_or(Some(false))
+            .unwrap_or(false);
 
         let dht = if dht_enabled {
             Some(

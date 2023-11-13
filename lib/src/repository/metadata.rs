@@ -6,8 +6,8 @@ use crate::{
     },
     db::{self, DatabaseId},
     device_id::DeviceId,
-    error::{Error, Result},
     repository::RepositoryId,
+    store::Error as StoreError,
 };
 use rand::{rngs::OsRng, Rng};
 use sqlx::Row;
@@ -52,7 +52,7 @@ impl Metadata {
     }
 
     #[instrument(skip(self), fields(value))]
-    pub async fn get<T>(&self, name: &str) -> Result<T>
+    pub async fn get<T>(&self, name: &str) -> Result<Option<T>, StoreError>
     where
         T: MetadataGet + fmt::Debug,
     {
@@ -63,11 +63,7 @@ impl Metadata {
         let value = get_public(&mut conn, name.as_bytes())
             .await
             .map_err(|error| {
-                match error {
-                    Error::EntryNotFound => (),
-                    _ => tracing::error!(?error),
-                }
-
+                tracing::error!(?error);
                 error
             })?;
 
@@ -75,7 +71,7 @@ impl Metadata {
     }
 
     #[instrument(skip(self), err(Debug))]
-    pub async fn set<'a, T>(&self, name: &'a str, value: T) -> Result<()>
+    pub async fn set<'a, T>(&self, name: &'a str, value: T) -> Result<(), StoreError>
     where
         T: MetadataSet<'a> + fmt::Debug,
     {
@@ -87,7 +83,7 @@ impl Metadata {
     }
 
     #[instrument(skip(self), err(Debug))]
-    pub async fn remove(&self, name: &str) -> Result<()> {
+    pub async fn remove(&self, name: &str) -> Result<(), StoreError> {
         let mut tx = self.db.begin_write().await?;
         remove_public(&mut tx, name.as_bytes()).await?;
         tx.commit().await?;
@@ -102,7 +98,7 @@ impl Metadata {
 pub(crate) async fn password_to_key(
     tx: &mut db::WriteTransaction,
     password: &Password,
-) -> Result<cipher::SecretKey> {
+) -> Result<cipher::SecretKey, StoreError> {
     let salt = get_or_generate_password_salt(tx).await?;
     Ok(cipher::SecretKey::derive_from_password(
         password.as_ref(),
@@ -113,17 +109,19 @@ pub(crate) async fn password_to_key(
 pub(crate) async fn secret_to_key<'a>(
     tx: &mut db::WriteTransaction,
     secret: &'a LocalSecret,
-) -> Result<Cow<'a, cipher::SecretKey>> {
+) -> Result<Cow<'a, cipher::SecretKey>, StoreError> {
     match secret {
         LocalSecret::Password(password) => password_to_key(tx, password).await.map(Cow::Owned),
         LocalSecret::SecretKey(key) => Ok(Cow::Borrowed(key)),
     }
 }
 
-async fn get_or_generate_password_salt(tx: &mut db::WriteTransaction) -> Result<PasswordSalt> {
+async fn get_or_generate_password_salt(
+    tx: &mut db::WriteTransaction,
+) -> Result<PasswordSalt, StoreError> {
     let salt = match get_public_blob(tx, PASSWORD_SALT).await {
-        Ok(salt) => salt,
-        Err(Error::EntryNotFound) => {
+        Ok(Some(salt)) => salt,
+        Ok(None) => {
             let salt: PasswordSalt = OsRng.gen();
             set_public_blob(tx, PASSWORD_SALT, &salt).await?;
             salt
@@ -137,11 +135,11 @@ async fn get_or_generate_password_salt(tx: &mut db::WriteTransaction) -> Result<
 // -------------------------------------------------------------------
 // Database ID
 // -------------------------------------------------------------------
-pub(crate) async fn get_or_generate_database_id(db: &db::Pool) -> Result<DatabaseId> {
+pub(crate) async fn get_or_generate_database_id(db: &db::Pool) -> Result<DatabaseId, StoreError> {
     let mut tx = db.begin_write().await?;
     let database_id = match get_public_blob(&mut tx, DATABASE_ID).await {
-        Ok(database_id) => database_id,
-        Err(Error::EntryNotFound) => {
+        Ok(Some(database_id)) => database_id,
+        Ok(None) => {
             let database_id: DatabaseId = OsRng.gen();
             set_public_blob(&mut tx, DATABASE_ID, &database_id).await?;
             tx.commit().await?;
@@ -159,7 +157,7 @@ pub(crate) async fn get_or_generate_database_id(db: &db::Pool) -> Result<Databas
 pub(crate) async fn get_writer_id(
     conn: &mut db::Connection,
     local_key: Option<&cipher::SecretKey>,
-) -> Result<sign::PublicKey> {
+) -> Result<Option<sign::PublicKey>, StoreError> {
     get_blob(conn, WRITER_ID, local_key).await
 }
 
@@ -167,7 +165,7 @@ pub(crate) async fn set_writer_id(
     tx: &mut db::WriteTransaction,
     writer_id: &sign::PublicKey,
     local_key: Option<&cipher::SecretKey>,
-) -> Result<()> {
+) -> Result<(), StoreError> {
     set_blob(tx, WRITER_ID, writer_id, local_key).await?;
     Ok(())
 }
@@ -180,15 +178,15 @@ pub(crate) async fn set_writer_id(
 pub(crate) async fn check_device_id(
     conn: &mut db::Connection,
     device_id: &DeviceId,
-) -> Result<bool> {
-    let old_device_id: DeviceId = get_public_blob(conn, DEVICE_ID).await?;
-    Ok(old_device_id == *device_id)
+) -> Result<bool, StoreError> {
+    let old_device_id: Option<DeviceId> = get_public_blob(conn, DEVICE_ID).await?;
+    Ok(old_device_id.as_ref() == Some(device_id))
 }
 
 pub(crate) async fn set_device_id(
     tx: &mut db::WriteTransaction,
     device_id: &DeviceId,
-) -> Result<()> {
+) -> Result<(), StoreError> {
     set_public_blob(tx, DEVICE_ID, device_id).await?;
     Ok(())
 }
@@ -199,7 +197,7 @@ pub(crate) async fn set_device_id(
 async fn set_public_read_key(
     tx: &mut db::WriteTransaction,
     read_key: &cipher::SecretKey,
-) -> Result<()> {
+) -> Result<(), StoreError> {
     set_public_blob(tx, READ_KEY, read_key).await
 }
 
@@ -208,7 +206,7 @@ async fn set_secret_read_key(
     id: &RepositoryId,
     read_key: &cipher::SecretKey,
     local_key: &cipher::SecretKey,
-) -> Result<()> {
+) -> Result<(), StoreError> {
     set_secret_blob(tx, READ_KEY, read_key, local_key).await?;
     set_secret_blob(tx, READ_KEY_VALIDATOR, read_key_validator(id), read_key).await
 }
@@ -218,7 +216,7 @@ pub(crate) async fn set_read_key(
     id: &RepositoryId,
     read_key: &cipher::SecretKey,
     local_key: Option<&cipher::SecretKey>,
-) -> Result<()> {
+) -> Result<(), StoreError> {
     if let Some(local_key) = local_key {
         remove_public_read_key(tx).await?;
         set_secret_read_key(tx, id, read_key, local_key).await
@@ -228,11 +226,11 @@ pub(crate) async fn set_read_key(
     }
 }
 
-async fn remove_public_read_key(tx: &mut db::WriteTransaction) -> Result<()> {
+async fn remove_public_read_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     remove_public(tx, READ_KEY).await
 }
 
-async fn remove_secret_read_key(tx: &mut db::WriteTransaction) -> Result<()> {
+async fn remove_secret_read_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     let dummy_id = RepositoryId::from(sign::Keypair::random().public_key());
     let dummy_local_key = cipher::SecretKey::random();
     let dummy_read_key = cipher::SecretKey::random();
@@ -249,14 +247,17 @@ async fn remove_secret_read_key(tx: &mut db::WriteTransaction) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn remove_read_key(tx: &mut db::WriteTransaction) -> Result<()> {
+pub(crate) async fn remove_read_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     remove_public_read_key(tx).await?;
     remove_secret_read_key(tx).await
 }
 
 // ------------------------------
 
-async fn set_public_write_key(tx: &mut db::WriteTransaction, secrets: &WriteSecrets) -> Result<()> {
+async fn set_public_write_key(
+    tx: &mut db::WriteTransaction,
+    secrets: &WriteSecrets,
+) -> Result<(), StoreError> {
     set_public_blob(tx, WRITE_KEY, secrets.write_keys.to_bytes()).await
 }
 
@@ -264,7 +265,7 @@ async fn set_secret_write_key(
     tx: &mut db::WriteTransaction,
     secrets: &WriteSecrets,
     local_key: &cipher::SecretKey,
-) -> Result<()> {
+) -> Result<(), StoreError> {
     set_secret_blob(tx, WRITE_KEY, secrets.write_keys.to_bytes(), local_key).await
 }
 
@@ -272,7 +273,7 @@ pub(crate) async fn set_write_key(
     tx: &mut db::WriteTransaction,
     secrets: &WriteSecrets,
     local_key: Option<&cipher::SecretKey>,
-) -> Result<()> {
+) -> Result<(), StoreError> {
     if let Some(local_key) = local_key {
         remove_public_write_key(tx).await?;
         set_secret_write_key(tx, secrets, local_key).await
@@ -282,41 +283,45 @@ pub(crate) async fn set_write_key(
     }
 }
 
-async fn remove_public_write_key(tx: &mut db::WriteTransaction) -> Result<()> {
+async fn remove_public_write_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     remove_public(tx, WRITE_KEY).await
 }
 
-async fn remove_secret_write_key(tx: &mut db::WriteTransaction) -> Result<()> {
+async fn remove_secret_write_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     let dummy_local_key = cipher::SecretKey::random();
     let dummy_write_key = sign::Keypair::random().to_bytes();
     set_secret_blob(tx, WRITE_KEY, &dummy_write_key, &dummy_local_key).await
 }
 
-pub(crate) async fn remove_write_key(tx: &mut db::WriteTransaction) -> Result<()> {
+pub(crate) async fn remove_write_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     remove_public_write_key(tx).await?;
     remove_secret_write_key(tx).await
 }
 
 // ------------------------------
 
-pub(crate) async fn requires_local_password_for_reading(conn: &mut db::Connection) -> Result<bool> {
+pub(crate) async fn requires_local_password_for_reading(
+    conn: &mut db::Connection,
+) -> Result<bool, StoreError> {
     match get_public_blob::<cipher::SecretKey>(conn, READ_KEY).await {
-        Ok(_) => return Ok(false),
-        Err(Error::EntryNotFound) => (),
+        Ok(Some(_)) => return Ok(false),
+        Ok(None) => (),
         Err(err) => return Err(err),
     }
 
     match get_public_blob::<sign::Keypair>(conn, WRITE_KEY).await {
-        Ok(_) => Ok(false),
-        Err(Error::EntryNotFound) => Ok(true),
+        Ok(Some(_)) => Ok(false),
+        Ok(None) => Ok(true),
         Err(err) => Err(err),
     }
 }
 
-pub(crate) async fn requires_local_password_for_writing(conn: &mut db::Connection) -> Result<bool> {
+pub(crate) async fn requires_local_password_for_writing(
+    conn: &mut db::Connection,
+) -> Result<bool, StoreError> {
     match get_public_blob::<sign::Keypair>(conn, WRITE_KEY).await {
-        Ok(_) => Ok(false),
-        Err(Error::EntryNotFound) => Ok(true),
+        Ok(Some(_)) => Ok(false),
+        Ok(None) => Ok(true),
         Err(err) => Err(err),
     }
 }
@@ -324,7 +329,7 @@ pub(crate) async fn requires_local_password_for_writing(conn: &mut db::Connectio
 pub(crate) async fn initialize_access_secrets<'a>(
     tx: &mut db::WriteTransaction,
     access: &'a Access,
-) -> Result<LocalKeys<'a>> {
+) -> Result<LocalKeys<'a>, StoreError> {
     set_public_blob(tx, REPOSITORY_ID, access.id()).await?;
     set_access(tx, access).await
 }
@@ -332,7 +337,7 @@ pub(crate) async fn initialize_access_secrets<'a>(
 pub(crate) async fn set_access<'a>(
     tx: &mut db::WriteTransaction,
     access: &'a Access,
-) -> Result<LocalKeys<'a>> {
+) -> Result<LocalKeys<'a>, StoreError> {
     match access {
         Access::Blind { .. } => {
             remove_public_read_key(tx).await?;
@@ -430,19 +435,22 @@ pub(crate) struct LocalKeys<'a> {
 pub(crate) async fn get_access_secrets(
     conn: &mut db::Connection,
     local_key: Option<&cipher::SecretKey>,
-) -> Result<AccessSecrets> {
-    let id = get_public_blob(conn, REPOSITORY_ID).await?;
+) -> Result<AccessSecrets, StoreError> {
+    let Some(id) = get_public_blob(conn, REPOSITORY_ID).await? else {
+        // Repository id not found - possibly corrupted db?
+        return Err(StoreError::MalformedData);
+    };
 
     match get_write_key(conn, local_key, &id).await {
-        Ok(write_keys) => return Ok(AccessSecrets::Write(WriteSecrets::from(write_keys))),
-        Err(Error::EntryNotFound) => (),
+        Ok(Some(write_keys)) => return Ok(AccessSecrets::Write(WriteSecrets::from(write_keys))),
+        Ok(None) => (),
         Err(e) => return Err(e),
     }
 
     // No match. Maybe there's the read key?
     match get_read_key(conn, local_key, &id).await {
-        Ok(read_key) => return Ok(AccessSecrets::Read { id, read_key }),
-        Err(Error::EntryNotFound) => (),
+        Ok(Some(read_key)) => return Ok(AccessSecrets::Read { id, read_key }),
+        Ok(None) => (),
         Err(e) => return Err(e),
     }
 
@@ -455,23 +463,26 @@ async fn get_write_key(
     conn: &mut db::Connection,
     local_key: Option<&cipher::SecretKey>,
     id: &RepositoryId,
-) -> Result<sign::Keypair> {
+) -> Result<Option<sign::Keypair>, StoreError> {
     // Try to interpret it first as the write keys.
-    let write_keys: sign::Keypair = match get_blob(conn, WRITE_KEY, local_key).await {
-        Ok(write_keys) => write_keys,
-        Err(Error::EntryNotFound) => {
+    let write_keys: Option<sign::Keypair> = match get_blob(conn, WRITE_KEY, local_key).await? {
+        Some(write_keys) => Some(write_keys),
+        None => {
             // Let's be backward compatible.
             get_blob(conn, DEPRECATED_ACCESS_KEY, local_key).await?
         }
-        Err(error) => return Err(error),
+    };
+
+    let Some(write_keys) = write_keys else {
+        return Ok(None);
     };
 
     let derived_id = RepositoryId::from(write_keys.public_key());
 
     if &derived_id == id {
-        Ok(write_keys)
+        Ok(Some(write_keys))
     } else {
-        Err(Error::EntryNotFound)
+        Ok(None)
     }
 }
 
@@ -479,28 +490,33 @@ async fn get_read_key(
     conn: &mut db::Connection,
     local_key: Option<&cipher::SecretKey>,
     id: &RepositoryId,
-) -> Result<cipher::SecretKey> {
+) -> Result<Option<cipher::SecretKey>, StoreError> {
     let read_key: cipher::SecretKey = match get_blob(conn, READ_KEY, local_key).await {
-        Ok(read_key) => read_key,
-        Err(Error::EntryNotFound) => {
+        Ok(Some(read_key)) => read_key,
+        Ok(None) => {
             // Let's be backward compatible.
-            get_blob(conn, DEPRECATED_ACCESS_KEY, local_key).await?
+            if let Some(key) = get_blob(conn, DEPRECATED_ACCESS_KEY, local_key).await? {
+                key
+            } else {
+                return Ok(None);
+            }
         }
         Err(error) => return Err(error),
     };
 
     if local_key.is_none() {
-        return Ok(read_key);
+        return Ok(Some(read_key));
     }
 
     let key_validator_expected = read_key_validator(id);
-    let key_validator_actual: Hash = get_secret_blob(conn, READ_KEY_VALIDATOR, &read_key).await?;
+    let key_validator_actual: Option<Hash> =
+        get_secret_blob(conn, READ_KEY_VALIDATOR, &read_key).await?;
 
-    if key_validator_actual == key_validator_expected {
+    if key_validator_actual == Some(key_validator_expected) {
         // Match - we have read access.
-        Ok(read_key)
+        Ok(Some(read_key))
     } else {
-        Err(Error::EntryNotFound)
+        Ok(None)
     }
 }
 
@@ -510,15 +526,15 @@ async fn get_read_key(
 pub(crate) mod quota {
     use super::*;
 
-    pub(crate) async fn get(conn: &mut db::Connection) -> Result<u64> {
+    pub(crate) async fn get(conn: &mut db::Connection) -> Result<Option<u64>, StoreError> {
         get_public(conn, QUOTA).await
     }
 
-    pub(crate) async fn set(tx: &mut db::WriteTransaction, value: u64) -> Result<()> {
+    pub(crate) async fn set(tx: &mut db::WriteTransaction, value: u64) -> Result<(), StoreError> {
         set_public(tx, QUOTA, value).await
     }
 
-    pub(crate) async fn remove(tx: &mut db::WriteTransaction) -> Result<()> {
+    pub(crate) async fn remove(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
         remove_public(tx, QUOTA).await
     }
 }
@@ -529,20 +545,21 @@ pub(crate) mod quota {
 pub(crate) mod block_expiration {
     use super::*;
 
-    pub(crate) async fn get(conn: &mut db::Connection) -> Result<Option<Duration>> {
-        match get_public(conn, BLOCK_EXPIRATION).await {
-            Ok(duration_millis) => Ok(Some(Duration::from_millis(duration_millis))),
-            Err(Error::EntryNotFound) => Ok(None),
-            Err(error) => Err(error),
-        }
+    pub(crate) async fn get(conn: &mut db::Connection) -> Result<Option<Duration>, StoreError> {
+        Ok(get_public(conn, BLOCK_EXPIRATION)
+            .await?
+            .map(Duration::from_millis))
     }
 
-    pub(crate) async fn set(tx: &mut db::WriteTransaction, value: Option<Duration>) -> Result<()> {
+    pub(crate) async fn set(
+        tx: &mut db::WriteTransaction,
+        value: Option<Duration>,
+    ) -> Result<(), StoreError> {
         if let Some(duration) = value {
             set_public(
                 tx,
                 BLOCK_EXPIRATION,
-                u64::try_from(duration.as_millis()).map_err(|_| Error::InvalidArgument)?,
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
             )
             .await
         } else {
@@ -554,7 +571,7 @@ pub(crate) mod block_expiration {
 // -------------------------------------------------------------------
 // Public values
 // -------------------------------------------------------------------
-async fn get_public_blob<T>(conn: &mut db::Connection, id: &[u8]) -> Result<T>
+async fn get_public_blob<T>(conn: &mut db::Connection, id: &[u8]) -> Result<Option<T>, StoreError>
 where
     T: for<'a> TryFrom<&'a [u8]>,
 {
@@ -562,12 +579,21 @@ where
         .bind(id)
         .fetch_optional(conn)
         .await?;
-    let row = row.ok_or(Error::EntryNotFound)?;
-    let bytes: &[u8] = row.get(0);
-    bytes.try_into().map_err(|_| Error::MalformedData)
+
+    if let Some(row) = row {
+        let bytes: &[u8] = row.get(0);
+        let bytes = bytes.try_into().map_err(|_| StoreError::MalformedData)?;
+        Ok(Some(bytes))
+    } else {
+        Ok(None)
+    }
 }
 
-async fn set_public_blob<T>(tx: &mut db::WriteTransaction, id: &[u8], blob: T) -> Result<()>
+async fn set_public_blob<T>(
+    tx: &mut db::WriteTransaction,
+    id: &[u8],
+    blob: T,
+) -> Result<(), StoreError>
 where
     T: AsRef<[u8]>,
 {
@@ -580,7 +606,7 @@ where
     Ok(())
 }
 
-async fn get_public<T>(conn: &mut db::Connection, id: &[u8]) -> Result<T>
+async fn get_public<T>(conn: &mut db::Connection, id: &[u8]) -> Result<Option<T>, StoreError>
 where
     T: MetadataGet,
 {
@@ -588,11 +614,19 @@ where
         .bind(id)
         .fetch_optional(conn)
         .await?;
-    let row = row.ok_or(Error::EntryNotFound)?;
-    T::get(&row).map_err(|_| Error::MalformedData)
+    if let Some(row) = row {
+        let value = T::get(&row).map_err(|_| StoreError::MalformedData)?;
+        Ok(Some(value))
+    } else {
+        Ok(None)
+    }
 }
 
-async fn set_public<'a, T>(tx: &mut db::WriteTransaction, id: &'a [u8], value: T) -> Result<()>
+async fn set_public<'a, T>(
+    tx: &mut db::WriteTransaction,
+    id: &'a [u8],
+    value: T,
+) -> Result<(), StoreError>
 where
     T: MetadataSet<'a>,
 {
@@ -604,7 +638,7 @@ where
     Ok(())
 }
 
-async fn remove_public(tx: &mut db::WriteTransaction, id: &[u8]) -> Result<()> {
+async fn remove_public(tx: &mut db::WriteTransaction, id: &[u8]) -> Result<(), StoreError> {
     sqlx::query("DELETE FROM metadata_public WHERE name = ?")
         .bind(id)
         .execute(tx)
@@ -689,27 +723,30 @@ async fn get_secret_blob<T>(
     conn: &mut db::Connection,
     id: &[u8],
     local_key: &cipher::SecretKey,
-) -> Result<T>
+) -> Result<Option<T>, StoreError>
 where
     for<'a> T: TryFrom<&'a [u8]>,
 {
     let row = sqlx::query("SELECT nonce, value FROM metadata_secret WHERE name = ?")
         .bind(id)
         .fetch_optional(conn)
-        .await?
-        .ok_or(Error::EntryNotFound)?;
+        .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
 
     let nonce: &[u8] = row.get(0);
-    let nonce = Nonce::try_from(nonce)?;
+    let nonce = Nonce::try_from(nonce).map_err(|_| StoreError::MalformedData)?;
 
     let mut buffer: Vec<_> = row.get(1);
 
     local_key.decrypt_no_aead(&nonce, &mut buffer);
 
-    let secret = T::try_from(&buffer).map_err(|_| Error::MalformedData)?;
+    let secret = T::try_from(&buffer).map_err(|_| StoreError::MalformedData)?;
     buffer.zeroize();
 
-    Ok(secret)
+    Ok(Some(secret))
 }
 
 async fn set_secret_blob<T>(
@@ -717,7 +754,7 @@ async fn set_secret_blob<T>(
     id: &[u8],
     blob: T,
     local_key: &cipher::SecretKey,
-) -> Result<()>
+) -> Result<(), StoreError>
 where
     T: AsRef<[u8]>,
 {
@@ -756,7 +793,7 @@ async fn get_blob<T>(
     conn: &mut db::Connection,
     id: &[u8],
     local_key: Option<&cipher::SecretKey>,
-) -> Result<T>
+) -> Result<Option<T>, StoreError>
 where
     for<'a> T: TryFrom<&'a [u8]>,
 {
@@ -771,7 +808,7 @@ async fn set_blob<T>(
     id: &[u8],
     blob: T,
     local_key: Option<&cipher::SecretKey>,
-) -> Result<()>
+) -> Result<(), StoreError>
 where
     T: AsRef<[u8]>,
 {
@@ -800,7 +837,7 @@ mod tests {
 
         set_public_blob(&mut tx, b"hello", b"world").await.unwrap();
 
-        let v: [u8; 5] = get_public_blob(&mut tx, b"hello").await.unwrap();
+        let v: [u8; 5] = get_public_blob(&mut tx, b"hello").await.unwrap().unwrap();
 
         assert_eq!(b"world", &v);
     }
@@ -816,7 +853,10 @@ mod tests {
             .await
             .unwrap();
 
-        let v: [u8; 5] = get_secret_blob(&mut tx, b"hello", &key).await.unwrap();
+        let v: [u8; 5] = get_secret_blob(&mut tx, b"hello", &key)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(b"world", &v);
     }
@@ -835,7 +875,10 @@ mod tests {
             .await
             .unwrap();
 
-        let v: [u8; 5] = get_secret_blob(&mut tx, b"hello", &bad_key).await.unwrap();
+        let v: [u8; 5] = get_secret_blob(&mut tx, b"hello", &bad_key)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_ne!(b"world", &v);
     }
