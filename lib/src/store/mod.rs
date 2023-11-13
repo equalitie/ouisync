@@ -80,8 +80,12 @@ impl Store {
     }
 
     /// Runs data migrations. Does nothing if already at the latest version.
-    pub async fn migrate_data(&self, write_keys: &Keypair) -> Result<(), Error> {
-        migrations::run_data(&self.db, write_keys).await
+    pub async fn migrate_data(
+        &self,
+        this_writer_id: PublicKey,
+        write_keys: &Keypair,
+    ) -> Result<(), Error> {
+        migrations::run_data(self, this_writer_id, write_keys).await
     }
 
     pub async fn set_block_expiration(

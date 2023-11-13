@@ -39,6 +39,9 @@ const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 const QUOTA: &[u8] = b"quota";
 const BLOCK_EXPIRATION: &[u8] = b"block_expiration";
 
+// Support for data migrations.
+const DATA_VERSION: &[u8] = b"data_version";
+
 // -------------------------------------------------------------------
 // Accessor for user-defined metadata
 // -------------------------------------------------------------------
@@ -565,6 +568,21 @@ pub(crate) mod block_expiration {
         } else {
             remove_public(tx, BLOCK_EXPIRATION).await
         }
+    }
+}
+
+// -------------------------------------------------------------------
+// Data version
+// -------------------------------------------------------------------
+pub(crate) mod data_version {
+    use super::*;
+
+    pub(crate) async fn get(conn: &mut db::Connection) -> Result<u64, StoreError> {
+        Ok(get_public(conn, DATA_VERSION).await?.unwrap_or(0))
+    }
+
+    pub(crate) async fn set(tx: &mut db::WriteTransaction, value: u64) -> Result<(), StoreError> {
+        set_public(tx, DATA_VERSION, value).await
     }
 }
 

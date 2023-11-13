@@ -17,7 +17,7 @@ pub use self::{
 
 pub(crate) use self::{
     id::LocalId,
-    metadata::quota,
+    metadata::{data_version, quota},
     monitor::RepositoryMonitor,
     vault::{BlockRequestMode, Vault},
 };
@@ -185,7 +185,7 @@ impl Repository {
         let vault = Vault::new(*secrets.id(), event_tx, pool, block_request_mode, monitor);
 
         if let Some(keys) = secrets.write_secrets().map(|secrets| &secrets.write_keys) {
-            vault.store().migrate_data(keys).await?;
+            vault.store().migrate_data(this_writer_id, keys).await?;
         }
 
         {
