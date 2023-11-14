@@ -111,6 +111,8 @@ async fn test_load_writer(work_dir: &Path, input_dump: &Path) {
     info!("start");
 
     let repo = load_repo(work_dir, input_dump, AccessMode::Write).await;
+    assert!(repo.check_integrity().await.unwrap());
+
     let dump = dump(&repo).await;
     similar_asserts::assert_eq!(dump, *DUMP);
 
@@ -122,6 +124,8 @@ async fn test_load_reader(work_dir: &Path, input_dump: &Path) {
     info!("start");
 
     let repo = load_repo(work_dir, input_dump, AccessMode::Read).await;
+    assert!(repo.check_integrity().await.unwrap());
+
     let dump = dump(&repo).await;
     similar_asserts::assert_eq!(dump, *DUMP);
 

@@ -690,6 +690,12 @@ impl Repository {
         Ok(self.shared.vault.store().sync_progress().await?)
     }
 
+    /// Check integrity of the stored data.
+    // TODO: Return more detailed info about any integrity violation.
+    pub async fn check_integrity(&self) -> Result<bool> {
+        Ok(self.shared.vault.store().check_integrity().await?)
+    }
+
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;

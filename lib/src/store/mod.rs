@@ -6,6 +6,7 @@ mod changeset;
 mod error;
 mod index;
 mod inner_node;
+mod integrity;
 mod leaf_node;
 mod migrations;
 mod patch;
@@ -86,6 +87,11 @@ impl Store {
         write_keys: &Keypair,
     ) -> Result<(), Error> {
         migrations::run_data(self, this_writer_id, write_keys).await
+    }
+
+    /// Check data integrity
+    pub async fn check_integrity(&self) -> Result<bool, Error> {
+        integrity::check(self.acquire_read().await?.db()).await
     }
 
     pub async fn set_block_expiration(
