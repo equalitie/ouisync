@@ -51,7 +51,7 @@ pub(crate) struct RepositoryMonitor {
 
 impl RepositoryMonitor {
     pub fn new(parent: StateMonitor, metrics: Metrics, name: &str) -> Self {
-        let span = tracing::info_span!("repo", name);
+        let span = tracing::info_span!("repo", message = name);
         let node = parent.make_child(name);
 
         let index_requests_inflight = node.make_value("index requests inflight", 0);
@@ -308,7 +308,7 @@ impl JobMonitor {
         }
         .instrument(tracing::info_span!(
             "job",
-            job = self.metric.name().as_ref(),
+            message = self.metric.name().as_ref(),
             id = self.counter.fetch_add(1, Ordering::Relaxed),
         ))
         .await

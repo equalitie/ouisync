@@ -54,7 +54,7 @@ impl MessageBroker {
     ) -> Self {
         let span = tracing::info_span!(
             "message_broker",
-            runtime_id = ?that_runtime_id.as_public_key(),
+            message = ?that_runtime_id.as_public_key(),
         );
 
         tracing::info!(parent: &span, "Message broker created");
@@ -90,7 +90,7 @@ impl MessageBroker {
         let span = tracing::info_span!(
             parent: &self.span,
             "link",
-            repo = vault.monitor.name(),
+            message = vault.monitor.name(),
         );
 
         let span_enter = span.enter();

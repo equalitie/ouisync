@@ -93,7 +93,7 @@ async fn suite() {
 }
 
 /// Runs all tests on the given db dump.
-#[instrument(skip(work_dir))]
+#[instrument(target = "ouisync-test", skip(work_dir))]
 async fn group(work_dir: &Path, input_dump: &Path) {
     let (schema_version, data_version, directory_version) = parse_versions(input_dump);
 
@@ -106,7 +106,7 @@ async fn group(work_dir: &Path, input_dump: &Path) {
     info!(schema_version, data_version, directory_version, "done");
 }
 
-#[instrument(skip_all)]
+#[instrument(target = "ouisync-test", skip_all)]
 async fn test_load_writer(work_dir: &Path, input_dump: &Path) {
     info!("start");
 
@@ -119,7 +119,7 @@ async fn test_load_writer(work_dir: &Path, input_dump: &Path) {
     info!("done");
 }
 
-#[instrument(skip_all)]
+#[instrument(target = "ouisync-test", skip_all)]
 async fn test_load_reader(work_dir: &Path, input_dump: &Path) {
     info!("start");
 
@@ -132,7 +132,7 @@ async fn test_load_reader(work_dir: &Path, input_dump: &Path) {
     info!("done");
 }
 
-#[instrument(skip_all)]
+#[instrument(target = "ouisync-test", skip_all)]
 async fn test_sync(work_dir: &Path, input_dump: &Path) {
     info!("start");
 
@@ -196,7 +196,7 @@ async fn wait_until_sync(a: &Repository, b: &Repository) {
     .await
 }
 
-#[instrument(skip(work_dir))]
+#[instrument(target = "ouisync-test", skip(work_dir))]
 async fn create_repo_dump(work_dir: &Path, output_path: &Path) {
     let store_path = work_dir
         .join(output_path.file_stem().unwrap())
