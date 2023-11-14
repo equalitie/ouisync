@@ -51,7 +51,7 @@ static DUMP: Lazy<DumpDirectory> = Lazy::new(|| {
 async fn suite() {
     common::init_log();
 
-    let root_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dump_dir = root_dir.join("tests/dumps");
     let work_dir = TempDir::new().unwrap();
 
