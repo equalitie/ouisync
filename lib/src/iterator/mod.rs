@@ -3,10 +3,7 @@ mod combinations;
 mod sorted_union;
 
 use crate::collections::{hash_set, HashSet};
-use std::{
-    fmt::{self, Write},
-    hash::Hash,
-};
+use std::hash::Hash;
 
 #[cfg(test)]
 pub(crate) use self::combinations::PairCombinations;
@@ -71,27 +68,9 @@ where
     }
 }
 
-/// Combines all iterator elements into a `String`, separated by `sep`.
-pub(crate) fn join<I>(it: I, sep: &str) -> String
-where
-    I: IntoIterator,
-    I::Item: fmt::Display,
-{
-    it.into_iter().fold(String::new(), |mut out, e| {
-        if out.is_empty() {
-            write!(&mut out, "{e}").unwrap()
-        } else {
-            write!(&mut out, "{sep}{e}").unwrap()
-        }
-
-        out
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::iter;
 
     #[test]
     fn is_sorted_by_key_positive() {
@@ -103,12 +82,5 @@ mod tests {
     fn is_sorted_by_key_negative() {
         let input = [1, 3, 2, 4];
         assert!(!is_sorted_by_key(input, |n| n));
-    }
-
-    #[test]
-    fn join_test() {
-        assert_eq!(join(iter::empty::<u32>(), ", "), "");
-        assert_eq!(join([0], ", "), "0");
-        assert_eq!(join([0, 1, 2, 3], ", "), "0, 1, 2, 3");
     }
 }
