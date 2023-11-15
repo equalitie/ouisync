@@ -90,7 +90,7 @@ pub(crate) mod env {
             Fut: Future<Output = ()> + Send + 'static,
         {
             let actor = Actor::new(name.to_owned(), self.context.clone());
-            let span = info_span!("actor", name);
+            let span = info_span!("actor", message = name);
 
             let f = ACTOR.scope(actor, f);
             let f = f.instrument(span);
@@ -147,7 +147,7 @@ pub(crate) mod env {
             Fut: Future<Output = ()> + 'static,
         {
             let actor = Actor::new(name.to_owned(), self.context.clone());
-            let span = info_span!("actor", name);
+            let span = info_span!("actor", message = name);
 
             let f = async move {
                 f.await;

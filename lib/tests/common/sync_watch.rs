@@ -60,7 +60,7 @@ impl Receiver {
                 let this_vv = branch.version_vector().await.unwrap();
                 let that_vv = self.0.borrow();
 
-                debug!(?this_vv, ?that_vv);
+                debug!(?this_vv, that_vv = ?*that_vv);
 
                 if this_vv == *that_vv {
                     break;

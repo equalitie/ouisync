@@ -303,7 +303,7 @@ impl JointDirectory {
                                     .await?;
                                 match dir
                                     .merge()
-                                    .instrument(tracing::info_span!("dir", name))
+                                    .instrument(tracing::info_span!("dir", message = name))
                                     .await
                                 {
                                     Ok(_) => (),

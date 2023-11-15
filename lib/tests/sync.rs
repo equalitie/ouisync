@@ -25,47 +25,47 @@ const HUGE_SIZE: usize = 30 * 1024 * 1024;
 
 #[test]
 fn sync_two_peers_one_repo_small() {
-    sync_case(2, 1, SMALL_SIZE)
+    sync_swarm_case(2, 1, SMALL_SIZE)
 }
 
 #[test]
 fn sync_three_peers_one_repo_small() {
-    sync_case(3, 1, SMALL_SIZE)
+    sync_swarm_case(3, 1, SMALL_SIZE)
 }
 
 #[test]
 fn sync_two_peers_one_repo_large() {
-    sync_case(2, 1, LARGE_SIZE)
+    sync_swarm_case(2, 1, LARGE_SIZE)
 }
 
 #[ignore]
 #[test]
 fn sync_two_peers_one_repo_huge() {
-    sync_case(2, 1, HUGE_SIZE)
+    sync_swarm_case(2, 1, HUGE_SIZE)
 }
 
 #[test]
 fn sync_three_peers_one_repo_large() {
-    sync_case(3, 1, LARGE_SIZE)
+    sync_swarm_case(3, 1, LARGE_SIZE)
 }
 
 #[ignore]
 #[test]
 fn sync_three_peers_one_repo_huge() {
-    sync_case(3, 1, HUGE_SIZE)
+    sync_swarm_case(3, 1, HUGE_SIZE)
 }
 
 #[test]
 fn sync_two_peers_two_repos_small() {
-    sync_case(2, 2, SMALL_SIZE)
+    sync_swarm_case(2, 2, SMALL_SIZE)
 }
 
 #[test]
 fn sync_two_peers_two_repos_large() {
-    sync_case(2, 2, LARGE_SIZE)
+    sync_swarm_case(2, 2, LARGE_SIZE)
 }
 
-fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
+fn sync_swarm_case(num_peers: usize, num_repos: usize, file_size: usize) {
     assert!(num_peers > 1);
     assert!(num_repos > 0);
 
@@ -145,23 +145,59 @@ fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
 }
 
 #[test]
-fn sync_complex() {
-    let mut env = Env::new();
-    let (tx, rx) = sync_watch::channel();
+fn sync_directory_with_file() {
+    sync_dump_case(
+        dump::Directory::new().add("food", dump::Directory::new().add("pizza.jpg", vec![])),
+    );
+}
 
-    let dump = Arc::new(
+#[test]
+fn sync_directory_with_subdirectory() {
+    sync_dump_case(dump::Directory::new().add(
+        "food",
+        dump::Directory::new().add("mediterranean", dump::Directory::new()),
+    ));
+}
+
+#[test]
+fn sync_two_directories_one_with_subdirectory() {
+    sync_dump_case(
         dump::Directory::new()
-            .add("empty.txt", vec![])
-            .add("small.txt", b"foo".to_vec())
-            .add("large.txt", common::random_bytes(128 * 1024))
             .add("dir-a", dump::Directory::new())
             .add(
                 "dir-b",
-                dump::Directory::new()
-                    .add("file-in-dir-b.txt", b"bar".to_vec())
-                    .add("subdir", dump::Directory::new()),
+                dump::Directory::new().add("subdir", dump::Directory::new()),
             ),
     );
+}
+
+#[test]
+fn sync_many_files() {
+    let mut rng = rand::thread_rng();
+
+    let num_files = 10;
+    let min_size = 0;
+    let max_size = 128 * 1024;
+
+    let dump = (0..num_files)
+        .map(|index| {
+            let name = format!("file-{index}.dat");
+            let size = rng.gen_range(min_size..max_size);
+            let content = common::random_bytes(size);
+
+            (name, content)
+        })
+        .fold(dump::Directory::new(), |dump, (name, content)| {
+            dump.add(name, content)
+        });
+
+    sync_dump_case(dump);
+}
+
+fn sync_dump_case(dump: dump::Directory) {
+    let mut env = Env::new();
+    let (tx, rx) = sync_watch::channel();
+    let dump = Arc::new(dump);
 
     env.actor("writer", {
         let dump = dump.clone();
@@ -169,6 +205,8 @@ fn sync_complex() {
             let (_network, repo, _reg) = actor::setup().await;
 
             dump::load(&repo, &dump).await;
+
+            info!("dump load complete");
 
             tx.run(&repo).await;
         }
@@ -332,59 +370,6 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
             common::expect_file_content(&repo, "test.dat", &content).await;
 
             tx.send(()).unwrap();
-        }
-    });
-}
-
-#[test]
-fn transfer_many_files() {
-    let mut env = Env::new();
-    let (tx, mut rx) = mpsc::channel(1);
-
-    let num_files = 10;
-    let min_size = 0;
-    let max_size = 128 * 1024;
-    let files = {
-        let mut rng = rand::thread_rng();
-        let files: Vec<_> = (0..num_files)
-            .map(|_| {
-                let size = rng.gen_range(min_size..max_size);
-                let mut buffer = vec![0; size];
-                rng.fill(&mut buffer[..]);
-                buffer
-            })
-            .collect();
-        Arc::new(files)
-    };
-
-    env.actor("writer", {
-        let files = files.clone();
-
-        async move {
-            let (_network, repo, _reg) = actor::setup().await;
-
-            for (index, content) in files.iter().enumerate() {
-                let name = format!("file-{index}.dat");
-                let mut file = repo.create_file(&name).await.unwrap();
-                common::write_in_chunks(&mut file, content, 4096).await;
-                file.flush().await.unwrap();
-            }
-
-            rx.recv().await;
-        }
-    });
-
-    env.actor("reader", {
-        async move {
-            let (network, repo, _reg) = actor::setup().await;
-            network.add_user_provided_peer(&actor::lookup_addr("writer").await);
-
-            for (index, content) in files.iter().enumerate() {
-                let name = format!("file-{index}.dat");
-                common::expect_file_content(&repo, &name, content).await;
-            }
-
-            tx.send(()).await.unwrap();
         }
     });
 }
@@ -616,53 +601,6 @@ fn recreate_local_branch() {
         let vv_b = repo.local_branch().unwrap().version_vector().await.unwrap();
         tx.send(vv_b).await.unwrap();
         tx.closed().await;
-    });
-}
-
-#[test]
-fn transfer_directory_with_file() {
-    let mut env = Env::new();
-    let (tx, mut rx) = mpsc::channel(1); // side-channel
-
-    env.actor("writer", async move {
-        let (_network, repo, _reg) = actor::setup().await;
-
-        let mut dir = repo.create_directory("food").await.unwrap();
-        dir.create_file("pizza.jpg".into()).await.unwrap();
-
-        rx.recv().await;
-    });
-
-    env.actor("reader", async move {
-        let (network, repo, _reg) = actor::setup().await;
-        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
-
-        common::expect_entry_exists(&repo, "food/pizza.jpg", EntryType::File).await;
-
-        tx.send(()).await.unwrap();
-    });
-}
-
-#[test]
-fn transfer_directory_with_subdirectory() {
-    let mut env = Env::new();
-    let (tx, mut rx) = mpsc::channel(1);
-
-    env.actor("writer", async move {
-        let (_network, repo, _reg) = actor::setup().await;
-
-        repo.create_directory("food/mediterranean").await.unwrap();
-
-        rx.recv().await;
-    });
-
-    env.actor("reader", async move {
-        let (network, repo, _reg) = actor::setup().await;
-        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
-
-        common::expect_entry_exists(&repo, "food/mediterranean", EntryType::Directory).await;
-
-        tx.send(()).await.unwrap();
     });
 }
 

@@ -74,10 +74,9 @@ pub(super) async fn read(
         .bind(id)
         .fetch_optional(conn)
         .await?
-        .ok_or(Error::BlockNotFound)
-        .map_err(|error| {
-            tracing::trace!(?id, ?error);
-            error
+        .ok_or_else(|| {
+            tracing::trace!(?id, "Block not found");
+            Error::BlockNotFound
         })?;
 
     let nonce: &[u8] = row.get(0);
@@ -88,7 +87,7 @@ pub(super) async fn read(
         tracing::error!(
             expected = BLOCK_SIZE,
             actual = src_content.len(),
-            "wrong block length"
+            "Wrong block length"
         );
         return Err(Error::MalformedData);
     }
