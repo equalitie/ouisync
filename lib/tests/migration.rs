@@ -3,12 +3,12 @@
 #[macro_use]
 mod common;
 
-use async_recursion::async_recursion;
-use camino::Utf8Path;
+use common::{dump, sync_watch};
+use futures_util::future;
 use once_cell::sync::Lazy;
 use ouisync::{
-    network::Network, Access, AccessMode, AccessSecrets, JointDirectory, JointEntryRef, PeerAddr,
-    Repository, RepositoryParams, StateMonitor, DATA_VERSION, DIRECTORY_VERSION, SCHEMA_VERSION,
+    network::Network, Access, AccessMode, AccessSecrets, PeerAddr, Repository, RepositoryParams,
+    StateMonitor, DATA_VERSION, DIRECTORY_VERSION, SCHEMA_VERSION,
 };
 use rand::{
     distributions::{Alphanumeric, DistString, Standard},
@@ -17,10 +17,9 @@ use rand::{
     Rng, SeedableRng,
 };
 use std::{
-    collections::BTreeMap,
     env,
     ffi::OsString,
-    fmt, io,
+    io,
     net::Ipv4Addr,
     path::{Path, PathBuf},
     str,
@@ -32,17 +31,17 @@ use tracing::{instrument, Instrument};
 const DB_EXTENSION: &str = "db";
 const DB_DUMP_EXTENSION: &str = "db.dump";
 
-static DUMP: Lazy<DumpDirectory> = Lazy::new(|| {
-    DumpDirectory::new()
+static DUMP: Lazy<dump::Directory> = Lazy::new(|| {
+    dump::Directory::new()
         .add("empty.txt", vec![])
         .add("small.txt", b"foo".to_vec())
         .add("large.txt", seeded_random_bytes(0, 128 * 1024))
-        .add("dir-a", DumpDirectory::new())
+        .add("dir-a", dump::Directory::new())
         .add(
             "dir-b",
-            DumpDirectory::new()
+            dump::Directory::new()
                 .add("file-in-dir-b.txt", b"bar".to_vec())
-                .add("subdir", DumpDirectory::new()),
+                .add("subdir", dump::Directory::new()),
         )
 });
 
@@ -113,7 +112,7 @@ async fn test_load_writer(work_dir: &Path, input_dump: &Path) {
     let repo = load_repo(work_dir, input_dump, AccessMode::Write).await;
     assert!(repo.check_integrity().await.unwrap());
 
-    let dump = dump(&repo).await;
+    let dump = dump::save(&repo).await;
     similar_asserts::assert_eq!(dump, *DUMP);
 
     info!("done");
@@ -126,7 +125,7 @@ async fn test_load_reader(work_dir: &Path, input_dump: &Path) {
     let repo = load_repo(work_dir, input_dump, AccessMode::Read).await;
     assert!(repo.check_integrity().await.unwrap());
 
-    let dump = dump(&repo).await;
+    let dump = dump::save(&repo).await;
     similar_asserts::assert_eq!(dump, *DUMP);
 
     info!("done");
@@ -162,9 +161,11 @@ async fn test_sync(work_dir: &Path, input_dump: &Path) {
 
     network_b.add_user_provided_peer(&network_a.listener_local_addrs().into_iter().next().unwrap());
 
-    wait_until_sync(&repo_b, &repo_a).await;
+    // Wait until B fully syncs with A
+    let (tx, rx) = sync_watch::channel();
+    future::join(tx.run(&repo_a), rx.run(&repo_b)).await;
 
-    let dump = dump(&repo_b).await;
+    let dump = dump::save(&repo_b).await;
     similar_asserts::assert_eq!(dump, *DUMP);
 
     info!("done");
@@ -176,24 +177,6 @@ async fn create_network() -> Network {
         .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;
     network
-}
-
-async fn wait_until_sync(a: &Repository, b: &Repository) {
-    common::eventually(a, || async {
-        let progress = a.sync_progress().await.unwrap();
-        debug!(progress = %progress.percent());
-
-        if progress.total == 0 || progress.value < progress.total {
-            return false;
-        }
-
-        let vv_a = a.local_branch().unwrap().version_vector().await.unwrap();
-        let vv_b = b.local_branch().unwrap().version_vector().await.unwrap();
-        debug!(?vv_a, ?vv_b);
-
-        vv_a == vv_b
-    })
-    .await
 }
 
 #[instrument(target = "ouisync-test", skip(work_dir))]
@@ -213,7 +196,7 @@ async fn create_repo_dump(work_dir: &Path, output_path: &Path) {
     .unwrap();
 
     // Populate it with data
-    populate(&repo, &DUMP).await;
+    dump::load(&repo, &DUMP).await;
 
     repo.close().await.unwrap();
 
@@ -288,101 +271,6 @@ fn parse_versions(dump_path: &Path) -> (u32, u32, u32) {
         parts.next().unwrap_or(0),
         parts.next().unwrap_or(0),
     )
-}
-
-#[derive(Eq, PartialEq, Debug)]
-struct DumpDirectory(BTreeMap<String, DumpEntry>);
-
-impl DumpDirectory {
-    const fn new() -> Self {
-        Self(BTreeMap::new())
-    }
-
-    fn add(mut self, name: impl Into<String>, entry: impl Into<DumpEntry>) -> Self {
-        self.0.insert(name.into(), entry.into());
-        self
-    }
-}
-
-#[derive(Eq, PartialEq)]
-struct DumpFile(Vec<u8>);
-
-impl fmt::Debug for DumpFile {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Ok(s) = str::from_utf8(&self.0) {
-            write!(f, "{s:?}")
-        } else {
-            write!(f, "{}", hex::encode(&self.0))
-        }
-    }
-}
-
-#[derive(Eq, PartialEq, Debug)]
-enum DumpEntry {
-    File(DumpFile),
-    Directory(DumpDirectory),
-}
-
-impl From<Vec<u8>> for DumpEntry {
-    fn from(content: Vec<u8>) -> Self {
-        Self::File(DumpFile(content))
-    }
-}
-
-impl From<DumpDirectory> for DumpEntry {
-    fn from(dir: DumpDirectory) -> Self {
-        Self::Directory(dir)
-    }
-}
-
-async fn dump(repo: &Repository) -> DumpDirectory {
-    dump_directory(repo.open_directory("/").await.unwrap()).await
-}
-
-#[async_recursion]
-async fn dump_directory(dir: JointDirectory) -> DumpDirectory {
-    let mut entries = BTreeMap::new();
-
-    for entry in dir.entries() {
-        let name = entry.name().to_owned();
-        let dump = match entry {
-            JointEntryRef::File(entry) => {
-                let mut file = entry.open().await.unwrap();
-                DumpEntry::File(DumpFile(file.read_to_end().await.unwrap()))
-            }
-            JointEntryRef::Directory(entry) => {
-                let dir = entry.open().await.unwrap();
-                DumpEntry::Directory(dump_directory(dir).await)
-            }
-        };
-
-        entries.insert(name, dump);
-    }
-
-    DumpDirectory(entries)
-}
-
-async fn populate(repo: &Repository, dump: &DumpDirectory) {
-    populate_directory(repo, Utf8Path::new("/"), dump).await
-}
-
-#[async_recursion]
-async fn populate_directory(repo: &Repository, path: &Utf8Path, dump: &DumpDirectory) {
-    for (name, dump) in &dump.0 {
-        let path = path.join(name);
-
-        match dump {
-            DumpEntry::File(dump) => {
-                let mut file = repo.create_file(path).await.unwrap();
-                file.write_all(&dump.0).await.unwrap();
-                file.flush().await.unwrap();
-            }
-            DumpEntry::Directory(dump) => {
-                repo.create_directory(&path).await.unwrap();
-                populate_directory(repo, &path, dump).await;
-            }
-        }
-    }
 }
 
 fn seeded_random_bytes(seed: u64, size: usize) -> Vec<u8> {

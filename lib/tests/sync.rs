@@ -3,12 +3,8 @@
 #[macro_use]
 mod common;
 
-#[path = "common/traffic_monitor.rs"]
-mod traffic_monitor;
-
-use self::{
-    common::{actor, Env, Proto, DEFAULT_REPO},
-    traffic_monitor::TrafficMonitor,
+use self::common::{
+    actor, dump, sync_watch, traffic_monitor::TrafficMonitor, Env, Proto, DEFAULT_REPO,
 };
 use assert_matches::assert_matches;
 use ouisync::{
@@ -77,7 +73,7 @@ fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
     let barrier = Arc::new(Barrier::new(num_peers));
 
     let contents: Vec<_> = (0..num_repos)
-        .map(|_| common::random_content(file_size))
+        .map(|_| common::random_bytes(file_size))
         .collect();
 
     // Only one file per repo so we can use the same name.
@@ -146,6 +142,49 @@ fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
             }
         });
     }
+}
+
+#[test]
+fn sync_complex() {
+    let mut env = Env::new();
+    let (tx, rx) = sync_watch::channel();
+
+    let dump = Arc::new(
+        dump::Directory::new()
+            .add("empty.txt", vec![])
+            .add("small.txt", b"foo".to_vec())
+            .add("large.txt", common::random_bytes(128 * 1024))
+            .add("dir-a", dump::Directory::new())
+            .add(
+                "dir-b",
+                dump::Directory::new()
+                    .add("file-in-dir-b.txt", b"bar".to_vec())
+                    .add("subdir", dump::Directory::new()),
+            ),
+    );
+
+    env.actor("writer", {
+        let dump = dump.clone();
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            dump::load(&repo, &dump).await;
+
+            tx.run(&repo).await;
+        }
+    });
+
+    env.actor("reader", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.add_user_provided_peer(&actor::lookup_addr("writer").await);
+
+            rx.run(&repo).await;
+
+            let actual_dump = dump::save(&repo).await;
+            similar_asserts::assert_eq!(actual_dump, *dump);
+        }
+    });
 }
 
 #[test]
@@ -255,7 +294,7 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
     let mut env = Env::new();
     let (tx, _) = broadcast::channel(1);
 
-    let content = Arc::new(common::random_content(file_size));
+    let content = Arc::new(common::random_bytes(file_size));
 
     env.actor("relay", {
         let mut rx = tx.subscribe();
@@ -358,7 +397,7 @@ fn sync_during_file_write() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
 
-    let content = common::random_content(3 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content = common::random_bytes(3 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     env.actor("alice", {
         let content = content.clone();
@@ -430,8 +469,8 @@ fn concurrent_modify_open_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
 
-    let content_a = Arc::new(common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE));
-    let content_b = Arc::new(common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE));
+    let content_a = Arc::new(common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE));
+    let content_b = Arc::new(common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE));
 
     env.actor("alice", {
         let content_b = content_b.clone();
@@ -813,11 +852,11 @@ fn concurrent_update_and_delete_during_conflict() {
     let (bob_tx, mut bob_rx) = mpsc::channel(1);
 
     // Initial file content
-    let content_v0 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE); // exactly 2 blocks
+    let content_v0 = common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE); // exactly 2 blocks
 
     // Content later edited by overwriting its end with this (shorter than 1 block so that the
     // first block remains unchanged)
-    let chunk = common::random_content(64);
+    let chunk = common::random_bytes(64);
 
     // Expected file content after the edit
     let content_v1 = {
@@ -917,8 +956,8 @@ fn content_stays_available_during_sync() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
 
-    let content0 = common::random_content(32);
-    let content1 = common::random_content(128 * 1024);
+    let content0 = common::random_bytes(32);
+    let content1 = common::random_bytes(128 * 1024);
 
     env.actor("alice", {
         let content0 = content0.clone();
@@ -995,7 +1034,7 @@ fn redownload_expired_blocks() {
     let (finish_origin_tx, mut finish_origin_rx) = mpsc::channel(1);
     let (finish_cache_tx, mut finish_cache_rx) = mpsc::channel(1);
 
-    let test_content = Arc::new(common::random_content(2 * 1024 * 1024));
+    let test_content = Arc::new(common::random_bytes(2 * 1024 * 1024));
 
     async fn wait_for_block_count(repo: &Repository, block_count: u64) {
         common::eventually(repo, || {
@@ -1099,9 +1138,9 @@ fn quota_exceed() {
     let mut env = Env::new();
 
     let quota = StorageSize::from_blocks(4);
-    let content0 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
-    let content1 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
-    let content2 = common::random_content(BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content0 = common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content1 = common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content2 = common::random_bytes(BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     let (tx, mut rx) = mpsc::channel(1);
 
@@ -1189,8 +1228,8 @@ fn quota_concurrent_writes() {
     let quota = StorageSize::from_blocks(3);
 
     // Each of these files individually is within the quota but together they exceed it.
-    let content0 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
-    let content1 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content0 = common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content1 = common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     let barrier = Arc::new(Barrier::new(3));
 
@@ -1243,7 +1282,7 @@ fn file_progress() {
 
         for size in sizes {
             let mut file = repo.create_file(format!("test-{size}.dat")).await.unwrap();
-            let content = common::random_content(size);
+            let content = common::random_bytes(size);
             common::write_in_chunks(&mut file, &content, 4096).await;
             file.flush().await.unwrap();
         }

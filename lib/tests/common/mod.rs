@@ -1,5 +1,11 @@
 #![allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 
+#[macro_use]
+mod macros;
+
+pub(crate) mod dump;
+pub(crate) mod sync_watch;
+pub(crate) mod traffic_monitor;
 mod wait_map;
 
 use camino::Utf8Path;
@@ -45,55 +51,6 @@ pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
 });
 
 pub(crate) static TEST_TIMEOUT: Lazy<Duration> = Lazy::new(|| 4 * *EVENT_TIMEOUT);
-
-// Replacements for tracing macros that add "ouisync-test" as target:
-macro_rules! span {
-    ($($tokens:tt)*) => {
-        tracing::span!(target: "ouisync-test", $($tokens)*)
-    }
-}
-
-macro_rules! info_span {
-    ($($tokens:tt)*) => {
-        span!(tracing::Level::INFO, $($tokens)*)
-    }
-}
-
-macro_rules! event {
-    ($($tokens:tt)*) => {
-        tracing::event!(target: "ouisync-test", $($tokens)*)
-    }
-}
-
-macro_rules! error {
-    ($($tokens:tt)*) => {
-        event!(tracing::Level::ERROR, $($tokens)*)
-    }
-}
-
-macro_rules! warn {
-    ($($tokens:tt)*) => {
-        event!(tracing::Level::WARN, $($tokens)*)
-    }
-}
-
-macro_rules! info {
-    ($($tokens:tt)*) => {
-        event!(tracing::Level::INFO, $($tokens)*)
-    }
-}
-
-macro_rules! debug {
-    ($($tokens:tt)*) => {
-        event!(tracing::Level::DEBUG, $($tokens)*)
-    }
-}
-
-macro_rules! trace {
-    ($($tokens:tt)*) => {
-        event!(tracing::Level::TRACE, $($tokens)*)
-    }
-}
 
 #[cfg(not(feature = "simulation"))]
 pub(crate) mod env {
@@ -662,7 +619,7 @@ pub(crate) async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result
     Ok(content)
 }
 
-pub(crate) fn random_content(size: usize) -> Vec<u8> {
+pub(crate) fn random_bytes(size: usize) -> Vec<u8> {
     let mut content = vec![0; size];
     rand::thread_rng().fill(&mut content[..]);
     content
