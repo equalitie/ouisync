@@ -6,7 +6,7 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash},
     db,
     debug::DebugPrinter,
-    error::{Error, Result},
+    error::Result,
     event::{EventSender, Payload},
     protocol::{
         Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError, UntrustedProof,
@@ -214,11 +214,7 @@ impl Vault {
 
     pub async fn quota(&self) -> Result<Option<StorageSize>> {
         let mut conn = self.store().db().acquire().await?;
-        match quota::get(&mut conn).await {
-            Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
-            Err(Error::EntryNotFound) => Ok(None),
-            Err(error) => Err(error),
-        }
+        Ok(quota::get(&mut conn).await?.map(StorageSize::from_bytes))
     }
 
     pub async fn set_block_expiration(&self, duration: Option<Duration>) -> Result<()> {

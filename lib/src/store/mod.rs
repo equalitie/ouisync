@@ -6,7 +6,9 @@ mod changeset;
 mod error;
 mod index;
 mod inner_node;
+mod integrity;
 mod leaf_node;
+mod migrations;
 mod patch;
 mod quota;
 mod receive_filter;
@@ -16,6 +18,7 @@ mod root_node;
 mod tests;
 
 pub use error::Error;
+pub use migrations::DATA_VERSION;
 
 pub(crate) use {
     block::ReceiveStatus as BlockReceiveStatus, block_ids::BlockIdsPage, changeset::Changeset,
@@ -32,7 +35,10 @@ use self::{
 use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
     collections::HashSet,
-    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
+    crypto::{
+        sign::{Keypair, PublicKey},
+        CacheHash, Hash, Hashable,
+    },
     db,
     debug::DebugPrinter,
     progress::Progress,
@@ -72,6 +78,20 @@ impl Store {
             client_reload_index_tx,
             block_expiration_tracker: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Runs data migrations. Does nothing if already at the latest version.
+    pub async fn migrate_data(
+        &self,
+        this_writer_id: PublicKey,
+        write_keys: &Keypair,
+    ) -> Result<(), Error> {
+        migrations::run_data(self, this_writer_id, write_keys).await
+    }
+
+    /// Check data integrity
+    pub async fn check_integrity(&self) -> Result<bool, Error> {
+        integrity::check(self.acquire_read().await?.db()).await
     }
 
     pub async fn set_block_expiration(

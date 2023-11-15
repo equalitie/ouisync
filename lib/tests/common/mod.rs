@@ -1,3 +1,11 @@
+#![allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+
+#[macro_use]
+mod macros;
+
+pub(crate) mod dump;
+pub(crate) mod sync_watch;
+pub(crate) mod traffic_monitor;
 mod wait_map;
 
 use camino::Utf8Path;
@@ -82,7 +90,7 @@ pub(crate) mod env {
             Fut: Future<Output = ()> + Send + 'static,
         {
             let actor = Actor::new(name.to_owned(), self.context.clone());
-            let span = tracing::info_span!("actor", name);
+            let span = info_span!("actor", message = name);
 
             let f = ACTOR.scope(actor, f);
             let f = f.instrument(span);
@@ -139,7 +147,7 @@ pub(crate) mod env {
             Fut: Future<Output = ()> + 'static,
         {
             let actor = Actor::new(name.to_owned(), self.context.clone());
-            let span = tracing::info_span!("actor", name);
+            let span = info_span!("actor", message = name);
 
             let f = async move {
                 f.await;
@@ -228,6 +236,10 @@ pub(crate) mod actor {
         })
     }
 
+    pub(crate) fn get_repo_path(name: &str) -> PathBuf {
+        ACTOR.with(|actor| actor.repo_path(name))
+    }
+
     pub(crate) async fn create_repo_with_mode(name: &str, mode: AccessMode) -> Repository {
         let (params, secrets) = get_repo_params_and_secrets(name);
 
@@ -250,7 +262,6 @@ pub(crate) mod actor {
         (repo, reg)
     }
 
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     /// Convenience function for the common case where the actor has one linked repository.
     pub(crate) async fn setup() -> (Network, Repository, Registration) {
         let network = create_network(Proto::Tcp).await;
@@ -326,16 +337,14 @@ impl Drop for TempDir {
         // failures.
         if thread::panicking() {
             let path = self.0.take().unwrap().into_path();
-            tracing::warn!("preserving temp dir in '{}'", path.display());
+            warn!("preserving temp dir in '{}'", path.display());
         }
     }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Proto {
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     Tcp,
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     Quic,
 }
 
@@ -356,7 +365,7 @@ impl Proto {
 }
 
 // Keep calling `f` until it returns `true`. Wait for repo notification between calls.
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+
 pub(crate) async fn eventually<F, Fut>(repo: &Repository, mut f: F)
 where
     F: FnMut() -> Fut,
@@ -381,7 +390,7 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
     loop {
         match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
             Ok(event) => {
-                tracing::debug!(?event);
+                debug!(?event);
 
                 match event {
                     Ok(Event {
@@ -401,7 +410,7 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
 
                 // NOTE: in release mode backtrace is useless so this trace helps us to locate the
                 // source of the panic:
-                tracing::error!("{}", MESSAGE);
+                error!("{}", MESSAGE);
                 panic!("{}", MESSAGE);
             }
         }
@@ -410,7 +419,7 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
 
 /// Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 /// file content matches.
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+
 pub(crate) async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
     expect_file_version_content(repo, path, None, expected_content).await
 }
@@ -464,20 +473,20 @@ pub(crate) async fn check_file_version_content(
             error @ (Error::Store(StoreError::BlockNotFound)
             | Error::Store(StoreError::LocatorNotFound)),
         ) => {
-            tracing::warn!(path, ?error, "read failed");
+            warn!(path, ?error, "read failed");
             return false;
         }
         Err(error) => {
-            tracing::error!(path, ?error);
+            error!(path, ?error);
             panic!("unexpected error: {error:?}");
         }
     };
 
     if actual_content == expected_content {
-        tracing::debug!(path, "content matches");
+        debug!(path, "content matches");
         true
     } else {
-        tracing::warn!(path, "content does not match");
+        warn!(path, "content does not match");
         false
     }
 }
@@ -487,7 +496,7 @@ pub(crate) async fn open_file_version(
     path: &str,
     branch_id: Option<&PublicKey>,
 ) -> Option<File> {
-    tracing::debug!(path, "opening");
+    debug!(path, "opening");
 
     let result = if let Some(branch_id) = branch_id {
         repo.open_file_version(path, branch_id).await
@@ -507,16 +516,16 @@ pub(crate) async fn open_file_version(
             | Error::Store(StoreError::BlockNotFound)
             | Error::Store(StoreError::LocatorNotFound)),
         ) => {
-            tracing::warn!(path, ?branch_id, ?error, "open failed");
+            warn!(path, ?branch_id, ?error, "open failed");
             return None;
         }
         Err(error) => {
-            tracing::error!(path, ?branch_id, ?error);
+            error!(path, ?branch_id, ?error);
             panic!("unexpected error: {error:?}");
         }
     };
 
-    tracing::debug!(path, branch.id = ?file.branch().id(), "opened");
+    debug!(path, branch.id = ?file.branch().id(), "opened");
 
     Some(file)
 }
@@ -526,13 +535,12 @@ pub(crate) async fn expect_entry_exists(repo: &Repository, path: &str, entry_typ
     eventually(repo, || check_entry_exists(repo, path, entry_type)).await
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn check_entry_exists(
     repo: &Repository,
     path: &str,
     entry_type: EntryType,
 ) -> bool {
-    tracing::debug!(path, "opening");
+    debug!(path, "opening");
 
     let result = match entry_type {
         EntryType::File => repo.open_file(path).await.map(|_| ()),
@@ -541,7 +549,7 @@ pub(crate) async fn check_entry_exists(
 
     match result {
         Ok(()) => {
-            tracing::debug!(path, "opened");
+            debug!(path, "opened");
             true
         }
         Err(
@@ -549,11 +557,11 @@ pub(crate) async fn check_entry_exists(
             | Error::Store(StoreError::BlockNotFound)
             | Error::Store(StoreError::LocatorNotFound)),
         ) => {
-            tracing::warn!(path, ?error, "open failed");
+            warn!(path, ?error, "open failed");
             false
         }
         Err(error) => {
-            tracing::error!(path, ?error);
+            error!(path, ?error);
             panic!("unexpected error: {error:?}");
         }
     }
@@ -570,12 +578,12 @@ pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
 
         match parent.lookup_unique(name) {
             Ok(_) => {
-                tracing::debug!(%path, "still exists");
+                debug!(%path, "still exists");
                 false
             }
             Err(Error::EntryNotFound) => true,
             Err(error) => {
-                tracing::error!(%path, ?error);
+                error!(%path, ?error);
                 panic!("unexpected error: {error:?}");
             }
         }
@@ -583,14 +591,13 @@ pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
     .await
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
         let end = (offset + chunk_size).min(content.len());
         file.write_all(&content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
-            tracing::debug!(
+            debug!(
                 "file write progress: {}/{} MB",
                 to_megabytes(end),
                 to_megabytes(content.len())
@@ -612,8 +619,7 @@ pub(crate) async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result
     Ok(content)
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-pub(crate) fn random_content(size: usize) -> Vec<u8> {
+pub(crate) fn random_bytes(size: usize) -> Vec<u8> {
     let mut content = vec![0; size];
     rand::thread_rng().fill(&mut content[..]);
     content
@@ -621,48 +627,6 @@ pub(crate) fn random_content(size: usize) -> Vec<u8> {
 
 fn to_megabytes(bytes: usize) -> usize {
     bytes / 1024 / 1024
-}
-
-/// Helper to assert two byte slices are equal which prints useful info if they are not.
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-#[track_caller]
-pub(crate) fn assert_content_equal(lhs: &[u8], rhs: &[u8]) {
-    let Some(snip_start) = lhs.iter().zip(rhs).position(|(lhs, rhs)| lhs != rhs) else {
-        return;
-    };
-
-    let snip_len = 32;
-    let snip_end = snip_start + snip_len;
-
-    let lhs_snip = &lhs[snip_start..snip_end.min(lhs.len())];
-    let rhs_snip = &rhs[snip_start..snip_end.min(rhs.len())];
-
-    let ellipsis_start = if snip_start > 0 { "…" } else { "" };
-    let lhs_ellipsis_end = if snip_end < lhs.len() { "…" } else { "" };
-    let rhs_ellipsis_end = if snip_end < rhs.len() { "…" } else { "" };
-
-    panic!(
-        "content not equal (differing offset: {})\n    lhs: {}{:x}{}\n    rhs: {}{:x}{}",
-        snip_start,
-        ellipsis_start,
-        HexFmt(lhs_snip),
-        lhs_ellipsis_end,
-        ellipsis_start,
-        HexFmt(rhs_snip),
-        rhs_ellipsis_end,
-    );
-
-    struct HexFmt<'a>(&'a [u8]);
-
-    impl fmt::LowerHex for HexFmt<'_> {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            for byte in self.0 {
-                write!(f, "{:02x}", byte)?;
-            }
-
-            Ok(())
-        }
-    }
 }
 
 pub(crate) fn init_log() {

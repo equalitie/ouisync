@@ -17,7 +17,7 @@ pub use self::{
 
 pub(crate) use self::{
     id::LocalId,
-    metadata::quota,
+    metadata::{data_version, quota},
     monitor::RepositoryMonitor,
     vault::{BlockRequestMode, Vault},
 };
@@ -40,7 +40,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
-    protocol::BLOCK_SIZE,
+    protocol::{RootNodeFilter, BLOCK_SIZE},
     state_monitor::StateMonitor,
     storage_size::StorageSize,
     store,
@@ -137,8 +137,14 @@ impl Repository {
 
         // If we are writer, load the writer id from the db, otherwise use a dummy random one.
         let this_writer_id = if access_secrets.can_write() {
-            if metadata::check_device_id(&mut tx, &device_id).await? {
+            let writer_id = if metadata::check_device_id(&mut tx, &device_id).await? {
                 metadata::get_writer_id(&mut tx, local_key.as_ref()).await?
+            } else {
+                None
+            };
+
+            if let Some(writer_id) = writer_id {
+                writer_id
             } else {
                 // Replica id changed. Must generate new writer id.
                 generate_and_store_writer_id(&mut tx, &device_id, local_key.as_ref()).await?
@@ -177,6 +183,10 @@ impl Repository {
         };
 
         let vault = Vault::new(*secrets.id(), event_tx, pool, block_request_mode, monitor);
+
+        if let Some(keys) = secrets.write_secrets().map(|secrets| &secrets.write_keys) {
+            vault.store().migrate_data(this_writer_id, keys).await?;
+        }
 
         {
             let mut conn = vault.store().db().acquire().await?;
@@ -225,17 +235,17 @@ impl Repository {
     }
 
     pub async fn database_id(&self) -> Result<DatabaseId> {
-        metadata::get_or_generate_database_id(self.db()).await
+        Ok(metadata::get_or_generate_database_id(self.db()).await?)
     }
 
     pub async fn requires_local_password_for_reading(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        metadata::requires_local_password_for_reading(&mut conn).await
+        Ok(metadata::requires_local_password_for_reading(&mut conn).await?)
     }
 
     pub async fn requires_local_password_for_writing(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        metadata::requires_local_password_for_writing(&mut conn).await
+        Ok(metadata::requires_local_password_for_writing(&mut conn).await?)
     }
 
     pub async fn set_access(&self, access: &Access) -> Result<()> {
@@ -348,8 +358,10 @@ impl Repository {
             let local_old_write_key = metadata::secret_to_key(tx, local_old_write_secret).await?;
             metadata::get_writer_id(tx, Some(&local_old_write_key)).await?
         } else {
-            generate_writer_id()
+            None
         };
+
+        let writer_id = writer_id.unwrap_or_else(generate_writer_id);
 
         metadata::set_write_key(
             tx,
@@ -403,7 +415,7 @@ impl Repository {
             LocalSecret::SecretKey(key) => key,
         };
 
-        metadata::get_access_secrets(&mut tx, Some(&local_key)).await
+        Ok(metadata::get_access_secrets(&mut tx, Some(&local_key)).await?)
     }
 
     /// Obtain the reopen token for this repository. The token can then be used to reopen this
@@ -641,11 +653,25 @@ impl Repository {
         self.shared.local_branch()
     }
 
-    // Returns the branch corresponding to the given id.
-    // Currently test only.
+    /// Returns the branch corresponding to the given id or `Error::PermissionDenied. if this repo
+    /// doesn't have at least read access.
     #[cfg(test)]
-    pub(crate) fn get_branch(&self, id: PublicKey) -> Result<Branch> {
+    pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
         self.shared.get_branch(id)
+    }
+
+    /// Returns version vector of the given branch. Work in all access moded.
+    pub async fn get_branch_version_vector(&self, writer_id: &PublicKey) -> Result<VersionVector> {
+        Ok(self
+            .shared
+            .vault
+            .store()
+            .acquire_read()
+            .await?
+            .load_root_node(writer_id, RootNodeFilter::Any)
+            .await?
+            .proof
+            .into_version_vector())
     }
 
     /// Subscribe to event notifications.
@@ -662,6 +688,12 @@ impl Repository {
     /// all blocks)
     pub async fn sync_progress(&self) -> Result<Progress> {
         Ok(self.shared.vault.store().sync_progress().await?)
+    }
+
+    /// Check integrity of the stored data.
+    // TODO: Return more detailed info about any integrity violation.
+    pub async fn check_integrity(&self) -> Result<bool> {
+        Ok(self.shared.vault.store().check_integrity().await?)
     }
 
     // Opens the root directory across all branches as JointDirectory.

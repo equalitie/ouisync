@@ -125,7 +125,13 @@ impl RepositoryHolder {
     }
 
     pub async fn mount(&self, mount_dir: &Path) -> Result<()> {
-        let point: Option<String> = self.repository.metadata().get(MOUNT_POINT).await.ok();
+        let point: Option<String> = self
+            .repository
+            .metadata()
+            .get(MOUNT_POINT)
+            .await
+            .ok()
+            .flatten();
         let point = point.map(|point| self.resolve_mount_point(point, mount_dir));
 
         let mount = if let Some(point) = point {
@@ -445,7 +451,13 @@ pub(crate) async fn find_all(
 
         let metadata = repository.metadata();
 
-        if !metadata.get(OPEN_ON_START).await.unwrap_or(false) {
+        if !metadata
+            .get(OPEN_ON_START)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+        {
             continue;
         }
 

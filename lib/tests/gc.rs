@@ -1,5 +1,6 @@
 //! Garbage collection tests
 
+#[macro_use]
 mod common;
 
 use self::common::{actor, Env, DEFAULT_REPO};
@@ -32,7 +33,7 @@ fn local_delete_remote_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
 
-    let content = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content = common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     env.actor("remote", {
         let content = content.clone();
@@ -130,7 +131,7 @@ fn local_truncate_remote_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
 
-    let content = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content = common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     env.actor("remote", {
         let content = content.clone();
@@ -176,7 +177,7 @@ fn local_truncate_remote_file() {
 fn remote_truncate_remote_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
-    let content = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content = common::random_bytes(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     env.actor("remote", {
         let content = content.clone();
@@ -220,7 +221,7 @@ fn remote_truncate_remote_file() {
 }
 
 async fn write_to_file(file: &mut File, size: usize) {
-    file.write_all(&common::random_content(size)).await.unwrap();
+    file.write_all(&common::random_bytes(size)).await.unwrap();
 }
 
 async fn expect_block_count(repo: &Repository, expected: u64) {
@@ -230,7 +231,7 @@ async fn expect_block_count(repo: &Repository, expected: u64) {
         if actual == expected {
             true
         } else {
-            tracing::warn!(actual, expected, "block count");
+            warn!(actual, expected, "block count");
             false
         }
     })

@@ -74,10 +74,9 @@ pub(super) async fn read(
         .bind(id)
         .fetch_optional(conn)
         .await?
-        .ok_or(Error::BlockNotFound)
-        .map_err(|error| {
-            tracing::trace!(?id, ?error);
-            error
+        .ok_or_else(|| {
+            tracing::trace!(?id, "Block not found");
+            Error::BlockNotFound
         })?;
 
     let nonce: &[u8] = row.get(0);
@@ -88,7 +87,7 @@ pub(super) async fn read(
         tracing::error!(
             expected = BLOCK_SIZE,
             actual = src_content.len(),
-            "wrong block length"
+            "Wrong block length"
         );
         return Err(Error::MalformedData);
     }
@@ -181,7 +180,8 @@ mod tests {
         let (_base_dir, pool) = setup().await;
 
         let mut content = BlockContent::new();
-        let id = BlockId::from_content(&content);
+        let nonce = rand::random();
+        let id = BlockId::new(&content, &nonce);
 
         let mut conn = pool.acquire().await.unwrap();
 

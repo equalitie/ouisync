@@ -1,8 +1,6 @@
 use super::{error::Error as StoreError, root_node};
-use crate::{
-    crypto::Hash, db, future::try_collect_into, iterator, storage_size::StorageSize, versioned,
-};
-use sqlx::Row;
+use crate::{crypto::Hash, db, future::try_collect_into, storage_size::StorageSize, versioned};
+use sqlx::{QueryBuilder, Row};
 use thiserror::Error;
 
 /// Check whether the repository would be within the given block count quota if the snapshot with
@@ -68,37 +66,34 @@ async fn count_referenced_blocks(
     conn: &mut db::Connection,
     root_hashes: &[Hash],
 ) -> Result<u64, StoreError> {
-    // NOTE: sqlx currently doesn't support bindings collections to queries (but they are working
-    // on it: https://github.com/launchbadge/sqlx/issues/875) so we need to build the sql
-    // programatically.
-    const SQL_TEMPLATE: &str = "
-        WITH RECURSIVE
-            inner_nodes(hash) AS (
-                SELECT i.hash
-                    FROM snapshot_inner_nodes AS i
-                    INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
-                    WHERE r.hash IN ({root_hashes})
-                UNION ALL
-                SELECT c.hash
-                    FROM snapshot_inner_nodes AS c
-                    INNER JOIN inner_nodes AS p ON p.hash = c.parent
-            )
-        SELECT COUNT(DISTINCT block_id)
-            FROM snapshot_leaf_nodes
-            WHERE parent IN inner_nodes
-    ";
-
-    let sql = SQL_TEMPLATE.replace(
-        "{root_hashes}",
-        &iterator::join(root_hashes.iter().map(|_| '?'), ", "),
+    let mut builder = QueryBuilder::new(
+        "WITH RECURSIVE
+             inner_nodes(hash) AS (
+                 SELECT i.hash
+                     FROM snapshot_inner_nodes AS i
+                     INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
+                     WHERE r.hash IN (",
     );
 
-    let mut query = sqlx::query(&sql);
-
+    let mut separated = builder.separated(", ");
     for hash in root_hashes {
-        query = query.bind(hash);
+        separated.push_bind(hash);
     }
 
+    builder.push(
+        ")
+                 UNION ALL
+                 SELECT c.hash
+                     FROM snapshot_inner_nodes AS c
+                     INNER JOIN inner_nodes AS p ON p.hash = c.parent
+             )
+         SELECT COUNT(DISTINCT block_id)
+             FROM snapshot_leaf_nodes
+             WHERE parent IN inner_nodes
+     ",
+    );
+
+    let query = builder.build();
     let row = query.fetch_one(conn).await?;
     let num = db::decode_u64(row.get(0));
 

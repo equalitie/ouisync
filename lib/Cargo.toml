@@ -40,6 +40,7 @@ futures-util = { workspace = true }
 generic-array = { version = "0.14.5", features = ["serde"] }
 hdrhistogram = { version = "7.5.2", default-features = false }
 hex = "0.4.3"
+include_dir = "0.7.3"
 indexmap = "1.9.3"
 lru = "0.11.0"
 net = { package = "ouisync-net", path = "../net" }
@@ -83,14 +84,16 @@ network-interface = "0.1.3"
 
 [dev-dependencies]
 assert_matches = "1.5"
+async-compression = { version = "0.4.4", features = ["tokio", "gzip"] }
 comfy-table = { version = "6.2.0", default-features = false }
 criterion = { version = "0.4", features = ["html_reports"] }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = "1.0"
 serde_json = "1.0.94"
+similar-asserts = "1.5.0"
 tempfile = "3.2"
 test-strategy = "0.2.1"
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["process", "test-util"] }
 
 [features]
 simulation = ["rand/simulation", "turmoil"]
