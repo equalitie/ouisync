@@ -416,11 +416,15 @@ mod prune {
 mod trash {
     use super::*;
     use crate::{
+        crypto::sign::PublicKey,
         protocol::{BlockId, Bump},
         store::{Changeset, ReadTransaction, WriteTransaction},
     };
     use futures_util::TryStreamExt;
-    use std::collections::BTreeSet;
+    use std::{
+        collections::{BTreeSet, VecDeque},
+        iter,
+    };
 
     pub(super) async fn run(
         shared: &Shared,
@@ -439,97 +443,122 @@ mod trash {
                 break;
             }
 
-            process_locked_blocks(shared, &mut unreachable_block_ids, unlock_tx).await?;
+            exclude_locked_blocks(shared, &mut unreachable_block_ids, unlock_tx).await?;
 
-            traverse_root(shared, local_branch, &mut unreachable_block_ids).await?;
+            traverse_root_in_all_branches(shared, local_branch, &mut unreachable_block_ids).await?;
+
+            // If `merge` started but didn't complete (e.g., due to missing blocks), some of the
+            // entries in the local branch might be outdated. We can't garbage collect their
+            // blocks yet because they might still be needed in future `merge` (e.g., when those
+            // missing blocks become available). Thus we traverse the local root again to exclude
+            // all blocks that are reachable from it even if they belong to outdated entries.
+            // When future `merge` completes, any such blocks will become unreachable and will be
+            // collected during a subsequent `trash`.
+            if let Some(local_branch) = local_branch {
+                traverse_root_in_local_branch(local_branch, &mut unreachable_block_ids).await?;
+            }
+
             remove_unreachable_blocks(shared, local_branch, unreachable_block_ids).await?;
         }
 
         Ok(())
     }
 
-    async fn traverse_root(
+    async fn traverse_root_in_all_branches(
         shared: &Shared,
         local_branch: Option<&Branch>,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<()> {
+        let local_branch_id = local_branch.map(Branch::id);
         let branches = shared.load_branches().await?;
         let mut versions = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            process_reachable_blocks(unreachable_block_ids, branch.clone(), BlobId::ROOT).await?;
+            // Local blocks are be processed in `traverse_root_in_local_branch`, avoid processing
+            // them twice.
+            if Some(branch.id()) != local_branch_id {
+                exclude_reachable_blocks(branch.clone(), BlobId::ROOT, unreachable_block_ids)
+                    .await?;
+            }
 
             // TODO: enable fallback so fallback blocks are not collected
-            match branch
+            let dir = branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
-                .await.map_err(|error| {
-                    tracing::trace!(branch_id = ?branch.id(), ?error, "failed to open root directory");
-                    error
-                })
-            {
-                Ok(dir) => versions.push(dir),
-                Err(Error::EntryNotFound) => {
-                    // `EntryNotFound` here just means this is a newly created branch with no
-                    // content yet. It is safe to ignore it.
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
+                .await?;
+            versions.push(dir);
         }
 
-        traverse(
-            unreachable_block_ids,
-            JointDirectory::new(local_branch.cloned(), versions),
-        )
-        .await
+        let dir = JointDirectory::new(local_branch.cloned(), versions);
+
+        traverse(dir, local_branch_id, unreachable_block_ids).await
     }
 
-    #[async_recursion]
-    async fn traverse(
+    async fn traverse_root_in_local_branch(
+        local_branch: &Branch,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
-        dir: JointDirectory,
     ) -> Result<()> {
-        let mut subdirs = Vec::new();
+        exclude_reachable_blocks(local_branch.clone(), BlobId::ROOT, unreachable_block_ids).await?;
 
-        for entry in dir.entries() {
-            match entry {
-                JointEntryRef::File(entry) => {
-                    process_reachable_blocks(
-                        unreachable_block_ids,
-                        entry.inner().branch().clone(),
-                        *entry.inner().blob_id(),
-                    )
-                    .await?;
-                }
-                JointEntryRef::Directory(entry) => {
-                    for version in entry.versions() {
-                        process_reachable_blocks(
+        let dir = local_branch
+            .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
+            .await?;
+        let dir = JointDirectory::new(Some(local_branch.clone()), iter::once(dir));
+
+        traverse(dir, None, unreachable_block_ids).await
+    }
+
+    async fn traverse(
+        dir: JointDirectory,
+        skip_branch_id: Option<&PublicKey>,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
+    ) -> Result<()> {
+        let mut queue: VecDeque<_> = iter::once(dir).collect();
+
+        while let Some(dir) = queue.pop_back() {
+            for entry in dir.entries() {
+                match entry {
+                    JointEntryRef::File(entry) => {
+                        if Some(entry.branch().id()) == skip_branch_id {
+                            continue;
+                        }
+
+                        exclude_reachable_blocks(
+                            entry.inner().branch().clone(),
+                            *entry.inner().blob_id(),
                             unreachable_block_ids,
-                            version.branch().clone(),
-                            *version.blob_id(),
                         )
                         .await?;
                     }
+                    JointEntryRef::Directory(entry) => {
+                        for version in entry.versions() {
+                            if Some(version.branch().id()) == skip_branch_id {
+                                continue;
+                            }
 
-                    let dir = entry
-                        .open_with(MissingVersionStrategy::Fail, DirectoryFallback::Disabled)
-                        .await?;
-                    subdirs.push(dir);
+                            exclude_reachable_blocks(
+                                version.branch().clone(),
+                                *version.blob_id(),
+                                unreachable_block_ids,
+                            )
+                            .await?;
+                        }
+
+                        let dir = entry
+                            .open_with(MissingVersionStrategy::Fail, DirectoryFallback::Disabled)
+                            .await?;
+                        queue.push_front(dir);
+                    }
                 }
             }
-        }
-
-        for dir in subdirs {
-            traverse(unreachable_block_ids, dir).await?;
         }
 
         Ok(())
     }
 
-    async fn process_reachable_blocks(
-        unreachable_block_ids: &mut BTreeSet<BlockId>,
+    async fn exclude_reachable_blocks(
         branch: Branch,
         blob_id: BlobId,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<()> {
         let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
@@ -540,8 +569,8 @@ mod trash {
         Ok(())
     }
 
-    /// Remove blocks of locked blobs from the `unreachable_block_ids` set.
-    async fn process_locked_blocks(
+    /// Exclude blocks of locked blobs from the `unreachable_block_ids` set.
+    async fn exclude_locked_blocks(
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
         unlock_tx: &unlock::Sender,
