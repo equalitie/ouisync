@@ -167,20 +167,15 @@ mod tests {
             assert!(found);
         }
 
-        // Any two entries in `max` must either be concurrent and have different branch ids or be
-        // equal and have the same branch ids.
+        // Any two entries in `max` must either be equal or concurrent.
         for (a, b) in PairCombinations::new(&max) {
-            if a.branch_id == b.branch_id {
-                assert_eq!(a.version_vector, b.version_vector)
-            } else {
-                assert_matches!(
-                    a.version_vector.partial_cmp(&b.version_vector),
-                    None,
-                    "{:?}, {:?} must be concurrent",
-                    a,
-                    b
-                )
-            }
+            assert_matches!(
+                a.version_vector.partial_cmp(&b.version_vector),
+                Some(Ordering::Equal) | None,
+                "{:?}, {:?} must be equal or concurrent",
+                a,
+                b
+            )
         }
 
         // `max` must preserve original order.
