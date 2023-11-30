@@ -164,12 +164,12 @@ pub(crate) async fn receive_nodes(
 
 pub(crate) async fn receive_blocks(repo: &Vault, snapshot: &Snapshot) {
     let client = repo.block_tracker.client();
-    let acceptor = client.acceptor();
+    let offers = client.offers();
 
     for block in snapshot.blocks().values() {
         repo.block_tracker.require(block.id);
-        client.offer(block.id, OfferState::Approved);
-        let promise = acceptor.try_accept().unwrap();
+        client.register(block.id, OfferState::Approved);
+        let promise = offers.try_next().unwrap().accept().unwrap();
 
         repo.receive_block(block, Some(promise)).await.unwrap();
     }

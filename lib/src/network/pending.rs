@@ -3,7 +3,7 @@ use super::{
     message::{Request, Response, ResponseDisambiguator},
 };
 use crate::{
-    block_tracker::BlockPromise,
+    block_tracker::{BlockOffer, BlockPromise},
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
@@ -20,34 +20,10 @@ use tokio::{select, sync::OwnedSemaphorePermit, time};
 // triggered.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug)]
 pub(crate) enum PendingRequest {
     RootNode(PublicKey, PendingDebugRequest),
     ChildNodes(Hash, ResponseDisambiguator, PendingDebugRequest),
-    Block(BlockPromise, PendingDebugRequest),
-}
-
-impl PendingRequest {
-    pub fn to_key(&self) -> Key {
-        // Debug payloads are ignored in keys.
-        match self {
-            Self::RootNode(public_key, _) => Key::RootNode(*public_key),
-            Self::ChildNodes(hash, disambiguator, _) => Key::ChildNodes(*hash, *disambiguator),
-            Self::Block(block_promise, _) => Key::Block(*block_promise.block_id()),
-        }
-    }
-
-    pub fn to_message(&self) -> Request {
-        match self {
-            Self::RootNode(public_key, debug) => Request::RootNode(*public_key, debug.send()),
-            Self::ChildNodes(hash, disambiguator, debug) => {
-                Request::ChildNodes(*hash, *disambiguator, debug.send())
-            }
-            Self::Block(block_promise, debug) => {
-                Request::Block(*block_promise.block_id(), debug.send())
-            }
-        }
-    }
+    Block(BlockOffer, PendingDebugRequest),
 }
 
 pub(super) enum PendingResponse {
@@ -108,26 +84,43 @@ impl PendingRequests {
         pending_request: PendingRequest,
         peer_permit: OwnedSemaphorePermit,
         client_permit: OwnedSemaphorePermit,
-    ) -> bool {
-        match self.map.lock().unwrap().entry(pending_request.to_key()) {
-            Entry::Occupied(_) => false,
+    ) -> Option<Request> {
+        let (key, block_promise, request) = match pending_request {
+            PendingRequest::RootNode(public_key, debug) => (
+                Key::RootNode(public_key),
+                None,
+                Request::RootNode(public_key, debug.send()),
+            ),
+            PendingRequest::ChildNodes(hash, disambiguator, debug) => (
+                Key::ChildNodes(hash, disambiguator),
+                None,
+                Request::ChildNodes(hash, disambiguator, debug.send()),
+            ),
+            PendingRequest::Block(offer, debug) => {
+                let promise = offer.accept()?;
+                let block_id = *promise.block_id();
+
+                (
+                    Key::Block(block_id),
+                    Some(promise),
+                    Request::Block(block_id, debug.send()),
+                )
+            }
+        };
+
+        match self.map.lock().unwrap().entry(key) {
+            Entry::Occupied(_) => None,
             Entry::Vacant(entry) => {
-                let msg = pending_request.to_key();
-
-                let block_promise = match pending_request {
-                    PendingRequest::RootNode(_, _) => None,
-                    PendingRequest::ChildNodes(_, _, _) => None,
-                    PendingRequest::Block(block_promise, _) => Some(block_promise),
-                };
-
                 entry.insert(RequestData {
                     timestamp: Instant::now(),
                     block_promise,
                     _peer_permit: peer_permit,
                     client_permit,
                 });
-                self.request_added(&msg);
-                true
+
+                self.request_added(&key);
+
+                Some(request)
             }
         }
     }
