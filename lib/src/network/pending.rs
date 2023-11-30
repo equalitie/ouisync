@@ -147,60 +147,55 @@ impl PendingRequests {
             ));
 
             match response {
-                ProcessedResponse::Success(success) => {
-                    let r = match success {
-                        processed_response::Success::RootNode {
-                            proof,
-                            block_presence,
-                            debug,
-                        } => PendingResponse::RootNode {
-                            proof,
-                            block_presence,
-                            permit,
-                            debug,
-                        },
-                        processed_response::Success::InnerNodes(hash, _disambiguator, debug) => {
-                            PendingResponse::InnerNodes {
-                                hash,
-                                permit,
-                                debug,
-                            }
-                        }
-                        processed_response::Success::LeafNodes(hash, _disambiguator, debug) => {
-                            PendingResponse::LeafNodes {
-                                hash,
-                                permit,
-                                debug,
-                            }
-                        }
-                        processed_response::Success::Block { block, debug } => {
-                            PendingResponse::Block {
-                                block,
-                                permit,
-                                debug,
-                                block_promise: request_data.block_promise,
-                            }
-                        }
-                    };
-                    Some(r)
+                ProcessedResponse::RootNode {
+                    proof,
+                    block_presence,
+                    debug,
+                } => Some(PendingResponse::RootNode {
+                    proof,
+                    block_presence,
+                    permit,
+                    debug,
+                }),
+                ProcessedResponse::InnerNodes(hash, _disambiguator, debug) => {
+                    Some(PendingResponse::InnerNodes {
+                        hash,
+                        permit,
+                        debug,
+                    })
                 }
-                ProcessedResponse::Failure(processed_response::Failure::Block(block_id, debug)) => {
+                ProcessedResponse::LeafNodes(hash, _disambiguator, debug) => {
+                    Some(PendingResponse::LeafNodes {
+                        hash,
+                        permit,
+                        debug,
+                    })
+                }
+                ProcessedResponse::Block { block, debug } => Some(PendingResponse::Block {
+                    block,
+                    permit,
+                    debug,
+                    block_promise: request_data.block_promise,
+                }),
+                ProcessedResponse::BlockError(block_id, debug) => {
                     Some(PendingResponse::BlockNotFound {
                         block_id,
                         permit,
                         debug,
                     })
                 }
-                ProcessedResponse::Failure(_) => None,
+                ProcessedResponse::RootNodeError(..) | ProcessedResponse::ChildNodesError(..) => {
+                    None
+                }
             }
         } else {
             // Only `RootNode` response is allowed to be unsolicited
             match response {
-                ProcessedResponse::Success(processed_response::Success::RootNode {
+                ProcessedResponse::RootNode {
                     proof,
                     block_presence,
                     debug,
-                }) => Some(PendingResponse::RootNode {
+                } => Some(PendingResponse::RootNode {
                     proof,
                     block_presence,
                     permit: None,
@@ -312,60 +307,41 @@ impl Drop for ClientPermit {
     }
 }
 
-mod processed_response {
-    use super::*;
-
-    pub(super) enum Success {
-        RootNode {
-            proof: UntrustedProof,
-            block_presence: MultiBlockPresence,
-            debug: DebugResponse,
-        },
-        InnerNodes(
-            CacheHash<InnerNodeMap>,
-            ResponseDisambiguator,
-            DebugResponse,
-        ),
-        LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator, DebugResponse),
-        Block {
-            block: Block,
-            debug: DebugResponse,
-        },
-    }
-
-    #[derive(Debug)]
-    pub(super) enum Failure {
-        RootNode(PublicKey, DebugResponse),
-        ChildNodes(Hash, ResponseDisambiguator, DebugResponse),
-        Block(BlockId, DebugResponse),
-    }
-}
-
 enum ProcessedResponse {
-    Success(processed_response::Success),
-    Failure(processed_response::Failure),
+    RootNode {
+        proof: UntrustedProof,
+        block_presence: MultiBlockPresence,
+        debug: DebugResponse,
+    },
+    InnerNodes(
+        CacheHash<InnerNodeMap>,
+        ResponseDisambiguator,
+        DebugResponse,
+    ),
+    LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator, DebugResponse),
+    Block {
+        block: Block,
+        debug: DebugResponse,
+    },
+    RootNodeError(PublicKey, DebugResponse),
+    ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
+    BlockError(BlockId, DebugResponse),
 }
 
 impl ProcessedResponse {
     fn to_key(&self) -> Key {
         match self {
-            Self::Success(processed_response::Success::RootNode { proof, .. }) => {
-                Key::RootNode(proof.writer_id)
-            }
-            Self::Success(processed_response::Success::InnerNodes(nodes, disambiguator, _)) => {
+            Self::RootNode { proof, .. } => Key::RootNode(proof.writer_id),
+            Self::InnerNodes(nodes, disambiguator, _) => {
                 Key::ChildNodes(nodes.hash(), *disambiguator)
             }
-            Self::Success(processed_response::Success::LeafNodes(nodes, disambiguator, _)) => {
+            Self::LeafNodes(nodes, disambiguator, _) => {
                 Key::ChildNodes(nodes.hash(), *disambiguator)
             }
-            Self::Success(processed_response::Success::Block { block, .. }) => Key::Block(block.id),
-            Self::Failure(processed_response::Failure::RootNode(branch_id, _)) => {
-                Key::RootNode(*branch_id)
-            }
-            Self::Failure(processed_response::Failure::ChildNodes(hash, disambiguator, _)) => {
-                Key::ChildNodes(*hash, *disambiguator)
-            }
-            Self::Failure(processed_response::Failure::Block(block_id, _)) => Key::Block(*block_id),
+            Self::Block { block, .. } => Key::Block(block.id),
+            Self::RootNodeError(branch_id, _) => Key::RootNode(*branch_id),
+            Self::ChildNodesError(hash, disambiguator, _) => Key::ChildNodes(*hash, *disambiguator),
+            Self::BlockError(block_id, _) => Key::Block(*block_id),
         }
     }
 }
@@ -377,34 +353,30 @@ impl From<Response> for ProcessedResponse {
                 proof,
                 block_presence,
                 debug,
-            } => Self::Success(processed_response::Success::RootNode {
+            } => Self::RootNode {
                 proof,
                 block_presence,
                 debug,
-            }),
-            Response::InnerNodes(nodes, disambiguator, debug) => Self::Success(
-                processed_response::Success::InnerNodes(nodes.into(), disambiguator, debug),
-            ),
-            Response::LeafNodes(nodes, disambiguator, debug) => Self::Success(
-                processed_response::Success::LeafNodes(nodes.into(), disambiguator, debug),
-            ),
+            },
+            Response::InnerNodes(nodes, disambiguator, debug) => {
+                Self::InnerNodes(nodes.into(), disambiguator, debug)
+            }
+            Response::LeafNodes(nodes, disambiguator, debug) => {
+                Self::LeafNodes(nodes.into(), disambiguator, debug)
+            }
             Response::Block {
                 content,
                 nonce,
                 debug,
-            } => Self::Success(processed_response::Success::Block {
+            } => Self::Block {
                 block: Block::new(content, nonce),
                 debug,
-            }),
-            Response::RootNodeError(branch_id, debug) => {
-                Self::Failure(processed_response::Failure::RootNode(branch_id, debug))
+            },
+            Response::RootNodeError(branch_id, debug) => Self::RootNodeError(branch_id, debug),
+            Response::ChildNodesError(hash, disambiguator, debug) => {
+                Self::ChildNodesError(hash, disambiguator, debug)
             }
-            Response::ChildNodesError(hash, disambiguator, debug) => Self::Failure(
-                processed_response::Failure::ChildNodes(hash, disambiguator, debug),
-            ),
-            Response::BlockError(block_id, debug) => {
-                Self::Failure(processed_response::Failure::Block(block_id, debug))
-            }
+            Response::BlockError(block_id, debug) => Self::BlockError(block_id, debug),
         }
     }
 }

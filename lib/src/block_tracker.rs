@@ -359,14 +359,12 @@ struct MissingBlockState {
 
 impl MissingBlockState {
     fn unaccept_by(&mut self, client_id: ClientId) -> bool {
-        if let Some(currently_accepted_by) = &self.currently_accepted_by {
-            if currently_accepted_by == &client_id {
-                self.currently_accepted_by = None;
-                return true;
-            }
+        if self.currently_accepted_by == Some(client_id) {
+            self.currently_accepted_by = None;
+            true
+        } else {
+            false
         }
-
-        false
     }
 }
 
