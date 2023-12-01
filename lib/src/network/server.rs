@@ -1,6 +1,7 @@
 use std::{pin::pin, time::Duration};
 
 use super::{
+    choke,
     debug_payload::{DebugRequestPayload, DebugResponsePayload},
     message::{Content, Request, Response, ResponseDisambiguator},
 };
@@ -33,10 +34,15 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    pub fn new(vault: Vault, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Request>) -> Self {
+    pub fn new(
+        vault: Vault,
+        tx: mpsc::Sender<Content>,
+        rx: mpsc::Receiver<Request>,
+        choker: choke::Choker,
+    ) -> Self {
         Self {
             vault,
-            tx: Sender(tx),
+            tx: Sender(tx, choker),
             rx,
         }
     }
@@ -361,10 +367,14 @@ impl<'a> Monitor<'a> {
 
 type Receiver = mpsc::Receiver<Request>;
 
-struct Sender(mpsc::Sender<Content>);
+struct Sender(mpsc::Sender<Content>, choke::Choker);
 
 impl Sender {
     async fn send(&self, response: Response) -> bool {
+        if !self.1.can_send().await {
+            // `choke::Manager` has been destroyed
+            return false;
+        }
         self.0.send(Content::Response(response)).await.is_ok()
     }
 }

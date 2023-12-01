@@ -1,4 +1,5 @@
 mod barrier;
+mod choke;
 mod client;
 mod connection;
 mod connection_monitor;
@@ -124,6 +125,7 @@ impl Network {
             gateway,
             this_runtime_id,
             state: BlockingMutex::new(State {
+                choke_manager: choke::Manager::new(),
                 message_brokers: Some(HashMap::default()),
                 registry: Slab::new(),
             }),
@@ -418,6 +420,7 @@ struct Inner {
 }
 
 struct State {
+    choke_manager: choke::Manager,
     // This is None once the network calls shutdown.
     message_brokers: Option<HashMap<PublicRuntimeId, MessageBroker>>,
     registry: Slab<RegistrationHolder>,
@@ -795,6 +798,7 @@ impl Inner {
                             stream,
                             permit,
                             monitor,
+                            state.choke_manager.new_choker(),
                         )
                     });
 

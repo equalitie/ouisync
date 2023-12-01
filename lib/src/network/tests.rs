@@ -1,4 +1,5 @@
 use super::{
+    choke,
     client::Client,
     constants::MAX_REQUESTS_IN_FLIGHT,
     message::{Content, Request, Response},
@@ -69,8 +70,8 @@ async fn transfer_snapshot_between_two_replicas_case(
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_vault, a_id) = create_repository(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_vault, _) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_vault, a_choke, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_vault, _, _) = create_repository(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
@@ -78,7 +79,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 
     assert!(load_latest_root_node(&b_vault, &a_id).await.is_none());
 
-    let mut server = create_server(a_vault.clone());
+    let mut server = create_server(a_vault.clone(), &a_choke);
     let mut client = create_client(b_vault.clone());
 
     // Wait until replica B catches up to replica A, then have replica A perform a local change
@@ -122,15 +123,15 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_vault, a_id) = create_repository(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_vault, b_id) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_vault, a_choker, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_vault, _, b_id) = create_repository(&mut rng, &write_keys).await;
 
     // Initially both replicas have the whole snapshot but no blocks.
     let snapshot = Snapshot::generate(&mut rng, block_count);
     save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
     save_snapshot(&b_vault, b_id, &write_keys, &snapshot).await;
 
-    let mut server = create_server(a_vault.clone());
+    let mut server = create_server(a_vault.clone(), &a_choker);
     let mut client = create_client(b_vault.clone());
 
     let a_block_tracker = a_vault.block_tracker.client();
@@ -170,14 +171,14 @@ async fn failed_block_only_peer() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_vault, a_id) = create_repository(&mut rng, &write_keys).await;
-    let (_a_base_dir, b_vault, _) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_vault, a_choker, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, b_vault, _, _) = create_repository(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
     receive_blocks(&a_vault, &snapshot).await;
 
-    let mut server = create_server(a_vault.clone());
+    let mut server = create_server(a_vault.clone(), &a_choker);
     let mut client = create_client(b_vault.clone());
 
     simulate_connection_until(
@@ -191,7 +192,7 @@ async fn failed_block_only_peer() {
     drop(server);
     drop(client);
 
-    let mut server = create_server(a_vault.clone());
+    let mut server = create_server(a_vault.clone(), &a_choker);
     let mut client = create_client(b_vault.clone());
 
     simulate_connection_until(&mut server, &mut client, async {
@@ -209,9 +210,9 @@ async fn failed_block_same_peer() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_vault, a_id) = create_repository(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_vault, _) = create_repository(&mut rng, &write_keys).await;
-    let (_c_base_dir, c_vault, _) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_vault, a_choker, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_vault, b_choker, _) = create_repository(&mut rng, &write_keys).await;
+    let (_c_base_dir, c_vault, _, _) = create_repository(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
@@ -227,10 +228,10 @@ async fn failed_block_same_peer() {
     //                   |
     // [B]-(server_bc)---+
 
-    let mut server_ac = create_server(a_vault.clone());
+    let mut server_ac = create_server(a_vault.clone(), &a_choker);
     let mut client_ca = create_client(c_vault.clone());
 
-    let mut server_bc = create_server(b_vault.clone());
+    let mut server_bc = create_server(b_vault.clone(), &b_choker);
     let mut client_cb = create_client(c_vault.clone());
 
     // Run both connections in parallel until C syncs its index (but not blocks) with A
@@ -251,7 +252,7 @@ async fn failed_block_same_peer() {
     drop(server_ac);
     drop(client_ca);
 
-    let mut server_ac = create_server(a_vault.clone());
+    let mut server_ac = create_server(a_vault.clone(), &a_choker);
     let mut client_ca = create_client(c_vault.clone());
 
     // Run the new A-C connection in parallel with the existing B-C connection until all blocks are
@@ -277,9 +278,9 @@ async fn failed_block_other_peer() {
         let mut rng = StdRng::seed_from_u64(0);
 
         let write_keys = Keypair::generate(&mut rng);
-        let (_a_base_dir, a_state, a_id) = create_repository(&mut rng, &write_keys).await;
-        let (_b_base_dir, b_state, b_id) = create_repository(&mut rng, &write_keys).await;
-        let (_c_base_dir, c_state, _) = create_repository(&mut rng, &write_keys).await;
+        let (_a_base_dir, a_state, a_choker, a_id) = create_repository(&mut rng, &write_keys).await;
+        let (_b_base_dir, b_state, b_choker, b_id) = create_repository(&mut rng, &write_keys).await;
+        let (_c_base_dir, c_state, _, _) = create_repository(&mut rng, &write_keys).await;
 
         // Create the snapshot by A
         let snapshot = Snapshot::generate(&mut rng, 1);
@@ -287,7 +288,7 @@ async fn failed_block_other_peer() {
         receive_blocks(&a_state, &snapshot).await;
 
         // Sync B with A
-        let mut server_ab = create_server(a_state.clone());
+        let mut server_ab = create_server(a_state.clone(), &a_choker);
         let mut client_ba = create_client(b_state.clone());
         simulate_connection_until(&mut server_ab, &mut client_ba, async {
             for id in snapshot.blocks().keys() {
@@ -308,10 +309,10 @@ async fn failed_block_other_peer() {
         //                   |
         // [B]-(server_bc)---+
 
-        let mut server_ac = create_server(a_state.clone());
+        let mut server_ac = create_server(a_state.clone(), &a_choker);
         let mut client_ca = create_client(c_state.clone());
 
-        let mut server_bc = create_server(b_state.clone());
+        let mut server_bc = create_server(b_state.clone(), &b_choker);
         let mut client_cb = create_client(c_state.clone());
 
         // Run the two connections in parallel until C syncs its index with both A and B.
@@ -368,7 +369,7 @@ async fn failed_block_other_peer() {
 async fn create_repository<R: Rng + CryptoRng>(
     rng: &mut R,
     write_keys: &Keypair,
-) -> (TempDir, Vault, PublicKey) {
+) -> (TempDir, Vault, choke::Manager, PublicKey) {
     let (base_dir, db) = db::create_temp().await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public_key());
@@ -382,7 +383,9 @@ async fn create_repository<R: Rng + CryptoRng>(
         RepositoryMonitor::new(StateMonitor::make_root(), Metrics::new(), "test"),
     );
 
-    (base_dir, state, writer_id)
+    let choke_manager = choke::Manager::new();
+
+    (base_dir, state, choke_manager, writer_id)
 }
 
 // Enough capacity to prevent deadlocks.
@@ -581,10 +584,10 @@ type ClientData = (
     mpsc::Sender<Response>,
 );
 
-fn create_server(repo: Vault) -> ServerData {
+fn create_server(repo: Vault, choke_manager: &choke::Manager) -> ServerData {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let server = Server::new(repo, send_tx, recv_rx);
+    let server = Server::new(repo, send_tx, recv_rx, choke_manager.new_choker());
 
     (server, send_rx, recv_tx)
 }
