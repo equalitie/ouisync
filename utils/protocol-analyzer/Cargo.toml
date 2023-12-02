@@ -1,0 +1,22 @@
+[package]
+name = "ouisync-protocol-analyzer"
+description = "Utility to parse protocol logs and digest them into human readable output"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "protocol-analyzer"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.75"
+clap = { workspace = true  }
+tokio = { workspace = true, features = ["signal", "io-std", "fs", "macros", "rt-multi-thread", "io-util"] }
+tokio-stream = { workspace = true, features = ["sync"] }
+tokio-util = { workspace = true }
+chrono = "0.4.31"
