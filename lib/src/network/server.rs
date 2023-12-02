@@ -2,7 +2,7 @@ use std::{pin::pin, time::Duration};
 
 use super::{
     choke,
-    debug_payload::{DebugRequestPayload, DebugResponsePayload},
+    debug_payload::{DebugRequest, DebugResponse},
     message::{Content, Request, Response, ResponseDisambiguator},
 };
 use crate::{
@@ -115,11 +115,7 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_root_node(
-        &self,
-        branch_id: PublicKey,
-        debug: DebugRequestPayload,
-    ) -> Result<()> {
+    async fn handle_root_node(&self, branch_id: PublicKey, debug: DebugRequest) -> Result<()> {
         let debug = debug.begin_reply();
 
         let root_node = self
@@ -164,7 +160,7 @@ impl<'a> Responder<'a> {
         &self,
         parent_hash: Hash,
         disambiguator: ResponseDisambiguator,
-        debug: DebugRequestPayload,
+        debug: DebugRequest,
     ) -> Result<()> {
         let debug = debug.begin_reply();
 
@@ -183,7 +179,7 @@ impl<'a> Responder<'a> {
                     .send(Response::InnerNodes(
                         inner_nodes,
                         disambiguator,
-                        debug.send(),
+                        debug.clone().send(),
                     ))
                     .await;
             }
@@ -209,7 +205,7 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_block(&self, id: BlockId, debug: DebugRequestPayload) -> Result<()> {
+    async fn handle_block(&self, id: BlockId, debug: DebugRequest) -> Result<()> {
         let debug = debug.begin_reply();
         let mut content = BlockContent::new();
         let result = self
@@ -320,7 +316,7 @@ impl<'a> Monitor<'a> {
         let response = Response::RootNode {
             proof: root_node.proof.into(),
             block_presence: root_node.summary.block_presence,
-            debug: DebugResponsePayload::unsolicited(),
+            debug: DebugResponse::unsolicited(),
         };
 
         self.tx.send(response).await;

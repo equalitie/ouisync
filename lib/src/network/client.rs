@@ -1,6 +1,6 @@
 use super::{
     constants::MAX_PENDING_RESPONSES,
-    debug_payload::{DebugReceivedResponse, DebugRequest},
+    debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Content, Response, ResponseDisambiguator},
     pending::{PendingRequest, PendingRequests, PendingResponse},
 };
@@ -103,7 +103,7 @@ impl Client {
         loop {
             select! {
                 block_promise = block_promise_acceptor.accept() => {
-                    let debug = DebugRequest::start();
+                    let debug = PendingDebugRequest::start();
                     self.enqueue_request(PendingRequest::Block(block_promise, debug));
                 }
                 _ = &mut move_from_pending_into_queued => break,
@@ -216,6 +216,7 @@ impl Client {
             vv = ?proof.version_vector,
             hash = ?proof.hash,
             ?block_presence,
+            ?debug_payload,
         ),
         err(Debug)
     )]
@@ -223,7 +224,7 @@ impl Client {
         &self,
         proof: UntrustedProof,
         block_presence: MultiBlockPresence,
-        _debug: DebugReceivedResponse,
+        debug_payload: DebugResponse,
     ) -> Result<()> {
         let hash = proof.hash;
         let status = self.vault.receive_root_node(proof, block_presence).await?;
@@ -232,7 +233,7 @@ impl Client {
             self.enqueue_request(PendingRequest::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(block_presence),
-                DebugRequest::start(),
+                debug_payload.follow_up(),
             ));
         }
 
@@ -249,11 +250,11 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(hash = ?nodes.hash()), err(Debug))]
+    #[instrument(skip_all, fields(hash = ?nodes.hash(), ?debug_payload), err(Debug))]
     async fn handle_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodeMap>,
-        _debug: DebugReceivedResponse,
+        debug_payload: DebugResponse,
     ) -> Result<()> {
         let total = nodes.len();
 
@@ -263,7 +264,7 @@ impl Client {
             .receive_inner_nodes(nodes, &self.receive_filter, quota)
             .await?;
 
-        let debug = DebugRequest::start();
+        let debug = debug_payload.follow_up();
 
         tracing::trace!(
             "Received {}/{} inner nodes: {:?}",
@@ -280,7 +281,7 @@ impl Client {
             self.enqueue_request(PendingRequest::ChildNodes(
                 node.hash,
                 ResponseDisambiguator::new(node.summary.block_presence),
-                debug,
+                debug.clone(),
             ));
         }
 
@@ -296,11 +297,11 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(hash = ?nodes.hash()), err(Debug))]
+    #[instrument(skip_all, fields(hash = ?nodes.hash(), ?debug_payload), err(Debug))]
     async fn handle_leaf_nodes(
         &self,
         nodes: CacheHash<LeafNodeSet>,
-        _debug: DebugReceivedResponse,
+        debug_payload: DebugResponse,
     ) -> Result<()> {
         let total = nodes.len();
         let quota = self.vault.quota().await?.map(Into::into);
@@ -351,13 +352,15 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(id = ?block.id), err(Debug))]
+    #[instrument(skip_all, fields(id = ?block.id, debug_payload = ?_debug_payload), err(Debug))]
     async fn handle_block(
         &self,
         block: Block,
         block_promise: Option<BlockPromise>,
-        _debug: DebugReceivedResponse,
+        _debug_payload: DebugResponse,
     ) -> Result<()> {
+        tracing::trace!("Received block");
+
         match self.vault.receive_block(&block, block_promise).await {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
@@ -366,11 +369,11 @@ impl Client {
         }
     }
 
-    #[instrument(skip_all, fields(block_id), err(Debug))]
+    #[instrument(skip_all, fields(block_id, debug_payload = ?_debug_payload), err(Debug))]
     async fn handle_block_not_found(
         &self,
         block_id: BlockId,
-        _debug: DebugReceivedResponse,
+        _debug_payload: DebugResponse,
     ) -> Result<()> {
         tracing::trace!("Client received block not found {:?}", block_id);
         self.vault
@@ -439,7 +442,10 @@ impl Client {
     }
 
     fn reload_index(&self, branch_id: &PublicKey) {
-        self.enqueue_request(PendingRequest::RootNode(*branch_id, DebugRequest::start()));
+        self.enqueue_request(PendingRequest::RootNode(
+            *branch_id,
+            PendingDebugRequest::start(),
+        ));
     }
 }
 

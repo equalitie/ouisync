@@ -97,3 +97,4 @@ tokio = { workspace = true, features = ["process", "test-util"] }
 
 [features]
 simulation = ["rand/simulation", "turmoil"]
+analyze-protocol = []

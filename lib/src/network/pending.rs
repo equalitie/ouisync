@@ -1,5 +1,5 @@
 use super::{
-    debug_payload::{DebugReceivedResponse, DebugRequest},
+    debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Request, Response, ResponseDisambiguator},
 };
 use crate::{
@@ -22,9 +22,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub(crate) enum PendingRequest {
-    RootNode(PublicKey, DebugRequest),
-    ChildNodes(Hash, ResponseDisambiguator, DebugRequest),
-    Block(BlockPromise, DebugRequest),
+    RootNode(PublicKey, PendingDebugRequest),
+    ChildNodes(Hash, ResponseDisambiguator, PendingDebugRequest),
+    Block(BlockPromise, PendingDebugRequest),
 }
 
 impl PendingRequest {
@@ -55,17 +55,17 @@ pub(super) enum PendingResponse {
         proof: UntrustedProof,
         block_presence: MultiBlockPresence,
         permit: Option<ClientPermit>,
-        debug: DebugReceivedResponse,
+        debug: DebugResponse,
     },
     InnerNodes {
         hash: CacheHash<InnerNodeMap>,
         permit: Option<ClientPermit>,
-        debug: DebugReceivedResponse,
+        debug: DebugResponse,
     },
     LeafNodes {
         hash: CacheHash<LeafNodeSet>,
         permit: Option<ClientPermit>,
-        debug: DebugReceivedResponse,
+        debug: DebugResponse,
     },
     Block {
         block: Block,
@@ -73,12 +73,12 @@ pub(super) enum PendingResponse {
         // afterwards.
         block_promise: Option<BlockPromise>,
         permit: Option<ClientPermit>,
-        debug: DebugReceivedResponse,
+        debug: DebugResponse,
     },
     BlockNotFound {
         block_id: BlockId,
         permit: Option<ClientPermit>,
-        debug: DebugReceivedResponse,
+        debug: DebugResponse,
     },
 }
 
@@ -319,29 +319,25 @@ mod processed_response {
         RootNode {
             proof: UntrustedProof,
             block_presence: MultiBlockPresence,
-            debug: DebugReceivedResponse,
+            debug: DebugResponse,
         },
         InnerNodes(
             CacheHash<InnerNodeMap>,
             ResponseDisambiguator,
-            DebugReceivedResponse,
+            DebugResponse,
         ),
-        LeafNodes(
-            CacheHash<LeafNodeSet>,
-            ResponseDisambiguator,
-            DebugReceivedResponse,
-        ),
+        LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator, DebugResponse),
         Block {
             block: Block,
-            debug: DebugReceivedResponse,
+            debug: DebugResponse,
         },
     }
 
     #[derive(Debug)]
     pub(super) enum Failure {
-        RootNode(PublicKey, DebugReceivedResponse),
-        ChildNodes(Hash, ResponseDisambiguator, DebugReceivedResponse),
-        Block(BlockId, DebugReceivedResponse),
+        RootNode(PublicKey, DebugResponse),
+        ChildNodes(Hash, ResponseDisambiguator, DebugResponse),
+        Block(BlockId, DebugResponse),
     }
 }
 
@@ -384,39 +380,31 @@ impl From<Response> for ProcessedResponse {
             } => Self::Success(processed_response::Success::RootNode {
                 proof,
                 block_presence,
-                debug: debug.received(),
+                debug,
             }),
-            Response::InnerNodes(nodes, disambiguator, debug) => {
-                Self::Success(processed_response::Success::InnerNodes(
-                    nodes.into(),
-                    disambiguator,
-                    debug.received(),
-                ))
-            }
-            Response::LeafNodes(nodes, disambiguator, debug) => {
-                Self::Success(processed_response::Success::LeafNodes(
-                    nodes.into(),
-                    disambiguator,
-                    debug.received(),
-                ))
-            }
+            Response::InnerNodes(nodes, disambiguator, debug) => Self::Success(
+                processed_response::Success::InnerNodes(nodes.into(), disambiguator, debug),
+            ),
+            Response::LeafNodes(nodes, disambiguator, debug) => Self::Success(
+                processed_response::Success::LeafNodes(nodes.into(), disambiguator, debug),
+            ),
             Response::Block {
                 content,
                 nonce,
                 debug,
             } => Self::Success(processed_response::Success::Block {
                 block: Block::new(content, nonce),
-                debug: debug.received(),
+                debug,
             }),
-            Response::RootNodeError(branch_id, debug) => Self::Failure(
-                processed_response::Failure::RootNode(branch_id, debug.received()),
-            ),
+            Response::RootNodeError(branch_id, debug) => {
+                Self::Failure(processed_response::Failure::RootNode(branch_id, debug))
+            }
             Response::ChildNodesError(hash, disambiguator, debug) => Self::Failure(
-                processed_response::Failure::ChildNodes(hash, disambiguator, debug.received()),
+                processed_response::Failure::ChildNodes(hash, disambiguator, debug),
             ),
-            Response::BlockError(block_id, debug) => Self::Failure(
-                processed_response::Failure::Block(block_id, debug.received()),
-            ),
+            Response::BlockError(block_id, debug) => {
+                Self::Failure(processed_response::Failure::Block(block_id, debug))
+            }
         }
     }
 }
