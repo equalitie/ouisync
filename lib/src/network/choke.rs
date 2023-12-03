@@ -108,6 +108,15 @@ enum GetPermitResult {
 }
 
 impl ManagerInner {
+    /// Does this:
+    /// * If the `choker_id` is already unchoked it is granted a permit. Otherwise
+    /// * if there is a free slot in `unchoked`, adds `choker_id` into it and grants it a permit.
+    ///   Otherwise
+    /// * check if some of the `unchoked` chokers can be evicted, if so evict them and
+    ///   **some** choked choker takes its place. If the unchoked choker is `choker_id` then it
+    ///   is granted a permit. Othewise
+    /// * we calculate when the soonest unchoked choker is evictable and `choker_id` will
+    ///   need to recheck at that time.
     fn get_permit(&mut self, choker_id: usize) -> GetPermitResult {
         if let Some(state) = self.unchoked.get_mut(&choker_id) {
             // It's unchoked, update permit and return.
@@ -143,7 +152,7 @@ impl ManagerInner {
         GetPermitResult::AwaitUntil(until)
     }
 
-    // Return true if one was evicted from `unchoked` and inserted into `choked`.
+    // Return true if some choker was evicted from `unchoked` and inserted into `choked`.
     fn try_evict_from_unchoked(&mut self) -> bool {
         let to_evict = if let Some((id, state)) = self.soonest_evictable() {
             if state.is_evictable() {
@@ -211,9 +220,9 @@ pub(crate) struct Choker {
 }
 
 impl Choker {
-    /// Returns `false` when the `Manager` has already been destroyed.
-    pub async fn can_send(&self) -> bool {
-        self.inner.lock().await.can_send().await
+    /// Halts forever when the `Manager` has already been destroyed.
+    pub async fn wait_until_unchoked(&self) {
+        self.inner.lock().await.wait_until_unchoked().await
     }
 
     #[cfg(test)]
@@ -229,16 +238,21 @@ struct ChokerInner {
 }
 
 impl ChokerInner {
-    pub async fn can_send(&mut self) -> bool {
+    pub async fn wait_until_unchoked(&mut self) {
+        use std::future::pending;
+
         loop {
             self.on_change_rx.borrow_and_update();
 
             let result = self.try_get_permit();
 
             let sleep_until = match result {
-                None => return false,
+                None => {
+                    let () = pending().await;
+                    unreachable!();
+                }
                 Some(result) => match result {
-                    GetPermitResult::Granted => return true,
+                    GetPermitResult::Granted => return,
                     GetPermitResult::AwaitUntil(sleep_until) => sleep_until,
                 },
             };
@@ -246,7 +260,7 @@ impl ChokerInner {
             select! {
                 result = self.on_change_rx.changed() => {
                     if result.is_err() {
-                        return false;
+                        let () = pending().await;
                     }
                 },
                 _ = tokio::time::sleep_until(sleep_until) => {
@@ -299,11 +313,11 @@ mod tests {
             Some(GetPermitResult::AwaitUntil(_))
         );
 
-        assert!(tokio::time::timeout(
+        tokio::time::timeout(
             PERMIT_INACTIVITY_TIMEOUT + Duration::from_millis(200),
-            chokers[MAX_UNCHOKED_COUNT].can_send()
+            chokers[MAX_UNCHOKED_COUNT].wait_until_unchoked(),
         )
         .await
-        .unwrap());
+        .unwrap();
     }
 }
