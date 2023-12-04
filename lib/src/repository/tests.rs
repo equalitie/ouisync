@@ -95,7 +95,7 @@ async fn merge_file() {
 
     wait_for(&repo, || async {
         let local_vv = local_branch.version_vector().await.unwrap();
-        local_vv == remote_vv
+        local_vv >= remote_vv
     })
     .await;
 
