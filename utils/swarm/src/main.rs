@@ -91,6 +91,9 @@ fn build() -> Result<()> {
         .arg("--package")
         .arg("ouisync-cli")
         .arg("--release")
+        // Adds debugging payload to the messages.
+        .arg("--features")
+        .arg("ouisync-lib/analyze-protocol")
         .status()?;
 
     if !status.success() {

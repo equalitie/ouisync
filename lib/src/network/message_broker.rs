@@ -1,5 +1,6 @@
 use super::{
     barrier::{Barrier, BarrierError},
+    choke,
     client::Client,
     connection::ConnectionPermit,
     constants::MAX_REQUESTS_IN_FLIGHT,
@@ -42,6 +43,7 @@ pub(super) struct MessageBroker {
     request_limiter: Arc<Semaphore>,
     monitor: StateMonitor,
     span: Span,
+    choker: choke::Choker,
 }
 
 impl MessageBroker {
@@ -51,6 +53,7 @@ impl MessageBroker {
         stream: raw::Stream,
         permit: ConnectionPermit,
         monitor: StateMonitor,
+        choker: choke::Choker,
     ) -> Self {
         let span = tracing::info_span!(
             "message_broker",
@@ -67,6 +70,7 @@ impl MessageBroker {
             request_limiter: Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
             monitor,
             span,
+            choker,
         };
 
         this.add_connection(stream, permit);
@@ -135,6 +139,8 @@ impl MessageBroker {
 
         drop(span_enter);
 
+        let choker = self.choker.clone();
+
         let task = async move {
             select! {
                 _ = maintain_link(
@@ -146,6 +152,7 @@ impl MessageBroker {
                     pex_discovery_tx,
                     pex_announcer,
                     monitor,
+                    choker,
                 ) => (),
                 _ = abort_rx => (),
             }
@@ -186,6 +193,7 @@ async fn maintain_link(
     pex_discovery_tx: PexDiscoverySender,
     mut pex_announcer: PexAnnouncer,
     monitor: StateMonitor,
+    choker: choke::Choker,
 ) {
     #[derive(Debug)]
     enum State {
@@ -240,6 +248,7 @@ async fn maintain_link(
             request_limiter.clone(),
             pex_discovery_tx.clone(),
             &mut pex_announcer,
+            choker.clone(),
         )
         .await
         {
@@ -275,6 +284,7 @@ async fn run_link(
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     pex_announcer: &mut PexAnnouncer,
+    choker: choke::Choker,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
@@ -283,7 +293,7 @@ async fn run_link(
     // Run everything in parallel:
     select! {
         flow = run_client(repo.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
-        flow = run_server(repo.clone(), content_tx.clone(), request_rx ) => flow,
+        flow = run_server(repo.clone(), content_tx.clone(), request_rx, choker) => flow,
         flow = recv_messages(stream, request_tx, response_tx, pex_discovery_tx) => flow,
         flow = send_messages(content_rx, sink) => flow,
         _ = pex_announcer.run(content_tx) => ControlFlow::Continue,
@@ -388,8 +398,9 @@ async fn run_server(
     repo: Vault,
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
+    choker: choke::Choker,
 ) -> ControlFlow {
-    let mut server = Server::new(repo, content_tx, request_rx);
+    let mut server = Server::new(repo, content_tx, request_rx, choker);
 
     let result = server.run().await;
 

@@ -1,7 +1,8 @@
-use std::{pin::pin, time::Duration};
+use std::{collections::HashSet, pin::pin, sync::Mutex as SyncMutex, time::Duration};
 
 use super::{
-    debug_payload::{DebugRequestPayload, DebugResponsePayload},
+    choke,
+    debug_payload::{DebugRequest, DebugResponse},
     message::{Content, Request, Response, ResponseDisambiguator},
 };
 use crate::{
@@ -21,7 +22,7 @@ use tokio::{
     select,
     sync::{
         broadcast::{self, error::RecvError},
-        mpsc,
+        mpsc, watch,
     },
 };
 use tracing::instrument;
@@ -30,21 +31,33 @@ pub(crate) struct Server {
     vault: Vault,
     tx: Sender,
     rx: Receiver,
+    choker: choke::Choker,
 }
 
 impl Server {
-    pub fn new(vault: Vault, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Request>) -> Self {
+    pub fn new(
+        vault: Vault,
+        tx: mpsc::Sender<Content>,
+        rx: mpsc::Receiver<Request>,
+        choker: choke::Choker,
+    ) -> Self {
         Self {
             vault,
             tx: Sender(tx),
             rx,
+            choker,
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let Self { vault, tx, rx } = self;
-        let responder = Responder::new(vault, tx);
-        let monitor = Monitor::new(vault, tx);
+        let Self {
+            vault,
+            tx,
+            rx,
+            choker,
+        } = self;
+        let responder = Responder::new(vault, tx, choker);
+        let monitor = Monitor::new(vault, tx, choker);
 
         select! {
             result = responder.run(rx) => result,
@@ -57,11 +70,12 @@ impl Server {
 struct Responder<'a> {
     vault: &'a Vault,
     tx: &'a Sender,
+    choker: &'a choke::Choker,
 }
 
 impl<'a> Responder<'a> {
-    fn new(vault: &'a Vault, tx: &'a Sender) -> Self {
-        Self { vault, tx }
+    fn new(vault: &'a Vault, tx: &'a Sender, choker: &'a choke::Choker) -> Self {
+        Self { vault, tx, choker }
     }
 
     async fn run(self, rx: &'a mut Receiver) -> Result<()> {
@@ -76,6 +90,8 @@ impl<'a> Responder<'a> {
                 request = rx.recv() => {
                     match request {
                         Some(request) => {
+                            self.choker.wait_until_unchoked().await;
+
                             let handler = self
                                 .vault
                                 .monitor
@@ -109,11 +125,7 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_root_node(
-        &self,
-        branch_id: PublicKey,
-        debug: DebugRequestPayload,
-    ) -> Result<()> {
+    async fn handle_root_node(&self, branch_id: PublicKey, debug: DebugRequest) -> Result<()> {
         let debug = debug.begin_reply();
 
         let root_node = self
@@ -158,7 +170,7 @@ impl<'a> Responder<'a> {
         &self,
         parent_hash: Hash,
         disambiguator: ResponseDisambiguator,
-        debug: DebugRequestPayload,
+        debug: DebugRequest,
     ) -> Result<()> {
         let debug = debug.begin_reply();
 
@@ -177,7 +189,7 @@ impl<'a> Responder<'a> {
                     .send(Response::InnerNodes(
                         inner_nodes,
                         disambiguator,
-                        debug.send(),
+                        debug.clone().send(),
                     ))
                     .await;
             }
@@ -203,7 +215,7 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_block(&self, id: BlockId, debug: DebugRequestPayload) -> Result<()> {
+    async fn handle_block(&self, id: BlockId, debug: DebugRequest) -> Result<()> {
         let debug = debug.begin_reply();
         let mut content = BlockContent::new();
         let result = self
@@ -239,15 +251,50 @@ impl<'a> Responder<'a> {
     }
 }
 
+/// When we receive events that a branch has changed, we accumulate those events into this
+/// structure and use it once we receive a permit from the choker.
+enum BranchAccumulator {
+    All,
+    Some(HashSet<PublicKey>),
+    None,
+}
+
+impl BranchAccumulator {
+    fn insert_one_branch(&mut self, branch_id: PublicKey) {
+        match self {
+            Self::All => (),
+            Self::Some(branches) => {
+                branches.insert(branch_id);
+            }
+            Self::None => {
+                let mut branches = HashSet::new();
+                branches.insert(branch_id);
+                *self = BranchAccumulator::Some(branches);
+            }
+        }
+    }
+
+    fn insert_all_branches(&mut self) {
+        *self = BranchAccumulator::All;
+    }
+
+    fn take(&mut self) -> Self {
+        let mut ret = BranchAccumulator::None;
+        std::mem::swap(self, &mut ret);
+        ret
+    }
+}
+
 /// Monitors the repository for changes and notifies the peer.
 struct Monitor<'a> {
     vault: &'a Vault,
     tx: &'a Sender,
+    choker: &'a choke::Choker,
 }
 
 impl<'a> Monitor<'a> {
-    fn new(vault: &'a Vault, tx: &'a Sender) -> Self {
-        Self { vault, tx }
+    fn new(vault: &'a Vault, tx: &'a Sender, choker: &'a choke::Choker) -> Self {
+        Self { vault, tx, choker }
     }
 
     async fn run(self) -> Result<()> {
@@ -258,15 +305,72 @@ impl<'a> Monitor<'a> {
             Duration::from_secs(1)
         ));
 
-        self.handle_all_branches_changed().await?;
+        // Explanation of the code below: Because we're using the choker, we can't handle events
+        // that we receive on `events` right a way. We need to wait for the choker to give us a
+        // permit. In the mean while we "accumulate" events from `events` into the `accumulator`
+        // and once we receive a permit from the `choker` we process them all at once. Note that
+        // this allows us to process each branch event only once even if we received multiple
+        // events per particular branch.
 
-        while let Some(event) = events.next().await {
-            match event {
-                BranchChanged::One(branch_id) => self.handle_branch_changed(branch_id).await?,
-                BranchChanged::All => self.handle_all_branches_changed().await?,
+        let accumulator = SyncMutex::new(BranchAccumulator::All);
+        let (notify_tx, mut notify_rx) = watch::channel(());
+
+        // We already have a value in the `accumulator` so make use it's used in `work`.
+        notify_tx.send(()).unwrap_or(());
+
+        let mut work = pin!(async {
+            loop {
+                if notify_rx.changed().await.is_err() {
+                    break;
+                }
+                self.choker.wait_until_unchoked().await;
+                let accum = accumulator.lock().unwrap().take();
+                if self.apply_accumulator(accum).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        loop {
+            select! {
+                event = events.next() => {
+                    let event = match event {
+                        Some(event) => event,
+                        None => break,
+                    };
+
+                    let mut accum = accumulator.lock().unwrap();
+
+                    match event {
+                        BranchChanged::One(branch_id) => {
+                            accum.insert_one_branch(branch_id);
+                        },
+                        BranchChanged::All => {
+                            accum.insert_all_branches();
+                        }
+                    }
+
+                    notify_tx.send(()).unwrap_or(());
+                },
+                _ = &mut work => break,
             }
         }
 
+        Ok(())
+    }
+
+    async fn apply_accumulator(&self, accumulator: BranchAccumulator) -> Result<()> {
+        match accumulator {
+            BranchAccumulator::All => {
+                self.handle_all_branches_changed().await?;
+            }
+            BranchAccumulator::Some(branches) => {
+                for branch in branches {
+                    self.handle_branch_changed(branch).await?;
+                }
+            }
+            BranchAccumulator::None => (),
+        }
         Ok(())
     }
 
@@ -314,7 +418,7 @@ impl<'a> Monitor<'a> {
         let response = Response::RootNode {
             proof: root_node.proof.into(),
             block_presence: root_node.summary.block_presence,
-            debug: DebugResponsePayload::unsolicited(),
+            debug: DebugResponse::unsolicited(),
         };
 
         self.tx.send(response).await;

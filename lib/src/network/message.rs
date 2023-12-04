@@ -1,6 +1,6 @@
 use super::{
     crypto::Role,
-    debug_payload::{DebugRequestPayload, DebugResponsePayload},
+    debug_payload::{DebugRequest, DebugResponse},
     peer_exchange::PexPayload,
     runtime_id::PublicRuntimeId,
 };
@@ -16,11 +16,11 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{fmt, io::Write};
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
-    RootNode(PublicKey, DebugRequestPayload),
-    ChildNodes(Hash, ResponseDisambiguator, DebugRequestPayload),
-    Block(BlockId, DebugRequestPayload),
+    RootNode(PublicKey, DebugRequest),
+    ChildNodes(Hash, ResponseDisambiguator, DebugRequest),
+    Block(BlockId, DebugRequest),
 }
 
 /// ResponseDisambiguator is used to uniquelly assign a response to a request.
@@ -43,24 +43,24 @@ pub(crate) enum Response {
     RootNode {
         proof: UntrustedProof,
         block_presence: MultiBlockPresence,
-        debug: DebugResponsePayload,
+        debug: DebugResponse,
     },
     /// Send that a RootNode request failed
-    RootNodeError(PublicKey, DebugResponsePayload),
+    RootNodeError(PublicKey, DebugResponse),
     /// Send inner nodes.
-    InnerNodes(InnerNodeMap, ResponseDisambiguator, DebugResponsePayload),
+    InnerNodes(InnerNodeMap, ResponseDisambiguator, DebugResponse),
     /// Send leaf nodes.
-    LeafNodes(LeafNodeSet, ResponseDisambiguator, DebugResponsePayload),
+    LeafNodes(LeafNodeSet, ResponseDisambiguator, DebugResponse),
     /// Send that a ChildNodes request failed
-    ChildNodesError(Hash, ResponseDisambiguator, DebugResponsePayload),
+    ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
     /// Send a requested block.
     Block {
         content: BlockContent,
         nonce: BlockNonce,
-        debug: DebugResponsePayload,
+        debug: DebugResponse,
     },
     /// Send that a Block request failed
-    BlockError(BlockId, DebugResponsePayload),
+    BlockError(BlockId, DebugResponse),
 }
 
 // Custom `Debug` impl to avoid printing the whole block content in the `Block` variant.
