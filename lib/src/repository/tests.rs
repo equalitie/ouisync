@@ -84,14 +84,14 @@ async fn count_leaf_nodes_sanity_checks() {
 async fn merge_file() {
     let (_base_dir, repo) = setup().await;
 
+    let local_branch = repo.local_branch().unwrap();
     let remote_id = PublicKey::random();
+    tracing::info!(local_id = ?local_branch.id(), ?remote_id);
 
     create_remote_file(&repo, remote_id, "test.txt", b"hello").await;
 
     let remote_branch = repo.get_branch(remote_id).unwrap();
     let remote_vv = remote_branch.version_vector().await.unwrap();
-
-    let local_branch = repo.local_branch().unwrap();
 
     wait_for(&repo, || async {
         let local_vv = local_branch.version_vector().await.unwrap();
@@ -99,13 +99,17 @@ async fn merge_file() {
     })
     .await;
 
-    let content = repo
-        .open_file_version("test.txt", &remote_id)
-        .await
-        .unwrap()
-        .read_to_end()
-        .await
-        .unwrap();
+    let content = async {
+        repo.open_file_version("test.txt", local_branch.id())
+            .await
+            .unwrap()
+            .read_to_end()
+            .await
+            .unwrap()
+    }
+    .instrument(tracing::info_span!("open"))
+    .await;
+
     assert_eq!(content, b"hello");
 }
 
