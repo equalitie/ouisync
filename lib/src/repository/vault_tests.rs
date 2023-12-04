@@ -596,8 +596,8 @@ async fn receive_orphaned_block() {
 
     for block in snapshot.blocks().values() {
         vault.block_tracker.require(block.id);
-        block_tracker.offer(block.id, OfferState::Approved);
-        let promise = block_tracker.acceptor().try_accept().unwrap();
+        block_tracker.register(block.id, OfferState::Approved);
+        let promise = block_tracker.offers().try_next().unwrap().accept().unwrap();
 
         assert_matches!(
             vault.receive_block(block, Some(promise)).await,

@@ -66,48 +66,29 @@ impl Client {
         self.receive_filter.reset().await?;
 
         let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
-
-        let mut block_promise_acceptor = self.block_tracker.acceptor();
+        let mut block_offers = self.block_tracker.offers();
 
         // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
         // some unsolicited responses and also the peer may be malicious and send us too many
         // responses (so we shoulnd't use unbounded_channel).
         let (queued_responses_tx, queued_responses_rx) = mpsc::channel(2 * MAX_PENDING_RESPONSES);
 
-        let mut handle_queued_responses = pin!(self.handle_responses(queued_responses_rx));
-
         // NOTE: It is important to keep `remove`ing requests from `pending_requests` in parallel
         // with response handling. It is because response handling may take a long time (e.g. due
         // to acquiring database write transaction if there are other write transactions currently
         // going on - such as when forking) and so waiting for it could cause some requests in
         // `pending_requests` to time out.
-        let mut move_from_pending_into_queued = pin!(async {
-            loop {
-                let response = match rx.recv().await {
-                    Some(response) => response,
-                    None => break,
-                };
-
-                let response = match self.pending_requests.remove(response) {
-                    Some(response) => response,
-                    // Unsolicited and non-root response.
-                    None => continue,
-                };
-
-                if queued_responses_tx.send(response).await.is_err() {
-                    break;
-                }
-            }
-        });
+        let mut prepare_responses = pin!(self.prepare_responses(rx, queued_responses_tx));
+        let mut handle_responses = pin!(self.handle_responses(queued_responses_rx));
 
         loop {
             select! {
-                block_promise = block_promise_acceptor.accept() => {
+                block_offer = block_offers.next() => {
                     let debug = PendingDebugRequest::start();
-                    self.enqueue_request(PendingRequest::Block(block_promise, debug));
+                    self.enqueue_request(PendingRequest::Block(block_offer, debug));
                 }
-                _ = &mut move_from_pending_into_queued => break,
-                result = &mut handle_queued_responses => {
+                _ = &mut prepare_responses => break,
+                result = &mut handle_responses => {
                     result?;
                     break;
                 }
@@ -127,6 +108,29 @@ impl Client {
     fn enqueue_request(&self, request: PendingRequest) {
         // Unwrap OK because the sending task never returns.
         self.request_tx.send((request, Instant::now())).unwrap();
+    }
+
+    async fn prepare_responses(
+        &self,
+        rx: &mut mpsc::Receiver<Response>,
+        tx: mpsc::Sender<PendingResponse>,
+    ) {
+        loop {
+            let response = match rx.recv().await {
+                Some(response) => response,
+                None => break,
+            };
+
+            let response = match self.pending_requests.remove(response) {
+                Some(response) => response,
+                // Unsolicited and non-root response.
+                None => continue,
+            };
+
+            if tx.send(response).await.is_err() {
+                break;
+            }
+        }
     }
 
     async fn handle_responses(
@@ -328,12 +332,12 @@ impl Client {
         match self.vault.block_request_mode {
             BlockRequestMode::Lazy => {
                 for node in status.request_blocks {
-                    self.block_tracker.offer(node.block_id, offer_state);
+                    self.block_tracker.register(node.block_id, offer_state);
                 }
             }
             BlockRequestMode::Greedy => {
                 for node in status.request_blocks {
-                    if self.block_tracker.offer(node.block_id, offer_state) {
+                    if self.block_tracker.register(node.block_id, offer_state) {
                         self.vault.block_tracker.require(node.block_id);
                     }
                 }
@@ -485,16 +489,15 @@ fn start_sender(
 
                 monitor.request_queued_metric.record(time_created.elapsed());
 
-                let msg = request.to_message();
-
-                if !pending_requests.insert(request, peer_permit, client_permit) {
+                let Some(request) = pending_requests.insert(request, peer_permit, client_permit)
+                else {
                     // The same request is already in-flight.
                     continue;
-                }
+                };
 
                 *monitor.total_requests_cummulative.get() += 1;
 
-                tx.send(Content::Request(msg)).await.unwrap_or(());
+                tx.send(Content::Request(request)).await.unwrap_or(());
             }
 
             // Don't exist so we don't need to check whether `request_tx.send()` fails or not.

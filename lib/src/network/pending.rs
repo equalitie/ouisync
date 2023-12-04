@@ -3,7 +3,7 @@ use super::{
     message::{Request, Response, ResponseDisambiguator},
 };
 use crate::{
-    block_tracker::BlockPromise,
+    block_tracker::{BlockOffer, BlockPromise},
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
@@ -20,34 +20,10 @@ use tokio::{select, sync::OwnedSemaphorePermit, time};
 // triggered.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug)]
 pub(crate) enum PendingRequest {
     RootNode(PublicKey, PendingDebugRequest),
     ChildNodes(Hash, ResponseDisambiguator, PendingDebugRequest),
-    Block(BlockPromise, PendingDebugRequest),
-}
-
-impl PendingRequest {
-    pub fn to_key(&self) -> Key {
-        // Debug payloads are ignored in keys.
-        match self {
-            Self::RootNode(public_key, _) => Key::RootNode(*public_key),
-            Self::ChildNodes(hash, disambiguator, _) => Key::ChildNodes(*hash, *disambiguator),
-            Self::Block(block_promise, _) => Key::Block(*block_promise.block_id()),
-        }
-    }
-
-    pub fn to_message(&self) -> Request {
-        match self {
-            Self::RootNode(public_key, debug) => Request::RootNode(*public_key, debug.send()),
-            Self::ChildNodes(hash, disambiguator, debug) => {
-                Request::ChildNodes(*hash, *disambiguator, debug.send())
-            }
-            Self::Block(block_promise, debug) => {
-                Request::Block(*block_promise.block_id(), debug.send())
-            }
-        }
-    }
+    Block(BlockOffer, PendingDebugRequest),
 }
 
 pub(super) enum PendingResponse {
@@ -108,26 +84,43 @@ impl PendingRequests {
         pending_request: PendingRequest,
         peer_permit: OwnedSemaphorePermit,
         client_permit: OwnedSemaphorePermit,
-    ) -> bool {
-        match self.map.lock().unwrap().entry(pending_request.to_key()) {
-            Entry::Occupied(_) => false,
+    ) -> Option<Request> {
+        let (key, block_promise, request) = match pending_request {
+            PendingRequest::RootNode(public_key, debug) => (
+                Key::RootNode(public_key),
+                None,
+                Request::RootNode(public_key, debug.send()),
+            ),
+            PendingRequest::ChildNodes(hash, disambiguator, debug) => (
+                Key::ChildNodes(hash, disambiguator),
+                None,
+                Request::ChildNodes(hash, disambiguator, debug.send()),
+            ),
+            PendingRequest::Block(offer, debug) => {
+                let promise = offer.accept()?;
+                let block_id = *promise.block_id();
+
+                (
+                    Key::Block(block_id),
+                    Some(promise),
+                    Request::Block(block_id, debug.send()),
+                )
+            }
+        };
+
+        match self.map.lock().unwrap().entry(key) {
+            Entry::Occupied(_) => None,
             Entry::Vacant(entry) => {
-                let msg = pending_request.to_key();
-
-                let block_promise = match pending_request {
-                    PendingRequest::RootNode(_, _) => None,
-                    PendingRequest::ChildNodes(_, _, _) => None,
-                    PendingRequest::Block(block_promise, _) => Some(block_promise),
-                };
-
                 entry.insert(RequestData {
                     timestamp: Instant::now(),
                     block_promise,
                     _peer_permit: peer_permit,
                     client_permit,
                 });
-                self.request_added(&msg);
-                true
+
+                self.request_added(&key);
+
+                Some(request)
             }
         }
     }
@@ -147,60 +140,55 @@ impl PendingRequests {
             ));
 
             match response {
-                ProcessedResponse::Success(success) => {
-                    let r = match success {
-                        processed_response::Success::RootNode {
-                            proof,
-                            block_presence,
-                            debug,
-                        } => PendingResponse::RootNode {
-                            proof,
-                            block_presence,
-                            permit,
-                            debug,
-                        },
-                        processed_response::Success::InnerNodes(hash, _disambiguator, debug) => {
-                            PendingResponse::InnerNodes {
-                                hash,
-                                permit,
-                                debug,
-                            }
-                        }
-                        processed_response::Success::LeafNodes(hash, _disambiguator, debug) => {
-                            PendingResponse::LeafNodes {
-                                hash,
-                                permit,
-                                debug,
-                            }
-                        }
-                        processed_response::Success::Block { block, debug } => {
-                            PendingResponse::Block {
-                                block,
-                                permit,
-                                debug,
-                                block_promise: request_data.block_promise,
-                            }
-                        }
-                    };
-                    Some(r)
+                ProcessedResponse::RootNode {
+                    proof,
+                    block_presence,
+                    debug,
+                } => Some(PendingResponse::RootNode {
+                    proof,
+                    block_presence,
+                    permit,
+                    debug,
+                }),
+                ProcessedResponse::InnerNodes(hash, _disambiguator, debug) => {
+                    Some(PendingResponse::InnerNodes {
+                        hash,
+                        permit,
+                        debug,
+                    })
                 }
-                ProcessedResponse::Failure(processed_response::Failure::Block(block_id, debug)) => {
+                ProcessedResponse::LeafNodes(hash, _disambiguator, debug) => {
+                    Some(PendingResponse::LeafNodes {
+                        hash,
+                        permit,
+                        debug,
+                    })
+                }
+                ProcessedResponse::Block { block, debug } => Some(PendingResponse::Block {
+                    block,
+                    permit,
+                    debug,
+                    block_promise: request_data.block_promise,
+                }),
+                ProcessedResponse::BlockError(block_id, debug) => {
                     Some(PendingResponse::BlockNotFound {
                         block_id,
                         permit,
                         debug,
                     })
                 }
-                ProcessedResponse::Failure(_) => None,
+                ProcessedResponse::RootNodeError(..) | ProcessedResponse::ChildNodesError(..) => {
+                    None
+                }
             }
         } else {
             // Only `RootNode` response is allowed to be unsolicited
             match response {
-                ProcessedResponse::Success(processed_response::Success::RootNode {
+                ProcessedResponse::RootNode {
                     proof,
                     block_presence,
                     debug,
-                }) => Some(PendingResponse::RootNode {
+                } => Some(PendingResponse::RootNode {
                     proof,
                     block_presence,
                     permit: None,
@@ -312,60 +300,41 @@ impl Drop for ClientPermit {
     }
 }
 
-mod processed_response {
-    use super::*;
-
-    pub(super) enum Success {
-        RootNode {
-            proof: UntrustedProof,
-            block_presence: MultiBlockPresence,
-            debug: DebugResponse,
-        },
-        InnerNodes(
-            CacheHash<InnerNodeMap>,
-            ResponseDisambiguator,
-            DebugResponse,
-        ),
-        LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator, DebugResponse),
-        Block {
-            block: Block,
-            debug: DebugResponse,
-        },
-    }
-
-    #[derive(Debug)]
-    pub(super) enum Failure {
-        RootNode(PublicKey, DebugResponse),
-        ChildNodes(Hash, ResponseDisambiguator, DebugResponse),
-        Block(BlockId, DebugResponse),
-    }
-}
-
 enum ProcessedResponse {
-    Success(processed_response::Success),
-    Failure(processed_response::Failure),
+    RootNode {
+        proof: UntrustedProof,
+        block_presence: MultiBlockPresence,
+        debug: DebugResponse,
+    },
+    InnerNodes(
+        CacheHash<InnerNodeMap>,
+        ResponseDisambiguator,
+        DebugResponse,
+    ),
+    LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator, DebugResponse),
+    Block {
+        block: Block,
+        debug: DebugResponse,
+    },
+    RootNodeError(PublicKey, DebugResponse),
+    ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
+    BlockError(BlockId, DebugResponse),
 }
 
 impl ProcessedResponse {
     fn to_key(&self) -> Key {
         match self {
-            Self::Success(processed_response::Success::RootNode { proof, .. }) => {
-                Key::RootNode(proof.writer_id)
-            }
-            Self::Success(processed_response::Success::InnerNodes(nodes, disambiguator, _)) => {
+            Self::RootNode { proof, .. } => Key::RootNode(proof.writer_id),
+            Self::InnerNodes(nodes, disambiguator, _) => {
                 Key::ChildNodes(nodes.hash(), *disambiguator)
             }
-            Self::Success(processed_response::Success::LeafNodes(nodes, disambiguator, _)) => {
+            Self::LeafNodes(nodes, disambiguator, _) => {
                 Key::ChildNodes(nodes.hash(), *disambiguator)
             }
-            Self::Success(processed_response::Success::Block { block, .. }) => Key::Block(block.id),
-            Self::Failure(processed_response::Failure::RootNode(branch_id, _)) => {
-                Key::RootNode(*branch_id)
-            }
-            Self::Failure(processed_response::Failure::ChildNodes(hash, disambiguator, _)) => {
-                Key::ChildNodes(*hash, *disambiguator)
-            }
-            Self::Failure(processed_response::Failure::Block(block_id, _)) => Key::Block(*block_id),
+            Self::Block { block, .. } => Key::Block(block.id),
+            Self::RootNodeError(branch_id, _) => Key::RootNode(*branch_id),
+            Self::ChildNodesError(hash, disambiguator, _) => Key::ChildNodes(*hash, *disambiguator),
+            Self::BlockError(block_id, _) => Key::Block(*block_id),
         }
     }
 }
@@ -377,34 +346,30 @@ impl From<Response> for ProcessedResponse {
                 proof,
                 block_presence,
                 debug,
-            } => Self::Success(processed_response::Success::RootNode {
+            } => Self::RootNode {
                 proof,
                 block_presence,
                 debug,
-            }),
-            Response::InnerNodes(nodes, disambiguator, debug) => Self::Success(
-                processed_response::Success::InnerNodes(nodes.into(), disambiguator, debug),
-            ),
-            Response::LeafNodes(nodes, disambiguator, debug) => Self::Success(
-                processed_response::Success::LeafNodes(nodes.into(), disambiguator, debug),
-            ),
+            },
+            Response::InnerNodes(nodes, disambiguator, debug) => {
+                Self::InnerNodes(nodes.into(), disambiguator, debug)
+            }
+            Response::LeafNodes(nodes, disambiguator, debug) => {
+                Self::LeafNodes(nodes.into(), disambiguator, debug)
+            }
             Response::Block {
                 content,
                 nonce,
                 debug,
-            } => Self::Success(processed_response::Success::Block {
+            } => Self::Block {
                 block: Block::new(content, nonce),
                 debug,
-            }),
-            Response::RootNodeError(branch_id, debug) => {
-                Self::Failure(processed_response::Failure::RootNode(branch_id, debug))
+            },
+            Response::RootNodeError(branch_id, debug) => Self::RootNodeError(branch_id, debug),
+            Response::ChildNodesError(hash, disambiguator, debug) => {
+                Self::ChildNodesError(hash, disambiguator, debug)
             }
-            Response::ChildNodesError(hash, disambiguator, debug) => Self::Failure(
-                processed_response::Failure::ChildNodes(hash, disambiguator, debug),
-            ),
-            Response::BlockError(block_id, debug) => {
-                Self::Failure(processed_response::Failure::Block(block_id, debug))
-            }
+            Response::BlockError(block_id, debug) => Self::BlockError(block_id, debug),
         }
     }
 }

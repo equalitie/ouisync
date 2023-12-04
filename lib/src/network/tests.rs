@@ -141,8 +141,13 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
         for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
             a_vault.block_tracker.require(*id);
-            a_block_tracker.offer(*id, OfferState::Approved);
-            let promise = a_block_tracker.acceptor().try_accept().unwrap();
+            a_block_tracker.register(*id, OfferState::Approved);
+            let promise = a_block_tracker
+                .offers()
+                .try_next()
+                .unwrap()
+                .accept()
+                .unwrap();
 
             a_vault.receive_block(block, Some(promise)).await.unwrap();
             tracing::info!(?id, "write block");
@@ -272,6 +277,8 @@ async fn failed_block_same_peer() {
 // them drops, we can still succeed in retrieving the block from the remaining peer.
 #[tokio::test]
 async fn failed_block_other_peer() {
+    test_utils::init_log();
+
     // This test has a delicate setup phase which might not always succeed (it's not
     // deterministic) so the setup might need to be repeated multiple times.
     'main: loop {
@@ -309,19 +316,26 @@ async fn failed_block_other_peer() {
         //                   |
         // [B]-(server_bc)---+
 
+        let span_ac = tracing::info_span!("AC");
+        let span_bc = tracing::info_span!("BC");
+
+        let enter = span_ac.enter();
         let mut server_ac = create_server(a_state.clone(), &a_choker);
         let mut client_ca = create_client(c_state.clone());
+        drop(enter);
 
+        let enter = span_bc.enter();
         let mut server_bc = create_server(b_state.clone(), &b_choker);
         let mut client_cb = create_client(c_state.clone());
+        drop(enter);
 
         // Run the two connections in parallel until C syncs its index with both A and B.
         let conn_bc = simulate_connection(&mut server_bc, &mut client_cb);
-        let conn_bc = conn_bc.instrument(tracing::info_span!("BC"));
+        let conn_bc = conn_bc.instrument(span_bc);
         let mut conn_bc = Box::pin(conn_bc);
 
         let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
-        let conn_ac = conn_ac.instrument(tracing::info_span!("AC"));
+        let conn_ac = conn_ac.instrument(span_ac.clone());
 
         run_until(future::join(conn_ac, &mut conn_bc), async {
             wait_until_snapshots_in_sync(&a_state, a_id, &c_state).await;
@@ -330,8 +344,10 @@ async fn failed_block_other_peer() {
         .await;
 
         // Drop the A-C connection so C can't receive any blocks from A anymore.
+        let enter = span_ac.enter();
         drop(server_ac);
         drop(client_ca);
+        drop(enter);
 
         // It might sometimes happen that the block were already received in the previous step
         // In that case the situation this test is trying to exercise does not occur and we need
@@ -352,6 +368,8 @@ async fn failed_block_other_peer() {
             }
         }
         drop(reader);
+
+        tracing::info!("start");
 
         // Continue running the B-C connection and verify C receives the missing blocks from B who is
         // the only remaining peer at this point.

@@ -291,19 +291,19 @@ impl Drop for ChokerInner {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
+    use std::iter;
 
-    #[tokio::test(flavor = "multi_thread")]
+    // use simulated time (`start_paused`) to avoid having wait for the timeout.
+    #[tokio::test(start_paused = true)]
     async fn sanity() {
         let manager = Manager::new();
-        let mut chokers = Vec::new();
+        let mut chokers: Vec<_> = iter::repeat_with(|| manager.new_choker())
+            .take(MAX_UNCHOKED_COUNT + 1)
+            .collect();
 
-        for _ in 0..(MAX_UNCHOKED_COUNT + 1) {
-            chokers.push(manager.new_choker());
-        }
-
-        for i in 0..MAX_UNCHOKED_COUNT {
+        for choker in chokers.iter_mut().take(MAX_UNCHOKED_COUNT) {
             assert_matches!(
-                chokers[i].try_get_permit().await,
+                choker.try_get_permit().await,
                 Some(GetPermitResult::Granted)
             );
         }

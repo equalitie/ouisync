@@ -4,7 +4,7 @@ use crate::{
     protocol::BlockId,
 };
 use slab::Slab;
-use std::{fmt, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::watch;
 
 /// Helper for tracking required missing blocks.
@@ -32,33 +32,31 @@ impl BlockTracker {
     pub fn require(&self, block_id: BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let missing_block =
-            inner
-                .missing_blocks
-                .entry(block_id)
-                .or_insert_with(|| MissingBlockState {
-                    offering_clients: HashSet::default(),
-                    currently_accepted_by: None,
-                    previously_accepted_by: Default::default(),
+        let missing_block = inner
+            .missing_blocks
+            .entry(block_id)
+            .or_insert_with(|| MissingBlock {
+                offers: HashMap::default(),
+                state: State::Idle {
                     required: false,
                     approved: false,
-                });
+                },
+            });
 
-        if missing_block.required {
-            return;
+        match &mut missing_block.state {
+            State::Idle { required: true, .. } | State::Accepted(_) => return,
+            State::Idle { required, .. } => {
+                *required = true;
+            }
         }
 
-        tracing::trace!(?block_id, "require");
-
-        missing_block.required = true;
-
-        if !missing_block.offering_clients.is_empty() {
+        if !missing_block.offers.is_empty() {
             self.shared.notify();
         }
     }
 
     /// Approve the block request if offered. This is called when `quota` is not `None`, otherwise
-    /// blocks are pre-approved from `TrackerClient::offer(block_id, OfferState::Approved)`.
+    /// blocks are pre-approved from `TrackerClient::register(block_id, OfferState::Approved)`.
     pub fn approve(&self, block_id: BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
@@ -66,16 +64,16 @@ impl BlockTracker {
             return;
         };
 
-        if missing_block.approved {
-            return;
-        }
-
-        tracing::trace!(?block_id, "approve");
-
-        missing_block.approved = true;
+        let required = match &mut missing_block.state {
+            State::Idle { approved: true, .. } | State::Accepted(_) => return,
+            State::Idle { approved, required } => {
+                *approved = true;
+                *required
+            }
+        };
 
         // If required and offered, notify the waiting acceptors.
-        if missing_block.required && !missing_block.offering_clients.is_empty() {
+        if required && !missing_block.offers.is_empty() {
             self.shared.notify();
         }
     }
@@ -112,18 +110,19 @@ pub(crate) struct TrackerClient {
 }
 
 impl TrackerClient {
-    pub fn acceptor(&self) -> BlockPromiseAcceptor {
-        BlockPromiseAcceptor {
+    /// Returns a stream of offers for required blocks.
+    pub fn offers(&self) -> BlockOffers {
+        BlockOffers {
             shared: self.shared.clone(),
             client_id: self.client_id,
             notify_rx: self.notify_rx.clone(),
         }
     }
 
-    /// Offer to request the given block by the client with `client_id` if it is, or will become,
-    /// required and approved. Returns `true` if this block was offered for the first time (by any
-    /// client), `false` if it was already offered before but not yet accepted or cancelled.
-    pub fn offer(&self, block_id: BlockId, state: OfferState) -> bool {
+    /// Registers an offer for a block with the given id.
+    /// Returns `true` if this block was offered for the first time (by any client) or `false` if
+    /// it's already been offered but not yet accepted or cancelled.
+    pub fn register(&self, block_id: BlockId, state: OfferState) -> bool {
         let mut inner = self.shared.inner.lock().unwrap();
 
         if !inner.offering_clients[self.client_id].insert(block_id) {
@@ -131,32 +130,35 @@ impl TrackerClient {
             return false;
         }
 
-        tracing::trace!(?block_id, ?state, "offer");
-
-        let missing_block =
-            inner
-                .missing_blocks
-                .entry(block_id)
-                .or_insert_with(|| MissingBlockState {
-                    offering_clients: HashSet::default(),
-                    currently_accepted_by: None,
-                    previously_accepted_by: Default::default(),
+        let missing_block = inner
+            .missing_blocks
+            .entry(block_id)
+            .or_insert_with(|| MissingBlock {
+                offers: HashMap::default(),
+                state: State::Idle {
                     required: false,
                     approved: false,
-                });
+                },
+            });
 
-        missing_block.offering_clients.insert(self.client_id);
+        missing_block
+            .offers
+            .insert(self.client_id, Offer::Available);
 
-        // The peer could have previously lied about having the block (e.g. block expired). Now
-        // it's claiming to have it again so we need to reconsider loading from it again.
-        missing_block.previously_accepted_by.remove(&self.client_id);
+        match &mut missing_block.state {
+            State::Idle { approved, .. } => {
+                match state {
+                    OfferState::Approved => {
+                        *approved = true;
+                    }
+                    OfferState::Pending => (),
+                }
 
-        match state {
-            OfferState::Approved => {
-                missing_block.approved = true;
-                self.shared.notify();
+                if *approved {
+                    self.shared.notify();
+                }
             }
-            OfferState::Pending => (),
+            State::Accepted(_) => (),
         }
 
         true
@@ -173,14 +175,11 @@ impl Drop for TrackerClient {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(&block_id).unwrap();
 
-            missing_block.offering_clients.remove(&self.client_id);
+            missing_block.offers.remove(&self.client_id);
 
             if missing_block.unaccept_by(self.client_id) {
                 notify = true;
             }
-
-            // When the client reconnects, we allow it to accept the again.
-            missing_block.previously_accepted_by.remove(&self.client_id);
 
             // TODO: if the block hasn't other offers and isn't required, remove it
         }
@@ -191,28 +190,19 @@ impl Drop for TrackerClient {
     }
 }
 
-pub(crate) struct BlockPromiseAcceptor {
+/// Stream of offers for required blocks.
+pub(crate) struct BlockOffers {
     shared: Arc<Shared>,
     client_id: ClientId,
     notify_rx: watch::Receiver<()>,
 }
 
-impl BlockPromiseAcceptor {
-    /// Returns the next required, offered and approved block request. If there is no such request
-    /// at the moment this function is called, waits until one appears.
-    ///
-    /// When the client receives this promise, it can request the block from the peer. The peer
-    /// either responds and the client can fullfill the promise, or the promise can time out (or be
-    /// dropped). If the latter, another will `accept` the promise.
-    ///
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe.
-    pub async fn accept(&mut self) -> BlockPromise {
+impl BlockOffers {
+    /// Returns the next offer, waiting for one to appear if necessary.
+    pub async fn next(&mut self) -> BlockOffer {
         loop {
-            if let Some(block_promise) = self.try_accept() {
-                tracing::trace!(block_id = ?block_promise.block_id, "accept");
-                return block_promise;
+            if let Some(offer) = self.try_next() {
+                return offer;
             }
 
             // unwrap is ok because the sender exists in self.shared.
@@ -220,9 +210,8 @@ impl BlockPromiseAcceptor {
         }
     }
 
-    /// Returns the next required and offered block request or `None` if there is no such request
-    /// currently.
-    pub fn try_accept(&self) -> Option<BlockPromise> {
+    /// Returns the next offer or `None` if none exists currently.
+    pub fn try_next(&self) -> Option<BlockOffer> {
         let mut inner = self.shared.inner.lock().unwrap();
         let inner = &mut *inner;
 
@@ -231,94 +220,123 @@ impl BlockPromiseAcceptor {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
 
-            if missing_block.required
-                && missing_block.approved
-                && missing_block.currently_accepted_by.is_none()
-                && !missing_block
-                    .previously_accepted_by
-                    .contains(&self.client_id)
-            {
-                missing_block.currently_accepted_by = Some(self.client_id);
-                missing_block.previously_accepted_by.insert(self.client_id);
-
-                return Some(BlockPromise {
-                    shared: self.shared.clone(),
-                    client_id: self.client_id,
-                    block_id: *block_id,
-                    complete: false,
-                });
+            match missing_block.state {
+                State::Idle {
+                    required: true,
+                    approved: true,
+                } => (),
+                State::Idle { .. } | State::Accepted(_) => continue,
             }
+
+            // unwrap is ok because of the invariant.
+            let offer = missing_block.offers.get_mut(&self.client_id).unwrap();
+            match offer {
+                Offer::Available => {
+                    *offer = Offer::Candidate;
+                }
+                Offer::Candidate | Offer::Accepted | Offer::Rejected => continue,
+            }
+
+            return Some(BlockOffer {
+                shared: self.shared.clone(),
+                client_id: self.client_id,
+                block_id: *block_id,
+            });
         }
 
         None
     }
 }
 
-/// Represents an accepted block request.
-pub(crate) struct BlockPromise {
+/// Offer for a required block.
+pub(crate) struct BlockOffer {
     shared: Arc<Shared>,
     client_id: ClientId,
     block_id: BlockId,
-    complete: bool,
 }
 
-impl BlockPromise {
-    pub(crate) fn block_id(&self) -> &BlockId {
+impl BlockOffer {
+    #[cfg(test)]
+    pub fn block_id(&self) -> &BlockId {
         &self.block_id
     }
 
-    /// Mark the block request as successfully completed.
-    pub fn complete(mut self) {
+    /// Accepts the offer. There can be multiple offers for the same block (each from a different
+    /// peer) but only one returns `Some` here. The returned `BlockPromise` is a commitment to send
+    /// the block request through this client.
+    pub fn accept(self) -> Option<BlockPromise> {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let Some(missing_block) = inner.missing_blocks.remove(&self.block_id) else {
-            return;
+        let Some(missing_block) = inner.missing_blocks.get_mut(&self.block_id) else {
+            return None;
         };
 
-        for client_id in missing_block.offering_clients {
-            if let Some(block_ids) = inner.offering_clients.get_mut(client_id) {
-                block_ids.remove(&self.block_id);
-            }
+        match missing_block.state {
+            State::Idle {
+                required: true,
+                approved: true,
+            } => (),
+            State::Idle { .. } => unreachable!(),
+            State::Accepted(_) => return None,
         }
 
-        tracing::trace!(block_id = ?self.block_id, "complete");
+        missing_block.state = State::Accepted(self.client_id);
+        missing_block.offers.insert(self.client_id, Offer::Accepted);
 
-        self.complete = true;
+        drop(inner);
+
+        Some(BlockPromise(self))
     }
 }
 
-impl fmt::Debug for BlockPromise {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("BlockPromise")
-            .field("client_id", &self.client_id)
-            .field("block_id", &self.block_id)
-            .finish()
-    }
-}
-
-impl Drop for BlockPromise {
+impl Drop for BlockOffer {
     fn drop(&mut self) {
-        if self.complete {
-            return;
-        }
-
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let client = match inner.offering_clients.get_mut(self.client_id) {
-            Some(client) => client,
-            None => return,
+        let Some(missing_block) = inner.missing_blocks.get_mut(&self.block_id) else {
+            return;
         };
 
-        if !client.remove(&self.block_id) {
+        let Some(offer) = missing_block.offers.get_mut(&self.client_id) else {
             return;
-        }
+        };
 
-        // unwrap is ok because of the invariant in `Inner`
-        let missing_block = inner.missing_blocks.get_mut(&self.block_id).unwrap();
-        missing_block.offering_clients.remove(&self.client_id);
+        match offer {
+            Offer::Candidate => {
+                *offer = Offer::Available;
+            }
+            Offer::Accepted => {
+                *offer = Offer::Rejected;
+            }
+            Offer::Available | Offer::Rejected => (),
+        }
 
         if missing_block.unaccept_by(self.client_id) {
             self.shared.notify();
+        }
+    }
+}
+
+/// Accepted block offer.
+pub(crate) struct BlockPromise(BlockOffer);
+
+impl BlockPromise {
+    pub(crate) fn block_id(&self) -> &BlockId {
+        &self.0.block_id
+    }
+
+    /// Mark the block request as successfully completed.
+    pub fn complete(self) {
+        let mut inner = self.0.shared.inner.lock().unwrap();
+
+        let Some(missing_block) = inner.missing_blocks.remove(&self.0.block_id) else {
+            return;
+        };
+
+        for (client_id, _) in missing_block.offers {
+            if let Some(block_ids) = inner.offering_clients.get_mut(client_id) {
+                block_ids.remove(&self.0.block_id);
+            }
         }
     }
 }
@@ -344,30 +362,44 @@ impl Shared {
 //
 // and vice-versa.
 struct Inner {
-    missing_blocks: HashMap<BlockId, MissingBlockState>,
+    missing_blocks: HashMap<BlockId, MissingBlock>,
     offering_clients: Slab<HashSet<BlockId>>,
 }
 
 #[derive(Debug)]
-struct MissingBlockState {
-    offering_clients: HashSet<ClientId>,
-    currently_accepted_by: Option<ClientId>,
-    previously_accepted_by: HashSet<ClientId>,
-    required: bool,
-    approved: bool,
+struct MissingBlock {
+    // Clients that offered this block.
+    offers: HashMap<ClientId, Offer>,
+    state: State,
 }
 
-impl MissingBlockState {
+impl MissingBlock {
     fn unaccept_by(&mut self, client_id: ClientId) -> bool {
-        if let Some(currently_accepted_by) = &self.currently_accepted_by {
-            if currently_accepted_by == &client_id {
-                self.currently_accepted_by = None;
-                return true;
+        match self.state {
+            State::Accepted(other_client_id) if other_client_id == client_id => {
+                self.state = State::Idle {
+                    required: true,
+                    approved: true,
+                };
+                true
             }
+            State::Accepted(_) | State::Idle { .. } => false,
         }
-
-        false
     }
+}
+
+#[derive(Debug)]
+enum State {
+    Idle { required: bool, approved: bool },
+    Accepted(ClientId),
+}
+
+#[derive(Debug)]
+enum Offer {
+    Available,
+    Candidate,
+    Accepted,
+    Rejected,
 }
 
 type ClientId = usize;
@@ -389,31 +421,32 @@ mod tests {
         let client = tracker.client();
 
         // Initially no blocks are returned
-        assert!(client.acceptor().try_accept().is_none());
+        assert!(client.offers().try_next().is_none());
 
         // Offered but not required blocks are not returned
         let block0: Block = rand::random();
-        client.offer(block0.id, OfferState::Approved);
-        assert!(client.acceptor().try_accept().is_none());
+        client.register(block0.id, OfferState::Approved);
+        assert!(client.offers().try_next().is_none());
 
         // Required but not offered blocks are not returned
         let block1: Block = rand::random();
         tracker.require(block1.id);
-        assert!(client.acceptor().try_accept().is_none());
+        assert!(client.offers().try_next().is_none());
 
         // Required + offered blocks are returned...
         tracker.require(block0.id);
         assert_eq!(
             client
-                .acceptor()
-                .try_accept()
+                .offers()
+                .try_next()
+                .and_then(BlockOffer::accept)
                 .as_ref()
                 .map(BlockPromise::block_id),
             Some(&block0.id)
         );
 
         // ...but only once.
-        assert!(client.acceptor().try_accept().is_none());
+        assert!(client.offers().try_next().is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -422,36 +455,36 @@ mod tests {
 
         let block: Block = rand::random();
         let client = tracker.client();
-        let mut acceptor = client.acceptor();
+        let mut offers = client.offers();
 
         tracker.require(block.id);
 
         let (tx, mut rx) = mpsc::channel(1);
 
         let handle = tokio::task::spawn(async move {
-            let mut accept_task = pin!(acceptor.accept());
+            let mut next = pin!(offers.next());
 
             loop {
                 select! {
-                    block_promise = &mut accept_task => {
-                        return *block_promise.block_id();
+                    block_offer = &mut next => {
+                        return *block_offer.block_id();
                     },
                     _ = tx.send(()) => {}
                 }
             }
         });
 
-        // Make sure acceptor started accepting.
+        // Make sure the task started.
         rx.recv().await.unwrap();
 
-        client.offer(block.id, OfferState::Approved);
+        client.register(block.id, OfferState::Approved);
 
-        let accepted_block_id = time::timeout(Duration::from_secs(5), handle)
+        let offered_block_id = time::timeout(Duration::from_secs(5), handle)
             .await
             .expect("timeout")
             .unwrap();
 
-        assert_eq!(block.id, accepted_block_id);
+        assert_eq!(block.id, offered_block_id);
     }
 
     #[test]
@@ -464,23 +497,24 @@ mod tests {
         let block: Block = rand::random();
 
         tracker.require(block.id);
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
+        client0.register(block.id, OfferState::Approved);
+        client1.register(block.id, OfferState::Approved);
 
-        let block_promise = client0.acceptor().try_accept();
+        let block_promise = client0.offers().try_next().and_then(BlockOffer::accept);
         assert_eq!(
             block_promise.as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
-        assert!(client1.acceptor().try_accept().is_none());
+        assert!(client1.offers().try_next().is_none());
 
         drop(block_promise);
 
-        assert!(client0.acceptor().try_accept().is_none());
+        assert!(client0.offers().try_next().is_none());
         assert_eq!(
             client1
-                .acceptor()
-                .try_accept()
+                .offers()
+                .try_next()
+                .and_then(BlockOffer::accept)
                 .as_ref()
                 .map(BlockPromise::block_id),
             Some(&block.id)
@@ -496,8 +530,8 @@ mod tests {
 
         let block: Block = rand::random();
 
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
+        client0.register(block.id, OfferState::Approved);
+        client1.register(block.id, OfferState::Approved);
 
         tracker.require(block.id);
 
@@ -505,8 +539,9 @@ mod tests {
 
         assert_eq!(
             client1
-                .acceptor()
-                .try_accept()
+                .offers()
+                .try_next()
+                .and_then(BlockOffer::accept)
                 .as_ref()
                 .map(BlockPromise::block_id),
             Some(&block.id)
@@ -522,25 +557,26 @@ mod tests {
 
         let block: Block = rand::random();
 
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
+        client0.register(block.id, OfferState::Approved);
+        client1.register(block.id, OfferState::Approved);
 
         tracker.require(block.id);
 
-        let block_promise = client0.acceptor().try_accept();
+        let block_promise = client0.offers().try_next().and_then(BlockOffer::accept);
 
         assert_eq!(
             block_promise.as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
-        assert!(client1.acceptor().try_accept().is_none());
+        assert!(client1.offers().try_next().is_none());
 
         drop(client0);
 
         assert_eq!(
             client1
-                .acceptor()
-                .try_accept()
+                .offers()
+                .try_next()
+                .and_then(BlockOffer::accept)
                 .as_ref()
                 .map(BlockPromise::block_id),
             Some(&block.id)
@@ -548,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_on_client_drop_before_request() {
+    fn fallback_on_client_drop_before_require() {
         let tracker = BlockTracker::new();
 
         let client0 = tracker.client();
@@ -556,8 +592,8 @@ mod tests {
 
         let block: Block = rand::random();
 
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
+        client0.register(block.id, OfferState::Approved);
+        client1.register(block.id, OfferState::Approved);
 
         drop(client0);
 
@@ -565,8 +601,9 @@ mod tests {
 
         assert_eq!(
             client1
-                .acceptor()
-                .try_accept()
+                .offers()
+                .try_next()
+                .and_then(BlockOffer::accept)
                 .as_ref()
                 .map(BlockPromise::block_id),
             Some(&block.id)
@@ -581,18 +618,64 @@ mod tests {
         let block: Block = rand::random();
         tracker.require(block.id);
 
-        client.offer(block.id, OfferState::Pending);
-        assert!(client.acceptor().try_accept().is_none());
+        client.register(block.id, OfferState::Pending);
+        assert!(client.offers().try_next().is_none());
 
         tracker.approve(block.id);
         assert_eq!(
             client
-                .acceptor()
-                .try_accept()
+                .offers()
+                .try_next()
+                .and_then(BlockOffer::accept)
                 .as_ref()
                 .map(BlockPromise::block_id),
             Some(&block.id)
         );
+    }
+
+    #[test]
+    fn multiple_offers_from_different_clients() {
+        let tracker = BlockTracker::new();
+        let client0 = tracker.client();
+        let client1 = tracker.client();
+
+        let block: Block = rand::random();
+        tracker.require(block.id);
+
+        client0.register(block.id, OfferState::Approved);
+        client1.register(block.id, OfferState::Approved);
+
+        let offer0 = client0.offers().try_next().unwrap();
+        let offer1 = client1.offers().try_next().unwrap();
+
+        assert_eq!(offer0.block_id(), offer1.block_id());
+
+        let promise0 = offer0.accept();
+        let promise1 = offer1.accept();
+
+        assert!(promise0.is_some());
+        assert!(promise1.is_none());
+    }
+
+    #[test]
+    fn multiple_offers_from_same_client() {
+        let tracker = BlockTracker::new();
+        let client = tracker.client();
+
+        let block0: Block = rand::random();
+        tracker.require(block0.id);
+        client.register(block0.id, OfferState::Approved);
+
+        let block1: Block = rand::random();
+        tracker.require(block1.id);
+        client.register(block1.id, OfferState::Approved);
+
+        let offer0 = client.offers().try_next().unwrap();
+        let offer1 = client.offers().try_next().unwrap();
+        let offer2 = client.offers().try_next();
+
+        assert_ne!(offer0.block_id(), offer1.block_id());
+        assert!(offer2.is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -607,7 +690,7 @@ mod tests {
         tracker.require(block.id);
 
         for client in &clients {
-            client.offer(block.id, OfferState::Approved);
+            client.register(block.id, OfferState::Approved);
         }
 
         // Make sure all clients stay alive until we are done so that any accepted requests are not
@@ -619,7 +702,7 @@ mod tests {
             task::spawn({
                 let barrier = barrier.clone();
                 async move {
-                    let block_promise = client.acceptor().try_accept();
+                    let block_promise = client.offers().try_next().and_then(BlockOffer::accept);
                     let result = block_promise.as_ref().map(BlockPromise::block_id).cloned();
                     barrier.wait().await;
                     result
@@ -653,13 +736,13 @@ mod tests {
 
         enum Op {
             Require,
-            Offer,
+            Register,
         }
 
         let mut ops: Vec<_> = block_ids
             .iter()
             .map(|block_id| (Op::Require, *block_id))
-            .chain(block_ids.iter().map(|block_id| (Op::Offer, *block_id)))
+            .chain(block_ids.iter().map(|block_id| (Op::Register, *block_id)))
             .collect();
         ops.shuffle(&mut rng);
 
@@ -668,8 +751,8 @@ mod tests {
                 Op::Require => {
                     tracker.require(block_id);
                 }
-                Op::Offer => {
-                    client.offer(block_id, OfferState::Approved);
+                Op::Register => {
+                    client.register(block_id, OfferState::Approved);
                 }
             }
         }
@@ -677,8 +760,9 @@ mod tests {
         let mut block_promise = HashSet::with_capacity(block_ids.len());
 
         while let Some(block_id) = client
-            .acceptor()
-            .try_accept()
+            .offers()
+            .try_next()
+            .and_then(BlockOffer::accept)
             .as_ref()
             .map(BlockPromise::block_id)
         {
