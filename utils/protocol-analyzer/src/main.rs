@@ -36,31 +36,22 @@ async fn main() -> Result<()> {
             Line::ThisRuntimeId(_) => (),
             Line::ReceivedRootNode(line) => {
                 let key = (line.that_label.clone(), line.common_prefix.label.clone());
-                let value = context
-                    .from_to_root_nodes
-                    .entry(key)
-                    .or_insert_with(Vec::new);
+                let value = context.from_to_root_nodes.entry(key).or_default();
                 value.push(line.common_prefix.line_number);
             }
             Line::ReceivedInnerNode(line) => {
                 let key = (line.that_label.clone(), line.common_prefix.label.clone());
-                let value = context
-                    .from_to_inner_nodes
-                    .entry(key)
-                    .or_insert_with(Vec::new);
+                let value = context.from_to_inner_nodes.entry(key).or_default();
                 value.push(line.common_prefix.line_number);
             }
             Line::ReceivedLeafNode(line) => {
                 let key = (line.that_label.clone(), line.common_prefix.label.clone());
-                let value = context
-                    .from_to_leaf_nodes
-                    .entry(key)
-                    .or_insert_with(Vec::new);
+                let value = context.from_to_leaf_nodes.entry(key).or_default();
                 value.push(line.common_prefix.line_number);
             }
             Line::ReceivedBlock(line) => {
                 let key = (line.that_label.clone(), line.common_prefix.label.clone());
-                let value = context.from_to_blocks.entry(key).or_insert_with(Vec::new);
+                let value = context.from_to_blocks.entry(key).or_default();
                 value.push(line.common_prefix.line_number);
             }
         }
@@ -175,24 +166,24 @@ struct CommonPrefix {
 mod parse {
     use super::*;
 
-    pub(super) fn line(line_number: u32, input: &str, context: &mut Context) -> Option<Line> {
-        if let Some(line) = this_runtime_id_line(line_number, &mut input.clone()) {
+    pub(super) fn line(line_number: u32, mut input: &str, context: &mut Context) -> Option<Line> {
+        if let Some(line) = this_runtime_id_line(line_number, &mut input) {
             context.runtime_id_to_label.insert(
                 line.this_runtime_id.clone(),
                 line.common_prefix.label.clone(),
             );
             return Some(Line::ThisRuntimeId(line));
         }
-        if let Some(line) = received_root_node_line(line_number, &mut input.clone(), context) {
+        if let Some(line) = received_root_node_line(line_number, &mut input, context) {
             return Some(Line::ReceivedRootNode(line));
         }
-        if let Some(line) = received_inner_node_line(line_number, &mut input.clone(), context) {
+        if let Some(line) = received_inner_node_line(line_number, &mut input, context) {
             return Some(Line::ReceivedInnerNode(line));
         }
-        if let Some(line) = received_leaf_node_line(line_number, &mut input.clone(), context) {
+        if let Some(line) = received_leaf_node_line(line_number, &mut input, context) {
             return Some(Line::ReceivedLeafNode(line));
         }
-        if let Some(line) = received_block_line(line_number, &mut input.clone(), context) {
+        if let Some(line) = received_block_line(line_number, &mut input, context) {
             return Some(Line::ReceivedBlock(line));
         }
         None
@@ -470,13 +461,13 @@ mod parse {
     where
         F: Fn(&str) -> usize,
     {
-        let rest = &mut (*s).clone();
+        let mut rest = *s;
         loop {
             let n = f(rest);
             if n == 0 {
                 break;
             }
-            *rest = &rest[n..];
+            rest = &rest[n..];
         }
 
         let ret = &s[0..(s.len() - rest.len())];
