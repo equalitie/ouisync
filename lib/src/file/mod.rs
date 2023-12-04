@@ -27,15 +27,7 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
-        let lock = branch.locker().try_read(*locator.blob_id()).map_err(|_| {
-            tracing::warn!(
-                branch_id = ?branch.id(),
-                blob_id = ?locator.blob_id(),
-                "failed to acquire read lock"
-            );
-
-            Error::EntryNotFound
-        })?;
+        let lock = branch.locker().read(*locator.blob_id()).await;
         let lock = UpgradableLock::Read(lock);
 
         let mut tx = branch.store().begin_read().await?;
