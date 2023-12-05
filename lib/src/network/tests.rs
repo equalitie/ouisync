@@ -552,7 +552,7 @@ where
 // Simulate connection forever.
 async fn simulate_connection(server: &mut ServerData, client: &mut ClientData) {
     let (server, server_send_rx, server_recv_tx) = server;
-    let (client, client_send_rx, client_recv_rx, client_recv_tx) = client;
+    let (client, client_send_rx, client_recv_tx) = client;
 
     let mut server_conn = Connection {
         send_rx: server_send_rx,
@@ -565,9 +565,7 @@ async fn simulate_connection(server: &mut ServerData, client: &mut ClientData) {
     };
 
     let server_run = server.run().instrument(tracing::info_span!("server"));
-    let client_run = client
-        .run(client_recv_rx)
-        .instrument(tracing::info_span!("client"));
+    let client_run = client.run().instrument(tracing::info_span!("client"));
 
     select! {
         biased; // deterministic poll order for repeatable tests
@@ -595,12 +593,7 @@ where
 }
 
 type ServerData = (Server, mpsc::Receiver<Content>, mpsc::Sender<Request>);
-type ClientData = (
-    Client,
-    mpsc::Receiver<Content>,
-    mpsc::Receiver<Response>,
-    mpsc::Sender<Response>,
-);
+type ClientData = (Client, mpsc::Receiver<Content>, mpsc::Sender<Response>);
 
 fn create_server(repo: Vault, choke_manager: &choke::Manager) -> ServerData {
     let (send_tx, send_rx) = mpsc::channel(1);
@@ -616,10 +609,11 @@ fn create_client(repo: Vault) -> ClientData {
     let client = Client::new(
         repo,
         send_tx,
+        recv_rx,
         Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
     );
 
-    (client, send_rx, recv_rx, recv_tx)
+    (client, send_rx, recv_tx)
 }
 
 // Simulated connection between a server and a client.

@@ -12,74 +12,108 @@ use crate::{
         Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, RootNodeFilter,
         UntrustedProof,
     },
-    repository::{BlockRequestMode, RepositoryMonitor, Vault},
+    repository::{BlockRequestMode, Vault},
     store::{self, ReceiveFilter},
 };
-use scoped_task::ScopedJoinHandle;
-use std::{future, pin::pin, sync::Arc, time::Instant};
+use std::{pin::pin, sync::Arc, time::Instant};
 use tokio::{
     select,
     sync::{mpsc, Semaphore},
 };
-use tracing::{instrument, instrument::Instrument, Level, Span};
+use tracing::{instrument, Level};
 
 pub(super) struct Client {
-    vault: Vault,
-    pending_requests: Arc<PendingRequests>,
-    request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
-    receive_filter: ReceiveFilter,
-    block_tracker: TrackerClient,
-    _request_sender: ScopedJoinHandle<()>,
+    inner: Inner,
+    rx: mpsc::Receiver<Response>,
+    send_queue_rx: mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
+    recv_queue_rx: mpsc::Receiver<PendingResponse>,
 }
 
 impl Client {
     pub fn new(
         vault: Vault,
         tx: mpsc::Sender<Content>,
+        rx: mpsc::Receiver<Response>,
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
+        let pending_requests = PendingRequests::new(vault.monitor.clone());
         let receive_filter = vault.store().receive_filter();
         let block_tracker = vault.block_tracker.client();
 
-        let pending_requests = Arc::new(PendingRequests::new(vault.monitor.clone()));
-
         // We run the sender in a separate task so we can keep sending requests while we're
         // processing responses (which sometimes takes a while).
-        let (request_sender, request_tx) = start_sender(
-            tx,
-            pending_requests.clone(),
-            peer_request_limiter,
-            vault.monitor.clone(),
-        );
+        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel::<(PendingRequest, Instant)>();
 
-        Self {
+        // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
+        // some unsolicited responses and also the peer may be malicious and send us too many
+        // responses (so we shoulnd't use unbounded_channel).
+        let (recv_queue_tx, recv_queue_rx) = mpsc::channel(2 * MAX_PENDING_RESPONSES);
+
+        let inner = Inner {
             vault,
             pending_requests,
-            request_tx,
+            peer_request_limiter,
             receive_filter,
             block_tracker,
-            _request_sender: request_sender,
+            tx,
+            send_queue_tx,
+            recv_queue_tx,
+        };
+
+        Self {
+            inner,
+            rx,
+            send_queue_rx,
+            recv_queue_rx,
         }
     }
+}
 
-    pub async fn run(&mut self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
+impl Client {
+    pub async fn run(&mut self) -> Result<()> {
+        let Self {
+            inner,
+            rx,
+            send_queue_rx,
+            recv_queue_rx,
+        } = self;
+
+        inner.run(rx, send_queue_rx, recv_queue_rx).await
+    }
+}
+
+struct Inner {
+    vault: Vault,
+    pending_requests: PendingRequests,
+    peer_request_limiter: Arc<Semaphore>,
+    receive_filter: ReceiveFilter,
+    block_tracker: TrackerClient,
+    tx: mpsc::Sender<Content>,
+    send_queue_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
+    recv_queue_tx: mpsc::Sender<PendingResponse>,
+}
+
+impl Inner {
+    async fn run(
+        &mut self,
+        rx: &mut mpsc::Receiver<Response>,
+        send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
+        recv_queue_rx: &mut mpsc::Receiver<PendingResponse>,
+    ) -> Result<()> {
         self.receive_filter.reset().await?;
 
         let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
         let mut block_offers = self.block_tracker.offers();
 
-        // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
-        // some unsolicited responses and also the peer may be malicious and send us too many
-        // responses (so we shoulnd't use unbounded_channel).
-        let (queued_responses_tx, queued_responses_rx) = mpsc::channel(2 * MAX_PENDING_RESPONSES);
+        let mut send_requests = pin!(self.send_requests(send_queue_rx));
 
         // NOTE: It is important to keep `remove`ing requests from `pending_requests` in parallel
         // with response handling. It is because response handling may take a long time (e.g. due
         // to acquiring database write transaction if there are other write transactions currently
         // going on - such as when forking) and so waiting for it could cause some requests in
         // `pending_requests` to time out.
-        let mut prepare_responses = pin!(self.prepare_responses(rx, queued_responses_tx));
-        let mut handle_responses = pin!(self.handle_responses(queued_responses_rx));
+        let mut enqueue_responses = pin!(self.enqueue_responses(rx));
+        let mut handle_responses = pin!(self.handle_responses(recv_queue_rx));
 
         loop {
             select! {
@@ -87,7 +121,8 @@ impl Client {
                     let debug = PendingDebugRequest::start();
                     self.enqueue_request(PendingRequest::Block(block_offer, debug));
                 }
-                _ = &mut prepare_responses => break,
+                _ = &mut send_requests => break,
+                _ = &mut enqueue_responses => break,
                 result = &mut handle_responses => {
                     result?;
                     break;
@@ -106,15 +141,58 @@ impl Client {
     }
 
     fn enqueue_request(&self, request: PendingRequest) {
-        // Unwrap OK because the sending task never returns.
-        self.request_tx.send((request, Instant::now())).unwrap();
+        self.send_queue_tx.send((request, Instant::now())).ok();
     }
 
-    async fn prepare_responses(
+    async fn send_requests(
         &self,
-        rx: &mut mpsc::Receiver<Response>,
-        tx: mpsc::Sender<PendingResponse>,
+        send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
     ) {
+        let client_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_RESPONSES));
+
+        loop {
+            let Some((request, time_created)) = send_queue_rx.recv().await else {
+                break;
+            };
+
+            // Unwraps OK because we never `close()` the semaphores.
+            //
+            // NOTE that the order here is important, we don't want to block the other clients
+            // on this peer if we have too many responses queued up (which is what the
+            // `client_permit` is responsible for limiting)..
+            let client_permit = client_request_limiter
+                .clone()
+                .acquire_owned()
+                .await
+                .unwrap();
+
+            let peer_permit = self
+                .peer_request_limiter
+                .clone()
+                .acquire_owned()
+                .await
+                .unwrap();
+
+            self.vault
+                .monitor
+                .request_queued_metric
+                .record(time_created.elapsed());
+
+            let Some(request) = self
+                .pending_requests
+                .insert(request, peer_permit, client_permit)
+            else {
+                // The same request is already in-flight.
+                continue;
+            };
+
+            *self.vault.monitor.total_requests_cummulative.get() += 1;
+
+            self.tx.send(Content::Request(request)).await.unwrap_or(());
+        }
+    }
+
+    async fn enqueue_responses(&self, rx: &mut mpsc::Receiver<Response>) {
         loop {
             let response = match rx.recv().await {
                 Some(response) => response,
@@ -127,7 +205,7 @@ impl Client {
                 None => continue,
             };
 
-            if tx.send(response).await.is_err() {
+            if self.recv_queue_tx.send(response).await.is_err() {
                 break;
             }
         }
@@ -135,10 +213,10 @@ impl Client {
 
     async fn handle_responses(
         &self,
-        mut queued_responses_rx: mpsc::Receiver<PendingResponse>,
+        recv_queue_rx: &mut mpsc::Receiver<PendingResponse>,
     ) -> Result<()> {
         loop {
-            match queued_responses_rx.recv().await {
+            match recv_queue_rx.recv().await {
                 Some(response) => {
                     self.vault
                         .monitor
@@ -451,60 +529,4 @@ impl Client {
             PendingDebugRequest::start(),
         ));
     }
-}
-
-fn start_sender(
-    tx: mpsc::Sender<Content>,
-    pending_requests: Arc<PendingRequests>,
-    peer_request_limiter: Arc<Semaphore>,
-    monitor: Arc<RepositoryMonitor>,
-) -> (
-    ScopedJoinHandle<()>,
-    mpsc::UnboundedSender<(PendingRequest, Instant)>,
-) {
-    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<(PendingRequest, Instant)>();
-
-    let handle = scoped_task::spawn({
-        async move {
-            let client_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_RESPONSES));
-
-            loop {
-                let (request, time_created) = match request_rx.recv().await {
-                    Some((request, time_created)) => (request, time_created),
-                    None => break,
-                };
-
-                // Unwraps OK because we never `close()` the semaphores.
-                //
-                // NOTE that the order here is important, we don't want to block the other clients
-                // on this peer if we have too many responses queued up (which is what the
-                // `client_permit` is responsible for limiting)..
-                let client_permit = client_request_limiter
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .unwrap();
-
-                let peer_permit = peer_request_limiter.clone().acquire_owned().await.unwrap();
-
-                monitor.request_queued_metric.record(time_created.elapsed());
-
-                let Some(request) = pending_requests.insert(request, peer_permit, client_permit)
-                else {
-                    // The same request is already in-flight.
-                    continue;
-                };
-
-                *monitor.total_requests_cummulative.get() += 1;
-
-                tx.send(Content::Request(request)).await.unwrap_or(());
-            }
-
-            // Don't exist so we don't need to check whether `request_tx.send()` fails or not.
-            future::pending::<()>().await;
-        }
-        .instrument(Span::current())
-    });
-
-    (handle, request_tx)
 }

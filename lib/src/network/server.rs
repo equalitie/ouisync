@@ -1,7 +1,7 @@
 use std::{collections::HashSet, pin::pin, sync::Mutex as SyncMutex, time::Duration};
 
 use super::{
-    choke,
+    choke::Choker,
     debug_payload::{DebugRequest, DebugResponse},
     message::{Content, Request, Response, ResponseDisambiguator},
 };
@@ -31,7 +31,7 @@ pub(crate) struct Server {
     vault: Vault,
     tx: Sender,
     rx: Receiver,
-    choker: choke::Choker,
+    choker: Choker,
 }
 
 impl Server {
@@ -39,7 +39,7 @@ impl Server {
         vault: Vault,
         tx: mpsc::Sender<Content>,
         rx: mpsc::Receiver<Request>,
-        choker: choke::Choker,
+        choker: Choker,
     ) -> Self {
         Self {
             vault,
@@ -56,12 +56,12 @@ impl Server {
             rx,
             choker,
         } = self;
-        let responder = Responder::new(vault, tx, choker);
-        let monitor = Monitor::new(vault, tx, choker);
+        let responder = Responder::new(vault, tx);
+        let monitor = Monitor::new(vault, tx);
 
         select! {
-            result = responder.run(rx) => result,
-            result = monitor.run() => result,
+            result = responder.run(rx, choker.clone()) => result,
+            result = monitor.run(choker.clone()) => result,
         }
     }
 }
@@ -70,15 +70,14 @@ impl Server {
 struct Responder<'a> {
     vault: &'a Vault,
     tx: &'a Sender,
-    choker: &'a choke::Choker,
 }
 
 impl<'a> Responder<'a> {
-    fn new(vault: &'a Vault, tx: &'a Sender, choker: &'a choke::Choker) -> Self {
-        Self { vault, tx, choker }
+    fn new(vault: &'a Vault, tx: &'a Sender) -> Self {
+        Self { vault, tx }
     }
 
-    async fn run(self, rx: &'a mut Receiver) -> Result<()> {
+    async fn run(self, rx: &'a mut Receiver, mut choker: Choker) -> Result<()> {
         let mut handlers = FuturesUnordered::new();
 
         loop {
@@ -90,7 +89,7 @@ impl<'a> Responder<'a> {
                 request = rx.recv() => {
                     match request {
                         Some(request) => {
-                            self.choker.wait_until_unchoked().await;
+                            choker.wait_until_unchoked().await;
 
                             let handler = self
                                 .vault
@@ -289,15 +288,14 @@ impl BranchAccumulator {
 struct Monitor<'a> {
     vault: &'a Vault,
     tx: &'a Sender,
-    choker: &'a choke::Choker,
 }
 
 impl<'a> Monitor<'a> {
-    fn new(vault: &'a Vault, tx: &'a Sender, choker: &'a choke::Choker) -> Self {
-        Self { vault, tx, choker }
+    fn new(vault: &'a Vault, tx: &'a Sender) -> Self {
+        Self { vault, tx }
     }
 
-    async fn run(self) -> Result<()> {
+    async fn run(self, mut choker: Choker) -> Result<()> {
         // Important: make sure to create the event subscription first, before calling
         // `handle_all_branches_changed` otherwise we might miss some events.
         let mut events = pin!(Throttle::new(
@@ -323,7 +321,9 @@ impl<'a> Monitor<'a> {
                 if notify_rx.changed().await.is_err() {
                     break;
                 }
-                self.choker.wait_until_unchoked().await;
+
+                choker.wait_until_unchoked().await;
+
                 let accum = accumulator.lock().unwrap().take();
                 if self.apply_accumulator(accum).await.is_err() {
                     break;

@@ -2,13 +2,12 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex, Weak,
+        Arc, Mutex,
     },
 };
 use tokio::{
-    select,
-    sync::{watch, Mutex as AsyncMutex},
-    time::{Duration, Instant},
+    sync::watch,
+    time::{self, Duration, Instant},
 };
 
 const MAX_UNCHOKED_COUNT: usize = 3;
@@ -36,22 +35,20 @@ impl Manager {
     pub fn new_choker(&self) -> Choker {
         let mut inner = self.inner.lock().unwrap();
 
-        let choker_id = inner.next_choker_id.fetch_add(1, Ordering::Relaxed);
-
-        let choker_inner = Arc::new(AsyncMutex::new(ChokerInner {
-            manager_inner: Arc::downgrade(&self.inner),
-            id: choker_id,
-            on_change_rx: inner.on_change_tx.subscribe(),
-        }));
+        let id = inner.next_choker_id.fetch_add(1, Ordering::Relaxed);
 
         if inner.unchoked.len() < MAX_UNCHOKED_COUNT {
-            inner.unchoked.insert(choker_id, UnchokedState::default());
+            inner.unchoked.insert(id, UnchokedState::default());
         } else {
-            inner.choked.insert(choker_id, ChokedState::Uninterested);
+            inner.choked.insert(id, ChokedState::Uninterested);
         }
 
         Choker {
-            inner: choker_inner,
+            inner: Arc::new(ChokerInner {
+                manager_inner: self.inner.clone(),
+                id,
+            }),
+            on_change_rx: inner.on_change_tx.subscribe(),
         }
     }
 }
@@ -216,74 +213,45 @@ impl ManagerInner {
 
 #[derive(Clone)]
 pub(crate) struct Choker {
-    inner: Arc<AsyncMutex<ChokerInner>>,
+    inner: Arc<ChokerInner>,
+    on_change_rx: watch::Receiver<()>,
 }
 
 impl Choker {
     /// Halts forever when the `Manager` has already been destroyed.
-    pub async fn wait_until_unchoked(&self) {
-        self.inner.lock().await.wait_until_unchoked().await
-    }
-
-    #[cfg(test)]
-    async fn try_get_permit(&mut self) -> Option<GetPermitResult> {
-        self.inner.lock().await.try_get_permit()
-    }
-}
-
-struct ChokerInner {
-    manager_inner: Weak<Mutex<ManagerInner>>,
-    id: usize,
-    on_change_rx: watch::Receiver<()>,
-}
-
-impl ChokerInner {
     pub async fn wait_until_unchoked(&mut self) {
-        use std::future::pending;
-
         loop {
             self.on_change_rx.borrow_and_update();
 
-            let result = self.try_get_permit();
-
-            let sleep_until = match result {
-                None => {
-                    let () = pending().await;
-                    unreachable!();
-                }
-                Some(result) => match result {
-                    GetPermitResult::Granted => return,
-                    GetPermitResult::AwaitUntil(sleep_until) => sleep_until,
-                },
+            let sleep_until = match self.get_permit() {
+                GetPermitResult::Granted => return,
+                GetPermitResult::AwaitUntil(sleep_until) => sleep_until,
             };
 
-            select! {
-                result = self.on_change_rx.changed() => {
-                    if result.is_err() {
-                        let () = pending().await;
-                    }
-                },
-                _ = tokio::time::sleep_until(sleep_until) => {
-                }
+            match time::timeout_at(sleep_until, self.on_change_rx.changed()).await {
+                Ok(Ok(())) | Err(_) => (),
+                Ok(Err(_)) => unreachable!(),
             }
         }
     }
 
-    fn try_get_permit(&mut self) -> Option<GetPermitResult> {
-        let result = match self.manager_inner.upgrade() {
-            Some(inner) => inner.lock().unwrap().get_permit(self.id),
-            None => return None,
-        };
-
-        Some(result)
+    fn get_permit(&mut self) -> GetPermitResult {
+        self.inner
+            .manager_inner
+            .lock()
+            .unwrap()
+            .get_permit(self.inner.id)
     }
+}
+
+struct ChokerInner {
+    manager_inner: Arc<Mutex<ManagerInner>>,
+    id: usize,
 }
 
 impl Drop for ChokerInner {
     fn drop(&mut self) {
-        if let Some(manager_inner) = self.manager_inner.upgrade() {
-            manager_inner.lock().unwrap().remove_choker(self.id);
-        }
+        self.manager_inner.lock().unwrap().remove_choker(self.id);
     }
 }
 
@@ -293,7 +261,7 @@ mod tests {
     use assert_matches::assert_matches;
     use std::iter;
 
-    // use simulated time (`start_paused`) to avoid having wait for the timeout.
+    // use simulated time (`start_paused`) to avoid having to wait for the timeout in the real time.
     #[tokio::test(start_paused = true)]
     async fn sanity() {
         let manager = Manager::new();
@@ -302,15 +270,12 @@ mod tests {
             .collect();
 
         for choker in chokers.iter_mut().take(MAX_UNCHOKED_COUNT) {
-            assert_matches!(
-                choker.try_get_permit().await,
-                Some(GetPermitResult::Granted)
-            );
+            assert_matches!(choker.get_permit(), GetPermitResult::Granted);
         }
 
         assert_matches!(
-            chokers[MAX_UNCHOKED_COUNT].try_get_permit().await,
-            Some(GetPermitResult::AwaitUntil(_))
+            chokers[MAX_UNCHOKED_COUNT].get_permit(),
+            GetPermitResult::AwaitUntil(_)
         );
 
         tokio::time::timeout(

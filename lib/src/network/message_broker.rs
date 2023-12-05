@@ -43,7 +43,6 @@ pub(super) struct MessageBroker {
     request_limiter: Arc<Semaphore>,
     monitor: StateMonitor,
     span: Span,
-    choker: choke::Choker,
 }
 
 impl MessageBroker {
@@ -53,7 +52,6 @@ impl MessageBroker {
         stream: raw::Stream,
         permit: ConnectionPermit,
         monitor: StateMonitor,
-        choker: choke::Choker,
     ) -> Self {
         let span = tracing::info_span!(
             "message_broker",
@@ -70,7 +68,6 @@ impl MessageBroker {
             request_limiter: Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
             monitor,
             span,
-            choker,
         };
 
         this.add_connection(stream, permit);
@@ -89,7 +86,12 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
-    pub fn create_link(&mut self, vault: Vault, pex: &PexController) {
+    pub fn create_link(
+        &mut self,
+        vault: Vault,
+        pex: &PexController,
+        choke_manager: &choke::Manager,
+    ) {
         let monitor = self.monitor.make_child(vault.monitor.name());
         let span = tracing::info_span!(
             parent: &self.span,
@@ -135,11 +137,11 @@ impl MessageBroker {
         let pex_discovery_tx = pex.discovery_sender();
         let pex_announcer = pex.announcer(self.that_runtime_id, self.dispatcher.connection_infos());
 
+        let choker = choke_manager.new_choker();
+
         tracing::info!(?role, "Link created");
 
         drop(span_enter);
-
-        let choker = self.choker.clone();
 
         let task = async move {
             select! {
@@ -378,12 +380,11 @@ async fn send_messages(
 async fn run_client(
     repo: Vault,
     content_tx: mpsc::Sender<Content>,
-    mut response_rx: mpsc::Receiver<Response>,
+    response_rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
-    let mut client = Client::new(repo, content_tx, request_limiter);
-
-    let result = client.run(&mut response_rx).await;
+    let mut client = Client::new(repo, content_tx, response_rx, request_limiter);
+    let result = client.run().await;
 
     tracing::debug!("Client stopped running with result {:?}", result);
 
