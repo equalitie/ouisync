@@ -125,7 +125,6 @@ impl Network {
             gateway,
             this_runtime_id,
             state: BlockingMutex::new(State {
-                choke_manager: choke::Manager::new(),
                 message_brokers: Some(HashMap::default()),
                 registry: Slab::new(),
             }),
@@ -284,14 +283,17 @@ impl Network {
         );
         pex.set_enabled(pex_enabled);
 
+        let choke_manager = choke::Manager::new();
+
         let mut network_state = self.inner.state.lock().unwrap();
 
-        network_state.create_link(handle.vault.clone(), &pex);
+        network_state.create_link(handle.vault.clone(), &pex, &choke_manager);
 
         let key = network_state.registry.insert(RegistrationHolder {
             vault: handle.vault,
             dht,
             pex,
+            choke_manager,
         });
 
         Registration {
@@ -392,6 +394,7 @@ struct RegistrationHolder {
     vault: Vault,
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexController,
+    choke_manager: choke::Manager,
 }
 
 struct Inner {
@@ -420,17 +423,16 @@ struct Inner {
 }
 
 struct State {
-    choke_manager: choke::Manager,
     // This is None once the network calls shutdown.
     message_brokers: Option<HashMap<PublicRuntimeId, MessageBroker>>,
     registry: Slab<RegistrationHolder>,
 }
 
 impl State {
-    fn create_link(&mut self, repo: Vault, pex: &PexController) {
+    fn create_link(&mut self, repo: Vault, pex: &PexController, choke_manager: &choke::Manager) {
         if let Some(brokers) = &mut self.message_brokers {
             for broker in brokers.values_mut() {
-                broker.create_link(repo.clone(), pex)
+                broker.create_link(repo.clone(), pex, choke_manager)
             }
         }
     }
@@ -798,7 +800,6 @@ impl Inner {
                             stream,
                             permit,
                             monitor,
-                            state.choke_manager.new_choker(),
                         )
                     });
 
@@ -806,7 +807,11 @@ impl Inner {
                     // lookup but make sure we correctly handle edge cases, for example, when we have
                     // more than one repository shared with the peer.
                     for (_, holder) in &state.registry {
-                        broker.create_link(holder.vault.clone(), &holder.pex);
+                        broker.create_link(
+                            holder.vault.clone(),
+                            &holder.pex,
+                            &holder.choke_manager,
+                        );
                     }
 
                     entry.insert(broker);
