@@ -378,12 +378,11 @@ async fn send_messages(
 async fn run_client(
     repo: Vault,
     content_tx: mpsc::Sender<Content>,
-    mut response_rx: mpsc::Receiver<Response>,
+    response_rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
-    let mut client = Client::new(repo, content_tx, request_limiter);
-
-    let result = client.run(&mut response_rx).await;
+    let mut client = Client::new(repo, content_tx, response_rx, request_limiter);
+    let result = client.run().await;
 
     tracing::debug!("Client stopped running with result {:?}", result);
 
