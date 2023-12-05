@@ -20,6 +20,7 @@ use crate::{
 use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{sync::Arc, time::Duration};
+use tracing::Instrument;
 
 #[derive(Clone)]
 pub(crate) struct Vault {
@@ -221,6 +222,7 @@ impl Vault {
         Ok(self
             .store
             .set_block_expiration(duration, self.block_tracker.clone())
+            .instrument(self.monitor.span().clone())
             .await?)
     }
 

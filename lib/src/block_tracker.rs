@@ -4,7 +4,7 @@ use crate::{
     protocol::BlockId,
 };
 use slab::Slab;
-use std::sync::Arc;
+use std::{collections::hash_map::Entry, sync::Arc};
 use tokio::sync::watch;
 
 /// Helper for tracking required missing blocks.
@@ -232,9 +232,9 @@ impl BlockOffers {
             let offer = missing_block.offers.get_mut(&self.client_id).unwrap();
             match offer {
                 Offer::Available => {
-                    *offer = Offer::Candidate;
+                    *offer = Offer::Proposed;
                 }
-                Offer::Candidate | Offer::Accepted | Offer::Rejected => continue,
+                Offer::Proposed | Offer::Accepted => continue,
             }
 
             return Some(BlockOffer {
@@ -292,23 +292,28 @@ impl BlockOffer {
 impl Drop for BlockOffer {
     fn drop(&mut self) {
         let mut inner = self.shared.inner.lock().unwrap();
+        let inner = &mut *inner;
 
         let Some(missing_block) = inner.missing_blocks.get_mut(&self.block_id) else {
             return;
         };
 
-        let Some(offer) = missing_block.offers.get_mut(&self.client_id) else {
+        let Entry::Occupied(mut entry) = missing_block.offers.entry(self.client_id) else {
             return;
         };
 
-        match offer {
-            Offer::Candidate => {
-                *offer = Offer::Available;
+        match entry.get() {
+            Offer::Proposed => {
+                entry.insert(Offer::Available);
             }
             Offer::Accepted => {
-                *offer = Offer::Rejected;
+                // Dropping an accepted offer means the request either failed or timeouted so it's
+                // safe to remove it. If the peer sends us another leaf node response with the same
+                // block id, we register the offer again.
+                entry.remove();
+                inner.offering_clients[self.client_id].remove(&self.block_id);
             }
-            Offer::Available | Offer::Rejected => (),
+            Offer::Available => unreachable!(),
         }
 
         if missing_block.unaccept_by(self.client_id) {
@@ -397,9 +402,8 @@ enum State {
 #[derive(Debug)]
 enum Offer {
     Available,
-    Candidate,
+    Proposed,
     Accepted,
-    Rejected,
 }
 
 type ClientId = usize;

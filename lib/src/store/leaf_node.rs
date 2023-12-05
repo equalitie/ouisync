@@ -171,7 +171,31 @@ pub(super) async fn set_missing_if_expired(
     .await?;
 
     if result.rows_affected() > 0 {
-        tracing::warn!("Marking 'Expired' block {block_id:?} as 'Missing'");
+        tracing::debug!(?block_id, "Block unexpired");
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+/// Returns true if the block changed status from present to expired
+pub(super) async fn set_expired_if_present(
+    tx: &mut db::WriteTransaction,
+    block_id: &BlockId,
+) -> Result<bool, Error> {
+    let result = sqlx::query(
+        "UPDATE snapshot_leaf_nodes
+         SET block_presence = ?
+         WHERE block_id = ? AND block_presence = ?",
+    )
+    .bind(SingleBlockPresence::Expired)
+    .bind(block_id)
+    .bind(SingleBlockPresence::Present)
+    .execute(tx)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        tracing::debug!(?block_id, "Block expired");
         return Ok(true);
     }
 

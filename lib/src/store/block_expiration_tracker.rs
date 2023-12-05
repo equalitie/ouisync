@@ -24,6 +24,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tokio::{select, sync::watch, time::sleep};
+use tracing::{Instrument, Span};
 
 /// This structure keeps track (in memory) of which blocks are currently in the database. To each
 /// one block it assigns a time when it should expire to free space. Once a block is expired, it is
@@ -94,6 +95,7 @@ impl BlockExpirationTracker {
 
         let _task = scoped_task::spawn({
             let shared = shared.clone();
+            let span = Span::current();
 
             async move {
                 if let Err(err) = run_task(
@@ -110,6 +112,7 @@ impl BlockExpirationTracker {
                     tracing::error!("BlockExpirationTracker task has ended with {err:?}");
                 }
             }
+            .instrument(span)
         });
 
         Ok(Self {
@@ -294,7 +297,7 @@ async fn run_task(
     loop {
         let expiration_time = *expiration_time_rx.borrow();
 
-        let (ts, block) = {
+        let (ts, block_id) = {
             enum Enum {
                 OldestEntry(Option<(TimeUpdated, BlockId)>),
                 ToMissing(HashSet<BlockId>),
@@ -360,36 +363,22 @@ async fn run_task(
                 None => continue,
             };
 
-            if *first_entry.key() > ts || !first_entry.get().contains(&block) {
+            if *first_entry.key() > ts || !first_entry.get().contains(&block_id) {
                 continue;
             }
         }
 
         let mut tx = pool.begin_write().await?;
 
-        // TODO: extract this to `store::leaf_node::set_expired_if_present`.
-        let update_result = sqlx::query(
-            "UPDATE snapshot_leaf_nodes
-             SET block_presence = ?
-             WHERE block_id = ? AND block_presence = ?",
-        )
-        .bind(SingleBlockPresence::Expired)
-        .bind(&block)
-        .bind(SingleBlockPresence::Present)
-        .execute(&mut tx)
-        .await?;
-
-        if update_result.rows_affected() == 0 {
+        if !leaf_node::set_expired_if_present(&mut tx, &block_id).await? {
             return Ok(());
         }
 
-        block::remove(&mut tx, &block).await?;
-
-        tracing::warn!("Block {block:?} has expired");
+        block::remove(&mut tx, &block_id).await?;
 
         tx.commit().await?;
 
-        shared.lock().unwrap().remove_block(&block);
+        shared.lock().unwrap().remove_block(&block_id);
     }
 }
 
