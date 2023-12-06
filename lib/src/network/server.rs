@@ -123,7 +123,7 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_root_node(&self, branch_id: PublicKey, debug: DebugRequest) -> Result<()> {
+    async fn handle_root_node(&self, writer_id: PublicKey, debug: DebugRequest) -> Result<()> {
         let debug = debug.begin_reply();
 
         let root_node = self
@@ -131,18 +131,18 @@ impl<'a> Responder<'a> {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(&branch_id, RootNodeFilter::Published)
+            .load_root_node(&writer_id, RootNodeFilter::Published)
             .await;
 
         match root_node {
             Ok(node) => {
                 tracing::trace!("root node found");
 
-                let response = Response::RootNode {
-                    proof: node.proof.into(),
-                    block_presence: node.summary.block_presence,
-                    debug: debug.send(),
-                };
+                let response = Response::RootNode(
+                    node.proof.into(),
+                    node.summary.block_presence,
+                    debug.send(),
+                );
 
                 self.tx.send(response).await;
                 Ok(())
@@ -150,13 +150,13 @@ impl<'a> Responder<'a> {
             Err(store::Error::BranchNotFound) => {
                 tracing::trace!("root node not found");
                 self.tx
-                    .send(Response::RootNodeError(branch_id, debug.send()))
+                    .send(Response::RootNodeError(writer_id, debug.send()))
                     .await;
                 Ok(())
             }
             Err(error) => {
                 self.tx
-                    .send(Response::RootNodeError(branch_id, debug.send()))
+                    .send(Response::RootNodeError(writer_id, debug.send()))
                     .await;
                 Err(error.into())
             }
@@ -213,7 +213,7 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_block(&self, id: BlockId, debug: DebugRequest) -> Result<()> {
+    async fn handle_block(&self, block_id: BlockId, debug: DebugRequest) -> Result<()> {
         let debug = debug.begin_reply();
         let mut content = BlockContent::new();
         let result = self
@@ -221,28 +221,28 @@ impl<'a> Responder<'a> {
             .store()
             .acquire_read()
             .await?
-            .read_block(&id, &mut content)
+            .read_block(&block_id, &mut content)
             .await;
 
         match result {
             Ok(nonce) => {
                 tracing::trace!("block found");
                 self.tx
-                    .send(Response::Block {
-                        content,
-                        nonce,
-                        debug: debug.send(),
-                    })
+                    .send(Response::Block(content, nonce, debug.send()))
                     .await;
                 Ok(())
             }
             Err(store::Error::BlockNotFound) => {
                 tracing::trace!("block not found");
-                self.tx.send(Response::BlockError(id, debug.send())).await;
+                self.tx
+                    .send(Response::BlockError(block_id, debug.send()))
+                    .await;
                 Ok(())
             }
             Err(error) => {
-                self.tx.send(Response::BlockError(id, debug.send())).await;
+                self.tx
+                    .send(Response::BlockError(block_id, debug.send()))
+                    .await;
                 Err(error.into())
             }
         }
@@ -363,11 +363,11 @@ impl<'a> Monitor<'a> {
             "handle_branch_changed",
         );
 
-        let response = Response::RootNode {
-            proof: root_node.proof.into(),
-            block_presence: root_node.summary.block_presence,
-            debug: DebugResponse::unsolicited(),
-        };
+        let response = Response::RootNode(
+            root_node.proof.into(),
+            root_node.summary.block_presence,
+            DebugResponse::unsolicited(),
+        );
 
         self.tx.send(response).await;
 

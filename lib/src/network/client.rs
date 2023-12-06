@@ -2,7 +2,7 @@ use super::{
     constants::MAX_PENDING_RESPONSES,
     debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Content, Response, ResponseDisambiguator},
-    pending::{PendingRequest, PendingRequests, PendingResponse},
+    pending::{PendingRequest, PendingRequests, PendingResponse, ProcessedResponse},
 };
 use crate::{
     block_tracker::{BlockPromise, OfferState, TrackerClient},
@@ -144,7 +144,8 @@ impl Inner {
         &self,
         send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
     ) {
-        let client_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_RESPONSES));
+        // Limits requests per link (peer + repo)
+        let link_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_RESPONSES));
 
         loop {
             let Some((request, time_created)) = send_queue_rx.recv().await else {
@@ -155,12 +156,8 @@ impl Inner {
             //
             // NOTE that the order here is important, we don't want to block the other clients
             // on this peer if we have too many responses queued up (which is what the
-            // `client_permit` is responsible for limiting)..
-            let client_permit = client_request_limiter
-                .clone()
-                .acquire_owned()
-                .await
-                .unwrap();
+            // `link_permit` is responsible for limiting)..
+            let link_permit = link_request_limiter.clone().acquire_owned().await.unwrap();
 
             let peer_permit = self
                 .peer_request_limiter
@@ -176,7 +173,7 @@ impl Inner {
 
             let Some(request) = self
                 .pending_requests
-                .insert(request, peer_permit, client_permit)
+                .insert(request, link_permit, peer_permit)
             else {
                 // The same request is already in-flight.
                 continue;
@@ -190,16 +187,11 @@ impl Inner {
 
     async fn enqueue_responses(&self, rx: &mut mpsc::Receiver<Response>) {
         loop {
-            let response = match rx.recv().await {
-                Some(response) => response,
-                None => break,
+            let Some(response) = rx.recv().await else {
+                break;
             };
 
-            let response = match self.pending_requests.remove(response) {
-                Some(response) => response,
-                // Unsolicited and non-root response.
-                None => continue,
-            };
+            let response = self.pending_requests.remove(response);
 
             if self.recv_queue_tx.send(response).await.is_err() {
                 break;
@@ -226,64 +218,43 @@ impl Inner {
     }
 
     async fn handle_response(&self, response: PendingResponse) -> Result<()> {
-        match response {
-            PendingResponse::RootNode {
-                proof,
-                block_presence,
-                permit: _permit,
-                debug,
-            } => {
+        match response.response {
+            ProcessedResponse::RootNode(proof, block_presence, debug) => {
                 self.vault
                     .monitor
                     .handle_root_node_metric
                     .measure_ok(self.handle_root_node(proof, block_presence, debug))
                     .await
             }
-            PendingResponse::InnerNodes {
-                hash,
-                permit: _permit,
-                debug,
-            } => {
+            ProcessedResponse::InnerNodes(nodes, _, debug) => {
                 self.vault
                     .monitor
                     .handle_inner_nodes_metric
-                    .measure_ok(self.handle_inner_nodes(hash, debug))
+                    .measure_ok(self.handle_inner_nodes(nodes, debug))
                     .await
             }
-            PendingResponse::LeafNodes {
-                hash,
-                permit: _permit,
-                debug,
-            } => {
+            ProcessedResponse::LeafNodes(nodes, _, debug) => {
                 self.vault
                     .monitor
                     .handle_leaf_nodes_metric
-                    .measure_ok(self.handle_leaf_nodes(hash, debug))
+                    .measure_ok(self.handle_leaf_nodes(nodes, debug))
                     .await
             }
-            PendingResponse::Block {
-                block,
-                block_promise,
-                permit: _permit,
-                debug,
-            } => {
+            ProcessedResponse::Block(block, debug) => {
                 self.vault
                     .monitor
                     .handle_block_metric
-                    .measure_ok(self.handle_block(block, block_promise, debug))
+                    .measure_ok(self.handle_block(block, response.block_promise, debug))
                     .await
             }
-            PendingResponse::BlockNotFound {
-                block_id,
-                permit: _permit,
-                debug,
-            } => {
+            ProcessedResponse::BlockError(block_id, debug) => {
                 self.vault
                     .monitor
                     .handle_block_not_found_metric
                     .measure_ok(self.handle_block_not_found(block_id, debug))
                     .await
             }
+            ProcessedResponse::RootNodeError(..) | ProcessedResponse::ChildNodesError(..) => Ok(()),
         }
     }
 
