@@ -1,5 +1,3 @@
-use std::{collections::HashSet, pin::pin, sync::Mutex as SyncMutex, time::Duration};
-
 use super::{
     choke::Choker,
     debug_payload::{DebugRequest, DebugResponse},
@@ -18,11 +16,12 @@ use futures_util::{
     stream::{self, FuturesUnordered},
     Stream, StreamExt, TryStreamExt,
 };
+use std::{collections::HashSet, mem, pin::pin, time::Duration};
 use tokio::{
     select,
     sync::{
         broadcast::{self, error::RecvError},
-        mpsc, watch,
+        mpsc,
     },
 };
 use tracing::instrument;
@@ -250,40 +249,6 @@ impl<'a> Responder<'a> {
     }
 }
 
-/// When we receive events that a branch has changed, we accumulate those events into this
-/// structure and use it once we receive a permit from the choker.
-enum BranchAccumulator {
-    All,
-    Some(HashSet<PublicKey>),
-    None,
-}
-
-impl BranchAccumulator {
-    fn insert_one_branch(&mut self, branch_id: PublicKey) {
-        match self {
-            Self::All => (),
-            Self::Some(branches) => {
-                branches.insert(branch_id);
-            }
-            Self::None => {
-                let mut branches = HashSet::new();
-                branches.insert(branch_id);
-                *self = BranchAccumulator::Some(branches);
-            }
-        }
-    }
-
-    fn insert_all_branches(&mut self) {
-        *self = BranchAccumulator::All;
-    }
-
-    fn take(&mut self) -> Self {
-        let mut ret = BranchAccumulator::None;
-        std::mem::swap(self, &mut ret);
-        ret
-    }
-}
-
 /// Monitors the repository for changes and notifies the peer.
 struct Monitor<'a> {
     vault: &'a Vault,
@@ -310,49 +275,31 @@ impl<'a> Monitor<'a> {
         // this allows us to process each branch event only once even if we received multiple
         // events per particular branch.
 
-        let accumulator = SyncMutex::new(BranchAccumulator::All);
-        let (notify_tx, mut notify_rx) = watch::channel(());
-
-        // We already have a value in the `accumulator` so make use it's used in `work`.
-        notify_tx.send(()).unwrap_or(());
-
-        let mut work = pin!(async {
-            loop {
-                if notify_rx.changed().await.is_err() {
-                    break;
-                }
-
-                choker.wait_until_unchoked().await;
-
-                let accum = accumulator.lock().unwrap().take();
-                if self.apply_accumulator(accum).await.is_err() {
-                    break;
-                }
-            }
-        });
+        let mut accumulator = BranchAccumulator::All;
+        let mut choked = true;
 
         loop {
             select! {
                 event = events.next() => {
-                    let event = match event {
-                        Some(event) => event,
-                        None => break,
+                    let Some(event) = event else {
+                        break;
                     };
-
-                    let mut accum = accumulator.lock().unwrap();
 
                     match event {
                         BranchChanged::One(branch_id) => {
-                            accum.insert_one_branch(branch_id);
+                            accumulator.insert_one_branch(branch_id);
                         },
                         BranchChanged::All => {
-                            accum.insert_all_branches();
+                            accumulator.insert_all_branches();
                         }
                     }
 
-                    notify_tx.send(()).unwrap_or(());
+                    choked = true;
                 },
-                _ = &mut work => break,
+                _ = choker.wait_until_unchoked(), if choked => {
+                    self.apply_accumulator(mem::take(&mut accumulator)).await?;
+                    choked = false;
+                }
             }
         }
 
@@ -365,12 +312,13 @@ impl<'a> Monitor<'a> {
                 self.handle_all_branches_changed().await?;
             }
             BranchAccumulator::Some(branches) => {
-                for branch in branches {
-                    self.handle_branch_changed(branch).await?;
+                for branch_id in branches {
+                    self.handle_branch_changed(branch_id).await?;
                 }
             }
             BranchAccumulator::None => (),
         }
+
         Ok(())
     }
 
@@ -495,4 +443,34 @@ fn events(rx: broadcast::Receiver<Event>) -> impl Stream<Item = BranchChanged> {
 enum BranchChanged {
     One(PublicKey),
     All,
+}
+
+/// When we receive events that a branch has changed, we accumulate those events into this
+/// structure and use it once we receive a permit from the choker.
+#[derive(Default)]
+enum BranchAccumulator {
+    All,
+    Some(HashSet<PublicKey>),
+    #[default]
+    None,
+}
+
+impl BranchAccumulator {
+    fn insert_one_branch(&mut self, branch_id: PublicKey) {
+        match self {
+            Self::All => (),
+            Self::Some(branches) => {
+                branches.insert(branch_id);
+            }
+            Self::None => {
+                let mut branches = HashSet::new();
+                branches.insert(branch_id);
+                *self = BranchAccumulator::Some(branches);
+            }
+        }
+    }
+
+    fn insert_all_branches(&mut self) {
+        *self = BranchAccumulator::All;
+    }
 }
