@@ -42,7 +42,7 @@ impl Client {
 
         // We run the sender in a separate task so we can keep sending requests while we're
         // processing responses (which sometimes takes a while).
-        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel::<(PendingRequest, Instant)>();
+        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
 
         // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
         // some unsolicited responses and also the peer may be malicious and send us too many
@@ -127,12 +127,8 @@ impl Inner {
                     result?;
                     break;
                 }
-                branches_to_reload = reload_index_rx.changed() => {
-                    if let Ok(branches_to_reload) = branches_to_reload {
-                        for branch_to_reload in &branches_to_reload {
-                            self.reload_index(branch_to_reload);
-                        }
-                    }
+                result = reload_index_rx.changed(), if !reload_index_rx.is_closed() => {
+                    self.refresh_branches(result.ok().into_iter().flatten());
                 }
             }
         }
@@ -373,7 +369,7 @@ impl Inner {
             }
         }
 
-        self.refresh_branches(&status.new_approved);
+        self.refresh_branches(status.new_approved.iter().copied());
         self.log_approved(&status.new_approved).await;
 
         Ok(())
@@ -428,7 +424,7 @@ impl Inner {
             }
         }
 
-        self.refresh_branches(&status.new_approved);
+        self.refresh_branches(status.new_approved.iter().copied());
         self.log_approved(&status.new_approved).await;
 
         Ok(())
@@ -480,9 +476,12 @@ impl Inner {
     //
     // By requesting the root node again immediatelly, we ensure that the missing block is
     // requested as soon as possible.
-    fn refresh_branches(&self, branches: &[PublicKey]) {
+    fn refresh_branches(&self, branches: impl IntoIterator<Item = PublicKey>) {
         for branch_id in branches {
-            self.reload_index(branch_id);
+            self.enqueue_request(PendingRequest::RootNode(
+                branch_id,
+                PendingDebugRequest::start(),
+            ));
         }
     }
 
@@ -521,12 +520,5 @@ impl Inner {
                 "Snapshot complete"
             );
         }
-    }
-
-    fn reload_index(&self, branch_id: &PublicKey) {
-        self.enqueue_request(PendingRequest::RootNode(
-            *branch_id,
-            PendingDebugRequest::start(),
-        ));
     }
 }

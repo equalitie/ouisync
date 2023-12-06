@@ -55,6 +55,13 @@ pub(crate) mod uninitialized_watch {
                 rx.changed().await.ok().map(|value| (value, rx))
             })
         }
+
+        pub fn is_closed(&self) -> bool {
+            // `tokio::sync::watch::Receiver` doesn't expose a `is_closed`, but we can get the same
+            // information by checking whether `has_changed` returns an error as it only does so
+            // when the chanel has been closed.
+            self.0.has_changed().is_err()
+        }
     }
 
     pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -224,6 +231,10 @@ pub(crate) mod broadcast_hash_set {
             }
 
             Ok(new_set)
+        }
+
+        pub fn is_closed(&self) -> bool {
+            self.watch_rx.is_closed()
         }
     }
 
