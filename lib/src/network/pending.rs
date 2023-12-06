@@ -1,24 +1,19 @@
 use super::{
+    constants::REQUEST_TIMEOUT,
     debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Request, Response, ResponseDisambiguator},
 };
 use crate::{
     block_tracker::{BlockOffer, BlockPromise},
-    collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
     protocol::{Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::RepositoryMonitor,
-    sync::uninitialized_watch,
+    sync::delay_map::DelayMap,
 };
-use scoped_task::ScopedJoinHandle;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::{select, sync::OwnedSemaphorePermit, time};
-
-// If a response to a pending request is not received within this time, a request timeout error is
-// triggered.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+use std::{future, sync::Arc, task::ready};
+use std::{task::Poll, time::Instant};
+use tokio::{sync::OwnedSemaphorePermit, task};
 
 pub(crate) enum PendingRequest {
     RootNode(PublicKey, PendingDebugRequest),
@@ -60,22 +55,14 @@ pub(super) enum PendingResponse {
 
 pub(super) struct PendingRequests {
     monitor: Arc<RepositoryMonitor>,
-    map: Arc<BlockingMutex<HashMap<Key, RequestData>>>,
-    to_tracker_tx: uninitialized_watch::Sender<()>,
-    _expiration_tracker: ScopedJoinHandle<()>,
+    map: Arc<BlockingMutex<DelayMap<Key, RequestData>>>,
 }
 
 impl PendingRequests {
     pub fn new(monitor: Arc<RepositoryMonitor>) -> Self {
-        let map = Arc::new(BlockingMutex::new(HashMap::<Key, RequestData>::default()));
-
-        let (expiration_tracker, to_tracker_tx) = run_tracker(monitor.clone(), map.clone());
-
         Self {
             monitor,
-            map,
-            to_tracker_tx,
-            _expiration_tracker: expiration_tracker,
+            map: Arc::new(BlockingMutex::new(DelayMap::default())),
         }
     }
 
@@ -108,21 +95,30 @@ impl PendingRequests {
             }
         };
 
-        match self.map.lock().unwrap().entry(key) {
-            Entry::Occupied(_) => None,
-            Entry::Vacant(entry) => {
-                entry.insert(RequestData {
-                    timestamp: Instant::now(),
-                    block_promise,
-                    _peer_permit: peer_permit,
-                    client_permit,
-                });
+        let mut map = self.map.lock().unwrap();
 
-                self.request_added(&key);
+        map.try_insert(key)?.insert(
+            RequestData {
+                timestamp: Instant::now(),
+                block_promise,
+                _peer_permit: peer_permit,
+                client_permit,
+            },
+            REQUEST_TIMEOUT,
+        );
 
-                Some(request)
-            }
+        // The expiration tracker task is started each time an item is inserted into previously
+        // empty map and stopped when the map becomes empty again.
+        if map.len() == 1 {
+            task::spawn(run_expiration_tracker(
+                self.monitor.clone(),
+                self.map.clone(),
+            ));
         }
+
+        request_added(&self.monitor, &key);
+
+        Some(request)
     }
 
     pub fn remove(&self, response: Response) -> Option<PendingResponse> {
@@ -130,7 +126,7 @@ impl PendingRequests {
         let key = response.to_key();
 
         if let Some(request_data) = self.map.lock().unwrap().remove(&key) {
-            self.request_removed(&key, Some(request_data.timestamp));
+            request_removed(&self.monitor, &key, Some(request_data.timestamp));
 
             // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
             // only `drop` it once the request is processed.
@@ -198,23 +194,9 @@ impl PendingRequests {
             }
         }
     }
-
-    fn request_added(&self, key: &Key) {
-        stats_request_added(&self.monitor, key);
-        self.notify_tracker_task();
-    }
-
-    fn request_removed(&self, key: &Key, timestamp: Option<Instant>) {
-        stats_request_removed(&self.monitor, key, timestamp);
-        self.notify_tracker_task();
-    }
-
-    fn notify_tracker_task(&self) {
-        self.to_tracker_tx.send(()).unwrap_or(());
-    }
 }
 
-fn stats_request_added(monitor: &RepositoryMonitor, key: &Key) {
+fn request_added(monitor: &RepositoryMonitor, key: &Key) {
     *monitor.pending_requests.get() += 1;
 
     match key {
@@ -223,64 +205,37 @@ fn stats_request_added(monitor: &RepositoryMonitor, key: &Key) {
     }
 }
 
-fn stats_request_removed(monitor: &RepositoryMonitor, key: &Key, timestamp: Option<Instant>) {
+fn request_removed(monitor: &RepositoryMonitor, key: &Key, timestamp: Option<Instant>) {
     match key {
         Key::RootNode(_) | Key::ChildNodes { .. } => *monitor.index_requests_inflight.get() -= 1,
         Key::Block(_) => *monitor.block_requests_inflight.get() -= 1,
     }
+
     if let Some(timestamp) = timestamp {
         monitor.request_inflight_metric.record(timestamp.elapsed());
     }
 }
 
-fn run_tracker(
+async fn run_expiration_tracker(
     monitor: Arc<RepositoryMonitor>,
-    request_map: Arc<BlockingMutex<HashMap<Key, RequestData>>>,
-) -> (ScopedJoinHandle<()>, uninitialized_watch::Sender<()>) {
-    let (to_tracker_tx, mut to_tracker_rx) = uninitialized_watch::channel::<()>();
+    request_map: Arc<BlockingMutex<DelayMap<Key, RequestData>>>,
+) {
+    while let Some((key, _)) = expired(&request_map).await {
+        *monitor.request_timeouts.get() += 1;
+        request_removed(&monitor, &key, None);
+    }
+}
 
-    let expiration_tracker = scoped_task::spawn(async move {
-        loop {
-            let entry = request_map
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|(_, data)| data.block_promise.is_some())
-                .min_by(|(_, lhs), (_, rhs)| lhs.timestamp.cmp(&rhs.timestamp))
-                .map(|(k, v)| (*k, v.timestamp));
-
-            if let Some((key, timestamp)) = entry {
-                select! {
-                    r = to_tracker_rx.changed() => {
-                        match r {
-                            Ok(()) => continue,
-                            Err(_) => break,
-                        }
-                    }
-                    _ = time::sleep_until((timestamp + REQUEST_TIMEOUT).into()) => {
-                        // Check it hasn't been removed in a meanwhile for cancel safety.
-                        if let Some(data) = request_map.lock().unwrap().get_mut(&key) {
-                            *monitor.request_timeouts.get() += 1;
-                            data.block_promise = None;
-                        }
-                    }
-                };
-            } else {
-                match to_tracker_rx.changed().await {
-                    Ok(()) => continue,
-                    Err(_) => break,
-                }
-            }
-        }
-    });
-
-    (expiration_tracker, to_tracker_tx)
+// Wait for the next expired request. This does not block the map so it can be inserted / removed
+// from while this is being awaited.
+async fn expired(map: &BlockingMutex<DelayMap<Key, RequestData>>) -> Option<(Key, RequestData)> {
+    future::poll_fn(|cx| Poll::Ready(ready!(map.lock().unwrap().poll_expired(cx)))).await
 }
 
 impl Drop for PendingRequests {
     fn drop(&mut self) {
-        for key in self.map.lock().unwrap().keys() {
-            self.request_removed(key, None);
+        for (key, ..) in self.map.lock().unwrap().drain() {
+            request_removed(&self.monitor, &key, None);
         }
     }
 }

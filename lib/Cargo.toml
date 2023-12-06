@@ -63,7 +63,7 @@ ssdp-client = "1.0"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
-tokio-util = { workspace = true }
+tokio-util = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
 turmoil = { workspace = true, optional = true }
