@@ -2,7 +2,7 @@ use super::error::Error;
 use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
-    protocol::{BlockId, LeafNode, LeafNodeSet, SingleBlockPresence},
+    protocol::{BlockId, LeafNode, LeafNodes, SingleBlockPresence},
 };
 use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
@@ -23,7 +23,7 @@ pub(crate) struct ReceiveStatus {
 pub(super) async fn load_children(
     conn: &mut db::Connection,
     parent: &Hash,
-) -> Result<LeafNodeSet, Error> {
+) -> Result<LeafNodes, Error> {
     Ok(sqlx::query(
         "SELECT locator, block_id, block_presence
          FROM snapshot_leaf_nodes
@@ -85,7 +85,7 @@ async fn save(tx: &mut db::WriteTransaction, node: &LeafNode, parent: &Hash) -> 
 
 pub(super) async fn save_all(
     tx: &mut db::WriteTransaction,
-    nodes: &LeafNodeSet,
+    nodes: &LeafNodes,
     parent: &Hash,
 ) -> Result<(), Error> {
     for node in nodes {
@@ -205,7 +205,7 @@ pub(super) async fn set_expired_if_present(
 // Filter nodes that the remote replica has a block for but the local one is missing it.
 pub(super) async fn filter_nodes_with_new_blocks(
     conn: &mut db::Connection,
-    remote_nodes: &LeafNodeSet,
+    remote_nodes: &LeafNodes,
 ) -> Result<Vec<LeafNode>, Error> {
     let mut output = Vec::new();
 

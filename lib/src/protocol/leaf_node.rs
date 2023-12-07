@@ -47,9 +47,9 @@ impl Hashable for LeafNode {
 
 /// Collection that acts as a ordered set of `LeafNode`s
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct LeafNodeSet(Vec<LeafNode>);
+pub(crate) struct LeafNodes(Vec<LeafNode>);
 
-impl LeafNodeSet {
+impl LeafNodes {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -133,7 +133,7 @@ impl LeafNodeSet {
     }
 }
 
-impl FromIterator<LeafNode> for LeafNodeSet {
+impl FromIterator<LeafNode> for LeafNodes {
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = LeafNode>,
@@ -145,7 +145,7 @@ impl FromIterator<LeafNode> for LeafNodeSet {
     }
 }
 
-impl<'a> IntoIterator for &'a LeafNodeSet {
+impl<'a> IntoIterator for &'a LeafNodes {
     type Item = &'a LeafNode;
     type IntoIter = slice::Iter<'a, LeafNode>;
 
@@ -154,7 +154,7 @@ impl<'a> IntoIterator for &'a LeafNodeSet {
     }
 }
 
-impl IntoIterator for LeafNodeSet {
+impl IntoIterator for LeafNodes {
     type Item = LeafNode;
     type IntoIter = vec::IntoIter<LeafNode>;
 
@@ -163,7 +163,7 @@ impl IntoIterator for LeafNodeSet {
     }
 }
 
-impl Hashable for LeafNodeSet {
+impl Hashable for LeafNodes {
     fn update_hash<S: Digest>(&self, state: &mut S) {
         b"leaf".update_hash(state); // to disambiguate it from hash of inner nodes
         self.0.update_hash(state);
@@ -171,4 +171,4 @@ impl Hashable for LeafNodeSet {
 }
 
 // Cached hash of an empty LeafNodeSet.
-pub(crate) static EMPTY_LEAF_HASH: Lazy<Hash> = Lazy::new(|| LeafNodeSet::default().hash());
+pub(crate) static EMPTY_LEAF_HASH: Lazy<Hash> = Lazy::new(|| LeafNodes::default().hash());

@@ -2,7 +2,7 @@ use crate::{
     collections::HashMap,
     crypto::{sign::PublicKey, Hash},
     deadlock::BlockingMutex,
-    protocol::{InnerNodeMap, LeafNodeSet, RootNode, Summary},
+    protocol::{InnerNodes, LeafNodes, RootNode, Summary},
 };
 use lru::LruCache;
 use std::{num::NonZeroUsize, sync::Arc};
@@ -10,8 +10,8 @@ use std::{num::NonZeroUsize, sync::Arc};
 /// Cache for index nodes
 pub(super) struct Cache {
     roots: BlockingMutex<HashMap<PublicKey, RootNode>>,
-    inners: BlockingMutex<LruCache<Hash, InnerNodeMap>>,
-    leaves: BlockingMutex<LruCache<Hash, LeafNodeSet>>,
+    inners: BlockingMutex<LruCache<Hash, InnerNodes>>,
+    leaves: BlockingMutex<LruCache<Hash, LeafNodes>>,
 }
 
 impl Cache {
@@ -88,20 +88,20 @@ impl CacheTransaction {
             .insert(bucket, summary);
     }
 
-    pub fn get_inners(&self, parent_hash: &Hash) -> Option<InnerNodeMap> {
+    pub fn get_inners(&self, parent_hash: &Hash) -> Option<InnerNodes> {
         self.cache.inners.lock().unwrap().get(parent_hash).cloned()
     }
 
-    pub fn put_inners(&self, parent_hash: Hash, nodes: InnerNodeMap) {
+    pub fn put_inners(&self, parent_hash: Hash, nodes: InnerNodes) {
         // NOTE: Writing directly to the cache because this cache entry is immutable
         self.cache.inners.lock().unwrap().put(parent_hash, nodes);
     }
 
-    pub fn get_leaves(&self, parent_hash: &Hash) -> Option<LeafNodeSet> {
+    pub fn get_leaves(&self, parent_hash: &Hash) -> Option<LeafNodes> {
         self.cache.leaves.lock().unwrap().get(parent_hash).cloned()
     }
 
-    pub fn put_leaves(&self, parent_hash: Hash, nodes: LeafNodeSet) {
+    pub fn put_leaves(&self, parent_hash: Hash, nodes: LeafNodes) {
         // NOTE: Writing directly to the cache because this cache entry is immutable
         self.cache.leaves.lock().unwrap().put(parent_hash, nodes);
     }

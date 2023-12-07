@@ -5,7 +5,7 @@ use crate::{
         Hash, Hashable,
     },
     protocol::{
-        get_bucket, BlockId, Bump, InnerNode, InnerNodeMap, LeafNodeSet, NodeState, Proof,
+        get_bucket, BlockId, Bump, InnerNode, InnerNodes, LeafNodes, NodeState, Proof,
         RootNodeFilter, RootNodeKind, SingleBlockPresence, Summary, EMPTY_INNER_HASH,
         EMPTY_LEAF_HASH, INNER_LAYER_COUNT,
     },
@@ -24,8 +24,8 @@ pub(super) struct Patch {
     vv: VersionVector,
     root_hash: Hash,
     root_summary: Summary,
-    inners: BTreeMap<Key, InnerNodeMap>,
-    leaves: BTreeMap<Key, LeafNodeSet>,
+    inners: BTreeMap<Key, InnerNodes>,
+    leaves: BTreeMap<Key, LeafNodes>,
 }
 
 impl Patch {
@@ -103,7 +103,7 @@ impl Patch {
         &'a mut self,
         tx: &'_ mut ReadTransaction,
         encoded_locator: &'_ Hash,
-    ) -> Result<&'a mut LeafNodeSet, Error> {
+    ) -> Result<&'a mut LeafNodes, Error> {
         let mut parent_hash = self.root_hash;
         let mut key = Key::ROOT;
 

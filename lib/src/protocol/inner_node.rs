@@ -31,9 +31,9 @@ impl Hashable for InnerNode {
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct InnerNodeMap(BTreeMap<u8, InnerNode>);
+pub(crate) struct InnerNodes(BTreeMap<u8, InnerNode>);
 
-impl InnerNodeMap {
+impl InnerNodes {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -51,12 +51,12 @@ impl InnerNodeMap {
         self.0.get_mut(&bucket)
     }
 
-    pub fn iter(&self) -> InnerNodeMapIter {
-        InnerNodeMapIter(self.0.iter())
+    pub fn iter(&self) -> InnerNodesIter {
+        InnerNodesIter(self.0.iter())
     }
 
-    pub fn iter_mut(&mut self) -> InnerNodeMapIterMut {
-        InnerNodeMapIterMut(self.0.iter_mut())
+    pub fn iter_mut(&mut self) -> InnerNodesIterMut {
+        InnerNodesIterMut(self.0.iter_mut())
     }
 
     pub fn insert(&mut self, bucket: u8, node: InnerNode) -> Option<InnerNode> {
@@ -78,7 +78,7 @@ impl InnerNodeMap {
     }
 }
 
-impl FromIterator<(u8, InnerNode)> for InnerNodeMap {
+impl FromIterator<(u8, InnerNode)> for InnerNodes {
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = (u8, InnerNode)>,
@@ -87,7 +87,7 @@ impl FromIterator<(u8, InnerNode)> for InnerNodeMap {
     }
 }
 
-impl Extend<(u8, InnerNode)> for InnerNodeMap {
+impl Extend<(u8, InnerNode)> for InnerNodes {
     fn extend<T>(&mut self, iter: T)
     where
         T: IntoIterator<Item = (u8, InnerNode)>,
@@ -96,7 +96,7 @@ impl Extend<(u8, InnerNode)> for InnerNodeMap {
     }
 }
 
-impl IntoIterator for InnerNodeMap {
+impl IntoIterator for InnerNodes {
     type Item = (u8, InnerNode);
     type IntoIter = btree_map::IntoIter<u8, InnerNode>;
 
@@ -105,25 +105,25 @@ impl IntoIterator for InnerNodeMap {
     }
 }
 
-impl<'a> IntoIterator for &'a InnerNodeMap {
+impl<'a> IntoIterator for &'a InnerNodes {
     type Item = (u8, &'a InnerNode);
-    type IntoIter = InnerNodeMapIter<'a>;
+    type IntoIter = InnerNodesIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
 }
 
-impl<'a> IntoIterator for &'a mut InnerNodeMap {
+impl<'a> IntoIterator for &'a mut InnerNodes {
     type Item = (u8, &'a mut InnerNode);
-    type IntoIter = InnerNodeMapIterMut<'a>;
+    type IntoIter = InnerNodesIterMut<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter_mut()
     }
 }
 
-impl Hashable for InnerNodeMap {
+impl Hashable for InnerNodes {
     fn update_hash<S: Digest>(&self, state: &mut S) {
         b"inner".update_hash(state); // to disambiguate it from hash of leaf nodes
         self.0.update_hash(state);
@@ -131,11 +131,11 @@ impl Hashable for InnerNodeMap {
 }
 
 // Cached hash of an empty InnerNodeMap.
-pub(crate) static EMPTY_INNER_HASH: Lazy<Hash> = Lazy::new(|| InnerNodeMap::default().hash());
+pub(crate) static EMPTY_INNER_HASH: Lazy<Hash> = Lazy::new(|| InnerNodes::default().hash());
 
-pub(crate) struct InnerNodeMapIter<'a>(btree_map::Iter<'a, u8, InnerNode>);
+pub(crate) struct InnerNodesIter<'a>(btree_map::Iter<'a, u8, InnerNode>);
 
-impl<'a> Iterator for InnerNodeMapIter<'a> {
+impl<'a> Iterator for InnerNodesIter<'a> {
     type Item = (u8, &'a InnerNode);
 
     fn next(&mut self) -> Option<(u8, &'a InnerNode)> {
@@ -143,9 +143,9 @@ impl<'a> Iterator for InnerNodeMapIter<'a> {
     }
 }
 
-pub(crate) struct InnerNodeMapIterMut<'a>(btree_map::IterMut<'a, u8, InnerNode>);
+pub(crate) struct InnerNodesIterMut<'a>(btree_map::IterMut<'a, u8, InnerNode>);
 
-impl<'a> Iterator for InnerNodeMapIterMut<'a> {
+impl<'a> Iterator for InnerNodesIterMut<'a> {
     type Item = (u8, &'a mut InnerNode);
 
     fn next(&mut self) -> Option<(u8, &'a mut InnerNode)> {

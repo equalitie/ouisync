@@ -6,15 +6,14 @@ use super::{
 };
 use crate::{
     crypto::{sign::PublicKey, Hash, Hashable},
-    format::Hex,
     protocol::{
-        BlockContent, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence,
+        BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, MultiBlockPresence,
         UntrustedProof,
     },
     repository::RepositoryId,
 };
 use serde::{Deserialize, Serialize};
-use std::{fmt, io::Write};
+use std::io::Write;
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
@@ -35,72 +34,24 @@ impl ResponseDisambiguator {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.
     /// NOTE: This is both a response and notification - the server sends this as a response to
     /// `Request::RootNode` but also on its own when it detects change in the repo.
-    RootNode {
-        proof: UntrustedProof,
-        block_presence: MultiBlockPresence,
-        debug: DebugResponse,
-    },
+    RootNode(UntrustedProof, MultiBlockPresence, DebugResponse),
     /// Send that a RootNode request failed
     RootNodeError(PublicKey, DebugResponse),
     /// Send inner nodes.
-    InnerNodes(InnerNodeMap, ResponseDisambiguator, DebugResponse),
+    InnerNodes(InnerNodes, ResponseDisambiguator, DebugResponse),
     /// Send leaf nodes.
-    LeafNodes(LeafNodeSet, ResponseDisambiguator, DebugResponse),
+    LeafNodes(LeafNodes, ResponseDisambiguator, DebugResponse),
     /// Send that a ChildNodes request failed
     ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
     /// Send a requested block.
-    Block {
-        content: BlockContent,
-        nonce: BlockNonce,
-        debug: DebugResponse,
-    },
+    Block(BlockContent, BlockNonce, DebugResponse),
     /// Send that a Block request failed
     BlockError(BlockId, DebugResponse),
-}
-
-// Custom `Debug` impl to avoid printing the whole block content in the `Block` variant.
-impl fmt::Debug for Response {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::RootNode {
-                proof,
-                block_presence,
-                ..
-            } => f
-                .debug_struct("RootNode")
-                .field("proof", proof)
-                .field("block_presence", block_presence)
-                .finish(),
-            Self::RootNodeError(branch_id, _) => {
-                f.debug_tuple("RootNodeError").field(branch_id).finish()
-            }
-            Self::InnerNodes(nodes, disambiguator, _) => f
-                .debug_tuple("InnerNodes")
-                .field(nodes)
-                .field(disambiguator)
-                .finish(),
-            Self::LeafNodes(nodes, disambiguator, _) => f
-                .debug_tuple("LeafNodes")
-                .field(nodes)
-                .field(disambiguator)
-                .finish(),
-            Self::ChildNodesError(hash, disambiguator, _) => f
-                .debug_tuple("ChildNodesError")
-                .field(hash)
-                .field(disambiguator)
-                .finish(),
-            Self::Block { content, .. } => f
-                .debug_struct("Block")
-                .field("content", &format_args!("{:6x}", Hex(content)))
-                .finish_non_exhaustive(),
-            Self::BlockError(id, _) => f.debug_tuple("BlockError").field(id).finish(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]

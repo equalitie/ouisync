@@ -55,6 +55,13 @@ pub(crate) mod uninitialized_watch {
                 rx.changed().await.ok().map(|value| (value, rx))
             })
         }
+
+        pub fn is_closed(&self) -> bool {
+            // `tokio::sync::watch::Receiver` doesn't expose a `is_closed`, but we can get the same
+            // information by checking whether `has_changed` returns an error as it only does so
+            // when the chanel has been closed.
+            self.0.has_changed().is_err()
+        }
     }
 
     pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -224,6 +231,10 @@ pub(crate) mod broadcast_hash_set {
             }
 
             Ok(new_set)
+        }
+
+        pub fn is_closed(&self) -> bool {
+            self.watch_rx.is_closed()
         }
     }
 
@@ -570,5 +581,124 @@ pub(crate) mod stream {
 
             assert_eq!(actual, expected);
         }
+    }
+}
+
+/// A hash map whose entries expire after a timeout.
+pub(crate) mod delay_map {
+    use crate::collections::{hash_map, HashMap};
+    use std::{
+        borrow::Borrow,
+        hash::Hash,
+        task::{ready, Context, Poll},
+    };
+    use tokio::time::Duration;
+    use tokio_util::time::delay_queue::{DelayQueue, Key};
+
+    pub struct DelayMap<K, V> {
+        items: HashMap<K, Item<V>>,
+        delays: DelayQueue<K>,
+    }
+
+    impl<K, V> DelayMap<K, V> {
+        pub fn new() -> Self {
+            Self {
+                items: HashMap::default(),
+                delays: DelayQueue::default(),
+            }
+        }
+    }
+
+    impl<K, V> DelayMap<K, V>
+    where
+        K: Eq + Hash + Clone,
+    {
+        // This is unused right now but keeping it around so we don't have to recreate when we need
+        // it.
+        #[allow(unused)]
+        pub fn insert(&mut self, key: K, value: V, timeout: Duration) -> Option<V> {
+            let delay_key = self.delays.insert(key.clone(), timeout);
+            let old = self.items.insert(key, Item { value, delay_key })?;
+
+            self.delays.remove(&old.delay_key);
+
+            Some(old.value)
+        }
+
+        pub fn try_insert(&mut self, key: K) -> Option<VacantEntry<K, V>> {
+            match self.items.entry(key) {
+                hash_map::Entry::Vacant(item_entry) => Some(VacantEntry {
+                    item_entry,
+                    delays: &mut self.delays,
+                }),
+                hash_map::Entry::Occupied(_) => None,
+            }
+        }
+
+        pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+        where
+            K: Borrow<Q>,
+            Q: Hash + Eq + ?Sized,
+        {
+            let item = self.items.remove(key)?;
+            self.delays.remove(&item.delay_key);
+
+            Some(item.value)
+        }
+
+        pub fn drain(&mut self) -> impl Iterator<Item = (K, V)> + '_ {
+            self.items.drain().map(|(key, item)| {
+                self.delays.remove(&item.delay_key);
+                (key, item.value)
+            })
+        }
+
+        pub fn len(&self) -> usize {
+            self.items.len()
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.items.is_empty()
+        }
+
+        /// Poll for the next expired item. This can be wrapped in `future::poll_fn` and awaited.
+        /// Returns `Poll::Ready(None)` if the map is empty.
+        pub fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<Option<(K, V)>> {
+            if let Some(expired) = ready!(self.delays.poll_expired(cx)) {
+                let key = expired.into_inner();
+                // unwrap is OK because an entry exists in `delays` iff it exists in `items`.
+                let item = self.items.remove(&key).unwrap();
+
+                Poll::Ready(Some((key, item.value)))
+            } else {
+                Poll::Ready(None)
+            }
+        }
+    }
+
+    impl<K, V> Default for DelayMap<K, V> {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    pub struct VacantEntry<'a, K, V> {
+        item_entry: hash_map::VacantEntry<'a, K, Item<V>>,
+        delays: &'a mut DelayQueue<K>,
+    }
+
+    impl<'a, K, V> VacantEntry<'a, K, V>
+    where
+        K: Clone,
+    {
+        pub fn insert(self, value: V, timeout: Duration) -> &'a V {
+            let delay_key = self.delays.insert(self.item_entry.key().clone(), timeout);
+            &mut self.item_entry.insert(Item { value, delay_key }).value
+        }
+    }
+
+    struct Item<V> {
+        value: V,
+        delay_key: Key,
     }
 }

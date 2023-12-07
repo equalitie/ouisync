@@ -173,6 +173,8 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 // received, then re-establish the connection and make sure the block gets received then.
 #[tokio::test]
 async fn failed_block_only_peer() {
+    test_utils::init_log();
+
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);

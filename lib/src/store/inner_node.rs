@@ -2,7 +2,7 @@ use super::{error::Error, leaf_node, ReceiveFilter};
 use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
-    protocol::{InnerNode, InnerNodeMap, LeafNodeSet, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
+    protocol::{InnerNode, InnerNodes, LeafNodes, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
 };
 use futures_util::{future, Stream, TryStreamExt};
 use sqlx::Row;
@@ -20,7 +20,7 @@ pub(crate) struct ReceiveStatus {
 pub(super) async fn load_children(
     conn: &mut db::Connection,
     parent: &Hash,
-) -> Result<InnerNodeMap, Error> {
+) -> Result<InnerNodes, Error> {
     sqlx::query(
         "SELECT
              bucket,
@@ -127,7 +127,7 @@ pub(super) async fn save(
 /// Atomically saves all nodes in this map to the db.
 pub(super) async fn save_all(
     tx: &mut db::WriteTransaction,
-    nodes: &InnerNodeMap,
+    nodes: &InnerNodes,
     parent: &Hash,
 ) -> Result<(), Error> {
     for (bucket, node) in nodes {
@@ -144,13 +144,13 @@ pub(super) async fn compute_summary(
 ) -> Result<Summary, Error> {
     // 1st attempt: empty inner nodes
     if parent_hash == &*EMPTY_INNER_HASH {
-        let children = InnerNodeMap::default();
+        let children = InnerNodes::default();
         return Ok(Summary::from_inners(&children));
     }
 
     // 2nd attempt: empty leaf nodes
     if parent_hash == &*EMPTY_LEAF_HASH {
-        let children = LeafNodeSet::default();
+        let children = LeafNodes::default();
         return Ok(Summary::from_leaves(&children));
     }
 
@@ -198,7 +198,7 @@ pub(super) async fn update_summaries(
 
 pub(super) async fn inherit_summaries(
     conn: &mut db::Connection,
-    nodes: &mut InnerNodeMap,
+    nodes: &mut InnerNodes,
 ) -> Result<(), Error> {
     for (_, node) in nodes {
         inherit_summary(conn, node).await?;
@@ -246,7 +246,7 @@ async fn inherit_summary(conn: &mut db::Connection, node: &mut InnerNode) -> Res
 /// Filter nodes that the remote replica has some blocks in that the local one is missing.
 pub(super) async fn filter_nodes_with_new_blocks(
     tx: &mut db::WriteTransaction,
-    remote_nodes: &InnerNodeMap,
+    remote_nodes: &InnerNodes,
     receive_filter: &ReceiveFilter,
 ) -> Result<Vec<InnerNode>, Error> {
     let mut output = Vec::with_capacity(remote_nodes.len());
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn empty_map_hash() {
-        assert_eq!(*EMPTY_INNER_HASH, InnerNodeMap::default().hash())
+        assert_eq!(*EMPTY_INNER_HASH, InnerNodes::default().hash())
     }
 
     #[tokio::test(flavor = "multi_thread")]
