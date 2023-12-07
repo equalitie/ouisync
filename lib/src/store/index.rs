@@ -172,7 +172,7 @@ mod tests {
             Hashable,
         },
         protocol::{
-            test_utils::Snapshot, InnerNode, InnerNodes, LeafNode, LeafNodeSet, MultiBlockPresence,
+            test_utils::Snapshot, InnerNode, InnerNodes, LeafNode, LeafNodes, MultiBlockPresence,
             Proof, RootNode, RootNodeFilter, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH,
         },
         test_utils,
@@ -203,7 +203,7 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
 
         let node = LeafNode::missing(rand::random(), rand::random());
-        let nodes: LeafNodeSet = iter::once(node).collect();
+        let nodes: LeafNodes = iter::once(node).collect();
         let hash = nodes.hash();
 
         let summary = inner_node::compute_summary(&mut conn, &hash).await.unwrap();
@@ -216,7 +216,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
 
         let node = LeafNode::missing(rand::random(), rand::random());
-        let nodes: LeafNodeSet = iter::once(node).collect();
+        let nodes: LeafNodes = iter::once(node).collect();
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
@@ -235,7 +235,7 @@ mod tests {
         let node0 = LeafNode::present(rand::random(), rand::random());
         let node1 = LeafNode::missing(rand::random(), rand::random());
         let node2 = LeafNode::missing(rand::random(), rand::random());
-        let nodes: LeafNodeSet = vec![node0, node1, node2].into_iter().collect();
+        let nodes: LeafNodes = vec![node0, node1, node2].into_iter().collect();
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
@@ -253,7 +253,7 @@ mod tests {
 
         let node0 = LeafNode::present(rand::random(), rand::random());
         let node1 = LeafNode::present(rand::random(), rand::random());
-        let nodes: LeafNodeSet = vec![node0, node1].into_iter().collect();
+        let nodes: LeafNodes = vec![node0, node1].into_iter().collect();
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
@@ -298,7 +298,7 @@ mod tests {
         let inners: InnerNodes = (0..2)
             .map(|bucket| {
                 let leaf = LeafNode::missing(rand::random(), rand::random());
-                let leaf_nodes: LeafNodeSet = iter::once(leaf).collect();
+                let leaf_nodes: LeafNodes = iter::once(leaf).collect();
 
                 (
                     bucket,
@@ -324,7 +324,7 @@ mod tests {
 
         // all missing
         let inner0 = {
-            let leaf_nodes: LeafNodeSet = (0..2)
+            let leaf_nodes: LeafNodes = (0..2)
                 .map(|_| LeafNode::missing(rand::random(), rand::random()))
                 .collect();
 
@@ -333,7 +333,7 @@ mod tests {
 
         // some present
         let inner1 = {
-            let leaf_nodes: LeafNodeSet = vec![
+            let leaf_nodes: LeafNodes = vec![
                 LeafNode::missing(rand::random(), rand::random()),
                 LeafNode::present(rand::random(), rand::random()),
             ]
@@ -345,7 +345,7 @@ mod tests {
 
         // all present
         let inner2 = {
-            let leaf_nodes: LeafNodeSet = (0..2)
+            let leaf_nodes: LeafNodes = (0..2)
                 .map(|_| LeafNode::present(rand::random(), rand::random()))
                 .collect();
 
@@ -372,7 +372,7 @@ mod tests {
 
         let inners: InnerNodes = (0..2)
             .map(|bucket| {
-                let leaf_nodes: LeafNodeSet = (0..2)
+                let leaf_nodes: LeafNodes = (0..2)
                     .map(|_| LeafNode::present(rand::random(), rand::random()))
                     .collect();
 

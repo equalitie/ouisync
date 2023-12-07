@@ -2,7 +2,7 @@ use super::{error::Error, leaf_node, ReceiveFilter};
 use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
-    protocol::{InnerNode, InnerNodes, LeafNodeSet, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
+    protocol::{InnerNode, InnerNodes, LeafNodes, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
 };
 use futures_util::{future, Stream, TryStreamExt};
 use sqlx::Row;
@@ -150,7 +150,7 @@ pub(super) async fn compute_summary(
 
     // 2nd attempt: empty leaf nodes
     if parent_hash == &*EMPTY_LEAF_HASH {
-        let children = LeafNodeSet::default();
+        let children = LeafNodes::default();
         return Ok(Summary::from_leaves(&children));
     }
 

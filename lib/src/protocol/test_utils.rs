@@ -7,7 +7,7 @@ use crate::{
         Hash, Hashable,
     },
     protocol::{
-        get_bucket, Block, BlockId, InnerNode, InnerNodes, LeafNode, LeafNodeSet, INNER_LAYER_COUNT,
+        get_bucket, Block, BlockId, InnerNode, InnerNodes, LeafNode, LeafNodes, INNER_LAYER_COUNT,
     },
     repository::Vault,
     store::ReceiveFilter,
@@ -20,7 +20,7 @@ use std::mem;
 pub(crate) struct Snapshot {
     root_hash: Hash,
     inners: [HashMap<BucketPath, InnerNodes>; INNER_LAYER_COUNT],
-    leaves: HashMap<BucketPath, LeafNodeSet>,
+    leaves: HashMap<BucketPath, LeafNodes>,
     blocks: HashMap<BlockId, Block>,
 }
 
@@ -43,7 +43,7 @@ impl Snapshot {
             let node = LeafNode::present(locator, id);
             leaves
                 .entry(BucketPath::new(&node.locator, INNER_LAYER_COUNT - 1))
-                .or_insert_with(LeafNodeSet::default)
+                .or_insert_with(LeafNodes::default)
                 .insert(node.locator, node.block_id, SingleBlockPresence::Present);
         }
 
@@ -83,7 +83,7 @@ impl Snapshot {
         &self.root_hash
     }
 
-    pub fn leaf_sets(&self) -> impl Iterator<Item = (&Hash, &LeafNodeSet)> {
+    pub fn leaf_sets(&self) -> impl Iterator<Item = (&Hash, &LeafNodes)> {
         self.leaves.iter().map(move |(path, nodes)| {
             let parent_hash = self.parent_hash(INNER_LAYER_COUNT, path);
             (parent_hash, nodes)

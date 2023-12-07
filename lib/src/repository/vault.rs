@@ -9,7 +9,7 @@ use crate::{
     error::Result,
     event::{EventSender, Payload},
     protocol::{
-        Block, BlockId, InnerNodes, LeafNodeSet, MultiBlockPresence, ProofError, UntrustedProof,
+        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, ProofError, UntrustedProof,
     },
     storage_size::StorageSize,
     store::{
@@ -110,7 +110,7 @@ impl Vault {
     /// Also returns the receive status.
     pub async fn receive_leaf_nodes(
         &self,
-        nodes: CacheHash<LeafNodeSet>,
+        nodes: CacheHash<LeafNodes>,
         quota: Option<StorageSize>,
     ) -> Result<LeafNodeReceiveStatus> {
         let mut tx = self.store().begin_write().await?;

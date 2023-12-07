@@ -43,7 +43,7 @@ use crate::{
     debug::DebugPrinter,
     progress::Progress,
     protocol::{
-        get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodeSet,
+        get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes,
         MultiBlockPresence, Proof, RootNode, RootNodeFilter, Summary, INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
@@ -403,7 +403,7 @@ impl Reader {
     }
 
     // TODO: use cache and remove `ReadTransaction::load_leaf_nodes_with_cache`
-    pub async fn load_leaf_nodes(&mut self, parent_hash: &Hash) -> Result<LeafNodeSet, Error> {
+    pub async fn load_leaf_nodes(&mut self, parent_hash: &Hash) -> Result<LeafNodes, Error> {
         leaf_node::load_children(self.db(), parent_hash).await
     }
 
@@ -480,10 +480,7 @@ impl ReadTransaction {
         self.load_inner_nodes(parent_hash).await
     }
 
-    async fn load_leaf_nodes_with_cache(
-        &mut self,
-        parent_hash: &Hash,
-    ) -> Result<LeafNodeSet, Error> {
+    async fn load_leaf_nodes_with_cache(&mut self, parent_hash: &Hash) -> Result<LeafNodes, Error> {
         if let Some(nodes) = self.cache.get_leaves(parent_hash) {
             return Ok(nodes);
         }
@@ -631,7 +628,7 @@ impl WriteTransaction {
     /// Also returns the receive status.
     pub async fn receive_leaf_nodes(
         &mut self,
-        nodes: CacheHash<LeafNodeSet>,
+        nodes: CacheHash<LeafNodes>,
         quota: Option<StorageSize>,
     ) -> Result<LeafNodeReceiveStatus, Error> {
         let (db, cache) = self.db_and_cache();

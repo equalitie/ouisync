@@ -7,7 +7,7 @@ use super::{
 use crate::{
     crypto::{sign::PublicKey, Hash, Hashable},
     protocol::{
-        BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodeSet, MultiBlockPresence,
+        BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, MultiBlockPresence,
         UntrustedProof,
     },
     repository::RepositoryId,
@@ -45,7 +45,7 @@ pub(crate) enum Response {
     /// Send inner nodes.
     InnerNodes(InnerNodes, ResponseDisambiguator, DebugResponse),
     /// Send leaf nodes.
-    LeafNodes(LeafNodeSet, ResponseDisambiguator, DebugResponse),
+    LeafNodes(LeafNodes, ResponseDisambiguator, DebugResponse),
     /// Send that a ChildNodes request failed
     ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
     /// Send a requested block.

@@ -19,7 +19,7 @@ pub(crate) use self::{
     block::{Block, BlockContent, BlockId, BlockNonce, BLOCK_RECORD_SIZE},
     bump::Bump,
     inner_node::{get_bucket, InnerNode, InnerNodes, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
-    leaf_node::{LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
+    leaf_node::{LeafNode, LeafNodes, EMPTY_LEAF_HASH},
     locator::Locator,
     proof::{Proof, ProofError, UntrustedProof},
     root_node::{RootNode, RootNodeFilter, RootNodeKind},

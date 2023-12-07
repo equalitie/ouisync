@@ -1,4 +1,4 @@
-use super::{InnerNodes, LeafNodeSet};
+use super::{InnerNodes, LeafNodes};
 use crate::format::Hex;
 use serde::{Deserialize, Serialize};
 use sqlx::{
@@ -28,7 +28,7 @@ impl Summary {
         block_presence: MultiBlockPresence::None,
     };
 
-    pub fn from_leaves(nodes: &LeafNodeSet) -> Self {
+    pub fn from_leaves(nodes: &LeafNodes) -> Self {
         let mut block_presence_builder = MultiBlockPresenceBuilder::new();
 
         for node in nodes {
