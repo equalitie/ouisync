@@ -6,17 +6,16 @@ use super::{
 use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
-    event::{Event, Payload},
+    event,
     protocol::{BlockContent, BlockId, RootNode, RootNodeFilter},
     repository::Vault,
     store,
-    sync::stream::Throttle,
 };
 use futures_util::{
     stream::{self, FuturesUnordered},
     Stream, StreamExt, TryStreamExt,
 };
-use std::{collections::HashSet, mem, pin::pin, time::Duration};
+use std::{collections::HashSet, pin::pin};
 use tokio::{
     select,
     sync::{
@@ -65,28 +64,24 @@ impl Inner {
     async fn run(&self, rx: &mut Receiver, choker: &mut Choker) -> Result<()> {
         // Important: make sure to create the event subscription first, before calling
         // `handle_all_branches_changed` otherwise we might miss some events.
-        let mut events = pin!(Throttle::new(
-            events(self.vault.event_tx.subscribe()),
-            Duration::from_secs(1)
-        ));
+        let mut events = pin!(events(self.vault.event_tx.subscribe()));
 
         // Because we're using the choker, we can't handle events that we receive on `events` right
         // a way. We need to wait for being unchoked. In the meanwhile we "accumulate" events from
         // `events` into the `accumulator` and once we get unchoked we process them all at once.
         // Note that this allows us to process each branch event only once even if we received
         // multiple events per particular branch.
-        let mut accumulator = BranchAccumulator::All;
+        let mut accumulator = EventAccumulator::default();
 
         // This is to handle multiple requests / events at once.
         // TODO: Do we need to limit the number of concurrent request handlers? We have a limit on
         // the number of read DB transactions, so that might be enough, but perhaps we also want to
         // limit per peer?
         let mut request_handlers = FuturesUnordered::new();
-        let mut one_branch_event_handlers = FuturesUnordered::new();
-        let mut all_branch_event_handlers = FuturesUnordered::new();
+        let mut event_handlers = FuturesUnordered::new();
 
         // Send the initial root node messages
-        self.handle_all_branches_changed().await?;
+        self.handle_unknown_event().await?;
 
         loop {
             select! {
@@ -111,18 +106,20 @@ impl Inner {
                     if choker.is_choked() {
                         accumulator.insert(event);
                     } else {
-                        one_branch_event_handlers.push(self.handle_event(event));
+                        event_handlers.push(self.handle_event(event));
                     }
                 },
                 _ = choker.changed() => {
-                    if !choker.is_choked() {
-                        all_branch_event_handlers
-                            .push(self.handle_accumulated_events(mem::take(&mut accumulator)));
+                    if choker.is_choked() {
+                        continue;
+                    }
+
+                    for event in accumulator.drain() {
+                        event_handlers.push(self.handle_event(event));
                     }
                 }
                 Some(result) = request_handlers.next() => result?,
-                Some(result) = one_branch_event_handlers.next() => result?,
-                Some(result) = all_branch_event_handlers.next() => result?,
+                Some(result) = event_handlers.next() => result?,
             }
         }
 
@@ -265,39 +262,15 @@ impl Inner {
         }
     }
 
-    async fn handle_event(&self, event: BranchChanged) -> Result<()> {
+    async fn handle_event(&self, event: Event) -> Result<()> {
         match event {
-            BranchChanged::One(branch_id) => self.handle_branch_changed(branch_id).await,
-            BranchChanged::All => self.handle_all_branches_changed().await,
+            Event::BranchChanged(branch_id) => self.handle_branch_changed_event(branch_id).await,
+            Event::BlockReceived(block_id) => self.handle_block_received_event(block_id).await,
+            Event::Unknown => self.handle_unknown_event().await,
         }
     }
 
-    async fn handle_accumulated_events(&self, accumulator: BranchAccumulator) -> Result<()> {
-        match accumulator {
-            BranchAccumulator::All => {
-                self.handle_all_branches_changed().await?;
-            }
-            BranchAccumulator::Some(branches) => {
-                for branch_id in branches {
-                    self.handle_branch_changed(branch_id).await?;
-                }
-            }
-            BranchAccumulator::None => (),
-        }
-
-        Ok(())
-    }
-
-    async fn handle_all_branches_changed(&self) -> Result<()> {
-        let root_nodes = self.load_root_nodes().await?;
-        for root_node in root_nodes {
-            self.handle_root_node_changed(root_node).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn handle_branch_changed(&self, branch_id: PublicKey) -> Result<()> {
+    async fn handle_branch_changed_event(&self, branch_id: PublicKey) -> Result<()> {
         let root_node = match self.load_root_node(&branch_id).await {
             Ok(node) => node,
             Err(Error::Store(store::Error::BranchNotFound)) => {
@@ -307,17 +280,33 @@ impl Inner {
             Err(error) => return Err(error),
         };
 
-        self.handle_root_node_changed(root_node).await
+        self.send_root_node(root_node).await
     }
 
-    async fn handle_root_node_changed(&self, root_node: RootNode) -> Result<()> {
+    async fn handle_block_received_event(&self, block_id: BlockId) -> Result<()> {
+        self.tx
+            .send(Response::BlockOffer(block_id, DebugResponse::unsolicited()))
+            .await;
+        Ok(())
+    }
+
+    async fn handle_unknown_event(&self) -> Result<()> {
+        let root_nodes = self.load_root_nodes().await?;
+        for root_node in root_nodes {
+            self.send_root_node(root_node).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn send_root_node(&self, root_node: RootNode) -> Result<()> {
         if !root_node.summary.state.is_approved() {
-            // send only approved branches
+            // send only approved snapshots
             return Ok(());
         }
 
         if root_node.proof.version_vector.is_empty() {
-            // Do not send branches with empty version vectors because they have no content yet
+            // Do not send snapshots with empty version vectors because they have no content yet
             return Ok(());
         }
 
@@ -326,7 +315,7 @@ impl Inner {
             hash = ?root_node.proof.hash,
             vv = ?root_node.proof.version_vector,
             block_presence = ?root_node.summary.block_presence,
-            "handle_branch_changed",
+            "send_root_node",
         );
 
         let response = Response::RootNode(
@@ -387,18 +376,20 @@ impl Sender {
     }
 }
 
-fn events(rx: broadcast::Receiver<Event>) -> impl Stream<Item = BranchChanged> {
+fn events(rx: broadcast::Receiver<event::Event>) -> impl Stream<Item = Event> {
     stream::unfold(rx, |mut rx| async move {
         loop {
             match rx.recv().await {
-                Ok(Event { payload, .. }) => match payload {
-                    Payload::BranchChanged(branch_id)
-                    | Payload::BlockReceived { branch_id, .. } => {
-                        return Some((BranchChanged::One(branch_id), rx))
+                Ok(event::Event { payload, .. }) => match payload {
+                    event::Payload::BranchChanged(branch_id) => {
+                        return Some((Event::BranchChanged(branch_id), rx))
                     }
-                    Payload::MaintenanceCompleted => continue,
+                    event::Payload::BlockReceived(block_id) => {
+                        return Some((Event::BlockReceived(block_id), rx))
+                    }
+                    event::Payload::MaintenanceCompleted => continue,
                 },
-                Err(RecvError::Lagged(_)) => return Some((BranchChanged::All, rx)),
+                Err(RecvError::Lagged(_)) => return Some((Event::Unknown, rx)),
                 Err(RecvError::Closed) => return None,
             }
         }
@@ -406,48 +397,29 @@ fn events(rx: broadcast::Receiver<Event>) -> impl Stream<Item = BranchChanged> {
 }
 
 #[derive(Eq, PartialEq, Clone, Debug, Hash)]
-enum BranchChanged {
-    One(PublicKey),
-    All,
+enum Event {
+    BranchChanged(PublicKey),
+    BlockReceived(BlockId),
+    Unknown,
 }
 
-/// When we receive events that a branch has changed, we accumulate those events into this
-/// structure and use it once we receive a permit from the choker.
 #[derive(Default)]
-enum BranchAccumulator {
-    All,
-    Some(HashSet<PublicKey>),
-    #[default]
-    None,
-}
+struct EventAccumulator(HashSet<Event>);
 
-impl BranchAccumulator {
-    fn insert(&mut self, event: BranchChanged) {
-        match event {
-            BranchChanged::One(branch_id) => {
-                self.insert_one(branch_id);
-            }
-            BranchChanged::All => {
-                self.insert_all();
-            }
+impl EventAccumulator {
+    fn insert(&mut self, event: Event) {
+        if self.0.contains(&Event::Unknown) {
+            return;
         }
+
+        if matches!(event, Event::Unknown) {
+            self.0.clear();
+        }
+
+        self.0.insert(event);
     }
 
-    fn insert_one(&mut self, branch_id: PublicKey) {
-        match self {
-            Self::All => (),
-            Self::Some(branches) => {
-                branches.insert(branch_id);
-            }
-            Self::None => {
-                let mut branches = HashSet::new();
-                branches.insert(branch_id);
-                *self = BranchAccumulator::Some(branches);
-            }
-        }
-    }
-
-    fn insert_all(&mut self) {
-        *self = BranchAccumulator::All;
+    fn drain(&mut self) -> impl Iterator<Item = Event> + '_ {
+        self.0.drain()
     }
 }

@@ -4,14 +4,14 @@ use crate::{
     db,
     debug::DebugPrinter,
     protocol::{
-        MultiBlockPresence, NodeState, Proof, RootNode, RootNodeFilter, RootNodeKind,
+        BlockId, MultiBlockPresence, NodeState, Proof, RootNode, RootNodeFilter, RootNodeKind,
         SingleBlockPresence, Summary,
     },
     version_vector::VersionVector,
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::Row;
-use std::cmp::Ordering;
+use std::{cmp::Ordering, future};
 
 /// Status of receiving a root node
 #[derive(Default)]
@@ -290,6 +290,52 @@ pub(super) fn load_all_by_hash<'a>(
         },
     })
     .err_into()
+}
+
+/// Loads the "best" `NodeState` of all the root nodes that reference the given missing block. If
+/// the block is not referenced from any root node or if it's not missing, falls back to returning
+/// `Rejected`.
+pub(super) async fn load_node_state_of_missing(
+    conn: &mut db::Connection,
+    block_id: &BlockId,
+) -> Result<NodeState, Error> {
+    use NodeState as S;
+
+    sqlx::query(
+        "WITH RECURSIVE
+             inner_nodes(parent) AS (
+                 SELECT parent
+                     FROM snapshot_leaf_nodes
+                     WHERE block_id = ? AND block_presence = ?
+                 UNION ALL
+                 SELECT i.parent
+                     FROM snapshot_inner_nodes i INNER JOIN inner_nodes c
+                     WHERE i.hash = c.parent
+             )
+         SELECT state
+             FROM snapshot_root_nodes r INNER JOIN inner_nodes c
+             WHERE r.hash = c.parent",
+    )
+    .bind(block_id)
+    .bind(SingleBlockPresence::Missing)
+    .fetch(conn)
+    .map_ok(|row| row.get(0))
+    .err_into()
+    .try_fold(S::Rejected, |old, new| {
+        let new = match (old, new) {
+            (S::Incomplete | S::Complete | S::Approved | S::Rejected, S::Approved)
+            | (S::Approved, S::Incomplete | S::Complete | S::Rejected) => S::Approved,
+            (S::Incomplete | S::Complete | S::Rejected, S::Complete)
+            | (S::Complete, S::Incomplete | S::Rejected) => S::Complete,
+            (S::Incomplete | S::Rejected, S::Incomplete) | (S::Incomplete, S::Rejected) => {
+                S::Incomplete
+            }
+            (S::Rejected, S::Rejected) => S::Rejected,
+        };
+
+        future::ready(Ok(new))
+    })
+    .await
 }
 
 /// Does this node exist in the db?

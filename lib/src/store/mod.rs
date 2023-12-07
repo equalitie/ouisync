@@ -21,7 +21,7 @@ pub use error::Error;
 pub use migrations::DATA_VERSION;
 
 pub(crate) use {
-    block::ReceiveStatus as BlockReceiveStatus, block_ids::BlockIdsPage, changeset::Changeset,
+    block_ids::BlockIdsPage, changeset::Changeset,
     inner_node::ReceiveStatus as InnerNodeReceiveStatus,
     leaf_node::ReceiveStatus as LeafNodeReceiveStatus, receive_filter::ReceiveFilter,
     root_node::ReceiveStatus as RootNodeReceiveStatus,
@@ -44,7 +44,7 @@ use crate::{
     progress::Progress,
     protocol::{
         get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes,
-        MultiBlockPresence, Proof, RootNode, RootNodeFilter, Summary, INNER_LAYER_COUNT,
+        MultiBlockPresence, NodeState, Proof, RootNode, RootNodeFilter, Summary, INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
     sync::broadcast_hash_set,
@@ -318,6 +318,15 @@ impl Reader {
         block::exists(self.db(), id).await
     }
 
+    /// Checks whether the block is missing - that is, it's referenced from some snapshot but
+    /// doesn't exist in the store.
+    ///
+    /// NOTE: This is not the same as `!block_exists` because that only checks the block existence
+    /// but not whether it's referenced.
+    pub async fn is_block_missing(&mut self, id: &BlockId) -> Result<bool, Error> {
+        leaf_node::is_missing(self.db(), id).await
+    }
+
     /// Returns the total number of blocks in the store.
     pub async fn count_blocks(&mut self) -> Result<u64, Error> {
         block::count(self.db()).await
@@ -414,6 +423,14 @@ impl Reader {
         leaf_node::load_locators(self.db(), block_id)
     }
 
+    /// Load the `NodeState` of the root node(s) that reference the given missing block.
+    pub async fn load_root_node_state_of_missing(
+        &mut self,
+        block_id: &BlockId,
+    ) -> Result<NodeState, Error> {
+        root_node::load_node_state_of_missing(self.db(), block_id).await
+    }
+
     pub(super) fn missing_block_ids_in_branch<'a>(
         &'a mut self,
         branch_id: &'a PublicKey,
@@ -422,7 +439,8 @@ impl Reader {
     }
 
     // Access the underlying database connection.
-    fn db(&mut self) -> &mut db::Connection {
+    // TODO: Make this private, but first we need to move the `metadata` module to `store`.
+    pub(crate) fn db(&mut self) -> &mut db::Connection {
         &mut self.inner
     }
 }
@@ -654,7 +672,7 @@ impl WriteTransaction {
     /// Write a block received from a remote replica and marks it as present in the index.
     /// The block must already be referenced by the index, otherwise an `BlockNotReferenced` error
     /// is returned.
-    pub async fn receive_block(&mut self, block: &Block) -> Result<BlockReceiveStatus, Error> {
+    pub async fn receive_block(&mut self, block: &Block) -> Result<(), Error> {
         let (db, cache) = self.db_and_cache();
         let result = block::receive(db, cache, block).await;
 

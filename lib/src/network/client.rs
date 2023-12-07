@@ -239,6 +239,9 @@ impl Inner {
                     .measure_ok(self.handle_leaf_nodes(nodes, debug))
                     .await
             }
+            ProcessedResponse::BlockOffer(block_id, debug) => {
+                self.handle_block_offer(block_id, debug).await
+            }
             ProcessedResponse::Block(block, debug) => {
                 self.vault
                     .monitor
@@ -400,12 +403,38 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(id = ?block.id, debug_payload = ?_debug_payload), err(Debug))]
+    #[instrument(skip_all, fields(id = ?block_id, ?debug_payload), err(Debug))]
+    async fn handle_block_offer(
+        &self,
+        block_id: BlockId,
+        debug_payload: DebugResponse,
+    ) -> Result<()> {
+        let Some(offer_state) = self.vault.offer_state(&block_id).await? else {
+            return Ok(());
+        };
+
+        tracing::trace!(?offer_state, "Received block offer");
+
+        if !self.block_tracker.register(block_id, offer_state) {
+            return Ok(());
+        }
+
+        match self.vault.block_request_mode {
+            BlockRequestMode::Lazy => (),
+            BlockRequestMode::Greedy => {
+                self.vault.block_tracker.require(block_id);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip_all, fields(id = ?block.id, ?debug_payload), err(Debug))]
     async fn handle_block(
         &self,
         block: Block,
         block_promise: Option<BlockPromise>,
-        _debug_payload: DebugResponse,
+        debug_payload: DebugResponse,
     ) -> Result<()> {
         tracing::trace!("Received block");
 

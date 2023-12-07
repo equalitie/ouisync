@@ -2,57 +2,34 @@ use super::{
     cache::CacheTransaction,
     error::Error,
     index::{self, UpdateSummaryReason},
-    leaf_node, root_node,
+    leaf_node,
 };
 use crate::{
-    collections::HashSet,
-    crypto::sign::PublicKey,
     db,
-    future::try_collect_into,
     protocol::{Block, BlockContent, BlockId, BlockNonce, BLOCK_SIZE},
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
-
-#[derive(Default)]
-pub(crate) struct ReceiveStatus {
-    /// List of branches that reference the received block.
-    pub branches: HashSet<PublicKey>,
-}
 
 /// Write a block received from a remote replica.
 pub(super) async fn receive(
     write_tx: &mut db::WriteTransaction,
     cache_tx: &mut CacheTransaction,
     block: &Block,
-) -> Result<ReceiveStatus, Error> {
+) -> Result<(), Error> {
     if !leaf_node::set_present(write_tx, &block.id).await? {
-        return Ok(ReceiveStatus::default());
+        return Ok(());
     }
 
     let nodes: Vec<_> = leaf_node::load_parent_hashes(write_tx, &block.id)
         .try_collect()
         .await?;
 
-    let mut branches = HashSet::default();
-
-    for (hash, state) in
-        index::update_summaries(write_tx, cache_tx, nodes, UpdateSummaryReason::Other).await?
-    {
-        if !state.is_approved() {
-            continue;
-        }
-
-        try_collect_into(
-            root_node::load_writer_ids_by_hash(write_tx, &hash),
-            &mut branches,
-        )
-        .await?;
-    }
+    index::update_summaries(write_tx, cache_tx, nodes, UpdateSummaryReason::Other).await?;
 
     write(write_tx, block).await?;
 
-    Ok(ReceiveStatus { branches })
+    Ok(())
 }
 
 /// Reads a block from the store into a buffer.

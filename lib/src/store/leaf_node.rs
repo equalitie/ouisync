@@ -100,6 +100,8 @@ pub(super) async fn is_present_or_expired(
     conn: &mut db::Connection,
     block_id: &BlockId,
 ) -> Result<bool, Error> {
+    // FIXME: we should check whether block_presence is present *or expired*, not just present.
+
     Ok(
         sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? AND block_presence = ?")
             .bind(block_id)
@@ -138,6 +140,25 @@ pub(super) async fn set_present(
         .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Checks whether the block with the specified id is missing.
+///
+/// NOTE: This is not the same as `!is_present_or_expired`. This function only returns true for
+/// blocks that are referenced and missing, but `!is_present_or_expired` would return true also for
+/// unreferenced blocks.
+pub(super) async fn is_missing(
+    conn: &mut db::Connection,
+    block_id: &BlockId,
+) -> Result<bool, Error> {
+    Ok(
+        sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? AND block_presence = ?")
+            .bind(block_id)
+            .bind(SingleBlockPresence::Missing)
+            .fetch_optional(conn)
+            .await?
+            .is_some(),
+    )
 }
 
 /// Marks all leaf nodes that point to the specified block as missing.

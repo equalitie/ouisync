@@ -12,12 +12,8 @@ use tokio::sync::broadcast;
 pub enum Payload {
     /// A new snapshot was created in the specified branch.
     BranchChanged(PublicKey),
-    /// A block with the specified id referenced from the specified branch was received from a
-    /// remote replica.
-    BlockReceived {
-        block_id: BlockId,
-        branch_id: PublicKey,
-    },
+    /// A block with the specified id was received from a remote replica.
+    BlockReceived(BlockId),
     /// The `maintain` worker job successfully completed. It won't perform any more work until
     /// triggered again by any of the above events.
     /// This event is useful mostly for diagnostics or testing and can be safely ignored in other
