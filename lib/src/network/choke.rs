@@ -6,7 +6,7 @@ use std::{
     },
 };
 use tokio::{
-    sync::watch,
+    sync::Notify,
     time::{self, Duration, Instant},
 };
 
@@ -20,14 +20,12 @@ pub(crate) struct Manager {
 
 impl Manager {
     pub fn new() -> Self {
-        let on_change_tx = watch::channel(()).0;
-
         Self {
             inner: Arc::new(Mutex::new(ManagerInner {
                 next_choker_id: AtomicUsize::new(0),
-                on_change_tx,
                 choked: Default::default(),
                 unchoked: Default::default(),
+                notify: Arc::new(Notify::new()),
             })),
         }
     }
@@ -36,19 +34,21 @@ impl Manager {
         let mut inner = self.inner.lock().unwrap();
 
         let id = inner.next_choker_id.fetch_add(1, Ordering::Relaxed);
+        let choked = inner.unchoked.len() >= MAX_UNCHOKED_COUNT;
 
-        if inner.unchoked.len() < MAX_UNCHOKED_COUNT {
-            inner.unchoked.insert(id, UnchokedState::default());
-        } else {
+        if choked {
             inner.choked.insert(id, ChokedState::Uninterested);
+        } else {
+            inner.unchoked.insert(id, UnchokedState::default());
         }
 
         Choker {
             inner: Arc::new(ChokerInner {
                 manager_inner: self.inner.clone(),
                 id,
+                notify: inner.notify.clone(),
             }),
-            on_change_rx: inner.on_change_tx.subscribe(),
+            choked,
         }
     }
 }
@@ -93,9 +93,9 @@ impl Default for UnchokedState {
 
 struct ManagerInner {
     next_choker_id: AtomicUsize,
-    on_change_tx: watch::Sender<()>,
     choked: HashMap<usize, ChokedState>,
     unchoked: HashMap<usize, UnchokedState>,
+    notify: Arc<Notify>,
 }
 
 #[derive(Debug)]
@@ -121,8 +121,7 @@ impl ManagerInner {
             return GetPermitResult::Granted;
         }
 
-        // Unwrap OK because if `choker_id` is not in `unchoked`, it must be in `choked`.
-        *self.choked.get_mut(&choker_id).unwrap() = ChokedState::Interested;
+        self.choked.insert(choker_id, ChokedState::Interested);
 
         // It's choked, check if we can unchoke something.
         if self.unchoked.len() < MAX_UNCHOKED_COUNT || self.try_evict_from_unchoked() {
@@ -132,21 +131,21 @@ impl ManagerInner {
             assert!(self.choked.remove(&to_unchoke).is_some());
             self.unchoked.insert(to_unchoke, UnchokedState::default());
 
+            // Notify both the choked (if any) and the unchoked one.
+            self.notify.notify_waiters();
+
             if to_unchoke == choker_id {
-                return GetPermitResult::Granted;
+                GetPermitResult::Granted
             } else {
-                // TODO: Consider waking up only the one who just got unchoked.
-                self.on_change_tx.send(()).unwrap_or(());
                 // Unwrap OK because we know `unchoked` is not empty.
                 let until = self.soonest_evictable().unwrap().1.evictable_at();
-                return GetPermitResult::AwaitUntil(until);
+                GetPermitResult::AwaitUntil(until)
             }
+        } else {
+            // Unwrap OK because we know `unchoked` is not empty.
+            let until = self.soonest_evictable().unwrap().1.evictable_at();
+            GetPermitResult::AwaitUntil(until)
         }
-
-        // Unwrap OK because we know `unchoked` is not empty.
-        let until = self.soonest_evictable().unwrap().1.evictable_at();
-
-        GetPermitResult::AwaitUntil(until)
     }
 
     // Return true if some choker was evicted from `unchoked` and inserted into `choked`.
@@ -207,35 +206,45 @@ impl ManagerInner {
     fn remove_choker(&mut self, choker_id: usize) {
         self.choked.remove(&choker_id);
         self.unchoked.remove(&choker_id);
-        self.on_change_tx.send(()).unwrap_or(());
+        self.notify.notify_waiters();
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct Choker {
     inner: Arc<ChokerInner>,
-    on_change_rx: watch::Receiver<()>,
+    choked: bool,
 }
 
 impl Choker {
-    /// Halts forever when the `Manager` has already been destroyed.
-    pub async fn wait_until_unchoked(&mut self) {
+    /// Waits until the state changes from choked to unchoked or from unchoked to choked. To find
+    /// what state the choker is in currently, use `is_choked()`.
+    pub async fn changed(&mut self) {
         loop {
-            self.on_change_rx.borrow_and_update();
-
-            let sleep_until = match self.get_permit() {
-                GetPermitResult::Granted => return,
-                GetPermitResult::AwaitUntil(sleep_until) => sleep_until,
+            match (self.choked, self.get_permit()) {
+                (true, GetPermitResult::Granted) => {
+                    self.choked = false;
+                    return;
+                }
+                (true, GetPermitResult::AwaitUntil(sleep_until)) => {
+                    time::timeout_at(sleep_until, self.inner.notify.notified())
+                        .await
+                        .ok();
+                }
+                (false, GetPermitResult::Granted) => self.inner.notify.notified().await,
+                (false, GetPermitResult::AwaitUntil(_)) => {
+                    self.choked = true;
+                    return;
+                }
             };
-
-            match time::timeout_at(sleep_until, self.on_change_rx.changed()).await {
-                Ok(Ok(())) | Err(_) => (),
-                Ok(Err(_)) => unreachable!(),
-            }
         }
     }
 
-    fn get_permit(&mut self) -> GetPermitResult {
+    pub fn is_choked(&self) -> bool {
+        self.choked
+    }
+
+    fn get_permit(&self) -> GetPermitResult {
         self.inner
             .manager_inner
             .lock()
@@ -247,6 +256,7 @@ impl Choker {
 struct ChokerInner {
     manager_inner: Arc<Mutex<ManagerInner>>,
     id: usize,
+    notify: Arc<Notify>,
 }
 
 impl Drop for ChokerInner {
@@ -258,7 +268,6 @@ impl Drop for ChokerInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assert_matches::assert_matches;
     use std::iter;
 
     // use simulated time (`start_paused`) to avoid having to wait for the timeout in the real time.
@@ -270,19 +279,18 @@ mod tests {
             .collect();
 
         for choker in chokers.iter_mut().take(MAX_UNCHOKED_COUNT) {
-            assert_matches!(choker.get_permit(), GetPermitResult::Granted);
+            assert!(!choker.is_choked());
         }
 
-        assert_matches!(
-            chokers[MAX_UNCHOKED_COUNT].get_permit(),
-            GetPermitResult::AwaitUntil(_)
-        );
+        assert!(chokers[MAX_UNCHOKED_COUNT].is_choked());
 
         tokio::time::timeout(
             PERMIT_INACTIVITY_TIMEOUT + Duration::from_millis(200),
-            chokers[MAX_UNCHOKED_COUNT].wait_until_unchoked(),
+            chokers[MAX_UNCHOKED_COUNT].changed(),
         )
         .await
         .unwrap();
+
+        assert!(!chokers[MAX_UNCHOKED_COUNT].is_choked());
     }
 }
