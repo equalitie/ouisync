@@ -114,15 +114,15 @@ impl Inner {
                         one_branch_event_handlers.push(self.handle_event(event));
                     }
                 },
-                Some(result) = request_handlers.next() => result?,
-                Some(result) = one_branch_event_handlers.next() => result?,
-                Some(result) = all_branch_event_handlers.next() => result?,
                 _ = choker.changed() => {
                     if !choker.is_choked() {
                         all_branch_event_handlers
                             .push(self.handle_accumulated_events(mem::take(&mut accumulator)));
                     }
                 }
+                Some(result) = request_handlers.next() => result?,
+                Some(result) = one_branch_event_handlers.next() => result?,
+                Some(result) = all_branch_event_handlers.next() => result?,
             }
         }
 

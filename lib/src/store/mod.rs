@@ -43,7 +43,7 @@ use crate::{
     debug::DebugPrinter,
     progress::Progress,
     protocol::{
-        get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet,
+        get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodeSet,
         MultiBlockPresence, Proof, RootNode, RootNodeFilter, Summary, INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
@@ -398,7 +398,7 @@ impl Reader {
     }
 
     // TODO: use cache and remove `ReadTransaction::load_inner_nodes_with_cache`
-    pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodeMap, Error> {
+    pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodes, Error> {
         inner_node::load_children(self.db(), parent_hash).await
     }
 
@@ -472,7 +472,7 @@ impl ReadTransaction {
     async fn load_inner_nodes_with_cache(
         &mut self,
         parent_hash: &Hash,
-    ) -> Result<InnerNodeMap, Error> {
+    ) -> Result<InnerNodes, Error> {
         if let Some(nodes) = self.cache.get_inners(parent_hash) {
             return Ok(nodes);
         }
@@ -600,7 +600,7 @@ impl WriteTransaction {
     /// Write inner nodes received from a remote replica.
     pub async fn receive_inner_nodes(
         &mut self,
-        nodes: CacheHash<InnerNodeMap>,
+        nodes: CacheHash<InnerNodes>,
         receive_filter: &ReceiveFilter,
         quota: Option<StorageSize>,
     ) -> Result<InnerNodeReceiveStatus, Error> {

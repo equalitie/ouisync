@@ -1,4 +1,4 @@
-use super::{InnerNodeMap, LeafNodeSet};
+use super::{InnerNodes, LeafNodeSet};
 use crate::format::Hex;
 use serde::{Deserialize, Serialize};
 use sqlx::{
@@ -57,7 +57,7 @@ impl Summary {
         }
     }
 
-    pub fn from_inners(nodes: &InnerNodeMap) -> Self {
+    pub fn from_inners(nodes: &InnerNodes) -> Self {
         let mut block_presence_builder = MultiBlockPresenceBuilder::new();
         let mut state = NodeState::Complete;
 

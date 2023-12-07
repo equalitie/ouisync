@@ -605,7 +605,7 @@ async fn fork_and_write_case(
 
     let buffer = orig.read_to_end(&mut tx).await.unwrap();
     assert_eq!(buffer.len(), src_content.len());
-    assert!(buffer == src_content);
+    similar_asserts::assert_eq!(buffer, src_content);
 
     // Re-open the fork and verify the content is changed
     let mut fork = Blob::open(&mut tx, dst_branch, src_id).await.unwrap();
@@ -613,12 +613,12 @@ async fn fork_and_write_case(
     let mut buffer = vec![0; seek_pos];
     let len = fork.read_all(&mut tx, &mut buffer[..]).await.unwrap();
     assert_eq!(len, buffer.len());
-    assert!(buffer == src_content[..seek_pos]);
+    similar_asserts::assert_eq!(buffer, src_content[..seek_pos]);
 
     let mut buffer = vec![0; write_len];
     let len = fork.read_all(&mut tx, &mut buffer[..]).await.unwrap();
     assert_eq!(len, buffer.len());
-    assert!(buffer == write_content);
+    similar_asserts::assert_eq!(buffer, write_content);
 
     drop(tx);
     store.close().await.unwrap();

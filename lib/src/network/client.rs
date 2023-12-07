@@ -9,8 +9,7 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
     protocol::{
-        Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, RootNodeFilter,
-        UntrustedProof,
+        Block, BlockId, InnerNodes, LeafNodeSet, MultiBlockPresence, RootNodeFilter, UntrustedProof,
     },
     repository::{BlockRequestMode, Vault},
     store::{self, ReceiveFilter},
@@ -302,7 +301,7 @@ impl Inner {
     #[instrument(skip_all, fields(hash = ?nodes.hash(), ?debug_payload), err(Debug))]
     async fn handle_inner_nodes(
         &self,
-        nodes: CacheHash<InnerNodeMap>,
+        nodes: CacheHash<InnerNodes>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
         let total = nodes.len();

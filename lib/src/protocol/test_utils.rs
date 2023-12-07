@@ -7,8 +7,7 @@ use crate::{
         Hash, Hashable,
     },
     protocol::{
-        get_bucket, Block, BlockId, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
-        INNER_LAYER_COUNT,
+        get_bucket, Block, BlockId, InnerNode, InnerNodes, LeafNode, LeafNodeSet, INNER_LAYER_COUNT,
     },
     repository::Vault,
     store::ReceiveFilter,
@@ -20,7 +19,7 @@ use std::mem;
 // In-memory snapshot for testing purposes.
 pub(crate) struct Snapshot {
     root_hash: Hash,
-    inners: [HashMap<BucketPath, InnerNodeMap>; INNER_LAYER_COUNT],
+    inners: [HashMap<BucketPath, InnerNodes>; INNER_LAYER_COUNT],
     leaves: HashMap<BucketPath, LeafNodeSet>,
     blocks: HashMap<BlockId, Block>,
 }
@@ -48,7 +47,7 @@ impl Snapshot {
                 .insert(node.locator, node.block_id, SingleBlockPresence::Present);
         }
 
-        let mut inners: [HashMap<_, InnerNodeMap>; INNER_LAYER_COUNT] = Default::default();
+        let mut inners: [HashMap<_, InnerNodes>; INNER_LAYER_COUNT] = Default::default();
 
         for (path, set) in &leaves {
             add_inner_node(
@@ -69,7 +68,7 @@ impl Snapshot {
 
         let root_hash = inners[0]
             .get(&BucketPath::default())
-            .unwrap_or(&InnerNodeMap::default())
+            .unwrap_or(&InnerNodes::default())
             .hash();
 
         Self {
@@ -122,7 +121,7 @@ impl Snapshot {
 pub(crate) struct InnerLayer<'a>(&'a Snapshot, usize);
 
 impl<'a> InnerLayer<'a> {
-    pub fn inner_maps(&self) -> impl Iterator<Item = (&Hash, &InnerNodeMap)> {
+    pub fn inner_maps(&self) -> impl Iterator<Item = (&Hash, &InnerNodes)> {
         self.0.inners[self.1].iter().map(move |(path, nodes)| {
             let parent_hash = self.0.parent_hash(self.1, path);
             (parent_hash, nodes)
@@ -177,7 +176,7 @@ pub(crate) async fn receive_blocks(repo: &Vault, snapshot: &Snapshot) {
 
 fn add_inner_node(
     inner_layer: usize,
-    maps: &mut HashMap<BucketPath, InnerNodeMap>,
+    maps: &mut HashMap<BucketPath, InnerNodes>,
     path: &BucketPath,
     hash: Hash,
 ) {

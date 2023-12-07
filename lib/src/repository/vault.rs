@@ -9,7 +9,7 @@ use crate::{
     error::Result,
     event::{EventSender, Payload},
     protocol::{
-        Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError, UntrustedProof,
+        Block, BlockId, InnerNodes, LeafNodeSet, MultiBlockPresence, ProofError, UntrustedProof,
     },
     storage_size::StorageSize,
     store::{
@@ -94,7 +94,7 @@ impl Vault {
     /// Also returns the receive status.
     pub async fn receive_inner_nodes(
         &self,
-        nodes: CacheHash<InnerNodeMap>,
+        nodes: CacheHash<InnerNodes>,
         receive_filter: &ReceiveFilter,
         quota: Option<StorageSize>,
     ) -> Result<InnerNodeReceiveStatus> {

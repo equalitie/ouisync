@@ -7,7 +7,7 @@ use crate::{
     block_tracker::{BlockOffer, BlockPromise},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
-    protocol::{Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
+    protocol::{Block, BlockId, InnerNodes, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::RepositoryMonitor,
     sync::delay_map::DelayMap,
 };
@@ -31,11 +31,7 @@ pub(super) struct PendingResponse {
 
 pub(super) enum ProcessedResponse {
     RootNode(UntrustedProof, MultiBlockPresence, DebugResponse),
-    InnerNodes(
-        CacheHash<InnerNodeMap>,
-        ResponseDisambiguator,
-        DebugResponse,
-    ),
+    InnerNodes(CacheHash<InnerNodes>, ResponseDisambiguator, DebugResponse),
     LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator, DebugResponse),
     Block(Block, DebugResponse),
     RootNodeError(PublicKey, DebugResponse),
