@@ -2,14 +2,15 @@
 
 use super::{quota, LocalId, Metadata, RepositoryId, RepositoryMonitor};
 use crate::{
-    block_tracker::{BlockPromise, BlockTracker},
+    block_tracker::{BlockPromise, BlockTracker, OfferState},
     crypto::{sign::PublicKey, CacheHash},
     db,
     debug::DebugPrinter,
     error::Result,
     event::{EventSender, Payload},
     protocol::{
-        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, ProofError, UntrustedProof,
+        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, ProofError,
+        UntrustedProof,
     },
     storage_size::StorageSize,
     store::{
@@ -126,8 +127,8 @@ impl Vault {
         let event_tx = self.event_tx.clone();
 
         let mut tx = self.store().begin_write().await?;
-        let status = match tx.receive_block(block).await {
-            Ok(status) => status,
+        match tx.receive_block(block).await {
+            Ok(()) => (),
             Err(error) => {
                 if matches!(error, store::Error::BlockNotReferenced) {
                     // We no longer need this block but we still need to un-track it.
@@ -141,13 +142,7 @@ impl Vault {
         };
 
         tx.commit_and_then(move || {
-            // Notify affected branches.
-            for branch_id in status.branches {
-                event_tx.send(Payload::BlockReceived {
-                    block_id,
-                    branch_id,
-                });
-            }
+            event_tx.send(Payload::BlockReceived(block_id));
 
             if let Some(promise) = promise {
                 promise.complete();
@@ -178,6 +173,26 @@ impl Vault {
             .await?;
 
         Ok(())
+    }
+
+    /// Returns the state (`Pending` or `Approved`) that the offer for the given block should be
+    /// registetred with. If the block isn't referenced or isn't missing, returns `None`.
+    pub async fn offer_state(&self, block_id: &BlockId) -> Result<Option<OfferState>> {
+        let mut r = self.store().acquire_read().await?;
+
+        if quota::get(r.db()).await?.is_some() {
+            // If quota is set we need to check what node state the snapshots referencing the block
+            // are in and derive the offer state from that.
+            match r.load_root_node_state_of_missing(block_id).await? {
+                NodeState::Incomplete | NodeState::Complete => Ok(Some(OfferState::Pending)),
+                NodeState::Approved => Ok(Some(OfferState::Approved)),
+                NodeState::Rejected => Ok(None),
+            }
+        } else if r.is_block_missing(block_id).await? {
+            Ok(Some(OfferState::Approved))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn metadata(&self) -> Metadata {

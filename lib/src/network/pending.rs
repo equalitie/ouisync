@@ -33,6 +33,7 @@ pub(super) enum ProcessedResponse {
     RootNode(UntrustedProof, MultiBlockPresence, DebugResponse),
     InnerNodes(CacheHash<InnerNodes>, ResponseDisambiguator, DebugResponse),
     LeafNodes(CacheHash<LeafNodes>, ResponseDisambiguator, DebugResponse),
+    BlockOffer(BlockId, DebugResponse),
     Block(Block, DebugResponse),
     RootNodeError(PublicKey, DebugResponse),
     ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
@@ -49,6 +50,7 @@ impl ProcessedResponse {
             Self::LeafNodes(nodes, disambiguator, _) => {
                 Key::ChildNodes(nodes.hash(), *disambiguator)
             }
+            Self::BlockOffer(block_id, _) => Key::BlockOffer(*block_id),
             Self::Block(block, _) => Key::Block(block.id),
             Self::RootNodeError(writer_id, _) => Key::RootNode(*writer_id),
             Self::ChildNodesError(hash, disambiguator, _) => Key::ChildNodes(*hash, *disambiguator),
@@ -69,6 +71,7 @@ impl From<Response> for ProcessedResponse {
             Response::LeafNodes(nodes, disambiguator, debug) => {
                 Self::LeafNodes(nodes.into(), disambiguator, debug)
             }
+            Response::BlockOffer(block_id, debug) => Self::BlockOffer(block_id, debug),
             Response::Block(content, nonce, debug) => {
                 Self::Block(Block::new(content, nonce), debug)
             }
@@ -85,6 +88,7 @@ impl From<Response> for ProcessedResponse {
 pub(crate) enum Key {
     RootNode(PublicKey),
     ChildNodes(Hash, ResponseDisambiguator),
+    BlockOffer(BlockId),
     Block(BlockId),
 }
 
@@ -189,6 +193,7 @@ fn request_added(monitor: &RepositoryMonitor, key: &Key) {
     match key {
         Key::RootNode(_) | Key::ChildNodes { .. } => *monitor.index_requests_inflight.get() += 1,
         Key::Block(_) => *monitor.block_requests_inflight.get() += 1,
+        Key::BlockOffer(_) => (),
     }
 }
 
@@ -196,6 +201,7 @@ fn request_removed(monitor: &RepositoryMonitor, key: &Key, timestamp: Option<Ins
     match key {
         Key::RootNode(_) | Key::ChildNodes { .. } => *monitor.index_requests_inflight.get() -= 1,
         Key::Block(_) => *monitor.block_requests_inflight.get() -= 1,
+        Key::BlockOffer(_) => (),
     }
 
     if let Some(timestamp) = timestamp {

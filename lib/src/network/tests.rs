@@ -119,6 +119,12 @@ fn transfer_blocks_between_two_replicas(
     ))
 }
 
+// #[tokio::test]
+// async fn debug() {
+//     test_utils::init_log();
+//     transfer_blocks_between_two_replicas_case(1, 0).await
+// }
+
 async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 

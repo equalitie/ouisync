@@ -276,8 +276,7 @@ impl BlockOffer {
                 required: true,
                 approved: true,
             } => (),
-            State::Idle { .. } => unreachable!(),
-            State::Accepted(_) => return None,
+            State::Idle { .. } | State::Accepted(_) => return None,
         }
 
         missing_block.state = State::Accepted(self.client_id);

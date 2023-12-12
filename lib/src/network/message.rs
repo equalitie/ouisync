@@ -48,6 +48,10 @@ pub(crate) enum Response {
     LeafNodes(LeafNodes, ResponseDisambiguator, DebugResponse),
     /// Send that a ChildNodes request failed
     ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
+    /// Send a notification that a block became available on this replica.
+    /// NOTE: This is always unsolicited - the server sends it on its own when it detects a newly
+    /// received block.
+    BlockOffer(BlockId, DebugResponse),
     /// Send a requested block.
     Block(BlockContent, BlockNonce, DebugResponse),
     /// Send that a Block request failed

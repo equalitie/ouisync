@@ -30,17 +30,13 @@ impl Manager {
         }
     }
 
+    /// Creates a new choker which is initially choked.
     pub fn new_choker(&self) -> Choker {
         let mut inner = self.inner.lock().unwrap();
 
         let id = inner.next_choker_id.fetch_add(1, Ordering::Relaxed);
-        let choked = inner.unchoked.len() >= MAX_UNCHOKED_COUNT;
 
-        if choked {
-            inner.choked.insert(id, ChokedState::Uninterested);
-        } else {
-            inner.unchoked.insert(id, UnchokedState::default());
-        }
+        inner.choked.insert(id, ChokedState::Uninterested);
 
         Choker {
             inner: Arc::new(ChokerInner {
@@ -48,7 +44,7 @@ impl Manager {
                 id,
                 notify: inner.notify.clone(),
             }),
-            choked,
+            choked: true,
         }
     }
 }
@@ -217,14 +213,17 @@ pub(crate) struct Choker {
 }
 
 impl Choker {
-    /// Waits until the state changes from choked to unchoked or from unchoked to choked. To find
-    /// what state the choker is in currently, use `is_choked()`.
-    pub async fn changed(&mut self) {
+    /// Waits until the state changes from choked to unchoked or from unchoked to choked. Returns
+    /// the new state (true = choked, false = unchoked).
+    ///
+    /// NOTE: The initial state of a newly created choker (before `changed` is called at least
+    /// once) is always choked.
+    pub async fn changed(&mut self) -> bool {
         loop {
             match (self.choked, self.get_permit()) {
                 (true, GetPermitResult::Granted) => {
                     self.choked = false;
-                    return;
+                    break;
                 }
                 (true, GetPermitResult::AwaitUntil(sleep_until)) => {
                     time::timeout_at(sleep_until, self.inner.notify.notified())
@@ -234,13 +233,11 @@ impl Choker {
                 (false, GetPermitResult::Granted) => self.inner.notify.notified().await,
                 (false, GetPermitResult::AwaitUntil(_)) => {
                     self.choked = true;
-                    return;
+                    break;
                 }
             };
         }
-    }
 
-    pub fn is_choked(&self) -> bool {
         self.choked
     }
 
@@ -268,29 +265,38 @@ impl Drop for ChokerInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::FutureExt;
     use std::iter;
 
     // use simulated time (`start_paused`) to avoid having to wait for the timeout in the real time.
     #[tokio::test(start_paused = true)]
     async fn sanity() {
         let manager = Manager::new();
+
         let mut chokers: Vec<_> = iter::repeat_with(|| manager.new_choker())
             .take(MAX_UNCHOKED_COUNT + 1)
             .collect();
 
-        for choker in chokers.iter_mut().take(MAX_UNCHOKED_COUNT) {
-            assert!(!choker.is_choked());
+        // All but one get unchoked immediatelly.
+        for choker in &mut chokers[..MAX_UNCHOKED_COUNT] {
+            assert_eq!(choker.changed().now_or_never(), Some(false));
         }
 
-        assert!(chokers[MAX_UNCHOKED_COUNT].is_choked());
+        // One gets unchoked after the timeout.
+        assert_eq!(chokers[MAX_UNCHOKED_COUNT].changed().now_or_never(), None);
 
-        tokio::time::timeout(
-            PERMIT_INACTIVITY_TIMEOUT + Duration::from_millis(200),
-            chokers[MAX_UNCHOKED_COUNT].changed(),
-        )
-        .await
-        .unwrap();
+        assert!(!chokers[MAX_UNCHOKED_COUNT].changed().await);
 
-        assert!(!chokers[MAX_UNCHOKED_COUNT].is_choked());
+        // And another one gets choked instead.
+        let mut num_choked = 0;
+
+        for choker in &mut chokers[..MAX_UNCHOKED_COUNT] {
+            if let Some(choked) = choker.changed().now_or_never() {
+                assert!(choked);
+                num_choked += 1;
+            }
+        }
+
+        assert_eq!(num_choked, 1);
     }
 }
