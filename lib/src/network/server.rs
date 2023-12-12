@@ -80,8 +80,9 @@ impl Inner {
         let mut request_handlers = FuturesUnordered::new();
         let mut event_handlers = FuturesUnordered::new();
 
-        // Send the initial root node messages
-        self.handle_unknown_event().await?;
+        // Send the initial root messages, but only after we get unchoked (which can happen
+        // immediatelly)
+        accumulator.insert(Event::Unknown);
 
         loop {
             select! {
