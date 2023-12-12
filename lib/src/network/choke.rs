@@ -30,6 +30,7 @@ impl Manager {
         }
     }
 
+    /// Creates a new choker which is initially choked.
     pub fn new_choker(&self) -> Choker {
         let mut inner = self.inner.lock().unwrap();
 
@@ -212,14 +213,17 @@ pub(crate) struct Choker {
 }
 
 impl Choker {
-    /// Waits until the state changes from choked to unchoked or from unchoked to choked. To find
-    /// what state the choker is in currently, use `is_choked()`.
-    pub async fn changed(&mut self) {
+    /// Waits until the state changes from choked to unchoked or from unchoked to choked. Returns
+    /// the new state (true = choked, false = unchoked).
+    ///
+    /// NOTE: The initial state of a newly created choker (before `changed` is called at least
+    /// once) is always choked.
+    pub async fn changed(&mut self) -> bool {
         loop {
             match (self.choked, self.get_permit()) {
                 (true, GetPermitResult::Granted) => {
                     self.choked = false;
-                    return;
+                    break;
                 }
                 (true, GetPermitResult::AwaitUntil(sleep_until)) => {
                     time::timeout_at(sleep_until, self.inner.notify.notified())
@@ -229,13 +233,11 @@ impl Choker {
                 (false, GetPermitResult::Granted) => self.inner.notify.notified().await,
                 (false, GetPermitResult::AwaitUntil(_)) => {
                     self.choked = true;
-                    return;
+                    break;
                 }
             };
         }
-    }
 
-    pub fn is_choked(&self) -> bool {
         self.choked
     }
 
@@ -275,35 +277,23 @@ mod tests {
             .take(MAX_UNCHOKED_COUNT + 1)
             .collect();
 
-        // Initially everyone is choked
-        for choker in &chokers {
-            assert!(choker.is_choked());
-        }
-
         // All but one get unchoked immediatelly.
         for choker in &mut chokers[..MAX_UNCHOKED_COUNT] {
-            assert!(choker.changed().now_or_never().is_some());
-            assert!(!choker.is_choked());
+            assert_eq!(choker.changed().now_or_never(), Some(false));
         }
 
         // One gets unchoked after the timeout.
-        assert!(chokers[MAX_UNCHOKED_COUNT]
-            .changed()
-            .now_or_never()
-            .is_none());
+        assert_eq!(chokers[MAX_UNCHOKED_COUNT].changed().now_or_never(), None);
 
-        chokers[MAX_UNCHOKED_COUNT].changed().await;
-        assert!(!chokers[MAX_UNCHOKED_COUNT].is_choked());
+        assert!(!chokers[MAX_UNCHOKED_COUNT].changed().await);
 
         // And another one gets choked instead.
         let mut num_choked = 0;
 
         for choker in &mut chokers[..MAX_UNCHOKED_COUNT] {
-            if choker.changed().now_or_never().is_some() {
-                assert!(choker.is_choked());
+            if let Some(choked) = choker.changed().now_or_never() {
+                assert!(choked);
                 num_choked += 1;
-            } else {
-                assert!(!choker.is_choked());
             }
         }
 

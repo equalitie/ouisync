@@ -72,6 +72,7 @@ impl Inner {
         // Note that this allows us to process each branch event only once even if we received
         // multiple events per particular branch.
         let mut accumulator = EventAccumulator::default();
+        let mut choked = true;
 
         // This is to handle multiple requests / events at once.
         // TODO: Do we need to limit the number of concurrent request handlers? We have a limit on
@@ -86,7 +87,7 @@ impl Inner {
 
         loop {
             select! {
-                request = rx.recv(), if !choker.is_choked() => {
+                request = rx.recv(), if !choked => {
                     let Some(request)  = request else {
                         break;
                     };
@@ -104,14 +105,16 @@ impl Inner {
                         break;
                     };
 
-                    if choker.is_choked() {
+                    if choked {
                         accumulator.insert(event);
                     } else {
                         event_handlers.push(self.handle_event(event));
                     }
                 },
-                _ = choker.changed() => {
-                    if choker.is_choked() {
+                new_choked = choker.changed() => {
+                    choked = new_choked;
+
+                    if choked {
                         continue;
                     }
 
