@@ -5,6 +5,37 @@ import 'package:flutter/services.dart';
 
 import 'ouisync_plugin.dart' show Session, Repository, File;
 
+/// Enum for handling the reponse from the previewFile method
+enum PreviewFileResult { previewOK, mimeTypeNull, noDefaultApp }
+
+String previewFileResultToString(PreviewFileResult previewFileResult) {
+  return switch (previewFileResult) {
+    PreviewFileResult.previewOK => 'previewOK',
+    PreviewFileResult.mimeTypeNull => 'mimeTypeNull',
+    PreviewFileResult.noDefaultApp => 'noDefaultApp'
+  };
+}
+
+PreviewFileResult? previewFileResultFromString(String previewFileResult) {
+  switch (previewFileResult) {
+    case 'previewOK':
+      {
+        return PreviewFileResult.previewOK;
+      }
+    case 'mimeTypeNull':
+      {
+        return PreviewFileResult.mimeTypeNull;
+      }
+    case 'noDefaultApp':
+      {
+        return PreviewFileResult.noDefaultApp;
+      }
+  }
+
+  print('Failed to convert string "$previewFileResult" to enum');
+  return null;
+}
+
 /// MethodChannel handler for calling functions
 /// implemented natively, and viceversa.
 class NativeChannels {
@@ -151,7 +182,7 @@ class NativeChannels {
   ///
   /// [path] is the location of the file to preview, including its full name (<path>/<file-name.ext>).
   /// [size] is the lenght of the file (bytes).
-  static Future<void> previewOuiSyncFile(
+  static Future<PreviewFileResult?> previewOuiSyncFile(
       String authority, String path, int size,
       {bool useDefaultApp = false}) async {
     var args = {"authority": authority, "path": path, "size": size};
@@ -161,7 +192,19 @@ class NativeChannels {
     }
 
     final dynamic result = await _channel.invokeMethod('previewFile', args);
-    print('previewFile result: $result');
+    final previewFileResult = previewFileResultFromString(result);
+
+    final message = switch (previewFileResult) {
+      PreviewFileResult.previewOK => 'started for file $path',
+      PreviewFileResult.mimeTypeNull => 'failed due to unknown file extension',
+      PreviewFileResult.noDefaultApp =>
+        'failed due to not app available for this file type',
+      _ => 'status unknown'
+    };
+
+    print("previewFile result: View file intent $message");
+
+    return previewFileResult;
   }
 }
 

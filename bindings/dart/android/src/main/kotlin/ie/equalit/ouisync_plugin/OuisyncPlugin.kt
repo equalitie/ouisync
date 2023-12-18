@@ -1,20 +1,20 @@
 package ie.equalit.ouisync_plugin
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import android.webkit.MimeTypeMap
 import androidx.annotation.NonNull
-
+import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
-import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
-import java.net.URLConnection
 
 /** OuisyncPlugin */
 class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
@@ -60,12 +60,11 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val arguments = call.arguments as HashMap<String, Any>
         startFileShareAction(arguments)
         result.success("Share file intent started")
-
       }
       "previewFile" -> {
         val arguments = call.arguments as HashMap<String, Any>
-        startFilePreviewAction(arguments)
-        result.success("View file intent started")
+        val previewResult = startFilePreviewAction(arguments)
+        result.success(previewResult)
       }
       else -> {
         result.notImplemented()
@@ -73,27 +72,53 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     }
   }
 
-  private fun startFilePreviewAction(arguments: HashMap<String, Any>) {
+  private fun startFilePreviewAction(arguments: HashMap<String, Any>): String {
     val authority = arguments["authority"]
     val path = arguments["path"]
     val size = arguments["size"]
     val useDefaultApp = arguments["useDefaultApp"]
 
-    val uri = Uri.parse("content://$authority.pipe/$size$path")
+    val extension = getFileExtension(path as String)
+    val mimeType = getMimeType(extension)
 
+    if (mimeType == null) {
+      Log.d(javaClass.simpleName, """PreviewFile: No mime type was found for the file extension $extension
+        We can't determine the default app for the file $path""")
+
+      return "mimeTypeNull"
+    }
+
+    Log.d(javaClass.simpleName, "File extension: $extension")
+    Log.d(javaClass.simpleName, "Mime type: $mimeType")
+
+    val uri = Uri.parse("content://$authority.pipe/$size$path")
     Log.d(javaClass.simpleName, "Uri: ${uri.toString()}")
 
     val intent = getIntentForAction(uri, Intent.ACTION_VIEW)
 
-    if (useDefaultApp != null) {
-        // Note that not using Intent.createChooser let's the user choose a
-        // default app and then use that the next time the same file type is
-        // opened.
-        activity?.startActivity(intent)
-    } else {
-        val title = "Preview file from Ouisync"
-        activity?.startActivity(Intent.createChooser(intent, title))
+    try {
+        if (useDefaultApp != null) {
+            // Note that not using Intent.createChooser let's the user choose a
+            // default app and then use that the next time the same file type is
+            // opened.
+            activity?.startActivity(intent)
+        } else {
+            val title = "Preview file from Ouisync"
+            activity?.startActivity(Intent.createChooser(intent, title))
+        }
+    } catch (e: ActivityNotFoundException) {
+        Log.d(javaClass.simpleName, "Exception: No default app for this file type was found")
+        return "noDefaultApp"
     }
+    return "previewOK"
+  }
+
+  private fun getMimeType(extension: String): String? {
+    return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+  }
+
+  private fun getFileExtension(path: String): String {
+    return MimeTypeMap.getFileExtensionFromUrl(path)
   }
 
   private fun startFileShareAction(arguments: HashMap<String, Any>) {
