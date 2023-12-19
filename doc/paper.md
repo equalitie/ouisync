@@ -521,8 +521,8 @@ be decided.
 Ouisync uses the following cryptographic primitives:
 
 - **random number generator** : [`ThreadRng`](https://docs.rs/rand/latest/rand/rngs/struct.ThreadRng.html) from [rand](https://crates.io/crates/rand).
-- **hash**: SHA3-256 from [sha3](https://crates.io/crates/sha3) and BLAKE2s from [blake2](https://crates.io/crates/blake2)
-- **symmetric encryption**: ChaCha20Poly1305 AEAD from [chacha20poly1305](https://crates.io/crates/chacha20poly1305)
+- **hash**: BLAKE3 from [blake3](https://crates.io/crates/blake3)
+- **symmetric encryption**: ChaCha20Poly1305 for Encryption with AEAD from [chacha20poly1305](https://crates.io/crates/chacha20poly1305) and Cacha20 for Encryption without AEAD from [https://crates.io/crates/chacha20]
 - **digital signature**: EdDSA with SHA2-512 and Curve25519 from [ed25519-dalek](https://crates.io/crates/ed25519-dalek)
 - **encryption protocol**: Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s from the Noise Protocol Framework from [noise-protocol](https://crates.io/crates/noise-protocol) with [noise-rust-crypto](https://crates.io/crates/noise-rust-crypto)
 - **Password hash / KDF**: [**Argon2**](https://en.wikipedia.org/wiki/Argon2)
