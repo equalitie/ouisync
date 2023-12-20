@@ -33,8 +33,11 @@ mod tests;
 mod upnp;
 
 pub use self::{
-    connection::PeerInfoCollector, peer_info::PeerInfo, peer_source::PeerSource,
-    peer_state::PeerState, runtime_id::PublicRuntimeId,
+    connection::PeerInfoCollector,
+    peer_info::PeerInfo,
+    peer_source::PeerSource,
+    peer_state::PeerState,
+    runtime_id::{PublicRuntimeId, SecretRuntimeId},
 };
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
@@ -46,7 +49,6 @@ use self::{
     peer_addr::{PeerAddr, PeerPort},
     peer_exchange::{PexController, PexDiscovery, PexPayload},
     protocol::{Version, MAGIC, VERSION},
-    runtime_id::SecretRuntimeId,
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{

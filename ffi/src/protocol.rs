@@ -393,7 +393,10 @@ pub mod as_option_str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ouisync_lib::{network::PeerSource, PeerInfo};
+    use ouisync_lib::{
+        network::{PeerSource, PeerState},
+        PeerInfo, SecretRuntimeId,
+    };
 
     #[test]
     fn request_serialize_deserialize() {
@@ -434,11 +437,18 @@ mod tests {
             Response::U64(u64::MAX),
             Response::Bytes(b"hello world".to_vec()),
             Response::Handle(1),
-            Response::PeerInfo(vec![PeerInfo {
-                addr: ([192, 168, 1, 204], 65535).into(),
-                source: PeerSource::LocalDiscovery,
-                state: ouisync_lib::network::PeerState::Connecting,
-            }]),
+            Response::PeerInfo(vec![
+                PeerInfo {
+                    addr: ([192, 168, 1, 204], 65535).into(),
+                    source: PeerSource::LocalDiscovery,
+                    state: PeerState::Connecting,
+                },
+                PeerInfo {
+                    addr: ([0x2001, 0xdb8, 0x0, 0x0, 0x0, 0x8a2e, 0x370, 0x7334], 12345).into(),
+                    source: PeerSource::Dht,
+                    state: PeerState::Active(SecretRuntimeId::random().public()),
+                },
+            ]),
         ];
 
         for orig in origs {
