@@ -1,4 +1,4 @@
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::{
     fmt,
     net::{IpAddr, SocketAddr},
@@ -11,7 +11,7 @@ pub enum PeerPort {
     Quic(u16),
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 pub enum PeerAddr {
     Tcp(SocketAddr),
     Quic(SocketAddr),
@@ -98,40 +98,6 @@ impl fmt::Display for PeerAddr {
             Self::Quic(addr) => write!(f, "quic/{}", addr),
         }
     }
-}
-
-impl Serialize for PeerAddr {
-    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if s.is_human_readable() {
-            self.to_string().serialize(s)
-        } else {
-            SerdeProxy::serialize(self, s)
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for PeerAddr {
-    fn deserialize<D>(d: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if d.is_human_readable() {
-            <&str>::deserialize(d)?.parse().map_err(D::Error::custom)
-        } else {
-            SerdeProxy::deserialize(d)
-        }
-    }
-}
-
-// Proxy to serialize/deserialize PeerAddr in non human-readable formats.
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "PeerAddr")]
-enum SerdeProxy {
-    Tcp(SocketAddr),
-    Quic(SocketAddr),
 }
 
 #[cfg(test)]

@@ -439,12 +439,14 @@ mod tests {
             Response::Handle(1),
             Response::PeerInfo(vec![
                 PeerInfo {
-                    addr: ([192, 168, 1, 204], 65535).into(),
+                    addr: PeerAddr::Quic(([192, 168, 1, 204], 65535).into()),
                     source: PeerSource::LocalDiscovery,
                     state: PeerState::Connecting,
                 },
                 PeerInfo {
-                    addr: ([0x2001, 0xdb8, 0x0, 0x0, 0x0, 0x8a2e, 0x370, 0x7334], 12345).into(),
+                    addr: PeerAddr::Quic(
+                        ([0x2001, 0xdb8, 0x0, 0x0, 0x0, 0x8a2e, 0x370, 0x7334], 12345).into(),
+                    ),
                     source: PeerSource::Dht,
                     state: PeerState::Active(SecretRuntimeId::random().public()),
                 },

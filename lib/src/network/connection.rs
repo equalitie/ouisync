@@ -107,7 +107,7 @@ impl ConnectionDeduplicator {
         connections
             .get(&incoming)
             .or_else(|| connections.get(&outgoing))
-            .map(|peer| PeerInfo::new(&addr, peer.source, peer.state))
+            .map(|peer| PeerInfo::new(addr, peer.source, peer.state))
     }
 
     pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
@@ -130,7 +130,7 @@ impl PeerInfoCollector {
             .lock()
             .unwrap()
             .iter()
-            .map(|(key, peer)| PeerInfo::new(&key.addr, peer.source, peer.state))
+            .map(|(key, peer)| PeerInfo::new(key.addr, peer.source, peer.state))
             .collect()
     }
 }
