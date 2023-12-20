@@ -435,8 +435,7 @@ mod tests {
             Response::Bytes(b"hello world".to_vec()),
             Response::Handle(1),
             Response::PeerInfo(vec![PeerInfo {
-                ip: [192, 168, 1, 204].into(),
-                port: 65535,
+                addr: ([192, 168, 1, 204], 65535).into(),
                 source: PeerSource::LocalDiscovery,
                 state: ouisync_lib::network::PeerState::Connecting,
             }]),

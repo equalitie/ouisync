@@ -181,7 +181,9 @@ async fn collect(
 
             let country = active_peers.entry(id).or_insert(CountryCode::UNKNOWN);
             if *country == CountryCode::UNKNOWN {
-                *country = geo_ip.lookup(peer.ip).unwrap_or(CountryCode::UNKNOWN);
+                *country = geo_ip
+                    .lookup(peer.addr.ip())
+                    .unwrap_or(CountryCode::UNKNOWN);
             }
         }
 

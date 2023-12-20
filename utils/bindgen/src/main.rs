@@ -14,6 +14,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "ffi/src/lib.rs",
         "lib/src/access_control/access_mode.rs",
         "lib/src/directory/entry_type.rs",
+        "lib/src/network/peer_source.rs",
+        "lib/src/network/peer_state.rs",
     ];
     let mut source = Source::new();
 

@@ -168,3 +168,62 @@ enum NetworkEvent {
 
 }
 
+enum PeerSource {
+  userProvided,
+  listener,
+  localDiscovery,
+  dht,
+  peerExchange,
+  ;
+
+  static PeerSource decode(int n) {
+    switch (n) {
+      case 0: return PeerSource.userProvided;
+      case 1: return PeerSource.listener;
+      case 2: return PeerSource.localDiscovery;
+      case 3: return PeerSource.dht;
+      case 4: return PeerSource.peerExchange;
+      default: throw ArgumentError('invalid value: $n');
+    }
+  }
+
+  int encode() {
+    switch (this) {
+      case PeerSource.userProvided: return 0;
+      case PeerSource.listener: return 1;
+      case PeerSource.localDiscovery: return 2;
+      case PeerSource.dht: return 3;
+      case PeerSource.peerExchange: return 4;
+    }
+  }
+
+}
+
+enum PeerStateKind {
+  known,
+  connecting,
+  handshaking,
+  active,
+  ;
+
+  static PeerStateKind decode(int n) {
+    switch (n) {
+      case 0: return PeerStateKind.known;
+      case 1: return PeerStateKind.connecting;
+      case 2: return PeerStateKind.handshaking;
+      case 3: return PeerStateKind.active;
+      default: throw ArgumentError('invalid value: $n');
+    }
+  }
+
+  int encode() {
+    switch (this) {
+      case PeerStateKind.known: return 0;
+      case PeerStateKind.connecting: return 1;
+      case PeerStateKind.handshaking: return 2;
+      case PeerStateKind.active: return 3;
+    }
+  }
+
+}
+

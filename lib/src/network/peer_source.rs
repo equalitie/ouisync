@@ -1,7 +1,22 @@
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    IntoPrimitive,
+    TryFromPrimitive,
+)]
+#[repr(u8)]
+#[serde(into = "u8", try_from = "u8")]
 pub enum PeerSource {
     UserProvided,
     Listener,

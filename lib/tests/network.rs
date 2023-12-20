@@ -183,7 +183,7 @@ async fn expect_knows_port(network: &Network, peer_port: u16) {
         let mut rx = network.on_peer_set_change();
 
         loop {
-            let mut peer_ports = collector.collect().into_iter().map(|info| info.port);
+            let mut peer_ports = collector.collect().into_iter().map(|info| info.addr.port());
 
             if peer_ports.any(|port| port == peer_port) {
                 break;

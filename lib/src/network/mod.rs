@@ -1,3 +1,6 @@
+pub mod dht_discovery;
+pub mod peer_addr;
+
 mod barrier;
 mod choke;
 mod client;
@@ -6,7 +9,6 @@ mod connection_monitor;
 mod constants;
 mod crypto;
 mod debug_payload;
-pub mod dht_discovery;
 mod gateway;
 mod interface;
 mod ip;
@@ -16,9 +18,10 @@ mod message;
 mod message_broker;
 mod message_dispatcher;
 mod message_io;
-pub mod peer_addr;
 mod peer_exchange;
+mod peer_info;
 mod peer_source;
+mod peer_state;
 mod pending;
 mod protocol;
 mod raw;
@@ -29,6 +32,10 @@ mod server;
 mod tests;
 mod upnp;
 
+pub use self::{
+    connection::PeerInfoCollector, peer_info::PeerInfo, peer_source::PeerSource,
+    peer_state::PeerState, runtime_id::PublicRuntimeId,
+};
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     connection_monitor::ConnectionMonitor,
@@ -41,11 +48,6 @@ use self::{
     protocol::{Version, MAGIC, VERSION},
     runtime_id::SecretRuntimeId,
     seen_peers::{SeenPeer, SeenPeers},
-};
-pub use self::{
-    connection::{PeerInfo, PeerInfoCollector, PeerState},
-    peer_source::PeerSource,
-    runtime_id::PublicRuntimeId,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},

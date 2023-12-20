@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:ffi';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
-import 'package:flutter/services.dart';
 import 'package:hex/hex.dart';
 
 import 'bindings.dart';
@@ -13,7 +13,14 @@ import 'native_channels.dart';
 import 'state_monitor.dart';
 
 export 'bindings.dart'
-    show AccessMode, EntryType, ErrorCode, LogLevel, NetworkEvent;
+    show
+        AccessMode,
+        EntryType,
+        ErrorCode,
+        LogLevel,
+        NetworkEvent,
+        PeerSource,
+        PeerStateKind;
 export 'native_channels.dart' show NativeChannels;
 
 const bool debugTrace = false;
@@ -215,43 +222,39 @@ class Session {
 }
 
 class PeerInfo {
-  final String ip;
-  final int port;
-  final String source;
-  final String state;
+  final String addr;
+  final PeerSource source;
+  final PeerStateKind state;
   final String? runtimeId;
 
   PeerInfo({
-    required this.ip,
-    required this.port,
+    required this.addr,
     required this.source,
     required this.state,
     this.runtimeId,
   });
 
   static PeerInfo decode(Object? raw) {
-    final map = raw as List<Object?>;
+    final list = raw as List<Object?>;
 
-    final ip = map[0] as String;
-    final port = map[1] as int;
-    final source = map[2] as String;
-    final rawState = map[3];
+    final addr = list[0] as String;
+    final source = PeerSource.decode(list[1] as int);
+    final rawState = list[2];
 
-    String state;
+    PeerStateKind state;
     String? runtimeId;
 
-    if (rawState is String) {
-      state = rawState;
-    } else if (rawState is Map) {
-      state = rawState.entries.single.key as String;
-      runtimeId = HEX.encode(rawState.entries.single.value as Uint8List);
+    if (rawState is int) {
+      state = PeerStateKind.decode(rawState);
+    } else if (rawState is List) {
+      state = PeerStateKind.decode(rawState[0] as int);
+      runtimeId = HEX.encode(rawState[1] as Uint8List);
     } else {
       throw Exception('invalid peer info state');
     }
 
     return PeerInfo(
-      ip: ip,
-      port: port,
+      addr: addr,
       source: source,
       state: state,
       runtimeId: runtimeId,
@@ -263,7 +266,7 @@ class PeerInfo {
 
   @override
   String toString() =>
-      '$runtimeType(ip: $ip, port: $port, source: $source, state: $state, runtimeId: $runtimeId)';
+      '$runtimeType(addr: $addr, source: $source, state: $state, runtimeId: $runtimeId)';
 }
 
 /// A reference to a ouisync repository.

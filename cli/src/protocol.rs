@@ -310,11 +310,7 @@ impl fmt::Display for Response {
             }
             Self::PeerInfo(value) => {
                 for peer in value {
-                    writeln!(
-                        f,
-                        "{}:{} ({:?}, {:?})",
-                        peer.ip, peer.port, peer.source, peer.state
-                    )?;
+                    writeln!(f, "{} ({:?}, {:?})", peer.addr, peer.source, peer.state)?;
                 }
 
                 Ok(())

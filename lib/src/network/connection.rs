@@ -1,12 +1,14 @@
-use super::{peer_addr::PeerAddr, peer_source::PeerSource, runtime_id::PublicRuntimeId};
+use super::{
+    peer_addr::PeerAddr, peer_info::PeerInfo, peer_source::PeerSource, peer_state::PeerState,
+    runtime_id::PublicRuntimeId,
+};
 use crate::{
     collections::{hash_map::Entry, HashMap},
     deadlock::BlockingMutex,
 };
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+use serde::Serialize;
 use std::{
     fmt,
-    net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -26,14 +28,6 @@ pub(super) type PermitId = u64;
 //
 //   https://github.com/tokio-rs/tokio/issues/3757
 use crate::sync::{uninitialized_watch, AwaitDrop, DropAwaitable};
-
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
-pub enum PeerState {
-    Known,
-    Connecting,
-    Handshaking,
-    Active(PublicRuntimeId),
-}
 
 /// Prevents establishing duplicate connections.
 pub(super) struct ConnectionDeduplicator {
@@ -113,7 +107,7 @@ impl ConnectionDeduplicator {
         connections
             .get(&incoming)
             .or_else(|| connections.get(&outgoing))
-            .map(|peer| PeerInfo::new(&addr, peer))
+            .map(|peer| PeerInfo::new(&addr, peer.source, peer.state))
     }
 
     pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
@@ -127,27 +121,6 @@ pub(super) enum ReserveResult {
     Occupied(AwaitDrop, PeerSource, PermitId),
 }
 
-/// Information about a peer.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct PeerInfo {
-    #[serde(with = "as_str")]
-    pub ip: IpAddr,
-    pub port: u16,
-    pub source: PeerSource,
-    pub state: PeerState,
-}
-
-impl PeerInfo {
-    fn new(addr: &PeerAddr, peer: &Peer) -> Self {
-        Self {
-            ip: addr.socket_addr().ip(),
-            port: addr.socket_addr().port(),
-            source: peer.source,
-            state: peer.state,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct PeerInfoCollector(Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>);
 
@@ -157,30 +130,12 @@ impl PeerInfoCollector {
             .lock()
             .unwrap()
             .iter()
-            .map(|(key, peer)| PeerInfo::new(&key.addr, peer))
+            .map(|(key, peer)| PeerInfo::new(&key.addr, peer.source, peer.state))
             .collect()
     }
 }
 
-mod as_str {
-    use super::*;
-
-    pub fn serialize<S>(value: &IpAddr, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        value.to_string().serialize(s)
-    }
-
-    pub fn deserialize<'de, D>(d: D) -> Result<IpAddr, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        <&str>::deserialize(d)?.parse().map_err(D::Error::custom)
-    }
-}
-
-struct Peer {
+pub(super) struct Peer {
     id: PermitId,
     state: PeerState,
     source: PeerSource,

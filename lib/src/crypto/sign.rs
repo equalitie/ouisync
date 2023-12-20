@@ -62,6 +62,7 @@ impl TryFrom<&'_ [u8]> for Keypair {
 
 #[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
 #[repr(transparent)]
+#[serde(transparent)]
 pub struct PublicKey(ext::VerifyingKey);
 
 impl PublicKey {

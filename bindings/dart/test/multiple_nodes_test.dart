@@ -61,9 +61,10 @@ void main() {
     final expect = expectLater(
       session2.onPeersChange,
       emitsThrough(contains(isA<PeerInfo>()
-          .having((peer) => '${peer.ip}:${peer.port}', 'ip+port', equals(addr))
-          .having((peer) => peer.source, 'source', equals('UserProvided'))
-          .having((peer) => peer.state, 'state', equals('Active'))
+          .having((peer) => peer.addr, 'addr', equals(addr))
+          .having(
+              (peer) => peer.source, 'source', equals(PeerSource.userProvided))
+          .having((peer) => peer.state, 'state', equals(PeerStateKind.active))
           .having((peer) => peer.runtimeId, 'runtimeId', isNotNull))),
     );
 
