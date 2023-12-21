@@ -123,4 +123,23 @@ void main() {
       expect(utf8.decode(content), equals('hello world'));
     }
   });
+
+  test('user provided peers', () async {
+    expect(await session.userProvidedPeers, isEmpty);
+
+    final addr0 = 'quic/127.0.0.1:12345';
+    final addr1 = 'quic/127.0.0.2:54321';
+
+    await session.addUserProvidedPeer(addr0);
+    expect(await session.userProvidedPeers, equals([addr0]));
+
+    await session.addUserProvidedPeer(addr1);
+    expect(await session.userProvidedPeers, equals([addr0, addr1]));
+
+    await session.removeUserProvidedPeer(addr0);
+    expect(await session.userProvidedPeers, equals([addr1]));
+
+    await session.removeUserProvidedPeer(addr1);
+    expect(await session.userProvidedPeers, isEmpty);
+  });
 }

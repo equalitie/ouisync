@@ -121,6 +121,10 @@ class Session {
   Future<void> removeUserProvidedPeer(String addr) =>
       client.invoke<void>('network_remove_user_provided_peer', addr);
 
+  Future<List<String>> get userProvidedPeers => client
+      .invoke<List<Object?>>('network_user_provided_peers')
+      .then((list) => list.cast<String>());
+
   Future<String?> get tcpListenerLocalAddressV4 =>
       client.invoke<String?>('network_tcp_listener_local_addr_v4');
 

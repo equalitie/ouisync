@@ -149,6 +149,7 @@ pub(crate) enum Request {
     NetworkQuicListenerLocalAddrV6,
     NetworkAddUserProvidedPeer(#[serde(with = "as_str")] PeerAddr),
     NetworkRemoveUserProvidedPeer(#[serde(with = "as_str")] PeerAddr),
+    NetworkUserProvidedPeers,
     NetworkKnownPeers,
     NetworkThisRuntimeId,
     NetworkCurrentProtocolVersion,
@@ -178,7 +179,8 @@ pub(crate) enum Response {
     Directory(Directory),
     StateMonitor(StateMonitor),
     Progress(Progress),
-    PeerInfo(Vec<PeerInfo>),
+    PeerInfos(Vec<PeerInfo>),
+    PeerAddrs(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
 }
 
 impl<T> From<Option<T>> for Response
@@ -301,7 +303,7 @@ impl From<Progress> for Response {
 
 impl From<Vec<PeerInfo>> for Response {
     fn from(value: Vec<PeerInfo>) -> Self {
-        Self::PeerInfo(value)
+        Self::PeerInfos(value)
     }
 }
 
@@ -310,7 +312,24 @@ impl TryFrom<Response> for Vec<PeerInfo> {
 
     fn try_from(response: Response) -> Result<Self, Self::Error> {
         match response {
-            Response::PeerInfo(value) => Ok(value),
+            Response::PeerInfos(value) => Ok(value),
+            _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
+impl From<Vec<PeerAddr>> for Response {
+    fn from(value: Vec<PeerAddr>) -> Self {
+        Self::PeerAddrs(value)
+    }
+}
+
+impl TryFrom<Response> for Vec<PeerAddr> {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::PeerAddrs(value) => Ok(value),
             _ => Err(UnexpectedResponse),
         }
     }
@@ -330,7 +349,11 @@ impl fmt::Debug for Response {
             Self::Directory(_) => write!(f, "Directory(_)"),
             Self::StateMonitor(_) => write!(f, "StateMonitor(_)"),
             Self::Progress(value) => f.debug_tuple("Progress").field(value).finish(),
-            Self::PeerInfo(_) => write!(f, "PeerInfo(_)"),
+            Self::PeerInfos(value) => f
+                .debug_struct("PeerInfos")
+                .field("len", &value.len())
+                .finish(),
+            Self::PeerAddrs(value) => f.debug_tuple("PeerAddrs").field(value).finish(),
         }
     }
 }
@@ -390,6 +413,59 @@ pub mod as_option_str {
     }
 }
 
+pub mod as_vec_str {
+    use serde::{de, ser::SerializeSeq, Deserializer, Serializer};
+    use std::{fmt, marker::PhantomData, str::FromStr};
+
+    pub fn deserialize<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        struct Visitor<T>(PhantomData<T>);
+
+        impl<'de, T> de::Visitor<'de> for Visitor<T>
+        where
+            T: FromStr,
+            T::Err: fmt::Display,
+        {
+            type Value = Vec<T>;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "sequence of strings")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+
+                while let Some(item) = seq.next_element::<&str>()? {
+                    out.push(item.parse().map_err(<A::Error as de::Error>::custom)?);
+                }
+
+                Ok(out)
+            }
+        }
+
+        d.deserialize_seq(Visitor(PhantomData))
+    }
+
+    pub fn serialize<T, S>(value: &[T], s: S) -> Result<S::Ok, S::Error>
+    where
+        T: fmt::Display,
+        S: Serializer,
+    {
+        let mut s = s.serialize_seq(Some(value.len()))?;
+        for item in value {
+            s.serialize_element(&item.to_string())?;
+        }
+        s.end()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,7 +513,7 @@ mod tests {
             Response::U64(u64::MAX),
             Response::Bytes(b"hello world".to_vec()),
             Response::Handle(1),
-            Response::PeerInfo(vec![
+            Response::PeerInfos(vec![
                 PeerInfo {
                     addr: PeerAddr::Quic(([192, 168, 1, 204], 65535).into()),
                     source: PeerSource::LocalDiscovery,
@@ -451,6 +527,7 @@ mod tests {
                     state: PeerState::Active(SecretRuntimeId::random().public()),
                 },
             ]),
+            Response::PeerAddrs(vec![PeerAddr::Tcp(([192, 168, 1, 234], 45678).into())]),
         ];
 
         for orig in origs {

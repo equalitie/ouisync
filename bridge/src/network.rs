@@ -160,6 +160,11 @@ pub async fn remove_user_provided_peers(
     }
 }
 
+/// Gets all user provided peers
+pub async fn user_provided_peers(config: &ConfigStore) -> Vec<PeerAddr> {
+    config.entry(PEERS_KEY).get().await.unwrap_or_default()
+}
+
 /// Add a storage server. This adds it as a user provided peers so we can immediatelly connect to
 /// it and don't have to wait for it to be discovered (e.g. on the DHT).
 ///

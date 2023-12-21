@@ -292,6 +292,11 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await;
                 ().into()
             }
+            Request::NetworkUserProvidedPeers => {
+                ouisync_bridge::network::user_provided_peers(&self.state.config)
+                    .await
+                    .into()
+            }
             Request::NetworkKnownPeers => self.state.network.peer_info_collector().collect().into(),
             Request::NetworkThisRuntimeId => network::this_runtime_id(&self.state).into(),
             Request::NetworkCurrentProtocolVersion => {
