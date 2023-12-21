@@ -435,15 +435,17 @@ to decrypt the access secret which is then used to actually open the repository.
 
 ### Network protocol
 
+⚠️ **TODO** ⚠️: Talk about peer discovery and establishing connections (NAT traversal, ...)
+
 #### Connections
 
 In ouisync two replicas can be connected to each other using more than one physical connection. The
-reason for this is to support different transports  (e.g. TCP, QUIC,  and Bluetooth) or even
+reason for this is to support different transports  (e.g. TCP, QUIC, Bluetooth, ...) or even
 multiple instances of a single transport (e.g. two replicas that simultaneously connect to each
 other via TCP end up with two connections). All physical connections to a single peer are
 multiplexed into a single logical connection to avoid duplicating messages. This logical connection
-is then further demultiplexed into multiple logical channels, where each channel is used only for
-communication pertaining to a single repository.
+is then further demultiplexed into multiple virtual connections, where each such connection is used
+only for communication pertaining to a single repository.
 
 #### Initial handshake
 
@@ -466,14 +468,10 @@ least prevent eavesdropping.
 
 After the plain text connection between two replicas is established, each replica attempts to create
 a virtual connection per repository. Each of these connections is encrypted with a symmetric key
-derived from the blind token of the corresponding repository as such:
+computed by hashing the repository id together with the runtime ids of the two replicas.
 
-```
-psk = SHA3-256(secret_repository_id ++ "pre-shared-key")
-```
-
-The goal is that only the replicas that posses the secret repository id (the blind token) are
-allowed to share it because only they can decrypt such messages.
+The goal is that only the replicas that posses the repository id (the blind token) are allowed to
+share it because only they can decrypt such messages.
 
 Ouisync uses transport encryption and authentication in order to prevent eavesdropping and
 man-in-the-middle attacks.  This means that unless the man-in-the-middle attacker has the blind
@@ -493,36 +491,13 @@ messsage exchange even if the blind token is compromised in the future.
 The particular encryption used is the **Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s** protocol from
 the [Noise Protocol Framework](https://noiseprotocol.org/noise.html).
 
-#### Messages
-
-The actual communication involves exchanging messages which are encoded like this:
-
-```
-[ public repository id ][ content length ][ content  ]
-[ 20 bytes             ][ 2 bytes        ][ variable ]
-```
-
-"public repository id" is a hash of the repository id (will be explained later) and is used to
- assign the message to its logical channel. "content length" is big-endian encoded 16-bits unsigned
- integer and "content" is "content length" bytes long encrypted data (details explained later). The
- length being only 2 bytes means that maximum content length is 65536 bytes (64 kilobytes). This is
- enough for any message type because the largest message type is the one carrying a block and
- blocks are only 32 kB.
-
-The public repository id and the content length are currently transmitted as cleartext. The reason
-is that the repository id is needed to route the message to the correct message channel and the
-content length is needed to read the whole message from the network socket so it can be passed to
-the decryption function. One way to improve this would be to encrypt them with a separate
-encryption key which would be unique per physical connection or even logical connection. This is to
-be decided.
-
 ### Cryptographic primitives and implementations
 
 Ouisync uses the following cryptographic primitives:
 
 - **random number generator** : [`ThreadRng`](https://docs.rs/rand/latest/rand/rngs/struct.ThreadRng.html) from [rand](https://crates.io/crates/rand).
 - **hash**: BLAKE3 from [blake3](https://crates.io/crates/blake3)
-- **symmetric encryption**: ChaCha20Poly1305 for Encryption with AEAD from [chacha20poly1305](https://crates.io/crates/chacha20poly1305) and Cacha20 for Encryption without AEAD from [chacha20](https://crates.io/crates/chacha20)
+- **symmetric encryption**: ChaCha20Poly1305 for Encryption with AEAD from [chacha20poly1305](https://crates.io/crates/chacha20poly1305) and ChaCha20 for Encryption without AEAD from [chacha20](https://crates.io/crates/chacha20)
 - **digital signature**: EdDSA with SHA2-512 and Curve25519 from [ed25519-dalek](https://crates.io/crates/ed25519-dalek)
 - **encryption protocol**: Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s from the Noise Protocol Framework from [noise-protocol](https://crates.io/crates/noise-protocol) with [noise-rust-crypto](https://crates.io/crates/noise-rust-crypto)
 - **Password hash / KDF**: [**Argon2**](https://en.wikipedia.org/wiki/Argon2)
