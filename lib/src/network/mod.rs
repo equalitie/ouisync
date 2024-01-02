@@ -53,13 +53,13 @@ use self::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    deadlock::BlockingMutex,
     repository::{RepositoryHandle, RepositoryId, Vault},
     state_monitor::StateMonitor,
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
+use deadlock::BlockingMutex;
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use std::{

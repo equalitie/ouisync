@@ -1,8 +1,8 @@
 use crate::{
     collections::{HashMap, HashSet},
-    deadlock::BlockingMutex,
     protocol::BlockId,
 };
+use deadlock::BlockingMutex;
 use slab::Slab;
 use std::{collections::hash_map::Entry, sync::Arc};
 use tokio::sync::watch;

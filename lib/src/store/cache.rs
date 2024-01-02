@@ -1,9 +1,9 @@
 use crate::{
     collections::HashMap,
     crypto::{sign::PublicKey, Hash},
-    deadlock::BlockingMutex,
     protocol::{InnerNodes, LeafNodes, RootNode, Summary},
 };
+use deadlock::BlockingMutex;
 use lru::LruCache;
 use std::{num::NonZeroUsize, sync::Arc};
 

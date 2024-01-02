@@ -16,6 +16,7 @@ crate-type = ["staticlib", "cdylib"]
 async-trait = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true, features = ["serde1"] }
+deadlock = { path = "../deadlock" }
 futures-util = { workspace = true }
 hex = "0.4.3"
 num_enum = { workspace = true }

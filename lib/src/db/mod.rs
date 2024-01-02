@@ -16,7 +16,7 @@ use self::{
     mutex::{CommittedMutexTransaction, ConnectionMutex},
     transaction::TransactionWrapper,
 };
-use crate::deadlock::ExpectShortLifetime;
+use deadlock::ExpectShortLifetime;
 use ref_cast::RefCast;
 use sqlx::{
     sqlite::{

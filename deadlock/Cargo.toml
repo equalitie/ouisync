@@ -1,0 +1,13 @@
+[package]
+name = "deadlock"
+description = "Utilities for deadlock detection"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+once_cell = { workspace = true }
+tokio     = { workspace = true, features = ["sync"] }
+tracing   = { workspace = true }

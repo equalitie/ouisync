@@ -107,7 +107,7 @@ pub(crate) mod env {
 
             let (tx, rx) = oneshot::channel();
 
-            self.context.clocks.report(|report| {
+            self.context.metrics.report(|report| {
                 report_metrics(report);
                 tx.send(()).ok();
             });
@@ -227,7 +227,7 @@ pub(crate) mod actor {
             (
                 RepositoryParams::new(actor.repo_path(name))
                     .with_device_id(actor.device_id)
-                    .with_clocks(actor.context.clocks.clone()),
+                    .with_metrics(actor.context.metrics.clone()),
                 actor
                     .context
                     .repo_map
@@ -278,7 +278,7 @@ struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
-    clocks: Metrics,
+    metrics: Metrics,
 }
 
 impl Context {
@@ -289,7 +289,7 @@ impl Context {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
-            clocks: Metrics::new(),
+            metrics: Metrics::new(),
         }
     }
 }

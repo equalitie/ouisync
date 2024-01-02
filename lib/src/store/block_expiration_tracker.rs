@@ -10,11 +10,11 @@ use crate::{
     collections::{hash_map, HashMap, HashSet},
     crypto::sign::PublicKey,
     db,
-    deadlock::BlockingMutex,
     future::try_collect_into,
     protocol::{BlockId, SingleBlockPresence},
     sync::{broadcast_hash_set, uninitialized_watch},
 };
+use deadlock::BlockingMutex;
 use futures_util::{StreamExt, TryStreamExt};
 use scoped_task::{self, ScopedJoinHandle};
 use sqlx::Row;

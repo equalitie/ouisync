@@ -1,10 +1,10 @@
 use super::ip;
 use crate::{
     collections::{hash_map, HashMap},
-    deadlock::BlockingMutex,
     state_monitor::StateMonitor,
 };
 use chrono::{offset::Local, DateTime};
+use deadlock::BlockingMutex;
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
 use rupnp::{

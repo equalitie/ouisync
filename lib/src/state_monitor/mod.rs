@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests;
 
-use crate::deadlock::{BlockingMutex, BlockingMutexGuard};
+use deadlock::{BlockingMutex, BlockingMutexGuard};
 use indexmap::{map::Entry, IndexMap};
 use serde::{
     de::Error as _,

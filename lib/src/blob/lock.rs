@@ -4,9 +4,9 @@ use crate::{
     blob::BlobId,
     collections::{hash_map::Entry, HashMap},
     crypto::sign::PublicKey,
-    deadlock::BlockingMutex,
     sync::{AwaitDrop, DropAwaitable},
 };
+use deadlock::BlockingMutex;
 use std::sync::Arc;
 
 /// Container for blob locks in all branches.

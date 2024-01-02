@@ -8,7 +8,7 @@ pub struct RepositoryParams {
     store: Store,
     device_id: DeviceId,
     parent_monitor: StateMonitor,
-    clocks: Metrics,
+    metrics: Metrics,
 }
 
 impl RepositoryParams {
@@ -29,7 +29,7 @@ impl RepositoryParams {
             store,
             device_id: rand::random(),
             parent_monitor: StateMonitor::make_root(),
-            clocks: Metrics::new(),
+            metrics: Metrics::new(),
         }
     }
 
@@ -44,8 +44,8 @@ impl RepositoryParams {
         }
     }
 
-    pub fn with_clocks(self, clocks: Metrics) -> Self {
-        Self { clocks, ..self }
+    pub fn with_metrics(self, metrics: Metrics) -> Self {
+        Self { metrics, ..self }
     }
 
     pub(super) async fn create(&self) -> Result<db::Pool, db::Error> {
@@ -77,7 +77,7 @@ impl RepositoryParams {
 
         RepositoryMonitor::new(
             self.parent_monitor.clone(),
-            self.clocks.clone(),
+            self.metrics.clone(),
             name.as_ref(),
         )
     }

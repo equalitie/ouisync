@@ -34,6 +34,7 @@ camino = { workspace = true }
 chacha20 = "0.9.1"
 chrono = "0.4.31"
 crossbeam-channel = "0.5.8"
+deadlock = { path = "../deadlock" }
 ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
 either = { version = "1.6.1", default-features = false }
 futures-util = { workspace = true }

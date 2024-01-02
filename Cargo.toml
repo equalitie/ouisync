@@ -2,6 +2,7 @@
 members = [
     "bridge",
     "cli",
+    "deadlock",
     "ffi",
     "lib",
     "net",

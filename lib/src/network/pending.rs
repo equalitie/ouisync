@@ -6,11 +6,11 @@ use super::{
 use crate::{
     block_tracker::{BlockOffer, BlockPromise},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
-    deadlock::BlockingMutex,
     protocol::{Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, UntrustedProof},
     repository::RepositoryMonitor,
     sync::delay_map::DelayMap,
 };
+use deadlock::BlockingMutex;
 use std::{future, sync::Arc, task::ready};
 use std::{task::Poll, time::Instant};
 use tokio::{sync::OwnedSemaphorePermit, task};

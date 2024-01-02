@@ -3,9 +3,10 @@ use crate::{
     registry::{Handle, Registry},
     repository::RepositoryHolder,
 };
+use deadlock::BlockingMutex;
 use once_cell::sync::OnceCell;
 use ouisync_bridge::{config::ConfigStore, transport};
-use ouisync_lib::{deadlock::BlockingMutex, network::Network, StateMonitor};
+use ouisync_lib::{network::Network, StateMonitor};
 use ouisync_vfs::{MountError, MultiRepoMount, MultiRepoVFS};
 use scoped_task::ScopedJoinHandle;
 use std::{collections::BTreeSet, io, path::PathBuf, sync::Arc};

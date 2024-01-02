@@ -10,7 +10,7 @@ use std::{
 
 /// Attach this to objects that are expected to be short-lived to be warned when they live longer
 /// than expected.
-pub(crate) struct ExpectShortLifetime {
+pub struct ExpectShortLifetime {
     id: Id,
     start: Instant,
 }

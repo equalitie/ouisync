@@ -12,9 +12,9 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    deadlock::BlockingMutex,
     sync::uninitialized_watch,
 };
+use deadlock::BlockingMutex;
 use futures_util::stream;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use serde::{Deserialize, Serialize};

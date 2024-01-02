@@ -30,7 +30,6 @@ use crate::{
         sign::{self, PublicKey},
     },
     db::{self, DatabaseId},
-    deadlock::BlockingMutex,
     debug::DebugPrinter,
     device_id::DeviceId,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef, EntryType},
@@ -48,6 +47,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use camino::Utf8Path;
+use deadlock::BlockingMutex;
 use futures_util::{future, TryStreamExt};
 use futures_util::{stream, StreamExt};
 use scoped_task::ScopedJoinHandle;
