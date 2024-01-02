@@ -61,6 +61,7 @@ serde_millis = "0.1.1"
 slab = "0.4.6"
 sqlx = { version = "0.7.2", default-features = false, features = ["runtime-tokio", "sqlite"] }
 ssdp-client = "1.0"
+state_monitor = { path = "../state_monitor" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
@@ -90,7 +91,7 @@ comfy-table = { version = "6.2.0", default-features = false }
 criterion = { version = "0.4", features = ["html_reports"] }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = "1.0"
-serde_json = "1.0.94"
+serde_json = { workspace = true }
 serde_test = "1.0.176"
 similar-asserts = "1.5.0"
 tempfile = "3.2"

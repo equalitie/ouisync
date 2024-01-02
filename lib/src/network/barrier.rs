@@ -1,7 +1,7 @@
 use super::message_dispatcher::{
     ChannelClosed, ContentSinkTrait, ContentStreamError, ContentStreamTrait,
 };
-use crate::state_monitor::{MonitoredValue, StateMonitor};
+use state_monitor::{MonitoredValue, StateMonitor};
 use std::{fmt, mem::size_of};
 use tokio::time::{self, Duration};
 

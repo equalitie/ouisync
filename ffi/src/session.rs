@@ -7,7 +7,7 @@ use crate::{
     utils::{self, UniqueHandle},
 };
 use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
-use ouisync_lib::StateMonitor;
+use state_monitor::StateMonitor;
 use std::{ffi::c_char, io, path::PathBuf, ptr, str::Utf8Error, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{runtime, time};

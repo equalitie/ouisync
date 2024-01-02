@@ -54,7 +54,6 @@ use self::{
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
     repository::{RepositoryHandle, RepositoryId, Vault},
-    state_monitor::StateMonitor,
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -62,6 +61,7 @@ use btdht::{self, InfoHash, INFO_HASH_LEN};
 use deadlock::BlockingMutex;
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
+use state_monitor::StateMonitor;
 use std::{
     future::Future,
     io, mem,

@@ -1,10 +1,10 @@
 use crate::{
     collections::HashMap,
     metrics::{Metric, MetricName, Metrics, Report, ReportItem},
-    state_monitor::{MonitoredValue, StateMonitor},
 };
 use btdht::InfoHash;
 use scoped_task::ScopedJoinHandle;
+use state_monitor::{MonitoredValue, StateMonitor};
 use std::{
     fmt,
     future::Future,

@@ -8,7 +8,7 @@ use futures_util::future;
 use once_cell::sync::Lazy;
 use ouisync::{
     network::Network, Access, AccessMode, AccessSecrets, PeerAddr, Repository, RepositoryParams,
-    StateMonitor, DATA_VERSION, DIRECTORY_VERSION, SCHEMA_VERSION,
+    DATA_VERSION, DIRECTORY_VERSION, SCHEMA_VERSION,
 };
 use rand::{
     distributions::{Alphanumeric, DistString, Standard},
@@ -16,6 +16,7 @@ use rand::{
     rngs::StdRng,
     Rng, SeedableRng,
 };
+use state_monitor::StateMonitor;
 use std::{
     env,
     ffi::OsString,

@@ -1,9 +1,10 @@
 use camino::Utf8Path;
 use ouisync::{
     network::{Network, Registration},
-    Access, Event, Payload, PeerAddr, Repository, RepositoryParams, StateMonitor, WriteSecrets,
+    Access, Event, Payload, PeerAddr, Repository, RepositoryParams, WriteSecrets,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use state_monitor::StateMonitor;
 use std::{net::Ipv4Addr, ops::Deref, path::Path, time::Duration};
 use tokio::{
     runtime::Handle,

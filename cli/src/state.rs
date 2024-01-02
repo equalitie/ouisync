@@ -12,8 +12,9 @@ use ouisync_bridge::{
     network::{self, NetworkDefaults},
     transport,
 };
-use ouisync_lib::{network::Network, StateMonitor};
+use ouisync_lib::network::Network;
 use rustls::Certificate;
+use state_monitor::StateMonitor;
 use std::{
     io,
     path::{Path, PathBuf},

@@ -4,13 +4,13 @@ use super::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::collections::{HashMap, HashSet};
-use crate::state_monitor::StateMonitor;
 use deadlock::AsyncMutex;
 use net::udp::{UdpSocket, MULTICAST_ADDR, MULTICAST_PORT};
 use rand::rngs::OsRng;
 use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
+use state_monitor::StateMonitor;
 use std::{
     io,
     net::{Ipv4Addr, SocketAddr},

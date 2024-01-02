@@ -1,0 +1,18 @@
+[package]
+name = "state_monitor"
+description = "Utility for monitoring the state of the program"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+deadlock = { path = "../deadlock" }
+indexmap = "1.9.3"
+serde    = { workspace = true }
+tokio    = { workspace = true }
+tracing  = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

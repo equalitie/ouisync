@@ -40,7 +40,6 @@ use crate::{
     path,
     progress::Progress,
     protocol::{RootNodeFilter, BLOCK_SIZE},
-    state_monitor::StateMonitor,
     storage_size::StorageSize,
     store,
     sync::stream::Throttle,
@@ -51,6 +50,7 @@ use deadlock::BlockingMutex;
 use futures_util::{future, TryStreamExt};
 use futures_util::{stream, StreamExt};
 use scoped_task::ScopedJoinHandle;
+use state_monitor::StateMonitor;
 use std::{io, path::Path, pin::pin, sync::Arc};
 use tokio::{
     fs,

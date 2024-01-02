@@ -1,4 +1,5 @@
-use ouisync::{Repository, StateMonitor};
+use ouisync::Repository;
+use state_monitor::StateMonitor;
 use tokio::sync::watch;
 
 // Utility to wait for a network traffic to start/stop

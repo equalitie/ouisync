@@ -15,9 +15,9 @@ use super::{
 use crate::{
     collections::{hash_map::Entry, HashMap},
     repository::{LocalId, Vault},
-    state_monitor::StateMonitor,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use state_monitor::StateMonitor;
 use std::{future, sync::Arc};
 use tokio::{
     select,

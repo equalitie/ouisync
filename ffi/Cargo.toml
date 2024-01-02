@@ -28,6 +28,7 @@ rustls = { workspace = true }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
+state_monitor = { path = "../state_monitor" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

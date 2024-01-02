@@ -318,7 +318,7 @@ fn split_port(s: &str) -> Result<(&str, Option<u16>), ParseIntError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ouisync_lib::StateMonitor;
+    use state_monitor::StateMonitor;
     use std::{net::Ipv4Addr, time::Duration};
     use tempfile::TempDir;
     use tokio::time;

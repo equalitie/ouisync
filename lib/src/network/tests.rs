@@ -16,13 +16,13 @@ use crate::{
         Block, BlockId, Bump, RootNode, SingleBlockPresence,
     },
     repository::{BlockRequestMode, RepositoryId, RepositoryMonitor, Vault},
-    state_monitor::StateMonitor,
     store::Changeset,
     test_utils,
     version_vector::VersionVector,
 };
 use futures_util::{future, TryStreamExt};
 use rand::prelude::*;
+use state_monitor::StateMonitor;
 use std::{fmt, future::Future, sync::Arc};
 use tempfile::TempDir;
 use test_strategy::proptest;

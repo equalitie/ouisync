@@ -6,7 +6,7 @@ use crate::{
     transport::{local::LocalClient, native::NativeClient},
 };
 use anyhow::Result;
-use ouisync_lib::StateMonitor;
+use state_monitor::StateMonitor;
 use std::{
     io,
     path::{Path, PathBuf},

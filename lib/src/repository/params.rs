@@ -1,7 +1,6 @@
 use super::RepositoryMonitor;
-use crate::{
-    db, device_id::DeviceId, error::Result, metrics::Metrics, state_monitor::StateMonitor,
-};
+use crate::{db, device_id::DeviceId, error::Result, metrics::Metrics};
+use state_monitor::StateMonitor;
 use std::path::{Path, PathBuf};
 
 pub struct RepositoryParams {

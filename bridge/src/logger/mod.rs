@@ -6,8 +6,8 @@ mod default;
 
 mod common;
 
-use ouisync_lib::StateMonitor;
 use serde::{Deserialize, Serialize};
+use state_monitor::StateMonitor;
 use std::{
     fmt, fs, io,
     panic::{self, PanicInfo},

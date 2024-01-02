@@ -7,8 +7,9 @@ use crate::{
 use futures_util::future;
 use ouisync_lib::{
     crypto::Password, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository,
-    RepositoryParams, ShareToken, StateMonitor, StorageSize,
+    RepositoryParams, ShareToken, StorageSize,
 };
+use state_monitor::StateMonitor;
 use std::{borrow::Cow, io, path::PathBuf, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio_rustls::rustls;

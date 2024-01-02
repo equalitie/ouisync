@@ -17,7 +17,6 @@ use crate::{
         Block, BlockContent, BlockId, Locator, MultiBlockPresence, NodeState, Proof,
         RootNodeFilter, SingleBlockPresence, EMPTY_INNER_HASH,
     },
-    state_monitor::StateMonitor,
     store::{self, Changeset, ReadTransaction},
     test_utils,
     version_vector::VersionVector,
@@ -25,6 +24,7 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt, TryStreamExt};
 use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use state_monitor::StateMonitor;
 use tempfile::TempDir;
 use test_strategy::proptest;
 
