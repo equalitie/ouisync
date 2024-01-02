@@ -26,8 +26,8 @@ hyper = { version = "0.14.27", features = ["server", "http1", "http2"] }
 hyper-rustls = { version = "0.24.1", default-features = false, features = ["acceptor"] }
 interprocess = { version = "1.2.1", features = ["tokio_support"] }
 maxminddb = "0.23.0"
-metrics = "0.21.1"
-metrics-exporter-prometheus = { version = "0.12.1", default-features = false }
+metrics = "0.22.0"
+metrics-exporter-prometheus = { version = "0.13.0", default-features = false }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }
