@@ -1,3 +1,4 @@
+pub mod metrics;
 #[cfg(test)]
 mod tests;
 
@@ -257,22 +258,24 @@ impl StateMonitor {
         }
     }
 
-    /// Gets current snapshot of the given value. Returns `None` if the value doesn't exists or is
-    /// not of type `T`.
-    pub fn get_value<T>(&self, name: &str) -> Option<T>
+    /// Gets current snapshot of the given value.
+    pub fn get_value<T>(&self, name: &str) -> Result<T, ValueError>
     where
         T: Any + Clone,
     {
-        self.shared
+        Ok(self
+            .shared
             .lock_inner()
             .values
-            .get(name)?
+            .get(name)
+            .ok_or(ValueError::NotFound)?
             .ptr
             .lock()
             .unwrap()
             .as_any()
-            .downcast_ref()
-            .cloned()
+            .downcast_ref::<T>()
+            .ok_or(ValueError::WrongType)?
+            .clone())
     }
 
     /// Get notified whenever there is a change in this StateMonitor
@@ -503,6 +506,23 @@ where
         self
     }
 }
+
+#[derive(Eq, PartialEq, Debug)]
+pub enum ValueError {
+    NotFound,
+    WrongType,
+}
+
+impl fmt::Display for ValueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "value not found"),
+            Self::WrongType => write!(f, "value has wrong type"),
+        }
+    }
+}
+
+impl std::error::Error for ValueError {}
 
 // --- Serialization
 
