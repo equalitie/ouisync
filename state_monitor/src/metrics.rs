@@ -107,7 +107,7 @@ async fn run(parent_node: StateMonitor, mut rx: mpsc::UnboundedReceiver<Op>) {
             Op::CreateCounter(handle, key) => {
                 counters.entry(handle).or_insert_with(|| {
                     let unit = descriptions.get(key.name()).copied();
-                    make_value_recursive(&parent_node, key.name(), Formatted(0, unit))
+                    make_value_recursive(&parent_node, key.name(), Formatted(0u64, unit))
                 });
             }
             Op::DeleteCounter(handle) => {
@@ -331,10 +331,10 @@ impl<T> DerefMut for Formatted<T> {
 
 impl<T> fmt::Debug for Formatted<T>
 where
-    T: fmt::Display,
+    T: Human,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)?;
+        Human::fmt(&self.0, f)?;
 
         match self.1 {
             Some(Unit::Count) | None => Ok(()),
@@ -354,6 +354,41 @@ where
             Some(Unit::GigabitsPerSecond) => write!(f, " Gbit/s"),
             Some(Unit::TerabitsPerSecond) => write!(f, " Tbit/s"),
             Some(Unit::CountPerSecond) => write!(f, "/s"),
+        }
+    }
+}
+
+/// Formats numbers oprimized for human consumption.
+trait Human {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result;
+}
+
+impl Human for u64 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl Human for f64 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let (sign, abs) = if *self < 0.0 {
+            ("-", -*self)
+        } else {
+            ("", *self)
+        };
+
+        if abs < 0.0001 {
+            write!(f, "0")
+        } else if abs < 0.1 {
+            write!(f, "{}{:.4}", sign, abs)
+        } else if abs < 1.0 {
+            write!(f, "{}{:.3}", sign, abs)
+        } else if abs < 10.0 {
+            write!(f, "{}{:.2}", sign, abs)
+        } else if abs < 100.0 {
+            write!(f, "{}{:.1}", sign, abs)
+        } else {
+            write!(f, "{}{:.0}", sign, abs)
         }
     }
 }
