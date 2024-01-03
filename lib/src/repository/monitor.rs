@@ -45,8 +45,14 @@ pub(crate) struct RepositoryMonitor {
 }
 
 impl RepositoryMonitor {
-    pub fn new(node: StateMonitor, recorder: &impl Recorder) -> Self {
-        let span = tracing::info_span!("repo", message = node.id().name());
+    pub fn new<R>(node: StateMonitor, recorder: &R) -> Self
+    where
+        R: Recorder + ?Sized,
+    {
+        let span = tracing::info_span!("repo", repo = node.id().name());
+
+        // to expose the repo name as metrics label (via metrics-tracing-context)
+        let span_enter = span.enter();
 
         let index_requests_inflight = node.make_value("index requests inflight", 0);
         let block_requests_inflight = node.make_value("block requests inflight", 0);
@@ -69,6 +75,8 @@ impl RepositoryMonitor {
         let merge_job = JobMonitor::new(&node, recorder, "merge");
         let prune_job = JobMonitor::new(&node, recorder, "prune");
         let trash_job = JobMonitor::new(&node, recorder, "trash");
+
+        drop(span_enter);
 
         Self {
             index_requests_inflight,
@@ -118,7 +126,10 @@ pub(crate) struct TaskMetrics {
 }
 
 impl TaskMetrics {
-    fn new(recorder: &impl Recorder, name: &str) -> Self {
+    fn new<R>(recorder: &R, name: &str) -> Self
+    where
+        R: Recorder + ?Sized,
+    {
         let meta = Metadata::new(module_path!(), Level::INFO, None);
 
         let key_name = KeyName::from(format!("{name}/time/last"));
@@ -164,7 +175,10 @@ pub(crate) struct JobMonitor {
 }
 
 impl JobMonitor {
-    fn new(parent_node: &StateMonitor, recorder: &impl Recorder, name: &str) -> Self {
+    fn new<R>(parent_node: &StateMonitor, recorder: &R, name: &str) -> Self
+    where
+        R: Recorder + ?Sized,
+    {
         let value = parent_node.make_value(format!("{name} state"), JobState::Idle);
         let metrics = TaskMetrics::new(recorder, name);
 

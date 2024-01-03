@@ -3,13 +3,20 @@
 #[macro_use]
 mod macros;
 
+mod arc_recorder;
 pub(crate) mod dump;
 pub(crate) mod sync_watch;
 pub(crate) mod traffic_monitor;
 mod wait_map;
 
+pub(crate) use self::env::*;
+
+use self::{arc_recorder::ArcRecorder, wait_map::WaitMap};
 use camino::Utf8Path;
-use comfy_table::{presets, CellAlignment, Table};
+use metrics::{NoopRecorder, Recorder};
+use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_tracing_context::{MetricsLayer, TracingContextLayer};
+use metrics_util::layers::Stack;
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
@@ -17,7 +24,9 @@ use ouisync::{
     Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
     Result, StoreError,
 };
+use ouisync_tracing_fmt::Formatter;
 use rand::Rng;
+use state_monitor::StateMonitor;
 use std::{
     fmt,
     future::Future,
@@ -27,14 +36,16 @@ use std::{
     thread,
 };
 use tokio::{
+    runtime::Handle,
     sync::broadcast::{self, error::RecvError},
     task_local,
     time::{self, Duration},
 };
+use tracing::metadata::LevelFilter;
 use tracing::{instrument, Instrument, Span};
-
-pub(crate) use self::env::*;
-use self::wait_map::WaitMap;
+use tracing_subscriber::{
+    fmt::time::SystemTime, layer::SubscriberExt, util::SubscriberInitExt, Layer,
+};
 
 pub(crate) const DEFAULT_REPO: &str = "default";
 
@@ -50,6 +61,9 @@ pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
 });
 
 pub(crate) static TEST_TIMEOUT: Lazy<Duration> = Lazy::new(|| 4 * *EVENT_TIMEOUT);
+
+static PROMETHEUS_PUSH_GATEWAY_ENDPOINT: Lazy<Option<String>> =
+    Lazy::new(|| std::env::var("PROMETHEUS_PUSH_GATEWAY_ENDPOINT").ok());
 
 #[cfg(not(feature = "simulation"))]
 pub(crate) mod env {
@@ -70,12 +84,12 @@ pub(crate) mod env {
 
     impl Env {
         pub fn new() -> Self {
-            let context = Context::new();
-
             let runtime = runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .unwrap();
+
+            let context = Context::new(runtime.handle());
 
             Self {
                 context: Arc::new(context),
@@ -89,7 +103,7 @@ pub(crate) mod env {
             Fut: Future<Output = ()> + Send + 'static,
         {
             let actor = Actor::new(name.to_owned(), self.context.clone());
-            let span = info_span!("actor", message = name);
+            let span = info_span!("actor", actor = name);
 
             let f = ACTOR.scope(actor, f);
             let f = f.instrument(span);
@@ -119,7 +133,7 @@ pub(crate) mod env {
 
     impl<'a> Env<'a> {
         pub fn new() -> Self {
-            let context = Context::new();
+            let context = Context::new(&Handle::current());
             let runner = turmoil::Builder::new()
                 .simulation_duration(Duration::from_secs(90))
                 .build_with_rng(Box::new(rand::thread_rng()));
@@ -211,10 +225,15 @@ pub(crate) mod actor {
         }
     }
 
-    pub(crate) fn get_repo_params_and_secrets(name: &str) -> (RepositoryParams, AccessSecrets) {
+    pub(crate) fn get_repo_params_and_secrets(
+        name: &str,
+    ) -> (RepositoryParams<ArcRecorder>, AccessSecrets) {
         ACTOR.with(|actor| {
             (
-                RepositoryParams::new(actor.repo_path(name)).with_device_id(actor.device_id),
+                RepositoryParams::new(actor.repo_path(name))
+                    .with_device_id(actor.device_id)
+                    .with_recorder(actor.context.recorder.clone())
+                    .with_parent_monitor(actor.monitor.clone()),
                 actor
                     .context
                     .repo_map
@@ -265,16 +284,26 @@ struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
+    recorder: ArcRecorder,
+    monitor: StateMonitor,
 }
 
 impl Context {
-    fn new() -> Self {
+    fn new(runtime: &Handle) -> Self {
         init_log();
+
+        let recorder = if let Some(endpoint) = PROMETHEUS_PUSH_GATEWAY_ENDPOINT.as_ref() {
+            ArcRecorder::new(init_prometheus_recorder(runtime, endpoint))
+        } else {
+            ArcRecorder::new(NoopRecorder)
+        };
 
         Self {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
+            recorder,
+            monitor: StateMonitor::make_root(),
         }
     }
 }
@@ -284,17 +313,20 @@ struct Actor {
     context: Arc<Context>,
     base_dir: PathBuf,
     device_id: DeviceId,
+    monitor: StateMonitor,
 }
 
 impl Actor {
     fn new(name: String, context: Arc<Context>) -> Self {
         let base_dir = context.base_dir.path().join(&name);
+        let monitor = context.monitor.make_child(&name);
 
         Actor {
             name,
             context,
             base_dir,
             device_id: rand::random(),
+            monitor,
         }
     }
 
@@ -615,23 +647,42 @@ fn to_megabytes(bytes: usize) -> usize {
 }
 
 pub(crate) fn init_log() {
-    use ouisync_tracing_fmt::Formatter;
-    use tracing::metadata::LevelFilter;
-    use tracing_subscriber::fmt::time::SystemTime;
-
-    let result = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::builder()
-                // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
-                .with_default_directive(LevelFilter::OFF.into())
-                .from_env_lossy(),
-        )
+    // Log to stdout
+    let stdout_layer = tracing_subscriber::fmt::layer()
         .event_format(Formatter::<SystemTime>::default())
         // log output is captured by default and only shown on failure. Run tests with
         // `--nocapture` to override.
         .with_test_writer()
-        .try_init();
+        .with_filter(
+            tracing_subscriber::EnvFilter::builder()
+                // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
+                .with_default_directive(LevelFilter::OFF.into())
+                .from_env_lossy(),
+        );
 
-    // error here most likely means the logger is already initialized. We can ignore that.
-    result.ok();
+    // Use spans as metrics labels
+    let metrics_layer = if PROMETHEUS_PUSH_GATEWAY_ENDPOINT.is_some() {
+        Some(MetricsLayer::new())
+    } else {
+        None
+    };
+
+    tracing_subscriber::registry()
+        .with(stdout_layer)
+        .with(metrics_layer)
+        .try_init()
+        // `Err` here just means the logger is already initialized, it's OK to ignore it.
+        .unwrap_or(());
+}
+
+fn init_prometheus_recorder(runtime: &Handle, endpoint: &str) -> impl Recorder {
+    let (recorder, exporter) = PrometheusBuilder::new()
+        .with_push_gateway(endpoint, Duration::from_millis(1000), None, None)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    runtime.spawn(exporter);
+
+    Stack::new(recorder).push(TracingContextLayer::all())
 }

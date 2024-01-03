@@ -85,8 +85,10 @@ network-interface = "0.1.3"
 
 [dev-dependencies]
 assert_matches = "1.5"
-comfy-table = { version = "6.2.0", default-features = false }
 criterion = { version = "0.4", features = ["html_reports"] }
+metrics-exporter-prometheus = { workspace = true, features = ["push-gateway"] }
+metrics-tracing-context = "0.15.0"
+metrics-util = { workspace = true }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = "1.0"
 serde_json = { workspace = true }

@@ -1,40 +1,20 @@
 use super::RepositoryMonitor;
 use crate::{db, device_id::DeviceId, error::Result};
+use metrics::{NoopRecorder, Recorder};
 use state_monitor::{metrics::MetricsRecorder, StateMonitor};
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
 };
 
-pub struct RepositoryParams {
+pub struct RepositoryParams<R> {
     store: Store,
     device_id: DeviceId,
     parent_monitor: Option<StateMonitor>,
-    recorder: Option<MetricsRecorder>,
+    recorder: Option<R>,
 }
 
-impl RepositoryParams {
-    pub fn new(path: impl AsRef<Path>) -> Self {
-        Self::with_store(Store::Path(path.as_ref().to_path_buf()))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_pool(pool: db::Pool, name: &str) -> Self {
-        Self::with_store(Store::Pool {
-            pool,
-            name: name.to_owned(),
-        })
-    }
-
-    fn with_store(store: Store) -> Self {
-        Self {
-            store,
-            device_id: rand::random(),
-            parent_monitor: None,
-            recorder: None,
-        }
-    }
-
+impl<R> RepositoryParams<R> {
     pub fn with_device_id(self, device_id: DeviceId) -> Self {
         Self { device_id, ..self }
     }
@@ -46,10 +26,12 @@ impl RepositoryParams {
         }
     }
 
-    pub fn with_recorder(self, recorder: MetricsRecorder) -> Self {
-        Self {
+    pub fn with_recorder<S>(self, recorder: S) -> RepositoryParams<S> {
+        RepositoryParams {
+            store: self.store,
+            device_id: self.device_id,
+            parent_monitor: self.parent_monitor,
             recorder: Some(recorder),
-            ..self
         }
     }
 
@@ -72,7 +54,12 @@ impl RepositoryParams {
     pub(super) fn device_id(&self) -> DeviceId {
         self.device_id
     }
+}
 
+impl<R> RepositoryParams<R>
+where
+    R: Recorder,
+{
     pub(super) fn monitor(&self) -> RepositoryMonitor {
         let name = self.store.name();
 
@@ -82,13 +69,34 @@ impl RepositoryParams {
             StateMonitor::make_root()
         };
 
-        let recorder = if let Some(recorder) = &self.recorder {
-            Cow::Borrowed(recorder)
+        if let Some(recorder) = &self.recorder {
+            RepositoryMonitor::new(monitor, recorder)
         } else {
-            Cow::Owned(MetricsRecorder::new(monitor.clone()))
-        };
+            RepositoryMonitor::new(monitor.clone(), &MetricsRecorder::new(monitor))
+        }
+    }
+}
 
-        RepositoryMonitor::new(monitor, recorder.as_ref())
+impl RepositoryParams<NoopRecorder> {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self::with_store(Store::Path(path.as_ref().to_path_buf()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_pool(pool: db::Pool, name: &str) -> Self {
+        Self::with_store(Store::Pool {
+            pool,
+            name: name.to_owned(),
+        })
+    }
+
+    fn with_store(store: Store) -> Self {
+        Self {
+            store,
+            device_id: rand::random(),
+            parent_monitor: None,
+            recorder: None,
+        }
     }
 }
 

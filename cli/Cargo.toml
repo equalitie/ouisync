@@ -27,7 +27,7 @@ hyper-rustls = { version = "0.24.1", default-features = false, features = ["acce
 interprocess = { version = "1.2.1", features = ["tokio_support"] }
 maxminddb = "0.23.0"
 metrics = { workspace = true }
-metrics-exporter-prometheus = { version = "0.13.0", default-features = false }
+metrics-exporter-prometheus = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }
