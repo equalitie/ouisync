@@ -8,7 +8,6 @@
 mod macros;
 
 pub mod crypto;
-pub mod metrics;
 pub mod network;
 pub mod path;
 

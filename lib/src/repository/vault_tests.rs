@@ -10,7 +10,6 @@ use crate::{
     db,
     error::Error,
     event::EventSender,
-    metrics::Metrics,
     progress::Progress,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
@@ -23,6 +22,7 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt, TryStreamExt};
+use metrics::NoopRecorder;
 use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use state_monitor::StateMonitor;
 use tempfile::TempDir;
@@ -1175,7 +1175,7 @@ async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Vault, WriteSecrets) {
         EventSender::new(1),
         pool,
         BlockRequestMode::Lazy,
-        RepositoryMonitor::new(StateMonitor::make_root(), Metrics::new(), "test"),
+        RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
     );
 
     (base_dir, vault, secrets)

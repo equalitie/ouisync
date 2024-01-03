@@ -10,7 +10,6 @@ use crate::{
     crypto::sign::{Keypair, PublicKey},
     db,
     event::{Event, EventSender, Payload},
-    metrics::Metrics,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
         Block, BlockId, Bump, RootNode, SingleBlockPresence,
@@ -21,6 +20,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{future, TryStreamExt};
+use metrics::NoopRecorder;
 use rand::prelude::*;
 use state_monitor::StateMonitor;
 use std::{fmt, future::Future, sync::Arc};
@@ -406,7 +406,7 @@ async fn create_repository<R: Rng + CryptoRng>(
         event_tx,
         db,
         BlockRequestMode::Greedy,
-        RepositoryMonitor::new(StateMonitor::make_root(), Metrics::new(), "test"),
+        RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
     );
 
     let choke_manager = choke::Manager::new();

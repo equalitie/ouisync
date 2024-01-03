@@ -1,13 +1,16 @@
 use super::RepositoryMonitor;
-use crate::{db, device_id::DeviceId, error::Result, metrics::Metrics};
-use state_monitor::StateMonitor;
-use std::path::{Path, PathBuf};
+use crate::{db, device_id::DeviceId, error::Result};
+use state_monitor::{metrics::MetricsRecorder, StateMonitor};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 pub struct RepositoryParams {
     store: Store,
     device_id: DeviceId,
-    parent_monitor: StateMonitor,
-    metrics: Metrics,
+    parent_monitor: Option<StateMonitor>,
+    recorder: Option<MetricsRecorder>,
 }
 
 impl RepositoryParams {
@@ -27,8 +30,8 @@ impl RepositoryParams {
         Self {
             store,
             device_id: rand::random(),
-            parent_monitor: StateMonitor::make_root(),
-            metrics: Metrics::new(),
+            parent_monitor: None,
+            recorder: None,
         }
     }
 
@@ -38,13 +41,16 @@ impl RepositoryParams {
 
     pub fn with_parent_monitor(self, parent_monitor: StateMonitor) -> Self {
         Self {
-            parent_monitor,
+            parent_monitor: Some(parent_monitor),
             ..self
         }
     }
 
-    pub fn with_metrics(self, metrics: Metrics) -> Self {
-        Self { metrics, ..self }
+    pub fn with_recorder(self, recorder: MetricsRecorder) -> Self {
+        Self {
+            recorder: Some(recorder),
+            ..self
+        }
     }
 
     pub(super) async fn create(&self) -> Result<db::Pool, db::Error> {
@@ -68,17 +74,21 @@ impl RepositoryParams {
     }
 
     pub(super) fn monitor(&self) -> RepositoryMonitor {
-        let name = match &self.store {
-            Store::Path(path) => path.as_os_str().to_string_lossy(),
-            #[cfg(test)]
-            Store::Pool { name, .. } => name.into(),
+        let name = self.store.name();
+
+        let monitor = if let Some(parent_monitor) = &self.parent_monitor {
+            parent_monitor.make_child(name)
+        } else {
+            StateMonitor::make_root()
         };
 
-        RepositoryMonitor::new(
-            self.parent_monitor.clone(),
-            self.metrics.clone(),
-            name.as_ref(),
-        )
+        let recorder = if let Some(recorder) = &self.recorder {
+            Cow::Borrowed(recorder)
+        } else {
+            Cow::Owned(MetricsRecorder::new(monitor.clone()))
+        };
+
+        RepositoryMonitor::new(monitor, recorder.as_ref())
     }
 }
 
@@ -89,4 +99,14 @@ enum Store {
         pool: db::Pool,
         name: String,
     },
+}
+
+impl Store {
+    fn name(&self) -> Cow<'_, str> {
+        match self {
+            Self::Path(path) => path.as_os_str().to_string_lossy(),
+            #[cfg(test)]
+            Self::Pool { name, .. } => name.into(),
+        }
+    }
 }

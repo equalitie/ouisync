@@ -13,7 +13,6 @@ use comfy_table::{presets, CellAlignment, Table};
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
-    metrics::{self, Metrics},
     network::{Network, Registration},
     Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
     Result, StoreError,
@@ -101,20 +100,9 @@ pub(crate) mod env {
 
     impl Drop for Env {
         fn drop(&mut self) {
-            let result = self
-                .runtime
-                .block_on(future::try_join_all(self.tasks.drain(..)));
-
-            let (tx, rx) = oneshot::channel();
-
-            self.context.metrics.report(|report| {
-                report_metrics(report);
-                tx.send(()).ok();
-            });
-
-            rx.blocking_recv().ok();
-
-            result.unwrap();
+            self.runtime
+                .block_on(future::try_join_all(self.tasks.drain(..)))
+                .unwrap();
         }
     }
 }
@@ -226,9 +214,7 @@ pub(crate) mod actor {
     pub(crate) fn get_repo_params_and_secrets(name: &str) -> (RepositoryParams, AccessSecrets) {
         ACTOR.with(|actor| {
             (
-                RepositoryParams::new(actor.repo_path(name))
-                    .with_device_id(actor.device_id)
-                    .with_metrics(actor.context.metrics.clone()),
+                RepositoryParams::new(actor.repo_path(name)).with_device_id(actor.device_id),
                 actor
                     .context
                     .repo_map
@@ -279,7 +265,6 @@ struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
-    metrics: Metrics,
 }
 
 impl Context {
@@ -290,7 +275,6 @@ impl Context {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
-            metrics: Metrics::new(),
         }
     }
 }
@@ -650,64 +634,4 @@ pub(crate) fn init_log() {
 
     // error here most likely means the logger is already initialized. We can ignore that.
     result.ok();
-}
-
-fn report_metrics(report: &metrics::Report) {
-    let mut table = Table::new();
-    table.load_preset(presets::UTF8_FULL_CONDENSED);
-    table.set_header(vec![
-        "name", "count", "min", "max", "mean", "stdev", "50%", "90%", "99%", "99.9%",
-    ]);
-
-    for column in table.column_iter_mut().skip(1) {
-        column.set_cell_alignment(CellAlignment::Right);
-    }
-
-    for item in report.items() {
-        let v = item.time;
-
-        table.add_row(vec![
-            format!("{}", item.name),
-            format!("{}", v.count()),
-            format!("{:.4}", v.min().as_secs_f64()),
-            format!("{:.4}", v.max().as_secs_f64()),
-            format!("{:.4}", v.mean().as_secs_f64()),
-            format!("{:.4}", v.stdev().as_secs_f64()),
-            format!("{:.4}", v.value_at_quantile(0.5).as_secs_f64()),
-            format!("{:.4}", v.value_at_quantile(0.9).as_secs_f64()),
-            format!("{:.4}", v.value_at_quantile(0.99).as_secs_f64()),
-            format!("{:.4}", v.value_at_quantile(0.999).as_secs_f64()),
-        ]);
-    }
-
-    println!("Time (s)\n{table}");
-
-    let mut table = Table::new();
-    table.load_preset(presets::UTF8_FULL_CONDENSED);
-    table.set_header(vec![
-        "name", "count", "min", "max", "mean", "stdev", "50%", "90%", "99%", "99.9%",
-    ]);
-
-    for column in table.column_iter_mut().skip(1) {
-        column.set_cell_alignment(CellAlignment::Right);
-    }
-
-    for item in report.items() {
-        let v = item.throughput;
-
-        table.add_row(vec![
-            format!("{}", item.name),
-            format!("{}", v.count()),
-            format!("{:.1}", v.min()),
-            format!("{:.1}", v.max()),
-            format!("{:.1}", v.mean()),
-            format!("{:.1}", v.stdev()),
-            format!("{:.1}", v.value_at_quantile(0.5)),
-            format!("{:.1}", v.value_at_quantile(0.9)),
-            format!("{:.1}", v.value_at_quantile(0.99)),
-            format!("{:.1}", v.value_at_quantile(0.999)),
-        ]);
-    }
-
-    println!("Throughput (hits/s)\n{table}");
 }
