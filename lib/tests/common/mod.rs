@@ -3,20 +3,21 @@
 #[macro_use]
 mod macros;
 
-mod arc_recorder;
 pub(crate) mod dump;
+mod recorder;
 pub(crate) mod sync_watch;
 pub(crate) mod traffic_monitor;
 mod wait_map;
 
 pub(crate) use self::env::*;
 
-use self::{arc_recorder::ArcRecorder, wait_map::WaitMap};
+use self::{
+    recorder::{AddLabels, ArcRecorder},
+    wait_map::WaitMap,
+};
 use camino::Utf8Path;
-use metrics::{NoopRecorder, Recorder};
+use metrics::{Label, NoopRecorder, Recorder};
 use metrics_exporter_prometheus::PrometheusBuilder;
-use metrics_tracing_context::{MetricsLayer, TracingContextLayer};
-use metrics_util::layers::Stack;
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
@@ -103,7 +104,7 @@ pub(crate) mod env {
             Fut: Future<Output = ()> + Send + 'static,
         {
             let actor = Actor::new(name.to_owned(), self.context.clone());
-            let span = info_span!("actor", actor = name);
+            let span = info_span!("actor", message = name);
 
             let f = ACTOR.scope(actor, f);
             let f = f.instrument(span);
@@ -227,18 +228,24 @@ pub(crate) mod actor {
 
     pub(crate) fn get_repo_params_and_secrets(
         name: &str,
-    ) -> (RepositoryParams<ArcRecorder>, AccessSecrets) {
+    ) -> (RepositoryParams<AddLabels<ArcRecorder>>, AccessSecrets) {
         ACTOR.with(|actor| {
-            (
-                RepositoryParams::new(actor.repo_path(name))
-                    .with_device_id(actor.device_id)
-                    .with_recorder(actor.context.recorder.clone())
-                    .with_parent_monitor(actor.monitor.clone()),
-                actor
-                    .context
-                    .repo_map
-                    .get_or_insert_with(name.to_owned(), AccessSecrets::random_write),
-            )
+            let recorder = AddLabels::new(
+                vec![Label::new("actor", actor.name.clone())],
+                actor.context.recorder.clone(),
+            );
+
+            let params = RepositoryParams::new(actor.repo_path(name))
+                .with_device_id(actor.device_id)
+                .with_recorder(recorder)
+                .with_parent_monitor(actor.monitor.clone());
+
+            let secrets = actor
+                .context
+                .repo_map
+                .get_or_insert_with(name.to_owned(), AccessSecrets::random_write);
+
+            (params, secrets)
         })
     }
 
@@ -660,16 +667,8 @@ pub(crate) fn init_log() {
                 .from_env_lossy(),
         );
 
-    // Use spans as metrics labels
-    let metrics_layer = if PROMETHEUS_PUSH_GATEWAY_ENDPOINT.is_some() {
-        Some(MetricsLayer::new())
-    } else {
-        None
-    };
-
     tracing_subscriber::registry()
         .with(stdout_layer)
-        .with(metrics_layer)
         .try_init()
         // `Err` here just means the logger is already initialized, it's OK to ignore it.
         .unwrap_or(());
@@ -684,5 +683,5 @@ fn init_prometheus_recorder(runtime: &Handle, endpoint: &str) -> impl Recorder {
 
     runtime.spawn(exporter);
 
-    Stack::new(recorder).push(TracingContextLayer::all())
+    recorder
 }
