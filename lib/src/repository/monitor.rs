@@ -49,10 +49,7 @@ impl RepositoryMonitor {
     where
         R: Recorder + ?Sized,
     {
-        let span = tracing::info_span!("repo", repo = node.id().name());
-
-        // to expose the repo name as metrics label (via metrics-tracing-context)
-        let span_enter = span.enter();
+        let span = tracing::info_span!("repo", message = node.id().name());
 
         let index_requests_inflight = node.make_value("index requests inflight", 0);
         let block_requests_inflight = node.make_value("block requests inflight", 0);
@@ -75,8 +72,6 @@ impl RepositoryMonitor {
         let merge_job = JobMonitor::new(&node, recorder, "merge");
         let prune_job = JobMonitor::new(&node, recorder, "prune");
         let trash_job = JobMonitor::new(&node, recorder, "trash");
-
-        drop(span_enter);
 
         Self {
             index_requests_inflight,
