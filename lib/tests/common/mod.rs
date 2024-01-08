@@ -12,12 +12,13 @@ mod wait_map;
 pub(crate) use self::env::*;
 
 use self::{
-    recorder::{AddLabels, ArcRecorder},
+    recorder::{AddLabels, ArcRecorder, MetricsSubscriber, PairRecorder, WatchRecorder},
     wait_map::WaitMap,
 };
 use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_util::layers::{Fanout, FanoutBuilder};
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
@@ -174,8 +175,10 @@ pub(crate) mod env {
 /// that is, from inside the future passed to `Env::actor`.
 pub(crate) mod actor {
     use super::*;
+    use metrics::Key;
     use ouisync::{AccessMode, RepositoryParams};
     use state_monitor::StateMonitor;
+    use tokio::sync::watch;
 
     pub(crate) fn create_unbound_network() -> Network {
         Network::new(None, StateMonitor::make_root())
@@ -281,6 +284,10 @@ pub(crate) mod actor {
         let (repo, reg) = create_linked_repo(DEFAULT_REPO, &network).await;
         (network, repo, reg)
     }
+
+    pub(crate) fn metrics_subscriber() -> MetricsSubscriber {
+        ACTOR.with(|actor| actor.context.metrics_subscriber.clone())
+    }
 }
 
 task_local! {
@@ -292,6 +299,7 @@ struct Context {
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
     recorder: ArcRecorder,
+    metrics_subscriber: MetricsSubscriber,
     monitor: StateMonitor,
 }
 
@@ -299,10 +307,16 @@ impl Context {
     fn new(runtime: &Handle) -> Self {
         init_log();
 
+        let watch_recorder = WatchRecorder::new();
+        let metrics_subscriber = watch_recorder.subscriber();
+
         let recorder = if let Some(endpoint) = PROMETHEUS_PUSH_GATEWAY_ENDPOINT.as_ref() {
-            ArcRecorder::new(init_prometheus_recorder(runtime, endpoint))
+            ArcRecorder::new(PairRecorder(
+                watch_recorder,
+                init_prometheus_recorder(runtime, endpoint),
+            ))
         } else {
-            ArcRecorder::new(NoopRecorder)
+            ArcRecorder::new(watch_recorder)
         };
 
         Self {
@@ -310,6 +324,7 @@ impl Context {
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
             recorder,
+            metrics_subscriber,
             monitor: StateMonitor::make_root(),
         }
     }
@@ -674,7 +689,7 @@ pub(crate) fn init_log() {
         .unwrap_or(());
 }
 
-fn init_prometheus_recorder(runtime: &Handle, endpoint: &str) -> impl Recorder {
+fn init_prometheus_recorder(runtime: &Handle, endpoint: &str) -> impl Recorder + Send + 'static {
     let (recorder, exporter) = PrometheusBuilder::new()
         .with_push_gateway(endpoint, Duration::from_millis(100), None, None)
         .unwrap()
