@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn parse_chinese_file_name() {
         let filename = "复制.txt";
-        let (newfilename, suffix) = parse_unique_name(&filename);
+        let (newfilename, suffix) = parse_unique_name(filename);
         assert!(suffix.is_none());
         assert_eq!(filename, newfilename);
     }
