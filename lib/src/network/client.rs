@@ -25,7 +25,7 @@ pub(super) struct Client {
     inner: Inner,
     rx: mpsc::Receiver<Response>,
     send_queue_rx: mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-    recv_queue_rx: mpsc::Receiver<PendingResponse>,
+    recv_queue_rx: mpsc::Receiver<(PendingResponse, Instant)>,
 }
 
 impl Client {
@@ -89,7 +89,7 @@ struct Inner {
     block_tracker: TrackerClient,
     tx: mpsc::Sender<Content>,
     send_queue_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
-    recv_queue_tx: mpsc::Sender<PendingResponse>,
+    recv_queue_tx: mpsc::Sender<(PendingResponse, Instant)>,
 }
 
 impl Inner {
@@ -97,7 +97,7 @@ impl Inner {
         &mut self,
         rx: &mut mpsc::Receiver<Response>,
         send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-        recv_queue_rx: &mut mpsc::Receiver<PendingResponse>,
+        recv_queue_rx: &mut mpsc::Receiver<(PendingResponse, Instant)>,
     ) -> Result<()> {
         self.receive_filter.reset().await?;
 
@@ -147,7 +147,7 @@ impl Inner {
         let link_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_RESPONSES));
 
         loop {
-            let Some((request, time_created)) = send_queue_rx.recv().await else {
+            let Some((request, timestamp)) = send_queue_rx.recv().await else {
                 break;
             };
 
@@ -167,8 +167,8 @@ impl Inner {
 
             self.vault
                 .monitor
-                .request_queued_metric
-                .record(time_created.elapsed());
+                .request_queue_time
+                .record(timestamp.elapsed());
 
             let Some(request) = self
                 .pending_requests
@@ -177,8 +177,6 @@ impl Inner {
                 // The same request is already in-flight.
                 continue;
             };
-
-            *self.vault.monitor.total_requests_cummulative.get() += 1;
 
             self.tx.send(Content::Request(request)).await.unwrap_or(());
         }
@@ -190,6 +188,8 @@ impl Inner {
                 break;
             };
 
+            self.vault.monitor.responses_received.increment(1);
+
             // TODO: The `BlockOffer` response doesn't require write access to the store and so
             // can be processed faster than the other response types and. Furthermode, it can be
             // processed concurrently. Consider using a separate queue and a separate `select`
@@ -197,7 +197,12 @@ impl Inner {
 
             let response = self.pending_requests.remove(response);
 
-            if self.recv_queue_tx.send(response).await.is_err() {
+            if self
+                .recv_queue_tx
+                .send((response, Instant::now()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -205,16 +210,22 @@ impl Inner {
 
     async fn handle_responses(
         &self,
-        recv_queue_rx: &mut mpsc::Receiver<PendingResponse>,
+        recv_queue_rx: &mut mpsc::Receiver<(PendingResponse, Instant)>,
     ) -> Result<()> {
         loop {
             match recv_queue_rx.recv().await {
-                Some(response) => {
+                Some((response, timestamp)) => {
                     self.vault
                         .monitor
-                        .handle_response_metric
-                        .measure_ok(self.handle_response(response))
-                        .await?
+                        .response_queue_time
+                        .record(timestamp.elapsed());
+
+                    let start = Instant::now();
+                    self.handle_response(response).await?;
+                    self.vault
+                        .monitor
+                        .response_handle_time
+                        .record(start.elapsed());
                 }
                 None => return Ok(()),
             };
@@ -224,42 +235,24 @@ impl Inner {
     async fn handle_response(&self, response: PendingResponse) -> Result<()> {
         match response.response {
             ProcessedResponse::RootNode(proof, block_presence, debug) => {
-                self.vault
-                    .monitor
-                    .handle_root_node_metric
-                    .measure_ok(self.handle_root_node(proof, block_presence, debug))
-                    .await
+                self.handle_root_node(proof, block_presence, debug).await
             }
+
             ProcessedResponse::InnerNodes(nodes, _, debug) => {
-                self.vault
-                    .monitor
-                    .handle_inner_nodes_metric
-                    .measure_ok(self.handle_inner_nodes(nodes, debug))
-                    .await
+                self.handle_inner_nodes(nodes, debug).await
             }
             ProcessedResponse::LeafNodes(nodes, _, debug) => {
-                self.vault
-                    .monitor
-                    .handle_leaf_nodes_metric
-                    .measure_ok(self.handle_leaf_nodes(nodes, debug))
-                    .await
+                self.handle_leaf_nodes(nodes, debug).await
             }
             ProcessedResponse::BlockOffer(block_id, debug) => {
                 self.handle_block_offer(block_id, debug).await
             }
             ProcessedResponse::Block(block, debug) => {
-                self.vault
-                    .monitor
-                    .handle_block_metric
-                    .measure_ok(self.handle_block(block, response.block_promise, debug))
+                self.handle_block(block, response.block_promise, debug)
                     .await
             }
             ProcessedResponse::BlockError(block_id, debug) => {
-                self.vault
-                    .monitor
-                    .handle_block_not_found_metric
-                    .measure_ok(self.handle_block_not_found(block_id, debug))
-                    .await
+                self.handle_block_not_found(block_id, debug).await
             }
             ProcessedResponse::RootNodeError(..) | ProcessedResponse::ChildNodesError(..) => Ok(()),
         }

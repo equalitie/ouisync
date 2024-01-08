@@ -1,5 +1,7 @@
 use btdht::InfoHash;
-use metrics::{Gauge, Histogram, Key, KeyName, Level, Metadata, Recorder, Unit};
+use metrics::{
+    Counter, Gauge, Histogram, Key, KeyName, Level, Metadata, Recorder, SharedString, Unit,
+};
 use state_monitor::{MonitoredValue, StateMonitor};
 use std::{
     fmt,
@@ -16,24 +18,36 @@ use tokio::{
 use tracing::{Instrument, Span};
 
 pub(crate) struct RepositoryMonitor {
-    // This indicates how many requests for index nodes are currently in flight.  It is used by the
-    // UI to indicate that the index is being synchronized.
-    pub index_requests_inflight: MonitoredValue<u64>,
-    pub block_requests_inflight: MonitoredValue<u64>,
-    pub pending_requests: MonitoredValue<u64>,
-    pub total_requests_cummulative: MonitoredValue<u64>,
-    pub request_timeouts: MonitoredValue<u64>,
     pub info_hash: MonitoredValue<Option<InfoHash>>,
 
-    pub handle_response_metric: TaskMetrics,
-    pub handle_root_node_metric: TaskMetrics,
-    pub handle_inner_nodes_metric: TaskMetrics,
-    pub handle_leaf_nodes_metric: TaskMetrics,
-    pub handle_block_metric: TaskMetrics,
-    pub handle_block_not_found_metric: TaskMetrics,
-    pub request_queued_metric: TaskMetrics,
-    pub request_inflight_metric: TaskMetrics,
-    pub handle_request_metric: TaskMetrics,
+    // Total number of index requests sent.
+    pub index_requests_sent: Counter,
+    // Current number of sent index request for which responses haven't been received yet.
+    pub index_requests_inflight: Gauge,
+    // Total number of block requests sent.
+    pub block_requests_sent: Counter,
+    // Current number of sent block request for which responses haven't been received yet.
+    pub block_requests_inflight: Gauge,
+    // Total number of received requests
+    pub requests_received: Counter,
+    // Current number of send requests (index + block) for which responses haven't been handled yet
+    // (they might be in-flight or queued).
+    pub requests_pending: Gauge,
+    // Time from sending a request to receiving its response.
+    pub request_latency: Histogram,
+    // Total number of timeouted requests.
+    pub request_timeouts: Counter,
+    // Time a request spends in the send queue.
+    pub request_queue_time: Histogram,
+
+    // Total number of responses sent.
+    pub responses_sent: Counter,
+    // Total number of responses received.
+    pub responses_received: Counter,
+    // Time a response spends in the receive queue.
+    pub response_queue_time: Histogram,
+    // Time to handle a response.
+    pub response_handle_time: Histogram,
 
     pub scan_job: JobMonitor,
     pub merge_job: JobMonitor,
@@ -51,22 +65,26 @@ impl RepositoryMonitor {
     {
         let span = tracing::info_span!("repo", message = node.id().name());
 
-        let index_requests_inflight = node.make_value("index requests inflight", 0);
-        let block_requests_inflight = node.make_value("block requests inflight", 0);
-        let pending_requests = node.make_value("pending requests", 0);
-        let total_requests_cummulative = node.make_value("total requests cummulative", 0);
-        let request_timeouts = node.make_value("request timeouts", 0);
         let info_hash = node.make_value("info-hash", None);
 
-        let handle_response_metric = TaskMetrics::new(recorder, "handle_response");
-        let handle_root_node_metric = TaskMetrics::new(recorder, "handle_root_node");
-        let handle_inner_nodes_metric = TaskMetrics::new(recorder, "handle_inner_node");
-        let handle_leaf_nodes_metric = TaskMetrics::new(recorder, "handle_leaf_node");
-        let handle_block_metric = TaskMetrics::new(recorder, "handle_block");
-        let handle_block_not_found_metric = TaskMetrics::new(recorder, "handle_block_not_found");
-        let request_queued_metric = TaskMetrics::new(recorder, "request queued");
-        let request_inflight_metric = TaskMetrics::new(recorder, "request inflight");
-        let handle_request_metric = TaskMetrics::new(recorder, "handle_request");
+        let index_requests_sent = create_counter(recorder, "index requests sent", Unit::Count);
+        let index_requests_inflight =
+            create_gauge(recorder, "index requests inflight", Unit::Count);
+        let block_requests_sent = create_counter(recorder, "block requests sent", Unit::Count);
+        let block_requests_inflight =
+            create_gauge(recorder, "block requests inflight", Unit::Count);
+
+        let requests_received = create_counter(recorder, "requests received", Unit::Count);
+        let requests_pending = create_gauge(recorder, "requests pending", Unit::Count);
+        let request_latency = create_histogram(recorder, "request latency", Unit::Seconds);
+        let request_timeouts = create_counter(recorder, "request timeouts", Unit::Count);
+        let request_queue_time = create_histogram(recorder, "request queue time", Unit::Seconds);
+
+        let responses_sent = create_counter(recorder, "responses sent", Unit::Count);
+        let responses_received = create_counter(recorder, "responses received", Unit::Count);
+        let response_queue_time = create_histogram(recorder, "response queue time", Unit::Seconds);
+        let response_handle_time =
+            create_histogram(recorder, "response handle time", Unit::Seconds);
 
         let scan_job = JobMonitor::new(&node, recorder, "scan");
         let merge_job = JobMonitor::new(&node, recorder, "merge");
@@ -74,22 +92,22 @@ impl RepositoryMonitor {
         let trash_job = JobMonitor::new(&node, recorder, "trash");
 
         Self {
-            index_requests_inflight,
-            block_requests_inflight,
-            pending_requests,
-            total_requests_cummulative,
-            request_timeouts,
             info_hash,
 
-            handle_response_metric,
-            handle_root_node_metric,
-            handle_inner_nodes_metric,
-            handle_leaf_nodes_metric,
-            handle_block_metric,
-            handle_block_not_found_metric,
-            request_queued_metric,
-            request_inflight_metric,
-            handle_request_metric,
+            index_requests_sent,
+            index_requests_inflight,
+            block_requests_sent,
+            block_requests_inflight,
+            requests_received,
+            requests_pending,
+            request_latency,
+            request_timeouts,
+            request_queue_time,
+
+            responses_sent,
+            responses_received,
+            response_queue_time,
+            response_handle_time,
 
             scan_job,
             merge_job,
@@ -114,59 +132,11 @@ impl RepositoryMonitor {
     }
 }
 
-pub(crate) struct TaskMetrics {
-    time_last: Gauge,
-    time_histogram: Histogram,
-    // TODO: throughtput
-}
-
-impl TaskMetrics {
-    fn new<R>(recorder: &R, name: &str) -> Self
-    where
-        R: Recorder + ?Sized,
-    {
-        let meta = Metadata::new(module_path!(), Level::INFO, None);
-
-        let key_name = KeyName::from(format!("{name}/time/last"));
-        recorder.describe_gauge(key_name.clone(), Some(Unit::Seconds), Default::default());
-        let time_last = recorder.register_gauge(&Key::from(key_name), &meta);
-
-        let key_name = KeyName::from(format!("{name}/time"));
-        recorder.describe_histogram(key_name.clone(), Some(Unit::Seconds), Default::default());
-        let time_histogram = recorder.register_histogram(&Key::from(key_name), &meta);
-
-        Self {
-            time_last,
-            time_histogram,
-        }
-    }
-
-    pub(crate) fn record(&self, value: Duration) {
-        let secs = value.as_secs_f64();
-        self.time_last.set(secs);
-        self.time_histogram.record(secs);
-    }
-
-    pub(crate) async fn measure_ok<F, T, E>(&self, fut: F) -> Result<T, E>
-    where
-        F: Future<Output = Result<T, E>>,
-    {
-        let start = Instant::now();
-        let result = fut.await;
-
-        if result.is_ok() {
-            self.record(start.elapsed());
-        }
-
-        result
-    }
-}
-
 pub(crate) struct JobMonitor {
     tx: watch::Sender<bool>,
-    metrics: TaskMetrics,
-    counter: AtomicU64,
     name: String,
+    counter: AtomicU64,
+    time: Histogram,
 }
 
 impl JobMonitor {
@@ -174,13 +144,13 @@ impl JobMonitor {
     where
         R: Recorder + ?Sized,
     {
-        let value = parent_node.make_value(format!("{name} state"), JobState::Idle);
-        let metrics = TaskMetrics::new(recorder, name);
+        let time = create_histogram(recorder, format!("{name} time"), Unit::Seconds);
+        let state = parent_node.make_value(format!("{name} state"), JobState::Idle);
 
-        Self::from_parts(value, metrics, name)
+        Self::from_parts(name, time, state)
     }
 
-    fn from_parts(value: MonitoredValue<JobState>, metrics: TaskMetrics, name: &str) -> Self {
+    fn from_parts(name: &str, time: Histogram, state: MonitoredValue<JobState>) -> Self {
         let (tx, mut rx) = watch::channel(false);
 
         task::spawn(async move {
@@ -193,7 +163,7 @@ impl JobMonitor {
                 select! {
                     result = rx.changed() => {
                         if result.is_err() {
-                            *value.get() = JobState::Idle;
+                            *state.get() = JobState::Idle;
                             break;
                         }
 
@@ -201,11 +171,11 @@ impl JobMonitor {
                             start = Some(Instant::now());
                         } else {
                             start = None;
-                            *value.get() = JobState::Idle;
+                            *state.get() = JobState::Idle;
                         }
                     }
                     _ = interval.tick(), if start.is_some() => {
-                        *value.get() = JobState::Running(start.unwrap().elapsed());
+                        *state.get() = JobState::Running(start.unwrap().elapsed());
                     }
                 }
             }
@@ -213,9 +183,9 @@ impl JobMonitor {
 
         Self {
             tx,
-            metrics,
-            counter: AtomicU64::new(0),
             name: name.to_string(),
+            counter: AtomicU64::new(0),
+            time,
         }
     }
 
@@ -235,7 +205,7 @@ impl JobMonitor {
             let result = f.await;
             let is_ok = result.is_ok();
 
-            self.metrics.record(start.elapsed());
+            self.time.record(start.elapsed());
 
             guard.complete(result);
 
@@ -297,4 +267,43 @@ impl fmt::Debug for JobState {
             Self::Running(duration) => write!(f, "running for {:.1}s", duration.as_secs_f64()),
         }
     }
+}
+
+fn create_counter<R: Recorder + ?Sized, N: Into<SharedString>>(
+    recorder: &R,
+    name: N,
+    unit: Unit,
+) -> Counter {
+    let name = KeyName::from(name);
+    recorder.describe_counter(name.clone(), Some(unit), "".into());
+    recorder.register_counter(
+        &Key::from_name(name),
+        &Metadata::new(module_path!(), Level::INFO, None),
+    )
+}
+
+fn create_gauge<R: Recorder + ?Sized, N: Into<SharedString>>(
+    recorder: &R,
+    name: N,
+    unit: Unit,
+) -> Gauge {
+    let name = KeyName::from(name);
+    recorder.describe_gauge(name.clone(), Some(unit), "".into());
+    recorder.register_gauge(
+        &Key::from_name(name),
+        &Metadata::new(module_path!(), Level::INFO, None),
+    )
+}
+
+fn create_histogram<R: Recorder + ?Sized, N: Into<SharedString>>(
+    recorder: &R,
+    name: N,
+    unit: Unit,
+) -> Histogram {
+    let name = KeyName::from(name);
+    recorder.describe_histogram(name.clone(), Some(unit), "".into());
+    recorder.register_histogram(
+        &Key::from_name(name),
+        &Metadata::new(module_path!(), Level::INFO, None),
+    )
 }

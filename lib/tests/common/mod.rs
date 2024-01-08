@@ -676,7 +676,7 @@ pub(crate) fn init_log() {
 
 fn init_prometheus_recorder(runtime: &Handle, endpoint: &str) -> impl Recorder {
     let (recorder, exporter) = PrometheusBuilder::new()
-        .with_push_gateway(endpoint, Duration::from_millis(1000), None, None)
+        .with_push_gateway(endpoint, Duration::from_millis(100), None, None)
         .unwrap()
         .build()
         .unwrap();
