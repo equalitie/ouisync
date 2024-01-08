@@ -852,8 +852,9 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
 
         if self.debug_type == DebugType::Full {
             println!(
-                "{debug_id} Enter: write_file {:?}",
-                file_name.to_string_lossy()
+                "{debug_id} Enter: write_file {:?} offset:{offset:?} len:{}",
+                file_name.to_string_lossy(),
+                buffer.len(),
             );
         }
 

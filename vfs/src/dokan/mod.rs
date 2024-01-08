@@ -506,7 +506,7 @@ impl VirtualFilesystem {
 
         tracing::trace!("L{} async_write_file", line!());
         file.fork(local_branch).await?;
-        file.write(buffer).await?;
+        file.write_all(buffer).await?;
 
         Ok(buffer.len().try_into().unwrap_or(u32::MAX))
     }
