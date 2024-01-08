@@ -11,23 +11,28 @@ pub fn create_unique_name(name: &str, branch_id: &PublicKey) -> String {
 
 /// Parse a name created with `create_unique_name` into the original name and the disambiguation
 /// suffix.
-pub fn parse_unique_name(name: &str) -> (&str, Option<[u8; SUFFIX_LEN / 2]>) {
-    let index = if let Some(index) = name.len().checked_sub(SUFFIX_LEN + SUFFIX_SEPARATOR.len()) {
-        index
-    } else {
-        return (name, None);
-    };
+pub fn parse_unique_name(unique_name: &str) -> (&str, Option<[u8; SUFFIX_LEN / 2]>) {
+    let mut split = unique_name.rsplitn(2, &SUFFIX_SEPARATOR);
 
-    if &name[index..index + SUFFIX_SEPARATOR.len()] != SUFFIX_SEPARATOR {
-        return (name, None);
+    if split.clone().count() < 2 {
+        return (unique_name, None);
     }
 
-    let mut suffix = [0; SUFFIX_LEN / 2];
+    // Unwraps below OK because of the above theck.
 
-    if hex::decode_to_slice(&name[index + 2..], &mut suffix).is_ok() {
-        (&name[..index], Some(suffix))
+    let suffix = split.next().unwrap();
+
+    if suffix.len() != SUFFIX_LEN {
+        return (unique_name, None);
+    }
+
+    let mut suffix_bytes = [0; SUFFIX_LEN / 2];
+
+    if hex::decode_to_slice(suffix, &mut suffix_bytes).is_ok() {
+        let name = split.next().unwrap();
+        (name, Some(suffix_bytes))
     } else {
-        (name, None)
+        (unique_name, None)
     }
 }
 
@@ -68,5 +73,13 @@ mod tests {
 
         assert_eq!(parsed_base_name, base_name);
         assert!(branch_id.starts_with(&branch_id_prefix));
+    }
+
+    #[test]
+    fn parse_chinese_file_name() {
+        let filename = "复制.txt";
+        let (newfilename, suffix) = parse_unique_name(&filename);
+        assert!(suffix.is_none());
+        assert_eq!(filename, newfilename);
     }
 }
