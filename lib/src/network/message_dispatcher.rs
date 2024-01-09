@@ -3,7 +3,7 @@
 use super::{
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf, PermitId},
     keep_alive::{KeepAliveSink, KeepAliveStream},
-    message::{Message, MessageChannel, Type},
+    message::{Message, MessageChannelId, Type},
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
@@ -59,12 +59,12 @@ impl MessageDispatcher {
     }
 
     /// Opens a stream for receiving messages with the given id.
-    pub fn open_recv(&self, channel: MessageChannel) -> ContentStream {
+    pub fn open_recv(&self, channel: MessageChannelId) -> ContentStream {
         ContentStream::new(channel, self.recv.clone())
     }
 
     /// Opens a sink for sending messages with the given id.
-    pub fn open_send(&self, channel: MessageChannel) -> ContentSink {
+    pub fn open_send(&self, channel: MessageChannelId) -> ContentSink {
         ContentSink {
             channel,
             state: self.send.clone(),
@@ -106,13 +106,13 @@ impl Drop for MessageDispatcher {
 }
 
 pub(super) struct ContentStream {
-    channel: MessageChannel,
+    channel: MessageChannelId,
     state: Arc<RecvState>,
     last_transport_id: Option<PermitId>,
 }
 
 impl ContentStream {
-    fn new(channel: MessageChannel, state: Arc<RecvState>) -> Self {
+    fn new(channel: MessageChannelId, state: Arc<RecvState>) -> Self {
         state.add_channel(channel);
 
         Self {
@@ -162,7 +162,7 @@ impl ContentStream {
         }
     }
 
-    pub fn channel(&self) -> &MessageChannel {
+    pub fn channel(&self) -> &MessageChannelId {
         &self.channel
     }
 }
@@ -181,12 +181,12 @@ pub(super) enum ContentStreamError {
 
 #[derive(Clone)]
 pub(super) struct ContentSink {
-    channel: MessageChannel,
+    channel: MessageChannelId,
     state: Arc<MultiSink>,
 }
 
 impl ContentSink {
-    pub fn channel(&self) -> &MessageChannel {
+    pub fn channel(&self) -> &MessageChannelId {
         &self.channel
     }
 
@@ -270,7 +270,7 @@ type ChannelQueueSender = UnboundedSender<(PermitId, Vec<u8>)>;
 
 struct RecvState {
     reader: Arc<MultiStream>,
-    queues: Arc<BlockingMutex<HashMap<MessageChannel, ChannelQueue>>>,
+    queues: Arc<BlockingMutex<HashMap<MessageChannelId, ChannelQueue>>>,
 }
 
 impl RecvState {
@@ -285,7 +285,7 @@ impl RecvState {
         self.reader.add(stream);
     }
 
-    fn add_channel(&self, channel_id: MessageChannel) {
+    fn add_channel(&self, channel_id: MessageChannelId) {
         match self.queues.lock().unwrap().entry(channel_id) {
             hash_map::Entry::Occupied(mut entry) => entry.get_mut().reference_count += 1,
             hash_map::Entry::Vacant(entry) => {
@@ -317,7 +317,7 @@ impl RecvState {
         }
     }
 
-    fn remove_channel(&self, channel_id: &MessageChannel) {
+    fn remove_channel(&self, channel_id: &MessageChannelId) {
         let mut queues = self.queues.lock().unwrap();
 
         match queues.entry(*channel_id) {
@@ -612,7 +612,7 @@ mod tests {
     async fn recv_on_stream() {
         let (mut client, server) = setup().await;
 
-        let channel = MessageChannel::random();
+        let channel = MessageChannelId::random();
         let send_content = b"hello world";
 
         client
@@ -634,8 +634,8 @@ mod tests {
     async fn recv_on_two_streams() {
         let (mut client, server) = setup().await;
 
-        let channel0 = MessageChannel::random();
-        let channel1 = MessageChannel::random();
+        let channel0 = MessageChannelId::random();
+        let channel1 = MessageChannelId::random();
 
         let send_content0 = b"one two three";
         let send_content1 = b"four five six";
@@ -669,8 +669,8 @@ mod tests {
 
         let (client, server) = setup_two_dispatchers().await;
 
-        let channel0 = MessageChannel::random();
-        let channel1 = MessageChannel::random();
+        let channel0 = MessageChannelId::random();
+        let channel1 = MessageChannelId::random();
 
         let num_messages = 20;
 
@@ -714,7 +714,7 @@ mod tests {
     async fn drop_stream() {
         let (mut client, server) = setup().await;
 
-        let channel = MessageChannel::random();
+        let channel = MessageChannelId::random();
 
         let send_content0 = b"one two three";
         let send_content1 = b"four five six";
@@ -749,7 +749,7 @@ mod tests {
     async fn drop_dispatcher() {
         let (_client, server) = setup().await;
 
-        let channel = MessageChannel::random();
+        let channel = MessageChannelId::random();
 
         let mut server_stream = server.open_recv(channel);
 
@@ -776,7 +776,7 @@ mod tests {
         client
             .send(Message {
                 tag: Type::Content,
-                channel: MessageChannel::random(),
+                channel: MessageChannelId::random(),
                 content: b"hello world".to_vec(),
             })
             .await

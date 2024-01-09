@@ -5,7 +5,7 @@ use super::{
     connection::ConnectionPermit,
     constants::MAX_REQUESTS_IN_FLIGHT,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
-    message::{Content, MessageChannel, Request, Response},
+    message::{Content, MessageChannelId, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     peer_exchange::{PexAnnouncer, PexController, PexDiscoverySender},
     raw,
@@ -123,7 +123,7 @@ impl MessageBroker {
             &self.that_runtime_id,
         );
 
-        let channel_id = MessageChannel::new(
+        let channel_id = MessageChannelId::new(
             vault.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,

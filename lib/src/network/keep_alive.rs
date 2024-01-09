@@ -203,7 +203,7 @@ fn sink_closed_error() -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::message::{MessageChannel, Type};
+    use crate::network::message::{MessageChannelId, Type};
     use std::net::Ipv4Addr;
     use tokio::net::{TcpListener, TcpStream};
 
@@ -235,7 +235,7 @@ mod tests {
 
         let message = Message {
             tag: Type::Content,
-            channel: MessageChannel::random(),
+            channel: MessageChannelId::random(),
             content: b"hello".to_vec(),
         };
 
@@ -276,7 +276,7 @@ mod tests {
 
         let message = Message {
             tag: Type::Content,
-            channel: MessageChannel::random(),
+            channel: MessageChannelId::random(),
             content: b"hello".to_vec(),
         };
 

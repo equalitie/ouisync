@@ -87,7 +87,7 @@ impl Type {
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) struct Header {
     pub tag: Type,
-    pub channel: MessageChannel,
+    pub channel: MessageChannelId,
 }
 
 impl Header {
@@ -122,7 +122,7 @@ impl Header {
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) struct Message {
     pub tag: Type,
-    pub channel: MessageChannel,
+    pub channel: MessageChannelId,
     pub content: Vec<u8>,
 }
 
@@ -130,7 +130,7 @@ impl Message {
     pub fn new_keep_alive() -> Self {
         Self {
             tag: Type::KeepAlive,
-            channel: MessageChannel::default(),
+            channel: MessageChannelId::default(),
             content: Vec::new(),
         }
     }
@@ -173,7 +173,7 @@ impl ArrayReader<'_> {
         n
     }
 
-    fn read_channel(&mut self) -> MessageChannel {
+    fn read_channel(&mut self) -> MessageChannelId {
         let hash: [u8; Hash::SIZE] = self.array[..Hash::SIZE].try_into().unwrap();
         self.array = &self.array[Hash::SIZE..];
         hash.into()
@@ -191,7 +191,7 @@ impl ArrayWriter<'_> {
         self.array.write_all(&n.to_le_bytes()).unwrap();
     }
 
-    fn write_channel(&mut self, channel: &MessageChannel) {
+    fn write_channel(&mut self, channel: &MessageChannelId) {
         self.array.write_all(channel.as_ref()).unwrap();
     }
 }
@@ -232,10 +232,10 @@ define_byte_array_wrapper! {
     // TODO: consider lower size (truncate the hash) which should still be enough to be unique
     // while reducing the message size.
     #[derive(Serialize, Deserialize)]
-    pub(crate) struct MessageChannel([u8; Hash::SIZE]);
+    pub(crate) struct MessageChannelId([u8; Hash::SIZE]);
 }
 
-impl MessageChannel {
+impl MessageChannelId {
     pub(super) fn new(
         repo_id: &'_ RepositoryId,
         this_runtime_id: &'_ PublicRuntimeId,
@@ -260,7 +260,7 @@ impl MessageChannel {
     }
 }
 
-impl Default for MessageChannel {
+impl Default for MessageChannelId {
     fn default() -> Self {
         Self([0; Self::SIZE])
     }
@@ -274,7 +274,7 @@ mod tests {
     fn header_serialization() {
         let header = Header {
             tag: Type::Content,
-            channel: MessageChannel::random(),
+            channel: MessageChannelId::random(),
         };
 
         let serialized = header.serialize();
