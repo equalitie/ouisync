@@ -61,7 +61,7 @@ mod tests {
         let v = &[1, 2, 2, 3, 4, 4, 4];
         let a = Accumulate::new(v.iter(), |&i| i);
         assert_eq!(
-            a.map(|(k, t)| (k, t)).collect::<Vec<_>>(),
+            a.collect::<Vec<_>>(),
             [
                 (&1, vec![&1]),
                 (&2, vec![&2, &2]),

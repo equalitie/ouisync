@@ -17,7 +17,6 @@ use self::{
 };
 use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
-use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_util::layers::{Fanout, FanoutBuilder};
 use once_cell::sync::Lazy;
 use ouisync::{
@@ -309,15 +308,7 @@ impl Context {
 
         let watch_recorder = WatchRecorder::new();
         let metrics_subscriber = watch_recorder.subscriber();
-
-        let recorder = if let Some(endpoint) = PROMETHEUS_PUSH_GATEWAY_ENDPOINT.as_ref() {
-            ArcRecorder::new(PairRecorder(
-                watch_recorder,
-                init_prometheus_recorder(runtime, endpoint),
-            ))
-        } else {
-            ArcRecorder::new(watch_recorder)
-        };
+        let recorder = init_recorder(runtime, watch_recorder);
 
         Self {
             base_dir: TempDir::new(),
@@ -689,7 +680,27 @@ pub(crate) fn init_log() {
         .unwrap_or(());
 }
 
+#[cfg(feature = "prometheus")]
+fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> ArcRecorder {
+    if let Some(endpoint) = PROMETHEUS_PUSH_GATEWAY_ENDPOINT.as_ref() {
+        ArcRecorder::new(PairRecorder(
+            watch_recorder,
+            init_prometheus_recorder(runtime, endpoint),
+        ))
+    } else {
+        ArcRecorder::new(watch_recorder)
+    }
+}
+
+#[cfg(not(feature = "prometheus"))]
+fn init_recorder(_runtime: &Handle, watch_recorder: WatchRecorder) -> ArcRecorder {
+    ArcRecorder::new(watch_recorder)
+}
+
+#[cfg(feature = "prometheus")]
 fn init_prometheus_recorder(runtime: &Handle, endpoint: &str) -> impl Recorder + Send + 'static {
+    use metrics_prometheus_recorder::PrometheusBuilder;
+
     let (recorder, exporter) = PrometheusBuilder::new()
         .with_push_gateway(endpoint, Duration::from_millis(100), None, None)
         .unwrap()

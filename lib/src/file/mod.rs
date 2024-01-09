@@ -298,6 +298,15 @@ impl File {
     }
 }
 
+impl fmt::Debug for File {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("File")
+            .field("blob_id", &self.blob.id())
+            .field("branch", &self.blob.branch().id())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,14 +487,5 @@ mod tests {
     ) -> Branch {
         let id = PublicKey::random();
         Branch::new(id, store, keys, shared, event_tx)
-    }
-}
-
-impl fmt::Debug for File {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("File")
-            .field("blob_id", &self.blob.id())
-            .field("branch", &self.blob.branch().id())
-            .finish()
     }
 }

@@ -6,7 +6,7 @@ pub use self::{hash_map::HashMap, hash_set::HashSet};
 
 pub mod hash_map {
     pub use rand::RandomState;
-    pub use std::collections::hash_map::{Entry, OccupiedEntry, VacantEntry};
+    pub use std::collections::hash_map::{Entry, /* OccupiedEntry,*/ VacantEntry};
 
     pub type HashMap<K, V, S = RandomState> = std::collections::HashMap<K, V, S>;
 }
