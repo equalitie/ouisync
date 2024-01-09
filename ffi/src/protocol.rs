@@ -160,6 +160,7 @@ pub(crate) enum Request {
     NetworkIsLocalDiscoveryEnabled,
     NetworkSetLocalDiscoveryEnabled(bool),
     NetworkAddStorageServer(String),
+    NetworkExternalAddrs,
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),

@@ -142,4 +142,11 @@ void main() {
     await session.removeUserProvidedPeer(addr1);
     expect(await session.userProvidedPeers, isEmpty);
   });
+
+  test('external addresses', () async {
+    await session.bindNetwork(quicV4: '0.0.0.0:0', quicV6: '[::]:0');
+    expect(await session.externalAddresses, isNotEmpty);
+  },
+      skip:
+          'this test makes network requests to 3rd party services (use --run-skipped to force run)');
 }

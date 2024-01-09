@@ -36,6 +36,11 @@ impl<T: DatagramSocket> StunClient<T> {
     }
 
     // TODO: NAT detection
+
+    /// Gets a reference to the underlying socket.
+    pub fn get_ref(&self) -> &T {
+        &self.socket
+    }
 }
 
 async fn send<S: DatagramSocket, A: Attribute>(
@@ -62,8 +67,8 @@ async fn recv<S: DatagramSocket, A: Attribute>(
     let mut decoder = MessageDecoder::new();
     let mut buffer = vec![0; 512];
 
-    // The socket might be multiplexed with other protocols so the receive response might
-    // not be for us. In that case, try again.
+    // The socket might be multiplexed with other protocols so the received message might not be
+    // for us. In that case, try again.
     loop {
         let (len, recv_addr) = socket.recv_from(&mut buffer[..]).await?;
 

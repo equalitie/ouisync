@@ -28,6 +28,8 @@ mod raw;
 mod runtime_id;
 mod seen_peers;
 mod server;
+mod stun;
+mod stun_server_list;
 #[cfg(test)]
 mod tests;
 mod upnp;
@@ -50,6 +52,7 @@ use self::{
     peer_exchange::{PexController, PexDiscovery, PexPayload},
     protocol::{Version, MAGIC, VERSION},
     seen_peers::{SeenPeer, SeenPeers},
+    stun::StunClients,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -142,6 +145,7 @@ impl Network {
             dht_discovery,
             dht_discovery_tx,
             pex_discovery_tx,
+            stun_clients: StunClients::new(),
             connection_deduplicator: ConnectionDeduplicator::new(),
             on_protocol_mismatch_tx,
             user_provided_peers,
@@ -212,6 +216,11 @@ impl Network {
             .lock()
             .unwrap()
             .is_enabled()
+    }
+
+    /// Find out external addresses using the STUN protocol.
+    pub async fn external_addrs(&self) -> Vec<PeerAddr> {
+        self.inner.stun_clients.external_addrs().await
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -415,6 +424,7 @@ struct Inner {
     dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
+    stun_clients: StunClients,
     connection_deduplicator: ConnectionDeduplicator,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
     user_provided_peers: SeenPeers,
@@ -460,12 +470,21 @@ impl Inner {
         // Gateway
         let side_channel_makers = self.gateway.bind(&bind).instrument(self.span.clone()).await;
 
-        // DHT
         let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
             Connectivity::Full => side_channel_makers,
             Connectivity::LocalOnly | Connectivity::Disabled => (None, None),
         };
 
+        // STUN
+        self.stun_clients.rebind(
+            side_channel_maker_v4
+                .as_ref()
+                .map(|m| m.make())
+                .into_iter()
+                .chain(side_channel_maker_v6.as_ref().map(|m| m.make())),
+        );
+
+        // DHT
         self.dht_discovery
             .rebind(side_channel_maker_v4, side_channel_maker_v6);
 

@@ -137,6 +137,10 @@ class Session {
   Future<String?> get quicListenerLocalAddressV6 =>
       client.invoke<String?>('network_quic_listener_local_addr_v6');
 
+  Future<List<String>> get externalAddresses => client
+      .invoke<List<Object?>>('network_external_addrs')
+      .then((list) => list.cast<String>());
+
   /// Gets a stream that yields lists of known peers.
   Stream<List<PeerInfo>> get onPeersChange async* {
     await for (final _ in networkEvents) {

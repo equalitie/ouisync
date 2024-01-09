@@ -13,6 +13,7 @@ members = [
     "utils/bindgen",
     "utils/btdht",
     "utils/stress-test",
+    "utils/stun-server-list",
     "utils/swarm",
     "utils/protocol-analyzer",
     "vfs"
