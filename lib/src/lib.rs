@@ -8,8 +8,6 @@
 mod macros;
 
 pub mod crypto;
-pub mod deadlock;
-pub mod metrics;
 pub mod network;
 pub mod path;
 
@@ -34,7 +32,6 @@ mod joint_entry;
 mod progress;
 mod protocol;
 mod repository;
-mod state_monitor;
 mod storage_size;
 mod store;
 mod sync;
@@ -64,7 +61,6 @@ pub use self::{
         delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryHandle,
         RepositoryId, RepositoryParams,
     },
-    state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     storage_size::StorageSize,
     store::{Error as StoreError, DATA_VERSION},
     version_vector::VersionVector,

@@ -5,7 +5,7 @@ mod blocking;
 mod expect_short_lifetime;
 mod timer;
 
-pub(crate) use self::expect_short_lifetime::ExpectShortLifetime;
+pub use self::expect_short_lifetime::ExpectShortLifetime;
 pub use self::{
     async_mutex::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard},
     blocking::{

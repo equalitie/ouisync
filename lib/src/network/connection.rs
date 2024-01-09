@@ -2,10 +2,8 @@ use super::{
     peer_addr::PeerAddr, peer_info::PeerInfo, peer_source::PeerSource, peer_state::PeerState,
     runtime_id::PublicRuntimeId,
 };
-use crate::{
-    collections::{hash_map::Entry, HashMap},
-    deadlock::BlockingMutex,
-};
+use crate::collections::{hash_map::Entry, HashMap};
+use deadlock::BlockingMutex;
 use serde::Serialize;
 use std::{
     fmt,

@@ -746,7 +746,7 @@ impl WriteTransaction {
             .try_collect()
             .await?;
 
-        let mut next_layer = HashSet::new();
+        let mut next_layer = HashSet::default();
 
         for _ in 0..INNER_LAYER_COUNT {
             for node in &nodes {

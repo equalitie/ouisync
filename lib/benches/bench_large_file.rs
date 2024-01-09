@@ -1,5 +1,5 @@
-use ouisync::StateMonitor;
 use rand::{rngs::StdRng, SeedableRng};
+use state_monitor::StateMonitor;
 use std::time::Instant;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;

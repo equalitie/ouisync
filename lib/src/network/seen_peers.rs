@@ -1,8 +1,6 @@
 use super::PeerAddr;
-use crate::{
-    collections::{HashMap, HashSet},
-    deadlock::BlockingRwLock,
-};
+use crate::collections::{HashMap, HashSet};
+use deadlock::BlockingRwLock;
 use std::sync::Arc;
 
 /// When a peer is found using some discovery mechanisms (local discovery, DHT, PEX, ...), the

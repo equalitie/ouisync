@@ -27,7 +27,7 @@ use tracing::instrument;
 
 pub(crate) struct Server {
     inner: Inner,
-    rx: Receiver,
+    rx: mpsc::Receiver<Request>,
     choker: Choker,
 }
 
@@ -39,10 +39,7 @@ impl Server {
         choker: Choker,
     ) -> Self {
         Self {
-            inner: Inner {
-                vault,
-                tx: Sender(tx),
-            },
+            inner: Inner { vault, tx },
             rx,
             choker,
         }
@@ -57,11 +54,11 @@ impl Server {
 
 struct Inner {
     vault: Vault,
-    tx: Sender,
+    tx: mpsc::Sender<Content>,
 }
 
 impl Inner {
-    async fn run(&self, rx: &mut Receiver, choker: &mut Choker) -> Result<()> {
+    async fn run(&self, rx: &mut mpsc::Receiver<Request>, choker: &mut Choker) -> Result<()> {
         // Important: make sure to create the event subscription first, before calling
         // `handle_all_branches_changed` otherwise we might miss some events.
         let mut events = pin!(events(self.vault.event_tx.subscribe()));
@@ -92,12 +89,7 @@ impl Inner {
                         break;
                     };
 
-                    let handler = self
-                        .vault
-                        .monitor
-                        .handle_request_metric
-                        .measure_ok(self.handle_request(request));
-
+                    let handler = self.handle_request(request);
                     request_handlers.push(handler);
                 }
                 event = events.next() => {
@@ -131,6 +123,8 @@ impl Inner {
     }
 
     async fn handle_request(&self, request: Request) -> Result<()> {
+        self.vault.monitor.requests_received.increment(1);
+
         match request {
             Request::RootNode(public_key, debug) => self.handle_root_node(public_key, debug).await,
             Request::ChildNodes(hash, disambiguator, debug) => {
@@ -162,19 +156,17 @@ impl Inner {
                     debug.send(),
                 );
 
-                self.tx.send(response).await;
+                self.send_response(response).await;
                 Ok(())
             }
             Err(store::Error::BranchNotFound) => {
                 tracing::trace!("root node not found");
-                self.tx
-                    .send(Response::RootNodeError(writer_id, debug.send()))
+                self.send_response(Response::RootNodeError(writer_id, debug.send()))
                     .await;
                 Ok(())
             }
             Err(error) => {
-                self.tx
-                    .send(Response::RootNodeError(writer_id, debug.send()))
+                self.send_response(Response::RootNodeError(writer_id, debug.send()))
                     .await;
                 Err(error.into())
             }
@@ -201,30 +193,27 @@ impl Inner {
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
-                self.tx
-                    .send(Response::InnerNodes(
-                        inner_nodes,
-                        disambiguator,
-                        debug.clone().send(),
-                    ))
-                    .await;
+                self.send_response(Response::InnerNodes(
+                    inner_nodes,
+                    disambiguator,
+                    debug.clone().send(),
+                ))
+                .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
-                self.tx
-                    .send(Response::LeafNodes(leaf_nodes, disambiguator, debug.send()))
+                self.send_response(Response::LeafNodes(leaf_nodes, disambiguator, debug.send()))
                     .await;
             }
         } else {
             tracing::trace!("child nodes not found");
-            self.tx
-                .send(Response::ChildNodesError(
-                    parent_hash,
-                    disambiguator,
-                    debug.send(),
-                ))
-                .await;
+            self.send_response(Response::ChildNodesError(
+                parent_hash,
+                disambiguator,
+                debug.send(),
+            ))
+            .await;
         }
 
         Ok(())
@@ -245,21 +234,18 @@ impl Inner {
         match result {
             Ok(nonce) => {
                 tracing::trace!("block found");
-                self.tx
-                    .send(Response::Block(content, nonce, debug.send()))
+                self.send_response(Response::Block(content, nonce, debug.send()))
                     .await;
                 Ok(())
             }
             Err(store::Error::BlockNotFound) => {
                 tracing::trace!("block not found");
-                self.tx
-                    .send(Response::BlockError(block_id, debug.send()))
+                self.send_response(Response::BlockError(block_id, debug.send()))
                     .await;
                 Ok(())
             }
             Err(error) => {
-                self.tx
-                    .send(Response::BlockError(block_id, debug.send()))
+                self.send_response(Response::BlockError(block_id, debug.send()))
                     .await;
                 Err(error.into())
             }
@@ -288,8 +274,7 @@ impl Inner {
     }
 
     async fn handle_block_received_event(&self, block_id: BlockId) -> Result<()> {
-        self.tx
-            .send(Response::BlockOffer(block_id, DebugResponse::unsolicited()))
+        self.send_response(Response::BlockOffer(block_id, DebugResponse::unsolicited()))
             .await;
         Ok(())
     }
@@ -328,7 +313,9 @@ impl Inner {
             DebugResponse::unsolicited(),
         );
 
-        self.tx.send(response).await;
+        // TODO: maybe this should use different metric counter, to distinguish
+        // solicited/unsolicited responses?
+        self.send_response(response).await;
 
         Ok(())
     }
@@ -368,15 +355,11 @@ impl Inner {
             .load_root_node(writer_id, RootNodeFilter::Published)
             .await?)
     }
-}
 
-type Receiver = mpsc::Receiver<Request>;
-
-struct Sender(mpsc::Sender<Content>);
-
-impl Sender {
-    async fn send(&self, response: Response) -> bool {
-        self.0.send(Content::Response(response)).await.is_ok()
+    async fn send_response(&self, response: Response) {
+        if self.tx.send(Content::Response(response)).await.is_ok() {
+            self.vault.monitor.responses_sent.increment(1);
+        }
     }
 }
 

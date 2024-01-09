@@ -8,9 +8,10 @@ use ouisync_bridge::{
 };
 use ouisync_lib::{
     network::{Network, Registration},
-    AccessMode, Repository, StateMonitor,
+    AccessMode, Repository,
 };
 use ouisync_vfs::MountGuard;
+use state_monitor::StateMonitor;
 use std::{
     borrow::{Borrow, Cow},
     collections::{btree_map::Entry, BTreeMap},

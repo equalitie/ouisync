@@ -1,6 +1,7 @@
 use async_trait::async_trait;
+use deadlock::AsyncMutex;
 use indexmap::set::IndexSet;
-use ouisync_lib::{deadlock::AsyncMutex, network::dht_discovery::DhtContactsStoreTrait};
+use ouisync_lib::network::dht_discovery::DhtContactsStoreTrait;
 use std::{
     cmp::Eq,
     collections::HashSet,

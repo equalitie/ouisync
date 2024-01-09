@@ -1,10 +1,7 @@
 use super::ip;
-use crate::{
-    collections::{hash_map, HashMap},
-    deadlock::BlockingMutex,
-    state_monitor::StateMonitor,
-};
+use crate::collections::{hash_map, HashMap};
 use chrono::{offset::Local, DateTime};
+use deadlock::BlockingMutex;
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
 use rupnp::{
@@ -13,6 +10,7 @@ use rupnp::{
     Device, Service,
 };
 use scoped_task::ScopedJoinHandle;
+use state_monitor::StateMonitor;
 use std::{
     fmt,
     future::Future,

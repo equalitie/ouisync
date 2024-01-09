@@ -6,11 +6,11 @@ use super::{
 use crate::{
     block_tracker::{BlockOffer, BlockPromise},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
-    deadlock::BlockingMutex,
     protocol::{Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, UntrustedProof},
     repository::RepositoryMonitor,
     sync::delay_map::DelayMap,
 };
+use deadlock::BlockingMutex;
 use std::{future, sync::Arc, task::ready};
 use std::{task::Poll, time::Instant};
 use tokio::{sync::OwnedSemaphorePermit, task};
@@ -167,7 +167,11 @@ impl PendingRequests {
         let (client_permit, block_promise) = if let Some(request_data) =
             self.map.lock().unwrap().remove(&key)
         {
-            request_removed(&self.monitor, &key, Some(request_data.timestamp));
+            request_removed(&self.monitor, &key);
+
+            self.monitor
+                .request_latency
+                .record(request_data.timestamp.elapsed());
 
             // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
             // only `drop` it once the request is processed.
@@ -188,24 +192,26 @@ impl PendingRequests {
 }
 
 fn request_added(monitor: &RepositoryMonitor, key: &Key) {
-    *monitor.pending_requests.get() += 1;
+    monitor.requests_pending.increment(1.0);
 
     match key {
-        Key::RootNode(_) | Key::ChildNodes { .. } => *monitor.index_requests_inflight.get() += 1,
-        Key::Block(_) => *monitor.block_requests_inflight.get() += 1,
+        Key::RootNode(_) | Key::ChildNodes { .. } => {
+            monitor.index_requests_sent.increment(1);
+            monitor.index_requests_inflight.increment(1.0);
+        }
+        Key::Block(_) => {
+            monitor.block_requests_sent.increment(1);
+            monitor.block_requests_inflight.increment(1.0);
+        }
         Key::BlockOffer(_) => (),
     }
 }
 
-fn request_removed(monitor: &RepositoryMonitor, key: &Key, timestamp: Option<Instant>) {
+fn request_removed(monitor: &RepositoryMonitor, key: &Key) {
     match key {
-        Key::RootNode(_) | Key::ChildNodes { .. } => *monitor.index_requests_inflight.get() -= 1,
-        Key::Block(_) => *monitor.block_requests_inflight.get() -= 1,
+        Key::RootNode(_) | Key::ChildNodes { .. } => monitor.index_requests_inflight.decrement(1.0),
+        Key::Block(_) => monitor.block_requests_inflight.decrement(1.0),
         Key::BlockOffer(_) => (),
-    }
-
-    if let Some(timestamp) = timestamp {
-        monitor.request_inflight_metric.record(timestamp.elapsed());
     }
 }
 
@@ -214,8 +220,8 @@ async fn run_expiration_tracker(
     request_map: Arc<BlockingMutex<DelayMap<Key, RequestData>>>,
 ) {
     while let Some((key, _)) = expired(&request_map).await {
-        *monitor.request_timeouts.get() += 1;
-        request_removed(&monitor, &key, None);
+        monitor.request_timeouts.increment(1);
+        request_removed(&monitor, &key);
     }
 }
 
@@ -228,7 +234,7 @@ async fn expired(map: &BlockingMutex<DelayMap<Key, RequestData>>) -> Option<(Key
 impl Drop for PendingRequests {
     fn drop(&mut self) {
         for (key, ..) in self.map.lock().unwrap().drain() {
-            request_removed(&self.monitor, &key, None);
+            request_removed(&self.monitor, &key);
         }
     }
 }
@@ -244,6 +250,6 @@ pub(super) struct ClientPermit(OwnedSemaphorePermit, Arc<RepositoryMonitor>);
 
 impl Drop for ClientPermit {
     fn drop(&mut self) {
-        *self.1.pending_requests.get() -= 1;
+        self.1.requests_pending.decrement(1.0);
     }
 }

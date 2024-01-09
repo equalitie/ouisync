@@ -2,8 +2,8 @@ mod utils;
 
 use camino::Utf8Path;
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
-use ouisync::StateMonitor;
 use rand::{rngs::StdRng, SeedableRng};
+use state_monitor::StateMonitor;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use utils::Actor;

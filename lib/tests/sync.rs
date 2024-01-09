@@ -1119,6 +1119,8 @@ fn quota_exceed() {
 
     env.actor("reader", {
         async move {
+            let mut traffic = TrafficMonitor::new();
+
             let network = actor::create_network(Proto::Tcp).await;
 
             let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
@@ -1129,8 +1131,6 @@ fn quota_exceed() {
             // The first file is within the quota
             common::expect_file_content(&repo, "0.dat", &content0).await;
 
-            let mut traffic = TrafficMonitor::new(&repo);
-
             let size0 = repo.size().await.unwrap();
             assert!(size0 <= quota);
 
@@ -1138,8 +1138,7 @@ fn quota_exceed() {
             tx.send(()).await.unwrap();
 
             // Wait for the traffic to settle
-            traffic.wait_start().await;
-            traffic.wait_stop().await;
+            traffic.wait().await;
 
             // The second file is rejected because it exceeds the quota
             let size1 = repo.size().await.unwrap();
@@ -1186,6 +1185,8 @@ fn quota_concurrent_writes() {
     }
 
     env.actor("reader", async move {
+        let mut traffic = TrafficMonitor::new();
+
         let network = actor::create_network(Proto::Tcp).await;
         network.add_user_provided_peer(&actor::lookup_addr("writer-0").await);
         network.add_user_provided_peer(&actor::lookup_addr("writer-1").await);
@@ -1193,12 +1194,9 @@ fn quota_concurrent_writes() {
         let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
         repo.set_quota(Some(quota)).await.unwrap();
 
-        let mut traffic = TrafficMonitor::new(&repo);
-
         let _reg = network.register(repo.handle()).await;
 
-        traffic.wait_start().await;
-        traffic.wait_stop().await;
+        traffic.wait().await;
 
         let size = repo.size().await.unwrap();
         assert!(size <= quota);

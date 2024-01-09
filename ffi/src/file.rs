@@ -1,6 +1,7 @@
 use crate::{registry::Handle, repository::RepositoryHolder, state::State};
 use camino::Utf8PathBuf;
-use ouisync_lib::{deadlock::AsyncMutex, Branch, File};
+use deadlock::AsyncMutex;
+use ouisync_lib::{Branch, File};
 use std::io::SeekFrom;
 
 pub struct FileHolder {

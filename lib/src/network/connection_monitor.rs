@@ -1,8 +1,6 @@
 use super::{connection::ConnectionDirection, peer_addr::PeerAddr, PeerSource, PublicRuntimeId};
-use crate::{
-    crypto::sign::PublicKey,
-    state_monitor::{MonitoredValue, StateMonitor},
-};
+use crate::crypto::sign::PublicKey;
+use state_monitor::{MonitoredValue, StateMonitor};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{field, Span};
 

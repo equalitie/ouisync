@@ -9,10 +9,10 @@ use super::{
 };
 use crate::{
     collections::{hash_map, HashMap, HashSet},
-    deadlock::BlockingMutex,
     iterator::IntoIntersection,
 };
 use async_trait::async_trait;
+use deadlock::BlockingMutex;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
     future::Future,

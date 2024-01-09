@@ -30,7 +30,6 @@ use crate::{
         sign::{self, PublicKey},
     },
     db::{self, DatabaseId},
-    deadlock::BlockingMutex,
     debug::DebugPrinter,
     device_id::DeviceId,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef, EntryType},
@@ -41,16 +40,18 @@ use crate::{
     path,
     progress::Progress,
     protocol::{RootNodeFilter, BLOCK_SIZE},
-    state_monitor::StateMonitor,
     storage_size::StorageSize,
     store,
     sync::stream::Throttle,
     version_vector::VersionVector,
 };
 use camino::Utf8Path;
+use deadlock::BlockingMutex;
 use futures_util::{future, TryStreamExt};
 use futures_util::{stream, StreamExt};
+use metrics::Recorder;
 use scoped_task::ScopedJoinHandle;
+use state_monitor::StateMonitor;
 use std::{io, path::Path, pin::pin, sync::Arc};
 use tokio::{
     fs,
@@ -92,7 +93,7 @@ pub async fn delete(store: impl AsRef<Path>) -> io::Result<()> {
 
 impl Repository {
     /// Creates a new repository.
-    pub async fn create(params: &RepositoryParams, access: Access) -> Result<Self> {
+    pub async fn create(params: &RepositoryParams<impl Recorder>, access: Access) -> Result<Self> {
         let pool = params.create().await?;
         let device_id = params.device_id();
         let monitor = params.monitor();
@@ -114,7 +115,7 @@ impl Repository {
     /// * `local_secret` - A user provided secret to encrypt the access secrets. If not provided,
     ///                    the repository will be opened as a blind replica.
     pub async fn open(
-        params: &RepositoryParams,
+        params: &RepositoryParams<impl Recorder>,
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
     ) -> Result<Self> {
@@ -161,7 +162,10 @@ impl Repository {
     }
 
     /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
-    pub async fn reopen(params: &RepositoryParams, token: ReopenToken) -> Result<Self> {
+    pub async fn reopen(
+        params: &RepositoryParams<impl Recorder>,
+        token: ReopenToken,
+    ) -> Result<Self> {
         let pool = params.open().await?;
         let monitor = params.monitor();
 

@@ -1,6 +1,6 @@
 use crate::state::{State, SubscriptionHandle};
 use ouisync_bridge::{protocol::Notification, transport::NotificationSender};
-use ouisync_lib::{MonitorId, StateMonitor};
+use state_monitor::{MonitorId, StateMonitor};
 use std::time::Duration;
 use tokio::time;
 

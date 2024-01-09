@@ -9,7 +9,7 @@ use hyper::{
     Body, Response,
 };
 use hyper_rustls::TlsAcceptor;
-use metrics::{Gauge, Key, KeyName, Label, Recorder, Unit};
+use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
 use ouisync_bridge::config::{ConfigError, ConfigKey};
 use ouisync_lib::{network::PeerState, PeerInfoCollector, PublicRuntimeId};
@@ -155,8 +155,10 @@ async fn collect(
         Some(Unit::Seconds),
         "duration of metrics collection".into(),
     );
-    let collect_duration_gauge =
-        recorder.register_gauge(&Key::from_name(collect_duration_key_name));
+    let collect_duration_gauge = recorder.register_gauge(
+        &Key::from_name(collect_duration_key_name),
+        &Metadata::new(module_path!(), Level::INFO, None),
+    );
 
     let mut active_peers = HashMap::<PublicRuntimeId, CountryCode>::default();
     let mut geo_ip = GeoIp::new(geo_ip_path);
@@ -216,7 +218,7 @@ impl GaugeMap {
             let label = Label::new("country", country.to_string());
             let key = Key::from_parts(key_name.clone(), vec![label]);
 
-            recorder.register_gauge(&key)
+            recorder.register_gauge(&key, &Metadata::new(module_path!(), Level::INFO, None))
         })
     }
 

@@ -10,8 +10,8 @@ use ouisync_bridge::{
     logger::{LogColor, LogFormat, Logger},
     transport::RemoteServer,
 };
-use ouisync_lib::StateMonitor;
 use scoped_task::ScopedAbortHandle;
+use state_monitor::StateMonitor;
 use std::{
     io,
     net::SocketAddr,

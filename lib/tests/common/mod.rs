@@ -4,21 +4,31 @@
 mod macros;
 
 pub(crate) mod dump;
+mod recorder;
 pub(crate) mod sync_watch;
 pub(crate) mod traffic_monitor;
 mod wait_map;
 
+pub(crate) use self::env::*;
+
+use self::{
+    recorder::{AddLabels, ArcRecorder, MetricsSubscriber, PairRecorder, WatchRecorder},
+    wait_map::WaitMap,
+};
 use camino::Utf8Path;
-use comfy_table::{presets, CellAlignment, Table};
+use metrics::{Label, NoopRecorder, Recorder};
+use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_util::layers::{Fanout, FanoutBuilder};
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
-    metrics::{self, Metrics},
     network::{Network, Registration},
     Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
     Result, StoreError,
 };
+use ouisync_tracing_fmt::Formatter;
 use rand::Rng;
+use state_monitor::StateMonitor;
 use std::{
     fmt,
     future::Future,
@@ -28,14 +38,16 @@ use std::{
     thread,
 };
 use tokio::{
+    runtime::Handle,
     sync::broadcast::{self, error::RecvError},
     task_local,
     time::{self, Duration},
 };
+use tracing::metadata::LevelFilter;
 use tracing::{instrument, Instrument, Span};
-
-pub(crate) use self::env::*;
-use self::wait_map::WaitMap;
+use tracing_subscriber::{
+    fmt::time::SystemTime, layer::SubscriberExt, util::SubscriberInitExt, Layer,
+};
 
 pub(crate) const DEFAULT_REPO: &str = "default";
 
@@ -51,6 +63,9 @@ pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
 });
 
 pub(crate) static TEST_TIMEOUT: Lazy<Duration> = Lazy::new(|| 4 * *EVENT_TIMEOUT);
+
+static PROMETHEUS_PUSH_GATEWAY_ENDPOINT: Lazy<Option<String>> =
+    Lazy::new(|| std::env::var("PROMETHEUS_PUSH_GATEWAY_ENDPOINT").ok());
 
 #[cfg(not(feature = "simulation"))]
 pub(crate) mod env {
@@ -71,12 +86,12 @@ pub(crate) mod env {
 
     impl Env {
         pub fn new() -> Self {
-            let context = Context::new();
-
             let runtime = runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .unwrap();
+
+            let context = Context::new(runtime.handle());
 
             Self {
                 context: Arc::new(context),
@@ -101,20 +116,9 @@ pub(crate) mod env {
 
     impl Drop for Env {
         fn drop(&mut self) {
-            let result = self
-                .runtime
-                .block_on(future::try_join_all(self.tasks.drain(..)));
-
-            let (tx, rx) = oneshot::channel();
-
-            self.context.clocks.report(|report| {
-                report_metrics(report);
-                tx.send(()).ok();
-            });
-
-            rx.blocking_recv().ok();
-
-            result.unwrap();
+            self.runtime
+                .block_on(future::try_join_all(self.tasks.drain(..)))
+                .unwrap();
         }
     }
 }
@@ -131,7 +135,7 @@ pub(crate) mod env {
 
     impl<'a> Env<'a> {
         pub fn new() -> Self {
-            let context = Context::new();
+            let context = Context::new(&Handle::current());
             let runner = turmoil::Builder::new()
                 .simulation_duration(Duration::from_secs(90))
                 .build_with_rng(Box::new(rand::thread_rng()));
@@ -171,7 +175,10 @@ pub(crate) mod env {
 /// that is, from inside the future passed to `Env::actor`.
 pub(crate) mod actor {
     use super::*;
-    use ouisync::{AccessMode, RepositoryParams, StateMonitor};
+    use metrics::Key;
+    use ouisync::{AccessMode, RepositoryParams};
+    use state_monitor::StateMonitor;
+    use tokio::sync::watch;
 
     pub(crate) fn create_unbound_network() -> Network {
         Network::new(None, StateMonitor::make_root())
@@ -222,17 +229,26 @@ pub(crate) mod actor {
         }
     }
 
-    pub(crate) fn get_repo_params_and_secrets(name: &str) -> (RepositoryParams, AccessSecrets) {
+    pub(crate) fn get_repo_params_and_secrets(
+        name: &str,
+    ) -> (RepositoryParams<AddLabels<ArcRecorder>>, AccessSecrets) {
         ACTOR.with(|actor| {
-            (
-                RepositoryParams::new(actor.repo_path(name))
-                    .with_device_id(actor.device_id)
-                    .with_clocks(actor.context.clocks.clone()),
-                actor
-                    .context
-                    .repo_map
-                    .get_or_insert_with(name.to_owned(), AccessSecrets::random_write),
-            )
+            let recorder = AddLabels::new(
+                vec![Label::new("actor", actor.name.clone())],
+                actor.context.recorder.clone(),
+            );
+
+            let params = RepositoryParams::new(actor.repo_path(name))
+                .with_device_id(actor.device_id)
+                .with_recorder(recorder)
+                .with_parent_monitor(actor.monitor.clone());
+
+            let secrets = actor
+                .context
+                .repo_map
+                .get_or_insert_with(name.to_owned(), AccessSecrets::random_write);
+
+            (params, secrets)
         })
     }
 
@@ -268,6 +284,10 @@ pub(crate) mod actor {
         let (repo, reg) = create_linked_repo(DEFAULT_REPO, &network).await;
         (network, repo, reg)
     }
+
+    pub(crate) fn metrics_subscriber() -> MetricsSubscriber {
+        ACTOR.with(|actor| actor.context.metrics_subscriber.clone())
+    }
 }
 
 task_local! {
@@ -278,18 +298,34 @@ struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
-    clocks: Metrics,
+    recorder: ArcRecorder,
+    metrics_subscriber: MetricsSubscriber,
+    monitor: StateMonitor,
 }
 
 impl Context {
-    fn new() -> Self {
+    fn new(runtime: &Handle) -> Self {
         init_log();
+
+        let watch_recorder = WatchRecorder::new();
+        let metrics_subscriber = watch_recorder.subscriber();
+
+        let recorder = if let Some(endpoint) = PROMETHEUS_PUSH_GATEWAY_ENDPOINT.as_ref() {
+            ArcRecorder::new(PairRecorder(
+                watch_recorder,
+                init_prometheus_recorder(runtime, endpoint),
+            ))
+        } else {
+            ArcRecorder::new(watch_recorder)
+        };
 
         Self {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
-            clocks: Metrics::new(),
+            recorder,
+            metrics_subscriber,
+            monitor: StateMonitor::make_root(),
         }
     }
 }
@@ -299,17 +335,20 @@ struct Actor {
     context: Arc<Context>,
     base_dir: PathBuf,
     device_id: DeviceId,
+    monitor: StateMonitor,
 }
 
 impl Actor {
     fn new(name: String, context: Arc<Context>) -> Self {
         let base_dir = context.base_dir.path().join(&name);
+        let monitor = context.monitor.make_child(&name);
 
         Actor {
             name,
             context,
             base_dir,
             device_id: rand::random(),
+            monitor,
         }
     }
 
@@ -630,83 +669,34 @@ fn to_megabytes(bytes: usize) -> usize {
 }
 
 pub(crate) fn init_log() {
-    use ouisync_tracing_fmt::Formatter;
-    use tracing::metadata::LevelFilter;
-    use tracing_subscriber::fmt::time::SystemTime;
-
-    let result = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::builder()
-                // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
-                .with_default_directive(LevelFilter::OFF.into())
-                .from_env_lossy(),
-        )
+    // Log to stdout
+    let stdout_layer = tracing_subscriber::fmt::layer()
         .event_format(Formatter::<SystemTime>::default())
         // log output is captured by default and only shown on failure. Run tests with
         // `--nocapture` to override.
         .with_test_writer()
-        .try_init();
+        .with_filter(
+            tracing_subscriber::EnvFilter::builder()
+                // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
+                .with_default_directive(LevelFilter::OFF.into())
+                .from_env_lossy(),
+        );
 
-    // error here most likely means the logger is already initialized. We can ignore that.
-    result.ok();
+    tracing_subscriber::registry()
+        .with(stdout_layer)
+        .try_init()
+        // `Err` here just means the logger is already initialized, it's OK to ignore it.
+        .unwrap_or(());
 }
 
-fn report_metrics(report: &metrics::Report) {
-    let mut table = Table::new();
-    table.load_preset(presets::UTF8_FULL_CONDENSED);
-    table.set_header(vec![
-        "name", "count", "min", "max", "mean", "stdev", "50%", "90%", "99%", "99.9%",
-    ]);
+fn init_prometheus_recorder(runtime: &Handle, endpoint: &str) -> impl Recorder + Send + 'static {
+    let (recorder, exporter) = PrometheusBuilder::new()
+        .with_push_gateway(endpoint, Duration::from_millis(100), None, None)
+        .unwrap()
+        .build()
+        .unwrap();
 
-    for column in table.column_iter_mut().skip(1) {
-        column.set_cell_alignment(CellAlignment::Right);
-    }
+    runtime.spawn(exporter);
 
-    for item in report.items() {
-        let v = item.time;
-
-        table.add_row(vec![
-            format!("{}", item.name),
-            format!("{}", v.count()),
-            format!("{:.4}", v.min().as_secs_f64()),
-            format!("{:.4}", v.max().as_secs_f64()),
-            format!("{:.4}", v.mean().as_secs_f64()),
-            format!("{:.4}", v.stdev().as_secs_f64()),
-            format!("{:.4}", v.value_at_quantile(0.5).as_secs_f64()),
-            format!("{:.4}", v.value_at_quantile(0.9).as_secs_f64()),
-            format!("{:.4}", v.value_at_quantile(0.99).as_secs_f64()),
-            format!("{:.4}", v.value_at_quantile(0.999).as_secs_f64()),
-        ]);
-    }
-
-    println!("Time (s)\n{table}");
-
-    let mut table = Table::new();
-    table.load_preset(presets::UTF8_FULL_CONDENSED);
-    table.set_header(vec![
-        "name", "count", "min", "max", "mean", "stdev", "50%", "90%", "99%", "99.9%",
-    ]);
-
-    for column in table.column_iter_mut().skip(1) {
-        column.set_cell_alignment(CellAlignment::Right);
-    }
-
-    for item in report.items() {
-        let v = item.throughput;
-
-        table.add_row(vec![
-            format!("{}", item.name),
-            format!("{}", v.count()),
-            format!("{:.1}", v.min()),
-            format!("{:.1}", v.max()),
-            format!("{:.1}", v.mean()),
-            format!("{:.1}", v.stdev()),
-            format!("{:.1}", v.value_at_quantile(0.5)),
-            format!("{:.1}", v.value_at_quantile(0.9)),
-            format!("{:.1}", v.value_at_quantile(0.99)),
-            format!("{:.1}", v.value_at_quantile(0.999)),
-        ]);
-    }
-
-    println!("Throughput (hits/s)\n{table}");
+    recorder
 }

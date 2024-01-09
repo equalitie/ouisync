@@ -26,8 +26,8 @@ hyper = { version = "0.14.27", features = ["server", "http1", "http2"] }
 hyper-rustls = { version = "0.24.1", default-features = false, features = ["acceptor"] }
 interprocess = { version = "1.2.1", features = ["tokio_support"] }
 maxminddb = "0.23.0"
-metrics = "0.21.1"
-metrics-exporter-prometheus = { version = "0.12.1", default-features = false }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }
@@ -35,6 +35,7 @@ pem = "2.0.1"
 rustls = { workspace = true }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
+state_monitor = { path = "../state_monitor" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["signal", "io-std"] }
 tokio-stream = { workspace = true }

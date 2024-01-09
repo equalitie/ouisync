@@ -34,15 +34,16 @@ camino = { workspace = true }
 chacha20 = "0.9.1"
 chrono = "0.4.31"
 crossbeam-channel = "0.5.8"
+deadlock = { path = "../deadlock" }
 ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
 either = { version = "1.6.1", default-features = false }
 futures-util = { workspace = true }
 generic-array = { version = "0.14.5", features = ["serde"] }
-hdrhistogram = { version = "7.5.2", default-features = false }
 hex = "0.4.3"
 include_dir = "0.7.3"
 indexmap = "1.9.3"
 lru = "0.11.0"
+metrics = { workspace = true }
 net = { package = "ouisync-net", path = "../net" }
 noise-protocol = "0.2.0"
 noise-rust-crypto = { version = "0.6.1", default-features = false, features = ["use-x25519", "use-chacha20poly1305", "use-blake2"] }
@@ -56,10 +57,10 @@ rupnp = { version = "1.1.0", default-features = false, features = [] }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
-serde_millis = "0.1.1"
 slab = "0.4.6"
 sqlx = { version = "0.7.2", default-features = false, features = ["runtime-tokio", "sqlite"] }
 ssdp-client = "1.0"
+state_monitor = { path = "../state_monitor" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
@@ -84,12 +85,12 @@ network-interface = "0.1.3"
 
 [dev-dependencies]
 assert_matches = "1.5"
-async-compression = { version = "0.4.4", features = ["tokio", "gzip"] }
-comfy-table = { version = "6.2.0", default-features = false }
 criterion = { version = "0.4", features = ["html_reports"] }
+metrics-exporter-prometheus = { workspace = true, features = ["push-gateway"] }
+metrics-util = { workspace = true }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = "1.0"
-serde_json = "1.0.94"
+serde_json = { workspace = true }
 serde_test = "1.0.176"
 similar-asserts = "1.5.0"
 tempfile = "3.2"

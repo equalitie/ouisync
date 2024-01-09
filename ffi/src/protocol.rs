@@ -4,8 +4,9 @@ use crate::{
 };
 use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
-use ouisync_lib::{AccessMode, MonitorId, PeerAddr, PeerInfo, Progress, ShareToken, StateMonitor};
+use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, Progress, ShareToken};
 use serde::{Deserialize, Serialize};
+use state_monitor::{MonitorId, StateMonitor};
 use std::{
     fmt,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
