@@ -5,7 +5,7 @@ use super::{
 };
 use crate::collections::{HashMap, HashSet};
 use deadlock::AsyncMutex;
-use net::udp::{UdpSocket, MULTICAST_ADDR, MULTICAST_PORT};
+use net::udp::{DatagramSocket, UdpSocket, MULTICAST_ADDR, MULTICAST_PORT};
 use rand::rngs::OsRng;
 use rand::Rng;
 use scoped_task::ScopedJoinHandle;

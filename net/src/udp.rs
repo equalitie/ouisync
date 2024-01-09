@@ -1,20 +1,35 @@
 pub use self::implementation::*;
 
-use std::net::Ipv4Addr;
+use std::{
+    future::Future,
+    io,
+    net::{Ipv4Addr, SocketAddr},
+};
 
 // Selected at random but to not clash with some reserved ones:
 // https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
 pub const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 137);
 pub const MULTICAST_PORT: u16 = 9271;
 
+/// Trait for UDP-like sockets.
+pub trait DatagramSocket {
+    fn send_to<'a>(
+        &'a self,
+        buf: &'a [u8],
+        target: SocketAddr,
+    ) -> impl Future<Output = io::Result<usize>> + Send + 'a;
+
+    fn recv_from<'a>(
+        &'a self,
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = io::Result<(usize, SocketAddr)>> + Send + 'a;
+}
+
 #[cfg(not(feature = "simulation"))]
 mod implementation {
     use super::*;
     use crate::socket::{self, ReuseAddr};
-    use std::{
-        io,
-        net::{SocketAddr, SocketAddrV4},
-    };
+    use std::net::SocketAddrV4;
 
     pub struct UdpSocket(tokio::net::UdpSocket);
 
@@ -35,16 +50,18 @@ mod implementation {
             Ok(Self(socket))
         }
 
-        pub async fn send_to(&self, buf: &[u8], target: SocketAddr) -> io::Result<usize> {
+        pub fn into_std(self) -> io::Result<std::net::UdpSocket> {
+            self.0.into_std()
+        }
+    }
+
+    impl DatagramSocket for UdpSocket {
+        async fn send_to<'a>(&'a self, buf: &'a [u8], target: SocketAddr) -> io::Result<usize> {
             self.0.send_to(buf, target).await
         }
 
-        pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        async fn recv_from<'a>(&'a self, buf: &'a mut [u8]) -> io::Result<(usize, SocketAddr)> {
             self.0.recv_from(buf).await
-        }
-
-        pub fn into_std(self) -> io::Result<std::net::UdpSocket> {
-            self.0.into_std()
         }
     }
 }
@@ -52,7 +69,6 @@ mod implementation {
 #[cfg(feature = "simulation")]
 mod implementation {
     use super::*;
-    use std::{io, net::SocketAddr};
 
     pub struct UdpSocket;
 
@@ -65,15 +81,17 @@ mod implementation {
             unimplemented!("simulated udp sockets not supported")
         }
 
-        pub async fn send_to(&self, _buf: &[u8], _target: SocketAddr) -> io::Result<usize> {
-            unimplemented!()
-        }
-
-        pub async fn recv_from(&self, _buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-            unimplemented!()
-        }
-
         pub fn into_std(self) -> io::Result<std::net::UdpSocket> {
+            unimplemented!()
+        }
+    }
+
+    impl DatagramSocket for UdpSocket {
+        async fn send_to<'a>(&'a self, _buf: &'a [u8], _target: SocketAddr) -> io::Result<usize> {
+            unimplemented!()
+        }
+
+        async fn recv_from<'a>(&'a self, _buf: &'a mut [u8]) -> io::Result<(usize, SocketAddr)> {
             unimplemented!()
         }
     }

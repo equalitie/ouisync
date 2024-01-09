@@ -11,7 +11,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::broadcast,
+    sync::{broadcast, Mutex as AsyncMutex},
     time::Duration,
 };
 
@@ -433,6 +433,8 @@ use futures_util::ready;
 use std::mem::MaybeUninit;
 use tokio::io::Interest;
 
+use crate::udp::DatagramSocket;
+
 // TODO: I saw this number mentioned somewhere in quinn as a standard MTU size rounded to 8 bytes.
 // I believe it's also more than is needed for BtDHT, but more rigorous definition of this number
 // would be welcome.
@@ -471,7 +473,7 @@ impl CustomUdpSocket {
     fn side_channel_maker(&self) -> SideChannelMaker {
         SideChannelMaker {
             io: self.io.clone(),
-            side_channel_tx: self.side_channel_tx.clone(),
+            packet_tx: self.side_channel_tx.clone(),
         }
     }
 }
@@ -561,43 +563,24 @@ fn send_to_side_channels(
 /// Makes new `SideChannel`s.
 pub struct SideChannelMaker {
     io: Arc<tokio::net::UdpSocket>,
-    side_channel_tx: broadcast::Sender<Packet>,
+    packet_tx: broadcast::Sender<Packet>,
 }
 
 impl SideChannelMaker {
     pub fn make(&self) -> SideChannel {
         SideChannel {
             io: self.io.clone(),
-            packet_receiver: self.side_channel_tx.subscribe(),
+            packet_rx: AsyncMutex::new(self.packet_tx.subscribe()),
         }
     }
 }
 
 pub struct SideChannel {
     io: Arc<tokio::net::UdpSocket>,
-    packet_receiver: broadcast::Receiver<Packet>,
+    packet_rx: AsyncMutex<broadcast::Receiver<Packet>>,
 }
 
 impl SideChannel {
-    pub async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
-        self.io.send_to(buf, target).await.map(|_| ())
-    }
-
-    // Note: receiving on side channels will only work when quinn is calling `poll_recv`.  This
-    // normally shouldn't be a problem because by default we'll always be accepting new connections
-    // on the `Acceptor`, but should be kept in mind if we decide to disable QUIC for some reason.
-    pub async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        let packet = match self.packet_receiver.recv().await {
-            Ok(packet) => packet,
-            Err(err) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, err)),
-        };
-        let len = packet.len.min(buf.len());
-        unsafe {
-            std::ptr::copy_nonoverlapping(packet.data.as_ptr().cast::<u8>(), buf.as_mut_ptr(), len);
-        }
-        Ok((len, packet.from))
-    }
-
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.io.local_addr()
     }
@@ -606,6 +589,27 @@ impl SideChannel {
         SideChannelSender {
             io: self.io.clone(),
         }
+    }
+}
+
+impl DatagramSocket for SideChannel {
+    async fn send_to<'a>(&'a self, buf: &'a [u8], target: SocketAddr) -> io::Result<usize> {
+        self.io.send_to(buf, target).await
+    }
+
+    // Note: receiving on side channels will only work when quinn is calling `poll_recv`.  This
+    // normally shouldn't be a problem because by default we'll always be accepting new connections
+    // on the `Acceptor`, but should be kept in mind if we decide to disable QUIC for some reason.
+    async fn recv_from<'a>(&'a self, buf: &'a mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        let packet = match self.packet_rx.lock().await.recv().await {
+            Ok(packet) => packet,
+            Err(err) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, err)),
+        };
+        let len = packet.len.min(buf.len());
+        unsafe {
+            std::ptr::copy_nonoverlapping(packet.data.as_ptr().cast::<u8>(), buf.as_mut_ptr(), len);
+        }
+        Ok((len, packet.from))
     }
 }
 
@@ -664,7 +668,7 @@ mod tests {
         let (_connector, mut acceptor, side_channel_maker) =
             configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
         let addr = *acceptor.local_addr();
-        let mut side_channel = side_channel_maker.make();
+        let side_channel = side_channel_maker.make();
 
         // We must ensure quinn polls on the socket for side channel to be able to receive data.
         task::spawn(async move {

@@ -1,4 +1,5 @@
 pub mod quic;
+pub mod stun;
 pub mod tcp;
 pub mod udp;
 
