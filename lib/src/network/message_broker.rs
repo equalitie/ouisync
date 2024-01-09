@@ -28,9 +28,9 @@ use tokio::{
 use tracing::{instrument::Instrument, Span};
 
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
-/// that at the present all the connections are TCP based and so dropping some of them would make
-/// sense. However, in the future we may also have other transports (e.g. Bluetooth) and thus
-/// keeping all may make sence because even if one is dropped, the others may still function.
+/// that at the present all the connections are UDP/QUIC based and so dropping some of them would
+/// make sense. However, in the future we may also have other transports (e.g. TCP, Bluetooth) and
+/// thus keeping all may make sence because even if one is dropped, the others may still function.
 ///
 /// Once a message is received, it is determined whether it is a request or a response. Based on
 /// that it either goes to the ClientStream or ServerStream for processing by the Client and Server
