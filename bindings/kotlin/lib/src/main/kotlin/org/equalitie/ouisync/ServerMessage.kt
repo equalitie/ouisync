@@ -4,37 +4,35 @@ import org.msgpack.core.MessageUnpacker
 import org.msgpack.value.ValueType
 
 data class PeerInfo(
-    val ip: String,
-    val port: UShort,
-    val source: String,
-    val state: String,
+    val addr: String,
+    val source: PeerSource,
+    val state: PeerStateKind,
     val runtimeId: String?,
 ) {
     companion object {
         fun unpack(unpacker: MessageUnpacker): PeerInfo {
             val count = unpacker.unpackArrayHeader()
 
-            if (count < 4) {
+            if (count < 3) {
                 throw InvalidResponse()
             }
 
-            val ip = unpacker.unpackString()
-            val port = unpacker.unpackInt().toUShort()
-            val source = unpacker.unpackString()
+            val addr = unpacker.unpackString()
+            val source = PeerSource.decode(unpacker.unpackByte())
 
-            var state: String
+            var state: PeerStateKind
             var runtimeId: String? = null
 
             when (unpacker.getNextFormat().getValueType()) {
-                ValueType.STRING -> {
-                    state = unpacker.unpackString()
+                ValueType.INTEGER -> {
+                    state = PeerStateKind.decode(unpacker.unpackByte())
                 }
-                ValueType.MAP -> {
-                    if (unpacker.unpackMapHeader() < 1) {
+                ValueType.ARRAY -> {
+                    if (unpacker.unpackArrayHeader() < 2) {
                         throw InvalidResponse()
                     }
 
-                    state = unpacker.unpackString()
+                    state = PeerStateKind.decode(unpacker.unpackByte())
 
                     val length = unpacker.unpackBinaryHeader()
                     val runtimeIdBytes = unpacker.readPayload(length)
@@ -45,7 +43,7 @@ data class PeerInfo(
                 else -> throw InvalidResponse()
             }
 
-            return PeerInfo(ip, port, source, state, runtimeId)
+            return PeerInfo(addr, source, state, runtimeId)
         }
     }
 }
@@ -120,7 +118,7 @@ internal class Success(val value: Any?) : Response {
                 ValueType.ARRAY -> {
                     when (name) {
                         "directory" -> Directory.unpack(unpacker)
-                        "peer_info" -> unpackPeerInfo(unpacker)
+                        "peer_infos" -> unpackPeerInfos(unpacker)
                         "progress" -> Progress.unpack(unpacker)
                         else -> throw InvalidResponse()
                     }
@@ -142,7 +140,7 @@ internal class Success(val value: Any?) : Response {
                 else -> throw InvalidResponse()
             }
 
-        private fun unpackPeerInfo(unpacker: MessageUnpacker): List<PeerInfo> {
+        private fun unpackPeerInfos(unpacker: MessageUnpacker): List<PeerInfo> {
             val count = unpacker.unpackArrayHeader()
             return 0.rangeUntil(count).map { PeerInfo.unpack(unpacker) }
         }

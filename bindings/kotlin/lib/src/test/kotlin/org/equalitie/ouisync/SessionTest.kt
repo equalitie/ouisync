@@ -62,7 +62,7 @@ class SessionTest {
 
         val peers1 = session.peers()
         assertEquals(1, peers1.size)
-        assertEquals(addr, "quic/${peers1[0].ip}:${peers1[0].port}")
+        assertEquals(addr, peers1[0].addr)
 
         session.removeUserProvidedPeer(addr)
         assertEquals(NetworkEvent.PEER_SET_CHANGE, events.receive())
