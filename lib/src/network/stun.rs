@@ -11,7 +11,7 @@ use std::{
 };
 use tokio::time;
 
-const HOST_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) struct StunClients {
     clients: Mutex<Vec<Arc<StunClient<SideChannel>>>>,
@@ -58,25 +58,37 @@ async fn external_addr(client: Arc<StunClient<SideChannel>>) -> Option<PeerAddr>
     hosts.shuffle(&mut rand::thread_rng());
 
     for host in hosts {
-        let server_addrs =
-            match time::timeout(HOST_LOOKUP_TIMEOUT, tokio::net::lookup_host(host)).await {
-                Ok(Ok(addrs)) => addrs,
-                Ok(Err(_)) | Err(_) => continue,
-            };
+        let server_addrs = match time::timeout(TIMEOUT, tokio::net::lookup_host(host)).await {
+            Ok(Ok(addrs)) => addrs,
+            Ok(Err(_)) | Err(_) => {
+                tracing::debug!(stun_server = host, "failed to resolve host");
+
+                continue;
+            }
+        };
 
         for server_addr in server_addrs {
             if !is_same_family(&server_addr, &local_addr) {
                 continue;
             }
 
-            match client.external_addr(server_addr).await {
-                Ok(addr) => {
+            match time::timeout(TIMEOUT, client.external_addr(server_addr)).await {
+                Ok(Ok(addr)) => {
                     tracing::debug!(stun_server = host, "got external address: {addr}");
                     // Currently this works for UDP (QUIC) only.
                     return Some(PeerAddr::Quic(addr));
                 }
-                Err(error) => {
-                    tracing::debug!(stun_server = host, ?error, "failed to get external address");
+                Ok(Err(error)) => {
+                    tracing::debug!(
+                        stun_server = host,
+                        "failed to get external address: {error:?}"
+                    );
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        stun_server = host,
+                        "failed to get external address: timeout"
+                    );
                 }
             }
         }
