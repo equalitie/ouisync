@@ -14,6 +14,7 @@ use crate::{
 use async_trait::async_trait;
 use deadlock::BlockingMutex;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
+use scoped_task::ScopedJoinHandle;
 use std::{
     future::Future,
     pin::Pin,
@@ -23,8 +24,8 @@ use std::{
 use tokio::{
     runtime, select,
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
-    sync::Mutex as AsyncMutex,
-    time::Duration,
+    sync::{Mutex as AsyncMutex, Notify},
+    time::{self, Duration},
 };
 
 // Time after which if no message is received, the connection is dropped.
@@ -33,7 +34,9 @@ const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
 const KEEP_ALIVE_SEND_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Reads/writes messages from/to the underlying TCP or QUIC streams and dispatches them to
-/// individual streams/sinks based on their ids.
+/// individual streams/sinks based on their channel ids (in the MessageDispatcher's and
+/// MessageBroker's contexts, there is a one-to-one relationship between the channel id and a
+/// repository id).
 #[derive(Clone)]
 pub(super) struct MessageDispatcher {
     recv: Arc<RecvState>,
@@ -411,16 +414,32 @@ impl Sink<Message> for PermittedSink {
 
 // Stream that reads `Message`s from multiple underlying raw (byte) streams concurrently.
 struct MultiStream {
-    inner: BlockingMutex<MultiStreamInner>,
+    rx: AsyncMutex<mpsc::Receiver<(PermitId, Message)>>,
+    inner: Arc<BlockingMutex<MultiStreamInner>>,
+    stream_added: Arc<Notify>,
+    _runner: ScopedJoinHandle<()>,
 }
 
 impl MultiStream {
     fn new() -> Self {
+        const MAX_QUEUED_MESSAGES: usize = 32;
+
+        let inner = Arc::new(BlockingMutex::new(MultiStreamInner {
+            streams: SelectAll::new(),
+            waker: None,
+        }));
+
+        let stream_added = Arc::new(Notify::new());
+        let (tx, rx) = mpsc::channel(MAX_QUEUED_MESSAGES);
+
+        let _runner =
+            scoped_task::spawn(multi_stream_runner(inner.clone(), tx, stream_added.clone()));
+
         Self {
-            inner: BlockingMutex::new(MultiStreamInner {
-                streams: SelectAll::new(),
-                waker: None,
-            }),
+            rx: AsyncMutex::new(rx),
+            inner,
+            stream_added,
+            _runner,
         }
     }
 
@@ -428,15 +447,12 @@ impl MultiStream {
         let mut inner = self.inner.lock().unwrap();
         inner.streams.push(stream);
         inner.wake();
+        self.stream_added.notify_one();
     }
 
-    // Receive next message from this stream. Equivalent to
-    //
-    // ```ignore
-    // async fn recv(&self) -> Option<Message>;
-    // ```
-    fn recv(&self) -> Recv {
-        Recv { inner: &self.inner }
+    // Receive next message from this stream.
+    async fn recv(&self) -> Option<(PermitId, Message)> {
+        self.rx.lock().await.recv().await
     }
 
     // Closes this stream. Any subsequent `recv` will immediately return `None` unless new
@@ -471,6 +487,29 @@ impl MultiStreamInner {
     fn wake(&mut self) {
         if let Some(waker) = self.waker.take() {
             waker.wake()
+        }
+    }
+}
+
+// We need this runner because we want to detect when a peer has disconnected even if the user has
+// not called `MultiStream::recv`.
+async fn multi_stream_runner(
+    inner: Arc<BlockingMutex<MultiStreamInner>>,
+    tx: mpsc::Sender<(PermitId, Message)>,
+    stream_added: Arc<Notify>,
+) {
+    // Wait for at least one stream to be added.
+    stream_added.notified().await;
+
+    while let Some((permit_id, message)) = (Recv { inner: &inner }).await {
+        // Close the connection if the sender is sending too many messages that we're not handling
+        // in a reasonable time. Note that if we don't have some of the repositories that the peer
+        // has, then they'll send some small number of messages from their Barrier code. That's
+        // fine because that number does not exceed MAX_QUEUED_MESSAGES and so the above `tx.send`
+        // won't block for long.
+        match time::timeout(KEEP_ALIVE_RECV_INTERVAL, tx.send((permit_id, message))).await {
+            Ok(Ok(())) => (),
+            Err(_) | Ok(Err(_)) => break,
         }
     }
 }
