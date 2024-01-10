@@ -33,6 +33,8 @@ impl StunClients {
 
     /// Queries our external addresses.
     pub async fn external_addrs(&self) -> Vec<PeerAddr> {
+        tracing::debug!("getting external addresses...");
+
         let tasks: Vec<_> = self
             .clients
             .lock()
@@ -62,7 +64,6 @@ async fn external_addr(client: Arc<StunClient<SideChannel>>) -> Option<PeerAddr>
             Ok(Ok(addrs)) => addrs,
             Ok(Err(_)) | Err(_) => {
                 tracing::debug!(stun_server = host, "failed to resolve host");
-
                 continue;
             }
         };
