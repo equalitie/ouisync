@@ -433,7 +433,6 @@ fn make_server_config() -> Result<quinn::ServerConfig> {
 
 //------------------------------------------------------------------------------
 use futures_util::ready;
-use std::mem::MaybeUninit;
 use tokio::io::Interest;
 
 use crate::udp::DatagramSocket;
@@ -447,7 +446,7 @@ const MAX_SIDE_CHANNEL_PENDING_PACKETS: usize = 1024;
 
 #[derive(Clone)]
 struct Packet {
-    data: [MaybeUninit<u8>; MAX_SIDE_CHANNEL_PACKET_SIZE],
+    data: [u8; MAX_SIDE_CHANNEL_PACKET_SIZE],
     len: usize,
     from: SocketAddr,
 }
@@ -538,25 +537,19 @@ fn send_to_side_channels(
     for (meta, buf) in metas.iter().zip(bufs.iter()).take(msg_count) {
         let mut data: BytesMut = buf[0..meta.len].into();
         while !data.is_empty() {
-            let buf = data.split_to(meta.stride.min(data.len()));
+            let src = data.split_to(meta.stride.min(data.len()));
+            let mut dst = [0; MAX_SIDE_CHANNEL_PACKET_SIZE];
+            let len = src.len().min(dst.len());
+
+            dst[..len].copy_from_slice(&src[..len]);
 
             channel
                 .send(Packet {
-                    data: unsafe {
-                        let mut data: [MaybeUninit<u8>; MAX_SIDE_CHANNEL_PACKET_SIZE] =
-                            MaybeUninit::uninit().assume_init();
-                        std::ptr::copy_nonoverlapping(
-                            buf.as_ptr(),
-                            data.as_mut_ptr().cast::<u8>(),
-                            buf.len().min(data.len()),
-                        );
-                        data
-                    },
-                    len: buf.len(),
+                    data: dst,
+                    len,
                     from: meta.addr,
                 })
-                .map(|_| ())
-                .unwrap_or(());
+                .unwrap_or(0);
         }
     }
 }
@@ -622,9 +615,7 @@ impl DatagramSocket for SideChannel {
         };
 
         let len = packet.len.min(buf.len());
-        unsafe {
-            std::ptr::copy_nonoverlapping(packet.data.as_ptr().cast::<u8>(), buf.as_mut_ptr(), len);
-        }
+        buf[..len].copy_from_slice(&packet.data[..len]);
 
         Ok((len, packet.from))
     }
