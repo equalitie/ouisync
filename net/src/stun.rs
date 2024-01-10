@@ -78,17 +78,15 @@ async fn recv<S: DatagramSocket, A: Attribute>(
 
         buffer.resize(len, 0);
 
-        // TODO: The `BrokenMessage` error might be also caused by the multiplexing issue,
-        // consider retrying as well.
-        let response = decoder
-            .decode_from_bytes(&buffer[..])
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "broken response"))?;
+        let response = match decoder.decode_from_bytes(&buffer[..]) {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) | Err(_) => continue,
+        };
 
-        if response.transaction_id() == expected_transaction_id {
-            return Ok(response);
-        } else {
+        if response.transaction_id() != expected_transaction_id {
             continue;
         }
+
+        return Ok(response);
     }
 }

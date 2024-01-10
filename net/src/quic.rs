@@ -11,7 +11,10 @@ use std::{
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::{broadcast, Mutex as AsyncMutex},
+    sync::{
+        broadcast::{self, error::RecvError},
+        Mutex as AsyncMutex,
+    },
     time::Duration,
 };
 
@@ -601,14 +604,28 @@ impl DatagramSocket for SideChannel {
     // normally shouldn't be a problem because by default we'll always be accepting new connections
     // on the `Acceptor`, but should be kept in mind if we decide to disable QUIC for some reason.
     async fn recv_from<'a>(&'a self, buf: &'a mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        let packet = match self.packet_rx.lock().await.recv().await {
-            Ok(packet) => packet,
-            Err(err) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, err)),
+        let packet = loop {
+            match self.packet_rx.lock().await.recv().await {
+                Ok(packet) => break packet,
+                Err(RecvError::Lagged(_)) => {
+                    // We missed one or more packets due to channel overflow. This is ok as this is
+                    // an unreliable socket anyway. Let's try again.
+                    continue;
+                }
+                Err(RecvError::Closed) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "side channel closed",
+                    ))
+                }
+            }
         };
+
         let len = packet.len.min(buf.len());
         unsafe {
             std::ptr::copy_nonoverlapping(packet.data.as_ptr().cast::<u8>(), buf.as_mut_ptr(), len);
         }
+
         Ok((len, packet.from))
     }
 }
