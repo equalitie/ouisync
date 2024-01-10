@@ -2,7 +2,7 @@
 
 use super::{peer_addr::PeerAddr, stun_server_list::STUN_SERVERS};
 use futures_util::future;
-use net::{quic::SideChannel, stun::StunClient};
+use net::{quic::SideChannel, stun::StunClient, udp::DatagramSocket};
 use rand::seq::SliceRandom;
 use std::{
     net::SocketAddr,
@@ -73,22 +73,16 @@ async fn external_addr(client: Arc<StunClient<SideChannel>>) -> Option<PeerAddr>
                 continue;
             }
 
-            match time::timeout(TIMEOUT, client.external_addr(server_addr)).await {
-                Ok(Ok(addr)) => {
+            match client.external_addr(server_addr).await {
+                Ok(addr) => {
                     tracing::debug!(stun_server = host, "got external address: {addr}");
                     // Currently this works for UDP (QUIC) only.
                     return Some(PeerAddr::Quic(addr));
                 }
-                Ok(Err(error)) => {
+                Err(error) => {
                     tracing::debug!(
                         stun_server = host,
                         "failed to get external address: {error:?}"
-                    );
-                }
-                Err(_) => {
-                    tracing::debug!(
-                        stun_server = host,
-                        "failed to get external address: timeout"
                     );
                 }
             }

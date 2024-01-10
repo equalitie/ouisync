@@ -577,10 +577,6 @@ pub struct SideChannel {
 }
 
 impl SideChannel {
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.io.local_addr()
-    }
-
     pub fn sender(&self) -> SideChannelSender {
         SideChannelSender {
             io: self.io.clone(),
@@ -618,6 +614,10 @@ impl DatagramSocket for SideChannel {
         buf[..len].copy_from_slice(&packet.data[..len]);
 
         Ok((len, packet.from))
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.io.local_addr()
     }
 }
 

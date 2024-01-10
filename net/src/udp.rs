@@ -23,6 +23,8 @@ pub trait DatagramSocket {
         &'a self,
         buf: &'a mut [u8],
     ) -> impl Future<Output = io::Result<(usize, SocketAddr)>> + Send + 'a;
+
+    fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
 #[cfg(not(feature = "simulation"))]
@@ -63,6 +65,10 @@ mod implementation {
         async fn recv_from<'a>(&'a self, buf: &'a mut [u8]) -> io::Result<(usize, SocketAddr)> {
             self.0.recv_from(buf).await
         }
+
+        fn local_addr(&self) -> io::Result<SocketAddr> {
+            self.0.local_addr()
+        }
     }
 }
 
@@ -92,6 +98,10 @@ mod implementation {
         }
 
         async fn recv_from<'a>(&'a self, _buf: &'a mut [u8]) -> io::Result<(usize, SocketAddr)> {
+            unimplemented!()
+        }
+
+        fn local_addr(&self) -> io::Result<SocketAddr> {
             unimplemented!()
         }
     }

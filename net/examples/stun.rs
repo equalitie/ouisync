@@ -24,8 +24,15 @@ async fn main() -> io::Result<()> {
                 SocketAddr::V6(_) => &client_v6,
             };
 
-            let addr = client.external_addr(server_addr).await?;
-            println!("  external address: {addr}");
+            let result = client.external_addr(server_addr).await;
+            println!("  external address:       {result:?}");
+
+            let result = client.nat_filtering(server_addr).await?;
+            println!("  NAT filtering behavior: {result:?}");
+
+            let result = client.nat_mapping(server_addr).await?;
+            println!("  NAT mapping behavior:   {result:?}");
+
             println!();
         }
     }

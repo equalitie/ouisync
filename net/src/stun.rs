@@ -5,12 +5,28 @@ use std::{
     io, mem,
     net::SocketAddr,
     sync::Mutex,
+    time::Duration,
 };
 use stun_codec::{
-    rfc5389::{attributes::XorMappedAddress, methods::BINDING, Attribute},
-    Message, MessageClass, MessageDecoder, MessageEncoder, TransactionId,
+    convert::TryAsRef,
+    rfc5389::{attributes::XorMappedAddress, methods::BINDING},
+    rfc5780::attributes::{ChangeRequest, OtherAddress},
+    Message, MessageClass, MessageDecoder, MessageEncoder, Method, TransactionId,
 };
-use tokio::{select, sync::Notify};
+use tokio::{select, sync::Notify, time};
+
+stun_codec::define_attribute_enums! {
+    Attribute, AttributeDecoded, AttributeEncoder,
+    [
+        // RFC 5389
+        XorMappedAddress,
+
+        // RFC 5780
+        ChangeRequest, OtherAddress
+    ]
+}
+
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// [STUN](https://en.wikipedia.org/wiki/STUN) client
 pub struct StunClient<T: DatagramSocket> {
@@ -30,20 +46,133 @@ impl<T: DatagramSocket> StunClient<T> {
 
     /// Query our external address as seen by the given STUN server.
     pub async fn external_addr(&self, server_addr: SocketAddr) -> io::Result<SocketAddr> {
-        let request = Message::new(
-            MessageClass::Request,
-            BINDING,
-            TransactionId::new(rand::random()),
-        );
+        let request = make_request(BINDING);
         let response = self.send_request(server_addr, request).await?;
 
-        return response
-            .get_attribute::<XorMappedAddress>()
-            .map(|attr| attr.address())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no address in response"));
+        get_xor_mapped_address(&response)
     }
 
-    // TODO: NAT detection
+    /// Determine NAT mapping behavior
+    /// (RFC 5780, section 4.3, https://datatracker.ietf.org/doc/html/rfc5780#section-4.3)
+    pub async fn nat_mapping(&self, server_addr: SocketAddr) -> io::Result<NatBehavior> {
+        // 4.3.  Determining NAT Mapping Behavior
+        //
+        //    This will require at most three tests.  In test I, the client
+        //    performs the UDP connectivity test.  The server will return its
+        //    alternate address and port in OTHER-ADDRESS in the binding response.
+        //    If OTHER-ADDRESS is not returned, the server does not support this
+        //    usage and this test cannot be run.  The client examines the XOR-
+        //    MAPPED-ADDRESS attribute.  If this address and port are the same as
+        //    the local IP address and port of the socket used to send the request,
+        //    the client knows that it is not NATed and the effective mapping will
+        //    be Endpoint-Independent.
+        //
+        //    In test II, the client sends a Binding Request to the alternate
+        //    address, but primary port.  If the XOR-MAPPED-ADDRESS in the Binding
+        //    Response is the same as test I the NAT currently has Endpoint-
+        //    Independent Mapping.  If not, test III is performed: the client sends
+        //    a Binding Request to the alternate address and port.  If the XOR-
+        //    MAPPED-ADDRESS matches test II, the NAT currently has Address-
+        //    Dependent Mapping; if it doesn't match it currently has Address and
+        //    Port-Dependent Mapping.
+        let local_addr = self.socket.local_addr()?;
+
+        // test I
+        let request = make_request(BINDING);
+        let response = self.send_request(server_addr, request).await?;
+        let mapped_addr_1 = get_xor_mapped_address(&response)?;
+        let other_addr = get_other_address(&response)?;
+
+        if other_addr == local_addr {
+            Ok(NatBehavior::EndpointIndependent)
+        } else {
+            // test II
+            let request = make_request(BINDING);
+            let dst_addr = SocketAddr::new(other_addr.ip(), server_addr.port());
+            let response = self.send_request(dst_addr, request).await?;
+            let mapped_addr_2 = get_xor_mapped_address(&response)?;
+
+            if mapped_addr_2 == mapped_addr_1 {
+                Ok(NatBehavior::EndpointIndependent)
+            } else {
+                // test III
+                let request = make_request(BINDING);
+                let response = self.send_request(other_addr, request).await?;
+                let mapped_addr_3 = get_xor_mapped_address(&response)?;
+
+                if mapped_addr_3 == mapped_addr_2 {
+                    Ok(NatBehavior::AddressDependent)
+                } else {
+                    Ok(NatBehavior::AddressAndPortDependent)
+                }
+            }
+        }
+    }
+
+    /// Determine NAT filtering behavior
+    /// (RFC 5780, section 4.4, https://datatracker.ietf.org/doc/html/rfc5780#section-4.4)
+    pub async fn nat_filtering(&self, server_addr: SocketAddr) -> io::Result<NatBehavior> {
+        // 4.4.  Determining NAT Filtering Behavior
+        //
+        //    This will also require at most three tests.  These tests are
+        //    sensitive to prior state on the NAT.
+        //
+        //    In test I, the client performs the UDP connectivity test.  The server
+        //    will return its alternate address and port in OTHER-ADDRESS in the
+        //    binding response.  If OTHER-ADDRESS is not returned, the server does
+        //    not support this usage and this test cannot be run.
+        //
+        //    In test II, the client sends a binding request to the primary address
+        //    of the server with the CHANGE-REQUEST attribute set to change-port
+        //    and change-IP.  This will cause the server to send its response from
+        //    its alternate IP address and alternate port.  If the client receives
+        //    a response, the current behavior of the NAT is Endpoint-Independent
+        //    Filtering.
+        //
+        //    If no response is received, test III must be performed to distinguish
+        //    between Address-Dependent Filtering and Address and Port-Dependent
+        //    Filtering.  In test III, the client sends a binding request to the
+        //    original server address with CHANGE-REQUEST set to change-port.  If
+        //    the client receives a response, the current behavior is Address-
+        //    Dependent Filtering; if no response is received, the current behavior
+        //    is Address and Port-Dependent Filtering.
+
+        // test I
+        let request = make_request(BINDING);
+        let response = self.send_request(server_addr, request).await?;
+        // Only to check that the server suports OTHER-ADDRESS:
+        let _other_addr = get_other_address(&response)?;
+
+        // test II
+        let mut request = make_request(BINDING);
+        request.add_attribute(ChangeRequest::new(true, true));
+
+        let response = match self.send_request(server_addr, request).await {
+            Ok(response) => Some(response),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => None,
+            Err(error) => return Err(error),
+        };
+
+        if response.is_some() {
+            Ok(NatBehavior::EndpointIndependent)
+        } else {
+            // test III
+            let mut request = make_request(BINDING);
+            request.add_attribute(ChangeRequest::new(false, true));
+
+            let response = match self.send_request(server_addr, request).await {
+                Ok(response) => Some(response),
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => None,
+                Err(error) => return Err(error),
+            };
+
+            if response.is_some() {
+                Ok(NatBehavior::AddressDependent)
+            } else {
+                Ok(NatBehavior::AddressAndPortDependent)
+            }
+        }
+    }
 
     /// Gets a reference to the underlying socket.
     pub fn get_ref(&self) -> &T {
@@ -60,23 +189,32 @@ impl<T: DatagramSocket> StunClient<T> {
 
         self.send(server_addr, message).await?;
 
-        loop {
-            if let Some(response) = self.remove_response(transaction_id) {
-                return Ok(response);
-            }
+        let result = time::timeout(TIMEOUT, async move {
+            loop {
+                if let Some(response) = self.remove_response(transaction_id) {
+                    return Ok(response);
+                }
 
-            select! {
-                response = self.recv() => {
-                    let response = response?;
+                select! {
+                    response = self.recv() => {
+                        let response = response?;
 
-                    if response.transaction_id() == transaction_id {
-                        return Ok(response);
-                    } else {
-                        self.insert_response(response);
-                    }
-                },
-                _ = self.responses_notify.notified() => (),
+                        if response.transaction_id() == transaction_id {
+                            return Ok(response);
+                        } else {
+                            self.insert_response(response);
+                        }
+                    },
+                    _ = self.responses_notify.notified() => (),
+                }
             }
+        })
+        .await;
+
+        match result {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "request timed out")),
         }
     }
 
@@ -150,6 +288,19 @@ impl<T: DatagramSocket> StunClient<T> {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct NatType {
+    pub mapping: NatBehavior,
+    pub filtering: NatBehavior,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum NatBehavior {
+    EndpointIndependent,
+    AddressDependent,
+    AddressAndPortDependent,
+}
+
 enum ResponseSlot {
     Pending,
     Received(Message<Attribute>),
@@ -164,4 +315,33 @@ impl Drop for RemoveGuard<'_> {
     fn drop(&mut self) {
         self.responses.lock().unwrap().remove(&self.transaction_id);
     }
+}
+
+fn make_request(method: Method) -> Message<Attribute> {
+    Message::new(
+        MessageClass::Request,
+        method,
+        TransactionId::new(rand::random()),
+    )
+}
+
+fn get_attribute<'a, A>(message: &'a Message<Attribute>, name: &'static str) -> io::Result<&'a A>
+where
+    A: stun_codec::Attribute,
+    Attribute: TryAsRef<A>,
+{
+    message.get_attribute::<A>().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("server does not support {name}"),
+        )
+    })
+}
+
+fn get_xor_mapped_address(message: &Message<Attribute>) -> io::Result<SocketAddr> {
+    get_attribute::<XorMappedAddress>(message, "XOR-MAPPED-ADDRESS").map(|attr| attr.address())
+}
+
+fn get_other_address(message: &Message<Attribute>) -> io::Result<SocketAddr> {
+    get_attribute::<OtherAddress>(message, "OTHER-ADDRESS").map(|attr| attr.address())
 }
