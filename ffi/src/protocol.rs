@@ -4,7 +4,7 @@ use crate::{
 };
 use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
-use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, Progress, ShareToken};
+use ouisync_lib::{network::NatBehavior, AccessMode, PeerAddr, PeerInfo, Progress, ShareToken};
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
 use std::{
@@ -161,6 +161,7 @@ pub(crate) enum Request {
     NetworkSetLocalDiscoveryEnabled(bool),
     NetworkAddStorageServer(String),
     NetworkExternalAddrs,
+    NetworkNatBehavior,
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
@@ -333,6 +334,19 @@ impl TryFrom<Response> for Vec<PeerAddr> {
         match response {
             Response::PeerAddrs(value) => Ok(value),
             _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
+impl From<Option<NatBehavior>> for Response {
+    fn from(value: Option<NatBehavior>) -> Self {
+        match value {
+            Some(NatBehavior::EndpointIndependent) => Self::String("endpoint independent".into()),
+            Some(NatBehavior::AddressDependent) => Self::String("address dependent".into()),
+            Some(NatBehavior::AddressAndPortDependent) => {
+                Self::String("address and port dependent".into())
+            }
+            None => Self::None,
         }
     }
 }

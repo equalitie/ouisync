@@ -41,6 +41,8 @@ pub use self::{
     peer_state::PeerState,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
 };
+pub use net::stun::NatBehavior;
+
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     connection_monitor::ConnectionMonitor,
@@ -221,6 +223,12 @@ impl Network {
     /// Find out external addresses using the STUN protocol.
     pub async fn external_addrs(&self) -> Vec<PeerAddr> {
         self.inner.stun_clients.external_addrs().await
+    }
+
+    /// Determine the behaviour of the NAT we are behind. Returns `None` on unknown.
+    /// Currently IPv4 only.
+    pub async fn nat_behavior(&self) -> Option<NatBehavior> {
+        self.inner.stun_clients.nat_behavior().await
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {

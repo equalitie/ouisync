@@ -141,6 +141,9 @@ class Session {
       .invoke<List<Object?>>('network_external_addrs')
       .then((list) => list.cast<String>());
 
+  Future<String?> get natBehavior =>
+      client.invoke<String?>('network_nat_behavior');
+
   /// Gets a stream that yields lists of known peers.
   Stream<List<PeerInfo>> get onPeersChange async* {
     await for (final _ in networkEvents) {

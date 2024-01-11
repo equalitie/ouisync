@@ -335,6 +335,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 ().into()
             }
             Request::NetworkExternalAddrs => self.state.network.external_addrs().await.into(),
+            Request::NetworkNatBehavior => self.state.network.nat_behavior().await.into(),
             Request::NetworkShutdown => {
                 self.state.network.shutdown().await;
                 ().into()

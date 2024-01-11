@@ -143,10 +143,26 @@ void main() {
     expect(await session.userProvidedPeers, isEmpty);
   });
 
-  test('external addresses', () async {
-    await session.bindNetwork(quicV4: '0.0.0.0:0', quicV6: '[::]:0');
-    expect(await session.externalAddresses, isNotEmpty);
+  group('stun', () {
+    setUp(() async {
+      await session.bindNetwork(quicV4: '0.0.0.0:0', quicV6: '[::]:0');
+    });
+
+    test('external addresses', () async {
+      expect(await session.externalAddresses, isNotEmpty);
+    });
+
+    test('nat behavior', () async {
+      expect(
+          await session.natBehavior,
+          anyOf(
+            "endpoint independent",
+            "address dependent",
+            "address and port dependent",
+            null,
+          ));
+    });
   },
       skip:
-          'this test makes network requests to 3rd party services (use --run-skipped to force run)');
+          'these tests make network requests to 3rd party services (use --run-skipped to force run)');
 }

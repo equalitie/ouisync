@@ -288,12 +288,6 @@ impl<T: DatagramSocket> StunClient<T> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct NatType {
-    pub mapping: NatBehavior,
-    pub filtering: NatBehavior,
-}
-
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum NatBehavior {
     EndpointIndependent,
