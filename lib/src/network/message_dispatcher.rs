@@ -18,7 +18,10 @@ use scoped_task::ScopedJoinHandle;
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     task::{Context, Poll, Waker},
 };
 use tokio::{
@@ -423,6 +426,7 @@ impl Sink<Message> for PermittedSink {
 
 // Stream that reads `Message`s from multiple underlying raw (byte) streams concurrently.
 struct MultiStream {
+    explicitly_closed: AtomicBool,
     rx: AsyncMutex<mpsc::Receiver<(PermitId, Message)>>,
     inner: Arc<BlockingMutex<MultiStreamInner>>,
     stream_added: Arc<Notify>,
@@ -445,6 +449,7 @@ impl MultiStream {
             scoped_task::spawn(multi_stream_runner(inner.clone(), tx, stream_added.clone()));
 
         Self {
+            explicitly_closed: AtomicBool::new(false),
             rx: AsyncMutex::new(rx),
             inner,
             stream_added,
@@ -461,12 +466,16 @@ impl MultiStream {
 
     // Receive next message from this stream.
     async fn recv(&self) -> Option<(PermitId, Message)> {
+        if self.explicitly_closed.load(Ordering::Relaxed) {
+            return None;
+        }
         self.rx.lock().await.recv().await
     }
 
     // Closes this stream. Any subsequent `recv` will immediately return `None` unless new
     // streams are added first.
     fn close(&self) {
+        self.explicitly_closed.store(true, Ordering::Relaxed);
         let mut inner = self.inner.lock().unwrap();
         inner.streams.clear();
         inner.wake();
