@@ -24,7 +24,7 @@ use std::{
 use tokio::{
     runtime, select,
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
-    sync::{Mutex as AsyncMutex, Notify},
+    sync::{Mutex as AsyncMutex, Notify, Semaphore},
     time::{self, Duration},
 };
 
@@ -274,6 +274,7 @@ type ChannelQueueSender = UnboundedSender<(PermitId, Vec<u8>)>;
 struct RecvState {
     multi_stream: Arc<MultiStream>,
     queues: Arc<BlockingMutex<HashMap<MessageChannelId, ChannelQueue>>>,
+    single_sorter: Semaphore,
 }
 
 impl RecvState {
@@ -281,6 +282,7 @@ impl RecvState {
         Self {
             multi_stream: Arc::new(MultiStream::new()),
             queues: Arc::new(BlockingMutex::new(HashMap::default())),
+            single_sorter: Semaphore::new(1),
         }
     }
 
@@ -316,6 +318,10 @@ impl RecvState {
     }
 
     async fn sort_incoming_messages_into_queues(&self) {
+        // The `recv_on_queue` function may be called multiple times (once per channel), but this
+        // function must be called at most once, otherwise messages could get reordered.
+        let _permit = self.single_sorter.acquire().await;
+
         while let Some((transport, message)) = self.multi_stream.recv().await {
             if let Some(queue) = self.queues.lock().unwrap().get_mut(&message.channel) {
                 queue.tx.send((transport, message.content)).unwrap_or(());
