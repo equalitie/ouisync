@@ -8,18 +8,22 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+bytecodec = "0.4.15"
 bytes = "1.1.0"
 futures-util = { workspace = true }
 quinn = "0.10.2"
 quinn-proto = "0.10.2"
+rand = { package = "ouisync-rand", path = "../rand" }
 rcgen = { workspace = true }
 rustls = { workspace = true, features = ["quic", "dangerous_configuration"] }
 socket2 = "0.4.4" # To be able to setsockopts before a socket is bound
+stun_codec = "0.3.4"
 thiserror = "1.0.31"
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "sync"] }
 turmoil = { workspace = true, optional = true }
 
 [dev-dependencies]
+clap  = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 
 [features]

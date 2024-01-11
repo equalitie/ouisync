@@ -8,7 +8,7 @@ use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
 use deadlock::{AsyncMutex, BlockingMutex};
 use futures_util::{stream, StreamExt};
-use net::quic;
+use net::{quic, udp::DatagramSocket};
 use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
@@ -633,7 +633,8 @@ struct Socket(quic::SideChannel);
 #[async_trait]
 impl btdht::SocketTrait for Socket {
     async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
-        self.0.send_to(buf, target).await
+        self.0.send_to(buf, *target).await?;
+        Ok(())
     }
 
     async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {

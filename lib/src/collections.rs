@@ -2,16 +2,16 @@
 //! uses `RandomState` from the `ouisync-rand` crate which makes them deterministic when the
 //! `simulation` feature is enabled.
 
-pub use self::{hash_map::HashMap, hash_set::HashSet};
+pub(crate) use self::{hash_map::HashMap, hash_set::HashSet};
 
-pub mod hash_map {
+pub(crate) mod hash_map {
     pub use rand::RandomState;
     pub use std::collections::hash_map::{Entry, /* OccupiedEntry,*/ VacantEntry};
 
     pub type HashMap<K, V, S = RandomState> = std::collections::HashMap<K, V, S>;
 }
 
-pub mod hash_set {
+pub(crate) mod hash_set {
     pub use std::collections::hash_set::IntoIter;
 
     use super::hash_map::RandomState;

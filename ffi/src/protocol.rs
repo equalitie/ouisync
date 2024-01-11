@@ -4,7 +4,7 @@ use crate::{
 };
 use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
-use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, Progress, ShareToken};
+use ouisync_lib::{network::NatBehavior, AccessMode, PeerAddr, PeerInfo, Progress, ShareToken};
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
 use std::{
@@ -160,6 +160,9 @@ pub(crate) enum Request {
     NetworkIsLocalDiscoveryEnabled,
     NetworkSetLocalDiscoveryEnabled(bool),
     NetworkAddStorageServer(String),
+    NetworkExternalAddrV4,
+    NetworkExternalAddrV6,
+    NetworkNatBehavior,
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
@@ -296,6 +299,18 @@ impl From<SocketAddr> for Response {
     }
 }
 
+impl From<SocketAddrV4> for Response {
+    fn from(value: SocketAddrV4) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
+impl From<SocketAddrV6> for Response {
+    fn from(value: SocketAddrV6) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
 impl From<Progress> for Response {
     fn from(value: Progress) -> Self {
         Self::Progress(value)
@@ -332,6 +347,19 @@ impl TryFrom<Response> for Vec<PeerAddr> {
         match response {
             Response::PeerAddrs(value) => Ok(value),
             _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
+impl From<Option<NatBehavior>> for Response {
+    fn from(value: Option<NatBehavior>) -> Self {
+        match value {
+            Some(NatBehavior::EndpointIndependent) => Self::String("endpoint independent".into()),
+            Some(NatBehavior::AddressDependent) => Self::String("address dependent".into()),
+            Some(NatBehavior::AddressAndPortDependent) => {
+                Self::String("address and port dependent".into())
+            }
+            None => Self::None,
         }
     }
 }

@@ -13,6 +13,7 @@ members = [
     "utils/bindgen",
     "utils/btdht",
     "utils/stress-test",
+    "utils/stun-server-list",
     "utils/swarm",
     "utils/protocol-analyzer",
     "vfs"
@@ -25,7 +26,7 @@ authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie
 repository = "https://github.com/equalitie/ouisync"
 license = "MPL-2.0"
 edition = "2021"
-rust-version = "1.65.0"
+rust-version = "1.75.0"
 
 [workspace.dependencies]
 async-trait = "0.1.73"

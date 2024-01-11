@@ -28,6 +28,8 @@ mod raw;
 mod runtime_id;
 mod seen_peers;
 mod server;
+mod stun;
+mod stun_server_list;
 #[cfg(test)]
 mod tests;
 mod upnp;
@@ -39,6 +41,8 @@ pub use self::{
     peer_state::PeerState,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
 };
+pub use net::stun::NatBehavior;
+
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     connection_monitor::ConnectionMonitor,
@@ -50,6 +54,7 @@ use self::{
     peer_exchange::{PexController, PexDiscovery, PexPayload},
     protocol::{Version, MAGIC, VERSION},
     seen_peers::{SeenPeer, SeenPeers},
+    stun::StunClients,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -65,7 +70,7 @@ use state_monitor::StateMonitor;
 use std::{
     future::Future,
     io, mem,
-    net::SocketAddr,
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{Arc, Weak},
 };
 use thiserror::Error;
@@ -142,6 +147,7 @@ impl Network {
             dht_discovery,
             dht_discovery_tx,
             pex_discovery_tx,
+            stun_clients: StunClients::new(),
             connection_deduplicator: ConnectionDeduplicator::new(),
             on_protocol_mismatch_tx,
             user_provided_peers,
@@ -212,6 +218,24 @@ impl Network {
             .lock()
             .unwrap()
             .is_enabled()
+    }
+
+    /// Find out external address using the STUN protocol.
+    /// Currently QUIC only.
+    pub async fn external_addr_v4(&self) -> Option<SocketAddrV4> {
+        self.inner.stun_clients.external_addr_v4().await
+    }
+
+    /// Find out external address using the STUN protocol.
+    /// Currently QUIC only.
+    pub async fn external_addr_v6(&self) -> Option<SocketAddrV6> {
+        self.inner.stun_clients.external_addr_v6().await
+    }
+
+    /// Determine the behaviour of the NAT we are behind. Returns `None` on unknown.
+    /// Currently IPv4 only.
+    pub async fn nat_behavior(&self) -> Option<NatBehavior> {
+        self.inner.stun_clients.nat_behavior().await
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -415,6 +439,7 @@ struct Inner {
     dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
+    stun_clients: StunClients,
     connection_deduplicator: ConnectionDeduplicator,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
     user_provided_peers: SeenPeers,
@@ -460,12 +485,18 @@ impl Inner {
         // Gateway
         let side_channel_makers = self.gateway.bind(&bind).instrument(self.span.clone()).await;
 
-        // DHT
         let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
             Connectivity::Full => side_channel_makers,
             Connectivity::LocalOnly | Connectivity::Disabled => (None, None),
         };
 
+        // STUN
+        self.stun_clients.rebind(
+            side_channel_maker_v4.as_ref().map(|m| m.make()),
+            side_channel_maker_v6.as_ref().map(|m| m.make()),
+        );
+
+        // DHT
         self.dht_discovery
             .rebind(side_channel_maker_v4, side_channel_maker_v6);
 
