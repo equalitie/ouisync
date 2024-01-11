@@ -1,6 +1,6 @@
 //! STUN protocol handling
 
-use super::{peer_addr::PeerAddr, stun_server_list::STUN_SERVERS};
+use super::stun_server_list::STUN_SERVERS;
 use futures_util::{future, StreamExt};
 use net::{
     quic::SideChannel,
@@ -10,7 +10,7 @@ use net::{
 use rand::seq::SliceRandom;
 use std::{
     future::Future,
-    net::SocketAddr,
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -22,62 +22,50 @@ const LOOKUP_HOST_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONCURRENCY: usize = 4;
 
 pub(super) struct StunClients {
-    clients: Mutex<Vec<Arc<StunClient<SideChannel>>>>,
+    client_v4: Mutex<Option<Arc<StunClient<SideChannel>>>>,
+    client_v6: Mutex<Option<Arc<StunClient<SideChannel>>>>,
 }
 
 impl StunClients {
     pub fn new() -> Self {
         Self {
-            clients: Mutex::new(Vec::new()),
+            client_v4: Mutex::new(None),
+            client_v6: Mutex::new(None),
         }
     }
 
     /// Binds the STUN clients to the given sockets.
-    pub fn rebind(&self, sockets: impl IntoIterator<Item = SideChannel>) {
-        let mut clients = self.clients.lock().unwrap();
-        clients.clear();
-        clients.extend(sockets.into_iter().map(StunClient::new).map(Arc::new));
+    pub fn rebind(&self, socket_v4: Option<SideChannel>, socket_v6: Option<SideChannel>) {
+        *self.client_v4.lock().unwrap() = socket_v4.map(StunClient::new).map(Arc::new);
+        *self.client_v6.lock().unwrap() = socket_v6.map(StunClient::new).map(Arc::new);
     }
 
-    /// Queries our external addresses.
-    pub async fn external_addrs(&self) -> Vec<PeerAddr> {
-        let tasks: Vec<_> = self
-            .clients
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|client| external_addr(client.clone()))
-            .collect();
+    /// Queries our external address.
+    pub async fn external_addr_v4(&self) -> Option<SocketAddrV4> {
+        let client = self.client_v4.lock().unwrap().as_ref().cloned()?;
+        external_addr(client).await.and_then(|addr| match addr {
+            SocketAddr::V4(addr) => Some(addr),
+            SocketAddr::V6(_) => None,
+        })
+    }
 
-        future::join_all(tasks)
-            .await
-            .into_iter()
-            .flatten()
-            .collect()
+    /// Queries our external address.
+    pub async fn external_addr_v6(&self) -> Option<SocketAddrV6> {
+        let client = self.client_v6.lock().unwrap().as_ref().cloned()?;
+        external_addr(client).await.and_then(|addr| match addr {
+            SocketAddr::V6(addr) => Some(addr),
+            SocketAddr::V4(_) => None,
+        })
     }
 
     /// Determines the behavior of the NAT we are behind. Returns `None` if unknown.
     pub async fn nat_behavior(&self) -> Option<NatBehavior> {
-        // Find IPv4 client
-        let client = self
-            .clients
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|client| {
-                client
-                    .get_ref()
-                    .local_addr()
-                    .map(|local_addr| local_addr.is_ipv4())
-                    .unwrap_or(false)
-            })
-            .cloned()?;
-
+        let client = self.client_v4.lock().unwrap().as_ref().cloned()?;
         nat_behavior(client).await
     }
 }
 
-async fn external_addr(client: Arc<StunClient<SideChannel>>) -> Option<PeerAddr> {
+async fn external_addr(client: Arc<StunClient<SideChannel>>) -> Option<SocketAddr> {
     let client = client.as_ref();
     let local_addr = client.get_ref().local_addr().ok()?;
 
@@ -89,8 +77,7 @@ async fn external_addr(client: Arc<StunClient<SideChannel>>) -> Option<PeerAddr>
         match client.external_addr(server_addr).await {
             Ok(addr) => {
                 tracing::debug!("got external address: {addr}");
-                // Currently this works for UDP (QUIC) only.
-                Some(PeerAddr::Quic(addr))
+                Some(addr)
             }
             Err(error) => {
                 tracing::debug!("failed to get external address: {error:?}");
@@ -103,8 +90,13 @@ async fn external_addr(client: Arc<StunClient<SideChannel>>) -> Option<PeerAddr>
 
 async fn nat_behavior(client: Arc<StunClient<SideChannel>>) -> Option<NatBehavior> {
     let client = client.as_ref();
+    let local_addr = client.get_ref().local_addr().ok()?;
 
     run(|server_addr| async move {
+        if !is_same_family(&server_addr, &local_addr) {
+            return None;
+        }
+
         match client.nat_mapping(server_addr).await {
             Ok(nat) => {
                 tracing::debug!("got NAT behavior: {nat:?}");
@@ -133,7 +125,7 @@ where
 
     // Resolve the individual server hosts sequentially (to avoid getting rate-limitted) but run
     // the whole thing concurrently with the tasks. Run the tasks themselves also concurrently, but
-    // with a max concurency.
+    // with a concurency limit.
     let push = async {
         for host in hosts {
             let span = tracing::info_span!("stun_server", message = host);

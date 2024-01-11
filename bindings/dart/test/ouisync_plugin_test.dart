@@ -148,8 +148,9 @@ void main() {
       await session.bindNetwork(quicV4: '0.0.0.0:0', quicV6: '[::]:0');
     });
 
-    test('external addresses', () async {
-      expect(await session.externalAddresses, isNotEmpty);
+    test('external address', () async {
+      expect(await session.externalAddressV4, isNotEmpty);
+      expect(await session.externalAddressV6, isNotEmpty);
     });
 
     test('nat behavior', () async {
@@ -159,7 +160,6 @@ void main() {
             "endpoint independent",
             "address dependent",
             "address and port dependent",
-            null,
           ));
     });
   },

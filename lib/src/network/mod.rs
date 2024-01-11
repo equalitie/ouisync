@@ -70,7 +70,7 @@ use state_monitor::StateMonitor;
 use std::{
     future::Future,
     io, mem,
-    net::SocketAddr,
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{Arc, Weak},
 };
 use thiserror::Error;
@@ -220,9 +220,16 @@ impl Network {
             .is_enabled()
     }
 
-    /// Find out external addresses using the STUN protocol.
-    pub async fn external_addrs(&self) -> Vec<PeerAddr> {
-        self.inner.stun_clients.external_addrs().await
+    /// Find out external address using the STUN protocol.
+    /// Currently QUIC only.
+    pub async fn external_addr_v4(&self) -> Option<SocketAddrV4> {
+        self.inner.stun_clients.external_addr_v4().await
+    }
+
+    /// Find out external address using the STUN protocol.
+    /// Currently QUIC only.
+    pub async fn external_addr_v6(&self) -> Option<SocketAddrV6> {
+        self.inner.stun_clients.external_addr_v6().await
     }
 
     /// Determine the behaviour of the NAT we are behind. Returns `None` on unknown.
@@ -485,11 +492,8 @@ impl Inner {
 
         // STUN
         self.stun_clients.rebind(
-            side_channel_maker_v4
-                .as_ref()
-                .map(|m| m.make())
-                .into_iter()
-                .chain(side_channel_maker_v6.as_ref().map(|m| m.make())),
+            side_channel_maker_v4.as_ref().map(|m| m.make()),
+            side_channel_maker_v6.as_ref().map(|m| m.make()),
         );
 
         // DHT

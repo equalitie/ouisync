@@ -160,7 +160,8 @@ pub(crate) enum Request {
     NetworkIsLocalDiscoveryEnabled,
     NetworkSetLocalDiscoveryEnabled(bool),
     NetworkAddStorageServer(String),
-    NetworkExternalAddrs,
+    NetworkExternalAddrV4,
+    NetworkExternalAddrV6,
     NetworkNatBehavior,
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
@@ -294,6 +295,18 @@ impl<T> TryFrom<Response> for Handle<T> {
 
 impl From<SocketAddr> for Response {
     fn from(value: SocketAddr) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
+impl From<SocketAddrV4> for Response {
+    fn from(value: SocketAddrV4) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
+impl From<SocketAddrV6> for Response {
+    fn from(value: SocketAddrV6) -> Self {
         Self::String(value.to_string())
     }
 }

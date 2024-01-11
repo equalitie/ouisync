@@ -137,9 +137,11 @@ class Session {
   Future<String?> get quicListenerLocalAddressV6 =>
       client.invoke<String?>('network_quic_listener_local_addr_v6');
 
-  Future<List<String>> get externalAddresses => client
-      .invoke<List<Object?>>('network_external_addrs')
-      .then((list) => list.cast<String>());
+  Future<String?> get externalAddressV4 =>
+      client.invoke<String?>('network_external_addr_v4');
+
+  Future<String?> get externalAddressV6 =>
+      client.invoke<String?>('network_external_addr_v6');
 
   Future<String?> get natBehavior =>
       client.invoke<String?>('network_nat_behavior');
