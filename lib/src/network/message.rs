@@ -13,7 +13,7 @@ use crate::{
     repository::RepositoryId,
 };
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use std::{fmt, io::Write};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
@@ -119,7 +119,7 @@ impl Header {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Message {
     pub tag: Type,
     pub channel: MessageChannelId,
@@ -144,6 +144,18 @@ impl Message {
 
     pub fn is_keep_alive(&self) -> bool {
         self.tag == Type::KeepAlive
+    }
+}
+
+impl fmt::Debug for Message {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Message {{ tag: {:?}, channel: {:?}, content-hash: {:?} }}",
+            self.tag,
+            self.channel,
+            self.content.hash()
+        )
     }
 }
 
