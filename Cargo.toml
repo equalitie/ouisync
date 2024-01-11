@@ -5,6 +5,7 @@ members = [
     "deadlock",
     "ffi",
     "lib",
+    "metrics_ext",
     "net",
     "rand",
     "scoped_task",

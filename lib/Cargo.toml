@@ -87,7 +87,7 @@ network-interface = "0.1.3"
 [dev-dependencies]
 assert_matches = "1.5"
 criterion = { version = "0.4", features = ["html_reports"] }
-metrics-util = { workspace = true }
+metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = "1.0"
 serde_json = { workspace = true }

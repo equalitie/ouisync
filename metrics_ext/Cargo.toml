@@ -1,0 +1,15 @@
+[package]
+name = "metrics_ext"
+description = "Extensions to the metrics crate"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+metrics      = { workspace = true }
+metrics-util = { workspace = true, features = ["summary"] }
+tokio        = { workspace = true, features = ["sync"] }
+tracing      = { workspace = true }
+

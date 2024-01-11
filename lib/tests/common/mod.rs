@@ -4,20 +4,16 @@
 mod macros;
 
 pub(crate) mod dump;
-mod recorder;
 pub(crate) mod sync_watch;
 pub(crate) mod traffic_monitor;
 mod wait_map;
 
 pub(crate) use self::env::*;
 
-use self::{
-    recorder::{AddLabels, ArcRecorder, MetricsSubscriber, PairRecorder, WatchRecorder},
-    wait_map::WaitMap,
-};
+use self::wait_map::WaitMap;
 use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
-use metrics_util::layers::{Fanout, FanoutBuilder};
+use metrics_ext::{WatchRecorder, WatchRecorderSubscriber};
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
@@ -62,9 +58,6 @@ pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
 });
 
 pub(crate) static TEST_TIMEOUT: Lazy<Duration> = Lazy::new(|| 4 * *EVENT_TIMEOUT);
-
-static PROMETHEUS_PUSH_GATEWAY_ENDPOINT: Lazy<Option<String>> =
-    Lazy::new(|| std::env::var("PROMETHEUS_PUSH_GATEWAY_ENDPOINT").ok());
 
 #[cfg(not(feature = "simulation"))]
 pub(crate) mod env {
@@ -230,9 +223,12 @@ pub(crate) mod actor {
 
     pub(crate) fn get_repo_params_and_secrets(
         name: &str,
-    ) -> (RepositoryParams<AddLabels<ArcRecorder>>, AccessSecrets) {
+    ) -> (
+        RepositoryParams<metrics_ext::AddLabels<metrics_ext::Shared>>,
+        AccessSecrets,
+    ) {
         ACTOR.with(|actor| {
-            let recorder = AddLabels::new(
+            let recorder = metrics_ext::AddLabels::new(
                 vec![Label::new("actor", actor.name.clone())],
                 actor.context.recorder.clone(),
             );
@@ -284,8 +280,8 @@ pub(crate) mod actor {
         (network, repo, reg)
     }
 
-    pub(crate) fn metrics_subscriber() -> MetricsSubscriber {
-        ACTOR.with(|actor| actor.context.metrics_subscriber.clone())
+    pub(crate) fn recorder_subscriber() -> WatchRecorderSubscriber {
+        ACTOR.with(|actor| actor.context.recorder_subscriber.clone())
     }
 }
 
@@ -297,8 +293,8 @@ struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
-    recorder: ArcRecorder,
-    metrics_subscriber: MetricsSubscriber,
+    recorder: metrics_ext::Shared,
+    recorder_subscriber: WatchRecorderSubscriber,
     monitor: StateMonitor,
 }
 
@@ -307,7 +303,7 @@ impl Context {
         init_log();
 
         let watch_recorder = WatchRecorder::new();
-        let metrics_subscriber = watch_recorder.subscriber();
+        let recorder_subscriber = watch_recorder.subscriber();
         let recorder = init_recorder(runtime, watch_recorder);
 
         Self {
@@ -315,7 +311,7 @@ impl Context {
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
             recorder,
-            metrics_subscriber,
+            recorder_subscriber,
             monitor: StateMonitor::make_root(),
         }
     }
@@ -681,25 +677,12 @@ pub(crate) fn init_log() {
 }
 
 #[cfg(feature = "prometheus")]
-fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> ArcRecorder {
-    if let Some(endpoint) = PROMETHEUS_PUSH_GATEWAY_ENDPOINT.as_ref() {
-        ArcRecorder::new(PairRecorder(
-            watch_recorder,
-            init_prometheus_recorder(runtime, endpoint),
-        ))
-    } else {
-        ArcRecorder::new(watch_recorder)
-    }
-}
+fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
+    use metrics_exporter_prometheus::PrometheusBuilder;
+    use metrics_ext::{Pair, Shared};
 
-#[cfg(not(feature = "prometheus"))]
-fn init_recorder(_runtime: &Handle, watch_recorder: WatchRecorder) -> ArcRecorder {
-    ArcRecorder::new(watch_recorder)
-}
-
-#[cfg(feature = "prometheus")]
-fn init_prometheus_recorder(runtime: &Handle, endpoint: &str) -> impl Recorder + Send + 'static {
-    use metrics_prometheus_recorder::PrometheusBuilder;
+    let endpoint = std::env::var("PROMETHEUS_PUSH_GATEWAY_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:9091/metrics/job/ouisync".to_string());
 
     let (recorder, exporter) = PrometheusBuilder::new()
         .with_push_gateway(endpoint, Duration::from_millis(100), None, None)
@@ -709,5 +692,10 @@ fn init_prometheus_recorder(runtime: &Handle, endpoint: &str) -> impl Recorder +
 
     runtime.spawn(exporter);
 
-    recorder
+    Shared::new(Pair(watch_recorder, recorder))
+}
+
+#[cfg(not(feature = "prometheus"))]
+fn init_recorder(_runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
+    metrics_ext::Shared::new(watch_recorder)
 }

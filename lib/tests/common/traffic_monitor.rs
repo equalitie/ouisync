@@ -15,7 +15,7 @@ pub(crate) struct TrafficMonitor {
 
 impl TrafficMonitor {
     pub fn new() -> Self {
-        let subscriber = actor::metrics_subscriber();
+        let subscriber = actor::recorder_subscriber();
         let requests_pending_rx = subscriber.gauge("requests pending".into());
 
         Self {
