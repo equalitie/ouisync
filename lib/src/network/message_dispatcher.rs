@@ -83,12 +83,12 @@ impl MessageDispatcher {
     }
 
     pub async fn close(&self) {
-        self.recv.reader.close();
+        self.recv.multi_stream.close();
         self.send.close().await;
     }
 
     pub fn is_closed(&self) -> bool {
-        self.recv.reader.is_empty() || self.send.is_empty()
+        self.recv.multi_stream.is_empty() || self.send.is_empty()
     }
 }
 
@@ -98,7 +98,7 @@ impl Drop for MessageDispatcher {
             return;
         }
 
-        self.recv.reader.close();
+        self.recv.multi_stream.close();
 
         let send = self.send.clone();
 
@@ -141,12 +141,12 @@ impl ContentStream {
 
         let mut lock = arc.lock().await;
 
-        if let Some((transport, data)) = lock.0.take() {
+        if let Some((transport, data)) = lock.parked_message.take() {
             self.last_transport_id = Some(transport);
             return Ok(data);
         }
 
-        let (transport, data) = match self.state.recv(&mut lock.1).await {
+        let (transport, data) = match self.state.recv_on_queue(&mut lock.receiver).await {
             Some((transport, data)) => (transport, data),
             None => return Err(ContentStreamError::ChannelClosed),
         };
@@ -156,7 +156,7 @@ impl ContentStream {
                 Ok(data)
             } else {
                 self.last_transport_id = Some(transport);
-                lock.0 = Some((transport, data));
+                lock.parked_message = Some((transport, data));
                 Err(ContentStreamError::TransportChanged)
             }
         } else {
@@ -250,7 +250,7 @@ pub(super) struct LiveConnectionInfoSet {
 impl LiveConnectionInfoSet {
     /// Returns the current infos.
     pub fn iter(&self) -> impl Iterator<Item = ConnectionInfo> {
-        let recv = self.recv.reader.connection_infos();
+        let recv = self.recv.multi_stream.connection_infos();
         let send = self.send.connection_infos();
 
         IntoIntersection::new(recv, send)
@@ -264,28 +264,28 @@ struct ChannelQueue {
     tx: ChannelQueueSender,
 }
 
-type ChannelQueueReceiver = (
-    Option<(PermitId, Vec<u8>)>,
-    UnboundedReceiver<(PermitId, Vec<u8>)>,
-);
+struct ChannelQueueReceiver {
+    parked_message: Option<(PermitId, Vec<u8>)>,
+    receiver: UnboundedReceiver<(PermitId, Vec<u8>)>,
+}
 
 type ChannelQueueSender = UnboundedSender<(PermitId, Vec<u8>)>;
 
 struct RecvState {
-    reader: Arc<MultiStream>,
+    multi_stream: Arc<MultiStream>,
     queues: Arc<BlockingMutex<HashMap<MessageChannelId, ChannelQueue>>>,
 }
 
 impl RecvState {
     fn new() -> Self {
         Self {
-            reader: Arc::new(MultiStream::new()),
+            multi_stream: Arc::new(MultiStream::new()),
             queues: Arc::new(BlockingMutex::new(HashMap::default())),
         }
     }
 
     fn add(&self, stream: PermittedStream) {
-        self.reader.add(stream);
+        self.multi_stream.add(stream);
     }
 
     fn add_channel(&self, channel_id: MessageChannelId) {
@@ -295,14 +295,17 @@ impl RecvState {
                 let (tx, rx) = mpsc::unbounded_channel();
                 entry.insert(ChannelQueue {
                     reference_count: 1,
-                    rx: Arc::new(AsyncMutex::new((None, rx))),
+                    rx: Arc::new(AsyncMutex::new(ChannelQueueReceiver {
+                        parked_message: None,
+                        receiver: rx,
+                    })),
                     tx,
                 });
             }
         }
     }
 
-    async fn recv(
+    async fn recv_on_queue(
         &self,
         queue_rx: &mut UnboundedReceiver<(PermitId, Vec<u8>)>,
     ) -> Option<(PermitId, Vec<u8>)> {
@@ -313,7 +316,7 @@ impl RecvState {
     }
 
     async fn sort_incoming_messages_into_queues(&self) {
-        while let Some((transport, message)) = self.reader.recv().await {
+        while let Some((transport, message)) = self.multi_stream.recv().await {
             if let Some(queue) = self.queues.lock().unwrap().get_mut(&message.channel) {
                 queue.tx.send((transport, message.content)).unwrap_or(());
             }
