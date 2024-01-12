@@ -1,11 +1,12 @@
 use super::{EntryHandle, EntryIdGenerator, VirtualFilesystem};
 use crate::{MountError, MultiRepoMount};
+use deadlock::BlockingRwLock;
 use dokan::{
     init, shutdown, unmount, CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler,
     FileSystemMountError, FileSystemMounter, FileTimeOperation, FillDataResult, FindData,
     MountOptions, OperationInfo, OperationResult, VolumeInfo, IO_SECURITY_CONTEXT,
 };
-use ouisync_lib::{deadlock::BlockingRwLock, Repository};
+use ouisync_lib::Repository;
 use std::io;
 use std::{
     collections::{hash_map, HashMap},

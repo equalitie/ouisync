@@ -2,6 +2,7 @@ pub(crate) mod multi_repo_mount;
 pub(crate) mod single_repo_mount;
 
 use camino::Utf8PathBuf;
+use deadlock::{AsyncMutex, AsyncMutexGuard};
 use dokan::{
     CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, FileTimeOperation, FillDataError,
     FillDataResult, FindData, MountFlags, OperationInfo, OperationResult, VolumeInfo,
@@ -11,10 +12,7 @@ use dokan_sys::win32::{
     FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
     FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_SUPERSEDE,
 };
-use ouisync_lib::{
-    deadlock::{AsyncMutex, AsyncMutexGuard},
-    path, File, JointDirectory, JointEntryRef, Repository,
-};
+use ouisync_lib::{path, File, JointDirectory, JointEntryRef, Repository};
 use std::{
     collections::{hash_map, HashMap},
     fmt,
@@ -25,7 +23,7 @@ use std::{
     },
     time::UNIX_EPOCH,
 };
-// TODO: We should have this in ouisync_lib::deadlock.
+// TODO: We should have this in the `deadlock` crate.
 use tokio::sync::{RwLock as AsyncRwLock, RwLockReadGuard as AsyncRwLockReadGuard};
 use tracing::instrument;
 use widestring::{U16CStr, U16CString};

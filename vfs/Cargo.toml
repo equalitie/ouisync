@@ -27,6 +27,7 @@ libc = "0.2.139"
 bitflags = "2.4.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+deadlock = { path = "../deadlock" }
 # Patch to force compilation of dokan2.dll when `DOKAN_DLL_OUTPUT_PATH` is
 # defined even if dokan is installed.
 # https://github.com/dokan-dev/dokan-rust/pull/7
