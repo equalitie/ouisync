@@ -678,8 +678,41 @@ pub(crate) fn init_log() {
 
 #[cfg(feature = "prometheus")]
 fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
-    use metrics_exporter_prometheus::PrometheusBuilder;
     use metrics_ext::{Pair, Shared};
+
+    Shared::new(Pair(watch_recorder, init_prometheus_recorder(runtime)))
+}
+
+#[cfg(feature = "influxdb")]
+fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
+    use metrics_ext::{Pair, Shared};
+
+    Shared::new(Pair(watch_recorder, init_influxdb_recorder(runtime)))
+}
+
+#[cfg(all(feature = "prometheus", feature = "influxdb"))]
+fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
+    use metrics_ext::{Pair, Shared};
+
+    Shared::new(Pair(
+        watch_recorder,
+        Pair(
+            init_prometheus_recorder(runtime),
+            init_influxdb_recorder(runtime),
+        ),
+    ))
+}
+
+#[cfg(not(any(feature = "prometheus", feature = "influxdb")))]
+fn init_recorder(_runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
+    use metrics_ext::{Pair, Shared};
+
+    Shared::new(watch_recorder)
+}
+
+#[cfg(feature = "prometheus")]
+fn init_prometheus_recorder(runtime: &Handle) -> impl Recorder {
+    use metrics_exporter_prometheus::PrometheusBuilder;
 
     let endpoint = std::env::var("PROMETHEUS_PUSH_GATEWAY_ENDPOINT")
         .unwrap_or_else(|_| "http://127.0.0.1:9091/metrics/job/ouisync".to_string());
@@ -692,10 +725,25 @@ fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext
 
     runtime.spawn(exporter);
 
-    Shared::new(Pair(watch_recorder, recorder))
+    recorder
 }
 
-#[cfg(not(feature = "prometheus"))]
-fn init_recorder(_runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
-    metrics_ext::Shared::new(watch_recorder)
+#[cfg(feature = "influxdb")]
+fn init_influxdb_recorder(runtime: &Handle) -> impl Recorder {
+    use metrics_ext::{InfluxDbParams, InfluxDbRecorder};
+    use std::env;
+
+    let params = InfluxDbParams {
+        endpoint: env::var("INFLUXDB_ENDPOINT")
+            .unwrap_or_else(|_| "http://localhost:8086/api/v2".to_string()),
+        token: env::var("INFLUXDB_TOKEN").expect("INFLUXDB_TOKEN (InfluxDB API token)"),
+        org: env::var("INFLUXDB_ORG").unwrap_or_else(|_| "equalitie".to_string()),
+        bucket: env::var("INFLUXDB_BUCKET").unwrap_or_else(|_| "ouisync".to_string()),
+    };
+
+    let (recorder, exporter) = InfluxDbRecorder::new(params);
+
+    runtime.spawn(exporter);
+
+    recorder
 }

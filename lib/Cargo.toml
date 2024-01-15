@@ -98,6 +98,7 @@ test-strategy = "0.2.1"
 tokio = { workspace = true, features = ["process", "test-util"] }
 
 [features]
-simulation = ["rand/simulation", "turmoil"]
 analyze-protocol = []
-prometheus = ["metrics-exporter-prometheus/push-gateway"]
+influxdb         = []
+prometheus       = ["metrics-exporter-prometheus/push-gateway"]
+simulation       = ["rand/simulation", "turmoil"]

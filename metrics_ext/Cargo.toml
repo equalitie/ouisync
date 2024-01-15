@@ -12,4 +12,4 @@ metrics      = { workspace = true }
 metrics-util = { workspace = true, features = ["summary"] }
 tokio        = { workspace = true, features = ["sync"] }
 tracing      = { workspace = true }
-
+reqwest      = { version = "0.11.23", default-features = false }
