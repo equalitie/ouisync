@@ -457,7 +457,7 @@ impl VirtualFilesystem {
             .try_into()
             .map_err(|_| ouisync_lib::Error::OffsetOutOfRange)?;
         file.seek(SeekFrom::Start(offset));
-        let size = file.read(buffer).await?;
+        let size = file.read_all(buffer).await?;
 
         Ok(size as u32)
     }
