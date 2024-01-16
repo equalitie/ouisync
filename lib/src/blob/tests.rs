@@ -69,7 +69,7 @@ async fn write_and_read_case(
     // Create the blob and write to it in chunks of `write_len` bytes.
     let mut blob = Blob::create(branch.clone(), block_id);
 
-    let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
+    let orig_content = random_bytes(rng, blob_len);
 
     for chunk in orig_content.chunks(write_len) {
         blob.write_all(&mut tx, &mut changeset, chunk)
@@ -116,7 +116,7 @@ fn len(
         let mut tx = store.begin_write().await.unwrap();
         let mut changeset = Changeset::new();
 
-        let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
+        let content = random_bytes(rng, content_len);
 
         let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
         blob.write_all(&mut tx, &mut changeset, &content[..])
@@ -174,7 +174,7 @@ async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize,
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
 
-    let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
+    let content = random_bytes(rng, content_len);
 
     let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
     blob.write_all(&mut tx, &mut changeset, &content[..])
@@ -207,7 +207,7 @@ fn seek_from_current(
         let mut tx = store.begin_write().await.unwrap();
         let mut changeset = Changeset::new();
 
-        let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
+        let content = random_bytes(rng, content_len);
 
         let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
         blob.write_all(&mut tx, &mut changeset, &content[..])
@@ -304,10 +304,7 @@ async fn truncate_to_empty() {
 
     let id = rng.gen();
 
-    let content: Vec<_> = (&mut rng)
-        .sample_iter(Standard)
-        .take(2 * BLOCK_SIZE)
-        .collect();
+    let content = random_bytes(&mut rng, 2 * BLOCK_SIZE);
 
     let mut changeset = Changeset::new();
     let mut blob = Blob::create(branch.clone(), id);
@@ -345,10 +342,7 @@ async fn truncate_to_shorter() {
 
     let id = rng.gen();
 
-    let content: Vec<_> = (&mut rng)
-        .sample_iter(Standard)
-        .take(3 * BLOCK_SIZE)
-        .collect();
+    let content = random_bytes(&mut rng, 3 * BLOCK_SIZE);
 
     let mut changeset = Changeset::new();
     let mut blob = Blob::create(branch.clone(), id);
@@ -390,10 +384,7 @@ async fn truncate_marks_as_dirty() {
 
     let id = rng.gen();
 
-    let content: Vec<_> = (&mut rng)
-        .sample_iter(Standard)
-        .take(2 * BLOCK_SIZE)
-        .collect();
+    let content = random_bytes(&mut rng, 2 * BLOCK_SIZE);
 
     let mut blob = Blob::create(branch.clone(), id);
     blob.write_all(&mut tx, &mut changeset, &content)
@@ -565,7 +556,7 @@ async fn fork_and_write_case(
         rng.gen()
     };
 
-    let src_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(src_len).collect();
+    let src_content = random_bytes(&mut rng, src_len);
 
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
@@ -588,7 +579,7 @@ async fn fork_and_write_case(
         .await
         .unwrap();
 
-    let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
+    let write_content = random_bytes(rng, write_len);
 
     blob.seek(SeekFrom::Start(seek_pos as u64));
     blob.write_all(&mut tx, &mut changeset, &write_content[..])
@@ -631,7 +622,7 @@ async fn fork_is_idempotent() {
     let (mut rng, _base_dir, store, [src_branch, dst_branch]) = setup(0).await;
 
     let id = rng.gen();
-    let content: Vec<u8> = (&mut rng).sample_iter(Standard).take(512 * 1024).collect();
+    let content = random_bytes(&mut rng, 512 * 1024);
 
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
@@ -707,10 +698,7 @@ async fn block_ids_test() {
     let blob_id: BlobId = rng.gen();
     let mut blob = Blob::create(branch.clone(), blob_id);
 
-    let content: Vec<_> = rng
-        .sample_iter(Standard)
-        .take(BLOCK_SIZE * 3 - HEADER_SIZE)
-        .collect();
+    let content = random_bytes(rng, BLOCK_SIZE * 3 - HEADER_SIZE);
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
     blob.write_all(&mut tx, &mut changeset, &content)
@@ -745,10 +733,7 @@ async fn block_ids_of_identical_blobs_in_the_same_branch() {
     let blob_id_1: BlobId = rng.gen();
     let mut blob_1 = Blob::create(branch.clone(), blob_id_1);
 
-    let content: Vec<_> = rng
-        .sample_iter(Standard)
-        .take(BLOCK_SIZE * 2 - HEADER_SIZE)
-        .collect();
+    let content = random_bytes(rng, BLOCK_SIZE * 2 - HEADER_SIZE);
 
     for blob in [&mut blob_0, &mut blob_1] {
         let mut tx = store.begin_write().await.unwrap();
@@ -794,10 +779,7 @@ async fn block_ids_of_identical_blobs_in_different_branches() {
     let mut blob_0 = Blob::create(branch_0.clone(), blob_id);
     let mut blob_1 = Blob::create(branch_1.clone(), blob_id);
 
-    let content: Vec<_> = rng
-        .sample_iter(Standard)
-        .take(BLOCK_SIZE * 2 - HEADER_SIZE)
-        .collect();
+    let content = random_bytes(rng, BLOCK_SIZE * 2 - HEADER_SIZE);
 
     for blob in [&mut blob_0, &mut blob_1] {
         let mut tx = store.begin_write().await.unwrap();
@@ -840,11 +822,8 @@ async fn block_ids_of_identical_blocks_in_the_same_blob() {
     let blob_id: BlobId = rng.gen();
     let mut blob = Blob::create(branch.clone(), blob_id);
 
-    let content_block_0: Vec<_> = (&mut rng)
-        .sample_iter(Standard)
-        .take(BLOCK_SIZE - HEADER_SIZE)
-        .collect();
-    let content_block_1: Vec<_> = (&mut rng).sample_iter(Standard).take(BLOCK_SIZE).collect();
+    let content_block_0 = random_bytes(&mut rng, BLOCK_SIZE - HEADER_SIZE);
+    let content_block_1 = random_bytes(&mut rng, BLOCK_SIZE);
 
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
@@ -900,4 +879,13 @@ async fn setup<const N: usize>(rng_seed: u64) -> (StdRng, TempDir, Store, [Branc
     });
 
     (rng, base_dir, store, branches)
+}
+
+fn random_bytes<R: Rng>(rng: R, size: usize) -> Vec<u8> {
+    rng
+        // The `u8` should be inferred but for some reason it doesn't work when compiling on
+        // windows, but only on the CI or cross-compilation ¯\_(ツ)_/¯
+        .sample_iter::<u8, _>(Standard)
+        .take(size)
+        .collect()
 }
