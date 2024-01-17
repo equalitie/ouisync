@@ -11,6 +11,7 @@ use super::{
     raw,
     runtime_id::PublicRuntimeId,
     server::Server,
+    traffic_tracker::TrafficTracker,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
@@ -43,6 +44,7 @@ pub(super) struct MessageBroker {
     links: HashMap<LocalId, oneshot::Sender<()>>,
     request_limiter: Arc<Semaphore>,
     monitor: StateMonitor,
+    tracker: TrafficTracker,
     span: Span,
 }
 
@@ -53,6 +55,7 @@ impl MessageBroker {
         stream: raw::Stream,
         permit: ConnectionPermit,
         monitor: StateMonitor,
+        tracker: TrafficTracker,
     ) -> Self {
         let span = tracing::info_span!(
             "message_broker",
@@ -68,6 +71,7 @@ impl MessageBroker {
             links: HashMap::default(),
             request_limiter: Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
             monitor,
+            tracker,
             span,
         };
 
@@ -131,14 +135,18 @@ impl MessageBroker {
             role,
         );
 
-        let stream = self.dispatcher.open_recv(channel_id);
-        let sink = self.dispatcher.open_send(channel_id);
-        let request_limiter = self.request_limiter.clone();
-
-        let pex_discovery_tx = pex.discovery_sender();
-        let pex_announcer = pex.announcer(self.that_runtime_id, self.dispatcher.connection_infos());
-
-        let choker = choke_manager.new_choker();
+        let mut link = Link {
+            role,
+            stream: self.dispatcher.open_recv(channel_id),
+            sink: self.dispatcher.open_send(channel_id),
+            vault,
+            request_limiter: self.request_limiter.clone(),
+            pex_discovery_tx: pex.discovery_sender(),
+            pex_announcer: pex.announcer(self.that_runtime_id, self.dispatcher.connection_infos()),
+            choker: choke_manager.new_choker(),
+            monitor,
+            tracker: self.tracker.clone(),
+        };
 
         tracing::info!(?role, "Link created");
 
@@ -146,17 +154,7 @@ impl MessageBroker {
 
         let task = async move {
             select! {
-                _ = maintain_link(
-                    role,
-                    stream,
-                    sink,
-                    vault,
-                    request_limiter,
-                    pex_discovery_tx,
-                    pex_announcer,
-                    monitor,
-                    choker,
-                ) => (),
+                _ = link.maintain() => (),
                 _ = abort_rx => (),
             }
 
@@ -184,79 +182,92 @@ impl Drop for MessageBroker {
     }
 }
 
-// Repeatedly establish and run the link until it's explicitly destroyed by calling `destroy_link()`.
-// TODO: Consider consolidating the arguments somehow
-#[allow(clippy::too_many_arguments)]
-async fn maintain_link(
+struct Link {
     role: Role,
-    mut stream: ContentStream,
-    mut sink: ContentSink,
+    stream: ContentStream,
+    sink: ContentSink,
     vault: Vault,
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
-    mut pex_announcer: PexAnnouncer,
-    monitor: StateMonitor,
+    pex_announcer: PexAnnouncer,
     choker: choke::Choker,
-) {
-    #[derive(Debug)]
-    enum State {
-        Sleeping(Duration),
-        AwaitingBarrier,
-        EstablishingChannel,
-        Running,
-    }
+    monitor: StateMonitor,
+    tracker: TrafficTracker,
+}
 
-    let mut backoff = ExponentialBackoffBuilder::new()
-        .with_initial_interval(Duration::from_millis(100))
-        .with_max_interval(Duration::from_secs(5))
-        .with_max_elapsed_time(None)
-        .build();
-
-    let mut next_sleep = None;
-    let state = monitor.make_value("state", State::AwaitingBarrier);
-
-    loop {
-        if let Some(sleep) = next_sleep {
-            *state.get() = State::Sleeping(sleep);
-            tokio::time::sleep(sleep).await;
+impl Link {
+    // Repeatedly establish and run the link until it's explicitly destroyed by calling `destroy_link()`.
+    async fn maintain(&mut self) {
+        #[derive(Debug)]
+        enum State {
+            Sleeping(Duration),
+            AwaitingBarrier,
+            EstablishingChannel,
+            Running,
         }
 
-        next_sleep = backoff.next_backoff();
+        let mut backoff = ExponentialBackoffBuilder::new()
+            .with_initial_interval(Duration::from_millis(100))
+            .with_max_interval(Duration::from_secs(5))
+            .with_max_elapsed_time(None)
+            .build();
 
-        *state.get() = State::AwaitingBarrier;
+        let mut next_sleep = None;
+        let state = self.monitor.make_value("state", State::AwaitingBarrier);
 
-        match Barrier::new(&mut stream, &sink, &monitor).run().await {
-            Ok(()) => (),
-            Err(BarrierError::Failure) => continue,
-            Err(BarrierError::ChannelClosed) => break,
-            Err(BarrierError::TransportChanged) => continue,
-        }
+        loop {
+            if let Some(sleep) = next_sleep {
+                *state.get() = State::Sleeping(sleep);
+                tokio::time::sleep(sleep).await;
+            }
 
-        *state.get() = State::EstablishingChannel;
+            next_sleep = backoff.next_backoff();
 
-        let (crypto_stream, crypto_sink) =
-            match establish_channel(role, &mut stream, &mut sink, &vault).await {
+            *state.get() = State::AwaitingBarrier;
+
+            match Barrier::new(&mut self.stream, &self.sink, &self.monitor)
+                .run()
+                .await
+            {
+                Ok(()) => (),
+                Err(BarrierError::Failure) => continue,
+                Err(BarrierError::ChannelClosed) => break,
+                Err(BarrierError::TransportChanged) => continue,
+            }
+
+            *state.get() = State::EstablishingChannel;
+
+            let (crypto_stream, crypto_sink) = match establish_channel(
+                self.role,
+                &mut self.stream,
+                &mut self.sink,
+                &self.vault,
+                self.tracker.clone(),
+            )
+            .await
+            {
                 Ok(io) => io,
                 Err(EstablishError::Crypto) => continue,
                 Err(EstablishError::Closed) => break,
                 Err(EstablishError::TransportChanged) => continue,
             };
 
-        *state.get() = State::Running;
+            *state.get() = State::Running;
 
-        match run_link(
-            crypto_stream,
-            crypto_sink,
-            &vault,
-            request_limiter.clone(),
-            pex_discovery_tx.clone(),
-            &mut pex_announcer,
-            choker.clone(),
-        )
-        .await
-        {
-            ControlFlow::Continue => continue,
-            ControlFlow::Break => break,
+            match run_link(
+                crypto_stream,
+                crypto_sink,
+                &self.vault,
+                self.request_limiter.clone(),
+                self.pex_discovery_tx.clone(),
+                &mut self.pex_announcer,
+                self.choker.clone(),
+            )
+            .await
+            {
+                ControlFlow::Continue => continue,
+                ControlFlow::Break => break,
+            }
         }
     }
 }
@@ -266,8 +277,9 @@ async fn establish_channel<'a>(
     stream: &'a mut ContentStream,
     sink: &'a mut ContentSink,
     vault: &Vault,
+    tracker: TrafficTracker,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
-    match crypto::establish_channel(role, vault.repository_id(), stream, sink).await {
+    match crypto::establish_channel(role, vault.repository_id(), stream, sink, tracker).await {
         Ok(io) => {
             tracing::debug!("Established encrypted channel");
             Ok(io)

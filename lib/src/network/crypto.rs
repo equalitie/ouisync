@@ -10,6 +10,7 @@
 use super::{
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream, ContentStreamError},
     runtime_id::PublicRuntimeId,
+    traffic_tracker::TrafficTracker,
 };
 use crate::repository::RepositoryId;
 use noise_protocol::Cipher as _;
@@ -64,6 +65,7 @@ pub(super) struct DecryptingStream<'a> {
     inner: &'a mut ContentStream,
     cipher: CipherState,
     buffer: Vec<u8>,
+    tracker: TrafficTracker,
 }
 
 impl DecryptingStream<'_> {
@@ -83,6 +85,10 @@ impl DecryptingStream<'_> {
             .decrypt_ad(self.inner.channel().as_ref(), &content, &mut self.buffer)
             .map_err(|_| RecvError::Crypto)?;
 
+        // Record the ciphertext length to account for the encryption overhead, but do it only
+        // after succesfull decryption to avoid including invalid data (e.g., spam).
+        self.tracker.record_recv(content.len() as u64);
+
         mem::swap(&mut content, &mut self.buffer);
 
         Ok(content)
@@ -94,6 +100,7 @@ pub(super) struct EncryptingSink<'a> {
     inner: &'a mut ContentSink,
     cipher: CipherState,
     buffer: Vec<u8>,
+    tracker: TrafficTracker,
 }
 
 impl EncryptingSink<'_> {
@@ -105,6 +112,9 @@ impl EncryptingSink<'_> {
         self.buffer.resize(content.len() + Cipher::tag_len(), 0);
         self.cipher
             .encrypt_ad(self.inner.channel().as_ref(), &content, &mut self.buffer);
+
+        // Record the ciphertext length to account for the encryption overhead.
+        self.tracker.record_send(self.buffer.len() as u64);
 
         mem::swap(&mut content, &mut self.buffer);
 
@@ -119,6 +129,7 @@ pub(super) async fn establish_channel<'a>(
     repo_id: &RepositoryId,
     stream: &'a mut ContentStream,
     sink: &'a mut ContentSink,
+    tracker: TrafficTracker,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     let mut handshake_state = build_handshake_state(role, repo_id);
 
@@ -146,12 +157,14 @@ pub(super) async fn establish_channel<'a>(
         inner: stream,
         cipher: recv_cipher,
         buffer: vec![],
+        tracker: tracker.clone(),
     };
 
     let sink = EncryptingSink {
         inner: sink,
         cipher: send_cipher,
         buffer: vec![],
+        tracker,
     };
 
     Ok((stream, sink))

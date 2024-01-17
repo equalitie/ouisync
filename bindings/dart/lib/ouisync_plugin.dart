@@ -146,6 +146,10 @@ class Session {
   Future<String?> get natBehavior =>
       client.invoke<String?>('network_nat_behavior');
 
+  Future<TrafficStats> get trafficStats => client
+      .invoke<List<Object?>>('network_traffic_stats')
+      .then((list) => TrafficStats.decode(list));
+
   /// Gets a stream that yields lists of known peers.
   Stream<List<PeerInfo>> get onPeersChange async* {
     await for (final _ in networkEvents) {
@@ -280,6 +284,23 @@ class PeerInfo {
   @override
   String toString() =>
       '$runtimeType(addr: $addr, source: $source, state: $state, runtimeId: $runtimeId)';
+}
+
+class TrafficStats {
+  final int send;
+  final int recv;
+
+  const TrafficStats({required this.send, required this.recv});
+
+  static TrafficStats decode(List<Object?> raw) {
+    final send = raw[0] as int;
+    final recv = raw[1] as int;
+
+    return TrafficStats(send: send, recv: recv);
+  }
+
+  @override
+  String toString() => '$runtimeType(send: $send, recv: $recv)';
 }
 
 /// A reference to a ouisync repository.

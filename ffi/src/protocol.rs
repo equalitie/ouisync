@@ -4,7 +4,10 @@ use crate::{
 };
 use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
-use ouisync_lib::{network::NatBehavior, AccessMode, PeerAddr, PeerInfo, Progress, ShareToken};
+use ouisync_lib::{
+    network::{NatBehavior, TrafficStats},
+    AccessMode, PeerAddr, PeerInfo, Progress, ShareToken,
+};
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
 use std::{
@@ -163,6 +166,7 @@ pub(crate) enum Request {
     NetworkExternalAddrV4,
     NetworkExternalAddrV6,
     NetworkNatBehavior,
+    NetworkTrafficStats,
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
@@ -185,6 +189,7 @@ pub(crate) enum Response {
     Progress(Progress),
     PeerInfos(Vec<PeerInfo>),
     PeerAddrs(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
+    TrafficStats(TrafficStats),
 }
 
 impl<T> From<Option<T>> for Response
@@ -364,6 +369,12 @@ impl From<Option<NatBehavior>> for Response {
     }
 }
 
+impl From<TrafficStats> for Response {
+    fn from(value: TrafficStats) -> Self {
+        Self::TrafficStats(value)
+    }
+}
+
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -383,6 +394,7 @@ impl fmt::Debug for Response {
                 .field("len", &value.len())
                 .finish(),
             Self::PeerAddrs(value) => f.debug_tuple("PeerAddrs").field(value).finish(),
+            Self::TrafficStats(value) => f.debug_tuple("TrafficStats").field(value).finish(),
         }
     }
 }
