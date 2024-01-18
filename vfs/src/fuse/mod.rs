@@ -274,7 +274,7 @@ impl fuser::Filesystem for VirtualFilesystem {
 
     fn create(
         &mut self,
-        _req: &Request,
+        req: &Request,
         parent: Inode,
         name: &OsStr,
         mode: u32,
@@ -283,8 +283,10 @@ impl fuser::Filesystem for VirtualFilesystem {
         reply: ReplyCreate,
     ) {
         let (attr, handle, flags) = try_request!(
-            self.rt
-                .block_on(self.inner.create(parent, name, mode, umask, flags.into())),
+            self.rt.block_on(
+                self.inner
+                    .create(parent, name, mode, umask, flags.into(), req)
+            ),
             reply
         );
         reply.created(&TTL, &attr, 0, handle, flags);
@@ -437,7 +439,8 @@ impl Inner {
 
         let inode = self.inodes.lookup(parent, entry.name(), name, repr);
 
-        Ok(make_file_attr(inode, entry.entry_type(), len))
+        // TODO: uid, gid
+        Ok(make_file_attr(inode, entry.entry_type(), len, 0, 0))
     }
 
     #[instrument(skip(self, inode), fields(path))]
@@ -452,7 +455,8 @@ impl Inner {
 
         let entry = self.open_entry_by_inode(self.inodes.get(inode)).await?;
 
-        Ok(make_file_attr_for_entry(&entry, inode).await)
+        // TODO: uid, gid
+        Ok(make_file_attr_for_entry(&entry, inode, 0, 0).await)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -535,7 +539,13 @@ impl Inner {
             file.flush().await?;
         }
 
-        Ok(make_file_attr(inode, EntryType::File, file.len()))
+        Ok(make_file_attr(
+            inode,
+            EntryType::File,
+            file.len(),
+            uid.unwrap_or(0),
+            gid.unwrap_or(0),
+        ))
     }
 
     #[instrument(skip(self, inode, flags), fields(path, ?flags), err(Debug))]
@@ -646,7 +656,8 @@ impl Inner {
             .lookup(parent, name, name, Representation::Directory);
         let len = dir.len();
 
-        Ok(make_file_attr(inode, EntryType::Directory, len))
+        // TODO: uid, gid
+        Ok(make_file_attr(inode, EntryType::Directory, len, 0, 0))
     }
 
     #[instrument(skip(self, parent, name), fields(path), err(Debug))]
@@ -675,6 +686,7 @@ impl Inner {
         mode: u32,
         umask: u32,
         flags: OpenFlags,
+        req: &Request<'_>,
     ) -> Result<(FileAttr, FileHandle, u32)> {
         record_fmt!("mode", "{:#o}", mode);
         record_fmt!("umask", "{:#o}", umask);
@@ -691,7 +703,7 @@ impl Inner {
         let inode = self
             .inodes
             .lookup(parent, name, name, Representation::File(branch_id));
-        let attr = make_file_attr_for_entry(&entry, inode).await;
+        let attr = make_file_attr_for_entry(&entry, inode, req.uid(), req.gid()).await;
         let handle = self.entries.insert(entry);
 
         Ok((attr, handle, 0))
@@ -917,11 +929,16 @@ impl Inner {
     }
 }
 
-async fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> FileAttr {
-    make_file_attr(inode, entry.entry_type(), entry.len())
+async fn make_file_attr_for_entry(
+    entry: &JointEntry,
+    inode: Inode,
+    uid: u32,
+    gid: u32,
+) -> FileAttr {
+    make_file_attr(inode, entry.entry_type(), entry.len(), uid, gid)
 }
 
-fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
+fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64, uid: u32, gid: u32) -> FileAttr {
     FileAttr {
         ino: inode,
         size: len,
@@ -936,8 +953,8 @@ fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
             EntryType::Directory => 0o555, // TODO
         },
         nlink: 1,
-        uid: 0, // TODO
-        gid: 0, // TODO
+        uid,
+        gid,
         rdev: 0,
         blksize: 0, // ?
         flags: 0,
