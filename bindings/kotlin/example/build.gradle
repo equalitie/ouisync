@@ -3,6 +3,12 @@ plugins {
     id 'kotlin-android'
 }
 
+Properties localProperties = new Properties()
+localProperties.load(rootProject.file('local.properties').newDataInputStream())
+def useLocalLib = false
+if (localProperties.containsKey("useLocalLib"))
+    useLocalLib = localProperties.getProperty("useLocalLib").toBoolean()
+
 android {
     compileSdkVersion 34
     namespace 'org.equalitie.ouisync.example'
@@ -38,5 +44,12 @@ dependencies {
     implementation 'androidx.compose.material3:material3'
     implementation "androidx.activity:activity-compose:1.7.2"
 
-    implementation project(':lib')
+    if (useLocalLib) {
+        implementation project(':lib')
+    }
+    else {
+        implementation 'ie.equalit.ouinet:ouisync-omni:0.7.2'
+        implementation 'net.java.dev.jna:jna:5.13.0@aar'
+        implementation 'org.msgpack:msgpack-core:0.9.5'
+    }
 }

@@ -5,8 +5,12 @@ plugins {
     id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.3'
 }
 
+Properties localProperties = new Properties()
+localProperties.load(rootProject.file('local.properties').newDataInputStream())
+def ouisyncVersionName = localProperties.getProperty("versionName")
+
 android {
-    compileSdkVersion 33
+    compileSdkVersion 34
     ndkVersion '25.2.9519653'
 
     namespace 'org.equalitie.ouisync'
@@ -21,8 +25,10 @@ android {
     }
 
     defaultConfig {
-        targetSdkVersion 33
+        targetSdkVersion 34
         minSdkVersion 21
+        versionCode 1
+        versionName ouisyncVersionName
     }
 
     compileOptions {
@@ -112,3 +118,15 @@ afterEvaluate {
         }
     }
 }
+
+ext {
+    PUBLISH_GROUP_ID = 'ie.equalit.ouinet'
+    PUBLISH_VERSION = "${ouisyncVersionName}"
+    PUBLISH_ARTIFACT_ID = "ouisync-omni"
+}
+
+tasks.withType(Sign).configureEach {
+    onlyIf { rootProject.gradle.startParameter.taskNames.contains('lib:publishToSonatype') }
+}
+
+apply from: "${rootProject.projectDir}/build-scripts/publish-module.gradle"
