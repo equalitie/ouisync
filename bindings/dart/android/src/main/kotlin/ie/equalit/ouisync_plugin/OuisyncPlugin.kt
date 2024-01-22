@@ -66,11 +66,20 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         val previewResult = startFilePreviewAction(arguments)
         result.success(previewResult)
       }
+      "getDownloadPath" -> {
+        val downloadPath = startGetDownloadPath()
+        result.success(downloadPath)
+      }
       else -> {
         result.notImplemented()
       }
     }
   }
+
+  private fun startGetDownloadPath(): String? {
+    val downloadDirectory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+    return downloadDirectory.toString()
+  } 
 
   private fun startFilePreviewAction(arguments: HashMap<String, Any>): String {
     val authority = arguments["authority"]
