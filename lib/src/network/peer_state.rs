@@ -116,13 +116,19 @@ impl<'de> Deserialize<'de> for PeerState {
     }
 }
 
+/// State of the peer connection.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum PeerStateKind {
+    /// The peer is known (discovered or explicitly added by the user) but we haven't started
+    /// establishing a connection to them yet.
     Known,
+    /// A connection to the peer is being established.
     Connecting,
+    /// The peer is connected but the protocol handshake is still in progress.
     Handshaking,
+    /// The peer connection is active.
     Active,
 }
 

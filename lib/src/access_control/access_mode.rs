@@ -3,14 +3,18 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use thiserror::Error;
 
+/// Access mode of a repository.
 #[derive(
     Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize, IntoPrimitive, TryFromPrimitive,
 )]
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum AccessMode {
+    /// Repository is neither readable not writtable (but can still be synced).
     Blind = 0,
+    /// Repository is readable but not writtable.
     Read = 1,
+    /// Repository is both readable and writable.
     Write = 2,
 }
 
