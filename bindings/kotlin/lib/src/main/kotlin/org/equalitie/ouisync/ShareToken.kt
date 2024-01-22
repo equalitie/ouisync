@@ -1,5 +1,13 @@
 package org.equalitie.ouisync
 
+/**
+ * A *share token* for a Ouisync repository.
+ *
+ * Tokens are used to share repositories between devices.
+ * [Create a token][Repository.createShareToken] on the device to share the repo from, send the
+ * token to the other device and [create][Repository.create] a repository on it, passing the
+ * token in the `shareToken` param.
+ */
 class ShareToken internal constructor(private val value: String, private val client: Client) {
     companion object {
         /**
@@ -22,12 +30,12 @@ class ShareToken internal constructor(private val value: String, private val cli
     }
 
     /**
-     * Returns the info-hash of the repository
+     * Returns the Bittorrent DHT info-hash of the repository.
      */
     suspend fun infoHash() = client.invoke(ShareTokenInfoHash(value)) as String
 
     /**
-     * Returns the suggested name for the repository
+     * Returns the suggested name for the repository.
      */
     suspend fun suggestedName() = client.invoke(ShareTokenSuggestedName(value)) as String
 
