@@ -111,4 +111,8 @@ afterEvaluate {
             systemProperty('jna.library.path', "$rootDir/../../target/debug")
         }
     }
+
+    tasks.named("dokkaHtml") {
+        dependsOn 'generateBindings'
+    }
 }

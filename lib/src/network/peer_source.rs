@@ -2,6 +2,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// How was the peer discovered.
 #[derive(
     Clone,
     Copy,
@@ -18,10 +19,15 @@ use std::fmt;
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum PeerSource {
+    /// Explicitly added by the user.
     UserProvided,
+    /// Peer connected to us.
     Listener,
+    /// Discovered on the Local Discovery.
     LocalDiscovery,
+    /// Discovered on the DHT.
     Dht,
+    /// Discovered on the Peer Exchange.
     PeerExchange,
 }
 

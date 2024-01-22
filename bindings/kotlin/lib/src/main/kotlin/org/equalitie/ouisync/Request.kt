@@ -386,6 +386,7 @@ internal class NetworkSetLocalDiscoveryEnabled : ValueRequest<Boolean> {
     constructor(value: Boolean) : super(value)
 }
 
+// TODO: rename to `NetworkAddCacheServer
 internal class NetworkAddStorageServer : ValueRequest<String> {
     constructor(value: String) : super(value)
 }

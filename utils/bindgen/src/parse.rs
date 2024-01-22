@@ -20,6 +20,7 @@ impl Source {
 
 #[derive(Debug)]
 pub(crate) struct Enum {
+    pub doc: String,
     // TODO: remove this `allow`
     #[allow(unused)]
     pub repr: EnumRepr,
@@ -28,6 +29,7 @@ pub(crate) struct Enum {
 
 #[derive(Debug)]
 pub(crate) struct EnumVariant {
+    pub doc: String,
     pub name: String,
     pub value: u64,
 }
@@ -150,6 +152,8 @@ fn parse_enum(item: ItemEnum) -> Option<Enum> {
         return None;
     }
 
+    let doc = extract_doc(&item.attrs);
+
     let Some(repr) = extract_repr(&item.attrs) else {
         return None;
     };
@@ -170,6 +174,8 @@ fn parse_enum(item: ItemEnum) -> Option<Enum> {
             return None;
         }
 
+        let doc = extract_doc(&variant.attrs);
+
         let value = if let Some((_, expr)) = variant.discriminant {
             parse_const_int_expr(expr)?
         } else {
@@ -179,12 +185,17 @@ fn parse_enum(item: ItemEnum) -> Option<Enum> {
         next_value = value + 1;
 
         variants.push(EnumVariant {
+            doc,
             name: variant.ident.to_string(),
             value,
         });
     }
 
-    Some(Enum { repr, variants })
+    Some(Enum {
+        doc,
+        repr,
+        variants,
+    })
 }
 
 fn parse_const_int_expr(expr: Expr) -> Option<u64> {
@@ -246,4 +257,29 @@ fn extract_repr(attrs: &[Attribute]) -> Option<String> {
     }
 
     None
+}
+
+fn extract_doc(attrs: &[Attribute]) -> String {
+    let mut output = String::new();
+
+    for attr in attrs {
+        let Meta::NameValue(meta) = &attr.meta else {
+            continue;
+        };
+
+        if !meta.path.is_ident("doc") {
+            continue;
+        }
+
+        let Expr::Lit(expr) = &meta.value else {
+            continue;
+        };
+
+        if let Lit::Str(lit) = &expr.lit {
+            output.push_str(&lit.value());
+            output.push('\n');
+        }
+    }
+
+    output
 }
