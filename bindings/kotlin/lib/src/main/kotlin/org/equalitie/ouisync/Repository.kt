@@ -212,7 +212,6 @@ class Repository private constructor(internal val handle: Long, internal val cli
     suspend fun setReadAccess(password: String?, shareToken: ShareToken? = null) =
         client.invoke(RepositorySetReadAccess(handle, password, shareToken?.toString()))
 
-
     /**
      * Changes the local read and write password.
      *

@@ -179,7 +179,6 @@ class Session private constructor(
         assert(response == null)
     }
 
-
     /**
      * Removes a peer previously added with [addUserProvidedPeer]
      */
