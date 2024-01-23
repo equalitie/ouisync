@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import android.os.Environment
 import android.webkit.MimeTypeMap
 import androidx.annotation.NonNull
 import io.flutter.embedding.engine.plugins.FlutterPlugin
