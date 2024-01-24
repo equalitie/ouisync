@@ -25,7 +25,7 @@ use std::{
 use tokio::{
     select,
     sync::{mpsc, watch},
-    time::{self, Duration},
+    time::{self, timeout, Duration},
 };
 use tracing::{instrument::Instrument, Span};
 
@@ -293,7 +293,7 @@ impl MonitoredDht {
             async move {
                 tracing::info!("bootstrap started");
 
-                if dht.bootstrapped(None).await {
+                if dht.bootstrapped().await {
                     *first_bootstrap.get() = "done";
                     tracing::info!("bootstrap complete");
                 } else {
@@ -582,7 +582,9 @@ impl Lookup {
 
                 let mut peers = Box::pin(stream::iter(dhts).flat_map(|dht| {
                     stream::once(async {
-                        dht.dht.bootstrapped(Some(Duration::from_secs(10))).await;
+                        timeout(Duration::from_secs(10), dht.dht.bootstrapped())
+                            .await
+                            .unwrap_or(false);
                         dht.dht.search(info_hash, true)
                     })
                     .flatten()
@@ -637,7 +639,7 @@ impl btdht::SocketTrait for Socket {
         Ok(())
     }
 
-    async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+    async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         self.0.recv_from(buf).await
     }
 
