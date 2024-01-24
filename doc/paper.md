@@ -27,10 +27,10 @@ security and efficient synchronization. It consist of three basic parts:
 Files and directories are encrypted and split into equally sized blocks to hide the content and any
 metadata associated with them.
 
-To support concurrent editing the index consist of **Branches**. Each branch contains data created
-only by a particular writer replica. The branches are further split into **Snapshots** where each
-snapshot corresponds to a state of the repository at some particular point in time. Within a single
-branch, the snapshots form a linear history of edits.
+To support concurrent editing the index consist of **Branches**. Branches are further split into
+**Snapshots** where each snapshot corresponds to a state of the repository at some particular point
+in time. Within a single branch, all snapshots are from a single replica and form a linear history
+of edits.
 
 Synchronization uses a custom peer-to-peer, end-to-end encrypted protocol which is efficient and
 secure. Furthermore, the protocol doesn't require access to the global internet and is specifically
@@ -74,8 +74,9 @@ attacks. Such adversary may be as simple as the admin of the WiFi router
 currently in use, or a state actor performing these actions on the global
 internet.
 
-The user-level adversary is set to be the one who may or may not possess one of
-the three Ouisync tokens and may or may not be using the same WiFi router.
+The user-level adversary is set to be the one who may or may not possess one of the three Ouisync
+tokens and may or may not be using the same WiFi router. This adversary does not have a physical
+access to the device.
 
 The adversary with a physical access to the device is self explanatory. Here we
 can distinquish between those that have the phone locked (e.g. someone who
@@ -99,7 +100,7 @@ or a cryptographic exploit is found.
 
 Finally, for as long as the repository is locked on the user's device, Ouisync also
 cryptographically hides from an adversary having physical access to the device whether the device
-owner has a read read or write access to the repository. See the [Plausible deniability
+owner has a read or write access to the repository. See the [Plausible deniability
 section](#plausible-deniability) for details.
 
 Ouisync currently does _not_ attempt to hide the IP addresses of peers using Ouisync alone or
@@ -237,8 +238,8 @@ be derived from it. To share in read mode both the repository id and the read ke
 one can't be derived from the other.
 
 The repository id, despite being a _public_ key, should still be treated as secret for private
-repositories as its possession allows one to find IP addresses of peers syncing this reposotiry and
-sync with them in the blind mode.
+repositories as its possession allows one to find the BitTorrent DHT info-hash and thus the IP
+addresses of peers syncing this reposotiry and sync with them in the blind mode.
 
 The **share token** is an encoding of the access secrets designed for convenient sharing with peers.
 It's formatted as an regular HTTPS URL. It looks like this:
