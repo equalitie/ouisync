@@ -55,7 +55,7 @@ tokio-stream = { version = "0.1.14", default-features = false }
 tokio-util = "0.7.10"
 tracing = { version = "0.1.37" }
 tracing-subscriber = { version = "0.3.17" }
-turmoil = { git = "https://github.com/tokio-rs/turmoil" }
+turmoil = "0.6.1"
 
 [profile.bench]
 # Enable debug info so we can profile the benches

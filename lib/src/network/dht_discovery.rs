@@ -2,7 +2,6 @@ use super::{
     peer_addr::PeerAddr,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::collections::{hash_map, HashMap, HashSet};
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
@@ -13,6 +12,7 @@ use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
 use std::{
+    collections::{hash_map, HashMap, HashSet},
     future::pending,
     io,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
