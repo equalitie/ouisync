@@ -220,7 +220,7 @@ fun App(viewModel: AppViewModel) {
             },
             bottomBar = { StatusBar(viewModel) },
             snackbarHost = { SnackbarHost(snackbar.state) },
-            content = {
+            content = { padding ->
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
