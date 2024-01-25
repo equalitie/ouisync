@@ -15,6 +15,7 @@ internal interface Bindings : Library {
     }
 
     fun session_create(
+        kind: Byte,
         configs_path: String,
         log_path: String?,
         context: Pointer?,

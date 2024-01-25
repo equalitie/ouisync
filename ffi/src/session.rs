@@ -4,11 +4,20 @@ use crate::{
     sender::Sender,
     state::State,
     transport::{ClientSender, Server},
-    utils::{self, UniqueHandle},
+    utils,
 };
 use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
 use state_monitor::StateMonitor;
-use std::{ffi::c_char, io, path::PathBuf, ptr, str::Utf8Error, sync::Arc, time::Duration};
+use std::{
+    ffi::c_char,
+    io,
+    marker::PhantomData,
+    path::PathBuf,
+    ptr,
+    str::Utf8Error,
+    sync::{Arc, Mutex, Weak},
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::{runtime, time};
 
@@ -70,7 +79,40 @@ impl Session {
     }
 }
 
-pub type SessionHandle = UniqueHandle<Session>;
+/// What type of session to create.
+///
+/// `Shared` should be used by default. `Unique` is useful mostly for tests, to ensure test
+/// isolation and/or to simulate multiple replicas in a single test.
+#[repr(u8)]
+pub enum SessionKind {
+    /// Returns the global `Session` instance, creating it if not exists.
+    Shared = 0,
+    /// Always creates a new `Session` instance.
+    Unique = 1,
+}
+
+/// Handle to [Session] which can be passed across the FFI boundary.
+#[repr(transparent)]
+pub struct SessionHandle(u64, PhantomData<&'static Session>);
+
+impl SessionHandle {
+    pub const NULL: Self = Self(0, PhantomData);
+
+    pub(crate) unsafe fn get(&self) -> &Session {
+        assert_ne!(self.0, 0, "invalid handle");
+        &*(self.0 as *const _)
+    }
+
+    pub(crate) unsafe fn release(self) -> Arc<Session> {
+        Arc::from_raw(self.0 as *mut _)
+    }
+}
+
+impl From<Arc<Session>> for SessionHandle {
+    fn from(session: Arc<Session>) -> Self {
+        Self(Arc::into_raw(session) as _, PhantomData)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -89,11 +131,11 @@ pub struct SessionCreateResult {
     error_message: *const c_char,
 }
 
-impl From<Result<Session, SessionError>> for SessionCreateResult {
-    fn from(result: Result<Session, SessionError>) -> Self {
+impl From<Result<Arc<Session>, SessionError>> for SessionCreateResult {
+    fn from(result: Result<Arc<Session>, SessionError>) -> Self {
         match result {
             Ok(session) => Self {
-                session: SessionHandle::new(Box::new(session)),
+                session: SessionHandle::from(session),
                 error_code: ErrorCode::Ok,
                 error_message: ptr::null(),
             },
@@ -106,21 +148,44 @@ impl From<Result<Session, SessionError>> for SessionCreateResult {
     }
 }
 
+static SHARED_SESSION: Mutex<Weak<Session>> = Mutex::new(Weak::new());
+
 /// Helper for creating guest-language specific FFI wrappers
 pub(crate) unsafe fn create(
+    kind: SessionKind,
     configs_path: *const c_char,
     log_path: *const c_char,
     sender: impl Sender,
 ) -> SessionCreateResult {
-    let configs_path = match utils::ptr_to_str(configs_path) {
-        Ok(configs_path) => PathBuf::from(configs_path),
-        Err(error) => return Err(SessionError::from(error)).into(),
-    };
+    match kind {
+        SessionKind::Unique => create_unique(configs_path, log_path, sender)
+            .map(Arc::new)
+            .into(),
+        SessionKind::Shared => {
+            let mut shared = SHARED_SESSION.lock().unwrap();
 
-    let log_path = match utils::ptr_to_maybe_str(log_path) {
-        Ok(log_path) => log_path.map(PathBuf::from),
-        Err(error) => return Err(SessionError::from(error)).into(),
-    };
+            if let Some(session) = shared.upgrade() {
+                Ok(session).into()
+            } else {
+                let result = create_unique(configs_path, log_path, sender).map(Arc::new);
+
+                if let Ok(session) = &result {
+                    *shared = Arc::downgrade(session);
+                }
+
+                result.into()
+            }
+        }
+    }
+}
+
+unsafe fn create_unique(
+    configs_path: *const c_char,
+    log_path: *const c_char,
+    sender: impl Sender,
+) -> Result<Session, SessionError> {
+    let configs_path = PathBuf::from(utils::ptr_to_str(configs_path)?);
+    let log_path = utils::ptr_to_maybe_str(log_path)?.map(PathBuf::from);
 
     let (server, client_tx) = Server::new(sender);
     let result = Session::create(configs_path, log_path, client_tx);
@@ -131,5 +196,5 @@ pub(crate) unsafe fn create(
             .spawn(server.run(Handler::new(session.state.clone())));
     }
 
-    result.into()
+    result
 }

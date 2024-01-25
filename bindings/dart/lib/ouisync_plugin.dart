@@ -20,7 +20,8 @@ export 'bindings.dart'
         LogLevel,
         NetworkEvent,
         PeerSource,
-        PeerStateKind;
+        PeerStateKind,
+        SessionKind;
 export 'native_channels.dart' show NativeChannels;
 
 const bool debugTrace = false;
@@ -45,6 +46,7 @@ class Session {
   /// doesn't exists, it will be created.
   /// [logPath] is a path to the log file. If null, logs will be printed to standard output.
   static Session create({
+    SessionKind kind = SessionKind.shared,
     required String configPath,
     String? logPath,
   }) {
@@ -54,6 +56,7 @@ class Session {
 
     final recvPort = ReceivePort();
     final result = _withPoolSync((pool) => bindings.session_create(
+          kind.encode(),
           pool.toNativeUtf8(configPath),
           logPath != null ? pool.toNativeUtf8(logPath) : nullptr,
           NativeApi.postCObject,

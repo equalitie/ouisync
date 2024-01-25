@@ -227,3 +227,25 @@ enum PeerStateKind {
 
 }
 
+enum SessionKind {
+  shared,
+  unique,
+  ;
+
+  static SessionKind decode(int n) {
+    switch (n) {
+      case 0: return SessionKind.shared;
+      case 1: return SessionKind.unique;
+      default: throw ArgumentError('invalid value: $n');
+    }
+  }
+
+  int encode() {
+    switch (this) {
+      case SessionKind.shared: return 0;
+      case SessionKind.unique: return 1;
+    }
+  }
+
+}
+

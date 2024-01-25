@@ -34,12 +34,19 @@ class Session private constructor(
          * Creates a new Ouisync session.
          *
          * @param configsPath path to the directory where ouisync stores its config files.
-         * @param logPath path to the log file. Ouisync always logs using the
-         *                [android log API](https://developer.android.com/reference/android/util/Log)
-         *                but if this param is not null, it logs to the specified file as well.
+         * @param logPath     path to the log file. Ouisync always logs using the
+         *                    [android log API](https://developer.android.com/reference/android/util/Log)
+         *                    but if this param is not null, it logs to the specified file as well.
+         * @param kind        whether to create shared or unique session. `SHARED` should be used
+         *                    by default. `UNIQUE` is useful mostly for tests, to ensure test
+         *                    isolation and/or to simulate multiple replicas in a single test.
          * @throws Error
          */
-        fun create(configsPath: String, logPath: String? = null): Session {
+        fun create(
+            configsPath: String,
+            logPath: String? = null,
+            kind: SessionKind = SessionKind.SHARED,
+        ): Session {
             val client = Client()
 
             val callback = object : Callback {
@@ -53,6 +60,7 @@ class Session private constructor(
             }
 
             val result = bindings.session_create(
+                kind.encode(),
                 configsPath,
                 logPath,
                 null,

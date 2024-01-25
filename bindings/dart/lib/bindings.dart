@@ -13,13 +13,19 @@ final bindings = Bindings(_defaultLib());
 typedef PostCObject = Int8 Function(Int64, Pointer<Dart_CObject>);
 
 typedef _session_create_c = SessionCreateResult Function(
+  Uint8,
   Pointer<Char>,
   Pointer<Char>,
   Pointer<NativeFunction<PostCObject>>,
   Int64,
 );
 typedef session_create_dart = SessionCreateResult Function(
-    Pointer<Char>, Pointer<Char>, Pointer<NativeFunction<PostCObject>>, int);
+  int,
+  Pointer<Char>,
+  Pointer<Char>,
+  Pointer<NativeFunction<PostCObject>>,
+  int,
+);
 
 typedef _session_channel_send_c = Void Function(Uint64, Pointer<Uint8>, Uint64);
 typedef session_channel_send_dart = void Function(int, Pointer<Uint8>, int);

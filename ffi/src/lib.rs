@@ -30,11 +30,15 @@ use crate::{
     sender::Sender,
     session::{SessionCreateResult, SessionHandle},
 };
+use session::SessionKind;
 use std::{
     ffi::CString,
     os::raw::{c_char, c_int},
     slice,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 /// Creates a ouisync session (common C-like API)
@@ -47,13 +51,14 @@ use std::{
 /// - `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
 #[no_mangle]
 pub unsafe extern "C" fn session_create(
+    kind: SessionKind,
     configs_path: *const c_char,
     log_path: *const c_char,
     context: *mut (),
     callback: Callback,
 ) -> SessionCreateResult {
     let sender = CallbackSender::new(context, callback);
-    session::create(configs_path, log_path, sender)
+    session::create(kind, configs_path, log_path, sender)
 }
 
 /// Creates a ouisync session (dart-specific API)
@@ -64,13 +69,14 @@ pub unsafe extern "C" fn session_create(
 /// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
 #[no_mangle]
 pub unsafe extern "C" fn session_create_dart(
+    kind: SessionKind,
     configs_path: *const c_char,
     log_path: *const c_char,
     post_c_object_fn: PostDartCObjectFn,
     port: Port,
 ) -> SessionCreateResult {
     let sender = PortSender::new(post_c_object_fn, port);
-    session::create(configs_path, log_path, sender)
+    session::create(kind, configs_path, log_path, sender)
 }
 
 /// Closes the ouisync session.
@@ -112,7 +118,9 @@ pub unsafe extern "C" fn session_channel_send(
 /// `session` must be a valid session handle.
 #[no_mangle]
 pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHandle) {
-    session.release().shutdown_network_and_close();
+    if let Ok(session) = Arc::try_unwrap(session.release()) {
+        session.shutdown_network_and_close();
+    }
 }
 
 /// Generates per-process unique id for a message to be sent via [session_channel_send].

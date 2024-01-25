@@ -11,8 +11,14 @@ void main() {
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
-    session1 = Session.create(configPath: '${temp.path}/1/config');
-    session2 = Session.create(configPath: '${temp.path}/2/config');
+    session1 = Session.create(
+      kind: SessionKind.unique,
+      configPath: '${temp.path}/1/config',
+    );
+    session2 = Session.create(
+      kind: SessionKind.unique,
+      configPath: '${temp.path}/2/config',
+    );
 
     repo1 = await Repository.create(
       session1,
