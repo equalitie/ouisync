@@ -34,6 +34,7 @@ use std::{
     ffi::CString,
     os::raw::{c_char, c_int},
     slice,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 /// Creates a ouisync session (common C-like API)
@@ -112,6 +113,13 @@ pub unsafe extern "C" fn session_channel_send(
 #[no_mangle]
 pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHandle) {
     session.release().shutdown_network_and_close();
+}
+
+/// Generates per-process unique id for a message to be sent via [session_channel_send].
+#[no_mangle]
+pub extern "C" fn next_message_id() -> u64 {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Copy the file contents into the provided raw file descriptor (dart-specific API).

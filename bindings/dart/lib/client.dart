@@ -16,14 +16,13 @@ class Client {
   final Stream<Uint8List> _stream;
   final _responses = HashMap<int, Completer<Object?>>();
   final _subscriptions = HashMap<int, StreamSink<Object?>>();
-  int _nextMessageId = 0;
 
   Client(this._session, ReceivePort port) : _stream = port.cast<Uint8List>() {
     unawaited(_receive());
   }
 
   Future<T> invoke<T>(String method, [Object? args]) async {
-    final id = _getMessageId();
+    final id = _nextMessageId();
     final completer = Completer();
 
     _responses[id] = completer;
@@ -152,11 +151,7 @@ class Client {
     completer.completeError(error);
   }
 
-  int _getMessageId() {
-    final id = _nextMessageId;
-    ++_nextMessageId;
-    return id;
-  }
+  int _nextMessageId() => bindings.next_message_id();
 
   void _handleNotification(StreamSink<Object?> sink, Object? payload) {
     if (payload is String) {

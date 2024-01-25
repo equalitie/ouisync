@@ -63,7 +63,7 @@ internal class Client {
     private val subscriptions: HashMap<Long, SendChannel<Any?>> = HashMap()
 
     suspend fun invoke(request: Request): Any? {
-        val id = getMessageId()
+        val id = nextMessageId()
 
         val stream = ByteArrayOutputStream()
         DataOutputStream(stream).writeLong(id)
@@ -150,11 +150,7 @@ internal class Client {
         }
     }
 
-    private fun getMessageId(): Long {
-        val id = nextMessageId
-        nextMessageId += 1
-        return id
-    }
+    private fun nextMessageId(): Long = Session.bindings.next_message_id()
 }
 
 private data class ServerEnvelope(val id: Long, val content: ServerMessage)

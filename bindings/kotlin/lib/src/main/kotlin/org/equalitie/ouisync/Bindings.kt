@@ -25,6 +25,8 @@ internal interface Bindings : Library {
 
     fun session_channel_send(handle: Handle, msg: ByteArray, msg_len: Int)
 
+    fun next_message_id(): Long
+
     fun free_string(ptr: Pointer?)
 }
 
