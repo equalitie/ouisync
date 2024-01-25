@@ -2,7 +2,6 @@ use super::{
     peer_addr::PeerAddr,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::collections::{hash_map, HashMap, HashSet};
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
@@ -13,6 +12,7 @@ use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
 use std::{
+    collections::{hash_map, HashMap, HashSet},
     future::pending,
     io,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
@@ -25,7 +25,7 @@ use std::{
 use tokio::{
     select,
     sync::{mpsc, watch},
-    time::{self, Duration},
+    time::{self, timeout, Duration},
 };
 use tracing::{instrument::Instrument, Span};
 
@@ -257,20 +257,17 @@ impl MonitoredDht {
         contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
     ) -> Self {
         // TODO: load the DHT state from a previous save if it exists.
-        let builder = MainlineDht::builder()
+        let mut builder = MainlineDht::builder()
             .add_routers(DHT_ROUTERS.iter().copied())
             .set_read_only(false);
 
-        // TODO: The reuse of initial contacts is incorrectly implemented, once the issue
-        // https://github.com/equalitie/btdht/issues/8
-        // is fixed, this can be uncommented again.
-        //if let Some(contacts_store) = &contacts_store {
-        //    let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts_store).await;
+        if let Some(contacts_store) = &contacts_store {
+            let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts_store).await;
 
-        //    for contact in initial_contacts {
-        //        builder = builder.add_node(contact);
-        //    }
-        //}
+            for contact in initial_contacts {
+                builder = builder.add_node(contact);
+            }
+        }
 
         let dht = builder
             .start(Socket(socket))
@@ -293,7 +290,7 @@ impl MonitoredDht {
             async move {
                 tracing::info!("bootstrap started");
 
-                if dht.bootstrapped(None).await {
+                if dht.bootstrapped().await {
                     *first_bootstrap.get() = "done";
                     tracing::info!("bootstrap complete");
                 } else {
@@ -401,29 +398,28 @@ impl MonitoredDht {
         }
     }
 
-    // TODO: See comment where this function is used (it's also commented out).
-    //async fn load_initial_contacts(
-    //    is_v4: bool,
-    //    contacts_store: &(impl DhtContactsStoreTrait + ?Sized),
-    //) -> HashSet<SocketAddr> {
-    //    if is_v4 {
-    //        match contacts_store.load_v4().await {
-    //            Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V4).collect(),
-    //            Err(error) => {
-    //                tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
-    //                Default::default()
-    //            }
-    //        }
-    //    } else {
-    //        match contacts_store.load_v6().await {
-    //            Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V6).collect(),
-    //            Err(error) => {
-    //                tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
-    //                Default::default()
-    //            }
-    //        }
-    //    }
-    //}
+    async fn load_initial_contacts(
+        is_v4: bool,
+        contacts_store: &(impl DhtContactsStoreTrait + ?Sized),
+    ) -> HashSet<SocketAddr> {
+        if is_v4 {
+            match contacts_store.load_v4().await {
+                Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V4).collect(),
+                Err(error) => {
+                    tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
+                    Default::default()
+                }
+            }
+        } else {
+            match contacts_store.load_v6().await {
+                Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V6).collect(),
+                Err(error) => {
+                    tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
+                    Default::default()
+                }
+            }
+        }
+    }
 }
 
 type Lookups = HashMap<InfoHash, Lookup>;
@@ -582,7 +578,9 @@ impl Lookup {
 
                 let mut peers = Box::pin(stream::iter(dhts).flat_map(|dht| {
                     stream::once(async {
-                        dht.dht.bootstrapped(Some(Duration::from_secs(10))).await;
+                        timeout(Duration::from_secs(10), dht.dht.bootstrapped())
+                            .await
+                            .unwrap_or(false);
                         dht.dht.search(info_hash, true)
                     })
                     .flatten()
@@ -637,7 +635,7 @@ impl btdht::SocketTrait for Socket {
         Ok(())
     }
 
-    async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+    async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         self.0.recv_from(buf).await
     }
 

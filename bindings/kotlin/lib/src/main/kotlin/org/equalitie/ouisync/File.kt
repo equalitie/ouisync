@@ -1,5 +1,8 @@
 package org.equalitie.ouisync
 
+/**
+ * A File stored in a Ouisync repository.
+ */
 class File private constructor(private val handle: Long, private val client: Client) {
     companion object {
         /**
@@ -26,34 +29,41 @@ class File private constructor(private val handle: Long, private val client: Cli
         }
     }
 
+    /**
+     * Closes the file.
+     */
     suspend fun close() = client.invoke(FileClose(handle))
 
+    /**
+     * Flushes any pending writes to the file.
+     */
     suspend fun flush() = client.invoke(FileFlush(handle))
 
     /**
-     * Length of this file in bytes
+     * Returns the length of this file in bytes
      */
     suspend fun length() = client.invoke(FileLen(handle)) as Long
 
     /**
-     * Read the given amount of bytes from this file, starting at the given offset.
+     * Reads the given amount of bytes from this file, starting at the given offset.
      */
     suspend fun read(offset: Long, length: Long) =
         client.invoke(FileRead(handle, offset, length)) as ByteArray
 
     /**
-     * Write the content of the array to the file at the given offset.
+     * Writes the content of the array to the file at the given offset.
      */
     suspend fun write(offset: Long, array: ByteArray) =
         client.invoke(FileWrite(handle, offset, array))
 
     /**
-     * Truncate the file to the given length.
+     * Truncates the file to the given length.
      */
     suspend fun truncate(length: Long) = client.invoke(FileTruncate(handle, length))
 
     /**
-     * Sync progress of this file, that is, what part of this file (in bytes) is available locally.
+     * Returns the sync progress of this file, that is, what part of this file (in bytes) is
+     * available locally.
      */
     suspend fun progress() = client.invoke(FileProgress(handle)) as Long
 }

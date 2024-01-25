@@ -167,6 +167,13 @@ class NativeChannels {
     await file.copyToRawFd(dstFd);
   }
 
+  /// Invokes the native method (In Android, it retrieves the legacy path to the
+  /// Download directory)
+  static Future<String> getDownloadPathForAndroid() async {
+    final dynamic result = await _channel.invokeMethod('getDownloadPath');
+    return result;
+  }
+
   /// Invokes the native method (In Android, it creates a share intent using the custom PipeProvider).
   ///
   /// [path] is the location of the file to share, including its full name (<path>/<file-name.ext>).

@@ -22,9 +22,11 @@ fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()
         EnumRepr::U64 => "Long",
     };
 
+    write_doc(out, "", &value.doc)?;
     writeln!(out, "enum class {name} {{")?;
 
     for variant in &value.variants {
+        write_doc(out, "    ", &variant.doc)?;
         writeln!(out, "    {},", AsShoutySnakeCase(&variant.name))?;
     }
 
@@ -68,6 +70,22 @@ fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()
 
     writeln!(out, "}}")?;
     writeln!(out)?;
+
+    Ok(())
+}
+
+fn write_doc(out: &mut dyn Write, prefix: &str, doc: &str) -> io::Result<()> {
+    if doc.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(out, "{prefix}/**")?;
+
+    for line in doc.lines() {
+        writeln!(out, "{prefix} *{}", line)?;
+    }
+
+    writeln!(out, "{prefix} */")?;
 
     Ok(())
 }

@@ -1,9 +1,10 @@
 FROM rust:alpine as builder
 
-RUN apk update && apk add fuse3-dev g++ pkgconfig
+RUN apk update && apk add musl-dev fuse3-dev fuse3-static pkgconfig
 
 WORKDIR /usr/src/ouisync
 COPY . .
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/src/ouisync/target   \
     cargo build --package ouisync-cli --release --bins; \

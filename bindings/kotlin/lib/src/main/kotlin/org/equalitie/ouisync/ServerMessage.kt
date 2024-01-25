@@ -3,6 +3,14 @@ package org.equalitie.ouisync
 import org.msgpack.core.MessageUnpacker
 import org.msgpack.value.ValueType
 
+/**
+ * Information about a peer.
+ *
+ * @property addr      remote address of the peer in the "PROTOCOL/IP:PORT" format.
+ * @property source    how was the peer discovered.
+ * @property state     state of the peer connection.
+ * @property runtimeId [runtime id][Session.thisRuntimeId] of the peer if [active][PeerStateKind.ACTIVE], otherwise null.
+ */
 data class PeerInfo(
     val addr: String,
     val source: PeerSource,

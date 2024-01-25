@@ -208,7 +208,7 @@ async fn run_single_action(info_hash: InfoHash, command: &Single) {
 
 async fn lookup(prefix: &str, dht: &MainlineDht, info_hash: InfoHash, announce: bool) {
     println!("{prefix} Bootstrapping...");
-    if dht.bootstrapped(None).await {
+    if dht.bootstrapped().await {
         let mut seen_peers = HashSet::new();
 
         if !announce {

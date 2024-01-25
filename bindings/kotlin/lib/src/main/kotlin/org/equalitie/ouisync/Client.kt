@@ -40,8 +40,8 @@ class EventReceiver<E> internal constructor(
     }
 
     /**
-     * Converts this receiver into [Flow]. The receiver is automatically [close]d after the flow is
-     * collected.
+     * Converts this receiver into [Flow]. The receiver is automatically
+     * [close]d after the flow is collected.
      */
     fun consumeAsFlow(): Flow<E> = flow {
         try {
