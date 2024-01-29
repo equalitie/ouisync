@@ -35,7 +35,6 @@ use std::{
     ffi::CString,
     os::raw::{c_char, c_int},
     slice,
-    sync::Arc,
 };
 
 /// Creates a ouisync session (common C-like API)
@@ -76,14 +75,59 @@ pub unsafe extern "C" fn session_create_dart(
     session::create(kind, configs_path, log_path, sender).into()
 }
 
-/// Closes the ouisync session.
+/// Closes the Ouisync session (common C-like API).
+///
+/// Also gracefully disconnects from all peers and asynchronously waits for the disconnections to
+/// complete.
+///
+/// # Safety
+///
+/// `session` must be a valid session handle.
+/// `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
+#[no_mangle]
+pub unsafe extern "C" fn session_close(
+    session: SessionHandle,
+    context: *mut (),
+    callback: Callback,
+) {
+    let sender = CallbackSender::new(context, callback);
+    session::close(session.release(), sender)
+}
+
+/// Closes the Ouisync session (dart-specific API).
+///
+/// Also gracefully disconnects from all peers and asynchronously waits for the disconnections to
+/// complete.
+///
+/// # Safety
+///
+/// - `session` must be a valid session handle.
+/// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
+#[no_mangle]
+pub unsafe extern "C" fn session_close_dart(
+    session: SessionHandle,
+    post_c_object_fn: PostDartCObjectFn,
+    port: Port,
+) {
+    let sender = PortSender::new(post_c_object_fn, port);
+    session::close(session.release(), sender)
+}
+
+/// Closes the Ouisync session synchronously.
+///
+/// This is similar to `session_close` / `session_close_dart` but it blocks while waiting for the
+/// graceful disconnect (with a short timeout to not block indefinitely). This is useful because in
+/// flutter when the engine is being detached from Android runtime then async wait never completes
+/// (or does so randomly), and thus `session_close` is never invoked. My guess is that because the
+/// dart engine is being detached we can't do any async await on the dart side anymore, and thus
+/// need to do it here.
 ///
 /// # Safety
 ///
 /// `session` must be a valid session handle.
 #[no_mangle]
-pub unsafe extern "C" fn session_close(session: SessionHandle) {
-    session.release();
+pub unsafe extern "C" fn session_close_blocking(session: SessionHandle) {
+    session::close_blocking(session.release());
 }
 
 /// # Safety
@@ -101,25 +145,6 @@ pub unsafe extern "C" fn session_channel_send(
     let payload = payload.into();
 
     session.get().client_tx.send(payload).ok();
-}
-
-/// Shutdowns the network and closes the session. This is equivalent to doing it in two steps
-/// (`network_shutdown` then `session_close`), but in flutter when the engine is being detached
-/// from Android runtime then async wait for `network_shutdown` never completes (or does so
-/// randomly), and thus `session_close` is never invoked. My guess is that because the dart engine
-/// is being detached we can't do any async await on the dart side anymore, and thus need to do it
-/// here.
-///
-/// # Safety
-///
-/// `session` must be a valid session handle.
-#[no_mangle]
-pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHandle) {
-    let session = session.release();
-
-    if let Ok(shared) = Arc::try_unwrap(session.shared) {
-        shared.shutdown_network_and_close();
-    }
 }
 
 /// Copy the file contents into the provided raw file descriptor (dart-specific API).

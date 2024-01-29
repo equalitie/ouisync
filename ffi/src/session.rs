@@ -6,6 +6,7 @@ use crate::{
     transport::{ClientSender, Server},
     utils,
 };
+use bytes::Bytes;
 use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
 use state_monitor::StateMonitor;
 use std::{
@@ -16,6 +17,7 @@ use std::{
     ptr,
     str::Utf8Error,
     sync::{Arc, Mutex, Weak},
+    thread,
     time::Duration,
 };
 use thiserror::Error;
@@ -60,21 +62,6 @@ impl Shared {
             state,
             _logger: logger,
         }))
-    }
-
-    pub(crate) fn shutdown_network_and_close(self) {
-        let Self {
-            runtime,
-            state,
-            _logger,
-            ..
-        } = self;
-
-        runtime.block_on(async move {
-            time::timeout(Duration::from_millis(500), state.network.shutdown())
-                .await
-                .unwrap_or(())
-        });
     }
 }
 
@@ -180,4 +167,34 @@ pub(crate) unsafe fn create(
         .spawn(server.run(Handler::new(shared.state.clone())));
 
     Ok(Session { shared, client_tx })
+}
+
+pub(crate) fn close(session: Session, sender: impl Sender) {
+    let Ok(shared) = Arc::try_unwrap(session.shared) else {
+        sender.send(Bytes::new());
+        return;
+    };
+
+    // Can't drop Runtime from inside a task spawned on it. Spawn a thread and do it there instead.
+    thread::spawn(move || {
+        let state = shared.state;
+        shared.runtime.block_on(state.network.shutdown());
+        sender.send(Bytes::new());
+    });
+}
+
+pub(crate) fn close_blocking(session: Session) {
+    let Ok(shared) = Arc::try_unwrap(session.shared) else {
+        return;
+    };
+
+    let state = shared.state;
+
+    shared
+        .runtime
+        .block_on(time::timeout(
+            Duration::from_millis(500),
+            state.network.shutdown(),
+        ))
+        .ok();
 }

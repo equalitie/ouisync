@@ -1,6 +1,7 @@
 package org.equalitie.ouisync
 
 import com.sun.jna.Pointer
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import java.io.Closeable
@@ -26,7 +27,7 @@ class Session private constructor(
     private val handle: Long,
     internal val client: Client,
     private val callback: Callback,
-) : Closeable {
+) {
     companion object {
         internal val bindings = Bindings.INSTANCE
 
@@ -91,11 +92,17 @@ class Session private constructor(
      * Closes the session.
      *
      * Don't forget to call this when the session is no longer needed, to avoid leaking resources.
-     *
-     * @see shutdownNetwork to gracefully disconnect from the peer before closing the session.
      */
-    override fun close() {
-        bindings.session_close(handle)
+    suspend fun close() {
+        val deferred = CompletableDeferred<Any?>()
+        val callback = object : Callback {
+            override fun invoke(context: Pointer?, msg_ptr: Pointer, msg_len: Long) {
+                deferred.complete(null)
+            }
+        }
+
+        bindings.session_close(handle, null, callback)
+        deferred.await()
     }
 
     /**
@@ -263,12 +270,4 @@ class Session private constructor(
      */
     suspend fun addCacheServer(host: String) =
         client.invoke(NetworkAddStorageServer(host))
-
-    /**
-     * Try to gracefully close all the connections to the peers.
-     *
-     * It's advisable to call this before [closing the session][close] so the peers get immediately
-     * notified about the connections closing without having to wait for them to timeout.
-     */
-    suspend fun shutdownNetwork() = client.invoke(NetworkShutdown())
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -199,19 +200,20 @@ class Session {
   /// Note that this function is idempotent with itself as well as with the
   /// `closeSync` function.
   Future<void> close() async {
-    if (_handle == 0) {
+    final handle = _takeHandle();
+    if (handle == 0) {
       return;
     }
 
-    final h = _handle;
-    _handle = 0;
-
     await _networkSubscription.close();
 
-    NativeChannels.session = null;
-
-    await _shutdownNetwork();
-    bindings.session_close(h);
+    await _invoke(
+      (port) => bindings.session_close(
+        handle,
+        NativeApi.postCObject,
+        port,
+      ),
+    );
   }
 
   /// Try to gracefully close connections to peers then close the session.
@@ -222,22 +224,29 @@ class Session {
   /// Note that this function is idempotent with itself as well as with the
   /// `close` function.
   void closeSync() {
-    if (_handle == 0) {
+    final handle = _takeHandle();
+    if (handle == 0) {
       return;
     }
 
-    final h = _handle;
-    _handle = 0;
-
     unawaited(_networkSubscription.close());
 
-    NativeChannels.session = null;
-    bindings.session_shutdown_network_and_close(h);
+    bindings.session_close_blocking(handle);
   }
 
-  /// Try to gracefully close connections to peers.
-  Future<void> _shutdownNetwork() async {
-    await client.invoke<void>('network_shutdown');
+  int _takeHandle() {
+    if (_handle == 0) {
+      return 0;
+    }
+
+    final handle = _handle;
+    _handle = 0;
+
+    if (NativeChannels.session?.handle == handle) {
+      NativeChannels.session = null;
+    }
+
+    return handle;
   }
 }
 
@@ -879,26 +888,26 @@ T _withPoolSync<T>(T Function(_Pool) fun) {
 }
 
 // Helper to invoke a native async function.
-Future<T> _invoke<T>(void Function(int) fun) async {
+Future<void> _invoke(void Function(int) fun) async {
   final recvPort = ReceivePort();
 
   try {
     fun(recvPort.sendPort.nativePort);
 
-    ErrorCode? code;
+    final bytes = await recvPort.cast<Uint8List>().first;
 
-    // Is there a better way to retrieve the first two values of a stream?
-    await for (var item in recvPort) {
-      if (code == null) {
-        code = ErrorCode.decode(item as int);
-      } else if (code == ErrorCode.ok) {
-        return item as T;
-      } else {
-        throw Error(code, item as String);
-      }
+    if (bytes.isEmpty) {
+      return;
     }
 
-    throw Exception('invoked native async function did not produce any result');
+    final code = ErrorCode.decode(bytes.buffer.asByteData().getUint16(0));
+    final message = utf8.decode(bytes.sublist(2));
+
+    if (code == ErrorCode.ok) {
+      return;
+    } else {
+      throw Error(code, message);
+    }
   } finally {
     recvPort.close();
   }

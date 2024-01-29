@@ -24,11 +24,16 @@ void main() {
       configPath: '${temp.path}/config',
     );
 
-    final vs = await Future.wait([
-      session0.currentProtocolVersion,
-      session1.currentProtocolVersion,
-    ]);
+    try {
+      final vs = await Future.wait([
+        session0.currentProtocolVersion,
+        session1.currentProtocolVersion,
+      ]);
 
-    expect(vs[0], equals(vs[1]));
+      expect(vs[0], equals(vs[1]));
+    } finally {
+      await session0.close();
+      await session1.close();
+    }
   });
 }

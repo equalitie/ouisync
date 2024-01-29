@@ -26,7 +26,7 @@ class SessionTest {
     }
 
     @After
-    fun teardown() {
+    fun teardown() = runTest {
         session.close()
         tempDir.deleteRecursively()
     }
