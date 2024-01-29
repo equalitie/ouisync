@@ -14,6 +14,7 @@ import 'ouisync_plugin.dart' show Error;
 class Client {
   final int _session;
   final Stream<Uint8List> _stream;
+  var _nextMessageId = 0;
   final _responses = HashMap<int, Completer<Object?>>();
   final _subscriptions = HashMap<int, StreamSink<Object?>>();
 
@@ -22,7 +23,7 @@ class Client {
   }
 
   Future<T> invoke<T>(String method, [Object? args]) async {
-    final id = _nextMessageId();
+    final id = _nextMessageId++;
     final completer = Completer();
 
     _responses[id] = completer;
@@ -150,8 +151,6 @@ class Client {
     final error = Exception('invalid response');
     completer.completeError(error);
   }
-
-  int _nextMessageId() => bindings.next_message_id();
 
   void _handleNotification(StreamSink<Object?> sink, Object? payload) {
     if (payload is String) {

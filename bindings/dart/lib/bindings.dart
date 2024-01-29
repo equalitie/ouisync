@@ -36,9 +36,6 @@ typedef session_close_dart = void Function(int);
 typedef _session_shutdown_network_and_close_c = Void Function(Uint64);
 typedef session_shutdown_network_and_close_dart = void Function(int);
 
-typedef _next_message_id_c = Uint64 Function();
-typedef next_message_id_dart = int Function();
-
 typedef _file_copy_to_raw_fd_c = Void Function(
     Uint64, Uint64, Int, Pointer<NativeFunction<PostCObject>>, Int64);
 typedef file_copy_to_raw_fd_dart = void Function(
@@ -76,9 +73,6 @@ class Bindings {
             .lookup<NativeFunction<_session_shutdown_network_and_close_c>>(
                 'session_shutdown_network_and_close')
             .asFunction(),
-        next_message_id = library
-            .lookup<NativeFunction<_next_message_id_c>>('next_message_id')
-            .asFunction(),
         file_copy_to_raw_fd = library
             .lookup<NativeFunction<_file_copy_to_raw_fd_c>>(
                 'file_copy_to_raw_fd_dart')
@@ -95,7 +89,6 @@ class Bindings {
   final session_close_dart session_close;
   final session_shutdown_network_and_close_dart
       session_shutdown_network_and_close;
-  final next_message_id_dart next_message_id;
   final file_copy_to_raw_fd_dart file_copy_to_raw_fd;
   final log_print_dart log_print;
   final free_string_dart free_string;

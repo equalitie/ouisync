@@ -12,7 +12,7 @@ use std::{
     ffi::c_char,
     io,
     marker::PhantomData,
-    path::PathBuf,
+    path::Path,
     ptr,
     str::Utf8Error,
     sync::{Arc, Mutex, Weak},
@@ -22,23 +22,24 @@ use thiserror::Error;
 use tokio::{runtime, time};
 
 pub struct Session {
+    pub(crate) shared: Arc<Shared>,
+    pub(crate) client_tx: ClientSender,
+}
+
+/// State shared between multiple instances of the same session.
+pub(crate) struct Shared {
     pub(crate) runtime: runtime::Runtime,
     pub(crate) state: Arc<State>,
-    pub(crate) client_sender: ClientSender,
     _logger: Logger,
 }
 
-impl Session {
-    pub(crate) fn create(
-        configs_path: PathBuf,
-        log_path: Option<PathBuf>,
-        client_sender: ClientSender,
-    ) -> Result<Self, SessionError> {
+impl Shared {
+    fn new(configs_path: &Path, log_path: Option<&Path>) -> Result<Arc<Self>, SessionError> {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
         let logger = Logger::new(
-            log_path.as_deref(),
+            log_path,
             Some(root_monitor.clone()),
             LogFormat::Human,
             LogColor::Auto,
@@ -52,15 +53,13 @@ impl Session {
             .map_err(SessionError::InitializeRuntime)?;
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
 
-        let state = Arc::new(State::new(configs_path, root_monitor));
-        let session = Session {
+        let state = Arc::new(State::new(configs_path.to_owned(), root_monitor));
+
+        Ok(Arc::new(Self {
             runtime,
             state,
-            client_sender,
             _logger: logger,
-        };
-
-        Ok(session)
+        }))
     }
 
     pub(crate) fn shutdown_network_and_close(self) {
@@ -93,7 +92,7 @@ pub enum SessionKind {
 
 /// Handle to [Session] which can be passed across the FFI boundary.
 #[repr(transparent)]
-pub struct SessionHandle(u64, PhantomData<&'static Session>);
+pub struct SessionHandle(u64, PhantomData<Box<Session>>);
 
 impl SessionHandle {
     pub const NULL: Self = Self(0, PhantomData);
@@ -103,14 +102,14 @@ impl SessionHandle {
         &*(self.0 as *const _)
     }
 
-    pub(crate) unsafe fn release(self) -> Arc<Session> {
-        Arc::from_raw(self.0 as *mut _)
+    pub(crate) unsafe fn release(self) -> Session {
+        *Box::from_raw(self.0 as *mut _)
     }
 }
 
-impl From<Arc<Session>> for SessionHandle {
-    fn from(session: Arc<Session>) -> Self {
-        Self(Arc::into_raw(session) as _, PhantomData)
+impl From<Session> for SessionHandle {
+    fn from(session: Session) -> Self {
+        Self(Box::into_raw(Box::new(session)) as _, PhantomData)
     }
 }
 
@@ -131,8 +130,8 @@ pub struct SessionCreateResult {
     error_message: *const c_char,
 }
 
-impl From<Result<Arc<Session>, SessionError>> for SessionCreateResult {
-    fn from(result: Result<Arc<Session>, SessionError>) -> Self {
+impl From<Result<Session, SessionError>> for SessionCreateResult {
+    fn from(result: Result<Session, SessionError>) -> Self {
         match result {
             Ok(session) => Self {
                 session: SessionHandle::from(session),
@@ -148,53 +147,37 @@ impl From<Result<Arc<Session>, SessionError>> for SessionCreateResult {
     }
 }
 
-static SHARED_SESSION: Mutex<Weak<Session>> = Mutex::new(Weak::new());
+static SHARED: Mutex<Weak<Shared>> = Mutex::new(Weak::new());
 
-/// Helper for creating guest-language specific FFI wrappers
 pub(crate) unsafe fn create(
     kind: SessionKind,
     configs_path: *const c_char,
     log_path: *const c_char,
     sender: impl Sender,
-) -> SessionCreateResult {
-    match kind {
-        SessionKind::Unique => create_unique(configs_path, log_path, sender)
-            .map(Arc::new)
-            .into(),
+) -> Result<Session, SessionError> {
+    let configs_path = Path::new(utils::ptr_to_str(configs_path)?);
+    let log_path = utils::ptr_to_maybe_str(log_path)?.map(Path::new);
+
+    let shared = match kind {
+        SessionKind::Unique => Shared::new(configs_path, log_path)?,
         SessionKind::Shared => {
-            let mut shared = SHARED_SESSION.lock().unwrap();
+            let mut guard = SHARED.lock().unwrap();
 
-            if let Some(session) = shared.upgrade() {
-                Ok(session).into()
+            if let Some(shared) = guard.upgrade() {
+                shared
             } else {
-                let result = create_unique(configs_path, log_path, sender).map(Arc::new);
-
-                if let Ok(session) = &result {
-                    *shared = Arc::downgrade(session);
-                }
-
-                result.into()
+                let shared = Shared::new(configs_path, log_path)?;
+                *guard = Arc::downgrade(&shared);
+                shared
             }
         }
-    }
-}
-
-unsafe fn create_unique(
-    configs_path: *const c_char,
-    log_path: *const c_char,
-    sender: impl Sender,
-) -> Result<Session, SessionError> {
-    let configs_path = PathBuf::from(utils::ptr_to_str(configs_path)?);
-    let log_path = utils::ptr_to_maybe_str(log_path)?.map(PathBuf::from);
+    };
 
     let (server, client_tx) = Server::new(sender);
-    let result = Session::create(configs_path, log_path, client_tx);
 
-    if let Ok(session) = &result {
-        session
-            .runtime
-            .spawn(server.run(Handler::new(session.state.clone())));
-    }
+    shared
+        .runtime
+        .spawn(server.run(Handler::new(shared.state.clone())));
 
-    result
+    Ok(Session { shared, client_tx })
 }

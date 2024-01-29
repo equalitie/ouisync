@@ -35,10 +35,7 @@ use std::{
     ffi::CString,
     os::raw::{c_char, c_int},
     slice,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 /// Creates a ouisync session (common C-like API)
@@ -58,7 +55,7 @@ pub unsafe extern "C" fn session_create(
     callback: Callback,
 ) -> SessionCreateResult {
     let sender = CallbackSender::new(context, callback);
-    session::create(kind, configs_path, log_path, sender)
+    session::create(kind, configs_path, log_path, sender).into()
 }
 
 /// Creates a ouisync session (dart-specific API)
@@ -76,7 +73,7 @@ pub unsafe extern "C" fn session_create_dart(
     port: Port,
 ) -> SessionCreateResult {
     let sender = PortSender::new(post_c_object_fn, port);
-    session::create(kind, configs_path, log_path, sender)
+    session::create(kind, configs_path, log_path, sender).into()
 }
 
 /// Closes the ouisync session.
@@ -103,7 +100,7 @@ pub unsafe extern "C" fn session_channel_send(
     let payload = slice::from_raw_parts(payload_ptr, payload_len as usize);
     let payload = payload.into();
 
-    session.get().client_sender.send(payload).ok();
+    session.get().client_tx.send(payload).ok();
 }
 
 /// Shutdowns the network and closes the session. This is equivalent to doing it in two steps
@@ -118,16 +115,11 @@ pub unsafe extern "C" fn session_channel_send(
 /// `session` must be a valid session handle.
 #[no_mangle]
 pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHandle) {
-    if let Ok(session) = Arc::try_unwrap(session.release()) {
-        session.shutdown_network_and_close();
-    }
-}
+    let session = session.release();
 
-/// Generates per-process unique id for a message to be sent via [session_channel_send].
-#[no_mangle]
-pub extern "C" fn next_message_id() -> u64 {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    if let Ok(shared) = Arc::try_unwrap(session.shared) {
+        shared.shutdown_network_and_close();
+    }
 }
 
 /// Copy the file contents into the provided raw file descriptor (dart-specific API).
@@ -159,10 +151,10 @@ pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     let session = session.get();
     let sender = PortSender::new(post_c_object_fn, port);
 
-    let src = session.state.files.get(handle);
+    let src = session.shared.state.files.get(handle);
     let mut dst = fs::File::from_raw_fd(fd);
 
-    session.runtime.spawn(async move {
+    session.shared.runtime.spawn(async move {
         let mut src = src.file.lock().await;
         src.seek(SeekFrom::Start(0));
         let result = src.copy_to_writer(&mut dst).await;
