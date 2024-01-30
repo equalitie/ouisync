@@ -97,13 +97,17 @@ impl State {
         self.repositories.get(handle)
     }
 
+    pub fn collect_repository_handles(&self) -> Vec<RepositoryHandle> {
+        self.repositories.collect_handles()
+    }
+
     pub async fn mount_all(&self, mount_point: PathBuf) -> Result<(), MountError> {
         let mounter = MultiRepoVFS::create(mount_point).await.map_err(|error| {
             tracing::error!("Failed create mounter: {error:?}");
             error
         })?;
 
-        for repo_holder in self.repositories.collect() {
+        for repo_holder in self.repositories.collect_values() {
             if let Err(error) = mounter.insert(
                 repo_holder.store_path.clone(),
                 repo_holder.repository.clone(),

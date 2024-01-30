@@ -21,6 +21,7 @@ use thiserror::Error;
 #[serde(rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Request {
+    RepositoryList,
     RepositoryCreate {
         path: Utf8PathBuf,
         read_password: Option<String>,
@@ -184,6 +185,7 @@ pub(crate) enum Response {
     Bytes(#[serde(with = "serde_bytes")] Vec<u8>),
     String(String),
     Handle(u64),
+    Handles(Vec<u64>),
     Directory(Directory),
     StateMonitor(StateMonitor),
     Progress(Progress),
@@ -298,6 +300,23 @@ impl<T> TryFrom<Response> for Handle<T> {
     }
 }
 
+impl<T> From<Vec<Handle<T>>> for Response {
+    fn from(value: Vec<Handle<T>>) -> Self {
+        Self::Handles(value.into_iter().map(|handle| handle.id()).collect())
+    }
+}
+
+impl<T> TryFrom<Response> for Vec<Handle<T>> {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::Handles(value) => Ok(value.into_iter().map(Handle::from_id).collect()),
+            _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
 impl From<SocketAddr> for Response {
     fn from(value: SocketAddr) -> Self {
         Self::String(value.to_string())
@@ -386,6 +405,7 @@ impl fmt::Debug for Response {
             Self::Bytes(_) => write!(f, "Bytes(_)"),
             Self::String(value) => f.debug_tuple("String").field(value).finish(),
             Self::Handle(value) => f.debug_tuple("Handle").field(value).finish(),
+            Self::Handles(value) => f.debug_tuple("Handles").field(value).finish(),
             Self::Directory(_) => write!(f, "Directory(_)"),
             Self::StateMonitor(_) => write!(f, "StateMonitor(_)"),
             Self::Progress(value) => f.debug_tuple("Progress").field(value).finish(),

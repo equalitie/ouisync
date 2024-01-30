@@ -80,7 +80,7 @@ void main() {
   });
 
   test('repository state monitor', () async {
-    expect(await repo.stateMonitor.load(), isNotNull);
+    expect(await repo.stateMonitor?.load(), isNotNull);
   });
 
   test('state monitor missing node', () async {

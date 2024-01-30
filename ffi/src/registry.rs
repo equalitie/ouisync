@@ -32,13 +32,23 @@ impl<T> Registry<T> {
     pub fn remove(&self, handle: Handle<T>) -> Option<T> {
         self.0.write().unwrap().remove(&handle.id)
     }
+
+    pub fn collect_handles(&self) -> Vec<Handle<T>> {
+        self.0
+            .read()
+            .unwrap()
+            .keys()
+            .copied()
+            .map(Handle::from_id)
+            .collect()
+    }
 }
 
 impl<T> Registry<T>
 where
     T: Clone,
 {
-    pub fn collect(&self) -> Vec<T> {
+    pub fn collect_values(&self) -> Vec<T> {
         self.0.read().unwrap().values().cloned().collect()
     }
 

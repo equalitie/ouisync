@@ -37,6 +37,7 @@ impl ouisync_bridge::transport::Handler for Handler {
         tracing::trace!(?request);
 
         let response = match request {
+            Request::RepositoryList => self.state.collect_repository_handles().into(),
             Request::RepositoryCreate {
                 path,
                 read_password,

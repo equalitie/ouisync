@@ -319,11 +319,21 @@ class TrafficStats {
 class Repository {
   final Session session;
   final int handle;
-  final String _store;
+  final String? _store;
   final Subscription _subscription;
 
   Repository._(this.session, this.handle, this._store)
       : _subscription = Subscription(session.client, "repository", handle);
+
+  /// List all currently opened repositories.
+  static Future<List<Repository>> list(Session session) async {
+    final handles = await session.client
+        .invoke<List<Object?>>('repository_list')
+        .then((list) => list.cast<int>());
+    return handles
+        .map((handle) => Repository._(session, handle, null))
+        .toList();
+  }
 
   /// Creates a new repository and set access to it based on the following table:
   ///
@@ -508,9 +518,14 @@ class Repository {
       .invoke<List<Object?>>('repository_sync_progress', handle)
       .then(Progress.decode);
 
-  StateMonitor get stateMonitor => StateMonitor.getRoot(session)
-      .child(MonitorId.expectUnique("Repositories"))
-      .child(MonitorId.expectUnique(_store));
+  StateMonitor? get stateMonitor {
+    final store = _store;
+    return store != null
+        ? StateMonitor.getRoot(session)
+            .child(MonitorId.expectUnique("Repositories"))
+            .child(MonitorId.expectUnique(store))
+        : null;
+  }
 
   Future<String> get infoHash =>
       session.client.invoke<String>("repository_info_hash", handle);
