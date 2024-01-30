@@ -189,6 +189,10 @@ impl Network {
         let mut state = self.inner.port_forwarder_state.lock().unwrap();
 
         if enabled {
+            if state.is_enabled() {
+                return;
+            }
+
             state.enable(PortMappings::new(
                 &self.inner.port_forwarder,
                 &self.inner.gateway,
@@ -206,6 +210,10 @@ impl Network {
         let mut state = self.inner.local_discovery_state.lock().unwrap();
 
         if enabled {
+            if state.is_enabled() {
+                return;
+            }
+
             if let Some(handle) = self.inner.spawn_local_discovery() {
                 state.enable(handle.into());
             } else {
