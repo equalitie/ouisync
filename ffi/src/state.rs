@@ -20,7 +20,7 @@ pub(crate) struct State {
     repositories: Registry<RepositoryHolder>,
     pub files: Registry<FileHolder>,
     pub tasks: Registry<ScopedJoinHandle<()>>,
-    pub storage_servers: BlockingMutex<BTreeSet<String>>,
+    pub cache_servers: BlockingMutex<BTreeSet<String>>,
     pub remote_client_config: OnceCell<Arc<rustls::ClientConfig>>,
     pub mounter: BlockingMutex<Option<MultiRepoVFS>>,
 }
@@ -44,7 +44,7 @@ impl State {
             repositories: Registry::new(),
             files: Registry::new(),
             tasks: Registry::new(),
-            storage_servers: BlockingMutex::new(BTreeSet::new()),
+            cache_servers: BlockingMutex::new(BTreeSet::new()),
             remote_client_config: OnceCell::new(),
             mounter: BlockingMutex::new(None),
         }

@@ -344,7 +344,7 @@ pub(crate) async fn mirror(state: &State, handle: Handle<RepositoryHolder>) -> R
     let holder = state.get_repository(handle);
     let config = state.get_remote_client_config()?;
     let hosts: Vec<_> = state
-        .storage_servers
+        .cache_servers
         .lock()
         .unwrap()
         .iter()

@@ -256,7 +256,9 @@ pub unsafe extern "C" fn log_print(
         }
     };
 
-    let _enter = tracing::info_span!("app", scope).entered();
+    // NOTE: Passing `scope` as `message` for more succinct span rendering: `app{"foo"}` instead
+    // of `app{scope="foo"}`.
+    let _enter = tracing::info_span!("app", message = scope).entered();
 
     let message = match utils::ptr_to_str(message_ptr) {
         Ok(message) => message,

@@ -284,7 +284,7 @@ pub async fn mirror(
         let client_config = client_config.clone();
         let share_token = share_token.clone();
 
-        // Stip port, if any.
+        // Strip port, if any.
         let host = strip_port(host);
 
         async move {

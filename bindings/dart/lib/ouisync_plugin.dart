@@ -192,8 +192,8 @@ class Session {
   Future<String> get thisRuntimeId =>
       client.invoke<String>('network_this_runtime_id');
 
-  Future<void> addStorageServer(String host) =>
-      client.invoke<void>('network_add_storage_server', host);
+  Future<void> addCacheServer(String host) =>
+      client.invoke<void>('network_add_cache_server', host);
 
   /// Try to gracefully close connections to peers then close the session.
   ///

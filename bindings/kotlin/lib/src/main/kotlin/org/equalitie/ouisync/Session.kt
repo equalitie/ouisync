@@ -269,5 +269,5 @@ class Session private constructor(
      * @see Repository.mirror to create a "mirror" of a repository on the cache server.
      */
     suspend fun addCacheServer(host: String) =
-        client.invoke(NetworkAddStorageServer(host))
+        client.invoke(NetworkAddCacheServer(host))
 }

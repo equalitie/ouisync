@@ -162,7 +162,7 @@ pub(crate) enum Request {
     NetworkSetPortForwardingEnabled(bool),
     NetworkIsLocalDiscoveryEnabled,
     NetworkSetLocalDiscoveryEnabled(bool),
-    NetworkAddStorageServer(String),
+    NetworkAddCacheServer(String),
     NetworkExternalAddrV4,
     NetworkExternalAddrV6,
     NetworkNatBehavior,

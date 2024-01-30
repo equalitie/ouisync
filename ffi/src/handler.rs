@@ -329,9 +329,20 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await;
                 ().into()
             }
-            Request::NetworkAddStorageServer(host) => {
-                ouisync_bridge::network::add_storage_server(&self.state.network, &host).await?;
-                self.state.storage_servers.lock().unwrap().insert(host);
+            Request::NetworkAddCacheServer(host) => {
+                // NOTE: Do not inline this into the `if`, otherwise we would hold the lock across
+                // await.
+                let new = self
+                    .state
+                    .cache_servers
+                    .lock()
+                    .unwrap()
+                    .insert(host.clone());
+
+                if new {
+                    ouisync_bridge::network::add_cache_server(&self.state.network, &host).await?;
+                }
+
                 ().into()
             }
             Request::NetworkExternalAddrV4 => self.state.network.external_addr_v4().await.into(),
