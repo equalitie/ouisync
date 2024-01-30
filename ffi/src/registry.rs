@@ -42,12 +42,13 @@ where
         self.0.read().unwrap().values().cloned().collect()
     }
 
-    pub fn get(&self, handle: Handle<T>) -> T {
-        self.try_get(handle).expect("invalid handle")
-    }
-
-    pub fn try_get(&self, handle: Handle<T>) -> Option<T> {
-        self.0.read().unwrap().get(&handle.id).cloned()
+    pub fn get(&self, handle: Handle<T>) -> Result<T, InvalidHandle> {
+        self.0
+            .read()
+            .unwrap()
+            .get(&handle.id)
+            .cloned()
+            .ok_or(InvalidHandle)
     }
 }
 
@@ -145,3 +146,14 @@ impl<T> fmt::Debug for Handle<T> {
         f.debug_tuple("Handle").field(&self.id).finish()
     }
 }
+
+#[derive(Debug)]
+pub struct InvalidHandle;
+
+impl fmt::Display for InvalidHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid handle")
+    }
+}
+
+impl std::error::Error for InvalidHandle {}

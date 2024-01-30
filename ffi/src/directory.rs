@@ -1,4 +1,4 @@
-use crate::{repository::RepositoryHandle, state::State};
+use crate::{error::Error, repository::RepositoryHandle, state::State};
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
@@ -17,9 +17,9 @@ pub(crate) async fn create(
     state: &State,
     repo: RepositoryHandle,
     path: Utf8PathBuf,
-) -> Result<(), ouisync_lib::Error> {
+) -> Result<(), Error> {
     state
-        .get_repository(repo)
+        .get_repository(repo)?
         .repository
         .create_directory(path)
         .await?;
@@ -30,8 +30,8 @@ pub(crate) async fn open(
     state: &State,
     repo: RepositoryHandle,
     path: Utf8PathBuf,
-) -> Result<Directory, ouisync_lib::Error> {
-    let repo = state.get_repository(repo);
+) -> Result<Directory, Error> {
+    let repo = state.get_repository(repo)?;
 
     let dir = repo.repository.open_directory(path).await?;
     let entries = dir
@@ -52,8 +52,8 @@ pub(crate) async fn remove(
     repo: RepositoryHandle,
     path: Utf8PathBuf,
     recursive: bool,
-) -> Result<(), ouisync_lib::Error> {
-    let repo = &state.get_repository(repo).repository;
+) -> Result<(), Error> {
+    let repo = &state.get_repository(repo)?.repository;
 
     if recursive {
         repo.remove_entry_recursively(path).await?

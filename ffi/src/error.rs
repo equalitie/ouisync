@@ -1,4 +1,4 @@
-use crate::session::SessionError;
+use crate::{registry::InvalidHandle, session::SessionError};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_bridge::{
     protocol::remote::ServerError,
@@ -51,6 +51,8 @@ pub enum ErrorCode {
     StorageVersionMismatch = 13,
     /// Connection lost
     ConnectionLost = 14,
+    /// Invalid handle to a resource (e.g., Repository, File, ...)
+    InvalidHandle = 15,
 
     VfsInvalidMountPoint = 2048,
     VfsDriverInstall = 2048 + 1,
@@ -141,6 +143,12 @@ impl ToErrorCode for MountError {
             Self::DriverInstall => ErrorCode::VfsDriverInstall,
             Self::Backend(_) => ErrorCode::VfsBackend,
         }
+    }
+}
+
+impl ToErrorCode for InvalidHandle {
+    fn to_error_code(&self) -> ErrorCode {
+        ErrorCode::InvalidHandle
     }
 }
 

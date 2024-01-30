@@ -60,7 +60,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository::close(&self.state, handle).await?.into()
             }
             Request::RepositoryCreateReopenToken(handle) => {
-                repository::create_reopen_token(&self.state, handle).into()
+                repository::create_reopen_token(&self.state, handle)?.into()
             }
             Request::RepositoryReopen { path, token } => {
                 repository::reopen(&self.state, path.into_std_path_buf(), token)
@@ -68,7 +68,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .into()
             }
             Request::RepositorySubscribe(handle) => {
-                repository::subscribe(&self.state, notification_tx, handle).into()
+                repository::subscribe(&self.state, notification_tx, handle)?.into()
             }
             Request::RepositorySetReadAccess {
                 repository,
@@ -112,7 +112,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .into()
             }
             Request::RepositoryInfoHash(handle) => {
-                repository::info_hash(&self.state, handle).into()
+                repository::info_hash(&self.state, handle)?.into()
             }
             Request::RepositoryDatabaseId(handle) => {
                 repository::database_id(&self.state, handle).await?.into()
@@ -130,23 +130,23 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await?
                 .into(),
             Request::RepositoryIsDhtEnabled(repository) => {
-                repository::is_dht_enabled(&self.state, repository).into()
+                repository::is_dht_enabled(&self.state, repository)?.into()
             }
             Request::RepositorySetDhtEnabled {
                 repository,
                 enabled,
             } => {
-                repository::set_dht_enabled(&self.state, repository, enabled).await;
+                repository::set_dht_enabled(&self.state, repository, enabled).await?;
                 ().into()
             }
             Request::RepositoryIsPexEnabled(repository) => {
-                repository::is_pex_enabled(&self.state, repository).into()
+                repository::is_pex_enabled(&self.state, repository)?.into()
             }
             Request::RepositorySetPexEnabled {
                 repository,
                 enabled,
             } => {
-                repository::set_pex_enabled(&self.state, repository, enabled).await;
+                repository::set_pex_enabled(&self.state, repository, enabled).await?;
                 ().into()
             }
             Request::RepositoryCreateShareToken {
@@ -167,7 +167,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
             Request::ShareTokenNormalize(token) => token.to_string().into(),
             Request::RepositoryAccessMode(repository) => {
-                repository::access_mode(&self.state, repository).into()
+                repository::access_mode(&self.state, repository)?.into()
             }
             Request::RepositorySyncProgress(repository) => {
                 repository::sync_progress(&self.state, repository)
@@ -210,7 +210,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::FileTruncate { file, len } => {
                 file::truncate(&self.state, file, len).await?.into()
             }
-            Request::FileLen(file) => file::len(&self.state, file).await.into(),
+            Request::FileLen(file) => file::len(&self.state, file).await?.into(),
             Request::FileProgress(file) => file::progress(&self.state, file).await?.into(),
             Request::FileFlush(file) => file::flush(&self.state, file).await?.into(),
             Request::FileClose(file) => file::close(&self.state, file).await?.into(),

@@ -1,6 +1,6 @@
 use crate::{
     file::FileHolder,
-    registry::{Handle, Registry},
+    registry::{Handle, InvalidHandle, Registry},
     repository::{RepositoryHandle, RepositoryHolder},
 };
 use deadlock::BlockingMutex;
@@ -90,7 +90,10 @@ impl State {
         Some(holder)
     }
 
-    pub fn get_repository(&self, handle: RepositoryHandle) -> Arc<RepositoryHolder> {
+    pub fn get_repository(
+        &self,
+        handle: RepositoryHandle,
+    ) -> Result<Arc<RepositoryHolder>, InvalidHandle> {
         self.repositories.get(handle)
     }
 

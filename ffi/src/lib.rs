@@ -175,7 +175,14 @@ pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     let session = session.get();
     let sender = PortSender::new(post_c_object_fn, port);
 
-    let src = session.shared.state.files.get(handle);
+    let src = match session.shared.state.files.get(handle) {
+        Ok(file) => file,
+        Err(error) => {
+            sender.send(encode_error(&error.into()));
+            return;
+        }
+    };
+
     let mut dst = fs::File::from_raw_fd(fd);
 
     session.shared.runtime.spawn(async move {
