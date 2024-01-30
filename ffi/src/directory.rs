@@ -1,4 +1,4 @@
-use crate::{registry::Handle, repository::RepositoryHolder, state::State};
+use crate::{repository::RepositoryHandle, state::State};
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +15,7 @@ pub(crate) struct DirEntry {
 
 pub(crate) async fn create(
     state: &State,
-    repo: Handle<RepositoryHolder>,
+    repo: RepositoryHandle,
     path: Utf8PathBuf,
 ) -> Result<(), ouisync_lib::Error> {
     state
@@ -28,7 +28,7 @@ pub(crate) async fn create(
 
 pub(crate) async fn open(
     state: &State,
-    repo: Handle<RepositoryHolder>,
+    repo: RepositoryHandle,
     path: Utf8PathBuf,
 ) -> Result<Directory, ouisync_lib::Error> {
     let repo = state.get_repository(repo);
@@ -49,7 +49,7 @@ pub(crate) async fn open(
 /// also the contents, otherwise the directory must be empty.
 pub(crate) async fn remove(
     state: &State,
-    repo: Handle<RepositoryHolder>,
+    repo: RepositoryHandle,
     path: Utf8PathBuf,
     recursive: bool,
 ) -> Result<(), ouisync_lib::Error> {

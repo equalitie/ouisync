@@ -1,7 +1,7 @@
 use crate::{
     file::FileHolder,
     registry::{Handle, Registry},
-    repository::RepositoryHolder,
+    repository::{RepositoryHandle, RepositoryHolder},
 };
 use deadlock::BlockingMutex;
 use once_cell::sync::OnceCell;
@@ -17,8 +17,8 @@ pub(crate) struct State {
     pub repos_monitor: StateMonitor,
     pub config: ConfigStore,
     pub network: Network,
-    repositories: Registry<RepositoryHolder>,
-    pub files: Registry<FileHolder>,
+    repositories: Registry<Arc<RepositoryHolder>>,
+    pub files: Registry<Arc<FileHolder>>,
     pub tasks: Registry<ScopedJoinHandle<()>>,
     pub cache_servers: BlockingMutex<BTreeSet<String>>,
     pub remote_client_config: OnceCell<Arc<rustls::ClientConfig>>,
@@ -61,7 +61,7 @@ impl State {
             .cloned()
     }
 
-    pub fn insert_repository(&self, holder: RepositoryHolder) -> Handle<RepositoryHolder> {
+    pub fn insert_repository(&self, holder: RepositoryHolder) -> RepositoryHandle {
         if let Some(mounter) = &*self.mounter.lock().unwrap() {
             if let Err(error) = mounter.insert(holder.store_path.clone(), holder.repository.clone())
             {
@@ -72,10 +72,10 @@ impl State {
             }
         }
 
-        self.repositories.insert(holder)
+        self.repositories.insert(Arc::new(holder))
     }
 
-    pub fn remove_repository(&self, handle: Handle<RepositoryHolder>) -> Option<RepositoryHolder> {
+    pub fn remove_repository(&self, handle: RepositoryHandle) -> Option<Arc<RepositoryHolder>> {
         let holder = self.repositories.remove(handle)?;
 
         if let Some(mounter) = &*self.mounter.lock().unwrap() {
@@ -90,12 +90,8 @@ impl State {
         Some(holder)
     }
 
-    pub fn get_repository(&self, handle: Handle<RepositoryHolder>) -> Arc<RepositoryHolder> {
+    pub fn get_repository(&self, handle: RepositoryHandle) -> Arc<RepositoryHolder> {
         self.repositories.get(handle)
-    }
-
-    pub fn get_all_repositories(&self) -> Vec<Arc<RepositoryHolder>> {
-        self.repositories.get_all()
     }
 
     pub async fn mount_all(&self, mount_point: PathBuf) -> Result<(), MountError> {
@@ -104,7 +100,7 @@ impl State {
             error
         })?;
 
-        for repo_holder in self.get_all_repositories() {
+        for repo_holder in self.repositories.collect() {
             if let Err(error) = mounter.insert(
                 repo_holder.store_path.clone(),
                 repo_holder.repository.clone(),

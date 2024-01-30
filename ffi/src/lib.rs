@@ -24,9 +24,8 @@ use crate::{
     c::{Callback, CallbackSender},
     dart::{Port, PortSender, PostDartCObjectFn},
     error::Error,
-    file::FileHolder,
+    file::FileHandle,
     log::LogLevel,
-    registry::Handle,
     sender::Sender,
     session::{SessionCreateResult, SessionHandle},
 };
@@ -164,7 +163,7 @@ pub unsafe extern "C" fn session_channel_send(
 #[no_mangle]
 pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     session: SessionHandle,
-    handle: Handle<FileHolder>,
+    handle: FileHandle,
     fd: c_int,
     post_c_object_fn: PostDartCObjectFn,
     port: Port,
@@ -203,7 +202,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
 #[no_mangle]
 pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     _session: SessionHandle,
-    _handle: Handle<FileHolder>,
+    _handle: FileHandle,
     _fd: c_int,
     post_c_object_fn: PostDartCObjectFn,
     port: Port,

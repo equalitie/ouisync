@@ -6,11 +6,11 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, RwLock,
+        RwLock,
     },
 };
 
-pub struct Registry<T>(RwLock<HashMap<u64, Arc<T>>>);
+pub struct Registry<T>(RwLock<HashMap<u64, T>>);
 
 impl<T> Registry<T> {
     pub fn new() -> Self {
@@ -30,28 +30,23 @@ impl<T> Registry<T> {
     }
 
     pub fn remove(&self, handle: Handle<T>) -> Option<T> {
-        let mut items = self.0.write().unwrap();
-
-        let ptr = items.remove(&handle.id)?;
-
-        match Arc::try_unwrap(ptr) {
-            Ok(item) => Some(item),
-            Err(ptr) => {
-                items.insert(handle.id, ptr);
-                None
-            }
-        }
+        self.0.write().unwrap().remove(&handle.id)
     }
+}
 
-    pub fn get_all(&self) -> Vec<Arc<T>> {
+impl<T> Registry<T>
+where
+    T: Clone,
+{
+    pub fn collect(&self) -> Vec<T> {
         self.0.read().unwrap().values().cloned().collect()
     }
 
-    pub fn get(&self, handle: Handle<T>) -> Arc<T> {
+    pub fn get(&self, handle: Handle<T>) -> T {
         self.try_get(handle).expect("invalid handle")
     }
 
-    pub fn try_get(&self, handle: Handle<T>) -> Option<Arc<T>> {
+    pub fn try_get(&self, handle: Handle<T>) -> Option<T> {
         self.0.read().unwrap().get(&handle.id).cloned()
     }
 }
@@ -80,7 +75,7 @@ impl<T> VacantEntry<'_, T> {
             .0
             .write()
             .unwrap()
-            .insert(self.handle.id, Arc::new(value));
+            .insert(self.handle.id, value);
         self.handle
     }
 }
@@ -148,23 +143,5 @@ impl<T> Hash for Handle<T> {
 impl<T> fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_tuple("Handle").field(&self.id).finish()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn remove() {
-        let registry = Registry::new();
-        let handle = registry.insert(0);
-
-        let item = registry.get(handle);
-        assert_eq!(registry.remove(handle), None);
-
-        drop(item);
-        assert_eq!(registry.remove(handle), Some(0));
-        assert_eq!(registry.remove(handle), None);
     }
 }
