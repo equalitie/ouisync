@@ -1,6 +1,6 @@
 use crate::{
     directory::Directory, file::FileHandle, registry::Handle, repository::RepositoryHandle,
-    state::SubscriptionHandle,
+    state::TaskHandle,
 };
 use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
@@ -21,7 +21,6 @@ use thiserror::Error;
 #[serde(rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Request {
-    RepositoryList,
     RepositoryCreate {
         path: Utf8PathBuf,
         read_password: Option<String>,
@@ -171,7 +170,7 @@ pub(crate) enum Request {
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
-    Unsubscribe(SubscriptionHandle),
+    Unsubscribe(TaskHandle),
 }
 
 #[derive(Eq, PartialEq, Serialize, Deserialize)]

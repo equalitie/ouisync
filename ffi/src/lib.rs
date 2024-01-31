@@ -9,6 +9,7 @@ mod error;
 mod file;
 mod handler;
 mod log;
+mod mounter;
 mod network;
 mod protocol;
 mod registry;

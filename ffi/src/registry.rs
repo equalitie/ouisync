@@ -10,55 +10,65 @@ use std::{
     },
 };
 
-pub struct Registry<T>(RwLock<HashMap<u64, T>>);
+pub struct Registry<T: 'static>(HashMap<Handle<T>, T>);
 
-impl<T> Registry<T> {
+impl<T: 'static> Registry<T> {
     pub fn new() -> Self {
-        Self(RwLock::new(HashMap::new()))
+        Self(HashMap::new())
     }
 
-    pub fn insert(&self, item: T) -> Handle<T> {
+    pub fn insert(&mut self, value: T) -> Handle<T> {
         let handle = Handle::new();
-        self.0.write().unwrap().insert(handle.id, item);
+        self.0.insert(handle, value);
         handle
     }
 
-    pub fn remove(&self, handle: Handle<T>) -> Option<T> {
-        self.0.write().unwrap().remove(&handle.id)
+    pub fn remove(&mut self, handle: Handle<T>) -> Option<T> {
+        self.0.remove(&handle)
     }
 
-    pub fn collect_handles(&self) -> Vec<Handle<T>> {
-        self.0
-            .read()
-            .unwrap()
-            .keys()
-            .copied()
-            .map(Handle::from_id)
-            .collect()
-    }
-}
-
-impl<T> Registry<T>
-where
-    T: Clone,
-{
-    pub fn collect_values(&self) -> Vec<T> {
-        self.0.read().unwrap().values().cloned().collect()
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.0.values()
     }
 
-    pub fn get(&self, handle: Handle<T>) -> Result<T, InvalidHandle> {
-        self.0
-            .read()
-            .unwrap()
-            .get(&handle.id)
-            .cloned()
-            .ok_or(InvalidHandle)
+    pub fn get(&self, handle: Handle<T>) -> Result<&T, InvalidHandle> {
+        self.0.get(&handle).ok_or(InvalidHandle)
     }
 }
 
 impl<T> Default for Registry<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub struct SharedRegistry<T: 'static>(RwLock<Registry<T>>);
+
+impl<T: 'static> SharedRegistry<T> {
+    pub fn new() -> Self {
+        Self(RwLock::new(Registry::new()))
+    }
+
+    pub fn insert(&self, item: T) -> Handle<T> {
+        self.0.write().unwrap().insert(item)
+    }
+
+    pub fn remove(&self, handle: Handle<T>) -> Option<T> {
+        self.0.write().unwrap().remove(handle)
+    }
+}
+
+impl<T> SharedRegistry<T>
+where
+    T: Clone,
+{
+    pub fn get(&self, handle: Handle<T>) -> Result<T, InvalidHandle> {
+        self.0
+            .read()
+            .unwrap()
+            .get(handle)
+            .cloned()
+            .map(|value| value.clone())
     }
 }
 

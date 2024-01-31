@@ -37,7 +37,6 @@ impl ouisync_bridge::transport::Handler for Handler {
         tracing::trace!(?request);
 
         let response = match request {
-            Request::RepositoryList => self.state.collect_repository_handles().into(),
             Request::RepositoryCreate {
                 path,
                 read_password,
@@ -176,7 +175,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .into()
             }
             Request::RepositoryMountAll(mount_point) => {
-                self.state.mount_all(mount_point).await?.into()
+                repository::mount_all(&self.state, mount_point)
+                    .await?
+                    .into()
             }
             Request::DirectoryCreate { repository, path } => {
                 directory::create(&self.state, repository, path)
@@ -359,7 +360,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 state_monitor::subscribe(&self.state, notification_tx, path)?.into()
             }
             Request::Unsubscribe(handle) => {
-                self.state.unsubscribe(handle);
+                self.state.remove_task(handle);
                 ().into()
             }
         };

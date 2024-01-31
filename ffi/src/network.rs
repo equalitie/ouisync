@@ -1,4 +1,4 @@
-use crate::state::{State, SubscriptionHandle};
+use crate::state::{State, TaskHandle};
 use ouisync_bridge::{
     protocol::{NetworkEvent, Notification},
     transport::NotificationSender,
@@ -6,7 +6,7 @@ use ouisync_bridge::{
 use tokio::select;
 
 /// Subscribe to network event notifications.
-pub(crate) fn subscribe(state: &State, notification_tx: &NotificationSender) -> SubscriptionHandle {
+pub(crate) fn subscribe(state: &State, notification_tx: &NotificationSender) -> TaskHandle {
     let mut on_protocol_mismatch = state.network.on_protocol_mismatch();
     let mut on_peer_set_change = state.network.on_peer_set_change();
     let notification_tx = notification_tx.clone();

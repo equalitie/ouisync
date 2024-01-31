@@ -19,7 +19,8 @@ pub(crate) async fn create(
     path: Utf8PathBuf,
 ) -> Result<(), Error> {
     state
-        .get_repository(repo)?
+        .repositories
+        .get(repo)?
         .repository
         .create_directory(path)
         .await?;
@@ -31,7 +32,7 @@ pub(crate) async fn open(
     repo: RepositoryHandle,
     path: Utf8PathBuf,
 ) -> Result<Directory, Error> {
-    let repo = state.get_repository(repo)?;
+    let repo = state.repositories.get(repo)?;
 
     let dir = repo.repository.open_directory(path).await?;
     let entries = dir
@@ -53,7 +54,7 @@ pub(crate) async fn remove(
     path: Utf8PathBuf,
     recursive: bool,
 ) -> Result<(), Error> {
-    let repo = &state.get_repository(repo)?.repository;
+    let repo = &state.repositories.get(repo)?.repository;
 
     if recursive {
         repo.remove_entry_recursively(path).await?

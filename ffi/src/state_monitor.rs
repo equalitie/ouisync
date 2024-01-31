@@ -1,4 +1,4 @@
-use crate::state::{State, SubscriptionHandle};
+use crate::state::{State, TaskHandle};
 use ouisync_bridge::{protocol::Notification, transport::NotificationSender};
 use state_monitor::{MonitorId, StateMonitor};
 use std::time::Duration;
@@ -17,7 +17,7 @@ pub(crate) fn subscribe(
     state: &State,
     notification_tx: &NotificationSender,
     path: Vec<MonitorId>,
-) -> Result<SubscriptionHandle, ouisync_lib::Error> {
+) -> Result<TaskHandle, ouisync_lib::Error> {
     let monitor = state
         .root_monitor
         .locate(path)

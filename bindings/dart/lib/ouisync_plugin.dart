@@ -311,7 +311,7 @@ class TrafficStats {
   String toString() => '$runtimeType(send: $send, recv: $recv)';
 }
 
-/// A reference to a ouisync repository.
+/// A handle to a Ouisync repository.
 class Repository {
   final Client _client;
   final int _handle;
@@ -320,16 +320,6 @@ class Repository {
 
   Repository._(this._client, this._handle, this._store)
       : _subscription = Subscription(_client, "repository", _handle);
-
-  /// List all currently opened repositories.
-  static Future<List<Repository>> list(Session session) async {
-    final handles = await session._client
-        .invoke<List<Object?>>('repository_list')
-        .then((list) => list.cast<int>());
-    return handles
-        .map((handle) => Repository._(session._client, handle, null))
-        .toList();
-  }
 
   /// Creates a new repository and set access to it based on the following table:
   ///
@@ -366,7 +356,10 @@ class Repository {
     return Repository._(session._client, handle, store);
   }
 
-  /// Opens an existing repository.
+  /// Opens an existing repository. If the same repository is opened again, a new handle pointing
+  /// to the same underlying repository is returned.
+  ///
+  /// See also [close].
   static Future<Repository> open(
     Session session, {
     required String store,
@@ -398,12 +391,9 @@ class Repository {
     return Repository._(session._client, handle, store);
   }
 
-  /// Close the repository. Accessing the repository after it's been closed is an error.
+  /// Closes the repository. All outstanding handles become invalid. Invoking any operation on a
+  /// repository after it's been closed results in an error being thrown.
   Future<void> close() async {
-    if (debugTrace) {
-      print("Repository.close");
-    }
-
     await _subscription.close();
     await _client.invoke('repository_close', _handle);
   }
