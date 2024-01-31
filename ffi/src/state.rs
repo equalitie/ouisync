@@ -10,7 +10,8 @@ use ouisync_lib::network::Network;
 use ouisync_vfs::{MountError, MultiRepoMount, MultiRepoVFS};
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
-use std::{collections::BTreeSet, io, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, future::Future, io, path::PathBuf, sync::Arc};
+use tokio::sync::oneshot;
 
 pub(crate) struct State {
     pub root_monitor: StateMonitor,
@@ -122,6 +123,28 @@ impl State {
         *self.mounter.lock().unwrap() = Some(mounter);
 
         Ok(())
+    }
+
+    /// Spawns a task and inserts it into the `tasks` registry. Returns its Registry handle.
+    pub fn spawn_task<M, F>(&self, make_task: M) -> Handle<ScopedJoinHandle<()>>
+    where
+        M: FnOnce(u64) -> F + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+
+        let task = scoped_task::spawn(async move {
+            let Ok(id) = rx.await else {
+                return;
+            };
+
+            make_task(id).await
+        });
+
+        let handle = self.tasks.insert(task);
+        tx.send(handle.id()).ok();
+
+        handle
     }
 }
 

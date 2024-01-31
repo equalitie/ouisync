@@ -257,10 +257,7 @@ pub(crate) fn subscribe(
     let mut notification_rx = holder.repository.subscribe();
     let notification_tx = notification_tx.clone();
 
-    let entry = state.tasks.vacant_entry();
-    let subscription_id = entry.handle().id();
-
-    let subscription_task = scoped_task::spawn(async move {
+    let handle = state.spawn_task(|id| async move {
         loop {
             match notification_rx.recv().await {
                 Ok(Event {
@@ -273,13 +270,13 @@ pub(crate) fn subscribe(
             }
 
             notification_tx
-                .send((subscription_id, Notification::Repository))
+                .send((id, Notification::Repository))
                 .await
                 .ok();
         }
     });
 
-    Ok(entry.insert(subscription_task))
+    Ok(handle)
 }
 
 pub(crate) fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
