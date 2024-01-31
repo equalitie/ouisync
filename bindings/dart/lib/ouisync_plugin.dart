@@ -30,15 +30,12 @@ const bool debugTrace = false;
 /// Entry point to the ouisync bindings. A session should be opened at the start of the application
 /// and closed at the end. There can be only one session at the time.
 class Session {
-  int _handle;
-  final Client client;
+  final Client _client;
   final Subscription _networkSubscription;
   String? _mountPoint;
 
-  int get handle => _handle;
-
-  Session._(this._handle, this.client)
-      : _networkSubscription = Subscription(client, "network", null) {
+  Session._(this._client)
+      : _networkSubscription = Subscription(_client, "network", null) {
     NativeChannels.session = this;
   }
 
@@ -77,7 +74,7 @@ class Session {
 
     final client = Client(handle, recvPort);
 
-    return Session._(handle, client);
+    return Session._(client);
   }
 
   String? get mountPoint => _mountPoint;
@@ -86,7 +83,7 @@ class Session {
   // read/write mode into the `mountPoint`. The `mountPoint` may point to an
   // empty directory or may be a drive letter.
   Future<void> mountAllRepositories(String mountPoint) async {
-    await client.invoke<void>("repository_mount_all", mountPoint);
+    await _client.invoke<void>("repository_mount_all", mountPoint);
     _mountPoint = mountPoint;
   }
 
@@ -96,7 +93,7 @@ class Session {
     bool defaultPortForwardingEnabled = false,
     bool defaultLocalDiscoveryEnabled = false,
   }) =>
-      client.invoke<void>("network_init", {
+      _client.invoke<void>("network_init", {
         'port_forwarding_enabled': defaultPortForwardingEnabled,
         'local_discovery_enabled': defaultLocalDiscoveryEnabled,
       });
@@ -108,7 +105,7 @@ class Session {
     String? tcpV4,
     String? tcpV6,
   }) async {
-    await client.invoke<void>("network_bind", {
+    await _client.invoke<void>("network_bind", {
       'quic_v4': quicV4,
       'quic_v6': quicV6,
       'tcp_v4': tcpV4,
@@ -120,37 +117,37 @@ class Session {
       _networkSubscription.stream.map((raw) => NetworkEvent.decode(raw as int));
 
   Future<void> addUserProvidedPeer(String addr) =>
-      client.invoke<void>('network_add_user_provided_peer', addr);
+      _client.invoke<void>('network_add_user_provided_peer', addr);
 
   Future<void> removeUserProvidedPeer(String addr) =>
-      client.invoke<void>('network_remove_user_provided_peer', addr);
+      _client.invoke<void>('network_remove_user_provided_peer', addr);
 
-  Future<List<String>> get userProvidedPeers => client
+  Future<List<String>> get userProvidedPeers => _client
       .invoke<List<Object?>>('network_user_provided_peers')
       .then((list) => list.cast<String>());
 
   Future<String?> get tcpListenerLocalAddressV4 =>
-      client.invoke<String?>('network_tcp_listener_local_addr_v4');
+      _client.invoke<String?>('network_tcp_listener_local_addr_v4');
 
   Future<String?> get tcpListenerLocalAddressV6 =>
-      client.invoke<String?>('network_tcp_listener_local_addr_v6');
+      _client.invoke<String?>('network_tcp_listener_local_addr_v6');
 
   Future<String?> get quicListenerLocalAddressV4 =>
-      client.invoke<String?>('network_quic_listener_local_addr_v4');
+      _client.invoke<String?>('network_quic_listener_local_addr_v4');
 
   Future<String?> get quicListenerLocalAddressV6 =>
-      client.invoke<String?>('network_quic_listener_local_addr_v6');
+      _client.invoke<String?>('network_quic_listener_local_addr_v6');
 
   Future<String?> get externalAddressV4 =>
-      client.invoke<String?>('network_external_addr_v4');
+      _client.invoke<String?>('network_external_addr_v4');
 
   Future<String?> get externalAddressV6 =>
-      client.invoke<String?>('network_external_addr_v6');
+      _client.invoke<String?>('network_external_addr_v6');
 
   Future<String?> get natBehavior =>
-      client.invoke<String?>('network_nat_behavior');
+      _client.invoke<String?>('network_nat_behavior');
 
-  Future<TrafficStats> get trafficStats => client
+  Future<TrafficStats> get trafficStats => _client
       .invoke<List<Object?>>('network_traffic_stats')
       .then((list) => TrafficStats.decode(list));
 
@@ -161,46 +158,46 @@ class Session {
     }
   }
 
-  Future<List<PeerInfo>> get peers => client
+  Future<List<PeerInfo>> get peers => _client
       .invoke<List<Object?>>('network_known_peers')
       .then(PeerInfo.decodeAll);
 
-  StateMonitor get rootStateMonitor => StateMonitor.getRoot(this);
+  StateMonitor get rootStateMonitor => StateMonitor.getRoot(_client);
 
   Future<int> get currentProtocolVersion =>
-      client.invoke<int>('network_current_protocol_version');
+      _client.invoke<int>('network_current_protocol_version');
 
   Future<int> get highestSeenProtocolVersion =>
-      client.invoke<int>('network_highest_seen_protocol_version');
+      _client.invoke<int>('network_highest_seen_protocol_version');
 
   /// Is port forwarding (UPnP) enabled?
   Future<bool> get isPortForwardingEnabled =>
-      client.invoke<bool>('network_is_port_forwarding_enabled');
+      _client.invoke<bool>('network_is_port_forwarding_enabled');
 
   /// Enable/disable port forwarding (UPnP)
   Future<void> setPortForwardingEnabled(bool enabled) =>
-      client.invoke<void>('network_set_port_forwarding_enabled', enabled);
+      _client.invoke<void>('network_set_port_forwarding_enabled', enabled);
 
   /// Is local discovery enabled?
   Future<bool> get isLocalDiscoveryEnabled =>
-      client.invoke<bool>('network_is_local_discovery_enabled');
+      _client.invoke<bool>('network_is_local_discovery_enabled');
 
   /// Enable/disable local discovery
   Future<void> setLocalDiscoveryEnabled(bool enabled) =>
-      client.invoke<void>('network_set_local_discovery_enabled', enabled);
+      _client.invoke<void>('network_set_local_discovery_enabled', enabled);
 
   Future<String> get thisRuntimeId =>
-      client.invoke<String>('network_this_runtime_id');
+      _client.invoke<String>('network_this_runtime_id');
 
   Future<void> addCacheServer(String host) =>
-      client.invoke<void>('network_add_cache_server', host);
+      _client.invoke<void>('network_add_cache_server', host);
 
   /// Try to gracefully close connections to peers then close the session.
   ///
   /// Note that this function is idempotent with itself as well as with the
   /// `closeSync` function.
   Future<void> close() async {
-    final handle = _takeHandle();
+    final handle = _closeClient();
     if (handle == 0) {
       return;
     }
@@ -224,7 +221,7 @@ class Session {
   /// Note that this function is idempotent with itself as well as with the
   /// `close` function.
   void closeSync() {
-    final handle = _takeHandle();
+    final handle = _closeClient();
     if (handle == 0) {
       return;
     }
@@ -234,15 +231,14 @@ class Session {
     bindings.session_close_blocking(handle);
   }
 
-  int _takeHandle() {
-    if (_handle == 0) {
+  int _closeClient() {
+    final handle = _client.close();
+
+    if (handle == 0) {
       return 0;
     }
 
-    final handle = _handle;
-    _handle = 0;
-
-    if (NativeChannels.session?.handle == handle) {
+    if (NativeChannels.session?._client.isClosed ?? false) {
       NativeChannels.session = null;
     }
 
@@ -317,21 +313,21 @@ class TrafficStats {
 
 /// A reference to a ouisync repository.
 class Repository {
-  final Session session;
-  final int handle;
+  final Client _client;
+  final int _handle;
   final String? _store;
   final Subscription _subscription;
 
-  Repository._(this.session, this.handle, this._store)
-      : _subscription = Subscription(session.client, "repository", handle);
+  Repository._(this._client, this._handle, this._store)
+      : _subscription = Subscription(_client, "repository", _handle);
 
   /// List all currently opened repositories.
   static Future<List<Repository>> list(Session session) async {
-    final handles = await session.client
+    final handles = await session._client
         .invoke<List<Object?>>('repository_list')
         .then((list) => list.cast<int>());
     return handles
-        .map((handle) => Repository._(session, handle, null))
+        .map((handle) => Repository._(session._client, handle, null))
         .toList();
   }
 
@@ -357,17 +353,17 @@ class Repository {
       print("Repository.create $store");
     }
 
-    final handle = await session.client.invoke<int>(
+    final handle = await session._client.invoke<int>(
       'repository_create',
       {
         'path': store,
         'read_password': readPassword,
         'write_password': writePassword,
-        'share_token': shareToken?.token
+        'share_token': shareToken?.toString()
       },
     );
 
-    return Repository._(session, handle, store);
+    return Repository._(session._client, handle, store);
   }
 
   /// Opens an existing repository.
@@ -380,12 +376,12 @@ class Repository {
       print("Repository.open $store");
     }
 
-    final handle = await session.client.invoke<int>('repository_open', {
+    final handle = await session._client.invoke<int>('repository_open', {
       'path': store,
       'password': password,
     });
 
-    return Repository._(session, handle, store);
+    return Repository._(session._client, handle, store);
   }
 
   /// Opens an existing repository using a reopen token.
@@ -394,12 +390,12 @@ class Repository {
     required String store,
     required Uint8List token,
   }) async {
-    final handle = await session.client.invoke<int>('repository_reopen', {
+    final handle = await session._client.invoke<int>('repository_reopen', {
       'path': store,
       'token': token,
     });
 
-    return Repository._(session, handle, store);
+    return Repository._(session._client, handle, store);
   }
 
   /// Close the repository. Accessing the repository after it's been closed is an error.
@@ -409,13 +405,13 @@ class Repository {
     }
 
     await _subscription.close();
-    await session.client.invoke('repository_close', handle);
+    await _client.invoke('repository_close', _handle);
   }
 
   /// Creates a reopen token to be used to reopen this repository in the same access mode as it has
   /// now.
-  Future<Uint8List> createReopenToken() => session.client
-      .invoke<Uint8List>('repository_create_reopen_token', handle);
+  Future<Uint8List> createReopenToken() =>
+      _client.invoke<Uint8List>('repository_create_reopen_token', _handle);
 
   /// Returns the type (file, directory, ..) of the entry at [path]. Returns `null` if the entry
   /// doesn't exists.
@@ -424,8 +420,8 @@ class Repository {
       print("Repository.type $path");
     }
 
-    final raw = await session.client.invoke<int?>('repository_entry_type', {
-      'repository': handle,
+    final raw = await _client.invoke<int?>('repository_entry_type', {
+      'repository': _handle,
       'path': path,
     });
 
@@ -447,8 +443,8 @@ class Repository {
       print("Repository.move $src -> $dst");
     }
 
-    await session.client.invoke<void>('repository_move_entry', {
-      'repository': handle,
+    await _client.invoke<void>('repository_move_entry', {
+      'repository': _handle,
       'src': src,
       'dst': dst,
     });
@@ -461,8 +457,7 @@ class Repository {
       print("Repository.isDhtEnabled");
     }
 
-    return await session.client
-        .invoke<bool>('repository_is_dht_enabled', handle);
+    return await _client.invoke<bool>('repository_is_dht_enabled', _handle);
   }
 
   Future<void> setDhtEnabled(bool enabled) async {
@@ -470,18 +465,18 @@ class Repository {
       print("Repository.setDhtEnabled($enabled)");
     }
 
-    await session.client.invoke<void>('repository_set_dht_enabled', {
-      'repository': handle,
+    await _client.invoke<void>('repository_set_dht_enabled', {
+      'repository': _handle,
       'enabled': enabled,
     });
   }
 
   Future<bool> get isPexEnabled =>
-      session.client.invoke<bool>('repository_is_pex_enabled', handle);
+      _client.invoke<bool>('repository_is_pex_enabled', _handle);
 
   Future<void> setPexEnabled(bool enabled) =>
-      session.client.invoke<void>('repository_set_pex_enabled', {
-        'repository': handle,
+      _client.invoke<void>('repository_set_pex_enabled', {
+        'repository': _handle,
         'enabled': enabled,
       });
 
@@ -490,8 +485,8 @@ class Repository {
       print("Repository.get accessMode");
     }
 
-    return session.client
-        .invoke<int>('repository_access_mode', handle)
+    return _client
+        .invoke<int>('repository_access_mode', _handle)
         .then((n) => AccessMode.decode(n));
   }
 
@@ -506,37 +501,37 @@ class Repository {
       print("Repository.createShareToken");
     }
 
-    return session.client.invoke<String>('repository_create_share_token', {
-      'repository': handle,
+    return _client.invoke<String>('repository_create_share_token', {
+      'repository': _handle,
       'password': password,
       'access_mode': accessMode.encode(),
       'name': name,
-    }).then((token) => ShareToken._(session, token));
+    }).then((token) => ShareToken._(_client, token));
   }
 
-  Future<Progress> get syncProgress => session.client
-      .invoke<List<Object?>>('repository_sync_progress', handle)
+  Future<Progress> get syncProgress => _client
+      .invoke<List<Object?>>('repository_sync_progress', _handle)
       .then(Progress.decode);
 
   StateMonitor? get stateMonitor {
     final store = _store;
     return store != null
-        ? StateMonitor.getRoot(session)
+        ? StateMonitor.getRoot(_client)
             .child(MonitorId.expectUnique("Repositories"))
             .child(MonitorId.expectUnique(store))
         : null;
   }
 
   Future<String> get infoHash =>
-      session.client.invoke<String>("repository_info_hash", handle);
+      _client.invoke<String>("repository_info_hash", _handle);
 
   Future<void> setReadWriteAccess({
     required String? oldPassword,
     required String newPassword,
     required ShareToken? shareToken,
   }) =>
-      session.client.invoke<void>('repository_set_read_and_write_access', {
-        'repository': handle,
+      _client.invoke<void>('repository_set_read_and_write_access', {
+        'repository': _handle,
         'old_password': oldPassword,
         'new_password': newPassword,
         'share_token': shareToken?.toString(),
@@ -546,55 +541,56 @@ class Repository {
     required String newPassword,
     required ShareToken? shareToken,
   }) =>
-      session.client.invoke<void>('repository_set_read_access', {
-        'repository': handle,
+      _client.invoke<void>('repository_set_read_access', {
+        'repository': _handle,
         'password': newPassword,
         'share_token': shareToken?.toString(),
       });
 
   Future<String> hexDatabaseId() async {
-    final bytes = await session.client
-        .invoke<Uint8List>("repository_database_id", handle);
+    final bytes =
+        await _client.invoke<Uint8List>("repository_database_id", _handle);
     return HEX.encode(bytes);
   }
 
   /// Create mirror of this repository on the storage servers.
-  Future<void> mirror() => session.client.invoke<void>('repository_mirror', {
-        'repository': handle,
+  Future<void> mirror() => _client.invoke<void>('repository_mirror', {
+        'repository': _handle,
       });
 }
 
 class ShareToken {
-  final Session session;
-  final String token;
+  final Client _client;
+  final String _token;
 
-  ShareToken._(this.session, this.token);
+  ShareToken._(this._client, this._token);
 
   static Future<ShareToken> fromString(Session session, String s) =>
-      session.client
+      session._client
           .invoke<String>('share_token_normalize', s)
-          .then((s) => ShareToken._(session, s));
+          .then((s) => ShareToken._(session._client, s));
 
   /// Get the suggested repository name from the share token.
   Future<String> get suggestedName =>
-      session.client.invoke<String>('share_token_suggested_name', token);
+      _client.invoke<String>('share_token_suggested_name', _token);
 
   Future<String> get infoHash =>
-      session.client.invoke<String>('share_token_info_hash', token);
+      _client.invoke<String>('share_token_info_hash', _token);
 
   /// Get the access mode the share token provides.
-  Future<AccessMode> get mode => session.client
-      .invoke<int>('share_token_mode', token)
+  Future<AccessMode> get mode => _client
+      .invoke<int>('share_token_mode', _token)
       .then((n) => AccessMode.decode(n));
 
   @override
-  String toString() => token;
+  String toString() => _token;
 
   @override
-  bool operator ==(Object other) => other is ShareToken && other.token == token;
+  bool operator ==(Object other) =>
+      other is ShareToken && other._token == _token;
 
   @override
-  int get hashCode => token.hashCode;
+  int get hashCode => _token.hashCode;
 }
 
 class Progress {
@@ -659,10 +655,10 @@ class Directory with IterableMixin<DirEntry> {
       print("Directory.open $path");
     }
 
-    final rawEntries = await repo.session.client.invoke<List<Object?>>(
+    final rawEntries = await repo._client.invoke<List<Object?>>(
       'directory_open',
       {
-        'repository': repo.handle,
+        'repository': repo._handle,
         'path': path,
       },
     );
@@ -679,8 +675,8 @@ class Directory with IterableMixin<DirEntry> {
       print("Directory.create $path");
     }
 
-    return repo.session.client.invoke<void>('directory_create', {
-      'repository': repo.handle,
+    return repo._client.invoke<void>('directory_create', {
+      'repository': repo._handle,
       'path': path,
     });
   }
@@ -697,8 +693,8 @@ class Directory with IterableMixin<DirEntry> {
       print("Directory.remove $path");
     }
 
-    return repo.session.client.invoke<void>('directory_remove', {
-      'repository': repo.handle,
+    return repo._client.invoke<void>('directory_remove', {
+      'repository': repo._handle,
       'path': path,
       'recursive': recursive,
     });
@@ -711,10 +707,10 @@ class Directory with IterableMixin<DirEntry> {
 
 /// Reference to a file in a [Repository].
 class File {
-  Session session;
-  final int handle;
+  final Client _client;
+  final int _handle;
 
-  File._(this.session, this.handle);
+  File._(this._client, this._handle);
 
   static const defaultChunkSize = 1024;
 
@@ -727,9 +723,9 @@ class File {
     }
 
     return File._(
-        repo.session,
-        await repo.session.client.invoke<int>('file_open', {
-          'repository': repo.handle,
+        repo._client,
+        await repo._client.invoke<int>('file_open', {
+          'repository': repo._handle,
           'path': path,
         }));
   }
@@ -743,9 +739,9 @@ class File {
     }
 
     return File._(
-        repo.session,
-        await repo.session.client.invoke<int>('file_create', {
-          'repository': repo.handle,
+        repo._client,
+        await repo._client.invoke<int>('file_create', {
+          'repository': repo._handle,
           'path': path,
         }));
   }
@@ -756,8 +752,8 @@ class File {
       print("File.remove $path");
     }
 
-    return repo.session.client.invoke<void>('file_remove', {
-      'repository': repo.handle,
+    return repo._client.invoke<void>('file_remove', {
+      'repository': repo._handle,
       'path': path,
     });
   }
@@ -768,7 +764,7 @@ class File {
       print("File.close");
     }
 
-    return session.client.invoke<void>('file_close', handle);
+    return _client.invoke<void>('file_close', _handle);
   }
 
   /// Flushes any pending writes to this file.
@@ -777,7 +773,7 @@ class File {
       print("File.flush");
     }
 
-    return session.client.invoke<void>('file_flush', handle);
+    return _client.invoke<void>('file_flush', _handle);
   }
 
   /// Read [size] bytes from this file, starting at [offset].
@@ -811,8 +807,8 @@ class File {
       print("File.read");
     }
 
-    return session.client.invoke<Uint8List>(
-        'file_read', {'file': handle, 'offset': offset, 'len': size});
+    return _client.invoke<Uint8List>(
+        'file_read', {'file': _handle, 'offset': offset, 'len': size});
   }
 
   /// Write [data] to this file starting at [offset].
@@ -821,8 +817,8 @@ class File {
       print("File.write");
     }
 
-    return session.client.invoke<void>('file_write', {
-      'file': handle,
+    return _client.invoke<void>('file_write', {
+      'file': _handle,
       'offset': offset,
       'data': Uint8List.fromList(data),
     });
@@ -834,8 +830,8 @@ class File {
       print("File.truncate");
     }
 
-    return session.client.invoke<void>('file_truncate', {
-      'file': handle,
+    return _client.invoke<void>('file_truncate', {
+      'file': _handle,
       'len': size,
     });
   }
@@ -846,11 +842,10 @@ class File {
       print("File.length");
     }
 
-    return session.client.invoke<int>('file_len', handle);
+    return _client.invoke<int>('file_len', _handle);
   }
 
-  Future<int> get progress =>
-      session.client.invoke<int>('file_progress', handle);
+  Future<int> get progress => _client.invoke<int>('file_progress', _handle);
 
   /// Copy the contents of the file into the provided raw file descriptor.
   Future<void> copyToRawFd(int fd) {
@@ -860,8 +855,8 @@ class File {
 
     return _invoke(
       (port) => bindings.file_copy_to_raw_fd(
-        session.handle,
-        handle,
+        _client.handle,
+        _handle,
         fd,
         NativeApi.postCObject,
         port,

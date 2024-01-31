@@ -60,6 +60,7 @@ enum ErrorCode {
   malformedMessage,
   storageVersionMismatch,
   connectionLost,
+  invalidHandle,
   vfsInvalidMountPoint,
   vfsDriverInstall,
   vfsBackend,
@@ -82,6 +83,7 @@ enum ErrorCode {
       case 12: return ErrorCode.malformedMessage;
       case 13: return ErrorCode.storageVersionMismatch;
       case 14: return ErrorCode.connectionLost;
+      case 15: return ErrorCode.invalidHandle;
       case 2048: return ErrorCode.vfsInvalidMountPoint;
       case 2049: return ErrorCode.vfsDriverInstall;
       case 2050: return ErrorCode.vfsBackend;
@@ -106,6 +108,7 @@ enum ErrorCode {
       case ErrorCode.malformedMessage: return 12;
       case ErrorCode.storageVersionMismatch: return 13;
       case ErrorCode.connectionLost: return 14;
+      case ErrorCode.invalidHandle: return 15;
       case ErrorCode.vfsInvalidMountPoint: return 2048;
       case ErrorCode.vfsDriverInstall: return 2049;
       case ErrorCode.vfsBackend: return 2050;

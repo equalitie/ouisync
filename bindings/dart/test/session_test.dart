@@ -36,4 +36,13 @@ void main() {
       await session1.close();
     }
   });
+
+  test('use after close', () async {
+    final session = Session.create(
+        kind: SessionKind.unique, configPath: '${temp.path}/config');
+    await session.close();
+
+    await expectLater(
+        session.currentProtocolVersion, throwsA(isA<StateError>()));
+  });
 }

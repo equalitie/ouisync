@@ -90,6 +90,7 @@ impl SessionHandle {
     }
 
     pub(crate) unsafe fn release(self) -> Session {
+        assert_ne!(self.0, 0, "invalid handle");
         *Box::from_raw(self.0 as *mut _)
     }
 }
