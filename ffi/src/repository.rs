@@ -6,8 +6,9 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
+    crypto::Password,
     network::{self, Registration},
-    path, AccessMode, Event, Payload, Progress, Repository, ShareToken,
+    path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository, ShareToken,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -95,42 +96,6 @@ pub(crate) async fn open(
     Ok(handle)
 }
 
-pub(crate) fn create_reopen_token(
-    state: &State,
-    handle: RepositoryHandle,
-) -> Result<Vec<u8>, Error> {
-    Ok(state
-        .repositories
-        .get(handle)?
-        .repository
-        .reopen_token()
-        .encode())
-}
-
-pub(crate) async fn reopen(
-    state: &State,
-    store_path: PathBuf,
-    token: Vec<u8>,
-) -> Result<RepositoryHandle, Error> {
-    let entry = ensure_vacant_entry(state, store_path.clone()).await?;
-
-    let repository = repository::reopen(store_path.clone(), token, &state.repos_monitor).await?;
-    let registration = state.network.register(repository.handle()).await;
-    let holder = RepositoryHolder {
-        store_path,
-        repository: Arc::new(repository),
-        registration,
-    };
-
-    state
-        .mounter
-        .mount(&holder.store_path, &holder.repository)?;
-
-    let handle = entry.insert(holder);
-
-    Ok(handle)
-}
-
 async fn ensure_vacant_entry(
     state: &State,
     store_path: PathBuf,
@@ -157,82 +122,58 @@ pub(crate) async fn close(state: &State, handle: RepositoryHandle) -> Result<(),
     Ok(())
 }
 
-pub(crate) async fn set_read_access(
-    state: &State,
-    handle: RepositoryHandle,
-    local_read_password: Option<String>,
-    share_token: Option<ShareToken>,
-) -> Result<(), Error> {
-    let holder = state.repositories.get(handle)?;
-    repository::set_read_access(&holder.repository, local_read_password, share_token).await?;
-    Ok(())
-}
-
-pub(crate) async fn set_read_and_write_access(
-    state: &State,
-    handle: RepositoryHandle,
-    local_old_rw_password: Option<String>,
-    local_new_rw_password: Option<String>,
-    share_token: Option<ShareToken>,
-) -> Result<(), Error> {
-    let holder = state.repositories.get(handle)?;
-    repository::set_read_and_write_access(
-        &holder.repository,
-        local_old_rw_password,
-        local_new_rw_password,
-        share_token,
-    )
-    .await?;
-    Ok(())
-}
-
-/// Note that after removing read key the user may still read the repository if they previously had
-/// write key set up.
-pub(crate) async fn remove_read_key(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
-    state
-        .repositories
-        .get(handle)?
-        .repository
-        .remove_read_key()
-        .await?;
-    Ok(())
-}
-
-/// Note that removing the write key will leave read key intact.
-pub(crate) async fn remove_write_key(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
-    state
-        .repositories
-        .get(handle)?
-        .repository
-        .remove_write_key()
-        .await?;
-    Ok(())
-}
-
-/// Returns true if the repository requires a local password to be opened for reading.
-pub(crate) async fn requires_local_password_for_reading(
-    state: &State,
-    handle: RepositoryHandle,
-) -> Result<bool, Error> {
+pub(crate) fn credentials(state: &State, handle: RepositoryHandle) -> Result<Vec<u8>, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .repository
-        .requires_local_password_for_reading()
-        .await?)
+        .credentials()
+        .encode())
 }
 
-/// Returns true if the repository requires a local password to be opened for writing.
-pub(crate) async fn requires_local_password_for_writing(
+pub(crate) async fn set_credentials(
     state: &State,
     handle: RepositoryHandle,
-) -> Result<bool, Error> {
+    credentials: Vec<u8>,
+) -> Result<(), Error> {
+    state
+        .repositories
+        .get(handle)?
+        .repository
+        .set_credentials(Credentials::decode(&credentials)?)
+        .await?;
+
+    Ok(())
+}
+
+pub(crate) fn access_mode(state: &State, handle: RepositoryHandle) -> Result<u8, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .repository
-        .requires_local_password_for_writing()
-        .await?)
+        .access_mode()
+        .into())
+}
+
+pub(crate) async fn set_access_mode(
+    state: &State,
+    handle: RepositoryHandle,
+    access_mode: AccessMode,
+    local_password: Option<String>,
+) -> Result<(), Error> {
+    state
+        .repositories
+        .get(handle)?
+        .repository
+        .set_access_mode(
+            access_mode,
+            local_password
+                .map(Password::from)
+                .map(LocalSecret::Password),
+        )
+        .await?;
+
+    Ok(())
 }
 
 /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
@@ -377,15 +318,6 @@ pub(crate) async fn create_share_token(
     let token =
         repository::create_share_token(&holder.repository, password, access_mode, name).await?;
     Ok(token)
-}
-
-pub(crate) fn access_mode(state: &State, handle: RepositoryHandle) -> Result<u8, Error> {
-    Ok(state
-        .repositories
-        .get(handle)?
-        .repository
-        .access_mode()
-        .into())
 }
 
 /// Returns the syncing progress.

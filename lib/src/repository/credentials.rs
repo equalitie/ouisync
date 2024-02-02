@@ -1,3 +1,4 @@
+use super::metadata;
 use crate::{
     access_control::AccessSecrets,
     crypto::sign,
@@ -6,15 +7,21 @@ use crate::{
 use bincode::Options;
 use serde::{Deserialize, Serialize};
 
-/// Token which can be obtained from an open repository and which can then be used to reopen the
-/// repository without having to provide the local secret.
-#[derive(Serialize, Deserialize)]
-pub struct ReopenToken {
+/// Credentials for accessing a repository.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Credentials {
     pub(super) secrets: AccessSecrets,
     pub(super) writer_id: sign::PublicKey,
 }
 
-impl ReopenToken {
+impl Credentials {
+    pub fn with_random_writer_id(secrets: AccessSecrets) -> Self {
+        Self {
+            secrets,
+            writer_id: metadata::generate_writer_id(),
+        }
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         // unwrap is ok because serialization into a vector can't fail unless we have a bug in the
         // code.

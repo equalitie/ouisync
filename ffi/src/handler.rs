@@ -59,58 +59,54 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositoryClose(handle) => {
                 repository::close(&self.state, handle).await?.into()
             }
-            Request::RepositoryCreateReopenToken(handle) => {
-                repository::create_reopen_token(&self.state, handle)?.into()
-            }
-            Request::RepositoryReopen { path, token } => {
-                repository::reopen(&self.state, path.into_std_path_buf(), token)
-                    .await?
-                    .into()
-            }
             Request::RepositorySubscribe(handle) => {
                 repository::subscribe(&self.state, notification_tx, handle)?.into()
             }
-            Request::RepositorySetReadAccess {
+            Request::RepositorySetAccess {
                 repository,
-                password,
-                share_token,
-            } => repository::set_read_access(&self.state, repository, password, share_token)
+                read,
+                write,
+            } => self
+                .state
+                .repositories
+                .get(repository)?
+                .repository
+                .set_access(read, write)
                 .await?
                 .into(),
-            Request::RepositorySetReadAndWriteAccess {
+            Request::RepositoryCredentials(handle) => {
+                repository::credentials(&self.state, handle)?.into()
+            }
+            Request::RepositorySetCredentials {
                 repository,
-                old_password,
-                new_password,
-                share_token,
-            } => repository::set_read_and_write_access(
-                &self.state,
+                credentials,
+            } => repository::set_credentials(&self.state, repository, credentials)
+                .await?
+                .into(),
+            Request::RepositorySetAccessMode {
                 repository,
-                old_password,
-                new_password,
-                share_token,
-            )
-            .await?
-            .into(),
-            Request::RepositoryRemoveReadKey(handle) => {
-                repository::remove_read_key(&self.state, handle)
-                    .await?
-                    .into()
+                access_mode,
+                password,
+            } => {
+                repository::set_access_mode(&self.state, repository, access_mode, password).await?;
+                ().into()
             }
-            Request::RepositoryRemoveWriteKey(handle) => {
-                repository::remove_write_key(&self.state, handle)
-                    .await?
-                    .into()
-            }
-            Request::RepositoryRequiresLocalPasswordForReading(handle) => {
-                repository::requires_local_password_for_reading(&self.state, handle)
-                    .await?
-                    .into()
-            }
-            Request::RepositoryRequiresLocalPasswordForWriting(handle) => {
-                repository::requires_local_password_for_writing(&self.state, handle)
-                    .await?
-                    .into()
-            }
+            Request::RepositoryRequiresLocalPasswordForReading(handle) => self
+                .state
+                .repositories
+                .get(handle)?
+                .repository
+                .requires_local_secret_for_reading()
+                .await?
+                .into(),
+            Request::RepositoryRequiresLocalPasswordForWriting(handle) => self
+                .state
+                .repositories
+                .get(handle)?
+                .repository
+                .requires_local_secret_for_writing()
+                .await?
+                .into(),
             Request::RepositoryInfoHash(handle) => {
                 repository::info_hash(&self.state, handle)?.into()
             }

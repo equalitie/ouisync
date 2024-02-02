@@ -1,6 +1,7 @@
 use crate::{registry::InvalidHandle, session::SessionError};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_bridge::{
+    config::ConfigError,
     protocol::remote::ServerError,
     repository::{MirrorError, OpenError},
     transport::TransportError,
@@ -126,10 +127,16 @@ impl ToErrorCode for ServerError {
     }
 }
 
+impl ToErrorCode for ConfigError {
+    fn to_error_code(&self) -> ErrorCode {
+        ErrorCode::Config
+    }
+}
+
 impl ToErrorCode for OpenError {
     fn to_error_code(&self) -> ErrorCode {
         match self {
-            Self::Config(_) => ErrorCode::Config,
+            Self::Config(error) => error.to_error_code(),
             Self::Repository(error) => error.to_error_code(),
         }
     }

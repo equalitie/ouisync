@@ -210,13 +210,9 @@ async fn load_repo(work_dir: &Path, input_dump: &Path, access_mode: AccessMode) 
 
     load_db_dump(&store_path, input_dump).await;
 
-    Repository::open(
-        &RepositoryParams::new(store_path).with_device_id(seeded_random(0)),
-        None,
-        access_mode,
-    )
-    .await
-    .unwrap()
+    Repository::open(&RepositoryParams::new(store_path), None, access_mode)
+        .await
+        .unwrap()
 }
 
 fn make_store_path(work_dir: &Path) -> PathBuf {

@@ -22,12 +22,14 @@ void main() {
   });
 
   group('repository', () {
+    late String store;
     late Repository repo;
 
     setUp(() async {
+      store = '${temp.path}/repo.db';
       repo = await Repository.create(
         session,
-        store: '${temp.path}/repo.db',
+        store: store,
         readPassword: null,
         writePassword: null,
       );
@@ -73,10 +75,6 @@ void main() {
       }
     });
 
-    test('access mode', () async {
-      expect(await repo.accessMode, equals(AccessMode.write));
-    });
-
     test('sync progress', () async {
       final progress = await repo.syncProgress;
       expect(progress, equals(Progress(0, 0)));
@@ -93,7 +91,7 @@ void main() {
         await file.close();
       }
 
-      final token = await repo.createReopenToken();
+      final cred = await repo.credentials;
       await repo.close();
 
       final src = '${temp.path}/repo.db';
@@ -107,13 +105,73 @@ void main() {
         }
       }
 
-      repo = await Repository.reopen(session, store: dst, token: token);
+      repo = await Repository.open(session, store: dst);
+      await repo.setCredentials(cred);
 
       {
         final file = await File.open(repo, 'file.txt');
         final content = await file.read(0, 11);
         expect(utf8.decode(content), equals('hello world'));
       }
+    });
+
+    test('get root directory contents after create and open', () async {
+      expect(await Directory.open(repo, '/'), equals([]));
+
+      await repo.close();
+
+      repo = await Repository.open(
+        session,
+        store: store,
+        password: null,
+      );
+
+      expect(await Directory.open(repo, '/'), equals([]));
+
+      await repo.close();
+    });
+
+    test('access mode', () async {
+      expect(await repo.accessMode, equals(AccessMode.write));
+
+      await repo.setAccessMode(AccessMode.read);
+      expect(await repo.accessMode, equals(AccessMode.read));
+
+      await repo.setAccessMode(AccessMode.blind);
+      expect(await repo.accessMode, equals(AccessMode.blind));
+
+      await repo.setAccessMode(AccessMode.write);
+      expect(await repo.accessMode, equals(AccessMode.write));
+    });
+
+    test('set access', () async {
+      await repo.setAccess(
+        read: EnableAccess('read_pass'),
+        write: EnableAccess('write_pass'),
+      );
+
+      await repo.close();
+      repo = await Repository.open(
+        session,
+        store: store,
+      );
+      expect(await repo.accessMode, equals(AccessMode.blind));
+
+      await repo.close();
+      repo = await Repository.open(
+        session,
+        store: store,
+        password: 'read_pass',
+      );
+      expect(await repo.accessMode, equals(AccessMode.read));
+
+      await repo.close();
+      repo = await Repository.open(
+        session,
+        store: store,
+        password: 'write_pass',
+      );
+      expect(await repo.accessMode, equals(AccessMode.write));
     });
   });
 

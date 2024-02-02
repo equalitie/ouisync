@@ -6,7 +6,7 @@ use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
 use ouisync_lib::{
     network::{NatBehavior, TrafficStats},
-    AccessMode, PeerAddr, PeerInfo, Progress, ShareToken,
+    AccessChange, AccessMode, PeerAddr, PeerInfo, Progress, ShareToken,
 };
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
@@ -32,28 +32,26 @@ pub(crate) enum Request {
         password: Option<String>,
     },
     RepositoryClose(RepositoryHandle),
-    RepositoryCreateReopenToken(RepositoryHandle),
-    RepositoryReopen {
-        path: Utf8PathBuf,
-        #[serde(with = "serde_bytes")]
-        token: Vec<u8>,
-    },
     RepositorySubscribe(RepositoryHandle),
-    RepositorySetReadAccess {
-        repository: RepositoryHandle,
-        password: Option<String>,
-        share_token: Option<ShareToken>,
-    },
-    RepositorySetReadAndWriteAccess {
-        repository: RepositoryHandle,
-        old_password: Option<String>,
-        new_password: Option<String>,
-        share_token: Option<ShareToken>,
-    },
-    RepositoryRemoveReadKey(RepositoryHandle),
-    RepositoryRemoveWriteKey(RepositoryHandle),
     RepositoryRequiresLocalPasswordForReading(RepositoryHandle),
     RepositoryRequiresLocalPasswordForWriting(RepositoryHandle),
+    RepositorySetAccess {
+        repository: RepositoryHandle,
+        read: Option<AccessChange>,
+        write: Option<AccessChange>,
+    },
+    RepositoryCredentials(RepositoryHandle),
+    RepositorySetCredentials {
+        repository: RepositoryHandle,
+        #[serde(with = "serde_bytes")]
+        credentials: Vec<u8>,
+    },
+    RepositoryAccessMode(RepositoryHandle),
+    RepositorySetAccessMode {
+        repository: RepositoryHandle,
+        access_mode: AccessMode,
+        password: Option<String>,
+    },
     RepositoryInfoHash(RepositoryHandle),
     RepositoryDatabaseId(RepositoryHandle),
     RepositoryEntryType {
@@ -81,7 +79,6 @@ pub(crate) enum Request {
         access_mode: AccessMode,
         name: Option<String>,
     },
-    RepositoryAccessMode(RepositoryHandle),
     RepositorySyncProgress(RepositoryHandle),
     RepositoryMirror {
         repository: RepositoryHandle,
@@ -531,11 +528,13 @@ mod tests {
     use super::*;
     use ouisync_lib::{
         network::{PeerSource, PeerState},
-        PeerInfo, SecretRuntimeId,
+        AccessSecrets, Credentials, PeerInfo, SecretRuntimeId,
     };
 
     #[test]
     fn request_serialize_deserialize() {
+        let credentials = Credentials::with_random_writer_id(AccessSecrets::random_write());
+
         let origs = [
             Request::RepositoryCreate {
                 path: Utf8PathBuf::from("/tmp/repo.db"),
@@ -544,6 +543,10 @@ mod tests {
                 share_token: None,
             },
             Request::RepositoryClose(Handle::from_id(1)),
+            Request::RepositorySetCredentials {
+                repository: Handle::from_id(1),
+                credentials: credentials.encode(),
+            },
         ];
 
         for orig in origs {

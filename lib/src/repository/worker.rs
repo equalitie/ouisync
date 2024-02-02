@@ -138,7 +138,7 @@ async fn maintain(
     success = success && job_success;
 
     // Collect unreachable blocks
-    if shared.secrets.can_read() {
+    if shared.credentials.lock().unwrap().secrets.can_read() {
         let job_success = shared
             .vault
             .monitor
@@ -358,13 +358,15 @@ mod prune {
             .try_collect()
             .await?;
 
+        let writer_id = shared.credentials.lock().unwrap().writer_id;
+
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
-            versioned::partition(all, PreferBranch(Some(&shared.this_writer_id)));
+            versioned::partition(all, PreferBranch(Some(&writer_id)));
 
         // Remove outdated branches
         for node in outdated {
             // Never remove local branch
-            if node.proof.writer_id == shared.this_writer_id {
+            if node.proof.writer_id == writer_id {
                 continue;
             }
 

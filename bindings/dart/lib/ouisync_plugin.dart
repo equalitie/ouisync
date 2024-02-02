@@ -377,20 +377,6 @@ class Repository {
     return Repository._(session._client, handle, store);
   }
 
-  /// Opens an existing repository using a reopen token.
-  static Future<Repository> reopen(
-    Session session, {
-    required String store,
-    required Uint8List token,
-  }) async {
-    final handle = await session._client.invoke<int>('repository_reopen', {
-      'path': store,
-      'token': token,
-    });
-
-    return Repository._(session._client, handle, store);
-  }
-
   /// Closes the repository. All outstanding handles become invalid. Invoking any operation on a
   /// repository after it's been closed results in an error being thrown.
   Future<void> close() async {
@@ -398,10 +384,42 @@ class Repository {
     await _client.invoke('repository_close', _handle);
   }
 
-  /// Creates a reopen token to be used to reopen this repository in the same access mode as it has
-  /// now.
-  Future<Uint8List> createReopenToken() =>
-      _client.invoke<Uint8List>('repository_create_reopen_token', _handle);
+  /// Sets, unsets or changes local secrets for accessing the repository or disables the given
+  /// access mode.
+  Future<void> setAccess({
+    AccessChange? read,
+    AccessChange? write,
+  }) =>
+      _client.invoke('repository_set_access', {
+        'repository': _handle,
+        'read': read?.encode(),
+        'write': write?.encode(),
+      });
+
+  /// Obtain the current repository credentials. They can be used to restore repository access
+  /// (with [setCredentials]) after the repo has been closed and re-opened without needing the
+  /// local password. This is useful for example when renaming/moving the repository database.
+  Future<Uint8List> get credentials =>
+      _client.invoke<Uint8List>('repository_credentials', _handle);
+
+  Future<void> setCredentials(Uint8List credentials) =>
+      _client.invoke<void>('repository_set_credentials', {
+        'repository': _handle,
+        'credentials': credentials,
+      });
+
+  Future<AccessMode> get accessMode {
+    return _client
+        .invoke<int>('repository_access_mode', _handle)
+        .then((n) => AccessMode.decode(n));
+  }
+
+  Future<void> setAccessMode(AccessMode accessMode, {String? password}) =>
+      _client.invoke('repository_set_access_mode', {
+        'repository': _handle,
+        'access_mode': accessMode.encode(),
+        'password': password,
+      });
 
   /// Returns the type (file, directory, ..) of the entry at [path]. Returns `null` if the entry
   /// doesn't exists.
@@ -470,16 +488,6 @@ class Repository {
         'enabled': enabled,
       });
 
-  Future<AccessMode> get accessMode {
-    if (debugTrace) {
-      print("Repository.get accessMode");
-    }
-
-    return _client
-        .invoke<int>('repository_access_mode', _handle)
-        .then((n) => AccessMode.decode(n));
-  }
-
   /// Create a share token providing access to this repository with the given mode. Can optionally
   /// specify repository name which will be included in the token and suggested to the recipient.
   Future<ShareToken> createShareToken({
@@ -515,28 +523,6 @@ class Repository {
   Future<String> get infoHash =>
       _client.invoke<String>("repository_info_hash", _handle);
 
-  Future<void> setReadWriteAccess({
-    required String? oldPassword,
-    required String newPassword,
-    required ShareToken? shareToken,
-  }) =>
-      _client.invoke<void>('repository_set_read_and_write_access', {
-        'repository': _handle,
-        'old_password': oldPassword,
-        'new_password': newPassword,
-        'share_token': shareToken?.toString(),
-      });
-
-  Future<void> setReadAccess({
-    required String newPassword,
-    required ShareToken? shareToken,
-  }) =>
-      _client.invoke<void>('repository_set_read_access', {
-        'repository': _handle,
-        'password': newPassword,
-        'share_token': shareToken?.toString(),
-      });
-
   Future<String> hexDatabaseId() async {
     final bytes =
         await _client.invoke<Uint8List>("repository_database_id", _handle);
@@ -547,6 +533,24 @@ class Repository {
   Future<void> mirror() => _client.invoke<void>('repository_mirror', {
         'repository': _handle,
       });
+}
+
+sealed class AccessChange {
+  Object? encode();
+}
+
+class EnableAccess extends AccessChange {
+  final String? password;
+
+  EnableAccess(this.password);
+
+  @override
+  Object? encode() => {'enable': password};
+}
+
+class DisableAccess extends AccessChange {
+  @override
+  Object? encode() => 'disable';
 }
 
 class ShareToken {

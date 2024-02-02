@@ -573,7 +573,7 @@ async fn blind_access_empty_repo() {
     .unwrap();
 
     // Reopen the repo in blind mode.
-    let repo = Repository::open(&params, Some(LocalSecret::random()), AccessMode::Read)
+    let repo = Repository::open(&params, Some(LocalSecret::random()), AccessMode::Blind)
         .await
         .unwrap();
 
