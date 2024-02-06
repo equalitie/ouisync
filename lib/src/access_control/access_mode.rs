@@ -5,7 +5,17 @@ use thiserror::Error;
 
 /// Access mode of a repository.
 #[derive(
-    Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize, IntoPrimitive, TryFromPrimitive,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Serialize,
+    Deserialize,
+    IntoPrimitive,
+    TryFromPrimitive,
 )]
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
@@ -50,3 +60,15 @@ impl fmt::Display for AccessMode {
 #[derive(Debug, Error)]
 #[error("failed to parse access mode")]
 pub struct AccessModeParseError;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ord() {
+        assert!(AccessMode::Blind < AccessMode::Read);
+        assert!(AccessMode::Blind < AccessMode::Write);
+        assert!(AccessMode::Read < AccessMode::Write);
+    }
+}

@@ -1053,6 +1053,115 @@ async fn size() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn access_mode() {
+    let secret1 = LocalSecret::random();
+    let secret2 = LocalSecret::random();
+
+    // TODO: given the large number of cases, consider converting this to a proptest.
+
+    #[rustfmt::skip]
+    let cases = [
+        (
+
+            // read access
+            AccessChange::Enable(None),
+            // write access
+            AccessChange::Enable(None),
+            // test steps
+            vec![
+                // params to `set_access_mode`             expected mode
+                (AccessMode::Blind, None,                  AccessMode::Blind),
+                (AccessMode::Read,  None,                  AccessMode::Read),
+                (AccessMode::Write, None,                  AccessMode::Write),
+            ],
+        ),
+        (
+            AccessChange::Enable(None),
+            AccessChange::Enable(Some(secret1.clone())),
+            vec![
+                (AccessMode::Blind, None,                  AccessMode::Blind),
+                (AccessMode::Blind, Some(secret1.clone()), AccessMode::Blind),
+                (AccessMode::Read,  None,                  AccessMode::Read),
+                (AccessMode::Read,  Some(secret1.clone()), AccessMode::Read),
+                (AccessMode::Write, None,                  AccessMode::Read),
+                (AccessMode::Write, Some(secret1.clone()), AccessMode::Write),
+            ],
+        ),
+        (
+            AccessChange::Enable(Some(secret1.clone())),
+            AccessChange::Enable(Some(secret1.clone())),
+            vec![
+                (AccessMode::Blind, None,                  AccessMode::Blind),
+                (AccessMode::Blind, Some(secret1.clone()), AccessMode::Blind),
+                (AccessMode::Read,  None,                  AccessMode::Blind),
+                (AccessMode::Write, None,                  AccessMode::Blind),
+                (AccessMode::Read,  Some(secret1.clone()), AccessMode::Read),
+                (AccessMode::Write, Some(secret1.clone()), AccessMode::Write),
+            ],
+        ),
+        (
+            AccessChange::Enable(Some(secret1.clone())),
+            AccessChange::Enable(Some(secret2.clone())),
+            vec![
+                (AccessMode::Blind, None, AccessMode::Blind),
+                (AccessMode::Blind, Some(secret1.clone()), AccessMode::Blind),
+                (AccessMode::Blind, Some(secret2.clone()), AccessMode::Blind),
+                (AccessMode::Read,  None,                  AccessMode::Blind),
+                (AccessMode::Write, None,                  AccessMode::Blind),
+                (AccessMode::Read,  Some(secret1.clone()), AccessMode::Read),
+                (AccessMode::Write, Some(secret2.clone()), AccessMode::Write),
+                (AccessMode::Blind, None,                  AccessMode::Blind),
+                (AccessMode::Read,  Some(secret2.clone()), AccessMode::Read),
+                (AccessMode::Blind, None,                  AccessMode::Blind),
+                (AccessMode::Write, Some(secret1.clone()), AccessMode::Read),
+            ],
+        ),
+        (
+            AccessChange::Enable(None),
+            AccessChange::Disable,
+            vec![
+                (AccessMode::Blind, None,                  AccessMode::Blind),
+                (AccessMode::Read,  None,                  AccessMode::Read),
+                (AccessMode::Write, None,                  AccessMode::Read),
+                (AccessMode::Blind, None,                  AccessMode::Blind),
+                (AccessMode::Write, None,                  AccessMode::Read),
+            ],
+        ),
+        (
+            AccessChange::Disable,
+            AccessChange::Disable,
+            vec![
+                (AccessMode::Blind, None,                  AccessMode::Blind),
+                (AccessMode::Read,  None,                  AccessMode::Blind),
+                (AccessMode::Write, None,                  AccessMode::Blind),
+            ],
+        ),
+    ];
+
+    // TODO: test also wrong local secret
+    // TODO: test "nonsensical" cases, e.g., enabling write mode but disabling read mode, etc...
+
+    for (read, write, steps) in cases {
+        let (_base_dir, repo) = setup().await;
+
+        let span = tracing::info_span!("set_access", ?read, ?write);
+
+        async move {
+            repo.set_access(Some(read), Some(write)).await.unwrap();
+
+            for (set_mode, set_secret, expected_mode) in steps {
+                tracing::info!(?set_mode, ?set_secret, ?expected_mode);
+
+                repo.set_access_mode(set_mode, set_secret).await.unwrap();
+                assert_eq!(repo.access_mode(), expected_mode);
+            }
+        }
+        .instrument(span)
+        .await;
+    }
+}
+
 async fn setup() -> (TempDir, Repository) {
     test_utils::init_log();
 

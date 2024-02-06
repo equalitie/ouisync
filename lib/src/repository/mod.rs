@@ -379,8 +379,11 @@ impl Repository {
             .access_mode()
     }
 
-    /// Switches the repository to the given mode. If the mode is protected by a local secret,
-    /// it needs to be provided in the `local_secret` parameter.
+    /// Switches the repository to the given mode.
+    ///
+    /// The actual mode the repository gets switched to is the higher of the current access mode
+    /// and the mode provided by `local_secret` but at most the mode specified in `access_mode`
+    /// ("higher" means according to `AccessMode`'s `Ord` impl, that is: Write > Read > Blind).
     pub async fn set_access_mode(
         &self,
         access_mode: AccessMode,
@@ -394,25 +397,30 @@ impl Repository {
             None
         };
 
-        let secrets = metadata::get_access_secrets(&mut tx, local_key.as_deref())
-            .await?
-            .with_mode(access_mode);
+        // Try to use the current secrets but fall back to the secrets stored in the metadata if the
+        // current ones are insufficient and the stored ones have higher access mode.
+        let old_secrets = self.shared.credentials.lock().unwrap().secrets.clone();
+
+        let secrets = if old_secrets.access_mode() >= access_mode {
+            old_secrets
+        } else {
+            let new_secrets = metadata::get_access_secrets(&mut tx, local_key.as_deref()).await?;
+
+            if new_secrets.access_mode() > old_secrets.access_mode() {
+                new_secrets
+            } else {
+                old_secrets
+            }
+        };
+
+        let secrets = secrets.with_mode(access_mode);
 
         let writer_id = match access_mode {
-            AccessMode::Blind => metadata::generate_writer_id(),
-            AccessMode::Read => {
-                if !secrets.can_read() {
-                    return Err(Error::PermissionDenied);
-                }
-
-                metadata::generate_writer_id()
-            }
-            AccessMode::Write => {
-                if !secrets.can_write() {
-                    return Err(Error::PermissionDenied);
-                }
-
+            AccessMode::Write if secrets.can_write() => {
                 metadata::get_or_generate_writer_id(&mut tx, local_key.as_deref()).await?
+            }
+            AccessMode::Write | AccessMode::Read | AccessMode::Blind => {
+                metadata::generate_writer_id()
             }
         };
 

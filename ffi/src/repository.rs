@@ -68,7 +68,10 @@ pub(crate) async fn open(
     local_password: Option<String>,
 ) -> Result<RepositoryHandle, Error> {
     let entry = match state.repositories.entry(store_path.clone()).await {
-        RepositoryEntry::Occupied(handle) => return Ok(handle),
+        RepositoryEntry::Occupied(handle) => {
+            // TODO: change the access mode according to `local_password`
+            return Ok(handle);
+        }
         RepositoryEntry::Vacant(entry) => entry,
     };
 
