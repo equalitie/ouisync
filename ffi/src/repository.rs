@@ -69,7 +69,22 @@ pub(crate) async fn open(
 ) -> Result<RepositoryHandle, Error> {
     let entry = match state.repositories.entry(store_path.clone()).await {
         RepositoryEntry::Occupied(handle) => {
-            // TODO: change the access mode according to `local_password`
+            // If `local_password` provides higher access mode than what the repo currently has,
+            // increase it. If not, the access mode remains unchanged.
+            // See `Repository::set_access_mode` for details.
+            let holder = state.repositories.get(handle)?;
+            holder
+                .repository
+                .set_access_mode(
+                    AccessMode::Write,
+                    local_password
+                        .as_ref()
+                        .cloned()
+                        .map(Password::from)
+                        .map(LocalSecret::Password),
+                )
+                .await?;
+
             return Ok(handle);
         }
         RepositoryEntry::Vacant(entry) => entry,
