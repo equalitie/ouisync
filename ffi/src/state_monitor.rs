@@ -1,4 +1,4 @@
-use crate::state::{State, SubscriptionHandle};
+use crate::state::{State, TaskHandle};
 use ouisync_bridge::{protocol::Notification, transport::NotificationSender};
 use state_monitor::{MonitorId, StateMonitor};
 use std::time::Duration;
@@ -17,24 +17,20 @@ pub(crate) fn subscribe(
     state: &State,
     notification_tx: &NotificationSender,
     path: Vec<MonitorId>,
-) -> Result<SubscriptionHandle, ouisync_lib::Error> {
+) -> Result<TaskHandle, ouisync_lib::Error> {
     let monitor = state
         .root_monitor
         .locate(path)
         .ok_or(ouisync_lib::Error::EntryNotFound)?;
     let mut rx = monitor.subscribe();
-
     let notification_tx = notification_tx.clone();
 
-    let entry = state.tasks.vacant_entry();
-    let subscription_id = entry.handle().id();
-
-    let handle = scoped_task::spawn(async move {
+    let handle = state.spawn_task(|id| async move {
         loop {
             match rx.changed().await {
                 Ok(()) => {
                     notification_tx
-                        .send((subscription_id, Notification::StateMonitor))
+                        .send((id, Notification::StateMonitor))
                         .await
                         .ok();
                 }
@@ -46,5 +42,5 @@ pub(crate) fn subscribe(
         }
     });
 
-    Ok(entry.insert(handle))
+    Ok(handle)
 }

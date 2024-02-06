@@ -6,53 +6,33 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, RwLock,
+        RwLock,
     },
 };
 
-pub struct Registry<T>(RwLock<HashMap<u64, Arc<T>>>);
+pub struct Registry<T: 'static>(HashMap<Handle<T>, T>);
 
-impl<T> Registry<T> {
+impl<T: 'static> Registry<T> {
     pub fn new() -> Self {
-        Self(RwLock::new(HashMap::new()))
+        Self(HashMap::new())
     }
 
-    pub fn vacant_entry(&self) -> VacantEntry<T> {
+    pub fn insert(&mut self, value: T) -> Handle<T> {
         let handle = Handle::new();
-        VacantEntry {
-            registry: self,
-            handle,
-        }
+        self.0.insert(handle, value);
+        handle
     }
 
-    pub fn insert(&self, item: T) -> Handle<T> {
-        self.vacant_entry().insert(item)
+    pub fn remove(&mut self, handle: Handle<T>) -> Option<T> {
+        self.0.remove(&handle)
     }
 
-    pub fn remove(&self, handle: Handle<T>) -> Option<T> {
-        let mut items = self.0.write().unwrap();
-
-        let ptr = items.remove(&handle.id)?;
-
-        match Arc::try_unwrap(ptr) {
-            Ok(item) => Some(item),
-            Err(ptr) => {
-                items.insert(handle.id, ptr);
-                None
-            }
-        }
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.0.values()
     }
 
-    pub fn get_all(&self) -> Vec<Arc<T>> {
-        self.0.read().unwrap().values().cloned().collect()
-    }
-
-    pub fn get(&self, handle: Handle<T>) -> Arc<T> {
-        self.try_get(handle).expect("invalid handle")
-    }
-
-    pub fn try_get(&self, handle: Handle<T>) -> Option<Arc<T>> {
-        self.0.read().unwrap().get(&handle.id).cloned()
+    pub fn get(&self, handle: Handle<T>) -> Result<&T, InvalidHandle> {
+        self.0.get(&handle).ok_or(InvalidHandle)
     }
 }
 
@@ -62,26 +42,33 @@ impl<T> Default for Registry<T> {
     }
 }
 
-pub struct VacantEntry<'a, T>
-where
-    T: 'static,
-{
-    registry: &'a Registry<T>,
-    handle: Handle<T>,
-}
+pub struct SharedRegistry<T: 'static>(RwLock<Registry<T>>);
 
-impl<T> VacantEntry<'_, T> {
-    pub fn handle(&self) -> Handle<T> {
-        self.handle
+impl<T: 'static> SharedRegistry<T> {
+    pub fn new() -> Self {
+        Self(RwLock::new(Registry::new()))
     }
 
-    pub fn insert(self, value: T) -> Handle<T> {
-        self.registry
-            .0
-            .write()
+    pub fn insert(&self, item: T) -> Handle<T> {
+        self.0.write().unwrap().insert(item)
+    }
+
+    pub fn remove(&self, handle: Handle<T>) -> Option<T> {
+        self.0.write().unwrap().remove(handle)
+    }
+}
+
+impl<T> SharedRegistry<T>
+where
+    T: Clone,
+{
+    pub fn get(&self, handle: Handle<T>) -> Result<T, InvalidHandle> {
+        self.0
+            .read()
             .unwrap()
-            .insert(self.handle.id, Arc::new(value));
-        self.handle
+            .get(handle)
+            .cloned()
+            .map(|value| value.clone())
     }
 }
 
@@ -151,20 +138,13 @@ impl<T> fmt::Debug for Handle<T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Debug)]
+pub struct InvalidHandle;
 
-    #[test]
-    fn remove() {
-        let registry = Registry::new();
-        let handle = registry.insert(0);
-
-        let item = registry.get(handle);
-        assert_eq!(registry.remove(handle), None);
-
-        drop(item);
-        assert_eq!(registry.remove(handle), Some(0));
-        assert_eq!(registry.remove(handle), None);
+impl fmt::Display for InvalidHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid handle")
     }
 }
+
+impl std::error::Error for InvalidHandle {}

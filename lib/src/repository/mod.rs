@@ -1,8 +1,8 @@
+mod credentials;
 mod id;
 mod metadata;
 mod monitor;
 mod params;
-mod reopen_token;
 mod vault;
 mod worker;
 
@@ -12,7 +12,7 @@ mod tests;
 mod vault_tests;
 
 pub use self::{
-    id::RepositoryId, metadata::Metadata, params::RepositoryParams, reopen_token::ReopenToken,
+    credentials::Credentials, id::RepositoryId, metadata::Metadata, params::RepositoryParams,
 };
 
 pub(crate) use self::{
@@ -23,15 +23,11 @@ pub(crate) use self::{
 };
 
 use crate::{
-    access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
+    access_control::{Access, AccessChange, AccessKeys, AccessMode, AccessSecrets, LocalSecret},
     branch::{Branch, BranchShared},
-    crypto::{
-        cipher,
-        sign::{self, PublicKey},
-    },
+    crypto::sign::PublicKey,
     db::{self, DatabaseId},
     debug::DebugPrinter,
-    device_id::DeviceId,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef, EntryType},
     error::{Error, Result},
     event::{Event, EventSender},
@@ -52,7 +48,7 @@ use futures_util::{stream, StreamExt};
 use metrics::Recorder;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
-use std::{io, path::Path, pin::pin, sync::Arc};
+use std::{borrow::Cow, io, path::Path, pin::pin, sync::Arc};
 use tokio::{
     fs,
     sync::broadcast::{self, error::RecvError},
@@ -99,97 +95,102 @@ impl Repository {
         let monitor = params.monitor();
 
         let mut tx = pool.begin_write().await?;
+
         let local_keys = metadata::initialize_access_secrets(&mut tx, &access).await?;
-        let this_writer_id =
-            generate_and_store_writer_id(&mut tx, &device_id, local_keys.write.as_deref()).await?;
+        let writer_id =
+            metadata::get_or_generate_writer_id(&mut tx, local_keys.write.as_deref()).await?;
+        metadata::set_device_id(&mut tx, &device_id).await?;
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access.secrets(), monitor).await
+        let credentials = Credentials {
+            secrets: access.secrets(),
+            writer_id,
+        };
+
+        Self::new(pool, credentials, monitor).await
     }
 
     /// Opens an existing repository.
-    ///
-    /// # Arguments
-    ///
-    /// * `local_secret` - A user provided secret to encrypt the access secrets. If not provided,
-    ///                    the repository will be opened as a blind replica.
     pub async fn open(
         params: &RepositoryParams<impl Recorder>,
         local_secret: Option<LocalSecret>,
-        max_access_mode: AccessMode,
+        access_mode: AccessMode,
     ) -> Result<Self> {
         let pool = params.open().await?;
-        let device_id = params.device_id();
         let monitor = params.monitor();
+        let device_id = params.device_id();
 
         let mut tx = pool.begin_write().await?;
-        let local_key = if let Some(local_secret) = local_secret {
-            let key = match local_secret {
-                LocalSecret::Password(pwd) => metadata::password_to_key(&mut tx, &pwd).await?,
-                LocalSecret::SecretKey(key) => key,
-            };
-            Some(key)
+
+        let local_key = if let Some(local_secret) = &local_secret {
+            Some(metadata::secret_to_key(&mut tx, local_secret).await?)
         } else {
             None
         };
 
-        let access_secrets = metadata::get_access_secrets(&mut tx, local_key.as_ref()).await?;
+        let secrets = metadata::get_access_secrets(&mut tx, local_key.as_deref())
+            .await?
+            .with_mode(access_mode);
 
-        // If we are writer, load the writer id from the db, otherwise use a dummy random one.
-        let this_writer_id = if access_secrets.can_write() {
-            let writer_id = if metadata::check_device_id(&mut tx, &device_id).await? {
-                metadata::get_writer_id(&mut tx, local_key.as_ref()).await?
+        let writer_id = if metadata::check_device_id(&mut tx, &device_id).await? {
+            if secrets.can_write() {
+                metadata::get_or_generate_writer_id(&mut tx, local_key.as_deref()).await?
             } else {
-                None
-            };
-
-            if let Some(writer_id) = writer_id {
-                writer_id
-            } else {
-                // Replica id changed. Must generate new writer id.
-                generate_and_store_writer_id(&mut tx, &device_id, local_key.as_ref()).await?
+                metadata::generate_writer_id()
             }
         } else {
-            sign::Keypair::random().public_key()
+            // Device id changed, likely because the repo database has been transferred to a
+            // different device. We need to generate a new writer id.
+            //
+            // Note we need to do this even when not currently opening the repo in write mode. This
+            // is so that when the access mode is subsequently switched to write
+            // (with [set_access_mode]) we don't end up using the wrong writer_id.
+            let writer_id = metadata::generate_writer_id();
+
+            metadata::set_device_id(&mut tx, &device_id).await?;
+            metadata::set_writer_id(&mut tx, &writer_id, local_key.as_deref()).await?;
+
+            writer_id
         };
 
         tx.commit().await?;
 
-        let access_secrets = access_secrets.with_mode(max_access_mode);
+        let credentials = Credentials { secrets, writer_id };
 
-        Self::new(pool, this_writer_id, access_secrets, monitor).await
-    }
-
-    /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
-    pub async fn reopen(
-        params: &RepositoryParams<impl Recorder>,
-        token: ReopenToken,
-    ) -> Result<Self> {
-        let pool = params.open().await?;
-        let monitor = params.monitor();
-
-        Self::new(pool, token.writer_id, token.secrets, monitor).await
+        Self::new(pool, credentials, monitor).await
     }
 
     async fn new(
         pool: db::Pool,
-        this_writer_id: PublicKey,
-        secrets: AccessSecrets,
+        credentials: Credentials,
         monitor: RepositoryMonitor,
     ) -> Result<Self> {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
 
-        let block_request_mode = if secrets.can_read() {
+        let block_request_mode = if credentials.secrets.can_read() {
             BlockRequestMode::Lazy
         } else {
             BlockRequestMode::Greedy
         };
 
-        let vault = Vault::new(*secrets.id(), event_tx, pool, block_request_mode, monitor);
+        let vault = Vault::new(
+            *credentials.secrets.id(),
+            event_tx,
+            pool,
+            block_request_mode,
+            monitor,
+        );
 
-        if let Some(keys) = secrets.write_secrets().map(|secrets| &secrets.write_keys) {
-            vault.store().migrate_data(this_writer_id, keys).await?;
+        if let Some(keys) = credentials
+            .secrets
+            .write_secrets()
+            .map(|secrets| &secrets.write_keys)
+        {
+            vault
+                .store()
+                .migrate_data(credentials.writer_id, keys)
+                .await?;
         }
 
         {
@@ -201,19 +202,20 @@ impl Repository {
 
         tracing::debug!(
             parent: vault.monitor.span(),
-            access = ?secrets.access_mode(),
-            writer_id = ?this_writer_id,
+            access = ?credentials.secrets.access_mode(),
+            writer_id = ?credentials.writer_id,
             "Repository opened"
         );
 
+        let can_write = credentials.secrets.can_write();
+
         let shared = Arc::new(Shared {
             vault,
-            this_writer_id,
-            secrets,
+            credentials: BlockingMutex::new(credentials),
             branch_shared: BranchShared::new(),
         });
 
-        let local_branch = if shared.secrets.can_write() {
+        let local_branch = if can_write {
             shared.local_branch().ok()
         } else {
             None
@@ -242,170 +244,245 @@ impl Repository {
         Ok(metadata::get_or_generate_database_id(self.db()).await?)
     }
 
-    pub async fn requires_local_password_for_reading(&self) -> Result<bool> {
+    pub async fn requires_local_secret_for_reading(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        Ok(metadata::requires_local_password_for_reading(&mut conn).await?)
+        Ok(metadata::requires_local_secret_for_reading(&mut conn).await?)
     }
 
-    pub async fn requires_local_password_for_writing(&self) -> Result<bool> {
+    pub async fn requires_local_secret_for_writing(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        Ok(metadata::requires_local_password_for_writing(&mut conn).await?)
+        Ok(metadata::requires_local_secret_for_writing(&mut conn).await?)
     }
 
-    pub async fn set_access(&self, access: &Access) -> Result<()> {
-        if access.id() != self.shared.secrets.id() {
-            return Err(Error::PermissionDenied);
-        }
-
-        let mut tx = self.db().begin_write().await?;
-        metadata::set_access(&mut tx, access).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn set_read_access(
+    /// Sets, unsets or changes local secrets for accessing the repository or disables the given
+    /// access mode.
+    ///
+    /// In order to enable or change a given access mode the repository must currently be in at
+    /// least that access mode. Disabling an access mode doesn't have this restriction.
+    ///
+    /// Disabling a given access mode makes the repo impossible to be opened in that mode anymore.
+    /// However, when the repo is currently in that mode it still remains in it until the repo is
+    /// closed.
+    ///
+    /// To restore a disabled mode the repo must first be put into that mode using
+    /// [set_credentials] where the `Credentials` must be obtained from `AccessSecrets` with at
+    /// least the mode one wants to restore.
+    ///
+    /// If `read` or `write` is `None` then no change is made to that mode. If both are `None` then
+    /// this function is a no-op.
+    ///
+    /// Disabling the read mode while keeping write mode enabled is allowed but not very useful as
+    /// write mode also grants read access.
+    pub async fn set_access(
         &self,
-        local_read_secret: Option<&LocalSecret>,
-        secrets: Option<&AccessSecrets>,
+        read_change: Option<AccessChange>,
+        write_change: Option<AccessChange>,
     ) -> Result<()> {
         let mut tx = self.db().begin_write().await?;
-        self.set_read_access_in(&mut tx, local_read_secret, secrets)
-            .await?;
+
+        if let Some(change) = read_change {
+            self.set_read_access(&mut tx, change).await?;
+        }
+
+        if let Some(change) = write_change {
+            self.set_write_access(&mut tx, change).await?;
+        }
+
         tx.commit().await?;
+
         Ok(())
     }
 
-    async fn set_read_access_in(
+    async fn set_read_access(
         &self,
         tx: &mut db::WriteTransaction,
-        local_read_secret: Option<&LocalSecret>,
-        secrets: Option<&AccessSecrets>,
+        change: AccessChange,
     ) -> Result<()> {
-        let secrets = match secrets.as_ref() {
-            Some(secrets) => secrets,
-            None => self.secrets(),
+        let local_key = match &change {
+            AccessChange::Enable(Some(local_secret)) => {
+                Some(metadata::secret_to_key(tx, local_secret).await?)
+            }
+            AccessChange::Enable(None) => None,
+            AccessChange::Disable => {
+                metadata::remove_read_key(tx).await?;
+                return Ok(());
+            }
         };
 
-        if secrets.id() != self.shared.secrets.id() {
-            return Err(Error::PermissionDenied);
-        }
-
-        let read_key = match secrets.read_key() {
-            Some(read_key) => read_key,
-            None => return Err(Error::PermissionDenied),
+        let (id, read_key) = {
+            let cred = self.shared.credentials.lock().unwrap();
+            (
+                *cred.secrets.id(),
+                cred.secrets
+                    .read_key()
+                    .ok_or(Error::PermissionDenied)?
+                    .clone(),
+            )
         };
 
-        let local_read_key = if let Some(local_secret) = local_read_secret {
-            Some(metadata::secret_to_key(tx, local_secret).await?)
-        } else {
-            None
-        };
-
-        metadata::set_read_key(
-            tx,
-            secrets.id(),
-            read_key,
-            // Option<Cow<SecretKey>> -> Option<&SecretKey>
-            local_read_key.as_ref().map(|k| k.as_ref()),
-        )
-        .await?;
+        metadata::set_read_key(tx, &id, &read_key, local_key.as_deref()).await?;
 
         Ok(())
     }
 
-    // Making this function public instead of the `set_read_access_in` and `set_write_access_in`
-    // separately to make the setting both (read and write) accesses ACID without having to make
-    // the db::WriteTransaction public.
-    pub async fn set_read_and_write_access(
-        &self,
-        local_old_secret: Option<&LocalSecret>,
-        local_new_secret: Option<&LocalSecret>,
-        secrets: Option<&AccessSecrets>,
-    ) -> Result<()> {
-        let mut tx = self.db().begin_write().await?;
-        self.set_read_access_in(&mut tx, local_new_secret, secrets)
-            .await?;
-        self.set_write_access_in(&mut tx, local_old_secret, local_new_secret, secrets)
-            .await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    async fn set_write_access_in(
+    async fn set_write_access(
         &self,
         tx: &mut db::WriteTransaction,
-        local_old_write_secret: Option<&LocalSecret>,
-        local_new_write_secret: Option<&LocalSecret>,
-        secrets: Option<&AccessSecrets>,
+        change: AccessChange,
     ) -> Result<()> {
-        let secrets = match secrets.as_ref() {
-            Some(secrets) => secrets,
-            None => self.secrets(),
+        let local_key = match &change {
+            AccessChange::Enable(Some(local_secret)) => {
+                Some(metadata::secret_to_key(tx, local_secret).await?)
+            }
+            AccessChange::Enable(None) => None,
+            AccessChange::Disable => {
+                metadata::remove_write_key(tx).await?;
+                return Ok(());
+            }
         };
 
-        if secrets.id() != self.shared.secrets.id() {
+        let (write_secrets, writer_id) = {
+            let cred = self.shared.credentials.lock().unwrap();
+            (
+                cred.secrets
+                    .write_secrets()
+                    .ok_or(Error::PermissionDenied)?
+                    .clone(),
+                cred.writer_id,
+            )
+        };
+
+        metadata::set_write_key(tx, &write_secrets, local_key.as_deref()).await?;
+        metadata::set_writer_id(tx, &writer_id, local_key.as_deref()).await?;
+
+        Ok(())
+    }
+
+    /// Gets the current credentials of this repository.
+    ///
+    /// See also [set_credentials].
+    pub fn credentials(&self) -> Credentials {
+        self.shared.credentials.lock().unwrap().clone()
+    }
+
+    pub fn secrets(&self) -> AccessSecrets {
+        self.shared.credentials.lock().unwrap().secrets.clone()
+    }
+
+    /// Gets the current access mode of this repository.
+    pub fn access_mode(&self) -> AccessMode {
+        self.shared
+            .credentials
+            .lock()
+            .unwrap()
+            .secrets
+            .access_mode()
+    }
+
+    /// Switches the repository to the given mode.
+    ///
+    /// The actual mode the repository gets switched to is the higher of the current access mode
+    /// and the mode provided by `local_secret` but at most the mode specified in `access_mode`
+    /// ("higher" means according to `AccessMode`'s `Ord` impl, that is: Write > Read > Blind).
+    pub async fn set_access_mode(
+        &self,
+        access_mode: AccessMode,
+        local_secret: Option<LocalSecret>,
+    ) -> Result<()> {
+        let mut tx = self.db().begin_write().await?;
+
+        let local_key = if let Some(local_secret) = &local_secret {
+            Some(metadata::secret_to_key(&mut tx, local_secret).await?)
+        } else {
+            None
+        };
+
+        // Try to use the current secrets but fall back to the secrets stored in the metadata if the
+        // current ones are insufficient and the stored ones have higher access mode.
+        let old_secrets = self.shared.credentials.lock().unwrap().secrets.clone();
+
+        let secrets = if old_secrets.access_mode() >= access_mode {
+            old_secrets
+        } else {
+            let new_secrets = metadata::get_access_secrets(&mut tx, local_key.as_deref()).await?;
+
+            if new_secrets.access_mode() > old_secrets.access_mode() {
+                new_secrets
+            } else {
+                old_secrets
+            }
+        };
+
+        let secrets = secrets.with_mode(access_mode);
+
+        let writer_id = match access_mode {
+            AccessMode::Write if secrets.can_write() => {
+                metadata::get_or_generate_writer_id(&mut tx, local_key.as_deref()).await?
+            }
+            AccessMode::Write | AccessMode::Read | AccessMode::Blind => {
+                metadata::generate_writer_id()
+            }
+        };
+
+        tx.commit().await?;
+
+        // Data migration can only be applied in write mode so apply any pending ones if we just
+        // switched to write mode.
+        if let Some(write_keys) = secrets.write_secrets().map(|secrets| &secrets.write_keys) {
+            self.shared
+                .vault
+                .store()
+                .migrate_data(writer_id, write_keys)
+                .await?;
+        }
+
+        *self.shared.credentials.lock().unwrap() = Credentials { secrets, writer_id };
+
+        Ok(())
+    }
+
+    /// Overrides the current credentials of this repository.
+    ///
+    /// This is useful for moving/renaming the repo database or to restore access which has been
+    /// either disabled or it's local secret lost.
+    ///
+    /// # Move/rename the repo db
+    ///
+    /// 1. Obtain the current credentials with [credentials] and keep them locally.
+    /// 2. Close the repo.
+    /// 3. Rename the repo database files(s).
+    /// 4. Open the repo from its new location in blind mode.
+    /// 5. Restore the credentials from step 1 with [set_credentials].
+    ///
+    /// # Restore access
+    ///
+    /// 1. Get the `AccessSecrets` the repository was originally created from (e.g., by extracting
+    ///    them from the original `ShareToken`).
+    /// 2. Construct `Credentials` using this access secrets and a random writer id.
+    /// 3. Restore the credentials with [set_credentials].
+    /// 4. Enable/change the access with [set_access].
+    pub async fn set_credentials(&self, credentials: Credentials) -> Result<()> {
+        // Check the credentials are actually for this repository
+        let expected_id = {
+            let mut conn = self.db().acquire().await?;
+            metadata::get_repository_id(&mut conn).await?
+        };
+
+        if credentials.secrets.id() != &expected_id {
             return Err(Error::PermissionDenied);
         }
 
-        let write_secrets = match secrets.write_secrets() {
-            Some(write_key) => write_key,
-            None => return Err(Error::PermissionDenied),
-        };
+        if let Some(write_secrets) = credentials.secrets.write_secrets() {
+            self.shared
+                .vault
+                .store()
+                .migrate_data(credentials.writer_id, &write_secrets.write_keys)
+                .await?;
+        }
 
-        let local_new_write_key = if let Some(secret) = local_new_write_secret {
-            Some(metadata::secret_to_key(tx, secret).await?)
-        } else {
-            None
-        };
-
-        let writer_id = if let Some(local_old_write_secret) = local_old_write_secret {
-            let local_old_write_key = metadata::secret_to_key(tx, local_old_write_secret).await?;
-            metadata::get_writer_id(tx, Some(&local_old_write_key)).await?
-        } else {
-            None
-        };
-
-        let writer_id = writer_id.unwrap_or_else(generate_writer_id);
-
-        metadata::set_write_key(
-            tx,
-            write_secrets,
-            // Option<Cow<SecretKey>> -> Option<&SecretKey>
-            local_new_write_key.as_ref().map(|k| k.as_ref()),
-        )
-        .await?;
-
-        metadata::set_writer_id(
-            tx,
-            &writer_id,
-            // Option<Cow<SecretKey>> -> Option<&SecretKey>
-            local_new_write_key.as_ref().map(|k| k.as_ref()),
-        )
-        .await?;
+        *self.shared.credentials.lock().unwrap() = credentials;
 
         Ok(())
-    }
-
-    /// After running this command, the user won't be able to obtain read access to the repository
-    /// using their local read secret.
-    pub async fn remove_read_key(&self) -> Result<()> {
-        let mut tx = self.db().begin_write().await?;
-        metadata::remove_read_key(&mut tx).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    /// After running this command, the user won't be able to obtain write access to the repository
-    /// using their local write secret.
-    pub async fn remove_write_key(&self) -> Result<()> {
-        let mut tx = self.db().begin_write().await?;
-        metadata::remove_write_key(&mut tx).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub fn secrets(&self) -> &AccessSecrets {
-        &self.shared.secrets
     }
 
     pub async fn unlock_secrets(&self, local_secret: LocalSecret) -> Result<AccessSecrets> {
@@ -420,16 +497,6 @@ impl Repository {
         };
 
         Ok(metadata::get_access_secrets(&mut tx, Some(&local_key)).await?)
-    }
-
-    /// Obtain the reopen token for this repository. The token can then be used to reopen this
-    /// repository (using [`Self::reopen()`]) in the same access mode without having to provide the
-    /// local secret.
-    pub fn reopen_token(&self) -> ReopenToken {
-        ReopenToken {
-            secrets: self.secrets().clone(),
-            writer_id: self.shared.this_writer_id,
-        }
     }
 
     /// Get accessor for repository metadata. The metadata are arbitrary key-value entries that are
@@ -574,8 +641,6 @@ impl Repository {
         dst_dir_path: D,
         dst_name: &str,
     ) -> Result<()> {
-        use std::borrow::Cow;
-
         let local_branch = self.local_branch()?;
         let src_joint_dir = self.cd(src_dir_path).await?;
 
@@ -681,11 +746,6 @@ impl Repository {
     /// Subscribe to event notifications.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.vault.event_tx.subscribe()
-    }
-
-    /// Gets the access mode this repository is opened in.
-    pub fn access_mode(&self) -> AccessMode {
-        self.shared.secrets.access_mode()
     }
 
     /// Gets the syncing progress of this repository (number of downloaded blocks / number of
@@ -802,9 +862,11 @@ impl Repository {
             }
         };
 
+        let writer_id = self.shared.credentials.lock().unwrap().writer_id;
+
         for branch in branches {
             let print = print.indent();
-            let local = if branch.id() == &self.shared.this_writer_id {
+            let local = if branch.id() == &writer_id {
                 " (local)"
             } else {
                 ""
@@ -845,33 +907,42 @@ pub struct RepositoryHandle {
 
 struct Shared {
     vault: Vault,
-    this_writer_id: PublicKey,
-    secrets: AccessSecrets,
+    credentials: BlockingMutex<Credentials>,
     branch_shared: BranchShared,
 }
 
 impl Shared {
     pub fn local_branch(&self) -> Result<Branch> {
-        self.get_branch(self.this_writer_id)
+        let credentials = self.credentials.lock().unwrap();
+
+        Ok(self.make_branch(
+            credentials.writer_id,
+            credentials.secrets.keys().ok_or(Error::PermissionDenied)?,
+        ))
     }
 
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
-        let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
+        let credentials = self.credentials.lock().unwrap();
+        let keys = credentials.secrets.keys().ok_or(Error::PermissionDenied)?;
 
         // Only the local branch is writable.
-        let keys = if id == self.this_writer_id {
+        let keys = if id == credentials.writer_id {
             keys
         } else {
             keys.read_only()
         };
 
-        Ok(Branch::new(
+        Ok(self.make_branch(id, keys))
+    }
+
+    fn make_branch(&self, id: PublicKey, keys: AccessKeys) -> Branch {
+        Branch::new(
             id,
             self.vault.store().clone(),
             keys,
             self.branch_shared.clone(),
             self.vault.event_tx.clone(),
-        ))
+        )
     }
 
     pub async fn load_branches(&self) -> Result<Vec<Branch>> {
@@ -885,23 +956,6 @@ impl Shared {
             .try_collect()
             .await
     }
-}
-
-// TODO: Writer IDs are currently practically just UUIDs with no real security (any replica with a
-// write access may impersonate any other replica).
-fn generate_writer_id() -> sign::PublicKey {
-    sign::Keypair::random().public_key()
-}
-
-async fn generate_and_store_writer_id(
-    tx: &mut db::WriteTransaction,
-    device_id: &DeviceId,
-    local_key: Option<&cipher::SecretKey>,
-) -> Result<sign::PublicKey> {
-    let writer_id = generate_writer_id();
-    metadata::set_writer_id(tx, &writer_id, local_key).await?;
-    metadata::set_device_id(tx, device_id).await?;
-    Ok(writer_id)
 }
 
 async fn report_sync_progress(vault: Vault) {

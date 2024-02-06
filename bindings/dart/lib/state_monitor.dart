@@ -1,5 +1,4 @@
-import 'client.dart' show Subscription;
-import 'ouisync_plugin.dart' show Session;
+import 'client.dart' show Client, Subscription;
 
 export 'client.dart' show Subscription;
 
@@ -92,31 +91,31 @@ class StateMonitorNode {
 }
 
 class StateMonitor {
-  final Session session;
-  List<MonitorId> path;
+  final Client _client;
+  final List<MonitorId> _path;
 
-  StateMonitor._(this.session, this.path);
+  StateMonitor._(this._client, this._path);
 
-  static StateMonitor getRoot(Session session) =>
-      StateMonitor._(session, <MonitorId>[]);
+  static StateMonitor getRoot(Client client) =>
+      StateMonitor._(client, <MonitorId>[]);
 
   StateMonitor child(MonitorId childId) =>
-      StateMonitor._(session, [...path, childId]);
+      StateMonitor._(_client, [..._path, childId]);
 
-  Subscription subscribe() => Subscription(
-      session.client, "state_monitor", path.map((id) => id.toString()));
+  Subscription subscribe() =>
+      Subscription(_client, "state_monitor", _path.map((id) => id.toString()));
 
   @override
-  String toString() => "StateMonitor($path)";
+  String toString() => "StateMonitor($_path)";
 
   Future<StateMonitorNode?> load() async {
     try {
-      final list = await session.client
-              .invoke("state_monitor_get", path.map((id) => id.toString()))
+      final list = await _client.invoke(
+              "state_monitor_get", _path.map((id) => id.toString()))
           as List<Object?>;
-      return StateMonitorNode._decode(path, list);
+      return StateMonitorNode._decode(_path, list);
     } catch (e) {
-      print('failed to load state monitor node at $path: $e');
+      print('failed to load state monitor node at $_path: $e');
       return null;
     }
   }

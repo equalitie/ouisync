@@ -12,18 +12,20 @@ import 'ouisync_plugin.dart' show Error;
 
 /// Client to interface with ouisync
 class Client {
-  final int _session;
+  int _handle;
   final Stream<Uint8List> _stream;
+  var _nextMessageId = 0;
   final _responses = HashMap<int, Completer<Object?>>();
   final _subscriptions = HashMap<int, StreamSink<Object?>>();
-  int _nextMessageId = 0;
 
-  Client(this._session, ReceivePort port) : _stream = port.cast<Uint8List>() {
+  Client(this._handle, ReceivePort port) : _stream = port.cast<Uint8List>() {
     unawaited(_receive());
   }
 
+  int get handle => _handle;
+
   Future<T> invoke<T>(String method, [Object? args]) async {
-    final id = _getMessageId();
+    final id = _nextMessageId++;
     final completer = Completer();
 
     _responses[id] = completer;
@@ -55,13 +57,25 @@ class Client {
     }
   }
 
+  int close() {
+    final handle = _handle;
+    _handle = 0;
+    return handle;
+  }
+
+  bool get isClosed => _handle == 0;
+
   void _send(Uint8List data) {
+    if (_handle == 0) {
+      throw StateError('session has been closed');
+    }
+
     // TODO: is there a way to do this without having to allocate whole new buffer?
     var buffer = malloc<Uint8>(data.length);
 
     try {
       buffer.asTypedList(data.length).setAll(0, data);
-      bindings.session_channel_send(_session, buffer, data.length);
+      bindings.session_channel_send(_handle, buffer, data.length);
     } finally {
       malloc.free(buffer);
     }
@@ -150,12 +164,6 @@ class Client {
   void _handleInvalidResponse(Completer<Object?> completer) {
     final error = Exception('invalid response');
     completer.completeError(error);
-  }
-
-  int _getMessageId() {
-    final id = _nextMessageId;
-    ++_nextMessageId;
-    return id;
   }
 
   void _handleNotification(StreamSink<Object?> sink, Object? payload) {

@@ -9,6 +9,7 @@ mod error;
 mod file;
 mod handler;
 mod log;
+mod mounter;
 mod network;
 mod protocol;
 mod registry;
@@ -24,12 +25,12 @@ use crate::{
     c::{Callback, CallbackSender},
     dart::{Port, PortSender, PostDartCObjectFn},
     error::Error,
-    file::FileHolder,
+    file::FileHandle,
     log::LogLevel,
-    registry::Handle,
     sender::Sender,
     session::{SessionCreateResult, SessionHandle},
 };
+use session::SessionKind;
 use std::{
     ffi::CString,
     os::raw::{c_char, c_int},
@@ -46,13 +47,14 @@ use std::{
 /// - `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
 #[no_mangle]
 pub unsafe extern "C" fn session_create(
+    kind: SessionKind,
     configs_path: *const c_char,
     log_path: *const c_char,
     context: *mut (),
     callback: Callback,
 ) -> SessionCreateResult {
     let sender = CallbackSender::new(context, callback);
-    session::create(configs_path, log_path, sender)
+    session::create(kind, configs_path, log_path, sender).into()
 }
 
 /// Creates a ouisync session (dart-specific API)
@@ -63,23 +65,69 @@ pub unsafe extern "C" fn session_create(
 /// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
 #[no_mangle]
 pub unsafe extern "C" fn session_create_dart(
+    kind: SessionKind,
     configs_path: *const c_char,
     log_path: *const c_char,
     post_c_object_fn: PostDartCObjectFn,
     port: Port,
 ) -> SessionCreateResult {
     let sender = PortSender::new(post_c_object_fn, port);
-    session::create(configs_path, log_path, sender)
+    session::create(kind, configs_path, log_path, sender).into()
 }
 
-/// Closes the ouisync session.
+/// Closes the Ouisync session (common C-like API).
+///
+/// Also gracefully disconnects from all peers and asynchronously waits for the disconnections to
+/// complete.
+///
+/// # Safety
+///
+/// `session` must be a valid session handle.
+/// `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
+#[no_mangle]
+pub unsafe extern "C" fn session_close(
+    session: SessionHandle,
+    context: *mut (),
+    callback: Callback,
+) {
+    let sender = CallbackSender::new(context, callback);
+    session::close(session.release(), sender)
+}
+
+/// Closes the Ouisync session (dart-specific API).
+///
+/// Also gracefully disconnects from all peers and asynchronously waits for the disconnections to
+/// complete.
+///
+/// # Safety
+///
+/// - `session` must be a valid session handle.
+/// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
+#[no_mangle]
+pub unsafe extern "C" fn session_close_dart(
+    session: SessionHandle,
+    post_c_object_fn: PostDartCObjectFn,
+    port: Port,
+) {
+    let sender = PortSender::new(post_c_object_fn, port);
+    session::close(session.release(), sender)
+}
+
+/// Closes the Ouisync session synchronously.
+///
+/// This is similar to `session_close` / `session_close_dart` but it blocks while waiting for the
+/// graceful disconnect (with a short timeout to not block indefinitely). This is useful because in
+/// flutter when the engine is being detached from Android runtime then async wait never completes
+/// (or does so randomly), and thus `session_close` is never invoked. My guess is that because the
+/// dart engine is being detached we can't do any async await on the dart side anymore, and thus
+/// need to do it here.
 ///
 /// # Safety
 ///
 /// `session` must be a valid session handle.
 #[no_mangle]
-pub unsafe extern "C" fn session_close(session: SessionHandle) {
-    session.release();
+pub unsafe extern "C" fn session_close_blocking(session: SessionHandle) {
+    session::close_blocking(session.release());
 }
 
 /// # Safety
@@ -96,22 +144,7 @@ pub unsafe extern "C" fn session_channel_send(
     let payload = slice::from_raw_parts(payload_ptr, payload_len as usize);
     let payload = payload.into();
 
-    session.get().client_sender.send(payload).ok();
-}
-
-/// Shutdowns the network and closes the session. This is equivalent to doing it in two steps
-/// (`network_shutdown` then `session_close`), but in flutter when the engine is being detached
-/// from Android runtime then async wait for `network_shutdown` never completes (or does so
-/// randomly), and thus `session_close` is never invoked. My guess is that because the dart engine
-/// is being detached we can't do any async await on the dart side anymore, and thus need to do it
-/// here.
-///
-/// # Safety
-///
-/// `session` must be a valid session handle.
-#[no_mangle]
-pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHandle) {
-    session.release().shutdown_network_and_close();
+    session.get().client_tx.send(payload).ok();
 }
 
 /// Copy the file contents into the provided raw file descriptor (dart-specific API).
@@ -131,7 +164,7 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
 #[no_mangle]
 pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     session: SessionHandle,
-    handle: Handle<FileHolder>,
+    handle: FileHandle,
     fd: c_int,
     post_c_object_fn: PostDartCObjectFn,
     port: Port,
@@ -143,10 +176,17 @@ pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     let session = session.get();
     let sender = PortSender::new(post_c_object_fn, port);
 
-    let src = session.state.files.get(handle);
+    let src = match session.shared.state.files.get(handle) {
+        Ok(file) => file,
+        Err(error) => {
+            sender.send(encode_error(&error.into()));
+            return;
+        }
+    };
+
     let mut dst = fs::File::from_raw_fd(fd);
 
-    session.runtime.spawn(async move {
+    session.shared.runtime.spawn(async move {
         let mut src = src.file.lock().await;
         src.seek(SeekFrom::Start(0));
         let result = src.copy_to_writer(&mut dst).await;
@@ -170,7 +210,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
 #[no_mangle]
 pub unsafe extern "C" fn file_copy_to_raw_fd_dart(
     _session: SessionHandle,
-    _handle: Handle<FileHolder>,
+    _handle: FileHandle,
     _fd: c_int,
     post_c_object_fn: PostDartCObjectFn,
     port: Port,
@@ -223,7 +263,9 @@ pub unsafe extern "C" fn log_print(
         }
     };
 
-    let _enter = tracing::info_span!("app", scope).entered();
+    // NOTE: Passing `scope` as `message` for more succinct span rendering: `app{"foo"}` instead
+    // of `app{scope="foo"}`.
+    let _enter = tracing::info_span!("app", message = scope).entered();
 
     let message = match utils::ptr_to_str(message_ptr) {
         Ok(message) => message,

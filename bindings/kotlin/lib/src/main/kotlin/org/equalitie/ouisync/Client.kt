@@ -63,7 +63,7 @@ internal class Client {
     private val subscriptions: HashMap<Long, SendChannel<Any?>> = HashMap()
 
     suspend fun invoke(request: Request): Any? {
-        val id = getMessageId()
+        val id = nextMessageId++
 
         val stream = ByteArrayOutputStream()
         DataOutputStream(stream).writeLong(id)
@@ -148,12 +148,6 @@ internal class Client {
         mutex.withLock {
             responses.remove(id)?.completeExceptionally(error)
         }
-    }
-
-    private fun getMessageId(): Long {
-        val id = nextMessageId
-        nextMessageId += 1
-        return id
     }
 }
 

@@ -11,8 +11,14 @@ void main() {
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
-    session1 = Session.create(configPath: '${temp.path}/1/config');
-    session2 = Session.create(configPath: '${temp.path}/2/config');
+    session1 = Session.create(
+      kind: SessionKind.unique,
+      configPath: '${temp.path}/1/config',
+    );
+    session2 = Session.create(
+      kind: SessionKind.unique,
+      configPath: '${temp.path}/2/config',
+    );
 
     repo1 = await Repository.create(
       session1,
@@ -71,5 +77,28 @@ void main() {
     await session2.addUserProvidedPeer('quic/$addr');
 
     await expect;
+  });
+
+  test('traffic stats', () async {
+    final addr = (await session1.quicListenerLocalAddressV4)!;
+    await session2.addUserProvidedPeer('quic/$addr');
+
+    final file = await File.create(repo1, 'file.txt');
+    await file.close();
+
+    // Wait for the file to get synced
+    while (true) {
+      try {
+        final file = await File.open(repo2, 'file.txt');
+        await file.close();
+        break;
+      } catch (_) {}
+
+      await repo2.events.first;
+    }
+
+    final stats = await session2.trafficStats;
+    expect(stats.send, greaterThan(0));
+    expect(stats.recv, greaterThan(65536)); // at least two blocks received
   });
 }

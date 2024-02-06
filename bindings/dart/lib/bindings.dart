@@ -13,22 +13,30 @@ final bindings = Bindings(_defaultLib());
 typedef PostCObject = Int8 Function(Int64, Pointer<Dart_CObject>);
 
 typedef _session_create_c = SessionCreateResult Function(
+  Uint8,
   Pointer<Char>,
   Pointer<Char>,
   Pointer<NativeFunction<PostCObject>>,
   Int64,
 );
 typedef session_create_dart = SessionCreateResult Function(
-    Pointer<Char>, Pointer<Char>, Pointer<NativeFunction<PostCObject>>, int);
+  int,
+  Pointer<Char>,
+  Pointer<Char>,
+  Pointer<NativeFunction<PostCObject>>,
+  int,
+);
 
 typedef _session_channel_send_c = Void Function(Uint64, Pointer<Uint8>, Uint64);
 typedef session_channel_send_dart = void Function(int, Pointer<Uint8>, int);
 
-typedef _session_close_c = Void Function(Uint64);
-typedef session_close_dart = void Function(int);
+typedef _session_close_c = Void Function(
+    Uint64, Pointer<NativeFunction<PostCObject>>, Int64);
+typedef session_close_dart = void Function(
+    int, Pointer<NativeFunction<PostCObject>>, int);
 
-typedef _session_shutdown_network_and_close_c = Void Function(Uint64);
-typedef session_shutdown_network_and_close_dart = void Function(int);
+typedef _session_close_blocking_c = Void Function(Uint64);
+typedef session_close_blocking_dart = void Function(int);
 
 typedef _file_copy_to_raw_fd_c = Void Function(
     Uint64, Uint64, Int, Pointer<NativeFunction<PostCObject>>, Int64);
@@ -61,11 +69,11 @@ class Bindings {
                 'session_channel_send')
             .asFunction(),
         session_close = library
-            .lookup<NativeFunction<_session_close_c>>('session_close')
+            .lookup<NativeFunction<_session_close_c>>('session_close_dart')
             .asFunction(),
-        session_shutdown_network_and_close = library
-            .lookup<NativeFunction<_session_shutdown_network_and_close_c>>(
-                'session_shutdown_network_and_close')
+        session_close_blocking = library
+            .lookup<NativeFunction<_session_close_blocking_c>>(
+                'session_close_blocking')
             .asFunction(),
         file_copy_to_raw_fd = library
             .lookup<NativeFunction<_file_copy_to_raw_fd_c>>(
@@ -81,8 +89,7 @@ class Bindings {
   final session_create_dart session_create;
   final session_channel_send_dart session_channel_send;
   final session_close_dart session_close;
-  final session_shutdown_network_and_close_dart
-      session_shutdown_network_and_close;
+  final session_close_blocking_dart session_close_blocking;
   final file_copy_to_raw_fd_dart file_copy_to_raw_fd;
   final log_print_dart log_print;
   final free_string_dart free_string;

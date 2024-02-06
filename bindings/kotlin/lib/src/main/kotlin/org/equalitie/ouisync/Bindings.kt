@@ -15,13 +15,14 @@ internal interface Bindings : Library {
     }
 
     fun session_create(
+        kind: Byte,
         configs_path: String,
         log_path: String?,
         context: Pointer?,
         callback: Callback,
     ): SessionCreateResult
 
-    fun session_close(handle: Handle)
+    fun session_close(handle: Handle, context: Pointer?, callback: Callback)
 
     fun session_channel_send(handle: Handle, msg: ByteArray, msg_len: Int)
 

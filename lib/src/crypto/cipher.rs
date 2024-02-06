@@ -11,6 +11,7 @@ use hex;
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, sync::Arc};
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -143,9 +144,19 @@ impl AsRef<[u8]> for SecretKey {
     }
 }
 
+/// Note this impl uses constant-time operations (using [subtle](https://crates.io/crates/subtle))
+/// and so provides protection against software side-channel attacks.
+impl PartialEq for SecretKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_array().ct_eq(other.as_array()).into()
+    }
+}
+
+impl Eq for SecretKey {}
+
 impl fmt::Debug for SecretKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SecretKey(****)")
+        write!(f, "****")
     }
 }
 
@@ -186,35 +197,30 @@ pub struct SecretKeyLengthError;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::{
-        arbitrary::{any, Arbitrary},
-        strategy::{Map, Strategy},
-    };
-    use test_strategy::proptest;
 
-    impl Arbitrary for SecretKey {
-        type Parameters = ();
-        type Strategy = Map<
-            <[u8; SecretKey::SIZE] as Arbitrary>::Strategy,
-            fn([u8; SecretKey::SIZE]) -> SecretKey,
-        >;
+    #[test]
+    fn serialize_deserialize_bincode() {
+        let orig = SecretKey::try_from(&b"abcdefghijklmnopqrstuvwxyz012345"[..]).unwrap();
+        let expected_serialized_hex =
+            "20000000000000006162636465666768696a6b6c6d6e6f707172737475767778797a303132333435";
 
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-            fn make_key(bytes: [u8; SecretKey::SIZE]) -> SecretKey {
-                let mut key = SecretKey::zero();
-                key.as_mut().copy_from_slice(&bytes);
-                key
-            }
+        let serialized = bincode::serialize(&orig).unwrap();
+        assert_eq!(hex::encode(&serialized), expected_serialized_hex);
 
-            any::<[u8; SecretKey::SIZE]>().prop_map(make_key)
-        }
+        let deserialized: SecretKey = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.as_ref(), orig.as_ref());
     }
 
-    #[proptest]
-    fn serialize_deserialize(key: SecretKey) {
-        let encoded = bincode::serialize(&key).unwrap();
-        let decoded: SecretKey = bincode::deserialize(&encoded).unwrap();
+    #[test]
+    fn serialize_deserialize_msgpack() {
+        let orig = SecretKey::try_from(&b"abcdefghijklmnopqrstuvwxyz012345"[..]).unwrap();
+        let expected_serialized_hex =
+            "c4206162636465666768696a6b6c6d6e6f707172737475767778797a303132333435";
 
-        assert_eq!(decoded.as_ref(), key.as_ref());
+        let serialized = rmp_serde::to_vec(&orig).unwrap();
+        assert_eq!(hex::encode(&serialized), expected_serialized_hex);
+
+        let deserialized: SecretKey = rmp_serde::from_slice(&serialized).unwrap();
+        assert_eq!(deserialized.as_ref(), orig.as_ref());
     }
 }

@@ -173,6 +173,27 @@ pub(crate) async fn set_writer_id(
     Ok(())
 }
 
+// TODO: Writer IDs are currently practically just UUIDs with no real security (any replica with a
+// write access may impersonate any other replica).
+pub(crate) fn generate_writer_id() -> sign::PublicKey {
+    sign::Keypair::random().public_key()
+}
+
+pub(crate) async fn get_or_generate_writer_id(
+    tx: &mut db::WriteTransaction,
+    local_key: Option<&cipher::SecretKey>,
+) -> Result<sign::PublicKey, StoreError> {
+    let writer_id = if let Some(writer_id) = get_writer_id(tx, local_key).await? {
+        writer_id
+    } else {
+        let writer_id = generate_writer_id();
+        set_writer_id(tx, &writer_id, local_key).await?;
+        writer_id
+    };
+
+    Ok(writer_id)
+}
+
 // -------------------------------------------------------------------
 // Device id
 // -------------------------------------------------------------------
@@ -197,6 +218,15 @@ pub(crate) async fn set_device_id(
 // -------------------------------------------------------------------
 // Access secrets
 // -------------------------------------------------------------------
+pub(super) async fn get_repository_id(
+    conn: &mut db::Connection,
+) -> Result<RepositoryId, StoreError> {
+    // Repository id should always exist. If not indicates a corrupted db.
+    get_public_blob(conn, REPOSITORY_ID)
+        .await?
+        .ok_or(StoreError::MalformedData)
+}
+
 async fn set_public_read_key(
     tx: &mut db::WriteTransaction,
     read_key: &cipher::SecretKey,
@@ -303,7 +333,7 @@ pub(crate) async fn remove_write_key(tx: &mut db::WriteTransaction) -> Result<()
 
 // ------------------------------
 
-pub(crate) async fn requires_local_password_for_reading(
+pub(crate) async fn requires_local_secret_for_reading(
     conn: &mut db::Connection,
 ) -> Result<bool, StoreError> {
     match get_public_blob::<cipher::SecretKey>(conn, READ_KEY).await {
@@ -319,7 +349,7 @@ pub(crate) async fn requires_local_password_for_reading(
     }
 }
 
-pub(crate) async fn requires_local_password_for_writing(
+pub(crate) async fn requires_local_secret_for_writing(
     conn: &mut db::Connection,
 ) -> Result<bool, StoreError> {
     match get_public_blob::<sign::Keypair>(conn, WRITE_KEY).await {
@@ -439,10 +469,7 @@ pub(crate) async fn get_access_secrets(
     conn: &mut db::Connection,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<AccessSecrets, StoreError> {
-    let Some(id) = get_public_blob(conn, REPOSITORY_ID).await? else {
-        // Repository id not found - possibly corrupted db?
-        return Err(StoreError::MalformedData);
-    };
+    let id = get_repository_id(conn).await?;
 
     match get_write_key(conn, local_key, &id).await {
         Ok(Some(write_keys)) => return Ok(AccessSecrets::Write(WriteSecrets::from(write_keys))),

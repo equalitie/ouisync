@@ -12,7 +12,7 @@ use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
 use state_monitor::StateMonitor;
 use std::{
-    io,
+    future, io,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
@@ -70,9 +70,18 @@ impl LocalDiscovery {
     }
 
     pub async fn recv(&mut self) -> SeenPeer {
-        // Unwrap is OK because we don't expect the `LocalDiscoveryInner` instance to get destroyed
-        // before this `LocalDiscovery` instance.
-        self.peer_rx.recv().await.unwrap()
+        // NOTE: This *almost* never returns `None`. One exception is if `LocalDiscovery` is
+        // created while the runtime is shutting down. Then it can happen that the worker task is
+        // never started and `peer_tx` is immediatelly dropped.
+        match self.peer_rx.recv().await {
+            Some(peer) => peer,
+            None => {
+                // To keep the API simple, instead of propagating the `None` we wait forever.
+                // However, this happens only during runtime shutdown so in practice we don't wait
+                // at all.
+                future::pending().await
+            }
+        }
     }
 }
 

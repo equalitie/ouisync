@@ -42,7 +42,9 @@ mod version_vector;
 mod versioned;
 
 pub use self::{
-    access_control::{Access, AccessMode, AccessSecrets, LocalSecret, ShareToken, WriteSecrets},
+    access_control::{
+        Access, AccessChange, AccessMode, AccessSecrets, LocalSecret, ShareToken, WriteSecrets,
+    },
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
     branch::Branch,
     db::SCHEMA_VERSION,
@@ -58,7 +60,7 @@ pub use self::{
     progress::Progress,
     protocol::BLOCK_SIZE,
     repository::{
-        delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryHandle,
+        delete as delete_repository, Credentials, Metadata, Repository, RepositoryHandle,
         RepositoryId, RepositoryParams,
     },
     storage_size::StorageSize,

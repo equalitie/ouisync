@@ -1,10 +1,13 @@
 use crate::{
-    directory::Directory, file::FileHolder, registry::Handle, repository::RepositoryHolder,
-    state::SubscriptionHandle,
+    directory::Directory, file::FileHandle, registry::Handle, repository::RepositoryHandle,
+    state::TaskHandle,
 };
 use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
-use ouisync_lib::{network::NatBehavior, AccessMode, PeerAddr, PeerInfo, Progress, ShareToken};
+use ouisync_lib::{
+    network::{NatBehavior, TrafficStats},
+    AccessChange, AccessMode, PeerAddr, PeerInfo, Progress, ShareToken,
+};
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
 use std::{
@@ -28,60 +31,57 @@ pub(crate) enum Request {
         path: Utf8PathBuf,
         password: Option<String>,
     },
-    RepositoryClose(Handle<RepositoryHolder>),
-    RepositoryCreateReopenToken(Handle<RepositoryHolder>),
-    RepositoryReopen {
-        path: Utf8PathBuf,
+    RepositoryClose(RepositoryHandle),
+    RepositorySubscribe(RepositoryHandle),
+    RepositoryRequiresLocalPasswordForReading(RepositoryHandle),
+    RepositoryRequiresLocalPasswordForWriting(RepositoryHandle),
+    RepositorySetAccess {
+        repository: RepositoryHandle,
+        read: Option<AccessChange>,
+        write: Option<AccessChange>,
+    },
+    RepositoryCredentials(RepositoryHandle),
+    RepositorySetCredentials {
+        repository: RepositoryHandle,
         #[serde(with = "serde_bytes")]
-        token: Vec<u8>,
+        credentials: Vec<u8>,
     },
-    RepositorySubscribe(Handle<RepositoryHolder>),
-    RepositorySetReadAccess {
-        repository: Handle<RepositoryHolder>,
+    RepositoryAccessMode(RepositoryHandle),
+    RepositorySetAccessMode {
+        repository: RepositoryHandle,
+        access_mode: AccessMode,
         password: Option<String>,
-        share_token: Option<ShareToken>,
     },
-    RepositorySetReadAndWriteAccess {
-        repository: Handle<RepositoryHolder>,
-        old_password: Option<String>,
-        new_password: Option<String>,
-        share_token: Option<ShareToken>,
-    },
-    RepositoryRemoveReadKey(Handle<RepositoryHolder>),
-    RepositoryRemoveWriteKey(Handle<RepositoryHolder>),
-    RepositoryRequiresLocalPasswordForReading(Handle<RepositoryHolder>),
-    RepositoryRequiresLocalPasswordForWriting(Handle<RepositoryHolder>),
-    RepositoryInfoHash(Handle<RepositoryHolder>),
-    RepositoryDatabaseId(Handle<RepositoryHolder>),
+    RepositoryInfoHash(RepositoryHandle),
+    RepositoryDatabaseId(RepositoryHandle),
     RepositoryEntryType {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
     RepositoryMoveEntry {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         src: Utf8PathBuf,
         dst: Utf8PathBuf,
     },
-    RepositoryIsDhtEnabled(Handle<RepositoryHolder>),
+    RepositoryIsDhtEnabled(RepositoryHandle),
     RepositorySetDhtEnabled {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         enabled: bool,
     },
-    RepositoryIsPexEnabled(Handle<RepositoryHolder>),
+    RepositoryIsPexEnabled(RepositoryHandle),
     RepositorySetPexEnabled {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         enabled: bool,
     },
     RepositoryCreateShareToken {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         password: Option<String>,
         access_mode: AccessMode,
         name: Option<String>,
     },
-    RepositoryAccessMode(Handle<RepositoryHolder>),
-    RepositorySyncProgress(Handle<RepositoryHolder>),
+    RepositorySyncProgress(RepositoryHandle),
     RepositoryMirror {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
     },
     RepositoryMountAll(PathBuf),
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
@@ -89,49 +89,49 @@ pub(crate) enum Request {
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
     ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
     DirectoryCreate {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
     DirectoryOpen {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
     DirectoryRemove {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         path: Utf8PathBuf,
         recursive: bool,
     },
     FileOpen {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
     FileCreate {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
     FileRemove {
-        repository: Handle<RepositoryHolder>,
+        repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
     FileRead {
-        file: Handle<FileHolder>,
+        file: FileHandle,
         offset: u64,
         len: u64,
     },
     FileWrite {
-        file: Handle<FileHolder>,
+        file: FileHandle,
         offset: u64,
         #[serde(with = "serde_bytes")]
         data: Vec<u8>,
     },
     FileTruncate {
-        file: Handle<FileHolder>,
+        file: FileHandle,
         len: u64,
     },
-    FileLen(Handle<FileHolder>),
-    FileProgress(Handle<FileHolder>),
-    FileFlush(Handle<FileHolder>),
-    FileClose(Handle<FileHolder>),
+    FileLen(FileHandle),
+    FileProgress(FileHandle),
+    FileFlush(FileHandle),
+    FileClose(FileHandle),
     NetworkInit(NetworkDefaults),
     NetworkSubscribe,
     NetworkBind {
@@ -159,14 +159,15 @@ pub(crate) enum Request {
     NetworkSetPortForwardingEnabled(bool),
     NetworkIsLocalDiscoveryEnabled,
     NetworkSetLocalDiscoveryEnabled(bool),
-    NetworkAddStorageServer(String),
+    NetworkAddCacheServer(String),
     NetworkExternalAddrV4,
     NetworkExternalAddrV6,
     NetworkNatBehavior,
+    NetworkTrafficStats,
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
-    Unsubscribe(SubscriptionHandle),
+    Unsubscribe(TaskHandle),
 }
 
 #[derive(Eq, PartialEq, Serialize, Deserialize)]
@@ -180,11 +181,13 @@ pub(crate) enum Response {
     Bytes(#[serde(with = "serde_bytes")] Vec<u8>),
     String(String),
     Handle(u64),
+    Handles(Vec<u64>),
     Directory(Directory),
     StateMonitor(StateMonitor),
     Progress(Progress),
     PeerInfos(Vec<PeerInfo>),
     PeerAddrs(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
+    TrafficStats(TrafficStats),
 }
 
 impl<T> From<Option<T>> for Response
@@ -293,6 +296,23 @@ impl<T> TryFrom<Response> for Handle<T> {
     }
 }
 
+impl<T> From<Vec<Handle<T>>> for Response {
+    fn from(value: Vec<Handle<T>>) -> Self {
+        Self::Handles(value.into_iter().map(|handle| handle.id()).collect())
+    }
+}
+
+impl<T> TryFrom<Response> for Vec<Handle<T>> {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::Handles(value) => Ok(value.into_iter().map(Handle::from_id).collect()),
+            _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
 impl From<SocketAddr> for Response {
     fn from(value: SocketAddr) -> Self {
         Self::String(value.to_string())
@@ -364,6 +384,12 @@ impl From<Option<NatBehavior>> for Response {
     }
 }
 
+impl From<TrafficStats> for Response {
+    fn from(value: TrafficStats) -> Self {
+        Self::TrafficStats(value)
+    }
+}
+
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -375,6 +401,7 @@ impl fmt::Debug for Response {
             Self::Bytes(_) => write!(f, "Bytes(_)"),
             Self::String(value) => f.debug_tuple("String").field(value).finish(),
             Self::Handle(value) => f.debug_tuple("Handle").field(value).finish(),
+            Self::Handles(value) => f.debug_tuple("Handles").field(value).finish(),
             Self::Directory(_) => write!(f, "Directory(_)"),
             Self::StateMonitor(_) => write!(f, "StateMonitor(_)"),
             Self::Progress(value) => f.debug_tuple("Progress").field(value).finish(),
@@ -383,6 +410,7 @@ impl fmt::Debug for Response {
                 .field("len", &value.len())
                 .finish(),
             Self::PeerAddrs(value) => f.debug_tuple("PeerAddrs").field(value).finish(),
+            Self::TrafficStats(value) => f.debug_tuple("TrafficStats").field(value).finish(),
         }
     }
 }
@@ -500,11 +528,13 @@ mod tests {
     use super::*;
     use ouisync_lib::{
         network::{PeerSource, PeerState},
-        PeerInfo, SecretRuntimeId,
+        AccessSecrets, Credentials, PeerInfo, SecretRuntimeId,
     };
 
     #[test]
     fn request_serialize_deserialize() {
+        let credentials = Credentials::with_random_writer_id(AccessSecrets::random_write());
+
         let origs = [
             Request::RepositoryCreate {
                 path: Utf8PathBuf::from("/tmp/repo.db"),
@@ -513,6 +543,10 @@ mod tests {
                 share_token: None,
             },
             Request::RepositoryClose(Handle::from_id(1)),
+            Request::RepositorySetCredentials {
+                repository: Handle::from_id(1),
+                credentials: credentials.encode(),
+            },
         ];
 
         for orig in origs {

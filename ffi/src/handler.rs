@@ -59,60 +59,56 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositoryClose(handle) => {
                 repository::close(&self.state, handle).await?.into()
             }
-            Request::RepositoryCreateReopenToken(handle) => {
-                repository::create_reopen_token(&self.state, handle).into()
-            }
-            Request::RepositoryReopen { path, token } => {
-                repository::reopen(&self.state, path.into_std_path_buf(), token)
-                    .await?
-                    .into()
-            }
             Request::RepositorySubscribe(handle) => {
-                repository::subscribe(&self.state, notification_tx, handle).into()
+                repository::subscribe(&self.state, notification_tx, handle)?.into()
             }
-            Request::RepositorySetReadAccess {
+            Request::RepositorySetAccess {
                 repository,
-                password,
-                share_token,
-            } => repository::set_read_access(&self.state, repository, password, share_token)
+                read,
+                write,
+            } => self
+                .state
+                .repositories
+                .get(repository)?
+                .repository
+                .set_access(read, write)
                 .await?
                 .into(),
-            Request::RepositorySetReadAndWriteAccess {
+            Request::RepositoryCredentials(handle) => {
+                repository::credentials(&self.state, handle)?.into()
+            }
+            Request::RepositorySetCredentials {
                 repository,
-                old_password,
-                new_password,
-                share_token,
-            } => repository::set_read_and_write_access(
-                &self.state,
+                credentials,
+            } => repository::set_credentials(&self.state, repository, credentials)
+                .await?
+                .into(),
+            Request::RepositorySetAccessMode {
                 repository,
-                old_password,
-                new_password,
-                share_token,
-            )
-            .await?
-            .into(),
-            Request::RepositoryRemoveReadKey(handle) => {
-                repository::remove_read_key(&self.state, handle)
-                    .await?
-                    .into()
+                access_mode,
+                password,
+            } => {
+                repository::set_access_mode(&self.state, repository, access_mode, password).await?;
+                ().into()
             }
-            Request::RepositoryRemoveWriteKey(handle) => {
-                repository::remove_write_key(&self.state, handle)
-                    .await?
-                    .into()
-            }
-            Request::RepositoryRequiresLocalPasswordForReading(handle) => {
-                repository::requires_local_password_for_reading(&self.state, handle)
-                    .await?
-                    .into()
-            }
-            Request::RepositoryRequiresLocalPasswordForWriting(handle) => {
-                repository::requires_local_password_for_writing(&self.state, handle)
-                    .await?
-                    .into()
-            }
+            Request::RepositoryRequiresLocalPasswordForReading(handle) => self
+                .state
+                .repositories
+                .get(handle)?
+                .repository
+                .requires_local_secret_for_reading()
+                .await?
+                .into(),
+            Request::RepositoryRequiresLocalPasswordForWriting(handle) => self
+                .state
+                .repositories
+                .get(handle)?
+                .repository
+                .requires_local_secret_for_writing()
+                .await?
+                .into(),
             Request::RepositoryInfoHash(handle) => {
-                repository::info_hash(&self.state, handle).into()
+                repository::info_hash(&self.state, handle)?.into()
             }
             Request::RepositoryDatabaseId(handle) => {
                 repository::database_id(&self.state, handle).await?.into()
@@ -130,23 +126,23 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await?
                 .into(),
             Request::RepositoryIsDhtEnabled(repository) => {
-                repository::is_dht_enabled(&self.state, repository).into()
+                repository::is_dht_enabled(&self.state, repository)?.into()
             }
             Request::RepositorySetDhtEnabled {
                 repository,
                 enabled,
             } => {
-                repository::set_dht_enabled(&self.state, repository, enabled).await;
+                repository::set_dht_enabled(&self.state, repository, enabled).await?;
                 ().into()
             }
             Request::RepositoryIsPexEnabled(repository) => {
-                repository::is_pex_enabled(&self.state, repository).into()
+                repository::is_pex_enabled(&self.state, repository)?.into()
             }
             Request::RepositorySetPexEnabled {
                 repository,
                 enabled,
             } => {
-                repository::set_pex_enabled(&self.state, repository, enabled).await;
+                repository::set_pex_enabled(&self.state, repository, enabled).await?;
                 ().into()
             }
             Request::RepositoryCreateShareToken {
@@ -167,7 +163,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
             Request::ShareTokenNormalize(token) => token.to_string().into(),
             Request::RepositoryAccessMode(repository) => {
-                repository::access_mode(&self.state, repository).into()
+                repository::access_mode(&self.state, repository)?.into()
             }
             Request::RepositorySyncProgress(repository) => {
                 repository::sync_progress(&self.state, repository)
@@ -175,7 +171,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .into()
             }
             Request::RepositoryMountAll(mount_point) => {
-                self.state.mount_all(mount_point).await?.into()
+                repository::mount_all(&self.state, mount_point)
+                    .await?
+                    .into()
             }
             Request::DirectoryCreate { repository, path } => {
                 directory::create(&self.state, repository, path)
@@ -210,7 +208,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::FileTruncate { file, len } => {
                 file::truncate(&self.state, file, len).await?.into()
             }
-            Request::FileLen(file) => file::len(&self.state, file).await.into(),
+            Request::FileLen(file) => file::len(&self.state, file).await?.into(),
             Request::FileProgress(file) => file::progress(&self.state, file).await?.into(),
             Request::FileFlush(file) => file::flush(&self.state, file).await?.into(),
             Request::FileClose(file) => file::close(&self.state, file).await?.into(),
@@ -329,14 +327,26 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await;
                 ().into()
             }
-            Request::NetworkAddStorageServer(host) => {
-                ouisync_bridge::network::add_storage_server(&self.state.network, &host).await?;
-                self.state.storage_servers.lock().unwrap().insert(host);
+            Request::NetworkAddCacheServer(host) => {
+                // NOTE: Do not inline this into the `if`, otherwise we would hold the lock across
+                // await.
+                let new = self
+                    .state
+                    .cache_servers
+                    .lock()
+                    .unwrap()
+                    .insert(host.clone());
+
+                if new {
+                    ouisync_bridge::network::add_cache_server(&self.state.network, &host).await?;
+                }
+
                 ().into()
             }
             Request::NetworkExternalAddrV4 => self.state.network.external_addr_v4().await.into(),
             Request::NetworkExternalAddrV6 => self.state.network.external_addr_v6().await.into(),
             Request::NetworkNatBehavior => self.state.network.nat_behavior().await.into(),
+            Request::NetworkTrafficStats => self.state.network.traffic_stats().into(),
             Request::NetworkShutdown => {
                 self.state.network.shutdown().await;
                 ().into()
@@ -346,7 +356,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 state_monitor::subscribe(&self.state, notification_tx, path)?.into()
             }
             Request::Unsubscribe(handle) => {
-                self.state.unsubscribe(handle);
+                self.state.remove_task(handle);
                 ().into()
             }
         };

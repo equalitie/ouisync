@@ -7,77 +7,177 @@ import 'package:ouisync_plugin/state_monitor.dart';
 void main() {
   late io.Directory temp;
   late Session session;
-  late Repository repo;
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
-    session = Session.create(configPath: '${temp.path}/config');
-    repo = await Repository.create(
-      session,
-      store: '${temp.path}/repo.db',
-      readPassword: null,
-      writePassword: null,
+    session = Session.create(
+      kind: SessionKind.unique,
+      configPath: '${temp.path}/config',
     );
   });
 
   tearDown(() async {
-    await repo.close();
     await session.close();
     await temp.delete(recursive: true);
   });
 
-  test('file write and read', () async {
-    final path = '/test.txt';
-    final origContent = 'hello world';
+  group('repository', () {
+    late String store;
+    late Repository repo;
 
-    {
-      final file = await File.create(repo, path);
-      await file.write(0, utf8.encode(origContent));
-      await file.close();
-    }
+    setUp(() async {
+      store = '${temp.path}/repo.db';
+      repo = await Repository.create(
+        session,
+        store: store,
+        readPassword: null,
+        writePassword: null,
+      );
+    });
 
-    {
-      final file = await File.open(repo, path);
+    tearDown(() async {
+      await repo.close();
+    });
 
-      try {
-        final length = await file.length;
-        final readContent = utf8.decode(await file.read(0, length));
+    test('file write and read', () async {
+      final path = '/test.txt';
+      final origContent = 'hello world';
 
-        expect(readContent, equals(origContent));
-      } finally {
+      {
+        final file = await File.create(repo, path);
+        await file.write(0, utf8.encode(origContent));
         await file.close();
       }
-    }
-  });
 
-  test('empty directory', () async {
-    final rootDir = await Directory.open(repo, '/');
-    expect(rootDir, isEmpty);
-  });
+      {
+        final file = await File.open(repo, path);
 
-  test('share token access mode', () async {
-    for (var mode in AccessMode.values) {
-      final token = await repo.createShareToken(accessMode: mode);
-      expect(await token.mode, equals(mode));
-    }
+        try {
+          final length = await file.length;
+          final readContent = utf8.decode(await file.read(0, length));
+
+          expect(readContent, equals(origContent));
+        } finally {
+          await file.close();
+        }
+      }
+    });
+
+    test('empty directory', () async {
+      final rootDir = await Directory.open(repo, '/');
+      expect(rootDir, isEmpty);
+    });
+
+    test('share token access mode', () async {
+      for (var mode in AccessMode.values) {
+        final token = await repo.createShareToken(accessMode: mode);
+        expect(await token.mode, equals(mode));
+      }
+    });
+
+    test('sync progress', () async {
+      final progress = await repo.syncProgress;
+      expect(progress, equals(Progress(0, 0)));
+    });
+
+    test('state monitor', () async {
+      expect(await repo.stateMonitor?.load(), isNotNull);
+    });
+
+    test('rename', () async {
+      {
+        final file = await File.create(repo, 'file.txt');
+        await file.write(0, utf8.encode('hello world'));
+        await file.close();
+      }
+
+      final cred = await repo.credentials;
+      await repo.close();
+
+      final src = '${temp.path}/repo.db';
+      final dst = '${temp.path}/repo-new.db';
+
+      for (final ext in ['', '-wal', '-shm']) {
+        final file = io.File('$src$ext');
+
+        if (await file.exists()) {
+          await file.rename('$dst$ext');
+        }
+      }
+
+      repo = await Repository.open(session, store: dst);
+      await repo.setCredentials(cred);
+
+      {
+        final file = await File.open(repo, 'file.txt');
+        final content = await file.read(0, 11);
+        expect(utf8.decode(content), equals('hello world'));
+      }
+    });
+
+    test('get root directory contents after create and open', () async {
+      expect(await Directory.open(repo, '/'), equals([]));
+
+      await repo.close();
+
+      repo = await Repository.open(
+        session,
+        store: store,
+        password: null,
+      );
+
+      expect(await Directory.open(repo, '/'), equals([]));
+
+      await repo.close();
+    });
+
+    test('access mode', () async {
+      expect(await repo.accessMode, equals(AccessMode.write));
+
+      await repo.setAccessMode(AccessMode.read);
+      expect(await repo.accessMode, equals(AccessMode.read));
+
+      await repo.setAccessMode(AccessMode.blind);
+      expect(await repo.accessMode, equals(AccessMode.blind));
+
+      await repo.setAccessMode(AccessMode.write);
+      expect(await repo.accessMode, equals(AccessMode.write));
+    });
+
+    test('set access', () async {
+      await repo.setAccess(
+        read: EnableAccess('read_pass'),
+        write: EnableAccess('write_pass'),
+      );
+
+      await repo.close();
+      repo = await Repository.open(
+        session,
+        store: store,
+      );
+      expect(await repo.accessMode, equals(AccessMode.blind));
+
+      await repo.close();
+      repo = await Repository.open(
+        session,
+        store: store,
+        password: 'read_pass',
+      );
+      expect(await repo.accessMode, equals(AccessMode.read));
+
+      await repo.close();
+      repo = await Repository.open(
+        session,
+        store: store,
+        password: 'write_pass',
+      );
+      expect(await repo.accessMode, equals(AccessMode.write));
+    });
   });
 
   test('parse invalid share token', () async {
     final input = "broken!@#%";
     expect(ShareToken.fromString(session, input), throwsA(isA<Error>()));
-  });
-
-  test('repository access mode', () async {
-    expect(await repo.accessMode, equals(AccessMode.write));
-  });
-
-  test('repository sync progress', () async {
-    final progress = await repo.syncProgress;
-    expect(progress, equals(Progress(0, 0)));
-  });
-
-  test('repository state monitor', () async {
-    expect(await repo.stateMonitor.load(), isNotNull);
   });
 
   test('state monitor missing node', () async {
@@ -92,36 +192,6 @@ void main() {
 
     await streamSubscription.cancel();
     await monitorSubscription.close();
-  });
-
-  test('rename repository', () async {
-    {
-      final file = await File.create(repo, 'file.txt');
-      await file.write(0, utf8.encode('hello world'));
-      await file.close();
-    }
-
-    final token = await repo.createReopenToken();
-    await repo.close();
-
-    final src = '${temp.path}/repo.db';
-    final dst = '${temp.path}/repo-new.db';
-
-    for (final ext in ['', '-wal', '-shm']) {
-      final file = io.File('$src$ext');
-
-      if (await file.exists()) {
-        await file.rename('$dst$ext');
-      }
-    }
-
-    repo = await Repository.reopen(session, store: dst, token: token);
-
-    {
-      final file = await File.open(repo, 'file.txt');
-      final content = await file.read(0, 11);
-      expect(utf8.decode(content), equals('hello world'));
-    }
   });
 
   test('user provided peers', () async {

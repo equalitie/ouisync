@@ -542,12 +542,7 @@ fn recreate_local_branch() {
         let vv_a_0 = repo.local_branch().unwrap().version_vector().await.unwrap();
 
         // 3. Reopen the repo in read mode to disable merger
-        repo.close().await.unwrap();
-        drop(repo);
-
-        let repo = Repository::open(&params, None, AccessMode::Read)
-            .await
-            .unwrap();
+        repo.set_access_mode(AccessMode::Read, None).await.unwrap();
 
         // 4. Establish link
         let reg = network.register(repo.handle()).await;
@@ -558,11 +553,7 @@ fn recreate_local_branch() {
         // 8: Reopen in write mode
         drop(reg);
 
-        repo.close().await.unwrap();
-        drop(repo);
-        let repo = Repository::open(&params, None, AccessMode::Write)
-            .await
-            .unwrap();
+        repo.set_access_mode(AccessMode::Write, None).await.unwrap();
 
         // 9. Modify the repo
         repo.create_file("bar.txt").await.unwrap();

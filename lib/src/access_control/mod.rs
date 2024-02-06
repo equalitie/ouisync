@@ -394,3 +394,53 @@ impl Access {
         }
     }
 }
+
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessChange {
+    Enable(Option<LocalSecret>),
+    Disable,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Note we don't actually use JSON anywhere in the protocol but this test uses it because it
+    // being human readable makes it easy to verify the values are serialized the way we want them.
+    #[test]
+    fn access_change_serialize_deserialize_json() {
+        for (orig, expected_serialized) in [
+            (
+                AccessChange::Enable(Some(LocalSecret::Password("mellon".to_string().into()))),
+                "{\"enable\":\"mellon\"}",
+            ),
+            (AccessChange::Enable(None), "{\"enable\":null}"),
+            (AccessChange::Disable, "\"disable\""),
+        ] {
+            let serialized = serde_json::to_string(&orig).unwrap();
+            assert_eq!(serialized, expected_serialized);
+
+            let deserialized: AccessChange = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, orig);
+        }
+    }
+
+    #[test]
+    fn access_change_serialize_deserialize_msgpack() {
+        for (orig, expected_serialized_hex) in [
+            (
+                AccessChange::Enable(Some(LocalSecret::Password("mellon".to_string().into()))),
+                "81a6656e61626c65a66d656c6c6f6e",
+            ),
+            (AccessChange::Enable(None), "81a6656e61626c65c0"),
+            (AccessChange::Disable, "a764697361626c65"),
+        ] {
+            let serialized = rmp_serde::to_vec(&orig).unwrap();
+            assert_eq!(hex::encode(&serialized), expected_serialized_hex);
+
+            let deserialized: AccessChange = rmp_serde::from_slice(&serialized).unwrap();
+            assert_eq!(deserialized, orig);
+        }
+    }
+}

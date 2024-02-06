@@ -32,6 +32,7 @@ mod stun;
 mod stun_server_list;
 #[cfg(test)]
 mod tests;
+mod traffic_tracker;
 mod upnp;
 
 pub use self::{
@@ -40,6 +41,7 @@ pub use self::{
     peer_source::PeerSource,
     peer_state::PeerState,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
+    traffic_tracker::TrafficStats,
 };
 pub use net::stun::NatBehavior;
 
@@ -55,6 +57,7 @@ use self::{
     protocol::{Version, MAGIC, VERSION},
     seen_peers::{SeenPeer, SeenPeers},
     stun::StunClients,
+    traffic_tracker::TrafficTracker,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -130,6 +133,7 @@ impl Network {
             main_monitor: monitor,
             connections_monitor,
             peers_monitor,
+            traffic_tracker: TrafficTracker::new(),
             span: Span::current(),
             gateway,
             this_runtime_id,
@@ -185,6 +189,10 @@ impl Network {
         let mut state = self.inner.port_forwarder_state.lock().unwrap();
 
         if enabled {
+            if state.is_enabled() {
+                return;
+            }
+
             state.enable(PortMappings::new(
                 &self.inner.port_forwarder,
                 &self.inner.gateway,
@@ -202,6 +210,10 @@ impl Network {
         let mut state = self.inner.local_discovery_state.lock().unwrap();
 
         if enabled {
+            if state.is_enabled() {
+                return;
+            }
+
             if let Some(handle) = self.inner.spawn_local_discovery() {
                 state.enable(handle.into());
             } else {
@@ -236,6 +248,11 @@ impl Network {
     /// Currently IPv4 only.
     pub async fn nat_behavior(&self) -> Option<NatBehavior> {
         self.inner.stun_clients.nat_behavior().await
+    }
+
+    /// Get the network traffic stats (total bytes sent and received).
+    pub fn traffic_stats(&self) -> TrafficStats {
+        self.inner.traffic_tracker.get()
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -429,6 +446,7 @@ struct Inner {
     main_monitor: StateMonitor,
     connections_monitor: StateMonitor,
     peers_monitor: StateMonitor,
+    traffic_tracker: TrafficTracker,
     span: Span,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
@@ -835,6 +853,7 @@ impl Inner {
                             stream,
                             permit,
                             monitor,
+                            self.traffic_tracker.clone(),
                         )
                     });
 

@@ -44,7 +44,7 @@ const LAST_USED_UDP_PORT_COMMENT: &str =
      This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
      default to manually setting up port forwarding on their routers.";
 
-pub const DEFAULT_STORAGE_SERVER_PORT: u16 = 20209;
+pub const DEFAULT_CACHE_SERVER_PORT: u16 = 20209;
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NetworkDefaults {
@@ -165,16 +165,16 @@ pub async fn user_provided_peers(config: &ConfigStore) -> Vec<PeerAddr> {
     config.entry(PEERS_KEY).get().await.unwrap_or_default()
 }
 
-/// Add a storage server. This adds it as a user provided peers so we can immediatelly connect to
+/// Add a cache server. This adds it as a user provided peers so we can immediatelly connect to
 /// it and don't have to wait for it to be discovered (e.g. on the DHT).
 ///
 /// NOTE: Currently this is not persisted.
-pub async fn add_storage_server(network: &Network, host: &str) -> Result<(), io::Error> {
+pub async fn add_cache_server(network: &Network, host: &str) -> Result<(), io::Error> {
     let (hostname, port) = split_port(host).map_err(|error| {
-        tracing::error!(host, "invalid storage server host");
+        tracing::error!(host, "invalid cache server host");
         io::Error::new(io::ErrorKind::InvalidInput, error)
     })?;
-    let port = port.unwrap_or(DEFAULT_STORAGE_SERVER_PORT);
+    let port = port.unwrap_or(DEFAULT_CACHE_SERVER_PORT);
 
     let addrs = net::lookup_host((hostname, port))
         .await
@@ -187,13 +187,13 @@ pub async fn add_storage_server(network: &Network, host: &str) -> Result<(), io:
             }
         })
         .map_err(|error| {
-            tracing::error!(host, ?error, "failed to lookup storage server host");
+            tracing::error!(host, ?error, "failed to lookup cache server host");
             error
         })?;
 
     for addr in addrs {
         network.add_user_provided_peer(&PeerAddr::Quic(addr));
-        tracing::info!(host, %addr, "storage server added");
+        tracing::info!(host, %addr, "cache server added");
     }
 
     Ok(())
