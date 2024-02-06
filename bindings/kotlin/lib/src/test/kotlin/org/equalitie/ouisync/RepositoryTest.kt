@@ -81,9 +81,10 @@ class RepositoryTest {
         var repo = createRepo()
 
         try {
-            val token = repo.createReopenToken()
+            val credentials = repo.credentials()
             repo.close()
-            repo = Repository.reopen(session, repoPath, token)
+            repo = Repository.open(session, repoPath)
+            repo.setCredentials(credentials)
         } finally {
             repo.close()
         }
@@ -95,15 +96,15 @@ class RepositoryTest {
             assertFalse(it.requiresLocalPasswordForReading())
             assertFalse(it.requiresLocalPasswordForWriting())
 
-            it.setReadAndWriteAccess(oldPassword = null, newPassword = "banana")
+            it.setAccess(read = EnableAccess("banana"), write = EnableAccess("banana"))
             assertTrue(it.requiresLocalPasswordForReading())
             assertTrue(it.requiresLocalPasswordForWriting())
 
-            it.setReadAccess(password = null)
+            it.setAccess(read = EnableAccess(null))
             assertFalse(it.requiresLocalPasswordForReading())
             assertTrue(it.requiresLocalPasswordForWriting())
 
-            it.setReadAndWriteAccess(oldPassword = null, newPassword = null)
+            it.setAccess(write = EnableAccess(null))
             assertFalse(it.requiresLocalPasswordForReading())
             assertFalse(it.requiresLocalPasswordForWriting())
         }
