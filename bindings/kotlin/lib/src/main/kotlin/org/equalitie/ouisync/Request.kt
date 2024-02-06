@@ -78,49 +78,59 @@ internal class RepositoryClose : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
-internal class RepositoryCreateReopenToken : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
-}
-
-internal class RepositoryReopen(val path: String, val token: ByteArray) : Request() {
-    override fun packContent(packer: MessagePacker) {
-        packer.packMap(mapOf("path" to path, "token" to token))
-    }
-}
-
 internal class RepositorySubscribe : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
-internal class RepositorySetReadAccess(
+internal class RepositorySetAccess(
     val repository: Long,
-    val password: String?,
-    val shareToken: String?,
+    val read: AccessChange?,
+    val write: AccessChange?,
 ) : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packMap(
             mapOf(
                 "repository" to repository,
-                "password" to password,
-                "share_token" to shareToken,
+                "read" to read,
+                "write" to write,
             ),
         )
     }
 }
 
-internal class RepositorySetReadAndWriteAccess(
+internal class RepositoryAccessMode : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class RepositorySetAccessMode(
     val repository: Long,
-    val oldPassword: String?,
-    val newPassword: String?,
-    val shareToken: String?,
+    val accessMode: AccessMode,
+    val password: String?,
 ) : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packMap(
             mapOf(
                 "repository" to repository,
-                "old_password" to oldPassword,
-                "new_password" to newPassword,
-                "share_token" to shareToken,
+                "access_mode" to accessMode,
+                "password" to password,
+            ),
+        )
+    }
+}
+
+internal class RepositoryCredentials : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class RepositorySetCredentials(
+    val repository: Long,
+    val credentials: ByteArray,
+) : Request() {
+    override fun packContent(packer: MessagePacker) {
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "credentials" to credentials,
             ),
         )
     }
@@ -204,10 +214,6 @@ internal class RepositoryCreateShareToken(
                 "name" to name,
             ),
         )
-}
-
-internal class RepositoryAccessMode : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
 }
 
 internal class RepositorySyncProgress : ValueRequest<Long> {
@@ -421,6 +427,7 @@ private fun MessagePacker.packAny(value: Any) {
         is Long -> packLong(value)
         is Short -> packShort(value)
         is String -> packString(value)
+        is AccessChange -> value.pack(this)
         else -> throw IllegalArgumentException("can't pack ${value::class.qualifiedName}")
     }
 }

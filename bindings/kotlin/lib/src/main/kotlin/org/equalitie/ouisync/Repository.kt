@@ -1,5 +1,7 @@
 package org.equalitie.ouisync
 
+import org.msgpack.core.MessagePacker
+
 /**
  *
  * A Ouisync repository.
@@ -93,27 +95,6 @@ class Repository private constructor(internal val handle: Long, internal val cli
 
             return Repository(handle, client)
         }
-
-        /**
-         * Reopen a repo using a *reopen token*.
-         *
-         * This is useful when one wants to move the repo to a different location while the repo is
-         * currently open without requiring the user to input the local password again.
-         * To do that:
-         *
-         * 1. Obtain the reopen token with [createReopenToken].
-         * 2. [Close][close] the repo.
-         * 3. Move the repo file.
-         * 4. Reopen the repo with [reopen], passing it the reopen token from step 1.
-         *
-         * @see createReopenToken
-         */
-        suspend fun reopen(session: Session, path: String, token: ByteArray): Repository {
-            val client = session.client
-            val handle = client.invoke(RepositoryReopen(path, token)) as Long
-
-            return Repository(handle, client)
-        }
     }
 
     /**
@@ -146,14 +127,6 @@ class Repository private constructor(internal val handle: Long, internal val cli
     suspend fun databaseId() = client.invoke(RepositoryDatabaseId(handle)) as ByteArray
 
     /**
-     * Returns the access mode (*blind*, *read* or *write*) the repo is opened in.
-     */
-    suspend fun accessMode(): AccessMode {
-        val raw = client.invoke(RepositoryAccessMode(handle)) as Byte
-        return AccessMode.decode(raw)
-    }
-
-    /**
      * Creates a *share token* to share this repository with other devices.
      *
      * By default the access mode of the token will be the same as the mode the repo is currently
@@ -178,14 +151,6 @@ class Repository private constructor(internal val handle: Long, internal val cli
     }
 
     /**
-     * Creates a token for reopening the repo after it's been renamed/moved.
-     *
-     * @see reopen
-     */
-    suspend fun createReopenToken() =
-        client.invoke(RepositoryCreateReopenToken(handle)) as ByteArray
-
-    /**
      * Is local password required to read this repo?
      */
     suspend fun requiresLocalPasswordForReading() =
@@ -198,50 +163,41 @@ class Repository private constructor(internal val handle: Long, internal val cli
         client.invoke(RepositoryRequiresLocalPasswordForWriting(handle)) as Boolean
 
     /**
-     * Changes the local read password.
-     *
-     * The repo must be either opened in at least read mode or the `shareToken` must be set to a
-     * token with at least read access, otherwise [Error] with [ErrorCode.PERMISSION_DENIED] is
-     * thrown.
-     *
-     * @param password   new password to set. If null, local read password is removed (the repo
-     *                   becomes readable without a password).
-     * @param shareToken share token to use in case the repo is currently not opened in at least
-     *                   read mode. Can be used to escalate access mode from blind to read.
+     * Returns the access mode (*blind*, *read* or *write*) the repo is opened in.
      */
-    suspend fun setReadAccess(password: String?, shareToken: ShareToken? = null) =
-        client.invoke(RepositorySetReadAccess(handle, password, shareToken?.toString()))
+    suspend fun accessMode(): AccessMode {
+        val raw = client.invoke(RepositoryAccessMode(handle)) as Byte
+        return AccessMode.decode(raw)
+    }
 
     /**
-     * Changes the local read and write password.
-     *
-     * The repo must be either opened in write mode or the `shareToken` must be set to a token with
-     * write mode, otherwise [Error] with [ErrorCode.PERMISSION_DENIED] is thrown.
-     *
-     * To set different read and write passwords, call first this function and then [setReadAccess].
-     *
-     * @param oldPassword previous local write password. This is optional and only needed if one
-     *                    wants to preserve the *writer id* of this replica. If null, this
-     *                    repository effectively becomes a different replica from the one it was
-     *                    before this function was called. This currently has no user observable
-     *                    effect apart from slight performance impact.
-     * @param newPassword new local read and write password to set. If null, password access is
-     *                    removed.
-     * @param shareToken  share token to use in case the repo is currently not opened in write mode.
-     *                    Can be used to escalate access mode from blind or read to write.
+     * Switches the repository to the given access mode.
      */
-    suspend fun setReadAndWriteAccess(oldPassword: String?, newPassword: String?, shareToken: ShareToken? = null) =
-        client.invoke(RepositorySetReadAndWriteAccess(handle, oldPassword, newPassword, shareToken?.toString()))
+    suspend fun setAccessMode(
+        accessMode: AccessMode,
+        password: String?,
+    ) =
+        client.invoke(RepositorySetAccessMode(handle, accessMode, password))
 
     /**
-     * Removes read access to the repository using the local read password.
+     * Gets the current credentials of this repository. Can be used to restore access after
+     * closing and reopening the repository.
+     *
+     * @see setCredentials
      */
-    suspend fun removeReadKey() = client.invoke(RepositoryRemoveReadKey(handle))
+    suspend fun credentials(): ByteArray = client.invoke(RepositoryCredentials(handle)) as ByteArray
 
     /**
-     * Removes write access to the repository using the local write password.
+     * Sets the current credentials of the repository.
      */
-    suspend fun removeWriteKey() = client.invoke(RepositoryRemoveWriteKey(handle))
+    suspend fun setCredentials(credentials: ByteArray) = client.invoke(RepositorySetCredentials(handle, credentials))
+
+    /**
+     * Sets, unsets or changes local passwords for accessing the repository or disables the given
+     * access mode.
+     */
+    suspend fun setAccess(read: AccessChange? = null, write: AccessChange? = null) =
+        client.invoke(RepositorySetAccess(handle, read, write))
 
     /**
      * Is Bittorrent DHT enabled?
@@ -254,7 +210,7 @@ class Repository private constructor(internal val handle: Long, internal val cli
      * Enables/disabled Bittorrent DHT (for peer discovery).
      *
      * @see isDhtEnabled
-     * @see [infoHash]
+     * @see infoHash
      */
     suspend fun setDhtEnabled(enabled: Boolean) =
         client.invoke(RepositorySetDhtEnabled(handle, enabled))
@@ -310,3 +266,42 @@ class Repository private constructor(internal val handle: Long, internal val cli
     suspend fun moveEntry(src: String, dst: String) =
         client.invoke(RepositoryMoveEntry(handle, src, dst))
 }
+
+/**
+ * How to change access to a repository.
+ *
+ * @see [Repository.setAccess]
+ */
+sealed class AccessChange {
+    fun pack(packer: MessagePacker) {
+        when (this) {
+            is EnableAccess -> {
+                packer.packMapHeader(1)
+                packer.packString("enable")
+
+                if (password != null) {
+                    packer.packString(password)
+                } else {
+                    packer.packNil()
+                }
+            }
+            is DiableAccess -> {
+                packer.packString("disabled")
+            }
+        }
+    }
+}
+
+/**
+ * Enable read or write access, optionally with local password
+ *
+ * @see [Repository.setAccess]
+ */
+class EnableAccess(val password: String?) : AccessChange()
+
+/**
+ * Disable access
+ *
+ * @see [Repository.setAccess]
+ */
+class DiableAccess() : AccessChange()

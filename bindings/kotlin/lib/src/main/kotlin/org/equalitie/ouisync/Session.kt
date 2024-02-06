@@ -4,7 +4,6 @@ import com.sun.jna.Pointer
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
-import java.io.Closeable
 
 /**
  * The entry point to the ouisync library.
