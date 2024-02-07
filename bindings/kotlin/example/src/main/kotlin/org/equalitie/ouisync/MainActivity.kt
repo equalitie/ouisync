@@ -191,10 +191,10 @@ class AppViewModel(private val configDir: String, private val storeDir: String) 
             for (repo in repos) {
                 repo.close()
             }
-        }
 
-        session?.close()
-        session = null
+            session?.close()
+            session = null
+        }
     }
 }
 
