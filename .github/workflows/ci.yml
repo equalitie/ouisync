@@ -126,6 +126,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      - name: Create local.properties
+        working-directory: bindings/kotlin
+        run: echo "useLocalLib=true" > local.properties
+
       - name: Run spotless
         working-directory: bindings/kotlin
         run: ./gradlew spotlessCheck

@@ -5,8 +5,14 @@ plugins {
     id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.3'
 }
 
+
 Properties localProperties = new Properties()
-localProperties.load(rootProject.file('local.properties').newDataInputStream())
+
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.newDataInputStream())
+}
+
 def ouisyncVersionName = localProperties.getProperty("versionName")
 
 android {

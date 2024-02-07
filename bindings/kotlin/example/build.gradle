@@ -4,10 +4,13 @@ plugins {
 }
 
 Properties localProperties = new Properties()
-localProperties.load(rootProject.file('local.properties').newDataInputStream())
-def useLocalLib = false
-if (localProperties.containsKey("useLocalLib"))
-    useLocalLib = localProperties.getProperty("useLocalLib").toBoolean()
+
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.newDataInputStream())
+}
+
+def useLocalLib = localProperties.getProperty("useLocalLib", "false").toBoolean()
 
 android {
     compileSdkVersion 34
