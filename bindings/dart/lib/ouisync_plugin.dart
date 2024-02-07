@@ -23,7 +23,6 @@ export 'bindings.dart'
         PeerSource,
         PeerStateKind,
         SessionKind;
-export 'native_channels.dart' show NativeChannels;
 
 const bool debugTrace = false;
 
@@ -35,9 +34,7 @@ class Session {
   String? _mountPoint;
 
   Session._(this._client)
-      : _networkSubscription = Subscription(_client, "network", null) {
-    NativeChannels.session = this;
-  }
+      : _networkSubscription = Subscription(_client, "network", null);
 
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
@@ -236,10 +233,6 @@ class Session {
 
     if (handle == 0) {
       return 0;
-    }
-
-    if (NativeChannels.session?._client.isClosed ?? false) {
-      NativeChannels.session = null;
     }
 
     return handle;

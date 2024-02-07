@@ -53,20 +53,12 @@ class NativeChannels {
   // Cache of open files.
   static final _files = FileCache();
 
-  /// Provides the Session instance, to be used in file operations.
-  /// [session] is the instance used in the OuiSync app for accessing the repository.
-  ///
-  /// This methoid also sets the method handler for the calls
-  /// to and from native implementations.
+  /// Initializes the native channels.
   ///
   /// Important: This method needs to be called when the app starts
   /// to guarantee the callbacks to the native methods works as expected.
-  static void init({Repository? repository}) {
+  static void init() {
     _channel.setMethodCallHandler(_methodHandler);
-
-    if (repository != null) {
-      _repository = repository;
-    }
   }
 
   /// Replaces the current [repository] instance with a new one.
@@ -76,7 +68,7 @@ class NativeChannels {
   /// required operation.
   ///
   /// [repository] is the current repository in the app.
-  static void setRepository(Repository? repository) {
+  static set repository(Repository? repository) {
     for (var file in _files.removeAll()) {
       file.close();
     }
