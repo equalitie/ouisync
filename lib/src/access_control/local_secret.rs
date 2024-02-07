@@ -1,8 +1,9 @@
 use crate::crypto::{cipher::SecretKey, Password};
 use rand::{CryptoRng, Rng};
-use serde::{ser, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LocalSecret {
     Password(Password),
     SecretKey(SecretKey),
@@ -17,31 +18,6 @@ impl LocalSecret {
     /// Generates random master secret containing a secret key using the provided RNG.
     pub fn generate<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
         Self::SecretKey(SecretKey::generate(rng))
-    }
-}
-
-/// Only the `Password` variant can be (de)serialized as that's all we currently need
-/// (the `SecretKey` variant is used mostly in tests).
-impl Serialize for LocalSecret {
-    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Password(password) => password.serialize(s),
-            Self::SecretKey(_) => Err(ser::Error::custom(
-                "serialize SecretKey variant not supported",
-            )),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for LocalSecret {
-    fn deserialize<D>(d: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(Self::Password(Password::deserialize(d)?))
     }
 }
 

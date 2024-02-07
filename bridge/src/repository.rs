@@ -6,8 +6,8 @@ use crate::{
 };
 use futures_util::future;
 use ouisync_lib::{
-    crypto::Password, Access, AccessMode, AccessSecrets, LocalSecret, Repository, RepositoryParams,
-    ShareToken, StorageSize,
+    Access, AccessMode, AccessSecrets, LocalSecret, Repository, RepositoryParams, ShareToken,
+    StorageSize,
 };
 use state_monitor::StateMonitor;
 use std::{io, path::PathBuf, sync::Arc, time::Duration};
@@ -38,19 +38,19 @@ pub enum MirrorError {
 
 /// Creates a new repository and set access to it based on the following table:
 ///
-/// local_read_password  |  local_write_password  |  token access  |  result
+/// local_read_secret  |  local_write_secret  |  token access  |  result
 /// ---------------------+------------------------+----------------+------------------------------
 /// None or any          |  None or any           |  blind         |  blind replica
-/// None                 |  None or any           |  read          |  read without password
-/// read_pwd             |  None or any           |  read          |  read with read_pwd as password
-/// None                 |  None                  |  write         |  read and write without password
-/// any                  |  None                  |  write         |  read (only!) with password
-/// None                 |  any                   |  write         |  read without password, require password for writing
-/// any                  |  any                   |  write         |  read with password, write with (same or different) password
+/// None                 |  None or any           |  read          |  read without secret
+/// read_secret          |  None or any           |  read          |  read with read_secret as secret
+/// None                 |  None                  |  write         |  read and write without secret
+/// any                  |  None                  |  write         |  read (only!) with secret
+/// None                 |  any                   |  write         |  read without secret, require secret for writing
+/// any                  |  any                   |  write         |  read with secret, write with (same or different) secret
 pub async fn create(
     store: PathBuf,
-    local_read_password: Option<String>,
-    local_write_password: Option<String>,
+    local_read_secret: Option<LocalSecret>,
+    local_write_secret: Option<LocalSecret>,
     share_token: Option<ShareToken>,
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
@@ -59,17 +59,12 @@ pub async fn create(
         .with_device_id(device_id::get_or_create(config).await?)
         .with_parent_monitor(repos_monitor.clone());
 
-    let local_read_password = local_read_password.map(Password::from);
-    let local_write_password = local_write_password.map(Password::from);
-
     let access_secrets = if let Some(share_token) = share_token {
         share_token.into_secrets()
     } else {
         AccessSecrets::random_write()
     };
 
-    let local_read_secret = local_read_password.map(LocalSecret::Password);
-    let local_write_secret = local_write_password.map(LocalSecret::Password);
     let access = Access::new(local_read_secret, local_write_secret, access_secrets);
 
     let repository = Repository::create(&params, access).await?;
@@ -86,7 +81,7 @@ pub async fn create(
 /// Opens an existing repository.
 pub async fn open(
     store: PathBuf,
-    local_password: Option<String>,
+    local_secret: Option<LocalSecret>,
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository, OpenError> {
@@ -94,29 +89,21 @@ pub async fn open(
         .with_device_id(device_id::get_or_create(config).await?)
         .with_parent_monitor(repos_monitor.clone());
 
-    let local_password = local_password
-        .map(Password::from)
-        .map(LocalSecret::Password);
-
-    let repository = Repository::open(&params, local_password, AccessMode::Write).await?;
+    let repository = Repository::open(&params, local_secret, AccessMode::Write).await?;
 
     Ok(repository)
 }
 
-/// The `password` parameter is optional, if `None` the current access level of the opened
-/// repository is used. If provided, the highest access level that the password can unlock is used.
+/// The `secret` parameter is optional, if `None` the current access level of the opened
+/// repository is used. If provided, the highest access level that the secret can unlock is used.
 pub async fn create_share_token(
     repository: &Repository,
-    password: Option<String>,
+    secret: Option<LocalSecret>,
     access_mode: AccessMode,
     name: Option<String>,
 ) -> Result<String, ouisync_lib::Error> {
-    let password = password.map(Password::from);
-
-    let access_secrets = if let Some(password) = password {
-        repository
-            .unlock_secrets(LocalSecret::Password(password))
-            .await?
+    let access_secrets = if let Some(secret) = secret {
+        repository.unlock_secrets(secret).await?
     } else {
         repository.secrets()
     };

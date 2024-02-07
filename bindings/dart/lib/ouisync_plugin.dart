@@ -315,20 +315,20 @@ class Repository {
 
   /// Creates a new repository and set access to it based on the following table:
   ///
-  /// local_read_password  |  local_write_password  |  token access  |  result
+  /// readSecret      |  writeSecret     |  token access  |  result
   /// ---------------------+------------------------+----------------+------------------------------
-  /// null or any          |  null or any           |  blind         |  blind replica
-  /// null                 |  null or any           |  read          |  read without password
-  /// read_pwd             |  null or any           |  read          |  read with read_pwd as password
-  /// null                 |  null                  |  write         |  read and write without password
-  /// any                  |  null                  |  write         |  read (only!) with password
-  /// null                 |  any                   |  write         |  read without password, require password for writing
-  /// any                  |  any                   |  write         |  read with one password, write with (possibly same) one
+  /// null or any     |  null or any     |  blind         |  blind replica
+  /// null            |  null or any     |  read          |  read without secret
+  /// any             |  null or any     |  read          |  read with readSecret as secret
+  /// null            |  null            |  write         |  read and write without secret
+  /// any             |  null            |  write         |  read (only!) with secret
+  /// null            |  any             |  write         |  read without secret, require secret for writing
+  /// any             |  any             |  write         |  read with one secret, write with (possibly same) one
   static Future<Repository> create(
     Session session, {
     required String store,
-    required String? readPassword,
-    required String? writePassword,
+    required LocalSecret? readSecret,
+    required LocalSecret? writeSecret,
     ShareToken? shareToken,
   }) async {
     if (debugTrace) {
@@ -339,8 +339,8 @@ class Repository {
       'repository_create',
       {
         'path': store,
-        'read_password': readPassword,
-        'write_password': writePassword,
+        'read_secret': readSecret?.encode(),
+        'write_secret': writeSecret?.encode(),
         'share_token': shareToken?.toString()
       },
     );
@@ -355,7 +355,7 @@ class Repository {
   static Future<Repository> open(
     Session session, {
     required String store,
-    String? password,
+    LocalSecret? secret,
   }) async {
     if (debugTrace) {
       print("Repository.open $store");
@@ -363,7 +363,7 @@ class Repository {
 
     final handle = await session._client.invoke<int>('repository_open', {
       'path': store,
-      'password': password,
+      'secret': secret?.encode(),
     });
 
     return Repository._(session._client, handle, store);
@@ -390,7 +390,7 @@ class Repository {
 
   /// Obtain the current repository credentials. They can be used to restore repository access
   /// (with [setCredentials]) after the repo has been closed and re-opened without needing the
-  /// local password. This is useful for example when renaming/moving the repository database.
+  /// local secret. This is useful for example when renaming/moving the repository database.
   Future<Uint8List> get credentials =>
       _client.invoke<Uint8List>('repository_credentials', _handle);
 
@@ -406,11 +406,11 @@ class Repository {
         .then((n) => AccessMode.decode(n));
   }
 
-  Future<void> setAccessMode(AccessMode accessMode, {String? password}) =>
+  Future<void> setAccessMode(AccessMode accessMode, {LocalSecret? secret}) =>
       _client.invoke('repository_set_access_mode', {
         'repository': _handle,
         'access_mode': accessMode.encode(),
-        'password': password,
+        'secret': secret?.encode(),
       });
 
   /// Returns the type (file, directory, ..) of the entry at [path]. Returns `null` if the entry
@@ -484,7 +484,7 @@ class Repository {
   /// specify repository name which will be included in the token and suggested to the recipient.
   Future<ShareToken> createShareToken({
     required AccessMode accessMode,
-    String? password,
+    LocalSecret? secret,
     String? name,
   }) {
     if (debugTrace) {
@@ -493,7 +493,7 @@ class Repository {
 
     return _client.invoke<String>('repository_create_share_token', {
       'repository': _handle,
-      'password': password,
+      'secret': secret?.encode(),
       'access_mode': accessMode.encode(),
       'name': name,
     }).then((token) => ShareToken._(_client, token));
@@ -527,17 +527,39 @@ class Repository {
       });
 }
 
+sealed class LocalSecret {
+  Object? encode();
+}
+
+class LocalPassword extends LocalSecret {
+  final String password;
+
+  LocalPassword(this.password);
+
+  @override
+  Object? encode() => {'password': password};
+}
+
+class LocalSecretKey extends LocalSecret {
+  final Uint8List key;
+
+  LocalSecretKey(this.key);
+
+  @override
+  Object? encode() => {'secret_key': key};
+}
+
 sealed class AccessChange {
   Object? encode();
 }
 
 class EnableAccess extends AccessChange {
-  final String? password;
+  final LocalSecret? secret;
 
-  EnableAccess(this.password);
+  EnableAccess(this.secret);
 
   @override
-  Object? encode() => {'enable': password};
+  Object? encode() => {'enable': secret?.encode()};
 }
 
 class DisableAccess extends AccessChange {
