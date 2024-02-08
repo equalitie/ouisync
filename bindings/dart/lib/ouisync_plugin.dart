@@ -10,7 +10,6 @@ import 'package:hex/hex.dart';
 
 import 'bindings.dart';
 import 'client.dart';
-import 'native_channels.dart';
 import 'state_monitor.dart';
 
 export 'bindings.dart'

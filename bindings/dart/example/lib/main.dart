@@ -5,6 +5,7 @@ import 'package:async/async.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:ouisync_plugin/ouisync_plugin.dart';
+import 'package:ouisync_plugin/native_channels.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -20,6 +21,7 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   late Session session;
   late Repository repo;
+  late NativeChannels nativeChannels;
 
   bool bittorrentDhtEnabled = false;
 
@@ -45,11 +47,13 @@ class _MyAppState extends State<MyApp> {
 
     bittorrentDhtEnabled = await repo.isDhtEnabled;
 
-    NativeChannels.init(repository: repo);
+    final nativeChannels = NativeChannels(session);
+    nativeChannels.repository = repo;
 
     setState(() {
       this.session = session;
       this.repo = repo;
+      this.nativeChannels = nativeChannels;
     });
   }
 
@@ -199,45 +203,45 @@ class _MyAppState extends State<MyApp> {
       contents.addAll(items);
     });
   }
-}
 
-void showAlertDialog(BuildContext context, String path, int size) {
-  Widget previewFileButton = TextButton(
-    child: Text("Preview"),
-    onPressed: () async {
-      Navigator.of(context).pop();
-      await NativeChannels.previewOuiSyncFile(
-          "ie.equalit.ouisync_plugin_example", path, size);
-    },
-  );
-  Widget shareFileButton = TextButton(
-      child: Text("Share"),
+  void showAlertDialog(BuildContext context, String path, int size) {
+    Widget previewFileButton = TextButton(
+      child: Text("Preview"),
       onPressed: () async {
         Navigator.of(context).pop();
-        await NativeChannels.shareOuiSyncFile(
+        await nativeChannels.previewOuiSyncFile(
             "ie.equalit.ouisync_plugin_example", path, size);
-      });
-  Widget cancelButton = TextButton(
-    child: Text("Cancel"),
-    onPressed: () {
-      Navigator.of(context).pop();
-    },
-  );
+      },
+    );
+    Widget shareFileButton = TextButton(
+        child: Text("Share"),
+        onPressed: () async {
+          Navigator.of(context).pop();
+          await nativeChannels.shareOuiSyncFile(
+              "ie.equalit.ouisync_plugin_example", path, size);
+        });
+    Widget cancelButton = TextButton(
+      child: Text("Cancel"),
+      onPressed: () {
+        Navigator.of(context).pop();
+      },
+    );
 
-  AlertDialog alert = AlertDialog(
-    title: Text("Ouisync Plugin Example App"),
-    content: Text("File:\n$path"),
-    actions: [
-      previewFileButton,
-      shareFileButton,
-      cancelButton,
-    ],
-  );
+    AlertDialog alert = AlertDialog(
+      title: Text("Ouisync Plugin Example App"),
+      content: Text("File:\n$path"),
+      actions: [
+        previewFileButton,
+        shareFileButton,
+        cancelButton,
+      ],
+    );
 
-  showDialog<AlertDialog>(
-    context: context,
-    builder: (BuildContext context) {
-      return alert;
-    },
-  );
+    showDialog<AlertDialog>(
+      context: context,
+      builder: (BuildContext context) {
+        return alert;
+      },
+    );
+  }
 }
