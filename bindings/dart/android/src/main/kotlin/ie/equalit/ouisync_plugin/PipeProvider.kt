@@ -171,22 +171,22 @@ class PipeProvider: AbstractFileProvider() {
 
 private fun openFile(path: String, result: MethodChannel.Result) {
     val arguments = hashMapOf<String, Any>("path" to path)
-    OuisyncPlugin.channel.invokeMethod("openFile", arguments, result)
+    OuisyncPlugin.invokeMethod("openFile", arguments, result)
 }
 
 private fun closeFile(id: Int, result: MethodChannel.Result) {
     val arguments = hashMapOf<String, Any>("id" to id)
-    OuisyncPlugin.channel.invokeMethod("closeFile", arguments, result)
+    OuisyncPlugin.invokeMethod("closeFile", arguments, result)
 }
 
 private fun readFile(id: Int, chunkSize: Int, offset: Long, result: MethodChannel.Result) {
     val arguments = hashMapOf<String, Any>("id" to id, "chunkSize" to chunkSize, "offset" to offset)
-    OuisyncPlugin.channel.invokeMethod("readFile", arguments, result)
+    OuisyncPlugin.invokeMethod("readFile", arguments, result)
 }
 
 private fun copyFileToRawFd(srcPath: String, dstFd: Int, result: MethodChannel.Result) {
     val arguments = hashMapOf<String, Any>("srcPath" to srcPath, "dstFd" to dstFd)
-    OuisyncPlugin.channel.invokeMethod("copyFileToRawFd", arguments, result)
+    OuisyncPlugin.invokeMethod("copyFileToRawFd", arguments, result)
 }
 
 // Implementation of MethodChannel.Result which blocks until the result is available.
