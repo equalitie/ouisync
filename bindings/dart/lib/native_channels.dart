@@ -39,27 +39,22 @@ PreviewFileResult? previewFileResultFromString(String previewFileResult) {
 /// MethodChannel handler for calling functions
 /// implemented natively, and viceversa.
 class NativeChannels {
-  // We need this "global" `session` variable to be able to close the session
+  NativeChannels(this._session) {
+    _channel.setMethodCallHandler(_methodHandler);
+  }
+
+  final MethodChannel _channel = const MethodChannel('ouisync_plugin');
+
+  // We need this session` variable to be able to close the session
   // from inside the java/kotlin code when the plugin is detached from the
   // engine. This is because when the app is set up to ignore battery
   // optimizations, Android may let the native (c/c++/rust) code running even
   // after the plugin was detached.
-  static Session? session;
+  final Session _session;
 
-  static final MethodChannel _channel = const MethodChannel('ouisync_plugin');
-
-  static Repository? _repository;
-
+  Repository? _repository;
   // Cache of open files.
-  static final _files = FileCache();
-
-  /// Initializes the native channels.
-  ///
-  /// Important: This method needs to be called when the app starts
-  /// to guarantee the callbacks to the native methods works as expected.
-  static void init() {
-    _channel.setMethodCallHandler(_methodHandler);
-  }
+  final _files = FileCache();
 
   /// Replaces the current [repository] instance with a new one.
   ///
@@ -68,9 +63,9 @@ class NativeChannels {
   /// required operation.
   ///
   /// [repository] is the current repository in the app.
-  static set repository(Repository? repository) {
+  set repository(Repository? repository) {
     for (var file in _files.removeAll()) {
-      file.close();
+      unawaited(file.close());
     }
 
     _repository = repository;
@@ -81,7 +76,7 @@ class NativeChannels {
   ///
   /// [call] is the object sent from the native platform with the function name ([call.method])
   /// and any arguments included ([call.arguments])
-  static Future<dynamic> _methodHandler(MethodCall call) async {
+  Future<dynamic> _methodHandler(MethodCall call) async {
     switch (call.method) {
       case 'openFile':
         final args = call.arguments as Map<Object?, Object?>;
@@ -111,13 +106,7 @@ class NativeChannels {
         return await _copyFileToRawFd(srcPath, dstFd);
 
       case 'stopSession':
-        final s = session;
-        session = null;
-
-        if (s != null) {
-          s.closeSync();
-        }
-
+        _session.closeSync();
         return;
 
       default:
@@ -125,13 +114,13 @@ class NativeChannels {
     }
   }
 
-  static Future<int?> _openFile(String path) async {
+  Future<int?> _openFile(String path) async {
     final id = _files.insert(await File.open(_repository!, path));
     print('openFile(path=$path) -> id=$id');
     return id;
   }
 
-  static Future<void> _closeFile(int id) async {
+  Future<void> _closeFile(int id) async {
     print('closeFile(id=$id)');
 
     final file = _files.remove(id);
@@ -141,7 +130,7 @@ class NativeChannels {
     }
   }
 
-  static Future<Uint8List> _readFile(int id, int chunkSize, int offset) async {
+  Future<Uint8List> _readFile(int id, int chunkSize, int offset) async {
     print('readFile(id=$id, chunkSize=$chunkSize, offset=$offset)');
 
     final file = _files[id];
@@ -154,14 +143,14 @@ class NativeChannels {
     }
   }
 
-  static Future<void> _copyFileToRawFd(String srcPath, int dstFd) async {
+  Future<void> _copyFileToRawFd(String srcPath, int dstFd) async {
     final file = await File.open(_repository!, srcPath);
     await file.copyToRawFd(dstFd);
   }
 
   /// Invokes the native method (In Android, it retrieves the legacy path to the
   /// Download directory)
-  static Future<String> getDownloadPathForAndroid() async {
+  Future<String> getDownloadPathForAndroid() async {
     final dynamic result = await _channel.invokeMethod('getDownloadPath');
     return result;
   }
@@ -170,8 +159,7 @@ class NativeChannels {
   ///
   /// [path] is the location of the file to share, including its full name (<path>/<file-name.ext>).
   /// [size] is the lenght of the file (bytes).
-  static Future<void> shareOuiSyncFile(
-      String authority, String path, int size) async {
+  Future<void> shareOuiSyncFile(String authority, String path, int size) async {
     final dynamic result = await _channel.invokeMethod(
         'shareFile', {"authority": authority, "path": path, "size": size});
     print('shareFile result: $result');
@@ -181,7 +169,7 @@ class NativeChannels {
   ///
   /// [path] is the location of the file to preview, including its full name (<path>/<file-name.ext>).
   /// [size] is the lenght of the file (bytes).
-  static Future<PreviewFileResult?> previewOuiSyncFile(
+  Future<PreviewFileResult?> previewOuiSyncFile(
       String authority, String path, int size,
       {bool useDefaultApp = false}) async {
     var args = {"authority": authority, "path": path, "size": size};
