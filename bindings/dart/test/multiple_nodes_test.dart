@@ -23,8 +23,8 @@ void main() {
     repo1 = await Repository.create(
       session1,
       store: '${temp.path}/1/repo.db',
-      readPassword: null,
-      writePassword: null,
+      readSecret: null,
+      writeSecret: null,
     );
     final token = await repo1.createShareToken(accessMode: AccessMode.write);
 
@@ -32,8 +32,8 @@ void main() {
       session2,
       store: '${temp.path}/2/repo.db',
       shareToken: token,
-      readPassword: null,
-      writePassword: null,
+      readSecret: null,
+      writeSecret: null,
     );
 
     await session1.bindNetwork(quicV4: "127.0.0.1:0");

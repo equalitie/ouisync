@@ -41,9 +41,9 @@ class _MyAppState extends State<MyApp> {
     final storeExists = await io.File(store).exists();
 
     final repo = storeExists
-        ? await Repository.open(session, store: store, password: null)
+        ? await Repository.open(session, store: store, secret: null)
         : await Repository.create(session,
-            store: store, readPassword: null, writePassword: null);
+            store: store, readSecret: null, writeSecret: null);
 
     bittorrentDhtEnabled = await repo.isDhtEnabled;
 
@@ -185,7 +185,7 @@ class _MyAppState extends State<MyApp> {
     } catch (e) {
       print('Exception writing the file $path:\n${e.toString()}');
     } finally {
-      file.close();
+      await file.close();
     }
   }
 

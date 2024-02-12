@@ -544,8 +544,8 @@ mod tests {
         let origs = [
             Request::RepositoryCreate {
                 path: Utf8PathBuf::from("/tmp/repo.db"),
-                read_password: None,
-                write_password: None,
+                read_secret: None,
+                write_secret: None,
                 share_token: None,
             },
             Request::RepositoryClose(Handle::from_id(1)),

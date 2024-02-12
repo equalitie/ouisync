@@ -30,8 +30,8 @@ void main() {
       repo = await Repository.create(
         session,
         store: store,
-        readPassword: null,
-        writePassword: null,
+        readSecret: null,
+        writeSecret: null,
       );
     });
 
@@ -123,7 +123,7 @@ void main() {
       repo = await Repository.open(
         session,
         store: store,
-        password: null,
+        secret: null,
       );
 
       expect(await Directory.open(repo, '/'), equals([]));
@@ -146,8 +146,8 @@ void main() {
 
     test('set access', () async {
       await repo.setAccess(
-        read: EnableAccess('read_pass'),
-        write: EnableAccess('write_pass'),
+        read: EnableAccess(LocalPassword('read_pass')),
+        write: EnableAccess(LocalPassword('write_pass')),
       );
 
       await repo.close();
@@ -161,7 +161,7 @@ void main() {
       repo = await Repository.open(
         session,
         store: store,
-        password: 'read_pass',
+        secret: LocalPassword('read_pass'),
       );
       expect(await repo.accessMode, equals(AccessMode.read));
 
@@ -169,7 +169,7 @@ void main() {
       repo = await Repository.open(
         session,
         store: store,
-        password: 'write_pass',
+        secret: LocalPassword('write_pass'),
       );
       expect(await repo.accessMode, equals(AccessMode.write));
     });
