@@ -23,6 +23,8 @@ export 'bindings.dart'
         PeerStateKind,
         SessionKind;
 
+part 'local_secret.dart';
+
 const bool debugTrace = false;
 
 /// Entry point to the ouisync bindings. A session should be opened at the start of the application
@@ -187,6 +189,19 @@ class Session {
 
   Future<void> addCacheServer(String host) =>
       _client.invoke<void>('network_add_cache_server', host);
+
+  // Utility functions to generate password salts and to derive LocalSecretKey from LocalPasswords.
+
+  Future<PasswordSalt> generateSaltForPasswordHash() => _client
+      .invoke<Uint8List>('generate_salt_for_secret_key')
+      .then((bytes) => PasswordSalt._(bytes));
+
+  Future<LocalSecretKey> deriveLocalSecretKey(
+          LocalPassword pwd, PasswordSalt salt) =>
+      _client.invoke<Uint8List>('derive_secret_key', {
+        'password': pwd.password,
+        'salt': salt._salt
+      }).then((bytes) => LocalSecretKey._(bytes));
 
   /// Try to gracefully close connections to peers then close the session.
   ///
@@ -525,28 +540,6 @@ class Repository {
   Future<void> mirror() => _client.invoke<void>('repository_mirror', {
         'repository': _handle,
       });
-}
-
-sealed class LocalSecret {
-  Object? encode();
-}
-
-class LocalPassword extends LocalSecret {
-  final String password;
-
-  LocalPassword(this.password);
-
-  @override
-  Object? encode() => {'password': password};
-}
-
-class LocalSecretKey extends LocalSecret {
-  final Uint8List key;
-
-  LocalSecretKey(this.key);
-
-  @override
-  Object? encode() => {'secret_key': key};
 }
 
 sealed class AccessChange {

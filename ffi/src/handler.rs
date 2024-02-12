@@ -9,7 +9,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::transport::NotificationSender;
-use ouisync_lib::PeerAddr;
+use ouisync_lib::{crypto::cipher::SecretKey, PeerAddr};
 use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Clone)]
@@ -356,6 +356,16 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::Unsubscribe(handle) => {
                 self.state.remove_task(handle);
                 ().into()
+            }
+            Request::GenerateSaltForSecretKey => {
+                SecretKey::generate_password_salt().to_vec().into()
+            }
+            Request::DeriveSecretKey { password, salt } => {
+                // TODO: This is a slow operation, do we need to send it to the thread pool?
+                SecretKey::derive_from_password(&password, &salt.try_into().unwrap())
+                    .as_array()
+                    .to_vec()
+                    .into()
             }
         };
 

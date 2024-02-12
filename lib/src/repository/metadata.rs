@@ -125,7 +125,7 @@ async fn get_or_generate_password_salt(
     let salt = match get_public_blob(tx, PASSWORD_SALT).await {
         Ok(Some(salt)) => salt,
         Ok(None) => {
-            let salt: PasswordSalt = OsRng.gen();
+            let salt: PasswordSalt = cipher::SecretKey::generate_password_salt();
             set_public_blob(tx, PASSWORD_SALT, &salt).await?;
             salt
         }

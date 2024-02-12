@@ -168,6 +168,12 @@ pub(crate) enum Request {
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
     Unsubscribe(TaskHandle),
+    GenerateSaltForSecretKey,
+    DeriveSecretKey {
+        password: String,
+        #[serde(with = "serde_bytes")]
+        salt: Vec<u8>,
+    },
 }
 
 #[derive(Eq, PartialEq, Serialize, Deserialize)]
