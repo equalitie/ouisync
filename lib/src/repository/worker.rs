@@ -192,6 +192,7 @@ mod scan {
         let mut versions = Vec::with_capacity(branches.len());
 
         for branch in branches {
+            #[allow(clippy::blocks_in_conditions)]
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
                 .await.map_err(|error| {

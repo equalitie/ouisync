@@ -303,6 +303,7 @@ async fn run_task(
                 ToMissing(HashSet<BlockId>),
             }
 
+            #[allow(clippy::blocks_in_conditions)]
             match {
                 let mut lock = shared.lock().unwrap();
 

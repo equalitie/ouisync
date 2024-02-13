@@ -118,7 +118,7 @@ impl Directory {
     }
 
     /// Returns iterator over the entries of this directory.
-    pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
+    pub fn entries(&self) -> impl DoubleEndedIterator<Item = EntryRef> + Clone {
         self.content
             .iter()
             .map(move |(name, data)| EntryRef::new(self, name, data))
