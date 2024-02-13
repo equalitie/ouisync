@@ -5,7 +5,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::{network, transport::NotificationSender};
-use ouisync_lib::{PeerAddr, ShareToken};
+use ouisync_lib::{crypto::Password, LocalSecret, PeerAddr, ShareToken};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 #[derive(Clone)]
@@ -79,8 +79,10 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 let repository = ouisync_bridge::repository::create(
                     store_path,
-                    read_password,
-                    write_password,
+                    read_password.map(Password::from).map(LocalSecret::Password),
+                    write_password
+                        .map(Password::from)
+                        .map(LocalSecret::Password),
                     share_token,
                     &self.state.config,
                     &self.state.repositories_monitor,
@@ -124,7 +126,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 let repository = ouisync_bridge::repository::open(
                     store_path,
-                    password,
+                    password.map(Password::from).map(LocalSecret::Password),
                     &self.state.config,
                     &self.state.repositories_monitor,
                 )
@@ -173,7 +175,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 let holder = self.state.repositories.find(&name)?;
                 let token = ouisync_bridge::repository::create_share_token(
                     &holder.repository,
-                    password,
+                    password.map(Password::from).map(LocalSecret::Password),
                     mode,
                     Some(name),
                 )
