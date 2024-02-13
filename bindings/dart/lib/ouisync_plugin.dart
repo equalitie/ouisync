@@ -194,14 +194,14 @@ class Session {
 
   Future<PasswordSalt> generateSaltForPasswordHash() => _client
       .invoke<Uint8List>('generate_salt_for_secret_key')
-      .then((bytes) => PasswordSalt._(bytes));
+      .then((bytes) => PasswordSalt(bytes));
 
   Future<LocalSecretKey> deriveLocalSecretKey(
           LocalPassword pwd, PasswordSalt salt) =>
       _client.invoke<Uint8List>('derive_secret_key', {
-        'password': pwd.password,
-        'salt': salt._salt
-      }).then((bytes) => LocalSecretKey._(bytes));
+        'password': pwd.string,
+        'salt': salt._bytes
+      }).then((bytes) => LocalSecretKey(bytes));
 
   /// Try to gracefully close connections to peers then close the session.
   ///

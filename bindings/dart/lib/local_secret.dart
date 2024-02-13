@@ -8,12 +8,15 @@ sealed class LocalSecret {
 }
 
 class LocalPassword extends LocalSecret {
-  final String password;
+  final String string;
 
-  LocalPassword(this.password);
+  LocalPassword(this.string);
+
+  int get length => string.length;
+  bool get isEmpty => string.isEmpty;
 
   @override
-  Object? encode() => {'password': password};
+  Object? encode() => {'password': string};
 
   // Discourage from writing local secret into the log.
   @override
@@ -21,14 +24,14 @@ class LocalPassword extends LocalSecret {
 }
 
 class LocalSecretKey extends LocalSecret {
-  final Uint8List _key;
+  final Uint8List _bytes;
 
-  LocalSecretKey._(this._key);
+  LocalSecretKey(this._bytes);
 
-  String toBase64() => base64.encode(_key);
+  Uint8List get bytes => _bytes;
 
   @override
-  Object? encode() => {'secret_key': _key};
+  Object? encode() => {'secret_key': _bytes};
 
   // Discourage from writing local secret into the log.
   @override
@@ -36,11 +39,16 @@ class LocalSecretKey extends LocalSecret {
 }
 
 class PasswordSalt {
-  final Uint8List _salt;
+  final Uint8List _bytes;
 
-  PasswordSalt._(this._salt);
+  PasswordSalt(this._bytes);
 
-  String toBase64() => base64.encode(_salt);
+  Uint8List get bytes => _bytes;
+
+  String toBase64() => base64.encode(_bytes);
+
+  static PasswordSalt fromBase64(String salt64) =>
+      PasswordSalt(base64.decode(salt64));
 
   // Discourage from writing local secret into the log.
   @override
