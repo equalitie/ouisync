@@ -28,7 +28,7 @@ mod tests {
     #[test]
     fn serialize_deserialize_bincode() {
         let orig = LocalSecret::Password("mellon".to_string().into());
-        let expected_serialized_hex = "06000000000000006d656c6c6f6e";
+        let expected_serialized_hex = "0000000006000000000000006d656c6c6f6e";
 
         let serialized = bincode::serialize(&orig).unwrap();
         assert_eq!(hex::encode(&serialized), expected_serialized_hex);
@@ -40,7 +40,7 @@ mod tests {
     #[test]
     fn serialize_deserialize_msgpack() {
         let orig = LocalSecret::Password("mellon".to_string().into());
-        let expected_serialized_hex = "a66d656c6c6f6e";
+        let expected_serialized_hex = "81a870617373776f7264a66d656c6c6f6e";
 
         let serialized = rmp_serde::to_vec(&orig).unwrap();
         assert_eq!(hex::encode(&serialized), expected_serialized_hex);
