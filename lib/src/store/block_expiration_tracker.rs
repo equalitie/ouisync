@@ -303,8 +303,7 @@ async fn run_task(
                 ToMissing(HashSet<BlockId>),
             }
 
-            #[allow(clippy::blocks_in_conditions)]
-            match {
+            let action = {
                 let mut lock = shared.lock().unwrap();
 
                 if !lock.to_missing_if_expired.is_empty() {
@@ -317,7 +316,9 @@ async fn run_task(
                             .map(|e| (*e.key(), *e.get().iter().next().unwrap())),
                     )
                 }
-            } {
+            };
+
+            match action {
                 Enum::OldestEntry(Some((time_updated, block_id))) => (time_updated, block_id),
                 Enum::OldestEntry(None) => {
                     if watch_rx.changed().await.is_err() {
