@@ -413,7 +413,7 @@ mod tests {
         for (orig, expected_serialized) in [
             (
                 AccessChange::Enable(Some(LocalSecret::Password("mellon".to_string().into()))),
-                "{\"enable\":\"mellon\"}",
+                "{\"enable\":{\"password\":\"mellon\"}}",
             ),
             (AccessChange::Enable(None), "{\"enable\":null}"),
             (AccessChange::Disable, "\"disable\""),
@@ -431,7 +431,7 @@ mod tests {
         for (orig, expected_serialized_hex) in [
             (
                 AccessChange::Enable(Some(LocalSecret::Password("mellon".to_string().into()))),
-                "81a6656e61626c65a66d656c6c6f6e",
+                "81a6656e61626c6581a870617373776f7264a66d656c6c6f6e",
             ),
             (AccessChange::Enable(None), "81a6656e61626c65c0"),
             (AccessChange::Disable, "a764697361626c65"),

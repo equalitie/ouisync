@@ -30,7 +30,7 @@ void main() {
       configPath: '${temp.path}/device_id.conf',
     );
     repository = await Repository.create(session,
-        store: '${temp.path}/repo.db', readPassword: null, writePassword: null);
+        store: '${temp.path}/repo.db', readSecret: null, writeSecret: null);
 
     currentPath = '/';
 

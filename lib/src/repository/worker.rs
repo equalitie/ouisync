@@ -192,12 +192,15 @@ mod scan {
         let mut versions = Vec::with_capacity(branches.len());
 
         for branch in branches {
+            let report_error = |error| {
+                tracing::trace!(branch_id = ?branch.id(), ?error, "Failed to open root directory");
+                error
+            };
+
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
-                .await.map_err(|error| {
-                    tracing::trace!(branch_id = ?branch.id(), ?error, "Failed to open root directory");
-                    error
-                })
+                .await
+                .map_err(report_error)
             {
                 Ok(dir) => {
                     versions.push(dir);

@@ -6,7 +6,6 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
-    crypto::Password,
     network::{self, Registration},
     path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository, ShareToken,
 };
@@ -29,16 +28,16 @@ pub(crate) type RepositoryHandle = Handle<Arc<RepositoryHolder>>;
 pub(crate) async fn create(
     state: &State,
     store_path: PathBuf,
-    local_read_password: Option<String>,
-    local_write_password: Option<String>,
+    local_read_secret: Option<LocalSecret>,
+    local_write_secret: Option<LocalSecret>,
     share_token: Option<ShareToken>,
 ) -> Result<RepositoryHandle, Error> {
     let entry = ensure_vacant_entry(state, store_path.clone()).await?;
 
     let repository = repository::create(
         store_path.clone(),
-        local_read_password,
-        local_write_password,
+        local_read_secret,
+        local_write_secret,
         share_token,
         &state.config,
         &state.repos_monitor,
@@ -65,24 +64,17 @@ pub(crate) async fn create(
 pub(crate) async fn open(
     state: &State,
     store_path: PathBuf,
-    local_password: Option<String>,
+    local_secret: Option<LocalSecret>,
 ) -> Result<RepositoryHandle, Error> {
     let entry = match state.repositories.entry(store_path.clone()).await {
         RepositoryEntry::Occupied(handle) => {
-            // If `local_password` provides higher access mode than what the repo currently has,
+            // If `local_secret` provides higher access mode than what the repo currently has,
             // increase it. If not, the access mode remains unchanged.
             // See `Repository::set_access_mode` for details.
             let holder = state.repositories.get(handle)?;
             holder
                 .repository
-                .set_access_mode(
-                    AccessMode::Write,
-                    local_password
-                        .as_ref()
-                        .cloned()
-                        .map(Password::from)
-                        .map(LocalSecret::Password),
-                )
+                .set_access_mode(AccessMode::Write, local_secret.clone())
                 .await?;
 
             return Ok(handle);
@@ -92,7 +84,7 @@ pub(crate) async fn open(
 
     let repository = repository::open(
         store_path.clone(),
-        local_password,
+        local_secret,
         &state.config,
         &state.repos_monitor,
     )
@@ -177,18 +169,13 @@ pub(crate) async fn set_access_mode(
     state: &State,
     handle: RepositoryHandle,
     access_mode: AccessMode,
-    local_password: Option<String>,
+    local_secret: Option<LocalSecret>,
 ) -> Result<(), Error> {
     state
         .repositories
         .get(handle)?
         .repository
-        .set_access_mode(
-            access_mode,
-            local_password
-                .map(Password::from)
-                .map(LocalSecret::Password),
-        )
+        .set_access_mode(access_mode, local_secret)
         .await?;
 
     Ok(())
@@ -323,18 +310,18 @@ pub(crate) async fn set_pex_enabled(
     Ok(())
 }
 
-/// The `password` parameter is optional, if `None` the current access level of the opened
-/// repository is used. If provided, the highest access level that the password can unlock is used.
+/// The `secret` parameter is optional, if `None` the current access level of the opened
+/// repository is used. If provided, the highest access level that the secret can unlock is used.
 pub(crate) async fn create_share_token(
     state: &State,
     repository: RepositoryHandle,
-    password: Option<String>,
+    secret: Option<LocalSecret>,
     access_mode: AccessMode,
     name: Option<String>,
 ) -> Result<String, Error> {
     let holder = state.repositories.get(repository)?;
     let token =
-        repository::create_share_token(&holder.repository, password, access_mode, name).await?;
+        repository::create_share_token(&holder.repository, secret, access_mode, name).await?;
     Ok(token)
 }
 

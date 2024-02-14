@@ -78,6 +78,10 @@ impl SecretKey {
         sub_key
     }
 
+    pub fn generate_password_salt() -> PasswordSalt {
+        OsRng.gen()
+    }
+
     /// Derive a secret key from user's password and salt.
     pub fn derive_from_password(user_password: &str, salt: &PasswordSalt) -> Self {
         let mut result = Self::zero();
@@ -107,7 +111,7 @@ impl SecretKey {
 
     /// Note this method is somewhat dangerous because if used carelessly the underlying sensitive data
     /// can be copied or revealed.
-    pub(crate) fn as_array(&self) -> &[u8; Self::SIZE] {
+    pub fn as_array(&self) -> &[u8; Self::SIZE] {
         &self.0
     }
 

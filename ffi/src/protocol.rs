@@ -6,7 +6,7 @@ use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
 use ouisync_lib::{
     network::{NatBehavior, TrafficStats},
-    AccessChange, AccessMode, PeerAddr, PeerInfo, Progress, ShareToken,
+    AccessChange, AccessMode, LocalSecret, PeerAddr, PeerInfo, Progress, ShareToken,
 };
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
@@ -23,18 +23,18 @@ use thiserror::Error;
 pub(crate) enum Request {
     RepositoryCreate {
         path: Utf8PathBuf,
-        read_password: Option<String>,
-        write_password: Option<String>,
+        read_secret: Option<LocalSecret>,
+        write_secret: Option<LocalSecret>,
         share_token: Option<ShareToken>,
     },
     RepositoryOpen {
         path: Utf8PathBuf,
-        password: Option<String>,
+        secret: Option<LocalSecret>,
     },
     RepositoryClose(RepositoryHandle),
     RepositorySubscribe(RepositoryHandle),
-    RepositoryRequiresLocalPasswordForReading(RepositoryHandle),
-    RepositoryRequiresLocalPasswordForWriting(RepositoryHandle),
+    RepositoryRequiresLocalSecretForReading(RepositoryHandle),
+    RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
     RepositorySetAccess {
         repository: RepositoryHandle,
         read: Option<AccessChange>,
@@ -50,7 +50,7 @@ pub(crate) enum Request {
     RepositorySetAccessMode {
         repository: RepositoryHandle,
         access_mode: AccessMode,
-        password: Option<String>,
+        secret: Option<LocalSecret>,
     },
     RepositoryInfoHash(RepositoryHandle),
     RepositoryDatabaseId(RepositoryHandle),
@@ -75,7 +75,7 @@ pub(crate) enum Request {
     },
     RepositoryCreateShareToken {
         repository: RepositoryHandle,
-        password: Option<String>,
+        secret: Option<LocalSecret>,
         access_mode: AccessMode,
         name: Option<String>,
     },
@@ -168,6 +168,12 @@ pub(crate) enum Request {
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
     Unsubscribe(TaskHandle),
+    GenerateSaltForSecretKey,
+    DeriveSecretKey {
+        password: String,
+        #[serde(with = "serde_bytes")]
+        salt: Vec<u8>,
+    },
 }
 
 #[derive(Eq, PartialEq, Serialize, Deserialize)]
@@ -538,8 +544,8 @@ mod tests {
         let origs = [
             Request::RepositoryCreate {
                 path: Utf8PathBuf::from("/tmp/repo.db"),
-                read_password: None,
-                write_password: None,
+                read_secret: None,
+                write_secret: None,
                 share_token: None,
             },
             Request::RepositoryClose(Handle::from_id(1)),

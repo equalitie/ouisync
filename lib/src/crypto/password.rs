@@ -56,4 +56,4 @@ impl<'de> Deserialize<'de> for Password {
 }
 
 pub(crate) const PASSWORD_SALT_LEN: usize = password_hash::Salt::RECOMMENDED_LENGTH;
-pub(crate) type PasswordSalt = [u8; PASSWORD_SALT_LEN];
+pub type PasswordSalt = [u8; PASSWORD_SALT_LEN];

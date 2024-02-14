@@ -9,7 +9,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::transport::NotificationSender;
-use ouisync_lib::PeerAddr;
+use ouisync_lib::{crypto::cipher::SecretKey, PeerAddr};
 use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Clone)]
@@ -39,20 +39,20 @@ impl ouisync_bridge::transport::Handler for Handler {
         let response = match request {
             Request::RepositoryCreate {
                 path,
-                read_password,
-                write_password,
+                read_secret,
+                write_secret,
                 share_token,
             } => repository::create(
                 &self.state,
                 path.into_std_path_buf(),
-                read_password,
-                write_password,
+                read_secret,
+                write_secret,
                 share_token,
             )
             .await?
             .into(),
-            Request::RepositoryOpen { path, password } => {
-                repository::open(&self.state, path.into_std_path_buf(), password)
+            Request::RepositoryOpen { path, secret } => {
+                repository::open(&self.state, path.into_std_path_buf(), secret)
                     .await?
                     .into()
             }
@@ -86,12 +86,12 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositorySetAccessMode {
                 repository,
                 access_mode,
-                password,
+                secret,
             } => {
-                repository::set_access_mode(&self.state, repository, access_mode, password).await?;
+                repository::set_access_mode(&self.state, repository, access_mode, secret).await?;
                 ().into()
             }
-            Request::RepositoryRequiresLocalPasswordForReading(handle) => self
+            Request::RepositoryRequiresLocalSecretForReading(handle) => self
                 .state
                 .repositories
                 .get(handle)?
@@ -99,7 +99,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .requires_local_secret_for_reading()
                 .await?
                 .into(),
-            Request::RepositoryRequiresLocalPasswordForWriting(handle) => self
+            Request::RepositoryRequiresLocalSecretForWriting(handle) => self
                 .state
                 .repositories
                 .get(handle)?
@@ -147,14 +147,12 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::RepositoryCreateShareToken {
                 repository,
-                password,
+                secret,
                 access_mode,
                 name,
-            } => {
-                repository::create_share_token(&self.state, repository, password, access_mode, name)
-                    .await?
-                    .into()
-            }
+            } => repository::create_share_token(&self.state, repository, secret, access_mode, name)
+                .await?
+                .into(),
             Request::RepositoryMirror { repository } => {
                 repository::mirror(&self.state, repository).await?.into()
             }
@@ -358,6 +356,16 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::Unsubscribe(handle) => {
                 self.state.remove_task(handle);
                 ().into()
+            }
+            Request::GenerateSaltForSecretKey => {
+                SecretKey::generate_password_salt().to_vec().into()
+            }
+            Request::DeriveSecretKey { password, salt } => {
+                // TODO: This is a slow operation, do we need to send it to the thread pool?
+                SecretKey::derive_from_password(&password, &salt.try_into().unwrap())
+                    .as_array()
+                    .to_vec()
+                    .into()
             }
         };
 

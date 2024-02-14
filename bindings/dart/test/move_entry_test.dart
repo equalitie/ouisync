@@ -24,8 +24,8 @@ void main() {
     repository = await Repository.create(
       session,
       store: '${temp.path}/repo.db',
-      readPassword: null,
-      writePassword: null,
+      readSecret: null,
+      writeSecret: null,
     );
   });
 

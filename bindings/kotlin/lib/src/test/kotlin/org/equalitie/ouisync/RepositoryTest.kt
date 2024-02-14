@@ -93,20 +93,20 @@ class RepositoryTest {
     @Test
     fun localPasswords() = runTest {
         withRepo {
-            assertFalse(it.requiresLocalPasswordForReading())
-            assertFalse(it.requiresLocalPasswordForWriting())
+            assertFalse(it.requiresLocalSecretForReading())
+            assertFalse(it.requiresLocalSecretForWriting())
 
-            it.setAccess(read = EnableAccess("banana"), write = EnableAccess("banana"))
-            assertTrue(it.requiresLocalPasswordForReading())
-            assertTrue(it.requiresLocalPasswordForWriting())
+            it.setAccess(read = EnableAccess(LocalPassword("banana")), write = EnableAccess(LocalPassword("banana")))
+            assertTrue(it.requiresLocalSecretForReading())
+            assertTrue(it.requiresLocalSecretForWriting())
 
             it.setAccess(read = EnableAccess(null))
-            assertFalse(it.requiresLocalPasswordForReading())
-            assertTrue(it.requiresLocalPasswordForWriting())
+            assertFalse(it.requiresLocalSecretForReading())
+            assertTrue(it.requiresLocalSecretForWriting())
 
             it.setAccess(write = EnableAccess(null))
-            assertFalse(it.requiresLocalPasswordForReading())
-            assertFalse(it.requiresLocalPasswordForWriting())
+            assertFalse(it.requiresLocalSecretForReading())
+            assertFalse(it.requiresLocalSecretForWriting())
         }
     }
 
@@ -263,7 +263,7 @@ class RepositoryTest {
     }
 
     private suspend fun createRepo(): Repository =
-        Repository.create(session, repoPath, readPassword = null, writePassword = null)
+        Repository.create(session, repoPath, readSecret = null, writeSecret = null)
 
     private suspend fun <R> withRepo(block: suspend (repo: Repository) -> R): R {
         val repo = createRepo()

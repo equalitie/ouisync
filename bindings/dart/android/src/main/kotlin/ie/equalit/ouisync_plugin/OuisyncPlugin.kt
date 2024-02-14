@@ -8,7 +8,6 @@ import android.net.Uri
 import android.util.Log
 import android.os.Environment
 import android.webkit.MimeTypeMap
-import androidx.annotation.NonNull
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -24,38 +23,87 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   /// This local reference serves to register the plugin with the Flutter Engine and unregister it
   /// when the Flutter Engine is detached from the Activity
   var activity : Activity? = null
-  private lateinit var context : Context
 
   companion object {
-    lateinit var channel : MethodChannel
+    private val TAG = OuisyncPlugin::class.java.simpleName
+
+    private const val CHANNEL_NAME = "ouisync_plugin"
+
+    /// The channel needs to be static so we can access it from `PipeProvider` but we need to make
+    /// sure we only create/destroy it once even when there are multiple `OuisyncPlugin` instances.
+    /// That's why we use the explicit ref count.
+    private var channel : MethodChannel? = null
+    private val channelLock = Any()
+    private var channelRefCount = 0
+
+    fun invokeMethod(method: String, arguments: Any?, callback: MethodChannel.Result? = null) {
+      channel.let {
+        if (it != null) {
+          it.invokeMethod(method, arguments, callback)
+        } else {
+          callback?.error("not attached to engine", null, null)
+        }
+      }
+    }
   }
 
-  override fun onAttachedToActivity(@NonNull activityPluginBinding: ActivityPluginBinding) {
-    print("onAttachedToActivity")
+  override fun onAttachedToActivity(activityPluginBinding: ActivityPluginBinding) {
+    Log.d(TAG, "onAttachedToActivity");
     activity = activityPluginBinding.activity
   }
 
   override fun onDetachedFromActivityForConfigChanges() {
+    Log.d(TAG, "onDetachedFromActivityForConfigChanges");
     activity = null
   }
 
-  override fun onReattachedToActivityForConfigChanges(@NonNull activityPluginBinding: ActivityPluginBinding) {
+  override fun onReattachedToActivityForConfigChanges(activityPluginBinding: ActivityPluginBinding) {
+    Log.d(TAG, "onReattachedToActivityForConfigChanges");
     activity = activityPluginBinding.activity
   }
 
   override fun onDetachedFromActivity() {
+    Log.d(TAG, "onDetachedFromActivity");
     activity = null
   }
 
-  override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
-    channel = MethodChannel(flutterPluginBinding.binaryMessenger, "ouisync_plugin")
-    channel.setMethodCallHandler(this)
+  override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
+    Log.d(TAG, "onAttachedToEngine");
 
-    context = flutterPluginBinding.getApplicationContext()
+    synchronized(channelLock) {
+      channelRefCount++
+
+      if (channelRefCount == 1) {
+        Log.d(TAG, "create method channel")
+
+        channel = MethodChannel(flutterPluginBinding.binaryMessenger, CHANNEL_NAME)
+        channel?.setMethodCallHandler(this)
+      }
+    }
   }
 
-  override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: MethodChannel.Result) {
+  override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+    Log.d(TAG, "onDetachedFromEngine");
 
+    // When the user requests for the app to manage it's own battery
+    // optimization permissions (e.g. when using the `flutter_background`
+    // plugin https://pub.dev/packages/flutter_background), then killing the
+    // app will not stop the native code execution and we have to do it
+    // manually.
+    invokeMethod("stopSession", null)
+
+    synchronized(channelLock) {
+      channelRefCount--
+
+      if (channelRefCount == 0) {
+        Log.d(TAG, "destroy method channel")
+
+        channel?.setMethodCallHandler(null)
+      }
+    }
+  }
+
+  override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
     when (call.method) {
       "shareFile" -> {
         val arguments = call.arguments as HashMap<String, Any>
@@ -131,6 +179,7 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     return MimeTypeMap.getFileExtensionFromUrl(path)
   }
 
+
   private fun startFileShareAction(arguments: HashMap<String, Any>) {
     val authority = arguments["authority"]
     val path = arguments["path"]
@@ -157,14 +206,4 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         putExtra(Intent.EXTRA_STREAM, intentData)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
       }
-
-  override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
-    // When the user requests for the app to manage it's own battery
-    // optimization permissions (e.g. when using the `flutter_background`
-    // plugin https://pub.dev/packages/flutter_background), then killing the
-    // app will not stop the native code execution and we have to do it
-    // manually.
-    channel.invokeMethod("stopSession", null)
-    channel.setMethodCallHandler(null)
-  }
 }
