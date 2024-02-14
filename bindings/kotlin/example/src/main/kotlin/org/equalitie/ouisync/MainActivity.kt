@@ -135,8 +135,8 @@ class AppViewModel(private val configDir: String, private val storeDir: String) 
         val repo = Repository.create(
             session,
             "$storeDir/$name.$DB_EXTENSION",
-            readPassword = null,
-            writePassword = null,
+            readSecret = null,
+            writeSecret = null,
             shareToken = shareToken,
         )
 

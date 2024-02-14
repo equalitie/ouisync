@@ -52,25 +52,25 @@ internal abstract class ValueRequest<T : Any>(val value: T) : Request() {
 
 internal class RepositoryCreate(
     val path: String,
-    val readPassword: String?,
-    val writePassword: String?,
+    val readSecret: LocalSecret?,
+    val writeSecret: LocalSecret?,
     val shareToken: String?,
 ) : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packMap(
             mapOf(
                 "path" to path,
-                "readPassword" to readPassword,
-                "writePassword" to writePassword,
+                "readSecret" to readSecret,
+                "writeSecret" to writeSecret,
                 "shareToken" to shareToken,
             ),
         )
     }
 }
 
-internal class RepositoryOpen(val path: String, val password: String?) : Request() {
+internal class RepositoryOpen(val path: String, val secret: LocalSecret?) : Request() {
     override fun packContent(packer: MessagePacker) {
-        packer.packMap(mapOf("path" to path, "password" to password))
+        packer.packMap(mapOf("path" to path, "secret" to secret))
     }
 }
 
@@ -105,14 +105,14 @@ internal class RepositoryAccessMode : ValueRequest<Long> {
 internal class RepositorySetAccessMode(
     val repository: Long,
     val accessMode: AccessMode,
-    val password: String?,
+    val secret: LocalSecret?,
 ) : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packMap(
             mapOf(
                 "repository" to repository,
                 "access_mode" to accessMode,
-                "password" to password,
+                "secret" to secret,
             ),
         )
     }
@@ -144,11 +144,11 @@ internal class RepositoryRemoveWriteKey : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
-internal class RepositoryRequiresLocalPasswordForReading : ValueRequest<Long> {
+internal class RepositoryRequiresLocalSecretForReading : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
-internal class RepositoryRequiresLocalPasswordForWriting : ValueRequest<Long> {
+internal class RepositoryRequiresLocalSecretForWriting : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
@@ -201,7 +201,7 @@ internal class RepositorySetPexEnabled(val repository: Long, val enabled: Boolea
 
 internal class RepositoryCreateShareToken(
     val repository: Long,
-    val password: String?,
+    val secret: LocalSecret?,
     val accessMode: AccessMode,
     val name: String?,
 ) : Request() {
@@ -209,7 +209,7 @@ internal class RepositoryCreateShareToken(
         packer.packMap(
             mapOf(
                 "repository" to repository,
-                "password" to password,
+                "secret" to secret,
                 "access_mode" to accessMode.encode(),
                 "name" to name,
             ),
@@ -402,7 +402,7 @@ internal class Unsubscribe : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
-private fun MessagePacker.packMap(map: Map<String, Any?>) {
+internal fun MessagePacker.packMap(map: Map<String, Any?>) {
     packMapHeader(map.count { it.value != null })
 
     for ((key, value) in map) {
@@ -428,6 +428,7 @@ private fun MessagePacker.packAny(value: Any) {
         is Short -> packShort(value)
         is String -> packString(value)
         is AccessChange -> value.pack(this)
+        is LocalSecret -> value.pack(this)
         else -> throw IllegalArgumentException("can't pack ${value::class.qualifiedName}")
     }
 }

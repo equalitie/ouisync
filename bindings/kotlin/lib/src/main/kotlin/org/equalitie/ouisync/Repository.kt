@@ -1,6 +1,7 @@
 package org.equalitie.ouisync
 
 import org.msgpack.core.MessagePacker
+import java.security.SecureRandom
 
 /**
  *
@@ -34,41 +35,39 @@ class Repository private constructor(internal val handle: Long, internal val cli
         /**
          * Creates a new repository.
          *
-         * @param session       the Ouisync session.
-         * @param path          path to the local file to store the repository in. It's recommended
-         *                      to use the "ouisyncdb" file extension, but any extension works.
-         * @param readPassword  local password for reading the repository on this device only. Do
-         *                      not share with peers!. If null, the repo won't be password
-         *                      protected and anyone with physical access to the device will be
-         *                      able to read it.
-         * @param writePassword local password for writing to the repository on this device only.
-         *                      Do not share with peers! Can be the same as `readPassword` if one
-         *                      wants to use only one password for both reading and writing.
-         *                      Separate passwords are useful for plausible deniability. If both
-         *                      `readPassword` and `writePassword` are null, the repo won't be
-         *                      password protected and anyone with physical access to the device
-         *                      will be able to read and write to it. If `readPassword` is not null
-         *                      but `writePassword` is null, the repo won't be writable from this
-         *                      device.
-         * @param shareToken    used to share repositories between devices. If not null, this repo
-         *                      will be linked with the repos with the same share token on other
-         *                      devices. See also [createShareToken]. This also determines the
-         *                      maximal access mode the repo can be opened in. If null, it's *write*
-         *                      mode.
+         * @param session     the Ouisync session.
+         * @param path        path to the local file to store the repository in. It's recommended
+         *                    to use the "ouisyncdb" file extension, but any extension works.
+         * @param readSecret  local secret for reading the repository on this device only. Do
+         *                    not share with peers!. If null, the repo won't be protected and anyone
+         *                    with physical access to the device will be able to read it.
+         * @param writeSecret local secret for writing to the repository on this device only.
+         *                    Do not share with peers! Can be the same as `readSecret` if one wants
+         *                    to use only one secret for both reading and writing.  Separate secrets
+         *                    are useful for plausible deniability. If both `readSecret` and
+         *                    `writeSecret` are null, the repo won't be protected and anyone with
+         *                    physical access to the device will be able to read and write to it. If
+         *                    `readSecret` is not null but `writeSecret` is null, the repo won't be
+         *                    writable from this device.
+         * @param shareToken  used to share repositories between devices. If not null, this repo
+         *                    will be linked with the repos with the same share token on other
+         *                    devices. See also [createShareToken]. This also determines the
+         *                    maximal access mode the repo can be opened in. If null, it's *write*
+         *                    mode.
          */
         suspend fun create(
             session: Session,
             path: String,
-            readPassword: String?,
-            writePassword: String?,
+            readSecret: LocalSecret?,
+            writeSecret: LocalSecret?,
             shareToken: ShareToken? = null,
         ): Repository {
             val client = session.client
             val handle = client.invoke(
                 RepositoryCreate(
                     path,
-                    readPassword,
-                    writePassword,
+                    readSecret,
+                    writeSecret,
                     shareToken?.toString(),
                 ),
             ) as Long
@@ -79,19 +78,19 @@ class Repository private constructor(internal val handle: Long, internal val cli
         /**
          * Open an existing repository.
          *
-         * @param session  the Ouisync session.
-         * @param path     path to the local file the repo is stored in.
-         * @param password a local password. See the `readPassword` and `writePassword` param in
-         *                 [create] for more details. If this repo uses local password(s), this
-         *                 determines the access mode the repo is opened in: `readPassword` opens it
-         *                 in *read* mode, `writePassword` opens it in *write* mode and no password
-         *                 or wrong password opens it in *blind* mode. If this repo doesn't use
-         *                 local password(s), the repo is opened in the maximal mode specified when
-         *                 the repo was created.
+         * @param session the Ouisync session.
+         * @param path    path to the local file the repo is stored in.
+         * @param secret  a local secret. See the `reaSecret` and `writeSecret` param in
+         *                [create] for more details. If this repo uses local secret(s), this
+         *                determines the access mode the repo is opened in: `readSecret` opens it in
+         *                *read* mode, `writeSecret` opens it in *write* mode and no secret or wrong
+         *                secret opens it in *blind* mode. If this repo doesn't use local secret(s),
+         *                the repo is opened in the maximal mode specified when the repo was
+         *                created.
          */
-        suspend fun open(session: Session, path: String, password: String? = null): Repository {
+        suspend fun open(session: Session, path: String, secret: LocalSecret? = null): Repository {
             val client = session.client
-            val handle = client.invoke(RepositoryOpen(path, password)) as Long
+            val handle = client.invoke(RepositoryOpen(path, secret)) as Long
 
             return Repository(handle, client)
         }
@@ -130,11 +129,11 @@ class Repository private constructor(internal val handle: Long, internal val cli
      * Creates a *share token* to share this repository with other devices.
      *
      * By default the access mode of the token will be the same as the mode the repo is currently
-     * opened in but it can be escalated with the `password` param or de-escalated with the
+     * opened in but it can be escalated with the `secret` param or de-escalated with the
      * `accessMode` param.
      *
-     * @param password   local repo password. If not null, the share token's access mode will be
-     *                   the same as what the password provides. Useful to escalate the access mode
+     * @param secret   local repo secret. If not null, the share token's access mode will be
+     *                   the same as what the secret provides. Useful to escalate the access mode
      *                   to above of what the repo is opened in.
      * @param accessMode access mode of the token. Useful to de-escalate the access mode to below
      *                   of what the repo is opened in.
@@ -142,25 +141,25 @@ class Repository private constructor(internal val handle: Long, internal val cli
      *                   labeled with. Useful to help organize the share tokens.
      */
     suspend fun createShareToken(
-        password: String? = null,
+        secret: LocalSecret? = null,
         accessMode: AccessMode = AccessMode.WRITE,
         name: String? = null,
     ): ShareToken {
-        val raw = client.invoke(RepositoryCreateShareToken(handle, password, accessMode, name)) as String
+        val raw = client.invoke(RepositoryCreateShareToken(handle, secret, accessMode, name)) as String
         return ShareToken(raw, client)
     }
 
     /**
-     * Is local password required to read this repo?
+     * Is local secret required to read this repo?
      */
-    suspend fun requiresLocalPasswordForReading() =
-        client.invoke(RepositoryRequiresLocalPasswordForReading(handle)) as Boolean
+    suspend fun requiresLocalSecretForReading() =
+        client.invoke(RepositoryRequiresLocalSecretForReading(handle)) as Boolean
 
     /**
-     * Is local password required to write to this repo?
+     * Is local secret required to write to this repo?
      */
-    suspend fun requiresLocalPasswordForWriting() =
-        client.invoke(RepositoryRequiresLocalPasswordForWriting(handle)) as Boolean
+    suspend fun requiresLocalSecretForWriting() =
+        client.invoke(RepositoryRequiresLocalSecretForWriting(handle)) as Boolean
 
     /**
      * Returns the access mode (*blind*, *read* or *write*) the repo is opened in.
@@ -175,9 +174,9 @@ class Repository private constructor(internal val handle: Long, internal val cli
      */
     suspend fun setAccessMode(
         accessMode: AccessMode,
-        password: String?,
+        secret: LocalSecret?,
     ) =
-        client.invoke(RepositorySetAccessMode(handle, accessMode, password))
+        client.invoke(RepositorySetAccessMode(handle, accessMode, secret))
 
     /**
      * Gets the current credentials of this repository. Can be used to restore access after
@@ -193,7 +192,7 @@ class Repository private constructor(internal val handle: Long, internal val cli
     suspend fun setCredentials(credentials: ByteArray) = client.invoke(RepositorySetCredentials(handle, credentials))
 
     /**
-     * Sets, unsets or changes local passwords for accessing the repository or disables the given
+     * Sets, unsets or changes local secrets for accessing the repository or disables the given
      * access mode.
      */
     suspend fun setAccess(read: AccessChange? = null, write: AccessChange? = null) =
@@ -268,6 +267,53 @@ class Repository private constructor(internal val handle: Long, internal val cli
 }
 
 /**
+ * Type of secret to unlock a repository.
+ *
+ * @see [Repository.create]
+ */
+sealed class LocalSecret {
+    fun pack(packer: MessagePacker) {
+        packContent(packer)
+        packer.close()
+    }
+
+    protected abstract fun packContent(packer: MessagePacker)
+}
+
+/**
+ * Password provided by the user to set local repository access.
+ *
+ * @see [Repository.create]
+ */
+class LocalPassword(val string: String) : LocalSecret() {
+    override fun packContent(packer: MessagePacker) {
+        packer.packMap(mapOf("password" to string))
+    }
+}
+
+/**
+ * 265-bit (32 bytes) secret key to set local repository access.
+ *
+ * @see [Repository.create]
+ */
+class LocalSecretKey(val bytes: ByteArray) : LocalSecret() {
+    companion object {
+        // 256-bits (32 bytes) for ChaCha20 used by Ouisync
+        const val SIZE_IN_BYTES = 32
+
+        fun generateRandom(): LocalSecretKey {
+            val bytes = ByteArray(SIZE_IN_BYTES)
+            SecureRandom().nextBytes(bytes)
+            return LocalSecretKey(bytes)
+        }
+    }
+
+    override fun packContent(packer: MessagePacker) {
+        packer.packMap(mapOf("secret_key" to bytes))
+    }
+}
+
+/**
  * How to change access to a repository.
  *
  * @see [Repository.setAccess]
@@ -279,8 +325,8 @@ sealed class AccessChange {
                 packer.packMapHeader(1)
                 packer.packString("enable")
 
-                if (password != null) {
-                    packer.packString(password)
+                if (secret != null) {
+                    secret.pack(packer)
                 } else {
                     packer.packNil()
                 }
@@ -293,11 +339,11 @@ sealed class AccessChange {
 }
 
 /**
- * Enable read or write access, optionally with local password
+ * Enable read or write access, optionally with local secret
  *
  * @see [Repository.setAccess]
  */
-class EnableAccess(val password: String?) : AccessChange()
+class EnableAccess(val secret: LocalSecret?) : AccessChange()
 
 /**
  * Disable access
