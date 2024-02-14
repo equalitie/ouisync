@@ -24,11 +24,23 @@ class LocalPassword extends LocalSecret {
 }
 
 class LocalSecretKey extends LocalSecret {
+  // 256-bit as used by the Rust ChaCha20 implementation Ouisync is using.
+  static const sizeInBytes = 32;
+
   final Uint8List _bytes;
 
   LocalSecretKey(this._bytes);
 
   Uint8List get bytes => _bytes;
+
+  static LocalSecretKey generateRandom() {
+    final random = Random.secure();
+    Uint8List bytes = Uint8List(sizeInBytes);
+    for (int i = 0; i < sizeInBytes; i++) {
+      bytes[i] = random.nextInt(256);
+    }
+    return LocalSecretKey(bytes);
+  }
 
   @override
   Object? encode() => {'secret_key': _bytes};

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:isolate';
 import 'dart:typed_data';
+import 'dart:math';
 
 import 'package:ffi/ffi.dart';
 import 'package:hex/hex.dart';
