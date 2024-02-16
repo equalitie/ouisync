@@ -6,8 +6,9 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
+    crypto::cipher::SecretKey,
     network::{self, Registration},
-    path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository, ShareToken,
+    path, AccessMode, Credentials, Event, KeyAndSalt, Payload, Progress, Repository, ShareToken,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -28,16 +29,16 @@ pub(crate) type RepositoryHandle = Handle<Arc<RepositoryHolder>>;
 pub(crate) async fn create(
     state: &State,
     store_path: PathBuf,
-    local_read_secret: Option<LocalSecret>,
-    local_write_secret: Option<LocalSecret>,
+    local_read_key: Option<KeyAndSalt>,
+    local_write_key: Option<KeyAndSalt>,
     share_token: Option<ShareToken>,
 ) -> Result<RepositoryHandle, Error> {
     let entry = ensure_vacant_entry(state, store_path.clone()).await?;
 
     let repository = repository::create(
         store_path.clone(),
-        local_read_secret,
-        local_write_secret,
+        local_read_key,
+        local_write_key,
         share_token,
         &state.config,
         &state.repos_monitor,
@@ -64,17 +65,17 @@ pub(crate) async fn create(
 pub(crate) async fn open(
     state: &State,
     store_path: PathBuf,
-    local_secret: Option<LocalSecret>,
+    local_key: Option<SecretKey>,
 ) -> Result<RepositoryHandle, Error> {
     let entry = match state.repositories.entry(store_path.clone()).await {
         RepositoryEntry::Occupied(handle) => {
-            // If `local_secret` provides higher access mode than what the repo currently has,
+            // If `local_key` provides higher access mode than what the repo currently has,
             // increase it. If not, the access mode remains unchanged.
             // See `Repository::set_access_mode` for details.
             let holder = state.repositories.get(handle)?;
             holder
                 .repository
-                .set_access_mode(AccessMode::Write, local_secret.clone())
+                .set_access_mode(AccessMode::Write, local_key.clone())
                 .await?;
 
             return Ok(handle);
@@ -84,7 +85,7 @@ pub(crate) async fn open(
 
     let repository = repository::open(
         store_path.clone(),
-        local_secret,
+        local_key,
         &state.config,
         &state.repos_monitor,
     )
@@ -169,13 +170,13 @@ pub(crate) async fn set_access_mode(
     state: &State,
     handle: RepositoryHandle,
     access_mode: AccessMode,
-    local_secret: Option<LocalSecret>,
+    local_key: Option<SecretKey>,
 ) -> Result<(), Error> {
     state
         .repositories
         .get(handle)?
         .repository
-        .set_access_mode(access_mode, local_secret)
+        .set_access_mode(access_mode, local_key)
         .await?;
 
     Ok(())
@@ -310,18 +311,17 @@ pub(crate) async fn set_pex_enabled(
     Ok(())
 }
 
-/// The `secret` parameter is optional, if `None` the current access level of the opened
-/// repository is used. If provided, the highest access level that the secret can unlock is used.
+/// The `key` parameter is optional, if `None` the current access level of the opened
+/// repository is used. If provided, the highest access level that the key can unlock is used.
 pub(crate) async fn create_share_token(
     state: &State,
     repository: RepositoryHandle,
-    secret: Option<LocalSecret>,
+    key: Option<SecretKey>,
     access_mode: AccessMode,
     name: Option<String>,
 ) -> Result<String, Error> {
     let holder = state.repositories.get(repository)?;
-    let token =
-        repository::create_share_token(&holder.repository, secret, access_mode, name).await?;
+    let token = repository::create_share_token(&holder.repository, key, access_mode, name).await?;
     Ok(token)
 }
 

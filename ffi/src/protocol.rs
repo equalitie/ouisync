@@ -5,8 +5,9 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
 use ouisync_lib::{
+    crypto::cipher::SecretKey,
     network::{NatBehavior, TrafficStats},
-    AccessChange, AccessMode, LocalSecret, PeerAddr, PeerInfo, Progress, ShareToken,
+    AccessChange, AccessMode, KeyAndSalt, PeerAddr, PeerInfo, Progress, ShareToken,
 };
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
@@ -23,18 +24,18 @@ use thiserror::Error;
 pub(crate) enum Request {
     RepositoryCreate {
         path: Utf8PathBuf,
-        read_secret: Option<LocalSecret>,
-        write_secret: Option<LocalSecret>,
+        read_key: Option<KeyAndSalt>,
+        write_key: Option<KeyAndSalt>,
         share_token: Option<ShareToken>,
     },
     RepositoryOpen {
         path: Utf8PathBuf,
-        secret: Option<LocalSecret>,
+        key: Option<SecretKey>,
     },
     RepositoryClose(RepositoryHandle),
     RepositorySubscribe(RepositoryHandle),
-    RepositoryRequiresLocalSecretForReading(RepositoryHandle),
-    RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
+    RepositoryRequiresLocalKeyForReading(RepositoryHandle),
+    RepositoryRequiresLocalKeyForWriting(RepositoryHandle),
     RepositorySetAccess {
         repository: RepositoryHandle,
         read: Option<AccessChange>,
@@ -50,7 +51,7 @@ pub(crate) enum Request {
     RepositorySetAccessMode {
         repository: RepositoryHandle,
         access_mode: AccessMode,
-        secret: Option<LocalSecret>,
+        key: Option<SecretKey>,
     },
     RepositoryInfoHash(RepositoryHandle),
     RepositoryDatabaseId(RepositoryHandle),
@@ -75,7 +76,7 @@ pub(crate) enum Request {
     },
     RepositoryCreateShareToken {
         repository: RepositoryHandle,
-        secret: Option<LocalSecret>,
+        key: Option<SecretKey>,
         access_mode: AccessMode,
         name: Option<String>,
     },
@@ -544,8 +545,8 @@ mod tests {
         let origs = [
             Request::RepositoryCreate {
                 path: Utf8PathBuf::from("/tmp/repo.db"),
-                read_secret: None,
-                write_secret: None,
+                read_key: None,
+                write_key: None,
                 share_token: None,
             },
             Request::RepositoryClose(Handle::from_id(1)),

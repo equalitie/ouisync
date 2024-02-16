@@ -39,20 +39,20 @@ impl ouisync_bridge::transport::Handler for Handler {
         let response = match request {
             Request::RepositoryCreate {
                 path,
-                read_secret,
-                write_secret,
+                read_key,
+                write_key,
                 share_token,
             } => repository::create(
                 &self.state,
                 path.into_std_path_buf(),
-                read_secret,
-                write_secret,
+                read_key,
+                write_key,
                 share_token,
             )
             .await?
             .into(),
-            Request::RepositoryOpen { path, secret } => {
-                repository::open(&self.state, path.into_std_path_buf(), secret)
+            Request::RepositoryOpen { path, key } => {
+                repository::open(&self.state, path.into_std_path_buf(), key)
                     .await?
                     .into()
             }
@@ -86,25 +86,25 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositorySetAccessMode {
                 repository,
                 access_mode,
-                secret,
+                key,
             } => {
-                repository::set_access_mode(&self.state, repository, access_mode, secret).await?;
+                repository::set_access_mode(&self.state, repository, access_mode, key).await?;
                 ().into()
             }
-            Request::RepositoryRequiresLocalSecretForReading(handle) => self
+            Request::RepositoryRequiresLocalKeyForReading(handle) => self
                 .state
                 .repositories
                 .get(handle)?
                 .repository
-                .requires_local_secret_for_reading()
+                .requires_local_key_for_reading()
                 .await?
                 .into(),
-            Request::RepositoryRequiresLocalSecretForWriting(handle) => self
+            Request::RepositoryRequiresLocalKeyForWriting(handle) => self
                 .state
                 .repositories
                 .get(handle)?
                 .repository
-                .requires_local_secret_for_writing()
+                .requires_local_key_for_writing()
                 .await?
                 .into(),
             Request::RepositoryInfoHash(handle) => {
@@ -147,10 +147,10 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::RepositoryCreateShareToken {
                 repository,
-                secret,
+                key,
                 access_mode,
                 name,
-            } => repository::create_share_token(&self.state, repository, secret, access_mode, name)
+            } => repository::create_share_token(&self.state, repository, key, access_mode, name)
                 .await?
                 .into(),
             Request::RepositoryMirror { repository } => {

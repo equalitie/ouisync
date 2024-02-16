@@ -6,8 +6,8 @@ use crate::{
 };
 use futures_util::future;
 use ouisync_lib::{
-    Access, AccessMode, AccessSecrets, LocalSecret, Repository, RepositoryParams, ShareToken,
-    StorageSize,
+    crypto::cipher::SecretKey, Access, AccessMode, AccessSecrets, KeyAndSalt, Repository,
+    RepositoryParams, ShareToken, StorageSize,
 };
 use state_monitor::StateMonitor;
 use std::{io, path::PathBuf, sync::Arc, time::Duration};
@@ -38,19 +38,19 @@ pub enum MirrorError {
 
 /// Creates a new repository and set access to it based on the following table:
 ///
-/// local_read_secret  |  local_write_secret  |  token access  |  result
-/// ---------------------+------------------------+----------------+------------------------------
-/// None or any          |  None or any           |  blind         |  blind replica
-/// None                 |  None or any           |  read          |  read without secret
-/// read_secret          |  None or any           |  read          |  read with read_secret as secret
-/// None                 |  None                  |  write         |  read and write without secret
-/// any                  |  None                  |  write         |  read (only!) with secret
-/// None                 |  any                   |  write         |  read without secret, require secret for writing
-/// any                  |  any                   |  write         |  read with secret, write with (same or different) secret
+/// local_read_key  |  local_write_key  |  token access  |  result
+/// ----------------+-------------------+----------------+------------------------------
+/// None or any     |  None or any      |  blind         |  blind replica
+/// None            |  None or any      |  read          |  read without secret key
+/// read_secret     |  None or any      |  read          |  read with read_secret as secret key
+/// None            |  None             |  write         |  read and write without secret key
+/// any             |  None             |  write         |  read (only!) with secret key
+/// None            |  any              |  write         |  read without secret, require secret key for writing
+/// any             |  any              |  write         |  read with secret key, write with (same or different) secret key
 pub async fn create(
     store: PathBuf,
-    local_read_secret: Option<LocalSecret>,
-    local_write_secret: Option<LocalSecret>,
+    local_read_key: Option<KeyAndSalt>,
+    local_write_key: Option<KeyAndSalt>,
     share_token: Option<ShareToken>,
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
@@ -65,7 +65,7 @@ pub async fn create(
         AccessSecrets::random_write()
     };
 
-    let access = Access::new(local_read_secret, local_write_secret, access_secrets);
+    let access = Access::new(local_read_key, local_write_key, access_secrets);
 
     let repository = Repository::create(&params, access).await?;
 
@@ -81,7 +81,7 @@ pub async fn create(
 /// Opens an existing repository.
 pub async fn open(
     store: PathBuf,
-    local_secret: Option<LocalSecret>,
+    local_key: Option<SecretKey>,
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository, OpenError> {
@@ -89,21 +89,21 @@ pub async fn open(
         .with_device_id(device_id::get_or_create(config).await?)
         .with_parent_monitor(repos_monitor.clone());
 
-    let repository = Repository::open(&params, local_secret, AccessMode::Write).await?;
+    let repository = Repository::open(&params, local_key, AccessMode::Write).await?;
 
     Ok(repository)
 }
 
-/// The `secret` parameter is optional, if `None` the current access level of the opened
-/// repository is used. If provided, the highest access level that the secret can unlock is used.
+/// The `key` parameter is optional, if `None` the current access level of the opened
+/// repository is used. If provided, the highest access level that the key can unlock is used.
 pub async fn create_share_token(
     repository: &Repository,
-    secret: Option<LocalSecret>,
+    key: Option<SecretKey>,
     access_mode: AccessMode,
     name: Option<String>,
 ) -> Result<String, ouisync_lib::Error> {
-    let access_secrets = if let Some(secret) = secret {
-        repository.unlock_secrets(secret).await?
+    let access_secrets = if let Some(key) = key {
+        repository.unlock_secrets(key).await?
     } else {
         repository.secrets()
     };

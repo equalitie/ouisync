@@ -1,11 +1,10 @@
 mod access_mode;
-mod local_secret;
 mod share_token;
 
-pub use self::{access_mode::AccessMode, local_secret::LocalSecret, share_token::ShareToken};
+pub use self::{access_mode::AccessMode, share_token::ShareToken};
 
 use crate::{
-    crypto::{cipher, sign},
+    crypto::{cipher, sign, PasswordSalt},
     error::Error,
     repository::RepositoryId,
     Result,
@@ -283,7 +282,8 @@ pub enum Access {
     // Providing a secret will grant the user read access, there's no write access.
     ReadLocked {
         id: RepositoryId,
-        local_secret: LocalSecret,
+        local_key: cipher::SecretKey,
+        password_salt: PasswordSalt,
         read_key: cipher::SecretKey,
     },
     // User doesn't need a secret to read nor write.
@@ -293,51 +293,57 @@ pub enum Access {
     // Providing a secret user will grant read and write access. The secret may be different for
     // reading or writing.
     WriteLocked {
-        local_read_secret: LocalSecret,
-        local_write_secret: LocalSecret,
+        local_read_key: cipher::SecretKey,
+        local_write_key: cipher::SecretKey,
+        read_password_salt: PasswordSalt,
+        write_password_salt: PasswordSalt,
         secrets: WriteSecrets,
     },
     // User doesn't need a secret to read, but a secret will grant access to write.
     WriteLockedReadUnlocked {
-        local_write_secret: LocalSecret,
+        local_write_key: cipher::SecretKey,
+        write_password_salt: PasswordSalt,
         secrets: WriteSecrets,
     },
 }
 
 impl Access {
     pub fn new(
-        local_read_secret: Option<LocalSecret>,
-        local_write_secret: Option<LocalSecret>,
+        local_read: Option<KeyAndSalt>,
+        local_write_key: Option<KeyAndSalt>,
         secrets: AccessSecrets,
     ) -> Self {
-        match (local_read_secret, local_write_secret, secrets) {
+        match (local_read, local_write_key, secrets) {
             (_, _, AccessSecrets::Blind { id }) => Access::Blind { id },
             (None, _, AccessSecrets::Read { id, read_key }) => {
                 Access::ReadUnlocked { id, read_key }
             }
-            (Some(local_read_secret), _, AccessSecrets::Read { id, read_key }) => {
-                Access::ReadLocked {
-                    id,
-                    local_secret: local_read_secret,
-                    read_key,
-                }
-            }
+            (Some(local_read), _, AccessSecrets::Read { id, read_key }) => Access::ReadLocked {
+                id,
+                local_key: local_read.key,
+                password_salt: local_read.salt,
+                read_key,
+            },
             (None, None, AccessSecrets::Write(secrets)) => Access::WriteUnlocked { secrets },
-            (Some(local_read_secret), None, AccessSecrets::Write(secrets)) => Access::ReadLocked {
+            (Some(local_read), None, AccessSecrets::Write(secrets)) => Access::ReadLocked {
                 id: secrets.id,
-                local_secret: local_read_secret,
+                local_key: local_read.key,
+                password_salt: local_read.salt,
                 read_key: secrets.read_key,
             },
-            (None, Some(local_write_secret), AccessSecrets::Write(secrets)) => {
+            (None, Some(local_write), AccessSecrets::Write(secrets)) => {
                 Access::WriteLockedReadUnlocked {
-                    local_write_secret,
+                    local_write_key: local_write.key,
+                    write_password_salt: local_write.salt,
                     secrets,
                 }
             }
-            (Some(local_read_secret), Some(local_write_secret), AccessSecrets::Write(secrets)) => {
+            (Some(local_read), Some(local_write), AccessSecrets::Write(secrets)) => {
                 Access::WriteLocked {
-                    local_read_secret,
-                    local_write_secret,
+                    local_read_key: local_read.key,
+                    local_write_key: local_write.key,
+                    read_password_salt: local_read.salt,
+                    write_password_salt: local_write.salt,
                     secrets,
                 }
             }
@@ -366,31 +372,31 @@ impl Access {
         }
     }
 
-    pub fn local_write_secret(&self) -> Option<&LocalSecret> {
+    pub fn local_write_key(&self) -> Option<&cipher::SecretKey> {
         match self {
             Self::WriteLocked {
-                local_write_secret, ..
-            } => Some(local_write_secret),
+                local_write_key, ..
+            } => Some(local_write_key),
             Self::WriteLockedReadUnlocked {
-                local_write_secret, ..
-            } => Some(local_write_secret),
+                local_write_key, ..
+            } => Some(local_write_key),
             _ => None,
         }
     }
 
     #[cfg(test)]
-    pub fn highest_local_secret(&self) -> Option<&LocalSecret> {
+    pub fn highest_local_key(&self) -> Option<&cipher::SecretKey> {
         match self {
             Self::Blind { .. } => None,
             Self::ReadUnlocked { .. } => None,
-            Self::ReadLocked { local_secret, .. } => Some(local_secret),
+            Self::ReadLocked { local_key, .. } => Some(local_key),
             Self::WriteUnlocked { .. } => None,
             Self::WriteLocked {
-                local_write_secret, ..
-            } => Some(local_write_secret),
+                local_write_key, ..
+            } => Some(local_write_key),
             Self::WriteLockedReadUnlocked {
-                local_write_secret, ..
-            } => Some(local_write_secret),
+                local_write_key, ..
+            } => Some(local_write_key),
         }
     }
 }
@@ -398,49 +404,13 @@ impl Access {
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessChange {
-    Enable(Option<LocalSecret>),
+    Enable(Option<KeyAndSalt>),
     Disable,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Note we don't actually use JSON anywhere in the protocol but this test uses it because it
-    // being human readable makes it easy to verify the values are serialized the way we want them.
-    #[test]
-    fn access_change_serialize_deserialize_json() {
-        for (orig, expected_serialized) in [
-            (
-                AccessChange::Enable(Some(LocalSecret::Password("mellon".to_string().into()))),
-                "{\"enable\":{\"password\":\"mellon\"}}",
-            ),
-            (AccessChange::Enable(None), "{\"enable\":null}"),
-            (AccessChange::Disable, "\"disable\""),
-        ] {
-            let serialized = serde_json::to_string(&orig).unwrap();
-            assert_eq!(serialized, expected_serialized);
-
-            let deserialized: AccessChange = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(deserialized, orig);
-        }
-    }
-
-    #[test]
-    fn access_change_serialize_deserialize_msgpack() {
-        for (orig, expected_serialized_hex) in [
-            (
-                AccessChange::Enable(Some(LocalSecret::Password("mellon".to_string().into()))),
-                "81a6656e61626c6581a870617373776f7264a66d656c6c6f6e",
-            ),
-            (AccessChange::Enable(None), "81a6656e61626c65c0"),
-            (AccessChange::Disable, "a764697361626c65"),
-        ] {
-            let serialized = rmp_serde::to_vec(&orig).unwrap();
-            assert_eq!(hex::encode(&serialized), expected_serialized_hex);
-
-            let deserialized: AccessChange = rmp_serde::from_slice(&serialized).unwrap();
-            assert_eq!(deserialized, orig);
-        }
-    }
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct KeyAndSalt {
+    pub key: cipher::SecretKey,
+    pub salt: PasswordSalt,
 }
