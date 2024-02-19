@@ -2,7 +2,11 @@ mod access_mode;
 mod local_secret;
 mod share_token;
 
-pub use self::{access_mode::AccessMode, local_secret::LocalSecret, share_token::ShareToken};
+pub use self::{
+    access_mode::AccessMode,
+    local_secret::{KeyAndSalt, LocalSecret, SetLocalSecret},
+    share_token::ShareToken,
+};
 
 use crate::{
     crypto::{cipher, sign},
@@ -283,7 +287,7 @@ pub enum Access {
     // Providing a secret will grant the user read access, there's no write access.
     ReadLocked {
         id: RepositoryId,
-        local_secret: LocalSecret,
+        local_secret: SetLocalSecret,
         read_key: cipher::SecretKey,
     },
     // User doesn't need a secret to read nor write.
@@ -293,21 +297,21 @@ pub enum Access {
     // Providing a secret user will grant read and write access. The secret may be different for
     // reading or writing.
     WriteLocked {
-        local_read_secret: LocalSecret,
-        local_write_secret: LocalSecret,
+        local_read_secret: SetLocalSecret,
+        local_write_secret: SetLocalSecret,
         secrets: WriteSecrets,
     },
     // User doesn't need a secret to read, but a secret will grant access to write.
     WriteLockedReadUnlocked {
-        local_write_secret: LocalSecret,
+        local_write_secret: SetLocalSecret,
         secrets: WriteSecrets,
     },
 }
 
 impl Access {
     pub fn new(
-        local_read_secret: Option<LocalSecret>,
-        local_write_secret: Option<LocalSecret>,
+        local_read_secret: Option<SetLocalSecret>,
+        local_write_secret: Option<SetLocalSecret>,
         secrets: AccessSecrets,
     ) -> Self {
         match (local_read_secret, local_write_secret, secrets) {
@@ -366,7 +370,7 @@ impl Access {
         }
     }
 
-    pub fn local_write_secret(&self) -> Option<&LocalSecret> {
+    pub fn local_write_secret(&self) -> Option<&SetLocalSecret> {
         match self {
             Self::WriteLocked {
                 local_write_secret, ..
@@ -379,7 +383,7 @@ impl Access {
     }
 
     #[cfg(test)]
-    pub fn highest_local_secret(&self) -> Option<&LocalSecret> {
+    pub fn highest_local_secret(&self) -> Option<&SetLocalSecret> {
         match self {
             Self::Blind { .. } => None,
             Self::ReadUnlocked { .. } => None,
@@ -398,7 +402,7 @@ impl Access {
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessChange {
-    Enable(Option<LocalSecret>),
+    Enable(Option<SetLocalSecret>),
     Disable,
 }
 
@@ -412,7 +416,7 @@ mod tests {
     fn access_change_serialize_deserialize_json() {
         for (orig, expected_serialized) in [
             (
-                AccessChange::Enable(Some(LocalSecret::Password("mellon".to_string().into()))),
+                AccessChange::Enable(Some(SetLocalSecret::Password("mellon".to_string().into()))),
                 "{\"enable\":{\"password\":\"mellon\"}}",
             ),
             (AccessChange::Enable(None), "{\"enable\":null}"),
@@ -430,7 +434,7 @@ mod tests {
     fn access_change_serialize_deserialize_msgpack() {
         for (orig, expected_serialized_hex) in [
             (
-                AccessChange::Enable(Some(LocalSecret::Password("mellon".to_string().into()))),
+                AccessChange::Enable(Some(SetLocalSecret::Password("mellon".to_string().into()))),
                 "81a6656e61626c6581a870617373776f7264a66d656c6c6f6e",
             ),
             (AccessChange::Enable(None), "81a6656e61626c65c0"),

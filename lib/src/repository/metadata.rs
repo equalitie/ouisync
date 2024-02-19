@@ -1,5 +1,7 @@
 use crate::{
-    access_control::{Access, AccessSecrets, LocalSecret, WriteSecrets},
+    access_control::{
+        Access, AccessSecrets, KeyAndSalt, LocalSecret, SetLocalSecret, WriteSecrets,
+    },
     crypto::{
         cipher::{self, Nonce},
         sign, Hash, Password, PasswordSalt,
@@ -17,11 +19,25 @@ use zeroize::Zeroize;
 
 // Metadata keys
 const REPOSITORY_ID: &[u8] = b"repository_id";
-const PASSWORD_SALT: &[u8] = b"password_salt";
+// Note that we don't do anything with these salts other than storing them for the user so they can
+// use them for SecretKey derivation. Storing them here (as opposed to having the user store it
+// outside of this repository database) ensures that when the database is moved to another device,
+// the same password can still unlock it.
+const READ_PASSWORD_SALT: &[u8] = b"read_password_salt";
+const WRITE_PASSWORD_SALT: &[u8] = b"write_password_salt";
 const WRITER_ID: &[u8] = b"writer_id";
 const READ_KEY: &[u8] = b"read_key";
 const WRITE_KEY: &[u8] = b"write_key";
 const DATABASE_ID: &[u8] = b"database_id";
+
+const DEVICE_ID: &[u8] = b"device_id";
+const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
+
+const QUOTA: &[u8] = b"quota";
+const BLOCK_EXPIRATION: &[u8] = b"block_expiration";
+
+// Support for data migrations.
+const DATA_VERSION: &[u8] = b"data_version";
 
 // We used to have only the ACCESS_KEY which would be either the read key or the write key or a
 // dummy (random) array of bytes with the length of the writer key. But that wasn't satisfactory
@@ -33,14 +49,12 @@ const DATABASE_ID: &[u8] = b"database_id";
 // 3. If the ACCESS_KEY was a valid write key, but the repository was in the blind mode, accepting
 //    the read token would disable the write access.
 const DEPRECATED_ACCESS_KEY: &[u8] = b"access_key"; // read key or write key
-const DEVICE_ID: &[u8] = b"device_id";
-const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
-const QUOTA: &[u8] = b"quota";
-const BLOCK_EXPIRATION: &[u8] = b"block_expiration";
-
-// Support for data migrations.
-const DATA_VERSION: &[u8] = b"data_version";
+// We used to have a single salt that was used when the user used a password to open a repository.
+// We no longer deal with passwords in ouisync_lib but leave the password hashing to the library
+// user (we provide them with functions to do it) and instead of a single salt we can store two for
+// them: one for the read password and one for the write password.
+const DEPRECATED_PASSWORD_SALT: &[u8] = b"password_salt";
 
 // -------------------------------------------------------------------
 // Accessor for user-defined metadata
@@ -98,43 +112,68 @@ impl Metadata {
 // -------------------------------------------------------------------
 // Password
 // -------------------------------------------------------------------
+pub(crate) enum KeyType {
+    Read,
+    Write,
+}
+
 pub(crate) async fn password_to_key(
-    tx: &mut db::WriteTransaction,
+    conn: &mut db::Connection,
+    key_type: KeyType,
     password: &Password,
 ) -> Result<cipher::SecretKey, StoreError> {
-    let salt = get_or_generate_password_salt(tx).await?;
+    let salt = match key_type {
+        KeyType::Read => get_public_blob(conn, READ_PASSWORD_SALT).await?,
+        KeyType::Write => get_public_blob(conn, WRITE_PASSWORD_SALT).await?,
+    }
+    // Salts should always be present
+    .ok_or(StoreError::MalformedData)?;
+
     Ok(cipher::SecretKey::derive_from_password(
         password.as_ref(),
         &salt,
     ))
 }
 
-pub(crate) async fn secret_to_key<'a>(
-    tx: &mut db::WriteTransaction,
+async fn secret_to_key<'a>(
+    conn: &mut db::Connection,
+    key_type: KeyType,
     secret: &'a LocalSecret,
 ) -> Result<Cow<'a, cipher::SecretKey>, StoreError> {
     match secret {
-        LocalSecret::Password(password) => password_to_key(tx, password).await.map(Cow::Owned),
+        LocalSecret::Password(password) => password_to_key(conn, key_type, password)
+            .await
+            .map(Cow::Owned),
         LocalSecret::SecretKey(key) => Ok(Cow::Borrowed(key)),
     }
 }
 
-async fn get_or_generate_password_salt(
-    tx: &mut db::WriteTransaction,
-) -> Result<PasswordSalt, StoreError> {
-    let salt = match get_public_blob(tx, PASSWORD_SALT).await {
-        Ok(Some(salt)) => salt,
-        Ok(None) => {
-            let salt: PasswordSalt = cipher::SecretKey::generate_password_salt();
-            set_public_blob(tx, PASSWORD_SALT, &salt).await?;
-            salt
+pub(crate) fn secret_to_key_and_salt(secret: &'_ SetLocalSecret) -> Cow<'_, KeyAndSalt> {
+    match secret {
+        SetLocalSecret::Password(password) => {
+            let salt = cipher::SecretKey::random_salt();
+            let key = cipher::SecretKey::derive_from_password(password.as_ref(), &salt);
+            Cow::Owned(KeyAndSalt { key, salt })
         }
-        Err(error) => return Err(error),
-    };
-
-    Ok(salt)
+        SetLocalSecret::KeyAndSalt(key_and_salt) => Cow::Borrowed(key_and_salt),
+    }
 }
 
+//async fn get_or_generate_password_salt(
+//    tx: &mut db::WriteTransaction,
+//) -> Result<PasswordSalt, StoreError> {
+//    let salt = match get_public_blob(tx, PASSWORD_SALT).await {
+//        Ok(Some(salt)) => salt,
+//        Ok(None) => {
+//            let salt: PasswordSalt = cipher::SecretKey::generate_password_salt();
+//            set_public_blob(tx, PASSWORD_SALT, &salt).await?;
+//            salt
+//        }
+//        Err(error) => return Err(error),
+//    };
+//
+//    Ok(salt)
+//}
 // -------------------------------------------------------------------
 // Database ID
 // -------------------------------------------------------------------
@@ -238,24 +277,25 @@ async fn set_secret_read_key(
     tx: &mut db::WriteTransaction,
     id: &RepositoryId,
     read_key: &cipher::SecretKey,
-    local_key: &cipher::SecretKey,
+    local: &KeyAndSalt,
 ) -> Result<(), StoreError> {
-    set_secret_blob(tx, READ_KEY, read_key, local_key).await?;
-    set_secret_blob(tx, READ_KEY_VALIDATOR, read_key_validator(id), read_key).await
+    set_secret_blob(tx, READ_KEY, read_key, &local.key).await?;
+    set_secret_blob(tx, READ_KEY_VALIDATOR, read_key_validator(id), read_key).await?;
+    set_read_password_salt(tx, &local.salt).await
 }
 
 pub(crate) async fn set_read_key(
     tx: &mut db::WriteTransaction,
     id: &RepositoryId,
     read_key: &cipher::SecretKey,
-    local_key: Option<&cipher::SecretKey>,
+    local: Option<&KeyAndSalt>,
 ) -> Result<(), StoreError> {
-    if let Some(local_key) = local_key {
+    if let Some(local) = local {
         remove_public_read_key(tx).await?;
-        set_secret_read_key(tx, id, read_key, local_key).await
+        set_secret_read_key(tx, id, read_key, local).await
     } else {
         set_public_read_key(tx, read_key).await?;
-        remove_secret_read_key(tx).await
+        obfuscate_secret_read_key(tx).await
     }
 }
 
@@ -263,7 +303,7 @@ async fn remove_public_read_key(tx: &mut db::WriteTransaction) -> Result<(), Sto
     remove_public(tx, READ_KEY).await
 }
 
-async fn remove_secret_read_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
+async fn obfuscate_secret_read_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     let dummy_id = RepositoryId::from(sign::Keypair::random().public_key());
     let dummy_local_key = cipher::SecretKey::random();
     let dummy_read_key = cipher::SecretKey::random();
@@ -277,12 +317,14 @@ async fn remove_secret_read_key(tx: &mut db::WriteTransaction) -> Result<(), Sto
     )
     .await?;
 
+    obfuscate_read_password_salt(tx).await?;
+
     Ok(())
 }
 
 pub(crate) async fn remove_read_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     remove_public_read_key(tx).await?;
-    remove_secret_read_key(tx).await
+    obfuscate_secret_read_key(tx).await
 }
 
 // ------------------------------
@@ -297,22 +339,23 @@ async fn set_public_write_key(
 async fn set_secret_write_key(
     tx: &mut db::WriteTransaction,
     secrets: &WriteSecrets,
-    local_key: &cipher::SecretKey,
+    local: &KeyAndSalt,
 ) -> Result<(), StoreError> {
-    set_secret_blob(tx, WRITE_KEY, secrets.write_keys.to_bytes(), local_key).await
+    set_secret_blob(tx, WRITE_KEY, secrets.write_keys.to_bytes(), &local.key).await?;
+    set_write_password_salt(tx, &local.salt).await
 }
 
 pub(crate) async fn set_write_key(
     tx: &mut db::WriteTransaction,
     secrets: &WriteSecrets,
-    local_key: Option<&cipher::SecretKey>,
+    local: Option<&KeyAndSalt>,
 ) -> Result<(), StoreError> {
-    if let Some(local_key) = local_key {
+    if let Some(local) = local {
         remove_public_write_key(tx).await?;
-        set_secret_write_key(tx, secrets, local_key).await
+        set_secret_write_key(tx, secrets, local).await
     } else {
         set_public_write_key(tx, secrets).await?;
-        remove_secret_write_key(tx).await
+        obfuscate_secret_write_key(tx).await
     }
 }
 
@@ -320,20 +363,68 @@ async fn remove_public_write_key(tx: &mut db::WriteTransaction) -> Result<(), St
     remove_public(tx, WRITE_KEY).await
 }
 
-async fn remove_secret_write_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
+async fn obfuscate_secret_write_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     let dummy_local_key = cipher::SecretKey::random();
     let dummy_write_key = sign::Keypair::random().to_bytes();
-    set_secret_blob(tx, WRITE_KEY, &dummy_write_key, &dummy_local_key).await
+    set_secret_blob(tx, WRITE_KEY, &dummy_write_key, &dummy_local_key).await?;
+    obfuscate_write_password_salt(tx).await
 }
 
 pub(crate) async fn remove_write_key(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     remove_public_write_key(tx).await?;
-    remove_secret_write_key(tx).await
+    obfuscate_secret_write_key(tx).await
 }
 
 // ------------------------------
 
-pub(crate) async fn requires_local_secret_for_reading(
+async fn set_read_password_salt(
+    tx: &mut db::WriteTransaction,
+    salt: &PasswordSalt,
+) -> Result<(), StoreError> {
+    migrate_to_separate_password_salts(tx).await?;
+    set_public_blob(tx, READ_PASSWORD_SALT, salt).await
+}
+
+async fn obfuscate_read_password_salt(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
+    migrate_to_separate_password_salts(tx).await?;
+    let dummy_salt = cipher::SecretKey::random_salt();
+    set_public_blob(tx, READ_PASSWORD_SALT, &dummy_salt).await
+}
+
+async fn set_write_password_salt(
+    tx: &mut db::WriteTransaction,
+    salt: &PasswordSalt,
+) -> Result<(), StoreError> {
+    migrate_to_separate_password_salts(tx).await?;
+    set_public_blob(tx, WRITE_PASSWORD_SALT, salt).await
+}
+
+async fn obfuscate_write_password_salt(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
+    migrate_to_separate_password_salts(tx).await?;
+    let dummy_salt = cipher::SecretKey::random_salt();
+    set_public_blob(tx, WRITE_PASSWORD_SALT, &dummy_salt).await
+}
+
+async fn migrate_to_separate_password_salts(
+    tx: &mut db::WriteTransaction,
+) -> Result<(), StoreError> {
+    let single_salt: PasswordSalt = match get_public_blob(tx, DEPRECATED_PASSWORD_SALT).await {
+        Ok(Some(salt)) => salt,
+        Ok(None) => {
+            // Single salt has already been migrated.
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+
+    set_public_blob(tx, READ_PASSWORD_SALT, &single_salt).await?;
+    set_public_blob(tx, WRITE_PASSWORD_SALT, &single_salt).await?;
+    remove_public(tx, DEPRECATED_PASSWORD_SALT).await
+}
+
+// ------------------------------
+
+pub(crate) async fn requires_local_key_for_reading(
     conn: &mut db::Connection,
 ) -> Result<bool, StoreError> {
     match get_public_blob::<cipher::SecretKey>(conn, READ_KEY).await {
@@ -349,7 +440,7 @@ pub(crate) async fn requires_local_secret_for_reading(
     }
 }
 
-pub(crate) async fn requires_local_secret_for_writing(
+pub(crate) async fn requires_local_key_for_writing(
     conn: &mut db::Connection,
 ) -> Result<bool, StoreError> {
     match get_public_blob::<sign::Keypair>(conn, WRITE_KEY).await {
@@ -374,9 +465,9 @@ pub(crate) async fn set_access<'a>(
     match access {
         Access::Blind { .. } => {
             remove_public_read_key(tx).await?;
-            remove_secret_read_key(tx).await?;
+            obfuscate_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
-            remove_secret_write_key(tx).await?;
+            obfuscate_secret_write_key(tx).await?;
 
             Ok(LocalKeys {
                 read: None,
@@ -385,9 +476,9 @@ pub(crate) async fn set_access<'a>(
         }
         Access::ReadUnlocked { id: _, read_key } => {
             set_public_read_key(tx, read_key).await?;
-            remove_secret_read_key(tx).await?;
+            obfuscate_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
-            remove_secret_write_key(tx).await?;
+            obfuscate_secret_write_key(tx).await?;
 
             Ok(LocalKeys {
                 read: None,
@@ -399,23 +490,23 @@ pub(crate) async fn set_access<'a>(
             local_secret,
             read_key,
         } => {
-            let local_key = secret_to_key(tx, local_secret).await?;
+            let local = secret_to_key_and_salt(local_secret);
 
             remove_public_read_key(tx).await?;
-            set_secret_read_key(tx, id, read_key, &local_key).await?;
+            set_secret_read_key(tx, id, read_key, &local).await?;
             remove_public_write_key(tx).await?;
-            remove_secret_write_key(tx).await?;
+            obfuscate_secret_write_key(tx).await?;
 
             Ok(LocalKeys {
-                read: Some(local_key),
+                read: Some(just_key(local)),
                 write: None,
             })
         }
         Access::WriteUnlocked { secrets } => {
             set_public_read_key(tx, &secrets.read_key).await?;
-            remove_secret_read_key(tx).await?;
+            obfuscate_secret_read_key(tx).await?;
             set_public_write_key(tx, secrets).await?;
-            remove_secret_write_key(tx).await?;
+            obfuscate_secret_write_key(tx).await?;
 
             Ok(LocalKeys {
                 read: None,
@@ -427,33 +518,33 @@ pub(crate) async fn set_access<'a>(
             local_write_secret,
             secrets,
         } => {
-            let local_read_key = secret_to_key(tx, local_read_secret).await?;
-            let local_write_key = secret_to_key(tx, local_write_secret).await?;
+            let local_read = secret_to_key_and_salt(local_read_secret);
+            let local_write = secret_to_key_and_salt(local_write_secret);
 
             remove_public_read_key(tx).await?;
-            set_secret_read_key(tx, &secrets.id, &secrets.read_key, &local_read_key).await?;
+            set_secret_read_key(tx, &secrets.id, &secrets.read_key, &local_read).await?;
             remove_public_write_key(tx).await?;
-            set_secret_write_key(tx, secrets, &local_write_key).await?;
+            set_secret_write_key(tx, secrets, &local_write).await?;
 
             Ok(LocalKeys {
-                read: Some(local_read_key),
-                write: Some(local_write_key),
+                read: Some(just_key(local_read)),
+                write: Some(just_key(local_write)),
             })
         }
         Access::WriteLockedReadUnlocked {
             local_write_secret,
             secrets,
         } => {
-            let local_write_key = secret_to_key(tx, local_write_secret).await?;
+            let local_write = secret_to_key_and_salt(local_write_secret);
 
             set_public_read_key(tx, &secrets.read_key).await?;
-            remove_secret_read_key(tx).await?;
+            obfuscate_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
-            set_secret_write_key(tx, secrets, &local_write_key).await?;
+            set_secret_write_key(tx, secrets, &local_write).await?;
 
             Ok(LocalKeys {
                 read: None,
-                write: Some(local_write_key),
+                write: Some(just_key(local_write)),
             })
         }
     }
@@ -465,27 +556,73 @@ pub(crate) struct LocalKeys<'a> {
     pub write: Option<Cow<'a, cipher::SecretKey>>,
 }
 
-pub(crate) async fn get_access_secrets(
+fn just_key(key_and_salt: Cow<'_, KeyAndSalt>) -> Cow<'_, cipher::SecretKey> {
+    match key_and_salt {
+        Cow::Borrowed(key_and_salt) => Cow::Borrowed(&key_and_salt.key),
+        Cow::Owned(key_and_salt) => Cow::Owned(key_and_salt.key),
+    }
+}
+
+//pub(crate) async fn get_access_secrets(
+//    conn: &mut db::Connection,
+//    local_key: Option<&cipher::SecretKey>,
+//) -> Result<AccessSecrets, StoreError> {
+//    let id = get_repository_id(conn).await?;
+//
+//    match get_write_key(conn, local_key, &id).await {
+//        Ok(Some(write_keys)) => return Ok(AccessSecrets::Write(WriteSecrets::from(write_keys))),
+//        Ok(None) => (),
+//        Err(e) => return Err(e),
+//    }
+//
+//    // No match. Maybe there's the read key?
+//    match get_read_key(conn, local_key, &id).await {
+//        Ok(Some(read_key)) => return Ok(AccessSecrets::Read { id, read_key }),
+//        Ok(None) => (),
+//        Err(e) => return Err(e),
+//    }
+//
+//    // No read key either, repository shall be open in blind mode.
+//    Ok(AccessSecrets::Blind { id })
+//}
+
+pub(crate) async fn get_access_secrets<'a>(
     conn: &mut db::Connection,
-    local_key: Option<&cipher::SecretKey>,
-) -> Result<AccessSecrets, StoreError> {
+    local_secret: Option<&'a LocalSecret>,
+) -> Result<(AccessSecrets, Option<Cow<'a, cipher::SecretKey>>), StoreError> {
     let id = get_repository_id(conn).await?;
 
-    match get_write_key(conn, local_key, &id).await {
-        Ok(Some(write_keys)) => return Ok(AccessSecrets::Write(WriteSecrets::from(write_keys))),
+    let local_write_key = match &local_secret {
+        Some(local_secret) => Some(secret_to_key(conn, KeyType::Write, local_secret).await?),
+        None => None,
+    };
+
+    match get_write_key(conn, local_write_key.as_deref(), &id).await {
+        Ok(Some(write_keys)) => {
+            let access = AccessSecrets::Write(WriteSecrets::from(write_keys));
+            return Ok((access, local_write_key));
+        }
         Ok(None) => (),
         Err(e) => return Err(e),
     }
 
+    let local_read_key = match &local_secret {
+        Some(local_secret) => Some(secret_to_key(conn, KeyType::Read, local_secret).await?),
+        None => None,
+    };
+
     // No match. Maybe there's the read key?
-    match get_read_key(conn, local_key, &id).await {
-        Ok(Some(read_key)) => return Ok(AccessSecrets::Read { id, read_key }),
+    match get_read_key(conn, local_read_key.as_deref(), &id).await {
+        Ok(Some(read_key)) => {
+            let access = AccessSecrets::Read { id, read_key };
+            return Ok((access, local_write_key));
+        }
         Ok(None) => (),
         Err(e) => return Err(e),
     }
 
     // No read key either, repository shall be open in blind mode.
-    Ok(AccessSecrets::Blind { id })
+    Ok((AccessSecrets::Blind { id }, None))
 }
 
 /// Returns Ok(None) when the key is there but isn't valid.
@@ -940,19 +1077,19 @@ mod tests {
             },
             Access::ReadLocked {
                 id: RepositoryId::random(),
-                local_secret: LocalSecret::SecretKey(cipher::SecretKey::random()),
+                local_secret: SetLocalSecret::random(),
                 read_key: cipher::SecretKey::random(),
             },
             Access::WriteUnlocked {
                 secrets: WriteSecrets::random(),
             },
             Access::WriteLocked {
-                local_read_secret: LocalSecret::SecretKey(cipher::SecretKey::random()),
-                local_write_secret: LocalSecret::SecretKey(cipher::SecretKey::random()),
+                local_read_secret: SetLocalSecret::random(),
+                local_write_secret: SetLocalSecret::random(),
                 secrets: WriteSecrets::random(),
             },
             Access::WriteLockedReadUnlocked {
-                local_write_secret: LocalSecret::SecretKey(cipher::SecretKey::random()),
+                local_write_secret: SetLocalSecret::random(),
                 secrets: WriteSecrets::random(),
             },
         ];
@@ -964,13 +1101,24 @@ mod tests {
             let local_keys = initialize_access_secrets(&mut tx, &access).await.unwrap();
             tx.commit().await.unwrap();
 
-            let local_key = local_keys.write.as_deref().or(local_keys.read.as_deref());
+            let local_key = local_keys
+                .write
+                .as_deref()
+                .or(local_keys.read.as_deref())
+                .cloned();
 
             let mut conn = pool.acquire().await.unwrap();
 
-            let access_secrets = get_access_secrets(&mut conn, local_key).await.unwrap();
+            let local_secret = local_key.clone().map(LocalSecret::SecretKey);
 
-            assert_eq!(access.secrets(), access_secrets);
+            let access_secrets = get_access_secrets(&mut conn, local_secret.as_ref())
+                .await
+                .unwrap();
+
+            assert_eq!(
+                (access.secrets(), local_key.as_ref()),
+                (access_secrets.0, access_secrets.1.as_deref())
+            );
         }
     }
 }

@@ -123,15 +123,10 @@ impl Repository {
 
         let mut tx = pool.begin_write().await?;
 
-        let local_key = if let Some(local_secret) = &local_secret {
-            Some(metadata::secret_to_key(&mut tx, local_secret).await?)
-        } else {
-            None
-        };
+        let (secrets, local_key) =
+            metadata::get_access_secrets(&mut tx, local_secret.as_ref()).await?;
 
-        let secrets = metadata::get_access_secrets(&mut tx, local_key.as_deref())
-            .await?
-            .with_mode(access_mode);
+        let secrets = secrets.with_mode(access_mode);
 
         let writer_id = if metadata::check_device_id(&mut tx, &device_id).await? {
             if secrets.can_write() {
@@ -244,14 +239,14 @@ impl Repository {
         Ok(metadata::get_or_generate_database_id(self.db()).await?)
     }
 
-    pub async fn requires_local_secret_for_reading(&self) -> Result<bool> {
+    pub async fn requires_local_key_for_reading(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        Ok(metadata::requires_local_secret_for_reading(&mut conn).await?)
+        Ok(metadata::requires_local_key_for_reading(&mut conn).await?)
     }
 
-    pub async fn requires_local_secret_for_writing(&self) -> Result<bool> {
+    pub async fn requires_local_key_for_writing(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        Ok(metadata::requires_local_secret_for_writing(&mut conn).await?)
+        Ok(metadata::requires_local_key_for_writing(&mut conn).await?)
     }
 
     /// Sets, unsets or changes local secrets for accessing the repository or disables the given
@@ -298,9 +293,9 @@ impl Repository {
         tx: &mut db::WriteTransaction,
         change: AccessChange,
     ) -> Result<()> {
-        let local_key = match &change {
+        let local = match &change {
             AccessChange::Enable(Some(local_secret)) => {
-                Some(metadata::secret_to_key(tx, local_secret).await?)
+                Some(metadata::secret_to_key_and_salt(local_secret))
             }
             AccessChange::Enable(None) => None,
             AccessChange::Disable => {
@@ -320,7 +315,7 @@ impl Repository {
             )
         };
 
-        metadata::set_read_key(tx, &id, &read_key, local_key.as_deref()).await?;
+        metadata::set_read_key(tx, &id, &read_key, local.as_deref()).await?;
 
         Ok(())
     }
@@ -330,9 +325,9 @@ impl Repository {
         tx: &mut db::WriteTransaction,
         change: AccessChange,
     ) -> Result<()> {
-        let local_key = match &change {
+        let local = match &change {
             AccessChange::Enable(Some(local_secret)) => {
-                Some(metadata::secret_to_key(tx, local_secret).await?)
+                Some(metadata::secret_to_key_and_salt(local_secret))
             }
             AccessChange::Enable(None) => None,
             AccessChange::Disable => {
@@ -352,8 +347,8 @@ impl Repository {
             )
         };
 
-        metadata::set_write_key(tx, &write_secrets, local_key.as_deref()).await?;
-        metadata::set_writer_id(tx, &writer_id, local_key.as_deref()).await?;
+        metadata::set_write_key(tx, &write_secrets, local.as_deref()).await?;
+        metadata::set_writer_id(tx, &writer_id, local.as_deref().map(|ks| &ks.key)).await?;
 
         Ok(())
     }
@@ -382,7 +377,7 @@ impl Repository {
     /// Switches the repository to the given mode.
     ///
     /// The actual mode the repository gets switched to is the higher of the current access mode
-    /// and the mode provided by `local_secret` but at most the mode specified in `access_mode`
+    /// and the mode provided by `local_key` but at most the mode specified in `access_mode`
     /// ("higher" means according to `AccessMode`'s `Ord` impl, that is: Write > Read > Blind).
     pub async fn set_access_mode(
         &self,
@@ -391,25 +386,20 @@ impl Repository {
     ) -> Result<()> {
         let mut tx = self.db().begin_write().await?;
 
-        let local_key = if let Some(local_secret) = &local_secret {
-            Some(metadata::secret_to_key(&mut tx, local_secret).await?)
-        } else {
-            None
-        };
-
         // Try to use the current secrets but fall back to the secrets stored in the metadata if the
         // current ones are insufficient and the stored ones have higher access mode.
         let old_secrets = self.shared.credentials.lock().unwrap().secrets.clone();
 
-        let secrets = if old_secrets.access_mode() >= access_mode {
-            old_secrets
+        let (secrets, local_key) = if old_secrets.access_mode() >= access_mode {
+            (old_secrets, None)
         } else {
-            let new_secrets = metadata::get_access_secrets(&mut tx, local_key.as_deref()).await?;
+            let (new_secrets, local_key) =
+                metadata::get_access_secrets(&mut tx, local_secret.as_ref()).await?;
 
             if new_secrets.access_mode() > old_secrets.access_mode() {
-                new_secrets
+                (new_secrets, local_key)
             } else {
-                old_secrets
+                (old_secrets, None)
             }
         };
 
@@ -486,17 +476,10 @@ impl Repository {
     }
 
     pub async fn unlock_secrets(&self, local_secret: LocalSecret) -> Result<AccessSecrets> {
-        // TODO: We don't really want to write here, but the `password_to_key` function requires a
-        // transaction. Consider changing it so that it only needs a connection (writing the seed would
-        // be done only during the db initialization explicitly).
-        let mut tx = self.db().begin_write().await?;
-
-        let local_key = match local_secret {
-            LocalSecret::Password(pwd) => metadata::password_to_key(&mut tx, &pwd).await?,
-            LocalSecret::SecretKey(key) => key,
-        };
-
-        Ok(metadata::get_access_secrets(&mut tx, Some(&local_key)).await?)
+        let mut conn = self.db().acquire().await?;
+        Ok(metadata::get_access_secrets(&mut conn, Some(&local_secret))
+            .await?
+            .0)
     }
 
     /// Get accessor for repository metadata. The metadata are arbitrary key-value entries that are

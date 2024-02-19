@@ -1,4 +1,5 @@
-use crate::crypto::{cipher::SecretKey, Password};
+use crate::crypto::{cipher::SecretKey, Password, PasswordSalt};
+#[cfg(test)]
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +10,7 @@ pub enum LocalSecret {
     SecretKey(SecretKey),
 }
 
+#[cfg(test)]
 impl LocalSecret {
     /// Generates random master secret containing a secret key.
     pub fn random() -> Self {
@@ -18,6 +20,49 @@ impl LocalSecret {
     /// Generates random master secret containing a secret key using the provided RNG.
     pub fn generate<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
         Self::SecretKey(SecretKey::generate(rng))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetLocalSecret {
+    Password(Password),
+    KeyAndSalt(KeyAndSalt),
+}
+
+#[cfg(test)]
+impl SetLocalSecret {
+    /// Generates random secret key and salt.
+    pub fn random() -> Self {
+        Self::KeyAndSalt(KeyAndSalt::random())
+    }
+}
+
+#[cfg(test)]
+impl From<SetLocalSecret> for LocalSecret {
+    fn from(local: SetLocalSecret) -> Self {
+        match local {
+            SetLocalSecret::Password(pwd) => Self::Password(pwd),
+            SetLocalSecret::KeyAndSalt(local) => Self::SecretKey(local.key),
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct KeyAndSalt {
+    pub key: SecretKey,
+    pub salt: PasswordSalt,
+}
+
+#[cfg(test)]
+impl KeyAndSalt {
+    /// Generates random secret key and salt.
+    pub fn random() -> Self {
+        KeyAndSalt {
+            key: SecretKey::random(),
+            salt: SecretKey::random_salt(),
+        }
     }
 }
 

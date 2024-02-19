@@ -78,7 +78,7 @@ impl SecretKey {
         sub_key
     }
 
-    pub fn generate_password_salt() -> PasswordSalt {
+    pub fn random_salt() -> PasswordSalt {
         OsRng.gen()
     }
 

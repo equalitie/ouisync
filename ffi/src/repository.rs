@@ -7,7 +7,8 @@ use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
     network::{self, Registration},
-    path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository, ShareToken,
+    path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository,
+    SetLocalSecret, ShareToken,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -28,8 +29,8 @@ pub(crate) type RepositoryHandle = Handle<Arc<RepositoryHolder>>;
 pub(crate) async fn create(
     state: &State,
     store_path: PathBuf,
-    local_read_secret: Option<LocalSecret>,
-    local_write_secret: Option<LocalSecret>,
+    local_read_secret: Option<SetLocalSecret>,
+    local_write_secret: Option<SetLocalSecret>,
     share_token: Option<ShareToken>,
 ) -> Result<RepositoryHandle, Error> {
     let entry = ensure_vacant_entry(state, store_path.clone()).await?;
@@ -310,18 +311,19 @@ pub(crate) async fn set_pex_enabled(
     Ok(())
 }
 
-/// The `secret` parameter is optional, if `None` the current access level of the opened
-/// repository is used. If provided, the highest access level that the secret can unlock is used.
+/// The `local_secret` parameter is optional, if `None` the current access level of the opened
+/// repository is used. If provided, the highest access level that the local_secret can unlock is
+/// used.
 pub(crate) async fn create_share_token(
     state: &State,
     repository: RepositoryHandle,
-    secret: Option<LocalSecret>,
+    local_secret: Option<LocalSecret>,
     access_mode: AccessMode,
     name: Option<String>,
 ) -> Result<String, Error> {
     let holder = state.repositories.get(repository)?;
     let token =
-        repository::create_share_token(&holder.repository, secret, access_mode, name).await?;
+        repository::create_share_token(&holder.repository, local_secret, access_mode, name).await?;
     Ok(token)
 }
 

@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     blob, db,
     protocol::{BlockId, BLOCK_NONCE_SIZE, BLOCK_SIZE},
-    test_utils, WriteSecrets,
+    test_utils, LocalSecret, SetLocalSecret, WriteSecrets,
 };
 use assert_matches::assert_matches;
 use rand::Rng;
@@ -491,7 +491,7 @@ async fn blind_access_non_empty_repo() {
     let (_base_dir, pool) = db::create_temp().await.unwrap();
     let params =
         RepositoryParams::with_pool(pool, "test").with_parent_monitor(StateMonitor::make_root());
-    let local_secret = LocalSecret::random();
+    let local_secret = SetLocalSecret::random();
 
     // Create the repo and put a file in it.
     let repo = Repository::create(
@@ -514,17 +514,17 @@ async fn blind_access_non_empty_repo() {
 
     // Reopen the repo first explicitly in blind mode and then using incorrect secret. The two ways
     // should be indistinguishable from each other.
-    for (local_secret, access_mode) in [
+    for (local_key, access_mode) in [
         (None, AccessMode::Blind),
         (Some(LocalSecret::random()), AccessMode::Write),
     ] {
         // Reopen the repo in blind mode.
-        let repo = Repository::open(&params, local_secret.clone(), access_mode)
+        let repo = Repository::open(&params, local_key.clone(), access_mode)
             .await
             .unwrap_or_else(|_| {
                 panic!(
-                    "Repo should open in blind mode (local_secret.is_some:{:?})",
-                    local_secret.is_some(),
+                    "Repo should open in blind mode (local_key.is_some:{:?})",
+                    local_key.is_some(),
                 )
             });
 
@@ -558,7 +558,7 @@ async fn blind_access_empty_repo() {
     let (_base_dir, pool) = db::create_temp().await.unwrap();
     let params = RepositoryParams::with_pool(pool, "test");
 
-    let local_secret = LocalSecret::random();
+    let local_secret = SetLocalSecret::random();
 
     // Create an empty repo.
     Repository::create(
@@ -1055,8 +1055,8 @@ async fn size() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn access_mode() {
-    let secret1 = LocalSecret::random();
-    let secret2 = LocalSecret::random();
+    let secret1 = SetLocalSecret::random();
+    let secret2 = SetLocalSecret::random();
 
     // TODO: given the large number of cases, consider converting this to a proptest.
 
@@ -1070,34 +1070,34 @@ async fn access_mode() {
             AccessChange::Enable(None),
             // test steps
             vec![
-                // params to `set_access_mode`             expected mode
-                (AccessMode::Blind, None,                  AccessMode::Blind),
-                (AccessMode::Read,  None,                  AccessMode::Read),
-                (AccessMode::Write, None,                  AccessMode::Write),
+                // params to `set_access_mode`                    expected mode
+                (AccessMode::Blind, None,                         AccessMode::Blind),
+                (AccessMode::Read,  None,                         AccessMode::Read),
+                (AccessMode::Write, None,                         AccessMode::Write),
             ],
         ),
         (
             AccessChange::Enable(None),
             AccessChange::Enable(Some(secret1.clone())),
             vec![
-                (AccessMode::Blind, None,                  AccessMode::Blind),
-                (AccessMode::Blind, Some(secret1.clone()), AccessMode::Blind),
-                (AccessMode::Read,  None,                  AccessMode::Read),
-                (AccessMode::Read,  Some(secret1.clone()), AccessMode::Read),
-                (AccessMode::Write, None,                  AccessMode::Read),
-                (AccessMode::Write, Some(secret1.clone()), AccessMode::Write),
+                (AccessMode::Blind, None,                         AccessMode::Blind),
+                (AccessMode::Blind, Some(secret1.clone().into()), AccessMode::Blind),
+                (AccessMode::Read,  None,                         AccessMode::Read),
+                (AccessMode::Read,  Some(secret1.clone().into()), AccessMode::Read),
+                (AccessMode::Write, None,                         AccessMode::Read),
+                (AccessMode::Write, Some(secret1.clone().into()), AccessMode::Write),
             ],
         ),
         (
             AccessChange::Enable(Some(secret1.clone())),
             AccessChange::Enable(Some(secret1.clone())),
             vec![
-                (AccessMode::Blind, None,                  AccessMode::Blind),
-                (AccessMode::Blind, Some(secret1.clone()), AccessMode::Blind),
-                (AccessMode::Read,  None,                  AccessMode::Blind),
-                (AccessMode::Write, None,                  AccessMode::Blind),
-                (AccessMode::Read,  Some(secret1.clone()), AccessMode::Read),
-                (AccessMode::Write, Some(secret1.clone()), AccessMode::Write),
+                (AccessMode::Blind, None,                         AccessMode::Blind),
+                (AccessMode::Blind, Some(secret1.clone().into()), AccessMode::Blind),
+                (AccessMode::Read,  None,                         AccessMode::Blind),
+                (AccessMode::Write, None,                         AccessMode::Blind),
+                (AccessMode::Read,  Some(secret1.clone().into()), AccessMode::Read),
+                (AccessMode::Write, Some(secret1.clone().into()), AccessMode::Write),
             ],
         ),
         (
@@ -1105,36 +1105,36 @@ async fn access_mode() {
             AccessChange::Enable(Some(secret2.clone())),
             vec![
                 (AccessMode::Blind, None, AccessMode::Blind),
-                (AccessMode::Blind, Some(secret1.clone()), AccessMode::Blind),
-                (AccessMode::Blind, Some(secret2.clone()), AccessMode::Blind),
-                (AccessMode::Read,  None,                  AccessMode::Blind),
-                (AccessMode::Write, None,                  AccessMode::Blind),
-                (AccessMode::Read,  Some(secret1.clone()), AccessMode::Read),
-                (AccessMode::Write, Some(secret2.clone()), AccessMode::Write),
-                (AccessMode::Blind, None,                  AccessMode::Blind),
-                (AccessMode::Read,  Some(secret2.clone()), AccessMode::Read),
-                (AccessMode::Blind, None,                  AccessMode::Blind),
-                (AccessMode::Write, Some(secret1.clone()), AccessMode::Read),
+                (AccessMode::Blind, Some(secret1.clone().into()), AccessMode::Blind),
+                (AccessMode::Blind, Some(secret2.clone().into()), AccessMode::Blind),
+                (AccessMode::Read,  None,                         AccessMode::Blind),
+                (AccessMode::Write, None,                         AccessMode::Blind),
+                (AccessMode::Read,  Some(secret1.clone().into()), AccessMode::Read),
+                (AccessMode::Write, Some(secret2.clone().into()), AccessMode::Write),
+                (AccessMode::Blind, None,                         AccessMode::Blind),
+                (AccessMode::Read,  Some(secret2.clone().into()), AccessMode::Read),
+                (AccessMode::Blind, None,                         AccessMode::Blind),
+                (AccessMode::Write, Some(secret1.clone().into()), AccessMode::Read),
             ],
         ),
         (
             AccessChange::Enable(None),
             AccessChange::Disable,
             vec![
-                (AccessMode::Blind, None,                  AccessMode::Blind),
-                (AccessMode::Read,  None,                  AccessMode::Read),
-                (AccessMode::Write, None,                  AccessMode::Read),
-                (AccessMode::Blind, None,                  AccessMode::Blind),
-                (AccessMode::Write, None,                  AccessMode::Read),
+                (AccessMode::Blind, None,                         AccessMode::Blind),
+                (AccessMode::Read,  None,                         AccessMode::Read),
+                (AccessMode::Write, None,                         AccessMode::Read),
+                (AccessMode::Blind, None,                         AccessMode::Blind),
+                (AccessMode::Write, None,                         AccessMode::Read),
             ],
         ),
         (
             AccessChange::Disable,
             AccessChange::Disable,
             vec![
-                (AccessMode::Blind, None,                  AccessMode::Blind),
-                (AccessMode::Read,  None,                  AccessMode::Blind),
-                (AccessMode::Write, None,                  AccessMode::Blind),
+                (AccessMode::Blind, None,                         AccessMode::Blind),
+                (AccessMode::Read,  None,                         AccessMode::Blind),
+                (AccessMode::Write, None,                         AccessMode::Blind),
             ],
         ),
     ];

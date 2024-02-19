@@ -91,20 +91,20 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository::set_access_mode(&self.state, repository, access_mode, secret).await?;
                 ().into()
             }
-            Request::RepositoryRequiresLocalSecretForReading(handle) => self
+            Request::RepositoryRequiresLocalKeyForReading(handle) => self
                 .state
                 .repositories
                 .get(handle)?
                 .repository
-                .requires_local_secret_for_reading()
+                .requires_local_key_for_reading()
                 .await?
                 .into(),
-            Request::RepositoryRequiresLocalSecretForWriting(handle) => self
+            Request::RepositoryRequiresLocalKeyForWriting(handle) => self
                 .state
                 .repositories
                 .get(handle)?
                 .repository
-                .requires_local_secret_for_writing()
+                .requires_local_key_for_writing()
                 .await?
                 .into(),
             Request::RepositoryInfoHash(handle) => {
@@ -357,9 +357,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 self.state.remove_task(handle);
                 ().into()
             }
-            Request::GenerateSaltForSecretKey => {
-                SecretKey::generate_password_salt().to_vec().into()
-            }
+            Request::GenerateSaltForSecretKey => SecretKey::random_salt().to_vec().into(),
             Request::DeriveSecretKey { password, salt } => {
                 // TODO: This is a slow operation, do we need to send it to the thread pool?
                 SecretKey::derive_from_password(&password, &salt.try_into().unwrap())

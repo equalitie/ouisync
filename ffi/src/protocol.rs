@@ -6,7 +6,8 @@ use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
 use ouisync_lib::{
     network::{NatBehavior, TrafficStats},
-    AccessChange, AccessMode, LocalSecret, PeerAddr, PeerInfo, Progress, ShareToken,
+    AccessChange, AccessMode, LocalSecret, PeerAddr, PeerInfo, Progress, SetLocalSecret,
+    ShareToken,
 };
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
@@ -23,8 +24,8 @@ use thiserror::Error;
 pub(crate) enum Request {
     RepositoryCreate {
         path: Utf8PathBuf,
-        read_secret: Option<LocalSecret>,
-        write_secret: Option<LocalSecret>,
+        read_secret: Option<SetLocalSecret>,
+        write_secret: Option<SetLocalSecret>,
         share_token: Option<ShareToken>,
     },
     RepositoryOpen {
@@ -33,8 +34,8 @@ pub(crate) enum Request {
     },
     RepositoryClose(RepositoryHandle),
     RepositorySubscribe(RepositoryHandle),
-    RepositoryRequiresLocalSecretForReading(RepositoryHandle),
-    RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
+    RepositoryRequiresLocalKeyForReading(RepositoryHandle),
+    RepositoryRequiresLocalKeyForWriting(RepositoryHandle),
     RepositorySetAccess {
         repository: RepositoryHandle,
         read: Option<AccessChange>,
