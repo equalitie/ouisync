@@ -255,7 +255,7 @@ pub(crate) async fn set_read_key(
         set_secret_read_key(tx, id, read_key, local_key).await
     } else {
         set_public_read_key(tx, read_key).await?;
-        remove_secret_write_key(tx).await
+        remove_secret_read_key(tx).await
     }
 }
 
