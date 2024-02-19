@@ -1,6 +1,7 @@
 mod client;
 mod geo_ip;
 mod handler;
+mod local_secret;
 mod metrics;
 mod options;
 mod protocol;

@@ -408,7 +408,7 @@ pub enum AccessChange {
     Disable,
 }
 
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub struct KeyAndSalt {
     pub key: cipher::SecretKey,

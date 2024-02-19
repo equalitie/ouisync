@@ -1,11 +1,12 @@
 use crate::{
+    local_secret::LocalSecret,
     protocol::{Error, QuotaInfo, Request, Response},
     repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
 };
 use async_trait::async_trait;
 use ouisync_bridge::{network, transport::NotificationSender};
-use ouisync_lib::{crypto::Password, LocalSecret, PeerAddr, ShareToken};
+use ouisync_lib::{crypto::cipher::SecretKey, crypto::Password, KeyAndSalt, PeerAddr, ShareToken};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 #[derive(Clone)]
@@ -74,15 +75,22 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 let name = RepositoryName::try_from(name)?;
 
                 let store_path = self.state.store_path(name.as_ref());
-                let read_password = read_password.or_else(|| password.as_ref().cloned());
-                let write_password = write_password.or(password);
+
+                let write_salt = SecretKey::generate_password_salt();
+
+                let access = password.map(password_to_access);
+
+                let read_access = read_password
+                    .map(password_to_access)
+                    .or_else(|| access.clone());
+                let write_access = write_password
+                    .map(password_to_access)
+                    .or_else(|| access.clone());
 
                 let repository = ouisync_bridge::repository::create(
                     store_path,
-                    read_password.map(Password::from).map(LocalSecret::Password),
-                    write_password
-                        .map(Password::from)
-                        .map(LocalSecret::Password),
+                    read_access,
+                    write_access,
                     share_token,
                     &self.state.config,
                     &self.state.repositories_monitor,
@@ -400,4 +408,10 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
             }
         }
     }
+}
+
+fn password_to_access(password: String) -> KeyAndSalt {
+    let salt = SecretKey::generate_password_salt();
+    let key = SecretKey::derive_from_password(&Password::from(password), &salt);
+    KeyAndSalt { key, salt }
 }
