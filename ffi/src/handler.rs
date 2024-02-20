@@ -357,10 +357,10 @@ impl ouisync_bridge::transport::Handler for Handler {
                 self.state.remove_task(handle);
                 ().into()
             }
-            Request::GenerateSaltForSecretKey => SecretKey::random_salt().to_vec().into(),
+            Request::GenerateSaltForSecretKey => SecretKey::random_salt().as_ref().to_vec().into(),
             Request::DeriveSecretKey { password, salt } => {
                 // TODO: This is a slow operation, do we need to send it to the thread pool?
-                SecretKey::derive_from_password(&password, &salt.try_into().unwrap())
+                SecretKey::derive_from_password(&password, &salt)
                     .as_array()
                     .to_vec()
                     .into()

@@ -59,7 +59,7 @@ pub struct KeyAndSalt {
 impl KeyAndSalt {
     /// Generates random secret key and salt.
     pub fn random() -> Self {
-        KeyAndSalt {
+        Self {
             key: SecretKey::random(),
             salt: SecretKey::random_salt(),
         }

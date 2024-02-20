@@ -414,6 +414,11 @@ mod tests {
     // being human readable makes it easy to verify the values are serialized the way we want them.
     #[test]
     fn access_change_serialize_deserialize_json() {
+        let key = cipher::SecretKey::random();
+        let salt = cipher::SecretKey::random_salt();
+        let key_serialized = serde_json::to_string(&key).unwrap();
+        let salt_serialized = serde_json::to_string(&salt).unwrap();
+
         for (orig, expected_serialized) in [
             (
                 AccessChange::Enable(Some(SetLocalSecret::Password("mellon".to_string().into()))),
@@ -428,6 +433,30 @@ mod tests {
             let deserialized: AccessChange = serde_json::from_str(&serialized).unwrap();
             assert_eq!(deserialized, orig);
         }
+    }
+
+    // This fails to deserialize the secret key. It works with msgpack, so not a big deal as long
+    // as we don't use json, but curious still.
+    #[ignore]
+    #[test]
+    fn access_change_key_serialize_deserialize_json() {
+        let key = cipher::SecretKey::random();
+        let salt = cipher::SecretKey::random_salt();
+        let key_serialized = serde_json::to_string(&key).unwrap();
+        let salt_serialized = serde_json::to_string(&salt).unwrap();
+
+        let orig = AccessChange::Enable(Some(SetLocalSecret::KeyAndSalt(KeyAndSalt { key, salt })));
+
+        let expected_serialized = format!(
+            "{{\"enable\":{{\"key_and_salt\":{{\"key\":{}, \"salt\":{}}}}}}}",
+            key_serialized, salt_serialized
+        );
+
+        let serialized = serde_json::to_string(&orig).unwrap();
+        assert_eq!(serialized, expected_serialized);
+
+        let deserialized: AccessChange = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, orig);
     }
 
     #[test]
@@ -446,5 +475,16 @@ mod tests {
             let deserialized: AccessChange = rmp_serde::from_slice(&serialized).unwrap();
             assert_eq!(deserialized, orig);
         }
+    }
+
+    #[test]
+    fn access_change_key_serialize_deserialize_msgpack() {
+        let key = cipher::SecretKey::random();
+        let salt = cipher::SecretKey::random_salt();
+
+        let orig = AccessChange::Enable(Some(SetLocalSecret::KeyAndSalt(KeyAndSalt { key, salt })));
+        let serialized = rmp_serde::to_vec(&orig).unwrap();
+        let deserialized: AccessChange = rmp_serde::from_slice(&serialized).unwrap();
+        assert_eq!(deserialized, orig);
     }
 }

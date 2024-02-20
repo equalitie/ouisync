@@ -1,5 +1,5 @@
 use argon2::password_hash;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, sync::Arc};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
@@ -55,5 +55,38 @@ impl<'de> Deserialize<'de> for Password {
     }
 }
 
-pub(crate) const PASSWORD_SALT_LEN: usize = password_hash::Salt::RECOMMENDED_LENGTH;
-pub type PasswordSalt = [u8; PASSWORD_SALT_LEN];
+define_byte_array_wrapper! {
+    pub struct PasswordSalt([u8; password_hash::Salt::RECOMMENDED_LENGTH]);
+}
+
+derive_rand_for_wrapper!(PasswordSalt);
+
+impl Serialize for PasswordSalt {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serde_bytes::Bytes::new(self.as_ref()).serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for PasswordSalt {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes: &serde_bytes::Bytes = Deserialize::deserialize(d)?;
+
+        if bytes.len() != Self::SIZE {
+            return Err(D::Error::invalid_length(
+                bytes.len(),
+                &format!("{}", Self::SIZE).as_str(),
+            ));
+        }
+
+        let mut salt = [0; Self::SIZE];
+        salt.as_mut().copy_from_slice(bytes);
+
+        Ok(PasswordSalt(salt))
+    }
+}

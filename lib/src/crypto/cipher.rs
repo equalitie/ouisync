@@ -89,7 +89,7 @@ impl SecretKey {
         // does is whether the password isn't too long, but that would have to be more than
         // 0xffffffff so the `.expect` shouldn't be an issue.
         Argon2::default()
-            .hash_password_into(user_password.as_ref(), salt, result.as_mut())
+            .hash_password_into(user_password.as_ref(), salt.as_ref(), result.as_mut())
             .expect("failed to hash password");
         result
     }

@@ -5,6 +5,7 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
 use ouisync_lib::{
+    crypto::PasswordSalt,
     network::{NatBehavior, TrafficStats},
     AccessChange, AccessMode, LocalSecret, PeerAddr, PeerInfo, Progress, SetLocalSecret,
     ShareToken,
@@ -172,8 +173,7 @@ pub(crate) enum Request {
     GenerateSaltForSecretKey,
     DeriveSecretKey {
         password: String,
-        #[serde(with = "serde_bytes")]
-        salt: Vec<u8>,
+        salt: PasswordSalt,
     },
 }
 
