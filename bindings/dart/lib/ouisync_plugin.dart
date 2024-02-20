@@ -343,8 +343,8 @@ class Repository {
   static Future<Repository> create(
     Session session, {
     required String store,
-    required LocalSecret? readSecret,
-    required LocalSecret? writeSecret,
+    required SetLocalSecret? readSecret,
+    required SetLocalSecret? writeSecret,
     ShareToken? shareToken,
   }) async {
     if (debugTrace) {
@@ -548,7 +548,7 @@ sealed class AccessChange {
 }
 
 class EnableAccess extends AccessChange {
-  final LocalSecret? secret;
+  final SetLocalSecret? secret;
 
   EnableAccess(this.secret);
 

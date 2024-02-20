@@ -52,16 +52,16 @@ internal abstract class ValueRequest<T : Any>(val value: T) : Request() {
 
 internal class RepositoryCreate(
     val path: String,
-    val readSecret: LocalSecret?,
-    val writeSecret: LocalSecret?,
+    val readSecret: SetLocalSecret?,
+    val writeSecret: SetLocalSecret?,
     val shareToken: String?,
 ) : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packMap(
             mapOf(
                 "path" to path,
-                "readSecret" to readSecret,
-                "writeSecret" to writeSecret,
+                "read_secret" to readSecret,
+                "write_secret" to writeSecret,
                 "shareToken" to shareToken,
             ),
         )
@@ -429,6 +429,7 @@ private fun MessagePacker.packAny(value: Any) {
         is String -> packString(value)
         is AccessChange -> value.pack(this)
         is LocalSecret -> value.pack(this)
+        is SetLocalSecret -> value.pack(this)
         else -> throw IllegalArgumentException("can't pack ${value::class.qualifiedName}")
     }
 }

@@ -32,6 +32,7 @@ ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }
 pem = "2.0.1"
+rand = { workspace = true }
 rustls = { workspace = true }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
@@ -47,7 +48,6 @@ walkdir = "2.3.3"
 backoff = "0.4.0"
 hex = "0.4.3"
 once_cell = { workspace = true }
-rand = "0.8.5"
 rcgen = { workspace = true, features = ["pem"] }
 tempfile = "3.2"
 
