@@ -305,8 +305,8 @@ class RepositoryTest {
         Repository.create(
             session,
             repoPath,
-            readSecret = SetLocalSecretKeyAndSalt(readKey, readSalt),
-            writeSecret = SetLocalSecretKeyAndSalt(writeKey, writeSalt),
+            readSecret = LocalSecretKeyAndSalt(readKey, readSalt),
+            writeSecret = LocalSecretKeyAndSalt(writeKey, writeSalt),
         ).also { repo ->
             assertEquals(AccessMode.WRITE, repo.accessMode())
             repo.close()

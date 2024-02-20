@@ -323,7 +323,7 @@ class LocalSecretKey(val bytes: ByteArray) : LocalSecret {
  *
  * @see [Repository.create]
  */
-class SetLocalSecretKeyAndSalt(val key: LocalSecretKey, val salt: PasswordSalt) : SetLocalSecret {
+class LocalSecretKeyAndSalt(val key: LocalSecretKey, val salt: PasswordSalt) : SetLocalSecret {
     override fun pack(packer: MessagePacker) {
         packer.packMapHeader(1)
         packer.packString("key_and_salt")
