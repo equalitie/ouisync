@@ -239,14 +239,14 @@ impl Repository {
         Ok(metadata::get_or_generate_database_id(self.db()).await?)
     }
 
-    pub async fn requires_local_key_for_reading(&self) -> Result<bool> {
+    pub async fn requires_local_secret_for_reading(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        Ok(metadata::requires_local_key_for_reading(&mut conn).await?)
+        Ok(metadata::requires_local_secret_for_reading(&mut conn).await?)
     }
 
-    pub async fn requires_local_key_for_writing(&self) -> Result<bool> {
+    pub async fn requires_local_secret_for_writing(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
-        Ok(metadata::requires_local_key_for_writing(&mut conn).await?)
+        Ok(metadata::requires_local_secret_for_writing(&mut conn).await?)
     }
 
     /// Sets, unsets or changes local secrets for accessing the repository or disables the given

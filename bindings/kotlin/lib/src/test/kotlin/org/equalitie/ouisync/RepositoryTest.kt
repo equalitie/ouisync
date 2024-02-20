@@ -262,6 +262,67 @@ class RepositoryTest {
         }
     }
 
+    @Test
+    fun repoWithLocalPasswords() = runTest {
+        val tempDir = JFile(createTempDirectory().toString())
+        val repoPath = "$tempDir/repo.db"
+
+        val readPassword = LocalPassword("read_pwd")
+        val writePassword = LocalPassword("write_pwd")
+
+        Repository.create(
+            session,
+            repoPath,
+            readSecret = readPassword,
+            writeSecret = writePassword,
+        ).also { repo ->
+            assertEquals(AccessMode.WRITE, repo.accessMode())
+            repo.close()
+        }
+
+        Repository.open(session, repoPath, secret = readPassword).also { repo ->
+            assertEquals(AccessMode.READ, repo.accessMode())
+            repo.close()
+        }
+
+        Repository.open(session, repoPath, secret = writePassword).also { repo ->
+            assertEquals(AccessMode.WRITE, repo.accessMode())
+            repo.close()
+        }
+    }
+
+    @Test
+    fun repoWithLocalKeys() = runTest {
+        val tempDir = JFile(createTempDirectory().toString())
+        val repoPath = "$tempDir/repo.db"
+
+        val readKey = LocalSecretKey.random()
+        val writeKey = LocalSecretKey.random()
+
+        val readSalt = PasswordSalt.random()
+        val writeSalt = PasswordSalt.random()
+
+        Repository.create(
+            session,
+            repoPath,
+            readSecret = SetLocalSecretKeyAndSalt(readKey, readSalt),
+            writeSecret = SetLocalSecretKeyAndSalt(writeKey, writeSalt),
+        ).also { repo ->
+            assertEquals(AccessMode.WRITE, repo.accessMode())
+            repo.close()
+        }
+
+        Repository.open(session, repoPath, secret = readKey).also { repo ->
+            assertEquals(AccessMode.READ, repo.accessMode())
+            repo.close()
+        }
+
+        Repository.open(session, repoPath, secret = writeKey).also { repo ->
+            assertEquals(AccessMode.WRITE, repo.accessMode())
+            repo.close()
+        }
+    }
+
     private suspend fun createRepo(): Repository =
         Repository.create(session, repoPath, readSecret = null, writeSecret = null)
 

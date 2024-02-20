@@ -414,7 +414,7 @@ async fn migrate_to_separate_password_salts(
 
 // ------------------------------
 
-pub(crate) async fn requires_local_key_for_reading(
+pub(crate) async fn requires_local_secret_for_reading(
     conn: &mut db::Connection,
 ) -> Result<bool, StoreError> {
     match get_public_blob::<cipher::SecretKey>(conn, READ_KEY).await {
@@ -430,7 +430,7 @@ pub(crate) async fn requires_local_key_for_reading(
     }
 }
 
-pub(crate) async fn requires_local_key_for_writing(
+pub(crate) async fn requires_local_secret_for_writing(
     conn: &mut db::Connection,
 ) -> Result<bool, StoreError> {
     match get_public_blob::<sign::Keypair>(conn, WRITE_KEY).await {

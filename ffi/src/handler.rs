@@ -91,20 +91,20 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository::set_access_mode(&self.state, repository, access_mode, secret).await?;
                 ().into()
             }
-            Request::RepositoryRequiresLocalKeyForReading(handle) => self
+            Request::RepositoryRequiresLocalSecretForReading(handle) => self
                 .state
                 .repositories
                 .get(handle)?
                 .repository
-                .requires_local_key_for_reading()
+                .requires_local_secret_for_reading()
                 .await?
                 .into(),
-            Request::RepositoryRequiresLocalKeyForWriting(handle) => self
+            Request::RepositoryRequiresLocalSecretForWriting(handle) => self
                 .state
                 .repositories
                 .get(handle)?
                 .repository
-                .requires_local_key_for_writing()
+                .requires_local_secret_for_writing()
                 .await?
                 .into(),
             Request::RepositoryInfoHash(handle) => {

@@ -58,8 +58,8 @@ class Repository private constructor(internal val handle: Long, internal val cli
         suspend fun create(
             session: Session,
             path: String,
-            readSecret: LocalSecret?,
-            writeSecret: LocalSecret?,
+            readSecret: SetLocalSecret?,
+            writeSecret: SetLocalSecret?,
             shareToken: ShareToken? = null,
         ): Repository {
             val client = session.client
@@ -271,13 +271,17 @@ class Repository private constructor(internal val handle: Long, internal val cli
  *
  * @see [Repository.create]
  */
-sealed class LocalSecret {
-    fun pack(packer: MessagePacker) {
-        packContent(packer)
-        packer.close()
-    }
+sealed interface LocalSecret {
+    abstract fun pack(packer: MessagePacker)
+}
 
-    protected abstract fun packContent(packer: MessagePacker)
+/**
+ * Used to set or change the read or write local secret of a repository.
+ *
+ * @see [Repository.create]
+ */
+sealed interface SetLocalSecret {
+    abstract fun pack(packer: MessagePacker)
 }
 
 /**
@@ -285,8 +289,8 @@ sealed class LocalSecret {
  *
  * @see [Repository.create]
  */
-class LocalPassword(val string: String) : LocalSecret() {
-    override fun packContent(packer: MessagePacker) {
+class LocalPassword(val string: String) : LocalSecret, SetLocalSecret {
+    override fun pack(packer: MessagePacker) {
         packer.packMap(mapOf("password" to string))
     }
 }
@@ -296,20 +300,47 @@ class LocalPassword(val string: String) : LocalSecret() {
  *
  * @see [Repository.create]
  */
-class LocalSecretKey(val bytes: ByteArray) : LocalSecret() {
+class LocalSecretKey(val bytes: ByteArray) : LocalSecret {
     companion object {
         // 256-bits (32 bytes) for ChaCha20 used by Ouisync
         const val SIZE_IN_BYTES = 32
 
-        fun generateRandom(): LocalSecretKey {
+        fun random(): LocalSecretKey {
             val bytes = ByteArray(SIZE_IN_BYTES)
             SecureRandom().nextBytes(bytes)
             return LocalSecretKey(bytes)
         }
     }
 
-    override fun packContent(packer: MessagePacker) {
+    override fun pack(packer: MessagePacker) {
         packer.packMap(mapOf("secret_key" to bytes))
+    }
+}
+
+/**
+ * Use to directly (without doing password hashing) set the LocalSecretKey and PasswordSalt for
+ * read or write access.
+ *
+ * @see [Repository.create]
+ */
+class SetLocalSecretKeyAndSalt(val key: LocalSecretKey, val salt: PasswordSalt) : SetLocalSecret {
+    override fun pack(packer: MessagePacker) {
+        packer.packMapHeader(1)
+        packer.packString("key_and_salt")
+        packer.packMap(mapOf("key" to key.bytes, "salt" to salt.bytes))
+    }
+}
+
+class PasswordSalt(val bytes: ByteArray) {
+    companion object {
+        // https://docs.rs/argon2/latest/argon2/constant.RECOMMENDED_SALT_LEN.html
+        const val SIZE_IN_BYTES = 16
+
+        fun random(): PasswordSalt {
+            val bytes = ByteArray(SIZE_IN_BYTES)
+            SecureRandom().nextBytes(bytes)
+            return PasswordSalt(bytes)
+        }
     }
 }
 
@@ -343,7 +374,7 @@ sealed class AccessChange {
  *
  * @see [Repository.setAccess]
  */
-class EnableAccess(val secret: LocalSecret?) : AccessChange()
+class EnableAccess(val secret: SetLocalSecret?) : AccessChange()
 
 /**
  * Disable access
