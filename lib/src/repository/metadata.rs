@@ -118,16 +118,11 @@ pub(crate) enum KeyType {
 }
 
 pub(crate) async fn password_to_key(
-    conn: &mut db::Connection,
+    tx: &mut db::WriteTransaction,
     key_type: KeyType,
     password: &Password,
 ) -> Result<cipher::SecretKey, StoreError> {
-    let salt = match key_type {
-        KeyType::Read => get_public_blob(conn, READ_PASSWORD_SALT).await?,
-        KeyType::Write => get_public_blob(conn, WRITE_PASSWORD_SALT).await?,
-    }
-    // Salts should always be present
-    .ok_or(StoreError::MalformedData)?;
+    let salt = get_password_salt(tx, key_type).await?;
 
     Ok(cipher::SecretKey::derive_from_password(
         password.as_ref(),
@@ -136,12 +131,12 @@ pub(crate) async fn password_to_key(
 }
 
 async fn secret_to_key<'a>(
-    conn: &mut db::Connection,
+    tx: &mut db::WriteTransaction,
     key_type: KeyType,
     secret: &'a LocalSecret,
 ) -> Result<Cow<'a, cipher::SecretKey>, StoreError> {
     match secret {
-        LocalSecret::Password(password) => password_to_key(conn, key_type, password)
+        LocalSecret::Password(password) => password_to_key(tx, key_type, password)
             .await
             .map(Cow::Owned),
         LocalSecret::SecretKey(key) => Ok(Cow::Borrowed(key)),
@@ -159,21 +154,6 @@ pub(crate) fn secret_to_key_and_salt(secret: &'_ SetLocalSecret) -> Cow<'_, KeyA
     }
 }
 
-//async fn get_or_generate_password_salt(
-//    tx: &mut db::WriteTransaction,
-//) -> Result<PasswordSalt, StoreError> {
-//    let salt = match get_public_blob(tx, PASSWORD_SALT).await {
-//        Ok(Some(salt)) => salt,
-//        Ok(None) => {
-//            let salt: PasswordSalt = cipher::SecretKey::generate_password_salt();
-//            set_public_blob(tx, PASSWORD_SALT, &salt).await?;
-//            salt
-//        }
-//        Err(error) => return Err(error),
-//    };
-//
-//    Ok(salt)
-//}
 // -------------------------------------------------------------------
 // Database ID
 // -------------------------------------------------------------------
@@ -281,7 +261,7 @@ async fn set_secret_read_key(
 ) -> Result<(), StoreError> {
     set_secret_blob(tx, READ_KEY, read_key, &local.key).await?;
     set_secret_blob(tx, READ_KEY_VALIDATOR, read_key_validator(id), read_key).await?;
-    set_read_password_salt(tx, &local.salt).await
+    set_password_salt(tx, KeyType::Read, &local.salt).await
 }
 
 pub(crate) async fn set_read_key(
@@ -342,7 +322,7 @@ async fn set_secret_write_key(
     local: &KeyAndSalt,
 ) -> Result<(), StoreError> {
     set_secret_blob(tx, WRITE_KEY, secrets.write_keys.to_bytes(), &local.key).await?;
-    set_write_password_salt(tx, &local.salt).await
+    set_password_salt(tx, KeyType::Write, &local.salt).await
 }
 
 pub(crate) async fn set_write_key(
@@ -377,26 +357,36 @@ pub(crate) async fn remove_write_key(tx: &mut db::WriteTransaction) -> Result<()
 
 // ------------------------------
 
-async fn set_read_password_salt(
+pub(crate) async fn get_password_salt(
     tx: &mut db::WriteTransaction,
+    key_type: KeyType,
+) -> Result<PasswordSalt, StoreError> {
+    migrate_to_separate_password_salts(tx).await?;
+
+    match key_type {
+        KeyType::Read => get_public_blob(tx, READ_PASSWORD_SALT).await?,
+        KeyType::Write => get_public_blob(tx, WRITE_PASSWORD_SALT).await?,
+    }
+    // Salts should always be present
+    .ok_or(StoreError::MalformedData)
+}
+
+async fn set_password_salt(
+    tx: &mut db::WriteTransaction,
+    key_type: KeyType,
     salt: &PasswordSalt,
 ) -> Result<(), StoreError> {
     migrate_to_separate_password_salts(tx).await?;
-    set_public_blob(tx, READ_PASSWORD_SALT, salt).await
+    match key_type {
+        KeyType::Read => set_public_blob(tx, READ_PASSWORD_SALT, salt).await,
+        KeyType::Write => set_public_blob(tx, WRITE_PASSWORD_SALT, salt).await,
+    }
 }
 
 async fn obfuscate_read_password_salt(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     migrate_to_separate_password_salts(tx).await?;
     let dummy_salt = cipher::SecretKey::random_salt();
     set_public_blob(tx, READ_PASSWORD_SALT, &dummy_salt).await
-}
-
-async fn set_write_password_salt(
-    tx: &mut db::WriteTransaction,
-    salt: &PasswordSalt,
-) -> Result<(), StoreError> {
-    migrate_to_separate_password_salts(tx).await?;
-    set_public_blob(tx, WRITE_PASSWORD_SALT, salt).await
 }
 
 async fn obfuscate_write_password_salt(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
@@ -587,17 +577,17 @@ fn just_key(key_and_salt: Cow<'_, KeyAndSalt>) -> Cow<'_, cipher::SecretKey> {
 //}
 
 pub(crate) async fn get_access_secrets<'a>(
-    conn: &mut db::Connection,
+    tx: &mut db::WriteTransaction,
     local_secret: Option<&'a LocalSecret>,
 ) -> Result<(AccessSecrets, Option<Cow<'a, cipher::SecretKey>>), StoreError> {
-    let id = get_repository_id(conn).await?;
+    let id = get_repository_id(tx).await?;
 
     let local_write_key = match &local_secret {
-        Some(local_secret) => Some(secret_to_key(conn, KeyType::Write, local_secret).await?),
+        Some(local_secret) => Some(secret_to_key(tx, KeyType::Write, local_secret).await?),
         None => None,
     };
 
-    match get_write_key(conn, local_write_key.as_deref(), &id).await {
+    match get_write_key(tx, local_write_key.as_deref(), &id).await {
         Ok(Some(write_keys)) => {
             let access = AccessSecrets::Write(WriteSecrets::from(write_keys));
             return Ok((access, local_write_key));
@@ -607,12 +597,12 @@ pub(crate) async fn get_access_secrets<'a>(
     }
 
     let local_read_key = match &local_secret {
-        Some(local_secret) => Some(secret_to_key(conn, KeyType::Read, local_secret).await?),
+        Some(local_secret) => Some(secret_to_key(tx, KeyType::Read, local_secret).await?),
         None => None,
     };
 
     // No match. Maybe there's the read key?
-    match get_read_key(conn, local_read_key.as_deref(), &id).await {
+    match get_read_key(tx, local_read_key.as_deref(), &id).await {
         Ok(Some(read_key)) => {
             let access = AccessSecrets::Read { id, read_key };
             return Ok((access, local_write_key));
@@ -1107,11 +1097,11 @@ mod tests {
                 .or(local_keys.read.as_deref())
                 .cloned();
 
-            let mut conn = pool.acquire().await.unwrap();
+            let mut tx = pool.begin_write().await.unwrap();
 
             let local_secret = local_key.clone().map(LocalSecret::SecretKey);
 
-            let access_secrets = get_access_secrets(&mut conn, local_secret.as_ref())
+            let access_secrets = get_access_secrets(&mut tx, local_secret.as_ref())
                 .await
                 .unwrap();
 

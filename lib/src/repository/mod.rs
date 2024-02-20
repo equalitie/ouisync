@@ -476,8 +476,8 @@ impl Repository {
     }
 
     pub async fn unlock_secrets(&self, local_secret: LocalSecret) -> Result<AccessSecrets> {
-        let mut conn = self.db().acquire().await?;
-        Ok(metadata::get_access_secrets(&mut conn, Some(&local_secret))
+        let mut tx = self.db().begin_write().await?;
+        Ok(metadata::get_access_secrets(&mut tx, Some(&local_secret))
             .await?
             .0)
     }

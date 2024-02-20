@@ -414,11 +414,6 @@ mod tests {
     // being human readable makes it easy to verify the values are serialized the way we want them.
     #[test]
     fn access_change_serialize_deserialize_json() {
-        let key = cipher::SecretKey::random();
-        let salt = cipher::SecretKey::random_salt();
-        let key_serialized = serde_json::to_string(&key).unwrap();
-        let salt_serialized = serde_json::to_string(&salt).unwrap();
-
         for (orig, expected_serialized) in [
             (
                 AccessChange::Enable(Some(SetLocalSecret::Password("mellon".to_string().into()))),
