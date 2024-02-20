@@ -12,6 +12,8 @@ sealed class LocalSecret {
 sealed class SetLocalSecret {
   Object? encode();
 
+  LocalSecret toLocalSecret();
+
   @override
   String toString();
 }
@@ -23,6 +25,11 @@ class LocalPassword implements LocalSecret, SetLocalSecret {
 
   int get length => string.length;
   bool get isEmpty => string.isEmpty;
+
+  @override
+  LocalSecret toLocalSecret() {
+    return this;
+  }
 
   @override
   Object? encode() => {'password': string};
@@ -62,6 +69,14 @@ class LocalSecretKeyAndSalt implements SetLocalSecret {
   final PasswordSalt salt;
 
   LocalSecretKeyAndSalt(this.key, this.salt);
+
+  static LocalSecretKeyAndSalt random() =>
+      LocalSecretKeyAndSalt(LocalSecretKey.random(), PasswordSalt.random());
+
+  @override
+  LocalSecret toLocalSecret() {
+    return key;
+  }
 
   @override
   Object? encode() => {
