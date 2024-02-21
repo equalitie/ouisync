@@ -175,6 +175,8 @@ pub(crate) enum Request {
         password: String,
         salt: PasswordSalt,
     },
+    GetReadPasswordSalt(RepositoryHandle),
+    GetWritePasswordSalt(RepositoryHandle),
 }
 
 #[derive(Eq, PartialEq, Serialize, Deserialize)]

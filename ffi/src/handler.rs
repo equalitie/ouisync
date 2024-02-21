@@ -365,6 +365,26 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .to_vec()
                     .into()
             }
+            Request::GetReadPasswordSalt(handle) => self
+                .state
+                .repositories
+                .get(handle)?
+                .repository
+                .get_read_password_salt()
+                .await?
+                .as_array()
+                .to_vec()
+                .into(),
+            Request::GetWritePasswordSalt(handle) => self
+                .state
+                .repositories
+                .get(handle)?
+                .repository
+                .get_write_password_salt()
+                .await?
+                .as_array()
+                .to_vec()
+                .into(),
         };
 
         Ok(response)

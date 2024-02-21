@@ -541,6 +541,14 @@ class Repository {
   Future<void> mirror() => _client.invoke<void>('repository_mirror', {
         'repository': _handle,
       });
+
+  Future<PasswordSalt> getReadPasswordSalt() => _client
+      .invoke<Uint8List>("get_read_password_salt", _handle)
+      .then((bytes) => PasswordSalt(bytes));
+
+  Future<PasswordSalt> getWritePasswordSalt() => _client
+      .invoke<Uint8List>("get_write_password_salt", _handle)
+      .then((bytes) => PasswordSalt(bytes));
 }
 
 sealed class AccessChange {

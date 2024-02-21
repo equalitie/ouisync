@@ -25,7 +25,7 @@ pub(crate) use self::{
 use crate::{
     access_control::{Access, AccessChange, AccessKeys, AccessMode, AccessSecrets, LocalSecret},
     branch::{Branch, BranchShared},
-    crypto::sign::PublicKey,
+    crypto::{sign::PublicKey, PasswordSalt},
     db::{self, DatabaseId},
     debug::DebugPrinter,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef, EntryType},
@@ -502,7 +502,7 @@ impl Repository {
     /// to disable expiration. Default is `None`.
     pub async fn set_block_expiration(&self, block_expiration: Option<Duration>) -> Result<()> {
         {
-            let mut tx = self.shared.vault.store().db().begin_write().await?;
+            let mut tx = self.db().begin_write().await?;
             metadata::block_expiration::set(&mut tx, block_expiration).await?;
             tx.commit().await?;
         }
@@ -526,6 +526,16 @@ impl Repository {
         RepositoryHandle {
             vault: self.shared.vault.clone(),
         }
+    }
+
+    pub async fn get_read_password_salt(&self) -> Result<PasswordSalt> {
+        let mut tx = self.db().begin_write().await?;
+        Ok(metadata::get_password_salt(&mut tx, metadata::KeyType::Read).await?)
+    }
+
+    pub async fn get_write_password_salt(&self) -> Result<PasswordSalt> {
+        let mut tx = self.db().begin_write().await?;
+        Ok(metadata::get_password_salt(&mut tx, metadata::KeyType::Write).await?)
     }
 
     /// Get the state monitor node of this repository.

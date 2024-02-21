@@ -219,7 +219,7 @@ where
         let id = u64::from_be_bytes(id.try_into().unwrap());
 
         let body = rmp_serde::from_slice(&buffer[8..]).map_err(|error| {
-            tracing::error!(?error, "failed to decode message body {:?}", &buffer[8..]);
+            tracing::error!(?error, "failed to decode message body {:?}", error);
             TransportError::MalformedMessage
         });
 

@@ -61,6 +61,12 @@ define_byte_array_wrapper! {
 
 derive_rand_for_wrapper!(PasswordSalt);
 
+impl PasswordSalt {
+    pub fn as_array(&self) -> &[u8; Self::SIZE] {
+        &self.0
+    }
+}
+
 impl Serialize for PasswordSalt {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
     where
