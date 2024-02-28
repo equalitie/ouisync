@@ -1,3 +1,4 @@
 /target
 proptest-regressions
 Cargo.lock
+bindings/dart/ios/libouisync_ffi.a
