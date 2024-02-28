@@ -23,28 +23,33 @@ public class SwiftOuisyncPlugin: NSObject, FlutterPlugin {
     let context: UnsafeMutableRawPointer? = nil
     let callback: Callback? = nil
 
-    let resultCreateC = session_create("", "", context, callback)
+    let sessionKind: UInt8 = 0
+
+    let resultCreateC = session_create(sessionKind, "", "", context, callback)
     print(resultCreateC)    
 
     let function: PostDartCObjectFn? = nil
     let port: Int64 = 0
 
-    let resultCreate = session_create_dart("", "", function, port)
+    let resultCreate = session_create_dart(sessionKind, "", "", function, port)
     print(resultCreate)
 
     let session: SessionHandle = 0
 
-    let resultClose = session_close(session)
+    let resultCloseC = session_close(session, context, callback)
+    print(resultCloseC)
+
+    let resultClose = session_close_dart(session, function, port)
     print(resultClose)
+
+    let resultCloseBlocking = session_close_blocking(session)
+    print(resultCloseBlocking)
 
     let payload: UnsafeMutablePointer<UInt8>? = nil
     let length: UInt64 = 0
     
     let resultSend = session_channel_send(session, payload, length)
     print(resultSend)
-
-    let resultShutdown = session_shutdown_network_and_close(session)
-    print(resultShutdown)
 
     let handle: UInt64 = 0
 

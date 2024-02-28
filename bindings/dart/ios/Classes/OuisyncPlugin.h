@@ -75,6 +75,10 @@ enum ErrorCode {
    * Connection lost
    */
   ConnectionLost = 14,
+  /**
+   * Invalid handle to a resource (e.g., Repository, File, ...)
+   */
+  InvalidHandle = 15,
   VfsInvalidMountPoint = 2048,
   VfsDriverInstall = (2048 + 1),
   VfsBackend = (2048 + 2),
@@ -86,11 +90,28 @@ enum ErrorCode {
 typedef uint16_t ErrorCode;
 
 /**
- * FFI handle to a resource with unique ownership.
+ * What type of session to create.
+ *
+ * `Shared` should be used by default. `Unique` is useful mostly for tests, to ensure test
+ * isolation and/or to simulate multiple replicas in a single test.
  */
-typedef uint64_t UniqueHandle_Session;
+enum SessionKind {
+  /**
+   * Returns the global `Session` instance, creating it if not exists.
+   */
+  Shared = 0,
+  /**
+   * Always creates a new `Session` instance.
+   */
+  Unique = 1,
+};
+typedef uint8_t SessionKind;
 
-typedef UniqueHandle_Session SessionHandle;
+/**
+ * Handle to [Session] which can be passed across the FFI boundary.
+ */
+typedef uint64_t SessionHandle;
+#define SessionHandle_NULL 0
 
 typedef struct SessionCreateResult {
   SessionHandle session;
@@ -120,7 +141,9 @@ typedef struct DartCObject {
 
 typedef bool (*PostDartCObjectFn)(Port, struct DartCObject*);
 
-typedef uint64_t Handle_FileHolder;
+typedef uint64_t Handle_Arc_FileHolder;
+
+typedef Handle_Arc_FileHolder FileHandle;
 
 /**
  * Creates a ouisync session (common C-like API)
@@ -132,7 +155,8 @@ typedef uint64_t Handle_FileHolder;
  *   to be sent to other threads or null.
  * - `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
  */
-struct SessionCreateResult session_create(const char *configs_path,
+struct SessionCreateResult session_create(SessionKind kind,
+                                          const char *configs_path,
                                           const char *log_path,
                                           void *context,
                                           Callback callback);
@@ -145,19 +169,53 @@ struct SessionCreateResult session_create(const char *configs_path,
  * - `configs_path` and `log_path` must be pointers to nul-terminated utf-8 encoded strings.
  * - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
  */
-struct SessionCreateResult session_create_dart(const char *configs_path,
+struct SessionCreateResult session_create_dart(SessionKind kind,
+                                               const char *configs_path,
                                                const char *log_path,
                                                PostDartCObjectFn post_c_object_fn,
                                                Port port);
 
 /**
- * Closes the ouisync session.
+ * Closes the Ouisync session (common C-like API).
+ *
+ * Also gracefully disconnects from all peers and asynchronously waits for the disconnections to
+ * complete.
+ *
+ * # Safety
+ *
+ * `session` must be a valid session handle.
+ * `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
+ */
+void session_close(SessionHandle session, void *context, Callback callback);
+
+/**
+ * Closes the Ouisync session (dart-specific API).
+ *
+ * Also gracefully disconnects from all peers and asynchronously waits for the disconnections to
+ * complete.
+ *
+ * # Safety
+ *
+ * - `session` must be a valid session handle.
+ * - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
+ */
+void session_close_dart(SessionHandle session, PostDartCObjectFn post_c_object_fn, Port port);
+
+/**
+ * Closes the Ouisync session synchronously.
+ *
+ * This is similar to `session_close` / `session_close_dart` but it blocks while waiting for the
+ * graceful disconnect (with a short timeout to not block indefinitely). This is useful because in
+ * flutter when the engine is being detached from Android runtime then async wait never completes
+ * (or does so randomly), and thus `session_close` is never invoked. My guess is that because the
+ * dart engine is being detached we can't do any async await on the dart side anymore, and thus
+ * need to do it here.
  *
  * # Safety
  *
  * `session` must be a valid session handle.
  */
-void session_close(SessionHandle session);
+void session_close_blocking(SessionHandle session);
 
 /**
  * # Safety
@@ -167,20 +225,6 @@ void session_close(SessionHandle session);
  *
  */
 void session_channel_send(SessionHandle session, uint8_t *payload_ptr, uint64_t payload_len);
-
-/**
- * Shutdowns the network and closes the session. This is equivalent to doing it in two steps
- * (`network_shutdown` then `session_close`), but in flutter when the engine is being detached
- * from Android runtime then async wait for `network_shutdown` never completes (or does so
- * randomly), and thus `session_close` is never invoked. My guess is that because the dart engine
- * is being detached we can't do any async await on the dart side anymore, and thus need to do it
- * here.
- *
- * # Safety
- *
- * `session` must be a valid session handle.
- */
-void session_shutdown_network_and_close(SessionHandle session);
 
 /**
  * Copy the file contents into the provided raw file descriptor (dart-specific API).
@@ -198,7 +242,7 @@ void session_shutdown_network_and_close(SessionHandle session);
  * - `port` must be a valid dart native port
  */
 void file_copy_to_raw_fd_dart(SessionHandle session,
-                              Handle_FileHolder handle,
+                              FileHandle handle,
                               int fd,
                               PostDartCObjectFn post_c_object_fn,
                               Port port);
@@ -214,7 +258,7 @@ void file_copy_to_raw_fd_dart(SessionHandle session,
  * - `session`, `handle` and `fd` are not actually used and so have no safety requirements.
  */
 void file_copy_to_raw_fd_dart(SessionHandle _session,
-                              Handle_FileHolder _handle,
+                              FileHandle _handle,
                               int _fd,
                               PostDartCObjectFn post_c_object_fn,
                               Port port);
