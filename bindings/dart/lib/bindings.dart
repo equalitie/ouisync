@@ -137,5 +137,9 @@ DynamicLibrary _defaultLib() {
     return DynamicLibrary.open('lib$name.so');
   }
 
+  if (Platform.isMacOS) {
+    return DynamicLibrary.open('lib$name.dylib');
+  }
+
   throw Exception('unsupported platform ${Platform.operatingSystem}');
 }
