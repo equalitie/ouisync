@@ -43,4 +43,6 @@ flutter:
         pluginClass: OuisyncPlugin
       linux:
         pluginClass: OuisyncPlugin
+      macos:
+        pluginClass: OuisyncPlugin
 
