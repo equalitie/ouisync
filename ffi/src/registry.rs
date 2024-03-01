@@ -27,6 +27,10 @@ impl<T: 'static> Registry<T> {
         self.0.remove(&handle)
     }
 
+    pub fn remove_all(&mut self) -> Vec<T> {
+        self.0.drain().map(|(_handle, value)| value).collect()
+    }
+
     pub fn values(&self) -> impl Iterator<Item = &T> {
         self.0.values()
     }

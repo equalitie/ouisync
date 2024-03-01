@@ -1,6 +1,7 @@
 use crate::{
     error::{ErrorCode, ToErrorCode},
     handler::Handler,
+    repository,
     sender::Sender,
     state::State,
     transport::{ClientSender, Server},
@@ -180,6 +181,9 @@ pub(crate) fn close(session: Session, sender: impl Sender) {
     thread::spawn(move || {
         let state = shared.state;
         shared.runtime.block_on(state.network.shutdown());
+        shared
+            .runtime
+            .block_on(repository::close_all_repositories(&state));
         sender.send(Bytes::new());
     });
 }

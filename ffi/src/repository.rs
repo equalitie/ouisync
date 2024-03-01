@@ -133,6 +133,26 @@ pub(crate) async fn close(state: &State, handle: RepositoryHandle) -> Result<(),
     Ok(())
 }
 
+/// Called when the session is closed and the user has not closed some or all the open
+/// repositories.
+pub async fn close_all_repositories(state: &State) {
+    // Best effort: if some operation fails, continue with the rest.
+    for holder in state.repositories.remove_all() {
+        if let Err(error) = holder.repository.close().await {
+            tracing::warn!(
+                "Failed to close repository \"{:?}\": {error:?}",
+                holder.store_path
+            );
+        }
+        if let Err(error) = state.mounter.unmount(&holder.store_path) {
+            tracing::warn!(
+                "Failed to unmount repository \"{:?}\": {error:?}",
+                holder.store_path
+            );
+        }
+    }
+}
+
 pub(crate) fn credentials(state: &State, handle: RepositoryHandle) -> Result<Vec<u8>, Error> {
     Ok(state
         .repositories
@@ -431,6 +451,10 @@ impl Repositories {
         inner.index.remove(&holder.store_path);
 
         Some(holder)
+    }
+
+    pub fn remove_all(&self) -> Vec<Arc<RepositoryHolder>> {
+        self.inner.write().unwrap().registry.remove_all()
     }
 
     pub fn get(&self, handle: RepositoryHandle) -> Result<Arc<RepositoryHolder>, InvalidHandle> {
