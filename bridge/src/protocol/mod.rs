@@ -46,6 +46,29 @@ pub enum NetworkEvent {
     PeerSetChange = 1,
 }
 
+/// Opaque, non-sensitive value associated with a particular client-server session. Both client and
+/// server see the same value. It's guaranteed to be unique only if the underlying transport is
+/// secured against eavesdropping (e.g., TLS).
+#[derive(Clone, Copy)]
+pub struct SessionCookie([u8; 32]);
+
+impl SessionCookie {
+    /// Dummy, non-unique value for non-secure transports.
+    pub const DUMMY: Self = Self([0; 32]);
+}
+
+impl AsRef<[u8]> for SessionCookie {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl AsMut<[u8]> for SessionCookie {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.0.as_mut()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

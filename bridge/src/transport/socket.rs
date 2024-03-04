@@ -1,8 +1,8 @@
 //! Low-level Client and Server tha wraps Stream/Sink of bytes. Used to implement some higher-level
 //! clients/servers
 
-use super::{Handler, TransportError};
-use crate::protocol::ServerMessage;
+use super::{Handler, SessionContext, TransportError};
+use crate::protocol::{ServerMessage, SessionCookie};
 use bytes::{Bytes, BytesMut};
 use futures_util::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{de::DeserializeOwned, Serialize};
@@ -16,12 +16,17 @@ use tokio::{
 pub mod server_connection {
     use super::*;
 
-    pub async fn run<S, H>(mut socket: S, handler: H)
+    pub async fn run<S, H>(mut socket: S, handler: H, session_cookie: SessionCookie)
     where
         S: Stream<Item = io::Result<BytesMut>> + Sink<Bytes, Error = io::Error> + Unpin,
         H: Handler,
     {
         let (notification_tx, mut notification_rx) = mpsc::channel(1);
+        let context = SessionContext {
+            notification_tx,
+            session_cookie,
+        };
+
         let mut request_handlers = FuturesUnordered::new();
 
         loop {
@@ -32,11 +37,11 @@ pub mod server_connection {
                     };
 
                     let handler = &handler;
-                    let notification_tx = &notification_tx;
+                    let context = &context;
 
                     let task = async move {
                         let result = match result {
-                            Ok(request) => handler.handle(request, notification_tx).await,
+                            Ok(request) => handler.handle(request, context).await,
                             Err(error) => Err(error.into()),
                         };
 

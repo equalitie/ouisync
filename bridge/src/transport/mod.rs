@@ -6,7 +6,7 @@ pub use self::{
     socket::{server_connection as socket_server_connection, SocketClient},
 };
 
-use crate::protocol::Notification;
+use crate::protocol::{Notification, SessionCookie};
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
@@ -21,8 +21,14 @@ pub trait Handler: Clone + Send + Sync + 'static {
     async fn handle(
         &self,
         request: Self::Request,
-        notification_tx: &NotificationSender,
+        context: &SessionContext,
     ) -> Result<Self::Response, Self::Error>;
+}
+
+/// Context associated with a given client session.
+pub struct SessionContext {
+    pub notification_tx: NotificationSender,
+    pub session_cookie: SessionCookie,
 }
 
 pub type NotificationSender = mpsc::Sender<(u64, Notification)>;

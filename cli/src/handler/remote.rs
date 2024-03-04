@@ -5,7 +5,7 @@ use crate::{
 use async_trait::async_trait;
 use ouisync_bridge::{
     protocol::remote::{Request, Response, ServerError},
-    transport::NotificationSender,
+    transport::SessionContext,
 };
 use ouisync_lib::{AccessSecrets, RepositoryId, ShareToken};
 use std::{
@@ -35,7 +35,7 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
     async fn handle(
         &self,
         request: Self::Request,
-        _notification_tx: &NotificationSender,
+        context: &SessionContext,
     ) -> Result<Self::Response, Self::Error> {
         tracing::debug!(?request);
 
@@ -45,10 +45,20 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
         };
 
         match request {
-            Request::Mirror { repository_id } => {
+            Request::Mirror {
+                repository_id,
+                proof,
+            } => {
+                if !repository_id
+                    .write_public_key()
+                    .verify(context.session_cookie.as_ref(), &proof)
+                {
+                    tracing::debug!("invalid mirror proof");
+                    return Err(ServerError::InvalidArgument);
+                }
+
                 // Mirroring is supported for blind replicas only.
                 let share_token = ShareToken::from(AccessSecrets::Blind { id: repository_id });
-
                 let name = make_name(share_token.id());
 
                 // Mirror is idempotent
@@ -131,6 +141,17 @@ fn insert_separators(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::Dirs;
+    use assert_matches::assert_matches;
+    use ouisync_bridge::transport::{
+        make_client_config, make_server_config, RemoteClient, RemoteServer,
+    };
+    use ouisync_lib::{crypto::sign::Keypair, AccessMode, WriteSecrets};
+    use rustls::{Certificate, PrivateKey};
+    use state_monitor::StateMonitor;
+    use std::net::Ipv4Addr;
+    use tempfile::TempDir;
+    use tokio::task;
 
     #[test]
     fn insert_separators_test() {
@@ -147,5 +168,81 @@ mod tests {
         let actual_output = insert_separators(input);
 
         assert_eq!(actual_output, expected_output);
+    }
+
+    #[tokio::test]
+    async fn mirror_ok() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
+
+        client
+            .invoke(Request::Mirror {
+                repository_id: secrets.id,
+                proof,
+            })
+            .await
+            .unwrap();
+
+        let repo = state
+            .repositories
+            .get_all()
+            .into_iter()
+            .find(|repo| repo.repository.secrets().id() == &secrets.id)
+            .unwrap();
+
+        assert_eq!(repo.repository.access_mode(), AccessMode::Blind);
+    }
+
+    #[tokio::test]
+    async fn mirror_invalid_proof() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let repository_id = WriteSecrets::random().id;
+        let invalid_write_keys = Keypair::random();
+        let invalid_proof = invalid_write_keys.sign(client.session_cookie().as_ref());
+
+        assert_matches!(
+            client
+                .invoke(Request::Mirror {
+                    repository_id,
+                    proof: invalid_proof
+                })
+                .await,
+            Err(ServerError::InvalidArgument)
+        );
+
+        assert!(state.repositories.get_all().is_empty());
+    }
+
+    async fn setup() -> (TempDir, Arc<State>, RemoteClient) {
+        let temp_dir = TempDir::new().unwrap();
+        let dirs = Dirs {
+            config_dir: temp_dir.path().join("config"),
+            store_dir: temp_dir.path().join("store"),
+            mount_dir: temp_dir.path().join("mount"),
+        };
+
+        let certs = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let cert = Certificate(certs.serialize_der().unwrap());
+        let private_key = PrivateKey(certs.serialize_private_key_der());
+
+        let server_config = make_server_config(vec![cert.clone()], private_key).unwrap();
+        let client_config = make_client_config(&[cert]).unwrap();
+
+        let state = State::init(&dirs, StateMonitor::make_root()).await.unwrap();
+
+        let server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into(), server_config)
+            .await
+            .unwrap();
+        let server_addr = format!("localhost:{}", server.local_addr().port());
+        task::spawn(server.run(RemoteHandler::new(state.clone())));
+
+        let client = RemoteClient::connect(&server_addr, client_config)
+            .await
+            .unwrap();
+
+        (temp_dir, state, client)
     }
 }

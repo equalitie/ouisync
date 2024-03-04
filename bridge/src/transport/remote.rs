@@ -1,7 +1,10 @@
 //! Client and Server than run on different devices.
 
 use super::{socket_server_connection, Handler, SocketClient};
-use crate::protocol::remote::{Request, Response, ServerError};
+use crate::protocol::{
+    remote::{Request, Response, ServerError},
+    SessionCookie,
+};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use std::{
@@ -18,7 +21,10 @@ use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
-use tokio_rustls::{rustls, TlsAcceptor};
+use tokio_rustls::{
+    rustls::{self, ConnectionCommon},
+    TlsAcceptor,
+};
 use tokio_tungstenite::{
     tungstenite::{self, Message},
     Connector, MaybeTlsStream, WebSocketStream,
@@ -160,6 +166,8 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
         }
     };
 
+    let session_cookie = extract_session_cookie(stream.get_ref().1);
+
     // Upgrade to websocket
     let stream = match tokio_tungstenite::accept_async(stream).await {
         Ok(stream) => stream,
@@ -171,11 +179,12 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
 
     tracing::debug!("Accepted");
 
-    socket_server_connection::run(Socket(stream), handler).await;
+    socket_server_connection::run(Socket(stream), handler, session_cookie).await;
 }
 
 pub struct RemoteClient {
     inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response, ServerError>,
+    session_cookie: SessionCookie,
 }
 
 impl RemoteClient {
@@ -194,13 +203,30 @@ impl RemoteClient {
         )
         .await
         .map_err(into_io_error)?;
+
+        let session_cookie = match stream.get_ref() {
+            MaybeTlsStream::Rustls(stream) => extract_session_cookie(stream.get_ref().1),
+            _ => {
+                // We created the stream with a rustls connector so the stream should be rustls as
+                // well.
+                unreachable!()
+            }
+        };
+
         let inner = SocketClient::new(Socket(stream));
 
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            session_cookie,
+        })
     }
 
     pub async fn invoke(&self, request: Request) -> Result<Response, ServerError> {
         self.inner.invoke(request).await
+    }
+
+    pub fn session_cookie(&self) -> &SessionCookie {
+        &self.session_cookie
     }
 }
 
@@ -273,12 +299,20 @@ fn to_alpn_protocols(versions: RangeInclusive<u64>) -> impl Iterator<Item = Vec<
     versions.map(|version| version.to_be_bytes().to_vec())
 }
 
+fn extract_session_cookie<Data>(connection: &ConnectionCommon<Data>) -> SessionCookie {
+    // unwrap is OK as the function fails only if called before TLS handshake or if the output
+    // length is zero, none of which is the case here.
+    connection
+        .export_keying_material(SessionCookie::DUMMY, b"ouisync session cookie", None)
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::NotificationSender;
+    use crate::transport::SessionContext;
     use async_trait::async_trait;
-    use ouisync_lib::AccessSecrets;
+    use ouisync_lib::WriteSecrets;
     use std::{
         net::Ipv4Addr,
         sync::atomic::{AtomicUsize, Ordering},
@@ -301,10 +335,14 @@ mod tests {
             .await
             .unwrap();
 
-        let repository_id = *AccessSecrets::random_write().id();
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
 
         match client
-            .invoke(Request::Mirror { repository_id })
+            .invoke(Request::Mirror {
+                repository_id: secrets.id,
+                proof,
+            })
             .await
             .unwrap()
         {
@@ -329,10 +367,14 @@ mod tests {
             .await
             .unwrap();
 
-        let repository_id = *AccessSecrets::random_write().id();
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
 
         match client
-            .invoke(Request::Mirror { repository_id })
+            .invoke(Request::Mirror {
+                repository_id: secrets.id,
+                proof,
+            })
             .await
             .unwrap()
         {
@@ -380,7 +422,7 @@ mod tests {
         async fn handle(
             &self,
             _: Self::Request,
-            _: &NotificationSender,
+            _: &SessionContext,
         ) -> Result<Self::Response, Self::Error> {
             self.received.fetch_add(1, Ordering::Relaxed);
             Ok(Response::None)

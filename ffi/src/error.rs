@@ -81,6 +81,7 @@ impl ToErrorCode for MirrorError {
         match self {
             Self::Connect(error) => error.to_error_code(),
             Self::Server(error) => error.to_error_code(),
+            Self::PermissionDenied => ErrorCode::PermissionDenied,
         }
     }
 }

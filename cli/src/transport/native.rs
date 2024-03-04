@@ -6,26 +6,30 @@ use crate::{
     handler::local::LocalHandler,
     protocol::{Error, Request, Response},
 };
-use ouisync_bridge::transport::{Handler as _, NotificationSender};
+use ouisync_bridge::{
+    protocol::SessionCookie,
+    transport::{Handler as _, SessionContext},
+};
 use tokio::sync::mpsc;
 
 pub(crate) struct NativeClient {
     handler: LocalHandler,
-    notification_tx: NotificationSender,
+    context: SessionContext,
 }
 
 impl NativeClient {
     pub fn new(handler: LocalHandler) -> Self {
         let (notification_tx, _notification_rx) = mpsc::channel(1);
-
-        Self {
-            handler,
+        let context = SessionContext {
             notification_tx,
-        }
+            session_cookie: SessionCookie::DUMMY,
+        };
+
+        Self { handler, context }
     }
 
     pub async fn invoke(&self, request: Request) -> Result<Response, Error> {
-        self.handler.handle(request, &self.notification_tx).await
+        self.handler.handle(request, &self.context).await
     }
 
     pub async fn close(&self) {

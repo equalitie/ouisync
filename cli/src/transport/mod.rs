@@ -29,7 +29,7 @@ pub(crate) mod tls {
             .map(move |pems| {
                 pems.into_iter()
                     .filter(move |pem| pem.tag() == tag)
-                    .map(|pen| pen.into_contents())
+                    .map(|pem| pem.into_contents())
             })
     }
 }

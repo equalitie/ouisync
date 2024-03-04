@@ -34,6 +34,8 @@ pub enum MirrorError {
     Connect(#[source] io::Error),
     #[error("server responded with error")]
     Server(#[source] ServerError),
+    #[error("permission denied")]
+    PermissionDenied,
 }
 
 /// Creates a new repository and set access to it based on the following table:
@@ -178,10 +180,14 @@ pub async fn mirror(
     client_config: Arc<rustls::ClientConfig>,
     hosts: &[String],
 ) -> Result<(), MirrorError> {
-    let repository_id = *repository.secrets().id();
+    let write_secrets = repository
+        .secrets()
+        .into_write_secrets()
+        .ok_or(MirrorError::PermissionDenied)?;
 
     let tasks = hosts.iter().map(|host| {
         let client_config = client_config.clone();
+        let write_secrets = &write_secrets;
 
         // Strip port, if any.
         let host = strip_port(host);
@@ -195,7 +201,13 @@ pub async fn mirror(
                     error
                 })?;
 
-            let request = Request::Mirror { repository_id };
+            let cookie = client.session_cookie();
+            let proof = write_secrets.write_keys.sign(cookie.as_ref());
+
+            let request = Request::Mirror {
+                repository_id: write_secrets.id,
+                proof,
+            };
 
             match client.invoke(request).await.map_err(MirrorError::Server) {
                 Ok(Response::None) => {

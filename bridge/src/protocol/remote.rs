@@ -1,15 +1,20 @@
 use crate::transport::TransportError;
-use ouisync_lib::RepositoryId;
+use ouisync_lib::{crypto::sign::Signature, RepositoryId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     /// Mirror repository on a remote server
-    Mirror { repository_id: RepositoryId },
+    Mirror {
+        repository_id: RepositoryId,
+        /// `SessionCookie` signed by the repo write key. Used as a zero-knowledge proof that the
+        /// client has write access to the repository.
+        proof: Signature,
+    },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Response {
     None,
 }

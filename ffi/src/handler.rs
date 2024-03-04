@@ -8,7 +8,7 @@ use crate::{
     state_monitor,
 };
 use async_trait::async_trait;
-use ouisync_bridge::transport::NotificationSender;
+use ouisync_bridge::transport::SessionContext;
 use ouisync_lib::{crypto::cipher::SecretKey, PeerAddr};
 use std::{net::SocketAddr, sync::Arc};
 
@@ -32,7 +32,7 @@ impl ouisync_bridge::transport::Handler for Handler {
     async fn handle(
         &self,
         request: Self::Request,
-        notification_tx: &NotificationSender,
+        context: &SessionContext,
     ) -> Result<Self::Response, Self::Error> {
         tracing::trace!(?request);
 
@@ -60,7 +60,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository::close(&self.state, handle).await?.into()
             }
             Request::RepositorySubscribe(handle) => {
-                repository::subscribe(&self.state, notification_tx, handle)?.into()
+                repository::subscribe(&self.state, &context.notification_tx, handle)?.into()
             }
             Request::RepositorySetAccess {
                 repository,
@@ -215,7 +215,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .await;
                 ().into()
             }
-            Request::NetworkSubscribe => network::subscribe(&self.state, notification_tx).into(),
+            Request::NetworkSubscribe => {
+                network::subscribe(&self.state, &context.notification_tx).into()
+            }
             Request::NetworkBind {
                 quic_v4,
                 quic_v6,
@@ -351,7 +353,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::StateMonitorGet(path) => state_monitor::get(&self.state, path)?.into(),
             Request::StateMonitorSubscribe(path) => {
-                state_monitor::subscribe(&self.state, notification_tx, path)?.into()
+                state_monitor::subscribe(&self.state, &context.notification_tx, path)?.into()
             }
             Request::Unsubscribe(handle) => {
                 self.state.remove_task(handle);

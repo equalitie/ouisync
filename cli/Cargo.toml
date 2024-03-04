@@ -45,6 +45,7 @@ tracing = { workspace = true }
 walkdir = "2.3.3"
 
 [dev-dependencies]
+assert_matches = { workspace = true }
 backoff = "0.4.0"
 hex = "0.4.3"
 once_cell = { workspace = true }

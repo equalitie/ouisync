@@ -1,5 +1,5 @@
 use crate::{options::Dirs, utils, DB_EXTENSION};
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use camino::Utf8Path;
 use ouisync_bridge::{
     config::ConfigStore,
@@ -223,10 +223,20 @@ impl RepositoryHolder {
 
     /// Create a mirror of the repository on the given remote host.
     pub async fn mirror(&self, host: &str, config: Arc<rustls::ClientConfig>) -> Result<()> {
+        let secrets = self
+            .repository
+            .secrets()
+            .into_write_secrets()
+            .context("permission denied")?;
+
         let client = RemoteClient::connect(host, config).await?;
+
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
         let request = Request::Mirror {
-            repository_id: *self.repository.secrets().id(),
+            repository_id: secrets.id,
+            proof,
         };
+
         let response = client.invoke(request).await?;
 
         match response {
