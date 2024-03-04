@@ -278,7 +278,7 @@ mod tests {
     use super::*;
     use crate::transport::NotificationSender;
     use async_trait::async_trait;
-    use ouisync_lib::{AccessMode, AccessSecrets, ShareToken};
+    use ouisync_lib::AccessSecrets;
     use std::{
         net::Ipv4Addr,
         sync::atomic::{AtomicUsize, Ordering},
@@ -301,11 +301,10 @@ mod tests {
             .await
             .unwrap();
 
-        let share_token =
-            ShareToken::from(AccessSecrets::random_write().with_mode(AccessMode::Blind));
+        let repository_id = *AccessSecrets::random_write().id();
 
         match client
-            .invoke(Request::Mirror { share_token })
+            .invoke(Request::Mirror { repository_id })
             .await
             .unwrap()
         {
@@ -330,11 +329,10 @@ mod tests {
             .await
             .unwrap();
 
-        let share_token =
-            ShareToken::from(AccessSecrets::random_write().with_mode(AccessMode::Blind));
+        let repository_id = *AccessSecrets::random_write().id();
 
         match client
-            .invoke(Request::Mirror { share_token })
+            .invoke(Request::Mirror { repository_id })
             .await
             .unwrap()
         {

@@ -7,7 +7,7 @@ use ouisync_bridge::{
     protocol::remote::{Request, Response, ServerError},
     transport::NotificationSender,
 };
-use ouisync_lib::{AccessMode, RepositoryId, ShareToken};
+use ouisync_lib::{AccessSecrets, RepositoryId, ShareToken};
 use std::{
     iter,
     sync::{Arc, Weak},
@@ -45,12 +45,9 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
         };
 
         match request {
-            Request::Mirror { share_token } => {
+            Request::Mirror { repository_id } => {
                 // Mirroring is supported for blind replicas only.
-                let share_token: ShareToken = share_token
-                    .into_secrets()
-                    .with_mode(AccessMode::Blind)
-                    .into();
+                let share_token = ShareToken::from(AccessSecrets::Blind { id: repository_id });
 
                 let name = make_name(share_token.id());
 

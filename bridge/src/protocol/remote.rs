@@ -1,12 +1,12 @@
 use crate::transport::TransportError;
-use ouisync_lib::ShareToken;
+use ouisync_lib::RepositoryId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     /// Mirror repository on a remote server
-    Mirror { share_token: ShareToken },
+    Mirror { repository_id: RepositoryId },
 }
 
 #[derive(Serialize, Deserialize)]

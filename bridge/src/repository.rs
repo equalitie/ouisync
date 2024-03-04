@@ -178,11 +178,10 @@ pub async fn mirror(
     client_config: Arc<rustls::ClientConfig>,
     hosts: &[String],
 ) -> Result<(), MirrorError> {
-    let share_token = repository.secrets().with_mode(AccessMode::Blind);
+    let repository_id = *repository.secrets().id();
 
     let tasks = hosts.iter().map(|host| {
         let client_config = client_config.clone();
-        let share_token = share_token.clone();
 
         // Strip port, if any.
         let host = strip_port(host);
@@ -196,9 +195,7 @@ pub async fn mirror(
                     error
                 })?;
 
-            let request = Request::Mirror {
-                share_token: share_token.into(),
-            };
+            let request = Request::Mirror { repository_id };
 
             match client.invoke(request).await.map_err(MirrorError::Server) {
                 Ok(Response::None) => {

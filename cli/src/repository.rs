@@ -8,7 +8,7 @@ use ouisync_bridge::{
 };
 use ouisync_lib::{
     network::{Network, Registration},
-    AccessMode, Repository,
+    Repository,
 };
 use ouisync_vfs::MountGuard;
 use state_monitor::StateMonitor;
@@ -225,11 +225,7 @@ impl RepositoryHolder {
     pub async fn mirror(&self, host: &str, config: Arc<rustls::ClientConfig>) -> Result<()> {
         let client = RemoteClient::connect(host, config).await?;
         let request = Request::Mirror {
-            share_token: self
-                .repository
-                .secrets()
-                .with_mode(AccessMode::Blind)
-                .into(),
+            repository_id: *self.repository.secrets().id(),
         };
         let response = client.invoke(request).await?;
 

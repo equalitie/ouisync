@@ -11,6 +11,7 @@ use std::{
 
 #[derive(PartialEq, Eq, Clone, Debug, Copy, Serialize, Deserialize)]
 #[repr(transparent)]
+#[serde(transparent)]
 pub struct RepositoryId(PublicKey);
 
 derive_sqlx_traits_for_byte_array_wrapper!(RepositoryId);
@@ -91,5 +92,27 @@ impl LocalId {
 impl fmt::Display for LocalId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::sign::Keypair;
+
+    #[test]
+    fn serialize_deserialize() {
+        let public_key = Keypair::random().public_key();
+        let id = RepositoryId::from(public_key);
+
+        let bytes = public_key.as_ref();
+
+        let serialized_expected = serde_json::to_string(bytes).unwrap();
+        let serialized_actual = serde_json::to_string(&id).unwrap();
+
+        assert_eq!(serialized_actual, serialized_expected);
+
+        let deserialized_actual: RepositoryId = serde_json::from_str(&serialized_actual).unwrap();
+        assert_eq!(deserialized_actual, id);
     }
 }
