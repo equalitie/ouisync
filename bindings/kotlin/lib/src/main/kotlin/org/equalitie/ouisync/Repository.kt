@@ -235,10 +235,24 @@ class Repository private constructor(internal val handle: Long, internal val cli
     suspend fun syncProgress() = client.invoke(RepositorySyncProgress(handle)) as Progress
 
     /**
-     * Create mirror of this repository on the cache server(s) that were previously added with
+     * Create mirror of this repository on the cache servers that were previously added with
      * [Session.addCacheServer].
+     *
+     * Requires the repository to be opened in write mode.
      */
-    suspend fun mirror() = client.invoke(RepositoryMirror(handle))
+    suspend fun createMirror() = client.invoke(RepositoryCreateMirror(handle))
+
+    /**
+     * Delete mirrors of this repository from all cache servers.
+     *
+     * Requires the repository to be opened in write mode.
+     */
+    suspend fun deleteMirror() = client.invoke(RepositoryDeleteMirror(handle))
+
+    /**
+     * Check if this repository is mirrored on at least one cache server.
+     */
+    suspend fun mirrorExists() = client.invoke(RepositoryMirrorExists(handle))
 
     /**
      * Returns the type (file or directory) of an entry at the given path,

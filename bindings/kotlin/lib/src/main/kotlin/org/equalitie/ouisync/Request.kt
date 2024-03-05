@@ -220,7 +220,15 @@ internal class RepositorySyncProgress : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
-internal class RepositoryMirror : ValueRequest<Long> {
+internal class RepositoryCreateMirror : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class RepositoryDeleteMirror : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class RepositoryMirrorExists : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
