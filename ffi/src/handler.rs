@@ -153,8 +153,20 @@ impl ouisync_bridge::transport::Handler for Handler {
             } => repository::create_share_token(&self.state, repository, secret, access_mode, name)
                 .await?
                 .into(),
-            Request::RepositoryMirror { repository } => {
-                repository::mirror(&self.state, repository).await?.into()
+            Request::RepositoryCreateMirror { repository } => {
+                repository::create_mirror(&self.state, repository)
+                    .await?
+                    .into()
+            }
+            Request::RepositoryDeleteMirror { repository } => {
+                repository::delete_mirror(&self.state, repository)
+                    .await?
+                    .into()
+            }
+            Request::RepositoryMirrorExists { repository } => {
+                repository::mirror_exists(&self.state, repository)
+                    .await?
+                    .into()
             }
             Request::ShareTokenMode(token) => share_token::mode(token).into(),
             Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),

@@ -82,7 +82,13 @@ pub(crate) enum Request {
         name: Option<String>,
     },
     RepositorySyncProgress(RepositoryHandle),
-    RepositoryMirror {
+    RepositoryCreateMirror {
+        repository: RepositoryHandle,
+    },
+    RepositoryDeleteMirror {
+        repository: RepositoryHandle,
+    },
+    RepositoryMirrorExists {
         repository: RepositoryHandle,
     },
     RepositoryMountAll(PathBuf),
