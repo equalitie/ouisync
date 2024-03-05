@@ -2,7 +2,7 @@
 
 use super::{socket_server_connection, Handler, SocketClient};
 use crate::protocol::{
-    remote::{Request, Response, ServerError},
+    remote::{Request, ServerError},
     SessionCookie,
 };
 use bytes::{Bytes, BytesMut};
@@ -183,7 +183,7 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
 }
 
 pub struct RemoteClient {
-    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response, ServerError>,
+    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, (), ServerError>,
     session_cookie: SessionCookie,
 }
 
@@ -221,7 +221,7 @@ impl RemoteClient {
         })
     }
 
-    pub async fn invoke(&self, request: Request) -> Result<Response, ServerError> {
+    pub async fn invoke(&self, request: Request) -> Result<(), ServerError> {
         self.inner.invoke(request).await
     }
 
@@ -311,6 +311,7 @@ fn extract_session_cookie<Data>(connection: &ConnectionCommon<Data>) -> SessionC
 mod tests {
     use super::*;
     use crate::transport::SessionContext;
+    use assert_matches::assert_matches;
     use async_trait::async_trait;
     use ouisync_lib::WriteSecrets;
     use std::{
@@ -338,16 +339,15 @@ mod tests {
         let secrets = WriteSecrets::random();
         let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
 
-        match client
-            .invoke(Request::Mirror {
-                repository_id: secrets.id,
-                proof,
-            })
-            .await
-            .unwrap()
-        {
-            Response::None => (),
-        }
+        assert_matches!(
+            client
+                .invoke(Request::Create {
+                    repository_id: secrets.id,
+                    proof,
+                })
+                .await,
+            Ok(())
+        );
 
         assert_eq!(handler.received(), 1);
     }
@@ -370,16 +370,15 @@ mod tests {
         let secrets = WriteSecrets::random();
         let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
 
-        match client
-            .invoke(Request::Mirror {
-                repository_id: secrets.id,
-                proof,
-            })
-            .await
-            .unwrap()
-        {
-            Response::None => (),
-        }
+        assert_matches!(
+            client
+                .invoke(Request::Create {
+                    repository_id: secrets.id,
+                    proof,
+                })
+                .await,
+            Ok(())
+        );
 
         assert_eq!(handler.received(), 1);
     }
@@ -416,7 +415,7 @@ mod tests {
     #[async_trait]
     impl Handler for TestHandler {
         type Request = Request;
-        type Response = Response;
+        type Response = ();
         type Error = ServerError;
 
         async fn handle(
@@ -425,7 +424,7 @@ mod tests {
             _: &SessionContext,
         ) -> Result<Self::Response, Self::Error> {
             self.received.fetch_add(1, Ordering::Relaxed);
-            Ok(Response::None)
+            Ok(())
         }
     }
 

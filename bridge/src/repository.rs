@@ -1,7 +1,7 @@
 use crate::{
     config::{ConfigError, ConfigKey, ConfigStore},
     device_id,
-    protocol::remote::{Request, Response, ServerError},
+    protocol::remote::{Request, ServerError},
     transport::RemoteClient,
 };
 use futures_util::future;
@@ -29,13 +29,13 @@ pub enum OpenError {
 }
 
 #[derive(Debug, Error)]
-pub enum MirrorError {
+pub enum RemoteError {
+    #[error("permission denied")]
+    PermissionDenied,
     #[error("failed to connect to server")]
     Connect(#[source] io::Error),
     #[error("server responded with error")]
     Server(#[source] ServerError),
-    #[error("permission denied")]
-    PermissionDenied,
 }
 
 /// Creates a new repository and set access to it based on the following table:
@@ -174,16 +174,16 @@ pub async fn get_default_block_expiration(
     }
 }
 
-/// Mirror the repository to the storage servers
+/// Mirror the repository to the cache servers
 pub async fn mirror(
     repository: &Repository,
     client_config: Arc<rustls::ClientConfig>,
     hosts: &[String],
-) -> Result<(), MirrorError> {
+) -> Result<(), RemoteError> {
     let write_secrets = repository
         .secrets()
         .into_write_secrets()
-        .ok_or(MirrorError::PermissionDenied)?;
+        .ok_or(RemoteError::PermissionDenied)?;
 
     let tasks = hosts.iter().map(|host| {
         let client_config = client_config.clone();
@@ -195,27 +195,27 @@ pub async fn mirror(
         async move {
             let client = RemoteClient::connect(host, client_config)
                 .await
-                .map_err(MirrorError::Connect)
+                .map_err(RemoteError::Connect)
                 .map_err(|error| {
-                    tracing::error!(host, ?error, "mirror request failed");
+                    tracing::error!(host, ?error, "connection failed");
                     error
                 })?;
 
             let cookie = client.session_cookie();
             let proof = write_secrets.write_keys.sign(cookie.as_ref());
 
-            let request = Request::Mirror {
+            let request = Request::Create {
                 repository_id: write_secrets.id,
                 proof,
             };
 
-            match client.invoke(request).await.map_err(MirrorError::Server) {
-                Ok(Response::None) => {
-                    tracing::info!(host, "mirror request successfull");
+            match client.invoke(request).await.map_err(RemoteError::Server) {
+                Ok(()) => {
+                    tracing::info!(host, "request ok");
                     Ok(())
                 }
                 Err(error) => {
-                    tracing::error!(host, ?error, "mirror request failed");
+                    tracing::error!(host, ?error, "request failed");
                     Err(error)
                 }
             }

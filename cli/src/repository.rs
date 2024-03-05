@@ -1,11 +1,7 @@
 use crate::{options::Dirs, utils, DB_EXTENSION};
 use anyhow::{Context as _, Result};
 use camino::Utf8Path;
-use ouisync_bridge::{
-    config::ConfigStore,
-    protocol::remote::{Request, Response},
-    transport::RemoteClient,
-};
+use ouisync_bridge::{config::ConfigStore, protocol::remote::Request, transport::RemoteClient};
 use ouisync_lib::{
     network::{Network, Registration},
     Repository,
@@ -232,16 +228,14 @@ impl RepositoryHolder {
         let client = RemoteClient::connect(host, config).await?;
 
         let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
-        let request = Request::Mirror {
+        let request = Request::Create {
             repository_id: secrets.id,
             proof,
         };
 
-        let response = client.invoke(request).await?;
+        client.invoke(request).await?;
 
-        match response {
-            Response::None => Ok(()),
-        }
+        Ok(())
     }
 
     fn resolve_mount_point(&self, mount_point: String, mount_dir: &Path) -> PathBuf {

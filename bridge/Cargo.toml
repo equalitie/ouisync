@@ -42,5 +42,6 @@ os_pipe = { version = "1.1.4", features = ["io_safety"] }
 paranoid-android = "0.2.1"
 
 [dev-dependencies]
+assert_matches = { workspace = true }
 rcgen = { workspace = true }
 tempfile = "3.2"

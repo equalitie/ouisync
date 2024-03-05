@@ -1,13 +1,13 @@
 use crate::{
-    repository::{RepositoryHolder, RepositoryName, OPEN_ON_START},
+    repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
 };
 use async_trait::async_trait;
 use ouisync_bridge::{
-    protocol::remote::{Request, Response, ServerError},
+    protocol::remote::{Request, ServerError},
     transport::SessionContext,
 };
-use ouisync_lib::{AccessSecrets, RepositoryId, ShareToken};
+use ouisync_lib::{crypto::sign::Signature, AccessSecrets, RepositoryId, ShareToken};
 use std::{
     iter,
     sync::{Arc, Weak},
@@ -29,7 +29,7 @@ impl RemoteHandler {
 #[async_trait]
 impl ouisync_bridge::transport::Handler for RemoteHandler {
     type Request = Request;
-    type Response = Response;
+    type Response = ();
     type Error = ServerError;
 
     async fn handle(
@@ -45,49 +45,21 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
         };
 
         match request {
-            Request::Mirror {
+            Request::Create {
                 repository_id,
                 proof,
             } => {
-                if !repository_id
-                    .write_public_key()
-                    .verify(context.session_cookie.as_ref(), &proof)
-                {
-                    tracing::debug!("invalid mirror proof");
-                    return Err(ServerError::InvalidArgument);
-                }
+                verify_proof(context, &repository_id, &proof)?;
 
                 // Mirroring is supported for blind replicas only.
-                let share_token = ShareToken::from(AccessSecrets::Blind { id: repository_id });
-                let name = make_name(share_token.id());
+                let secrets = AccessSecrets::Blind { id: repository_id };
 
-                // Mirror is idempotent
-                if state.repositories.contains(&name) {
-                    return Ok(().into());
-                }
+                let Some(holder) = create_repository(&state, secrets).await? else {
+                    // Mirror is idempotent
+                    return Ok(());
+                };
 
-                let store_path = state.store_path(name.as_ref());
-
-                let repository = ouisync_bridge::repository::create(
-                    store_path,
-                    None,
-                    None,
-                    Some(share_token),
-                    &state.config,
-                    &state.repositories_monitor,
-                )
-                .await
-                .map_err(|error| ServerError::CreateRepository(error.to_string()))?;
-
-                tracing::info!(%name, "repository created");
-
-                let holder = RepositoryHolder::new(repository, name, &state.network).await;
-                let holder = Arc::new(holder);
-
-                // Mirror is idempotent
-                if !state.repositories.try_insert(holder.clone()) {
-                    return Ok(().into());
-                }
+                tracing::info!(name = %holder.name(), "repository created");
 
                 holder
                     .repository
@@ -103,10 +75,83 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                 holder.registration.set_dht_enabled(false).await;
                 holder.registration.set_pex_enabled(true).await;
 
-                Ok(().into())
+                Ok(())
+            }
+            Request::Delete {
+                repository_id,
+                proof,
+            } => {
+                verify_proof(context, &repository_id, &proof)?;
+
+                let name = make_name(&repository_id);
+
+                state.repositories.remove(&name);
+                repository::delete_store(&state.store_dir, &name)
+                    .await
+                    .map_err(|error| ServerError::Internal(error.to_string()))?;
+
+                Ok(())
+            }
+            Request::Exists { repository_id } => {
+                let name = make_name(&repository_id);
+
+                state
+                    .repositories
+                    .contains(&name)
+                    .then_some(())
+                    .ok_or(ServerError::NotFound)
             }
         }
     }
+}
+
+fn verify_proof(
+    context: &SessionContext,
+    repository_id: &RepositoryId,
+    proof: &Signature,
+) -> Result<(), ServerError> {
+    if repository_id
+        .write_public_key()
+        .verify(context.session_cookie.as_ref(), proof)
+    {
+        Ok(())
+    } else {
+        tracing::debug!("invalid proof");
+        Err(ServerError::PermissionDenied)
+    }
+}
+
+async fn create_repository(
+    state: &State,
+    secrets: AccessSecrets,
+) -> Result<Option<Arc<RepositoryHolder>>, ServerError> {
+    let name = make_name(secrets.id());
+
+    if state.repositories.contains(&name) {
+        return Ok(None);
+    }
+
+    let store_path = state.store_path(name.as_ref());
+
+    let repository = ouisync_bridge::repository::create(
+        store_path,
+        None,
+        None,
+        Some(ShareToken::from(secrets)),
+        &state.config,
+        &state.repositories_monitor,
+    )
+    .await
+    .map_err(|error| ServerError::Internal(error.to_string()))?;
+
+    let holder = RepositoryHolder::new(repository, name, &state.network).await;
+    let holder = Arc::new(holder);
+
+    if !state.repositories.try_insert(holder.clone()) {
+        return Ok(None);
+    }
+
+    Ok(Some(holder))
 }
 
 // Derive name from the hash of repository id
@@ -147,7 +192,7 @@ mod tests {
         make_client_config, make_server_config, RemoteClient, RemoteServer,
     };
     use ouisync_lib::{crypto::sign::Keypair, AccessMode, WriteSecrets};
-    use rustls::{Certificate, PrivateKey};
+    use rustls::{Certificate, ClientConfig, PrivateKey};
     use state_monitor::StateMonitor;
     use std::net::Ipv4Addr;
     use tempfile::TempDir;
@@ -171,19 +216,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mirror_ok() {
+    async fn create_ok() {
         let (_temp_dir, state, client) = setup().await;
 
         let secrets = WriteSecrets::random();
         let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
 
-        client
-            .invoke(Request::Mirror {
-                repository_id: secrets.id,
-                proof,
-            })
-            .await
-            .unwrap();
+        assert_matches!(
+            client
+                .invoke(Request::Create {
+                    repository_id: secrets.id,
+                    proof,
+                })
+                .await,
+            Ok(())
+        );
 
         let repo = state
             .repositories
@@ -196,7 +243,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mirror_invalid_proof() {
+    async fn create_is_idempotent() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+
+        let holder = create_repository(&state, AccessSecrets::Write(secrets.clone()))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Add some content to the repo so we can verify that it's not overwritten on repeated
+        // creations.
+        let mut file = holder.repository.create_file("test.txt").await.unwrap();
+        file.write(b"hello world").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
+
+        // Create is idempotent so this still returns `Ok`.
+        assert_matches!(
+            client
+                .invoke(Request::Create {
+                    repository_id: secrets.id,
+                    proof,
+                })
+                .await,
+            Ok(())
+        );
+
+        assert_eq!(
+            holder
+                .repository
+                .open_file("test.txt")
+                .await
+                .unwrap()
+                .read_to_end()
+                .await
+                .unwrap(),
+            b"hello world"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_invalid_proof() {
         let (_temp_dir, state, client) = setup().await;
 
         let repository_id = WriteSecrets::random().id;
@@ -205,18 +296,157 @@ mod tests {
 
         assert_matches!(
             client
-                .invoke(Request::Mirror {
+                .invoke(Request::Create {
                     repository_id,
                     proof: invalid_proof
                 })
                 .await,
-            Err(ServerError::InvalidArgument)
+            Err(ServerError::PermissionDenied)
         );
 
         assert!(state.repositories.get_all().is_empty());
     }
 
+    #[tokio::test]
+    async fn delete_present() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+
+        create_repository(&state, AccessSecrets::Blind { id: secrets.id })
+            .await
+            .unwrap()
+            .unwrap();
+
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
+
+        assert_matches!(
+            client
+                .invoke(Request::Delete {
+                    repository_id: secrets.id,
+                    proof
+                })
+                .await,
+            Ok(())
+        );
+
+        assert!(state.repositories.get_all().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_missing() {
+        let (_temp_dir, _state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
+
+        // Delete is idempotent so this still returns `Ok`
+        assert_matches!(
+            client
+                .invoke(Request::Delete {
+                    repository_id: secrets.id,
+                    proof
+                })
+                .await,
+            Ok(())
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_invalid_proof() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+
+        create_repository(&state, AccessSecrets::Blind { id: secrets.id })
+            .await
+            .unwrap()
+            .unwrap();
+
+        let invalid_write_keys = Keypair::random();
+        let invalid_proof = invalid_write_keys.sign(client.session_cookie().as_ref());
+
+        assert_matches!(
+            client
+                .invoke(Request::Delete {
+                    repository_id: secrets.id,
+                    proof: invalid_proof,
+                })
+                .await,
+            Err(ServerError::PermissionDenied)
+        );
+
+        assert!(state.repositories.get_all().into_iter().any(|holder| holder
+            .repository
+            .secrets()
+            .id()
+            == &secrets.id));
+    }
+
+    #[tokio::test]
+    async fn exists_present() {
+        let (_temp_dir, state, client) = setup().await;
+        let repository_id = WriteSecrets::random().id;
+
+        create_repository(&state, AccessSecrets::Blind { id: repository_id })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_matches!(
+            client.invoke(Request::Exists { repository_id }).await,
+            Ok(())
+        );
+    }
+
+    #[tokio::test]
+    async fn exists_missing() {
+        let (_temp_dir, _state, client) = setup().await;
+        let repository_id = WriteSecrets::random().id;
+
+        assert_matches!(
+            client.invoke(Request::Exists { repository_id }).await,
+            Err(ServerError::NotFound)
+        );
+    }
+
+    #[tokio::test]
+    async fn proof_replay_attack() {
+        let (_temp_dir, _state, server_addr, client_config) = setup_server().await;
+
+        let client0 = RemoteClient::connect(&server_addr, client_config.clone())
+            .await
+            .unwrap();
+        let client1 = RemoteClient::connect(&server_addr, client_config.clone())
+            .await
+            .unwrap();
+
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(client0.session_cookie().as_ref());
+
+        // Attempt to invoke the request using a proof leaked from another client.
+        assert_matches!(
+            client1
+                .invoke(Request::Create {
+                    repository_id: secrets.id,
+                    proof
+                })
+                .await,
+            Err(ServerError::PermissionDenied)
+        );
+    }
+
     async fn setup() -> (TempDir, Arc<State>, RemoteClient) {
+        let (temp_dir, state, server_addr, client_config) = setup_server().await;
+
+        let client = RemoteClient::connect(&server_addr, client_config)
+            .await
+            .unwrap();
+
+        (temp_dir, state, client)
+    }
+
+    async fn setup_server() -> (TempDir, Arc<State>, String, Arc<ClientConfig>) {
         let temp_dir = TempDir::new().unwrap();
         let dirs = Dirs {
             config_dir: temp_dir.path().join("config"),
@@ -237,12 +467,9 @@ mod tests {
             .await
             .unwrap();
         let server_addr = format!("localhost:{}", server.local_addr().port());
+
         task::spawn(server.run(RemoteHandler::new(state.clone())));
 
-        let client = RemoteClient::connect(&server_addr, client_config)
-            .await
-            .unwrap();
-
-        (temp_dir, state, client)
+        (temp_dir, state, server_addr, client_config)
     }
 }
