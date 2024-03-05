@@ -46,9 +46,14 @@ pub enum NetworkEvent {
     PeerSetChange = 1,
 }
 
-/// Opaque, non-sensitive value associated with a particular client-server session. Both client and
-/// server see the same value. It's guaranteed to be unique only if the underlying transport is
-/// secured against eavesdropping (e.g., TLS).
+/// Opaque, non-sensitive value unique to a particular client session and accessible to both the
+/// client and the server. It's useful for constructing zero-knowledge proofs: the client can sign
+/// this cookie with a private key and send the signature to the server in order to prove the
+/// possession of the private key without revealing it. The cookie is unique per session which
+/// makes this proof resistant to replay attacks. The value should be constructed by the underlying
+/// transport. For example if TLS is used, one can use the [export_keying_material]
+/// (https://docs.rs/rustls/0.22.0/rustls/struct.ConnectionCommon.html#method.export_keying_material)
+/// function. If no such proofs are needed, one can use `SesssionCookie::DUMMY` instead.
 #[derive(Clone, Copy)]
 pub struct SessionCookie([u8; 32]);
 
