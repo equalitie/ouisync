@@ -32,8 +32,8 @@ use tokio_tungstenite::{
 use tracing::Instrument;
 
 // Range (inclusive) of supported protocol versions.
-const MIN_VERSION: u64 = 0;
-const MAX_VERSION: u64 = 0;
+const MIN_VERSION: u64 = 1;
+const MAX_VERSION: u64 = 1;
 
 /// Shared config for `RemoteServer`
 pub fn make_server_config(
@@ -56,6 +56,7 @@ fn make_server_config_with_versions(
 
     // (ab)use ALPN (https://en.wikipedia.org/wiki/Application-Layer_Protocol_Negotiation) for
     // protocol version negotation
+    // TODO: Do we need/want the http protocols here?
     config.alpn_protocols = [b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()]
         .into_iter()
         .chain(to_alpn_protocols(versions))
@@ -68,7 +69,8 @@ fn make_server_config_with_versions(
 pub fn make_client_config(
     additional_root_certs: &[rustls::Certificate],
 ) -> io::Result<Arc<rustls::ClientConfig>> {
-    make_client_config_with_versions(additional_root_certs, MIN_VERSION..=MAX_VERSION)
+    // Clients support only the latest version.
+    make_client_config_with_versions(additional_root_certs, MAX_VERSION..=MAX_VERSION)
 }
 
 fn make_client_config_with_versions(

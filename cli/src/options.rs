@@ -1,5 +1,6 @@
 use crate::{protocol::Request, APP_NAME};
 use clap::{Args, Parser};
+use ouisync_bridge::logger::{LogColor, LogFormat};
 use std::{env, path::PathBuf};
 
 #[derive(Parser, Debug)]
@@ -14,6 +15,17 @@ pub(crate) struct Options {
     /// Can be also specified with env variable OUISYNC_SOCKET.
     #[arg(short, long, default_value_os_t = default_socket(), value_name = "PATH")]
     pub socket: PathBuf,
+
+    /// Log format ("human" or "json")
+    #[arg(long, default_value_t = LogFormat::Human)]
+    pub log_format: LogFormat,
+
+    /// When to color log messages ("always", "never" or "auto")
+    ///
+    /// "auto" means colors are used when printing directly to a terminal but not when
+    /// redirected to a file or a pipe.
+    #[arg(long, default_value_t)]
+    pub log_color: LogColor,
 
     #[command(subcommand)]
     pub request: Request,

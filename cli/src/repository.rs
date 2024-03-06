@@ -225,7 +225,10 @@ impl RepositoryHolder {
             .into_write_secrets()
             .context("permission denied")?;
 
-        let client = RemoteClient::connect(host, config).await?;
+        let client = RemoteClient::connect(host, config).await.map_err(|error| {
+            tracing::error!(?error, host, "connection failed");
+            error
+        })?;
 
         let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
         let request = Request::Create {
@@ -233,7 +236,10 @@ impl RepositoryHolder {
             proof,
         };
 
-        client.invoke(request).await?;
+        client.invoke(request).await.map_err(|error| {
+            tracing::error!(?error, host, "request failed");
+            error
+        })?;
 
         Ok(())
     }

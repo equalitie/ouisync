@@ -6,6 +6,7 @@ use crate::{
     transport::{local::LocalClient, native::NativeClient},
 };
 use anyhow::Result;
+use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
 use state_monitor::StateMonitor;
 use std::{
     io,
@@ -13,8 +14,17 @@ use std::{
 };
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-pub(crate) async fn run(dirs: Dirs, socket: PathBuf, request: Request) -> Result<()> {
+pub(crate) async fn run(
+    dirs: Dirs,
+    socket: PathBuf,
+    log_format: LogFormat,
+    log_color: LogColor,
+    request: Request,
+) -> Result<()> {
+    let _logger = Logger::new(None, None, log_format, log_color)?;
     let client = connect(&socket, &dirs).await?;
+
+    tracing::debug!(?request);
 
     let request = match request {
         Request::Create {
