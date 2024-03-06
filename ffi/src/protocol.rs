@@ -82,15 +82,9 @@ pub(crate) enum Request {
         name: Option<String>,
     },
     RepositorySyncProgress(RepositoryHandle),
-    RepositoryCreateMirror {
-        repository: RepositoryHandle,
-    },
-    RepositoryDeleteMirror {
-        repository: RepositoryHandle,
-    },
-    RepositoryMirrorExists {
-        repository: RepositoryHandle,
-    },
+    RepositoryCreateMirror(RepositoryHandle),
+    RepositoryDeleteMirror(RepositoryHandle),
+    RepositoryMirrorExists(RepositoryHandle),
     RepositoryMountAll(PathBuf),
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),

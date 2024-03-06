@@ -153,17 +153,17 @@ impl ouisync_bridge::transport::Handler for Handler {
             } => repository::create_share_token(&self.state, repository, secret, access_mode, name)
                 .await?
                 .into(),
-            Request::RepositoryCreateMirror { repository } => {
+            Request::RepositoryCreateMirror(repository) => {
                 repository::create_mirror(&self.state, repository)
                     .await?
                     .into()
             }
-            Request::RepositoryDeleteMirror { repository } => {
+            Request::RepositoryDeleteMirror(repository) => {
                 repository::delete_mirror(&self.state, repository)
                     .await?
                     .into()
             }
-            Request::RepositoryMirrorExists { repository } => {
+            Request::RepositoryMirrorExists(repository) => {
                 repository::mirror_exists(&self.state, repository)
                     .await?
                     .into()
