@@ -13,12 +13,13 @@ members = [
     "tracing_fmt",
     "utils/bindgen",
     "utils/btdht",
+    "utils/repogen",
     "utils/stress-test",
     "utils/stun-server-list",
     "utils/swarm",
     "utils/protocol-analyzer",
     "vfs"
-]
+, "utils/repogen"]
 resolver = "2"
 
 [workspace.package]
