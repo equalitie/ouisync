@@ -546,8 +546,8 @@ class Repository {
       _client.invoke<void>('repository_delete_mirror', _handle);
 
   /// Check if this repository is mirrored on at least one of the cache servers.
-  Future<void> mirrorExists() =>
-      _client.invoke<void>('repository_mirror_exists', _handle);
+  Future<bool> mirrorExists() =>
+      _client.invoke<bool>('repository_mirror_exists', _handle);
 
   Future<PasswordSalt> getReadPasswordSalt() => _client
       .invoke<Uint8List>("get_read_password_salt", _handle)
