@@ -187,8 +187,6 @@ pub async fn create_mirror(
         .ok_or(RemoteError::PermissionDenied)?;
 
     let tasks = hosts.iter().map(|host| {
-        let host = strip_port(host);
-
         async {
             let client = connect(client_config.clone(), host).await?;
             let proof = make_proof(&client, &secrets);
@@ -224,8 +222,6 @@ pub async fn delete_mirror(
         .ok_or(RemoteError::PermissionDenied)?;
 
     let tasks = hosts.iter().map(|host| {
-        let host = strip_port(host);
-
         async {
             let client = connect(client_config.clone(), host).await?;
             let proof = make_proof(&client, &secrets);
@@ -258,8 +254,6 @@ pub async fn mirror_exists(
     let repository_id = *repository.secrets().id();
 
     let tasks = hosts.iter().map(|host| {
-        let host = strip_port(host);
-
         async {
             let client = connect(client_config.clone(), host).await?;
             invoke(&client, Request::Exists { repository_id }).await
@@ -308,14 +302,6 @@ async fn invoke(client: &RemoteClient, request: Request) -> Result<(), RemoteErr
             tracing::error!(?error, "request failed");
             error
         })
-}
-
-fn strip_port(s: &str) -> &str {
-    if let Some(index) = s.rfind(':') {
-        &s[..index]
-    } else {
-        s
-    }
 }
 
 fn make_proof(client: &RemoteClient, secrets: &WriteSecrets) -> Signature {

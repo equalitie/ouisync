@@ -21,6 +21,7 @@ indexmap = "1.9.3"
 num_enum = { workspace = true }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
+pem = "2.0.1"
 rand = { workspace = true }
 rmp-serde = { workspace = true }
 serde = { workspace = true }

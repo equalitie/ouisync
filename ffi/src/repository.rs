@@ -363,7 +363,7 @@ pub(crate) async fn sync_progress(
 /// Create mirrored repository on the cache servers
 pub(crate) async fn create_mirror(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
     let holder = state.repositories.get(handle)?;
-    let config = state.get_remote_client_config()?;
+    let config = state.get_remote_client_config().await?;
     let hosts: Vec<_> = state
         .cache_servers
         .lock()
@@ -380,7 +380,7 @@ pub(crate) async fn create_mirror(state: &State, handle: RepositoryHandle) -> Re
 /// Delete mirrored repository from the cache servers
 pub(crate) async fn delete_mirror(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
     let holder = state.repositories.get(handle)?;
-    let config = state.get_remote_client_config()?;
+    let config = state.get_remote_client_config().await?;
     let hosts: Vec<_> = state
         .cache_servers
         .lock()
@@ -397,7 +397,7 @@ pub(crate) async fn delete_mirror(state: &State, handle: RepositoryHandle) -> Re
 /// Check if the repository is mirrored on at least one of the cache servers.
 pub(crate) async fn mirror_exists(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
     let holder = state.repositories.get(handle)?;
-    let config = state.get_remote_client_config()?;
+    let config = state.get_remote_client_config().await?;
     let hosts: Vec<_> = state
         .cache_servers
         .lock()
