@@ -188,9 +188,6 @@ class Session {
   Future<String> get thisRuntimeId =>
       _client.invoke<String>('network_this_runtime_id');
 
-  Future<void> addCacheServer(String host) =>
-      _client.invoke<void>('network_add_cache_server', host);
-
   // Utility functions to generate password salts and to derive LocalSecretKey from LocalPasswords.
 
   Future<PasswordSalt> generateSaltForPasswordHash() => _client
@@ -537,17 +534,26 @@ class Repository {
     return HEX.encode(bytes);
   }
 
-  /// Create mirrors of this repository on the cache servers.
-  Future<void> createMirror() =>
-      _client.invoke<void>('repository_create_mirror', _handle);
+  /// Create mirror of this repository on the cache server.
+  Future<void> createMirror(String host) =>
+      _client.invoke<void>('repository_create_mirror', {
+        'repository': _handle,
+        'host': host,
+      });
 
-  /// Delete all mirrors of this repository from the cache servers.
-  Future<void> deleteMirror() =>
-      _client.invoke<void>('repository_delete_mirror', _handle);
+  /// Delete mirror of this repository from the cache server.
+  Future<void> deleteMirror(String host) =>
+      _client.invoke<void>('repository_delete_mirror', {
+        'repository': _handle,
+        'host': host,
+      });
 
-  /// Check if this repository is mirrored on at least one of the cache servers.
-  Future<bool> mirrorExists() =>
-      _client.invoke<bool>('repository_mirror_exists', _handle);
+  /// Check if this repository is mirrored on the cache server.
+  Future<bool> mirrorExists(String host) =>
+      _client.invoke<bool>('repository_mirror_exists', {
+        'repository': _handle,
+        'host': host,
+      });
 
   Future<PasswordSalt> getReadPasswordSalt() => _client
       .invoke<Uint8List>("get_read_password_salt", _handle)

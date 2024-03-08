@@ -4,13 +4,11 @@ use crate::{
     registry::{Handle, SharedRegistry},
     repository::Repositories,
 };
-use deadlock::BlockingMutex;
 use ouisync_bridge::{config::ConfigStore, transport};
 use ouisync_lib::network::Network;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
 use std::{
-    collections::BTreeSet,
     future::Future,
     io,
     path::{Path, PathBuf},
@@ -19,7 +17,6 @@ use std::{
 use tokio::sync::{oneshot, OnceCell};
 
 pub(crate) struct State {
-    pub cache_servers: BlockingMutex<BTreeSet<String>>,
     pub config: ConfigStore,
     pub files: SharedRegistry<Arc<FileHolder>>,
     pub mounter: Mounter,
@@ -43,7 +40,6 @@ impl State {
         let repos_monitor = root_monitor.make_child("Repositories");
 
         Self {
-            cache_servers: BlockingMutex::new(BTreeSet::new()),
             config,
             files: SharedRegistry::new(),
             mounter: Mounter::new(),

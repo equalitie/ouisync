@@ -153,18 +153,18 @@ impl ouisync_bridge::transport::Handler for Handler {
             } => repository::create_share_token(&self.state, repository, secret, access_mode, name)
                 .await?
                 .into(),
-            Request::RepositoryCreateMirror(repository) => {
-                repository::create_mirror(&self.state, repository)
+            Request::RepositoryCreateMirror { repository, host } => {
+                repository::create_mirror(&self.state, repository, &host)
                     .await?
                     .into()
             }
-            Request::RepositoryDeleteMirror(repository) => {
-                repository::delete_mirror(&self.state, repository)
+            Request::RepositoryDeleteMirror { repository, host } => {
+                repository::delete_mirror(&self.state, repository, &host)
                     .await?
                     .into()
             }
-            Request::RepositoryMirrorExists(repository) => {
-                repository::mirror_exists(&self.state, repository)
+            Request::RepositoryMirrorExists { repository, host } => {
+                repository::mirror_exists(&self.state, repository, &host)
                     .await?
                     .into()
             }
@@ -337,22 +337,6 @@ impl ouisync_bridge::transport::Handler for Handler {
                     enabled,
                 )
                 .await;
-                ().into()
-            }
-            Request::NetworkAddCacheServer(host) => {
-                // NOTE: Do not inline this into the `if`, otherwise we would hold the lock across
-                // await.
-                let new = self
-                    .state
-                    .cache_servers
-                    .lock()
-                    .unwrap()
-                    .insert(host.clone());
-
-                if new {
-                    ouisync_bridge::network::add_cache_server(&self.state.network, &host).await?;
-                }
-
                 ().into()
             }
             Request::NetworkExternalAddrV4 => self.state.network.external_addr_v4().await.into(),

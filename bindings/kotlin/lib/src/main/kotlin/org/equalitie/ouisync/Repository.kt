@@ -235,24 +235,29 @@ class Repository private constructor(internal val handle: Long, internal val cli
     suspend fun syncProgress() = client.invoke(RepositorySyncProgress(handle)) as Progress
 
     /**
-     * Create mirror of this repository on the cache servers that were previously added with
-     * [Session.addCacheServer].
+     * Create mirror of this repository on the cache server.
+     *
+     * Cache servers relay traffic between Ouisync peers and also temporarily store data. They are
+     * Requires the repository to be opened in write mode.
+     * useful when direct P2P connection fails (e.g. due to restrictive NAT) and also to allow
+     * syncing when the peers are not online at the same time (they still need to be online within
+     * ~24 hours of each other).
      *
      * Requires the repository to be opened in write mode.
      */
-    suspend fun createMirror() = client.invoke(RepositoryCreateMirror(handle))
+    suspend fun createMirror(host: String) = client.invoke(RepositoryCreateMirror(handle, host))
 
     /**
-     * Delete mirrors of this repository from all cache servers.
+     * Delete mirrors of this repository from the cache server.
      *
      * Requires the repository to be opened in write mode.
      */
-    suspend fun deleteMirror() = client.invoke(RepositoryDeleteMirror(handle))
+    suspend fun deleteMirror(host: String) = client.invoke(RepositoryDeleteMirror(handle, host))
 
     /**
-     * Check if this repository is mirrored on at least one cache server.
+     * Check if this repository is mirrored on the cache server.
      */
-    suspend fun mirrorExists() = client.invoke(RepositoryMirrorExists(handle))
+    suspend fun mirrorExists(host: String) = client.invoke(RepositoryMirrorExists(handle, host))
 
     /**
      * Returns the type (file or directory) of an entry at the given path,

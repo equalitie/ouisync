@@ -220,16 +220,34 @@ internal class RepositorySyncProgress : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
-internal class RepositoryCreateMirror : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
+internal class RepositoryCreateMirror(val repository: Long, val host: String) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "host" to host,
+            )
+        )
 }
 
-internal class RepositoryDeleteMirror : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
+internal class RepositoryDeleteMirror(val repository: Long, val host: String) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "host" to host,
+            )
+        )
 }
 
-internal class RepositoryMirrorExists : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
+internal class RepositoryMirrorExists(val repository: Long, val host: String) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "host" to host,
+            )
+        )
 }
 
 internal class RepositoryMountAll : ValueRequest<String> {

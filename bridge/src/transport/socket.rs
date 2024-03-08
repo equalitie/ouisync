@@ -147,7 +147,7 @@ where
         }
 
         match self.socket.close().await {
-            Ok(()) => tracing::debug!("client closed"),
+            Ok(()) => (),
             Err(error) => tracing::error!(?error, "failed to close client"),
         }
     }
