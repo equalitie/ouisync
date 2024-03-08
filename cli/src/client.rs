@@ -24,8 +24,6 @@ pub(crate) async fn run(
     let _logger = Logger::new(None, None, log_format, log_color)?;
     let client = connect(&socket, &dirs).await?;
 
-    tracing::debug!(?request);
-
     let request = match request {
         Request::Create {
             name,
