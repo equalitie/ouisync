@@ -226,7 +226,7 @@ internal class RepositoryCreateMirror(val repository: Long, val host: String) : 
             mapOf(
                 "repository" to repository,
                 "host" to host,
-            )
+            ),
         )
 }
 
@@ -236,7 +236,7 @@ internal class RepositoryDeleteMirror(val repository: Long, val host: String) : 
             mapOf(
                 "repository" to repository,
                 "host" to host,
-            )
+            ),
         )
 }
 
@@ -246,7 +246,7 @@ internal class RepositoryMirrorExists(val repository: Long, val host: String) : 
             mapOf(
                 "repository" to repository,
                 "host" to host,
-            )
+            ),
         )
 }
 
