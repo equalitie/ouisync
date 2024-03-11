@@ -397,7 +397,10 @@ pub(crate) async fn mirror_exists(
     let holder = state.repositories.get(handle)?;
     let config = state.get_remote_client_config().await?;
 
-    Ok(ouisync_bridge::repository::mirror_exists(&holder.repository, config, host).await?)
+    Ok(
+        ouisync_bridge::repository::mirror_exists(holder.repository.secrets().id(), config, host)
+            .await?,
+    )
 }
 
 /// Mount all opened repositories

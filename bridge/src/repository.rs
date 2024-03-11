@@ -6,7 +6,7 @@ use crate::{
 };
 use ouisync_lib::{
     crypto::sign::Signature, Access, AccessMode, AccessSecrets, LocalSecret, Repository,
-    RepositoryParams, SetLocalSecret, ShareToken, StorageSize, WriteSecrets,
+    RepositoryId, RepositoryParams, SetLocalSecret, ShareToken, StorageSize, WriteSecrets,
 };
 use state_monitor::StateMonitor;
 use std::{io, path::PathBuf, sync::Arc, time::Duration};
@@ -225,16 +225,22 @@ pub async fn delete_mirror(
 }
 
 /// Check if the repository is mirrored on the cache server.
-#[instrument(skip(repository, client_config))]
+#[instrument(skip(repository_id, client_config))]
 pub async fn mirror_exists(
-    repository: &Repository,
+    repository_id: &RepositoryId,
     client_config: Arc<rustls::ClientConfig>,
     host: &str,
 ) -> Result<bool, RemoteError> {
-    let repository_id = *repository.secrets().id();
     let client = connect(client_config, host).await?;
 
-    match invoke(&client, Request::Exists { repository_id }).await {
+    match invoke(
+        &client,
+        Request::Exists {
+            repository_id: *repository_id,
+        },
+    )
+    .await
+    {
         Ok(()) => Ok(true),
         Err(RemoteError::Server(ServerError::NotFound)) => Ok(false),
         Err(error) => Err(error),

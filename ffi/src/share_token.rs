@@ -1,3 +1,4 @@
+use crate::{error::Error, state::State};
 use ouisync_lib::{network, ShareToken};
 
 /// Returns the access mode of the given share token.
@@ -13,4 +14,14 @@ pub(crate) fn info_hash(token: ShareToken) -> String {
 
 pub(crate) fn suggested_name(token: ShareToken) -> String {
     token.suggested_name().into_owned()
+}
+
+/// Check if the repository is mirrored on the given server.
+pub(crate) async fn mirror_exists(
+    state: &State,
+    token: ShareToken,
+    host: &str,
+) -> Result<bool, Error> {
+    let config = state.get_remote_client_config().await?;
+    Ok(ouisync_bridge::repository::mirror_exists(token.id(), config, host).await?)
 }

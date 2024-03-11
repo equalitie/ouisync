@@ -172,6 +172,11 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),
             Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
             Request::ShareTokenNormalize(token) => token.to_string().into(),
+            Request::ShareTokenMirrorExists { share_token, host } => {
+                share_token::mirror_exists(&self.state, share_token, &host)
+                    .await?
+                    .into()
+            }
             Request::RepositoryAccessMode(repository) => {
                 repository::access_mode(&self.state, repository)?.into()
             }

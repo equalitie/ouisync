@@ -605,6 +605,13 @@ class ShareToken {
       .invoke<int>('share_token_mode', _token)
       .then((n) => AccessMode.decode(n));
 
+  /// Check if the repository of this share token is mirrored on the cache server.
+  Future<bool> mirrorExists(String host) =>
+      _client.invoke<bool>('share_token_mirror_exists', {
+        'share_token': _token,
+        'host': host,
+      });
+
   @override
   String toString() => _token;
 

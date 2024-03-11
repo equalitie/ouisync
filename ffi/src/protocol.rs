@@ -99,6 +99,11 @@ pub(crate) enum Request {
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
     ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
+    ShareTokenMirrorExists {
+        #[serde(with = "as_str")]
+        share_token: ShareToken,
+        host: String,
+    },
     DirectoryCreate {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
