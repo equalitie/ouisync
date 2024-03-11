@@ -198,10 +198,10 @@ where
     }
 }
 
-async fn receive<R, T>(reader: &mut R) -> Option<(u64, Result<T, TransportError>)>
+async fn receive<R, M>(reader: &mut R) -> Option<(u64, Result<M, TransportError>)>
 where
     R: Stream<Item = io::Result<BytesMut>> + Unpin,
-    T: DeserializeOwned,
+    M: DeserializeOwned,
 {
     loop {
         let buffer = match reader.try_next().await {

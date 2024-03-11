@@ -1,7 +1,7 @@
 use crate::{options::Dirs, utils, DB_EXTENSION};
 use anyhow::{Context as _, Result};
 use camino::Utf8Path;
-use ouisync_bridge::{config::ConfigStore, protocol::remote::Request, transport::RemoteClient};
+use ouisync_bridge::{config::ConfigStore, protocol::remote::v1, transport::RemoteClient};
 use ouisync_lib::{
     network::{Network, Registration},
     Repository,
@@ -231,7 +231,7 @@ impl RepositoryHolder {
         })?;
 
         let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
-        let request = Request::Create {
+        let request = v1::Request::Create {
             repository_id: secrets.id,
             proof,
         };

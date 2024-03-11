@@ -4,7 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::{
-    protocol::remote::{Request, ServerError},
+    protocol::remote::{v0, v1, Request, ServerError},
     transport::SessionContext,
 };
 use ouisync_lib::{crypto::sign::Signature, AccessSecrets, RepositoryId, ShareToken};
@@ -45,62 +45,59 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
         };
 
         match request {
-            Request::Create {
-                repository_id,
-                proof,
-            } => {
-                verify_proof(context, &repository_id, &proof)?;
+            // TODO: disable v0 eventually
+            Request::V0(request) => {
+                tracing::warn!("deprecated API version: v0");
 
-                // Mirroring is supported for blind replicas only.
-                let secrets = AccessSecrets::Blind { id: repository_id };
+                match request {
+                    v0::Request::Mirror { share_token } => {
+                        create_repository(
+                            &state,
+                            AccessSecrets::Blind {
+                                id: *share_token.id(),
+                            },
+                        )
+                        .await?;
 
-                let Some(holder) = create_repository(&state, secrets).await? else {
-                    // Mirror is idempotent
-                    return Ok(());
-                };
-
-                tracing::info!(name = %holder.name(), "repository created");
-
-                holder
-                    .repository
-                    .metadata()
-                    .set(OPEN_ON_START, true)
-                    .await
-                    .ok();
-
-                // NOTE: DHT is disabled to prevent spamming the DHT when there is a lot of repos.
-                // This is fine because the clients add the storage servers as user-provided peers.
-                // TODO: After we address https://github.com/equalitie/ouisync/issues/128 we should
-                // consider enabling it again.
-                holder.registration.set_dht_enabled(false).await;
-                holder.registration.set_pex_enabled(true).await;
-
-                Ok(())
+                        Ok(())
+                    }
+                }
             }
-            Request::Delete {
-                repository_id,
-                proof,
-            } => {
-                verify_proof(context, &repository_id, &proof)?;
+            Request::V1(request) => match request {
+                v1::Request::Create {
+                    repository_id,
+                    proof,
+                } => {
+                    verify_proof(context, &repository_id, &proof)?;
+                    create_repository(&state, AccessSecrets::Blind { id: repository_id }).await?;
 
-                let name = make_name(&repository_id);
+                    Ok(())
+                }
+                v1::Request::Delete {
+                    repository_id,
+                    proof,
+                } => {
+                    verify_proof(context, &repository_id, &proof)?;
 
-                state.repositories.remove(&name);
-                repository::delete_store(&state.store_dir, &name)
-                    .await
-                    .map_err(|error| ServerError::Internal(error.to_string()))?;
+                    let name = make_name(&repository_id);
 
-                Ok(())
-            }
-            Request::Exists { repository_id } => {
-                let name = make_name(&repository_id);
+                    state.repositories.remove(&name);
+                    repository::delete_store(&state.store_dir, &name)
+                        .await
+                        .map_err(|error| ServerError::Internal(error.to_string()))?;
 
-                state
-                    .repositories
-                    .contains(&name)
-                    .then_some(())
-                    .ok_or(ServerError::NotFound)
-            }
+                    Ok(())
+                }
+                v1::Request::Exists { repository_id } => {
+                    let name = make_name(&repository_id);
+
+                    state
+                        .repositories
+                        .contains(&name)
+                        .then_some(())
+                        .ok_or(ServerError::NotFound)
+                }
+            },
         }
     }
 }
@@ -150,6 +147,22 @@ async fn create_repository(
     if !state.repositories.try_insert(holder.clone()) {
         return Ok(None);
     }
+
+    tracing::info!(name = %holder.name(), "repository created");
+
+    holder
+        .repository
+        .metadata()
+        .set(OPEN_ON_START, true)
+        .await
+        .ok();
+
+    // NOTE: DHT is disabled to prevent spamming the DHT when there is a lot of repos.
+    // This is fine because the clients add the storage servers as user-provided peers.
+    // TODO: After we address https://github.com/equalitie/ouisync/issues/128 we should
+    // consider enabling it again.
+    holder.registration.set_dht_enabled(false).await;
+    holder.registration.set_pex_enabled(true).await;
 
     Ok(Some(holder))
 }
@@ -224,7 +237,7 @@ mod tests {
 
         assert_matches!(
             client
-                .invoke(Request::Create {
+                .invoke(v1::Request::Create {
                     repository_id: secrets.id,
                     proof,
                 })
@@ -265,7 +278,7 @@ mod tests {
         // Create is idempotent so this still returns `Ok`.
         assert_matches!(
             client
-                .invoke(Request::Create {
+                .invoke(v1::Request::Create {
                     repository_id: secrets.id,
                     proof,
                 })
@@ -296,7 +309,7 @@ mod tests {
 
         assert_matches!(
             client
-                .invoke(Request::Create {
+                .invoke(v1::Request::Create {
                     repository_id,
                     proof: invalid_proof
                 })
@@ -322,7 +335,7 @@ mod tests {
 
         assert_matches!(
             client
-                .invoke(Request::Delete {
+                .invoke(v1::Request::Delete {
                     repository_id: secrets.id,
                     proof
                 })
@@ -343,7 +356,7 @@ mod tests {
         // Delete is idempotent so this still returns `Ok`
         assert_matches!(
             client
-                .invoke(Request::Delete {
+                .invoke(v1::Request::Delete {
                     repository_id: secrets.id,
                     proof
                 })
@@ -368,7 +381,7 @@ mod tests {
 
         assert_matches!(
             client
-                .invoke(Request::Delete {
+                .invoke(v1::Request::Delete {
                     repository_id: secrets.id,
                     proof: invalid_proof,
                 })
@@ -394,7 +407,7 @@ mod tests {
             .unwrap();
 
         assert_matches!(
-            client.invoke(Request::Exists { repository_id }).await,
+            client.invoke(v1::Request::Exists { repository_id }).await,
             Ok(())
         );
     }
@@ -405,7 +418,7 @@ mod tests {
         let repository_id = WriteSecrets::random().id;
 
         assert_matches!(
-            client.invoke(Request::Exists { repository_id }).await,
+            client.invoke(v1::Request::Exists { repository_id }).await,
             Err(ServerError::NotFound)
         );
     }
@@ -427,7 +440,7 @@ mod tests {
         // Attempt to invoke the request using a proof leaked from another client.
         assert_matches!(
             client1
-                .invoke(Request::Create {
+                .invoke(v1::Request::Create {
                     repository_id: secrets.id,
                     proof
                 })

@@ -1,7 +1,13 @@
 pub mod remote;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+pub trait DeserializeVersioned<'de>: Sized {
+    fn deserialize_versioned<D>(version: u64, d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>;
+}
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

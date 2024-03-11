@@ -1,7 +1,7 @@
 use crate::{
     config::{ConfigError, ConfigKey, ConfigStore},
     device_id,
-    protocol::remote::{Request, ServerError},
+    protocol::remote::{v1, Request, ServerError},
     transport::RemoteClient,
 };
 use ouisync_lib::{
@@ -191,7 +191,7 @@ pub async fn create_mirror(
 
     invoke(
         &client,
-        Request::Create {
+        v1::Request::Create {
             repository_id: secrets.id,
             proof,
         },
@@ -216,7 +216,7 @@ pub async fn delete_mirror(
 
     invoke(
         &client,
-        Request::Delete {
+        v1::Request::Delete {
             repository_id: secrets.id,
             proof,
         },
@@ -235,7 +235,7 @@ pub async fn mirror_exists(
 
     match invoke(
         &client,
-        Request::Exists {
+        v1::Request::Exists {
             repository_id: *repository_id,
         },
     )
@@ -260,8 +260,8 @@ async fn connect(
         .map_err(RemoteError::Connect)
 }
 
-async fn invoke(client: &RemoteClient, request: Request) -> Result<(), RemoteError> {
-    let result = client.invoke(request).await;
+async fn invoke(client: &RemoteClient, request: v1::Request) -> Result<(), RemoteError> {
+    let result = client.invoke(Request::V1(request)).await;
     tracing::debug!("response: {:?}", result);
     result.map_err(RemoteError::Server)
 }
