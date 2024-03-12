@@ -5,9 +5,7 @@ RUN apk update && apk add musl-dev fuse3-dev fuse3-static pkgconfig
 WORKDIR /usr/src/ouisync
 COPY . .
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/src/ouisync/target   \
-    cargo build --package ouisync-cli --release --bins; \
+RUN cargo build --package ouisync-cli --release --bins && \
     cp target/release/ouisync /usr/bin/
 
 FROM scratch as runtime
