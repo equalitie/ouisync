@@ -360,21 +360,47 @@ pub(crate) async fn sync_progress(
         .await?)
 }
 
-/// Mirror the repository to the storage servers
-pub(crate) async fn mirror(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
+/// Create mirrored repository on the given server
+pub(crate) async fn create_mirror(
+    state: &State,
+    handle: RepositoryHandle,
+    host: &str,
+) -> Result<(), Error> {
     let holder = state.repositories.get(handle)?;
-    let config = state.get_remote_client_config()?;
-    let hosts: Vec<_> = state
-        .cache_servers
-        .lock()
-        .unwrap()
-        .iter()
-        .cloned()
-        .collect();
+    let config = state.get_remote_client_config().await?;
 
-    ouisync_bridge::repository::mirror(&holder.repository, config, &hosts).await?;
+    ouisync_bridge::repository::create_mirror(&holder.repository, config, host).await?;
 
     Ok(())
+}
+
+/// Delete mirrored repository from the given server
+pub(crate) async fn delete_mirror(
+    state: &State,
+    handle: RepositoryHandle,
+    host: &str,
+) -> Result<(), Error> {
+    let holder = state.repositories.get(handle)?;
+    let config = state.get_remote_client_config().await?;
+
+    ouisync_bridge::repository::delete_mirror(&holder.repository, config, host).await?;
+
+    Ok(())
+}
+
+/// Check if the repository is mirrored on the given server.
+pub(crate) async fn mirror_exists(
+    state: &State,
+    handle: RepositoryHandle,
+    host: &str,
+) -> Result<bool, Error> {
+    let holder = state.repositories.get(handle)?;
+    let config = state.get_remote_client_config().await?;
+
+    Ok(
+        ouisync_bridge::repository::mirror_exists(holder.repository.secrets().id(), config, host)
+            .await?,
+    )
 }
 
 /// Mount all opened repositories

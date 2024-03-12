@@ -13,12 +13,13 @@ members = [
     "tracing_fmt",
     "utils/bindgen",
     "utils/btdht",
+    "utils/repogen",
     "utils/stress-test",
     "utils/stun-server-list",
     "utils/swarm",
     "utils/protocol-analyzer",
     "vfs"
-]
+, "utils/repogen"]
 resolver = "2"
 
 [workspace.package]
@@ -30,6 +31,7 @@ edition = "2021"
 rust-version = "1.75.0"
 
 [workspace.dependencies]
+assert_matches = "1.5"
 async-trait = "0.1.73"
 btdht = { git = "https://github.com/equalitie/btdht.git", rev = "e7ddf5607b20f0b82cbc3ea6259425c00bd8d16b" }
 bytes = "1.5.0"

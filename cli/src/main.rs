@@ -22,13 +22,22 @@ pub(crate) const DB_EXTENSION: &str = "ouisyncdb";
 async fn main() -> Result<()> {
     let options = Options::parse();
 
-    if let Request::Start {
-        log_format,
-        log_color,
-    } = &options.request
-    {
-        server::run(options.dirs, options.socket, *log_format, *log_color).await
+    if let Request::Start = &options.request {
+        server::run(
+            options.dirs,
+            options.socket,
+            options.log_format,
+            options.log_color,
+        )
+        .await
     } else {
-        client::run(options.dirs, options.socket, options.request).await
+        client::run(
+            options.dirs,
+            options.socket,
+            options.log_format,
+            options.log_color,
+            options.request,
+        )
+        .await
     }
 }

@@ -8,7 +8,7 @@ use crate::{
     state_monitor,
 };
 use async_trait::async_trait;
-use ouisync_bridge::transport::NotificationSender;
+use ouisync_bridge::transport::SessionContext;
 use ouisync_lib::{crypto::cipher::SecretKey, PeerAddr};
 use std::{net::SocketAddr, sync::Arc};
 
@@ -32,7 +32,7 @@ impl ouisync_bridge::transport::Handler for Handler {
     async fn handle(
         &self,
         request: Self::Request,
-        notification_tx: &NotificationSender,
+        context: &SessionContext,
     ) -> Result<Self::Response, Self::Error> {
         tracing::trace!(?request);
 
@@ -60,7 +60,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository::close(&self.state, handle).await?.into()
             }
             Request::RepositorySubscribe(handle) => {
-                repository::subscribe(&self.state, notification_tx, handle)?.into()
+                repository::subscribe(&self.state, &context.notification_tx, handle)?.into()
             }
             Request::RepositorySetAccess {
                 repository,
@@ -153,13 +153,30 @@ impl ouisync_bridge::transport::Handler for Handler {
             } => repository::create_share_token(&self.state, repository, secret, access_mode, name)
                 .await?
                 .into(),
-            Request::RepositoryMirror { repository } => {
-                repository::mirror(&self.state, repository).await?.into()
+            Request::RepositoryCreateMirror { repository, host } => {
+                repository::create_mirror(&self.state, repository, &host)
+                    .await?
+                    .into()
+            }
+            Request::RepositoryDeleteMirror { repository, host } => {
+                repository::delete_mirror(&self.state, repository, &host)
+                    .await?
+                    .into()
+            }
+            Request::RepositoryMirrorExists { repository, host } => {
+                repository::mirror_exists(&self.state, repository, &host)
+                    .await?
+                    .into()
             }
             Request::ShareTokenMode(token) => share_token::mode(token).into(),
             Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),
             Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
             Request::ShareTokenNormalize(token) => token.to_string().into(),
+            Request::ShareTokenMirrorExists { share_token, host } => {
+                share_token::mirror_exists(&self.state, share_token, &host)
+                    .await?
+                    .into()
+            }
             Request::RepositoryAccessMode(repository) => {
                 repository::access_mode(&self.state, repository)?.into()
             }
@@ -215,7 +232,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .await;
                 ().into()
             }
-            Request::NetworkSubscribe => network::subscribe(&self.state, notification_tx).into(),
+            Request::NetworkSubscribe => {
+                network::subscribe(&self.state, &context.notification_tx).into()
+            }
             Request::NetworkBind {
                 quic_v4,
                 quic_v6,
@@ -325,22 +344,6 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await;
                 ().into()
             }
-            Request::NetworkAddCacheServer(host) => {
-                // NOTE: Do not inline this into the `if`, otherwise we would hold the lock across
-                // await.
-                let new = self
-                    .state
-                    .cache_servers
-                    .lock()
-                    .unwrap()
-                    .insert(host.clone());
-
-                if new {
-                    ouisync_bridge::network::add_cache_server(&self.state.network, &host).await?;
-                }
-
-                ().into()
-            }
             Request::NetworkExternalAddrV4 => self.state.network.external_addr_v4().await.into(),
             Request::NetworkExternalAddrV6 => self.state.network.external_addr_v6().await.into(),
             Request::NetworkNatBehavior => self.state.network.nat_behavior().await.into(),
@@ -351,7 +354,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::StateMonitorGet(path) => state_monitor::get(&self.state, path)?.into(),
             Request::StateMonitorSubscribe(path) => {
-                state_monitor::subscribe(&self.state, notification_tx, path)?.into()
+                state_monitor::subscribe(&self.state, &context.notification_tx, path)?.into()
             }
             Request::Unsubscribe(handle) => {
                 self.state.remove_task(handle);

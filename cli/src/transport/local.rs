@@ -8,7 +8,10 @@ use interprocess::local_socket::{
     tokio::{LocalSocketListener, LocalSocketStream},
     ToLocalSocketName,
 };
-use ouisync_bridge::transport::{socket_server_connection, SocketClient};
+use ouisync_bridge::{
+    protocol::SessionCookie,
+    transport::{socket_server_connection, SocketClient},
+};
 use std::{fs, io, path::PathBuf};
 use tokio::task::JoinSet;
 use tokio_util::{
@@ -59,8 +62,12 @@ impl LocalServer {
                 Ok(socket) => {
                     let socket = make_socket(socket);
                     connections.spawn(
-                        socket_server_connection::run(socket, handler.clone())
-                            .instrument(tracing::info_span!("local client")),
+                        socket_server_connection::run(
+                            socket,
+                            handler.clone(),
+                            SessionCookie::DUMMY,
+                        )
+                        .instrument(tracing::info_span!("local client")),
                     );
                 }
                 Err(error) => {

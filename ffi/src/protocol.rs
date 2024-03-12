@@ -82,14 +82,28 @@ pub(crate) enum Request {
         name: Option<String>,
     },
     RepositorySyncProgress(RepositoryHandle),
-    RepositoryMirror {
+    RepositoryCreateMirror {
         repository: RepositoryHandle,
+        host: String,
+    },
+    RepositoryDeleteMirror {
+        repository: RepositoryHandle,
+        host: String,
+    },
+    RepositoryMirrorExists {
+        repository: RepositoryHandle,
+        host: String,
     },
     RepositoryMountAll(PathBuf),
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
     ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
+    ShareTokenMirrorExists {
+        #[serde(with = "as_str")]
+        share_token: ShareToken,
+        host: String,
+    },
     DirectoryCreate {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
@@ -161,7 +175,6 @@ pub(crate) enum Request {
     NetworkSetPortForwardingEnabled(bool),
     NetworkIsLocalDiscoveryEnabled,
     NetworkSetLocalDiscoveryEnabled(bool),
-    NetworkAddCacheServer(String),
     NetworkExternalAddrV4,
     NetworkExternalAddrV6,
     NetworkNatBehavior,

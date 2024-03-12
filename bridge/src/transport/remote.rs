@@ -1,14 +1,16 @@
 //! Client and Server than run on different devices.
 
 use super::{socket_server_connection, Handler, SocketClient};
-use crate::protocol::remote::{Request, Response, ServerError};
+use crate::protocol::{
+    remote::{Request, ServerError},
+    SessionCookie,
+};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use std::{
     borrow::Cow,
     io,
     net::SocketAddr,
-    ops::RangeInclusive,
     pin::Pin,
     sync::Arc,
     task::{ready, Context, Poll},
@@ -18,42 +20,26 @@ use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
-use tokio_rustls::{rustls, TlsAcceptor};
+use tokio_rustls::{
+    rustls::{self, ConnectionCommon},
+    TlsAcceptor,
+};
 use tokio_tungstenite::{
     tungstenite::{self, Message},
     Connector, MaybeTlsStream, WebSocketStream,
 };
 use tracing::Instrument;
 
-// Range (inclusive) of supported protocol versions.
-const MIN_VERSION: u64 = 0;
-const MAX_VERSION: u64 = 0;
-
 /// Shared config for `RemoteServer`
 pub fn make_server_config(
     cert_chain: Vec<rustls::Certificate>,
     key: rustls::PrivateKey,
 ) -> io::Result<Arc<rustls::ServerConfig>> {
-    make_server_config_with_versions(cert_chain, key, MIN_VERSION..=MAX_VERSION)
-}
-
-fn make_server_config_with_versions(
-    cert_chain: Vec<rustls::Certificate>,
-    key: rustls::PrivateKey,
-    versions: RangeInclusive<u64>,
-) -> io::Result<Arc<rustls::ServerConfig>> {
-    let mut config = rustls::ServerConfig::builder()
+    let config = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-
-    // (ab)use ALPN (https://en.wikipedia.org/wiki/Application-Layer_Protocol_Negotiation) for
-    // protocol version negotation
-    config.alpn_protocols = [b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()]
-        .into_iter()
-        .chain(to_alpn_protocols(versions))
-        .collect();
 
     Ok(Arc::new(config))
 }
@@ -61,13 +47,6 @@ fn make_server_config_with_versions(
 /// Shared config for `RemoteClient`
 pub fn make_client_config(
     additional_root_certs: &[rustls::Certificate],
-) -> io::Result<Arc<rustls::ClientConfig>> {
-    make_client_config_with_versions(additional_root_certs, MIN_VERSION..=MAX_VERSION)
-}
-
-fn make_client_config_with_versions(
-    additional_root_certs: &[rustls::Certificate],
-    versions: RangeInclusive<u64>,
 ) -> io::Result<Arc<rustls::ClientConfig>> {
     let mut root_cert_store = rustls::RootCertStore::empty();
 
@@ -87,11 +66,10 @@ fn make_client_config_with_versions(
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     }
 
-    let mut config = rustls::ClientConfig::builder()
+    let config = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_root_certificates(root_cert_store)
         .with_no_client_auth();
-    config.alpn_protocols = to_alpn_protocols(versions).collect();
 
     Ok(Arc::new(config))
 }
@@ -160,6 +138,8 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
         }
     };
 
+    let session_cookie = extract_session_cookie(stream.get_ref().1);
+
     // Upgrade to websocket
     let stream = match tokio_tungstenite::accept_async(stream).await {
         Ok(stream) => stream,
@@ -171,11 +151,12 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
 
     tracing::debug!("Accepted");
 
-    socket_server_connection::run(Socket(stream), handler).await;
+    socket_server_connection::run(Socket(stream), handler, session_cookie).await;
 }
 
 pub struct RemoteClient {
-    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response, ServerError>,
+    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, (), ServerError>,
+    session_cookie: SessionCookie,
 }
 
 impl RemoteClient {
@@ -194,13 +175,30 @@ impl RemoteClient {
         )
         .await
         .map_err(into_io_error)?;
+
+        let session_cookie = match stream.get_ref() {
+            MaybeTlsStream::Rustls(stream) => extract_session_cookie(stream.get_ref().1),
+            _ => {
+                // We created the stream with a rustls connector so the stream should be rustls as
+                // well.
+                unreachable!()
+            }
+        };
+
         let inner = SocketClient::new(Socket(stream));
 
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            session_cookie,
+        })
     }
 
-    pub async fn invoke(&self, request: Request) -> Result<Response, ServerError> {
-        self.inner.invoke(request).await
+    pub async fn invoke(&self, request: impl Into<Request>) -> Result<(), ServerError> {
+        self.inner.invoke(request.into()).await
+    }
+
+    pub fn session_cookie(&self) -> &SessionCookie {
+        &self.session_cookie
     }
 }
 
@@ -269,16 +267,21 @@ fn into_io_error(src: tungstenite::Error) -> io::Error {
     }
 }
 
-fn to_alpn_protocols(versions: RangeInclusive<u64>) -> impl Iterator<Item = Vec<u8>> {
-    versions.map(|version| version.to_be_bytes().to_vec())
+fn extract_session_cookie<Data>(connection: &ConnectionCommon<Data>) -> SessionCookie {
+    // unwrap is OK as the function fails only if called before TLS handshake or if the output
+    // length is zero, none of which is the case here.
+    connection
+        .export_keying_material(SessionCookie::DUMMY, b"ouisync session cookie", None)
+        .unwrap()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::NotificationSender;
+    use crate::{protocol::remote::v1, transport::SessionContext};
+    use assert_matches::assert_matches;
     use async_trait::async_trait;
-    use ouisync_lib::{AccessMode, AccessSecrets, ShareToken};
+    use ouisync_lib::WriteSecrets;
     use std::{
         net::Ipv4Addr,
         sync::atomic::{AtomicUsize, Ordering},
@@ -287,8 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn basic() {
-        let (server_config, client_config) =
-            make_configs(MIN_VERSION..=MAX_VERSION, MIN_VERSION..=MAX_VERSION);
+        let (server_config, client_config) = make_configs();
         let handler = TestHandler::default();
 
         let server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into(), server_config)
@@ -301,65 +303,20 @@ mod tests {
             .await
             .unwrap();
 
-        let share_token =
-            ShareToken::from(AccessSecrets::random_write().with_mode(AccessMode::Blind));
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
 
-        match client
-            .invoke(Request::Mirror { share_token })
-            .await
-            .unwrap()
-        {
-            Response::None => (),
-        }
-
-        assert_eq!(handler.received(), 1);
-    }
-
-    #[tokio::test]
-    async fn version_overlap() {
-        let (server_config, client_config) = make_configs(1..=2, 0..=1);
-        let handler = TestHandler::default();
-
-        let server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into(), server_config)
-            .await
-            .unwrap();
-        let port = server.local_addr().port();
-        task::spawn(server.run(handler.clone()));
-
-        let client = RemoteClient::connect(&format!("localhost:{port}"), client_config)
-            .await
-            .unwrap();
-
-        let share_token =
-            ShareToken::from(AccessSecrets::random_write().with_mode(AccessMode::Blind));
-
-        match client
-            .invoke(Request::Mirror { share_token })
-            .await
-            .unwrap()
-        {
-            Response::None => (),
-        }
+        assert_matches!(
+            client
+                .invoke(v1::Request::Create {
+                    repository_id: secrets.id,
+                    proof,
+                })
+                .await,
+            Ok(())
+        );
 
         assert_eq!(handler.received(), 1);
-    }
-
-    #[tokio::test]
-    async fn version_mismatch() {
-        let (server_config, client_config) = make_configs(2..=3, 0..=1);
-        let handler = TestHandler::default();
-
-        let server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into(), server_config)
-            .await
-            .unwrap();
-        let port = server.local_addr().port();
-        task::spawn(server.run(handler.clone()));
-
-        match RemoteClient::connect(&format!("localhost:{port}"), client_config).await {
-            Err(error) if error.kind() == io::ErrorKind::InvalidData => (),
-            Err(error) => panic!("unexpected error {:?}", error),
-            Ok(_) => panic!("unexpected success"),
-        }
     }
 
     #[derive(Default, Clone)]
@@ -376,30 +333,26 @@ mod tests {
     #[async_trait]
     impl Handler for TestHandler {
         type Request = Request;
-        type Response = Response;
+        type Response = ();
         type Error = ServerError;
 
         async fn handle(
             &self,
             _: Self::Request,
-            _: &NotificationSender,
+            _: &SessionContext,
         ) -> Result<Self::Response, Self::Error> {
             self.received.fetch_add(1, Ordering::Relaxed);
-            Ok(Response::None)
+            Ok(())
         }
     }
 
-    fn make_configs(
-        server_versions: RangeInclusive<u64>,
-        client_versions: RangeInclusive<u64>,
-    ) -> (Arc<rustls::ServerConfig>, Arc<rustls::ClientConfig>) {
+    fn make_configs() -> (Arc<rustls::ServerConfig>, Arc<rustls::ClientConfig>) {
         let gen = rcgen::generate_simple_self_signed(["localhost".to_owned()]).unwrap();
         let cert = rustls::Certificate(gen.serialize_der().unwrap());
         let key = rustls::PrivateKey(gen.serialize_private_key_der());
 
-        let server_config =
-            make_server_config_with_versions(vec![cert.clone()], key, server_versions).unwrap();
-        let client_config = make_client_config_with_versions(&[cert], client_versions).unwrap();
+        let server_config = make_server_config(vec![cert.clone()], key).unwrap();
+        let client_config = make_client_config(&[cert]).unwrap();
 
         (server_config, client_config)
     }

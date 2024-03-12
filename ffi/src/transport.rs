@@ -4,7 +4,7 @@
 use crate::{handler::Handler, sender::Sender};
 use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
-use ouisync_bridge::transport::socket_server_connection;
+use ouisync_bridge::{protocol::SessionCookie, transport::socket_server_connection};
 use std::{
     io,
     pin::Pin,
@@ -31,7 +31,7 @@ where
     T: Sender,
 {
     pub async fn run(self, handler: Handler) {
-        socket_server_connection::run(self.socket, handler).await
+        socket_server_connection::run(self.socket, handler, SessionCookie::DUMMY).await
     }
 }
 

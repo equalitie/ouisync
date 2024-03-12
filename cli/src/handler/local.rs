@@ -4,7 +4,7 @@ use crate::{
     state::State,
 };
 use async_trait::async_trait;
-use ouisync_bridge::{network, transport::NotificationSender};
+use ouisync_bridge::{network, transport::SessionContext};
 use ouisync_lib::{crypto::Password, LocalSecret, PeerAddr, SetLocalSecret, ShareToken};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
@@ -32,7 +32,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
     async fn handle(
         &self,
         request: Self::Request,
-        _notification_tx: &NotificationSender,
+        _context: &SessionContext,
     ) -> Result<Self::Response, Self::Error> {
         match request {
             Request::Start { .. } => unimplemented!(),

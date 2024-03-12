@@ -4,17 +4,19 @@ use crate::{
     registry::{Handle, SharedRegistry},
     repository::Repositories,
 };
-use deadlock::BlockingMutex;
-use once_cell::sync::OnceCell;
 use ouisync_bridge::{config::ConfigStore, transport};
 use ouisync_lib::network::Network;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
-use std::{collections::BTreeSet, future::Future, io, path::PathBuf, sync::Arc};
-use tokio::sync::oneshot;
+use std::{
+    future::Future,
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use tokio::sync::{oneshot, OnceCell};
 
 pub(crate) struct State {
-    pub cache_servers: BlockingMutex<BTreeSet<String>>,
     pub config: ConfigStore,
     pub files: SharedRegistry<Arc<FileHolder>>,
     pub mounter: Mounter,
@@ -38,7 +40,6 @@ impl State {
         let repos_monitor = root_monitor.make_child("Repositories");
 
         Self {
-            cache_servers: BlockingMutex::new(BTreeSet::new()),
             config,
             files: SharedRegistry::new(),
             mounter: Mounter::new(),
@@ -51,9 +52,10 @@ impl State {
         }
     }
 
-    pub fn get_remote_client_config(&self) -> Result<Arc<rustls::ClientConfig>, io::Error> {
+    pub async fn get_remote_client_config(&self) -> io::Result<Arc<rustls::ClientConfig>> {
         self.remote_client_config
-            .get_or_try_init(|| transport::make_client_config(&[]))
+            .get_or_try_init(|| make_remote_client_config(self.config.dir()))
+            .await
             .cloned()
     }
 
@@ -87,3 +89,10 @@ impl State {
 }
 
 pub(crate) type TaskHandle = Handle<ScopedJoinHandle<()>>;
+
+async fn make_remote_client_config(config_dir: &Path) -> io::Result<Arc<rustls::ClientConfig>> {
+    // Load custom root certificates (if any)
+    let additional_root_certs =
+        transport::tls::load_certificates_from_dir(&config_dir.join("root_certs")).await?;
+    transport::make_client_config(&additional_root_certs)
+}

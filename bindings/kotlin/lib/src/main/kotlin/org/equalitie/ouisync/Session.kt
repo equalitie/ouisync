@@ -256,17 +256,4 @@ class Session private constructor(
      * every start.
      */
     suspend fun thisRuntimeId(): String = client.invoke(NetworkThisRuntimeId()) as String
-
-    /**
-     * Adds a "cache server" to use.
-     *
-     * Cache servers relay traffic between Ouisync peers and also temporarily store data. They are
-     * useful when direct P2P connection fails (e.g. due to restrictive NAT) and also to allow
-     * syncing when the peers are not online at the same time (they still need to be online within
-     * ~24 hours of each other).
-     *
-     * @see Repository.mirror to create a "mirror" of a repository on the cache server.
-     */
-    suspend fun addCacheServer(host: String) =
-        client.invoke(NetworkAddCacheServer(host))
 }

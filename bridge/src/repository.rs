@@ -1,18 +1,18 @@
 use crate::{
     config::{ConfigError, ConfigKey, ConfigStore},
     device_id,
-    protocol::remote::{Request, Response, ServerError},
+    protocol::remote::{v1, Request, ServerError},
     transport::RemoteClient,
 };
-use futures_util::future;
 use ouisync_lib::{
-    Access, AccessMode, AccessSecrets, LocalSecret, Repository, RepositoryParams, SetLocalSecret,
-    ShareToken, StorageSize,
+    crypto::sign::Signature, Access, AccessMode, AccessSecrets, LocalSecret, Repository,
+    RepositoryId, RepositoryParams, SetLocalSecret, ShareToken, StorageSize, WriteSecrets,
 };
 use state_monitor::StateMonitor;
 use std::{io, path::PathBuf, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio_rustls::rustls;
+use tracing::instrument;
 
 const DEFAULT_QUOTA_KEY: ConfigKey<u64> = ConfigKey::new("default_quota", "Default storage quota");
 const DEFAULT_BLOCK_EXPIRATION_MILLIS: ConfigKey<u64> = ConfigKey::new(
@@ -29,11 +29,13 @@ pub enum OpenError {
 }
 
 #[derive(Debug, Error)]
-pub enum MirrorError {
+pub enum RemoteError {
+    #[error("permission denied")]
+    PermissionDenied,
     #[error("failed to connect to server")]
     Connect(#[source] io::Error),
     #[error("server responded with error")]
-    Server(#[source] ServerError),
+    Server(#[from] ServerError),
 }
 
 /// Creates a new repository and set access to it based on the following table:
@@ -172,60 +174,99 @@ pub async fn get_default_block_expiration(
     }
 }
 
-/// Mirror the repository to the storage servers
-pub async fn mirror(
+/// Create mirrored repository on the cache server
+#[instrument(skip(repository, client_config))]
+pub async fn create_mirror(
     repository: &Repository,
     client_config: Arc<rustls::ClientConfig>,
-    hosts: &[String],
-) -> Result<(), MirrorError> {
-    let share_token = repository.secrets().with_mode(AccessMode::Blind);
+    host: &str,
+) -> Result<(), RemoteError> {
+    let secrets = repository
+        .secrets()
+        .into_write_secrets()
+        .ok_or(RemoteError::PermissionDenied)?;
 
-    let tasks = hosts.iter().map(|host| {
-        let client_config = client_config.clone();
-        let share_token = share_token.clone();
+    let client = connect(client_config, host).await?;
+    let proof = make_proof(&client, &secrets);
 
-        // Strip port, if any.
-        let host = strip_port(host);
+    invoke(
+        &client,
+        v1::Request::Create {
+            repository_id: secrets.id,
+            proof,
+        },
+    )
+    .await
+}
 
-        async move {
-            let client = RemoteClient::connect(host, client_config)
-                .await
-                .map_err(MirrorError::Connect)
-                .map_err(|error| {
-                    tracing::error!(host, ?error, "mirror request failed");
-                    error
-                })?;
+/// Delete mirrored repository from the cache server
+#[instrument(skip(repository, client_config))]
+pub async fn delete_mirror(
+    repository: &Repository,
+    client_config: Arc<rustls::ClientConfig>,
+    host: &str,
+) -> Result<(), RemoteError> {
+    let secrets = repository
+        .secrets()
+        .into_write_secrets()
+        .ok_or(RemoteError::PermissionDenied)?;
 
-            let request = Request::Mirror {
-                share_token: share_token.into(),
-            };
+    let client = connect(client_config, host).await?;
+    let proof = make_proof(&client, &secrets);
 
-            match client.invoke(request).await.map_err(MirrorError::Server) {
-                Ok(Response::None) => {
-                    tracing::info!(host, "mirror request successfull");
-                    Ok(())
-                }
-                Err(error) => {
-                    tracing::error!(host, ?error, "mirror request failed");
-                    Err(error)
-                }
-            }
-        }
-    });
+    invoke(
+        &client,
+        v1::Request::Delete {
+            repository_id: secrets.id,
+            proof,
+        },
+    )
+    .await
+}
 
-    let results = future::join_all(tasks).await;
+/// Check if the repository is mirrored on the cache server.
+#[instrument(skip(repository_id, client_config))]
+pub async fn mirror_exists(
+    repository_id: &RepositoryId,
+    client_config: Arc<rustls::ClientConfig>,
+    host: &str,
+) -> Result<bool, RemoteError> {
+    let client = connect(client_config, host).await?;
 
-    if results.iter().any(|result| result.is_ok()) {
-        Ok(())
-    } else {
-        results.into_iter().next().unwrap_or(Ok(()))
+    match invoke(
+        &client,
+        v1::Request::Exists {
+            repository_id: *repository_id,
+        },
+    )
+    .await
+    {
+        Ok(()) => Ok(true),
+        Err(RemoteError::Server(ServerError::NotFound)) => Ok(false),
+        Err(error) => Err(error),
     }
 }
 
-fn strip_port(s: &str) -> &str {
-    if let Some(index) = s.rfind(':') {
-        &s[..index]
-    } else {
-        s
-    }
+async fn connect(
+    client_config: Arc<rustls::ClientConfig>,
+    host: &str,
+) -> Result<RemoteClient, RemoteError> {
+    RemoteClient::connect(host, client_config)
+        .await
+        .map_err(|error| {
+            tracing::debug!(?error, "connection failed");
+            error
+        })
+        .map_err(RemoteError::Connect)
+}
+
+async fn invoke(client: &RemoteClient, request: v1::Request) -> Result<(), RemoteError> {
+    let result = client.invoke(Request::V1(request)).await;
+    tracing::debug!("response: {:?}", result);
+    result.map_err(RemoteError::Server)
+}
+
+fn make_proof(client: &RemoteClient, secrets: &WriteSecrets) -> Signature {
+    let cookie = client.session_cookie();
+    secrets.write_keys.sign(cookie.as_ref())
 }

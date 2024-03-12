@@ -210,7 +210,8 @@ impl Bin {
         let mut command = Command::new(COMMAND);
         command
             .arg("--socket")
-            .arg(self.base_dir.path().join(API_SOCKET));
+            .arg(self.base_dir.path().join(API_SOCKET))
+            .env("RUST_LOG", "off");
         command
     }
 }

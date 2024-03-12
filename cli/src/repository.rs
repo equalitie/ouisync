@@ -1,14 +1,10 @@
 use crate::{options::Dirs, utils, DB_EXTENSION};
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use camino::Utf8Path;
-use ouisync_bridge::{
-    config::ConfigStore,
-    protocol::remote::{Request, Response},
-    transport::RemoteClient,
-};
+use ouisync_bridge::{config::ConfigStore, protocol::remote::v1, transport::RemoteClient};
 use ouisync_lib::{
     network::{Network, Registration},
-    AccessMode, Repository,
+    Repository,
 };
 use ouisync_vfs::MountGuard;
 use state_monitor::StateMonitor;
@@ -223,19 +219,29 @@ impl RepositoryHolder {
 
     /// Create a mirror of the repository on the given remote host.
     pub async fn mirror(&self, host: &str, config: Arc<rustls::ClientConfig>) -> Result<()> {
-        let client = RemoteClient::connect(host, config).await?;
-        let request = Request::Mirror {
-            share_token: self
-                .repository
-                .secrets()
-                .with_mode(AccessMode::Blind)
-                .into(),
-        };
-        let response = client.invoke(request).await?;
+        let secrets = self
+            .repository
+            .secrets()
+            .into_write_secrets()
+            .context("permission denied")?;
 
-        match response {
-            Response::None => Ok(()),
-        }
+        let client = RemoteClient::connect(host, config).await.map_err(|error| {
+            tracing::error!(?error, host, "connection failed");
+            error
+        })?;
+
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
+        let request = v1::Request::Create {
+            repository_id: secrets.id,
+            proof,
+        };
+
+        client.invoke(request).await.map_err(|error| {
+            tracing::error!(?error, host, "request failed");
+            error
+        })?;
+
+        Ok(())
     }
 
     fn resolve_mount_point(&self, mount_point: String, mount_dir: &Path) -> PathBuf {

@@ -224,6 +224,7 @@ fun App(viewModel: AppViewModel) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
+                        .padding(padding)
                         .padding(PADDING),
                 ) {
                     viewModel.sessionError?.let {

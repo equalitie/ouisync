@@ -3,7 +3,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_bridge::{
     config::ConfigError,
     protocol::remote::ServerError,
-    repository::{MirrorError, OpenError},
+    repository::{OpenError, RemoteError},
     transport::TransportError,
 };
 use ouisync_vfs::MountError;
@@ -76,9 +76,10 @@ impl ToErrorCode for SessionError {
     }
 }
 
-impl ToErrorCode for MirrorError {
+impl ToErrorCode for RemoteError {
     fn to_error_code(&self) -> ErrorCode {
         match self {
+            Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::Connect(error) => error.to_error_code(),
             Self::Server(error) => error.to_error_code(),
         }
@@ -120,9 +121,10 @@ impl ToErrorCode for ServerError {
     fn to_error_code(&self) -> ErrorCode {
         match self {
             Self::ShuttingDown => ErrorCode::Other,
-            Self::InvalidArgument => ErrorCode::InvalidArgument,
             Self::Transport(error) => error.to_error_code(),
-            Self::CreateRepository(_) => ErrorCode::Other,
+            Self::PermissionDenied => ErrorCode::PermissionDenied,
+            Self::NotFound => ErrorCode::EntryNotFound,
+            Self::Internal(_) => ErrorCode::Other,
         }
     }
 }

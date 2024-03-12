@@ -74,15 +74,15 @@ impl AccessSecrets {
         }
     }
 
-    pub(crate) fn can_write(&self) -> bool {
+    pub fn can_write(&self) -> bool {
         matches!(self, Self::Write(_))
     }
 
-    pub(crate) fn can_read(&self) -> bool {
+    pub fn can_read(&self) -> bool {
         matches!(self, Self::Read { .. } | Self::Write(_))
     }
 
-    pub(crate) fn read_key(&self) -> Option<&cipher::SecretKey> {
+    pub fn read_key(&self) -> Option<&cipher::SecretKey> {
         match self {
             Self::Blind { .. } => None,
             Self::Read { read_key, .. } => Some(read_key),
@@ -90,7 +90,15 @@ impl AccessSecrets {
         }
     }
 
-    pub(crate) fn write_secrets(&self) -> Option<&WriteSecrets> {
+    pub fn write_secrets(&self) -> Option<&WriteSecrets> {
+        match self {
+            Self::Blind { .. } => None,
+            Self::Read { .. } => None,
+            Self::Write(secrets) => Some(secrets),
+        }
+    }
+
+    pub fn into_write_secrets(self) -> Option<WriteSecrets> {
         match self {
             Self::Blind { .. } => None,
             Self::Read { .. } => None,
@@ -134,9 +142,9 @@ impl Eq for AccessSecrets {}
 /// Secrets for write access.
 #[derive(Clone)]
 pub struct WriteSecrets {
-    pub(crate) id: RepositoryId,
-    pub(crate) read_key: cipher::SecretKey,
-    pub(crate) write_keys: Arc<sign::Keypair>,
+    pub id: RepositoryId,
+    pub read_key: cipher::SecretKey,
+    pub write_keys: Arc<sign::Keypair>,
 }
 
 impl WriteSecrets {
