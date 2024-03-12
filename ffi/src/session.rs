@@ -195,6 +195,8 @@ pub(crate) fn close_blocking(session: Session) {
 
     let state = shared.state;
 
+    let _enter = shared.runtime.enter();
+
     shared
         .runtime
         .block_on(time::timeout(
