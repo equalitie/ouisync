@@ -7,7 +7,7 @@ use super::{
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannelId, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
-    peer_exchange::{PexAnnouncer, PexController, PexDiscoverySender},
+    peer_exchange::{PexPeer, PexReceiver, PexRepository, PexSender},
     raw,
     runtime_id::PublicRuntimeId,
     server::Server,
@@ -43,6 +43,7 @@ pub(super) struct MessageBroker {
     dispatcher: MessageDispatcher,
     links: HashMap<LocalId, oneshot::Sender<()>>,
     request_limiter: Arc<Semaphore>,
+    pex_peer: PexPeer,
     monitor: StateMonitor,
     tracker: TrafficTracker,
     span: Span,
@@ -54,6 +55,7 @@ impl MessageBroker {
         that_runtime_id: PublicRuntimeId,
         stream: raw::Stream,
         permit: ConnectionPermit,
+        pex_peer: PexPeer,
         monitor: StateMonitor,
         tracker: TrafficTracker,
     ) -> Self {
@@ -70,6 +72,7 @@ impl MessageBroker {
             dispatcher: MessageDispatcher::new(),
             links: HashMap::default(),
             request_limiter: Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
+            pex_peer,
             monitor,
             tracker,
             span,
@@ -80,6 +83,8 @@ impl MessageBroker {
     }
 
     pub fn add_connection(&self, stream: raw::Stream, permit: ConnectionPermit) {
+        self.pex_peer
+            .handle_connection(permit.addr(), permit.released());
         self.dispatcher.bind(stream, permit)
     }
 
@@ -94,7 +99,7 @@ impl MessageBroker {
     pub fn create_link(
         &mut self,
         vault: Vault,
-        pex: &PexController,
+        pex_repo: &PexRepository,
         choke_manager: &choke::Manager,
     ) {
         let monitor = self.monitor.make_child(vault.monitor.name());
@@ -135,14 +140,16 @@ impl MessageBroker {
             role,
         );
 
+        let (pex_tx, pex_rx) = self.pex_peer.new_link(pex_repo);
+
         let mut link = Link {
             role,
             stream: self.dispatcher.open_recv(channel_id),
             sink: self.dispatcher.open_send(channel_id),
             vault,
             request_limiter: self.request_limiter.clone(),
-            pex_discovery_tx: pex.discovery_sender(),
-            pex_announcer: pex.announcer(self.that_runtime_id, self.dispatcher.connection_infos()),
+            pex_tx,
+            pex_rx,
             choker: choke_manager.new_choker(),
             monitor,
             tracker: self.tracker.clone(),
@@ -188,8 +195,8 @@ struct Link {
     sink: ContentSink,
     vault: Vault,
     request_limiter: Arc<Semaphore>,
-    pex_discovery_tx: PexDiscoverySender,
-    pex_announcer: PexAnnouncer,
+    pex_tx: PexSender,
+    pex_rx: PexReceiver,
     choker: choke::Choker,
     monitor: StateMonitor,
     tracker: TrafficTracker,
@@ -259,8 +266,8 @@ impl Link {
                 crypto_sink,
                 &self.vault,
                 self.request_limiter.clone(),
-                self.pex_discovery_tx.clone(),
-                &mut self.pex_announcer,
+                &mut self.pex_tx,
+                &mut self.pex_rx,
                 self.choker.clone(),
             )
             .await
@@ -297,8 +304,8 @@ async fn run_link(
     sink: EncryptingSink<'_>,
     repo: &Vault,
     request_limiter: Arc<Semaphore>,
-    pex_discovery_tx: PexDiscoverySender,
-    pex_announcer: &mut PexAnnouncer,
+    pex_tx: &mut PexSender,
+    pex_rx: &mut PexReceiver,
     choker: choke::Choker,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
@@ -309,9 +316,9 @@ async fn run_link(
     select! {
         flow = run_client(repo.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
         flow = run_server(repo.clone(), content_tx.clone(), request_rx, choker) => flow,
-        flow = recv_messages(stream, request_tx, response_tx, pex_discovery_tx) => flow,
+        flow = recv_messages(stream, request_tx, response_tx, pex_rx) => flow,
         flow = send_messages(content_rx, sink) => flow,
-        _ = pex_announcer.run(content_tx) => ControlFlow::Continue,
+        _ = pex_tx.run(content_tx) => ControlFlow::Continue,
     }
 }
 
@@ -320,7 +327,7 @@ async fn recv_messages(
     mut stream: DecryptingStream<'_>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
-    pex_discovery_tx: PexDiscoverySender,
+    pex_rx: &PexReceiver,
 ) -> ControlFlow {
     loop {
         let content = match stream.recv().await {
@@ -354,7 +361,7 @@ async fn recv_messages(
         match content {
             Content::Request(request) => request_tx.send(request).await.unwrap_or(()),
             Content::Response(response) => response_tx.send(response).await.unwrap_or(()),
-            Content::Pex(payload) => pex_discovery_tx.send(payload).await.unwrap_or(()),
+            Content::Pex(payload) => pex_rx.handle_message(payload).await,
         }
     }
 }

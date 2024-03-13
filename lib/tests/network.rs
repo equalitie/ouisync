@@ -3,6 +3,7 @@
 // These test mostly require QUIC / UDP which the simulator doesn't support yet.
 #![cfg(not(feature = "simulation"))]
 
+#[macro_use]
 mod common;
 
 use self::common::{actor, Env, Proto, DEFAULT_REPO, TEST_TIMEOUT};
@@ -66,9 +67,7 @@ fn peer_exchange_basics() {
 }
 
 #[test]
-// FIXME: peer exchange currently leaks addresses of peers with whom we don't share any repo.
-#[ignore]
-fn peer_exchange_reveals_only_peers_sharing_same_repository() {
+fn peer_exchange_discovers_only_peers_sharing_same_repository() {
     let mut env = Env::new();
     let proto = Proto::Quic; // PEX works only with QUIC
     let barrier = Arc::new(Barrier::new(4));
@@ -294,6 +293,7 @@ async fn expect_peer_not_known(network: &Network, peer_name: &str) {
     let peer_addr = actor::lookup_addr(peer_name).await;
 
     if let Some(info) = network.peer_info(peer_addr) {
+        error!("unexpected known peer {peer_name}: {info:?}");
         panic!("unexpected known peer {peer_name}: {info:?}");
     }
 }

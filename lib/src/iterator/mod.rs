@@ -43,15 +43,6 @@ pub(crate) struct IntoIntersection<T> {
     other: HashSet<T>,
 }
 
-impl<T> IntoIntersection<T> {
-    pub fn new(a: HashSet<T>, b: HashSet<T>) -> Self {
-        Self {
-            iter: a.into_iter(),
-            other: b,
-        }
-    }
-}
-
 impl<T> Iterator for IntoIntersection<T>
 where
     T: Eq + Hash,
