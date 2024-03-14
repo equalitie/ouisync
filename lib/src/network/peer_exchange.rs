@@ -13,11 +13,15 @@ use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
 use slab::Slab;
 use std::{
+    fmt,
     ops::Range,
     sync::{Arc, RwLock},
     time::Duration,
 };
-use tokio::{sync::mpsc, task, time};
+use tokio::{
+    sync::{mpsc, Notify},
+    task, time,
+};
 
 /// How often we send contacts to other peers. It's a range that the actual interval is randomly
 /// picked from so that the sends don't happen all at the same time.
@@ -32,6 +36,7 @@ pub(crate) struct PexPayload(HashSet<PeerAddr>);
 /// Entry point to the peer exchange.
 pub(crate) struct PexDiscovery {
     state: Arc<RwLock<State>>,
+    state_notify: Arc<Notify>,
     seen_peers: SeenPeers,
     discover_tx: mpsc::Sender<SeenPeer>,
     _round_task: ScopedJoinHandle<()>,
@@ -54,6 +59,7 @@ impl PexDiscovery {
 
         Self {
             state: Arc::new(RwLock::new(State::default())),
+            state_notify: Arc::new(Notify::new()),
             seen_peers,
             discover_tx,
             _round_task: round_task,
@@ -67,6 +73,7 @@ impl PexDiscovery {
         PexPeer {
             peer_id,
             state: self.state.clone(),
+            state_notify: self.state_notify.clone(),
             seen_peers: self.seen_peers.clone(),
             discover_tx: self.discover_tx.clone(),
         }
@@ -79,15 +86,16 @@ impl PexDiscovery {
         PexRepository {
             repo_id,
             state: self.state.clone(),
+            state_notify: self.state_notify.clone(),
         }
     }
 }
 
 /// Handle to manage the peer exchange for a single repository.
-#[derive(Clone)]
 pub(crate) struct PexRepository {
     repo_id: RepoId,
     state: Arc<RwLock<State>>,
+    state_notify: Arc<Notify>,
 }
 
 impl PexRepository {
@@ -97,12 +105,14 @@ impl PexRepository {
 
     pub fn set_enabled(&self, enabled: bool) {
         self.state.write().unwrap().repos[self.repo_id].enabled = enabled;
+        self.state_notify.notify_waiters();
     }
 }
 
 impl Drop for PexRepository {
     fn drop(&mut self) {
         self.state.write().unwrap().repos.remove(self.repo_id);
+        self.state_notify.notify_waiters();
     }
 }
 
@@ -110,11 +120,14 @@ impl Drop for PexRepository {
 pub(crate) struct PexPeer {
     peer_id: PeerId,
     state: Arc<RwLock<State>>,
+    state_notify: Arc<Notify>,
     seen_peers: SeenPeers,
     discover_tx: mpsc::Sender<SeenPeer>,
 }
 
 impl PexPeer {
+    /// Call this whenever new connection to this peer has been established. The `closed` should
+    /// trigger when the connection gets closed.
     pub fn handle_connection(&self, addr: PeerAddr, closed: AwaitDrop) {
         if !self.state.write().unwrap().peers[self.peer_id]
             .addrs
@@ -139,12 +152,13 @@ impl PexPeer {
         });
     }
 
-    /// Create a pair of (sender, receiver) to manage peer exchange for a single link.
+    /// Creates a pair of (sender, receiver) to manage peer exchange for a single link.
     pub fn new_link(&self, repo: &PexRepository) -> (PexSender, PexReceiver) {
         let tx = PexSender {
             repo_id: repo.repo_id,
             peer_id: self.peer_id,
             state: self.state.clone(),
+            state_notify: self.state_notify.clone(),
         };
 
         let rx = PexReceiver {
@@ -164,10 +178,12 @@ impl Drop for PexPeer {
     }
 }
 
+/// Sends contacts of other peers to this peer.
 pub(crate) struct PexSender {
     repo_id: RepoId,
     peer_id: PeerId,
     state: Arc<RwLock<State>>,
+    state_notify: Arc<Notify>,
 }
 
 impl PexSender {
@@ -180,8 +196,13 @@ impl PexSender {
         };
 
         loop {
-            let Some(addrs) = collector.collect() else {
-                break;
+            let addrs = match collector.collect() {
+                Ok(addrs) => addrs,
+                Err(CollectError::Disabled(notify)) => {
+                    notify.notified().await;
+                    continue;
+                }
+                Err(CollectError::Closed) => break,
             };
 
             if !addrs.is_empty() {
@@ -208,14 +229,25 @@ impl PexSender {
     }
 }
 
+/// Collects contacts of other peers to be sent to this peer.
 pub(crate) struct PexCollector<'a>(&'a PexSender);
 
 impl<'a> PexCollector<'a> {
-    fn collect(&self) -> Option<HashSet<PeerAddr>> {
+    fn collect(&self) -> Result<HashSet<PeerAddr>, CollectError> {
         let state = self.0.state.read().unwrap();
 
-        let repo = state.repos.get(self.0.repo_id)?;
-        let peer = state.peers.get(self.0.peer_id)?;
+        let repo = state
+            .repos
+            .get(self.0.repo_id)
+            .ok_or(CollectError::Closed)?;
+        let peer = state
+            .peers
+            .get(self.0.peer_id)
+            .ok_or(CollectError::Closed)?;
+
+        if !repo.enabled {
+            return Err(CollectError::Disabled(self.0.state_notify.clone()));
+        }
 
         // If two peers are on the same LAN we exchange also their local addresses. Otherwise we
         // exchange only their global addresses.
@@ -237,7 +269,7 @@ impl<'a> PexCollector<'a> {
             .copied()
             .collect();
 
-        Some(addrs)
+        Ok(addrs)
     }
 }
 
@@ -245,6 +277,27 @@ impl<'a> Drop for PexCollector<'a> {
     fn drop(&mut self) {
         if let Some(repo) = self.0.state.write().unwrap().repos.get_mut(self.0.repo_id) {
             repo.peers.remove(&self.0.peer_id);
+        }
+    }
+}
+
+pub(crate) enum CollectError {
+    /// All the connections to the peer have been closed or the repository has been unlinked.
+    ///
+    /// Note this error should not happen in practice because in both of those cases the link should
+    /// be removed which removes the `PexSender` as well and so there should be no way to call
+    /// `collect` in the first place.
+    Closed,
+    /// Peer exchange is disabled for the repository. The `Notify` can be used to wait until it gets
+    /// enabled.
+    Disabled(Arc<Notify>),
+}
+
+impl fmt::Debug for CollectError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Closed => write!(f, "Closed"),
+            Self::Disabled(_) => write!(f, "Disabled(_)"),
         }
     }
 }
@@ -321,7 +374,10 @@ mod tests {
         let discovery = PexDiscovery::new(discover_tx);
 
         let repo_0 = discovery.new_repository();
+        repo_0.set_enabled(true);
+
         let repo_1 = discovery.new_repository();
+        repo_1.set_enabled(true);
 
         let peer_a = discovery.new_peer();
         let addr_a = make_peer_addr();
