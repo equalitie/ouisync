@@ -274,10 +274,6 @@ impl Drop for ConnectionPermit {
 pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 
 impl ConnectionPermitHalf {
-    pub fn info(&self) -> ConnectionInfo {
-        self.0.info
-    }
-
     pub fn id(&self) -> PermitId {
         self.0.id
     }

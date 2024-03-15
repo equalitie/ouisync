@@ -18,7 +18,7 @@ mod message;
 mod message_broker;
 mod message_dispatcher;
 mod message_io;
-mod peer_exchange;
+mod peer_exchange; // TODO: replace with v2
 mod peer_info;
 mod peer_source;
 mod peer_state;
@@ -53,7 +53,7 @@ use self::{
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
-    peer_exchange::{PexController, PexDiscovery, PexPayload},
+    peer_exchange::{PexDiscovery, PexRepository},
     protocol::{Version, MAGIC, VERSION},
     seen_peers::{SeenPeer, SeenPeers},
     stun::StunClients,
@@ -111,13 +111,13 @@ impl Network {
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
         let dht_discovery = DhtDiscovery::new(None, None, dht_contacts, monitor.make_child("DHT"));
-        let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
-
-        let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
-
         // TODO: do we need unbounded channel here?
         let (dht_discovery_tx, dht_discovery_rx) = mpsc::unbounded_channel();
+
+        let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
+
         let (pex_discovery_tx, pex_discovery_rx) = mpsc::channel(1);
+        let pex_discovery = PexDiscovery::new(pex_discovery_tx);
 
         let (on_protocol_mismatch_tx, _) = uninitialized_watch::channel();
 
@@ -128,6 +128,8 @@ impl Network {
 
         let connections_monitor = monitor.make_child("Connections");
         let peers_monitor = monitor.make_child("Peers");
+
+        let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
 
         let inner = Arc::new(Inner {
             main_monitor: monitor,
@@ -150,7 +152,7 @@ impl Network {
             )),
             dht_discovery,
             dht_discovery_tx,
-            pex_discovery_tx,
+            pex_discovery,
             stun_clients: StunClients::new(),
             connection_deduplicator: ConnectionDeduplicator::new(),
             on_protocol_mismatch_tx,
@@ -322,10 +324,7 @@ impl Network {
             None
         };
 
-        let pex = PexController::new(
-            self.inner.connection_deduplicator.on_change(),
-            self.inner.pex_discovery_tx.clone(),
-        );
+        let pex = self.inner.pex_discovery.new_repository();
         pex.set_enabled(pex_enabled);
 
         let choke_manager = choke::Manager::new();
@@ -438,7 +437,7 @@ impl Drop for Registration {
 struct RegistrationHolder {
     vault: Vault,
     dht: Option<dht_discovery::LookupRequest>,
-    pex: PexController,
+    pex: PexRepository,
     choke_manager: choke::Manager,
 }
 
@@ -456,7 +455,7 @@ struct Inner {
     local_discovery_state: BlockingMutex<ComponentState<ScopedAbortHandle>>,
     dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
-    pex_discovery_tx: mpsc::Sender<PexPayload>,
+    pex_discovery: PexDiscovery,
     stun_clients: StunClients,
     connection_deduplicator: ConnectionDeduplicator,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
@@ -476,7 +475,7 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, repo: Vault, pex: &PexController, choke_manager: &choke::Manager) {
+    fn create_link(&mut self, repo: Vault, pex: &PexRepository, choke_manager: &choke::Manager) {
         if let Some(brokers) = &mut self.message_brokers {
             for broker in brokers.values_mut() {
                 broker.create_link(repo.clone(), pex, choke_manager)
@@ -641,10 +640,8 @@ impl Inner {
         }
     }
 
-    async fn run_peer_exchange(self: Arc<Self>, discovery_rx: mpsc::Receiver<PexPayload>) {
-        let mut discovery = PexDiscovery::new(discovery_rx);
-
-        while let Some(peer) = discovery.recv().await {
+    async fn run_peer_exchange(self: Arc<Self>, mut discovery_rx: mpsc::Receiver<SeenPeer>) {
+        while let Some(peer) = discovery_rx.recv().await {
             if self.is_shutdown() {
                 break;
             }
@@ -852,6 +849,7 @@ impl Inner {
                             that_runtime_id,
                             stream,
                             permit,
+                            self.pex_discovery.new_peer(),
                             monitor,
                             self.traffic_tracker.clone(),
                         )

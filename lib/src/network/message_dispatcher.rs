@@ -1,16 +1,13 @@
 //! Utilities for sending and receiving messages across the network.
 
 use super::{
-    connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf, PermitId},
+    connection::{ConnectionPermit, ConnectionPermitHalf, PermitId},
     keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{Message, MessageChannelId, Type},
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
-use crate::{
-    collections::{hash_map, HashMap, HashSet},
-    iterator::IntoIntersection,
-};
+use crate::collections::{hash_map, HashMap};
 use async_trait::async_trait;
 use deadlock::BlockingMutex;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
@@ -74,14 +71,6 @@ impl MessageDispatcher {
         ContentSink {
             channel,
             state: self.send.clone(),
-        }
-    }
-
-    /// Returns the active connections of this dispatcher.
-    pub fn connection_infos(&self) -> LiveConnectionInfoSet {
-        LiveConnectionInfoSet {
-            recv: self.recv.clone(),
-            send: self.send.clone(),
         }
     }
 
@@ -245,20 +234,7 @@ pub(super) struct ChannelClosed;
 /// *) It means it gets automatically updated as connections are added/removed to/from the
 /// dispatcher.
 #[derive(Clone)]
-pub(super) struct LiveConnectionInfoSet {
-    recv: Arc<RecvState>,
-    send: Arc<MultiSink>,
-}
-
-impl LiveConnectionInfoSet {
-    /// Returns the current infos.
-    pub fn iter(&self) -> impl Iterator<Item = ConnectionInfo> {
-        let recv = self.recv.multi_stream.connection_infos();
-        let send = self.send.connection_infos();
-
-        IntoIntersection::new(recv, send)
-    }
-}
+pub(super) struct LiveConnectionInfoSet {}
 
 struct ChannelQueue {
     reference_count: usize,
@@ -366,10 +342,6 @@ impl PermittedStream {
             permit,
         }
     }
-
-    fn connection_info(&self) -> ConnectionInfo {
-        self.permit.info()
-    }
 }
 
 impl Stream for PermittedStream {
@@ -387,19 +359,15 @@ impl Stream for PermittedStream {
 // Contains a connection permit which gets released on drop.
 struct PermittedSink {
     inner: KeepAliveSink<raw::OwnedWriteHalf>,
-    permit: ConnectionPermitHalf,
+    _permit: ConnectionPermitHalf,
 }
 
 impl PermittedSink {
     fn new(stream: raw::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
             inner: KeepAliveSink::new(MessageSink::new(stream), KEEP_ALIVE_SEND_INTERVAL),
-            permit,
+            _permit: permit,
         }
-    }
-
-    fn connection_info(&self) -> ConnectionInfo {
-        self.permit.info()
     }
 }
 
@@ -483,16 +451,6 @@ impl MultiStream {
 
     fn is_empty(&self) -> bool {
         self.inner.lock().unwrap().streams.is_empty()
-    }
-
-    fn connection_infos(&self) -> HashSet<ConnectionInfo> {
-        self.inner
-            .lock()
-            .unwrap()
-            .streams
-            .iter()
-            .map(|stream| stream.connection_info())
-            .collect()
     }
 }
 
@@ -606,15 +564,6 @@ impl MultiSink {
 
     fn is_empty(&self) -> bool {
         self.sinks.lock().unwrap().is_empty()
-    }
-
-    fn connection_infos(&self) -> HashSet<ConnectionInfo> {
-        self.sinks
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|sink| sink.connection_info())
-            .collect()
     }
 }
 
