@@ -9,6 +9,7 @@ use std::{
         RwLock,
     },
 };
+use thiserror::Error;
 
 pub struct Registry<T: 'static>(HashMap<Handle<T>, T>);
 
@@ -142,13 +143,6 @@ impl<T> fmt::Debug for Handle<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("invalid handle")]
 pub struct InvalidHandle;
-
-impl fmt::Display for InvalidHandle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid handle")
-    }
-}
-
-impl std::error::Error for InvalidHandle {}

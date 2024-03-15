@@ -62,6 +62,16 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositorySubscribe(handle) => {
                 repository::subscribe(&self.state, &context.notification_tx, handle)?.into()
             }
+            Request::RepositoryIsSyncEnabled(handle) => {
+                repository::is_sync_enabled(&self.state, handle)?.into()
+            }
+            Request::RepositorySetSyncEnabled {
+                repository,
+                enabled,
+            } => {
+                repository::set_sync_enabled(&self.state, repository, enabled).await?;
+                ().into()
+            }
             Request::RepositorySetAccess {
                 repository,
                 read,

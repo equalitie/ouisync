@@ -35,6 +35,11 @@ pub(crate) enum Request {
     },
     RepositoryClose(RepositoryHandle),
     RepositorySubscribe(RepositoryHandle),
+    RepositoryIsSyncEnabled(RepositoryHandle),
+    RepositorySetSyncEnabled {
+        repository: RepositoryHandle,
+        enabled: bool,
+    },
     RepositoryRequiresLocalSecretForReading(RepositoryHandle),
     RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
     RepositorySetAccess {

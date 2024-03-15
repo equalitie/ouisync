@@ -389,6 +389,17 @@ class Repository {
     await _client.invoke('repository_close', _handle);
   }
 
+  /// Checks whether syncing with other replicas is enabled.
+  Future<bool> get isSyncEnabled =>
+      _client.invoke<bool>('repository_is_sync_enabled', _handle);
+
+  /// Enables or disables syncing with other replicas.
+  Future<void> setSyncEnabled(bool enabled) =>
+      _client.invoke('repository_set_sync_enabled', {
+        'repository': _handle,
+        'enabled': enabled,
+      });
+
   /// Sets, unsets or changes local secrets for accessing the repository or disables the given
   /// access mode.
   Future<void> setAccess({

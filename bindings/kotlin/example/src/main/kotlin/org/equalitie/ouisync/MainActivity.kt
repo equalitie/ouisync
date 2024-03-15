@@ -140,6 +140,8 @@ class AppViewModel(private val configDir: String, private val storeDir: String) 
             shareToken = shareToken,
         )
 
+        repo.setSyncEnabled(true)
+
         repositories = repositories + (name to repo)
     }
 

@@ -14,17 +14,36 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     mem,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
+use thiserror::Error;
 use tokio::sync::{broadcast::error::RecvError, Notify};
 
 pub(crate) struct RepositoryHolder {
     pub store_path: PathBuf,
     pub repository: Arc<Repository>,
-    pub registration: Registration,
+    pub registration: Mutex<Option<Registration>>,
+}
+
+impl RepositoryHolder {
+    fn with_registration<F, R>(&self, f: F) -> Result<R, Error>
+    where
+        F: FnOnce(&Registration) -> R,
+    {
+        self.registration
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(f)
+            .ok_or_else(|| RegistrationRequired.into())
+    }
 }
 
 pub(crate) type RepositoryHandle = Handle<Arc<RepositoryHolder>>;
+
+#[derive(Debug, Error)]
+#[error("operation requires network registration")]
+pub(crate) struct RegistrationRequired;
 
 pub(crate) async fn create(
     state: &State,
@@ -45,11 +64,10 @@ pub(crate) async fn create(
     )
     .await?;
 
-    let registration = state.network.register(repository.handle()).await;
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration,
+        registration: Mutex::new(None),
     };
 
     state
@@ -91,11 +109,10 @@ pub(crate) async fn open(
     )
     .await?;
 
-    let registration = state.network.register(repository.handle()).await;
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration,
+        registration: Mutex::new(None),
     };
 
     state
@@ -151,6 +168,34 @@ pub async fn close_all_repositories(state: &State) {
             );
         }
     }
+}
+
+pub(crate) fn is_sync_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+    Ok(state
+        .repositories
+        .get(handle)?
+        .registration
+        .lock()
+        .unwrap()
+        .is_some())
+}
+
+pub(crate) async fn set_sync_enabled(
+    state: &State,
+    handle: RepositoryHandle,
+    enabled: bool,
+) -> Result<(), Error> {
+    let holder = state.repositories.get(handle)?;
+
+    let registration = if enabled {
+        Some(state.network.register(holder.repository.handle()).await)
+    } else {
+        None
+    };
+
+    *holder.registration.lock().unwrap() = registration;
+
+    Ok(())
 }
 
 pub(crate) fn credentials(state: &State, handle: RepositoryHandle) -> Result<Vec<u8>, Error> {
@@ -288,11 +333,10 @@ pub(crate) fn subscribe(
 }
 
 pub(crate) fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
-    Ok(state
+    state
         .repositories
         .get(handle)?
-        .registration
-        .is_dht_enabled())
+        .with_registration(|reg| reg.is_dht_enabled())
 }
 
 pub(crate) async fn set_dht_enabled(
@@ -303,18 +347,16 @@ pub(crate) async fn set_dht_enabled(
     state
         .repositories
         .get(handle)?
-        .registration
-        .set_dht_enabled(enabled)
+        .with_registration(|reg| reg.set_dht_enabled(enabled))?
         .await;
     Ok(())
 }
 
 pub(crate) fn is_pex_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
-    Ok(state
+    state
         .repositories
         .get(handle)?
-        .registration
-        .is_pex_enabled())
+        .with_registration(|reg| reg.is_pex_enabled())
 }
 
 pub(crate) async fn set_pex_enabled(
@@ -325,8 +367,7 @@ pub(crate) async fn set_pex_enabled(
     state
         .repositories
         .get(handle)?
-        .registration
-        .set_pex_enabled(enabled)
+        .with_registration(|reg| reg.set_pex_enabled(enabled))?
         .await;
     Ok(())
 }

@@ -1,4 +1,4 @@
-use crate::{registry::InvalidHandle, session::SessionError};
+use crate::{registry::InvalidHandle, repository::RegistrationRequired, session::SessionError};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_bridge::{
     config::ConfigError,
@@ -158,6 +158,12 @@ impl ToErrorCode for MountError {
 impl ToErrorCode for InvalidHandle {
     fn to_error_code(&self) -> ErrorCode {
         ErrorCode::InvalidHandle
+    }
+}
+
+impl ToErrorCode for RegistrationRequired {
+    fn to_error_code(&self) -> ErrorCode {
+        ErrorCode::OperationNotSupported
     }
 }
 
