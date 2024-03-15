@@ -61,6 +61,9 @@ class RepositoryTest {
     @Test
     fun dht() = runTest {
         withRepo {
+            // Syncing is required to access DHT status
+            it.setSyncEnabled(true)
+
             assertFalse(it.isDhtEnabled())
             it.setDhtEnabled(true)
             assertTrue(it.isDhtEnabled())
@@ -70,6 +73,9 @@ class RepositoryTest {
     @Test
     fun pex() = runTest {
         withRepo {
+            // Syncing is required to access PEX status
+            it.setSyncEnabled(true)
+
             assertFalse(it.isPexEnabled())
             it.setPexEnabled(true)
             assertTrue(it.isPexEnabled())

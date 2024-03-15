@@ -111,6 +111,18 @@ class Repository private constructor(internal val handle: Long, internal val cli
         client.subscribe(RepositorySubscribe(handle))
 
     /**
+     * Returns whether syncing with other replicas is enabled.
+     */
+    suspend fun isSyncEnabled() = client.invoke(RepositoryIsSyncEnabled(handle))
+
+    /**
+     * Enabled or disables syncing with other replicas.
+     *
+     * Note syncing is initially disabled.
+     */
+    suspend fun setSyncEnabled(enabled: Boolean) = client.invoke(RepositorySetSyncEnabled(handle, enabled))
+
+    /**
      * Returns the info-hash used to announce the repo on the Bittorrent DHT.
      *
      * Note the announce happens automatically. This function exists just for information/debugging

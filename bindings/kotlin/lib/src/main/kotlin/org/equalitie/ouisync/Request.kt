@@ -82,6 +82,21 @@ internal class RepositorySubscribe : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
+internal class RepositoryIsSyncEnabled : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class RepositorySetSyncEnabled(val repository: Long, val enabled: Boolean) : Request() {
+    override fun packContent(packer: MessagePacker) {
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "enabled" to enabled,
+            ),
+        )
+    }
+}
+
 internal class RepositorySetAccess(
     val repository: Long,
     val read: AccessChange?,

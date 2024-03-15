@@ -26,6 +26,7 @@ void main() {
       readSecret: null,
       writeSecret: null,
     );
+    await repo1.setSyncEnabled(true);
     final token = await repo1.createShareToken(accessMode: AccessMode.write);
 
     repo2 = await Repository.create(
@@ -35,6 +36,7 @@ void main() {
       readSecret: null,
       writeSecret: null,
     );
+    await repo2.setSyncEnabled(true);
 
     await session1.bindNetwork(quicV4: "127.0.0.1:0");
     await session2.bindNetwork(quicV4: "127.0.0.1:0");

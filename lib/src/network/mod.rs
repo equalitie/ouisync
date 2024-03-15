@@ -374,20 +374,28 @@ pub struct Registration {
     key: usize,
 }
 
+// Note the async functions in this impl all return futures that don't borrow from `self`. This is
+// useful when the `Registration` is inside a blocking `Mutex` - one can lock the mutex, call the
+// function, then unlock it and only then await the future to avoid holding the mutex lock across
+// awaits.
 impl Registration {
-    pub async fn set_dht_enabled(&self, enabled: bool) {
-        self.set_metadata_bool(DHT_ENABLED, enabled).await;
+    pub fn set_dht_enabled(&self, enabled: bool) -> impl Future<Output = ()> + 'static {
+        let inner = self.inner.clone();
+        let key = self.key;
 
-        let mut state = self.inner.state.lock().unwrap();
-        let holder = &mut state.registry[self.key];
+        async move {
+            set_metadata_bool(&inner, key, DHT_ENABLED, enabled).await;
 
-        if enabled {
-            holder.dht = Some(
-                self.inner
-                    .start_dht_lookup(repository_info_hash(holder.vault.repository_id())),
-            );
-        } else {
-            holder.dht = None;
+            let mut state = inner.state.lock().unwrap();
+            let holder = &mut state.registry[key];
+
+            if enabled {
+                holder.dht = Some(
+                    inner.start_dht_lookup(repository_info_hash(holder.vault.repository_id())),
+                );
+            } else {
+                holder.dht = None;
+            }
         }
     }
 
@@ -400,23 +408,21 @@ impl Registration {
         state.registry[self.key].dht.is_some()
     }
 
-    pub async fn set_pex_enabled(&self, enabled: bool) {
-        self.set_metadata_bool(PEX_ENABLED, enabled).await;
+    pub fn set_pex_enabled(&self, enabled: bool) -> impl Future<Output = ()> + 'static {
+        let inner = self.inner.clone();
+        let key = self.key;
 
-        let state = self.inner.state.lock().unwrap();
-        state.registry[self.key].pex.set_enabled(enabled);
+        async move {
+            set_metadata_bool(&inner, key, PEX_ENABLED, enabled).await;
+
+            let state = inner.state.lock().unwrap();
+            state.registry[key].pex.set_enabled(enabled);
+        }
     }
 
     pub fn is_pex_enabled(&self) -> bool {
         let state = self.inner.state.lock().unwrap();
         state.registry[self.key].pex.is_enabled()
-    }
-
-    async fn set_metadata_bool(&self, name: &str, value: bool) {
-        let metadata = self.inner.state.lock().unwrap().registry[self.key]
-            .vault
-            .metadata();
-        metadata.set(name, value).await.ok();
     }
 }
 
@@ -432,6 +438,11 @@ impl Drop for Registration {
             }
         }
     }
+}
+
+async fn set_metadata_bool(inner: &Inner, key: usize, name: &str, value: bool) {
+    let metadata = inner.state.lock().unwrap().registry[key].vault.metadata();
+    metadata.set(name, value).await.ok();
 }
 
 struct RegistrationHolder {
