@@ -200,6 +200,16 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .await?
                     .into()
             }
+            Request::RepositoryGetMetadata { repository, key } => {
+                repository::metadata_get(&self.state, repository, key)
+                    .await?
+                    .into()
+            }
+            Request::RepositorySetMetadata { repository, edits } => {
+                repository::metadata_set(&self.state, repository, edits)
+                    .await?
+                    .into()
+            }
             Request::DirectoryCreate { repository, path } => {
                 directory::create(&self.state, repository, path)
                     .await?

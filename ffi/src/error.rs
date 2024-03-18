@@ -1,4 +1,8 @@
-use crate::{registry::InvalidHandle, repository::RegistrationRequired, session::SessionError};
+use crate::{
+    registry::InvalidHandle,
+    repository::{EntryChanged, RegistrationRequired},
+    session::SessionError,
+};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_bridge::{
     config::ConfigError,
@@ -54,6 +58,8 @@ pub enum ErrorCode {
     ConnectionLost = 14,
     /// Invalid handle to a resource (e.g., Repository, File, ...)
     InvalidHandle = 15,
+    /// Entry has been changed and no longer matches the expected value
+    EntryChanged = 16,
 
     VfsInvalidMountPoint = 2048,
     VfsDriverInstall = 2048 + 1,
@@ -105,6 +111,12 @@ impl ToErrorCode for ouisync_lib::Error {
                 ErrorCode::Other
             }
         }
+    }
+}
+
+impl ToErrorCode for ouisync_lib::StoreError {
+    fn to_error_code(&self) -> ErrorCode {
+        ErrorCode::Store
     }
 }
 
@@ -164,6 +176,12 @@ impl ToErrorCode for InvalidHandle {
 impl ToErrorCode for RegistrationRequired {
     fn to_error_code(&self) -> ErrorCode {
         ErrorCode::OperationNotSupported
+    }
+}
+
+impl ToErrorCode for EntryChanged {
+    fn to_error_code(&self) -> ErrorCode {
+        ErrorCode::EntryChanged
     }
 }
 

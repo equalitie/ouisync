@@ -173,6 +173,43 @@ void main() {
       );
       expect(await repo.accessMode, equals(AccessMode.write));
     });
+
+    test('metadata', () async {
+      expect(await repo.getMetadata('test.foo'), isNull);
+      expect(await repo.getMetadata('test.bar'), isNull);
+
+      await repo.setMetadata({
+        'test.foo': (oldValue: null, newValue: 'foo value 1'),
+        'test.bar': (oldValue: null, newValue: 'bar value 1'),
+      });
+
+      expect(await repo.getMetadata('test.foo'), equals('foo value 1'));
+      expect(await repo.getMetadata('test.bar'), equals('bar value 1'));
+
+      await repo.setMetadata({
+        'test.foo': (oldValue: 'foo value 1', newValue: 'foo value 2'),
+        'test.bar': (oldValue: 'bar value 1', newValue: null),
+      });
+
+      expect(await repo.getMetadata('test.foo'), equals('foo value 2'));
+      expect(await repo.getMetadata('test.bar'), isNull);
+
+      // Old value mismatch
+      await expectLater(
+        repo.setMetadata({
+          'test.foo': (oldValue: 'foo value 1', newValue: 'foo value 3'),
+        }),
+        throwsA(
+          isA<Error>().having(
+            (e) => e.code,
+            'code',
+            equals(ErrorCode.entryChanged),
+          ),
+        ),
+      );
+
+      expect(await repo.getMetadata('test.foo'), equals('foo value 2'));
+    });
   });
 
   test('parse invalid share token', () async {
