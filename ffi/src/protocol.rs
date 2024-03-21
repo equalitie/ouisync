@@ -1,5 +1,8 @@
 use crate::{
-    directory::Directory, file::FileHandle, registry::Handle, repository::RepositoryHandle,
+    directory::Directory,
+    file::FileHandle,
+    registry::Handle,
+    repository::{MetadataEdit, RepositoryHandle},
     state::TaskHandle,
 };
 use camino::Utf8PathBuf;
@@ -100,6 +103,14 @@ pub(crate) enum Request {
         host: String,
     },
     RepositoryMountAll(PathBuf),
+    RepositoryGetMetadata {
+        repository: RepositoryHandle,
+        key: String,
+    },
+    RepositorySetMetadata {
+        repository: RepositoryHandle,
+        edits: Vec<MetadataEdit>,
+    },
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),

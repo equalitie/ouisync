@@ -10,6 +10,7 @@ use ouisync_lib::{
     path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository,
     SetLocalSecret, ShareToken,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, HashMap},
     mem,
@@ -44,6 +45,10 @@ pub(crate) type RepositoryHandle = Handle<Arc<RepositoryHolder>>;
 #[derive(Debug, Error)]
 #[error("operation requires network registration")]
 pub(crate) struct RegistrationRequired;
+
+#[derive(Debug, Error)]
+#[error("entry has been changed")]
+pub(crate) struct EntryChanged;
 
 pub(crate) async fn create(
     state: &State,
@@ -458,6 +463,67 @@ pub(crate) async fn mount_all(state: &State, mount_point: PathBuf) -> Result<(),
         .await?;
 
     Ok(())
+}
+
+/// Reads a metadata entry
+pub(crate) async fn metadata_get(
+    state: &State,
+    handle: RepositoryHandle,
+    key: String,
+) -> Result<Option<String>, Error> {
+    Ok(state
+        .repositories
+        .get(handle)?
+        .repository
+        .metadata()
+        .get(&key)
+        .await?)
+}
+
+/// Atomically updates multiple metadata entries
+pub(crate) async fn metadata_set(
+    state: &State,
+    handle: RepositoryHandle,
+    edits: Vec<MetadataEdit>,
+) -> Result<(), Error> {
+    let mut tx = state
+        .repositories
+        .get(handle)?
+        .repository
+        .metadata()
+        .write()
+        .await?;
+
+    for edit in edits {
+        if tx.get(&edit.key).await? != edit.old {
+            return Err(EntryChanged.into());
+        }
+
+        if let Some(new) = edit.new {
+            tx.set(&edit.key, new).await?;
+        } else {
+            tx.remove(&edit.key).await?;
+        }
+    }
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// Edit of a single metadata entry.
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub(crate) struct MetadataEdit {
+    /// The key of the entry.
+    pub key: String,
+    /// The current value of the entry or `None` if the entry does not exist yet. This is used for
+    /// concurrency control - if the current value is different from this it's assumed it has been
+    /// modified by some other task and the whole `RepositorySetMetadata` operation is rolled back.
+    /// If that happens, the user should read the current value again, adjust the new value if
+    /// needed and retry the operation.
+    pub old: Option<String>,
+    /// The value to set the entry to or `None` to remove the entry.
+    pub new: Option<String>,
 }
 
 /// Registry of opened repositories.

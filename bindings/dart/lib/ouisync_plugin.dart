@@ -573,6 +573,26 @@ class Repository {
   Future<PasswordSalt> getWritePasswordSalt() => _client
       .invoke<Uint8List>("get_write_password_salt", _handle)
       .then((bytes) => PasswordSalt(bytes));
+
+  Future<String?> getMetadata(String key) =>
+      _client.invoke<String?>('repository_get_metadata', {
+        'repository': _handle,
+        'key': key,
+      });
+
+  Future<void> setMetadata(
+    Map<String, ({String? oldValue, String? newValue})> edits,
+  ) =>
+      _client.invoke<void>('repository_set_metadata', {
+        'repository': _handle,
+        'edits': edits.entries
+            .map((entry) => {
+                  'key': entry.key,
+                  'old': entry.value.oldValue,
+                  'new': entry.value.newValue,
+                })
+            .toList(),
+      });
 }
 
 sealed class AccessChange {
