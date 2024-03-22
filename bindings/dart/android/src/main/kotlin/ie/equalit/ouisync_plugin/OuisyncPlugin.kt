@@ -33,6 +33,7 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     private var channel : MethodChannel? = null
     private val channelLock = Any()
     private var channelRefCount = 0
+    private var isHandlingIntent = false
 
     fun invokeMethod(method: String, arguments: Any?, callback: MethodChannel.Result? = null) {
       channel.let {
@@ -47,6 +48,8 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
   override fun onAttachedToActivity(activityPluginBinding: ActivityPluginBinding) {
     Log.d(TAG, "onAttachedToActivity");
+
+    isHandlingIntent = true
     activity = activityPluginBinding.activity
   }
 
@@ -83,12 +86,16 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
     Log.d(TAG, "onDetachedFromEngine");
 
-    // When the user requests for the app to manage it's own battery
-    // optimization permissions (e.g. when using the `flutter_background`
-    // plugin https://pub.dev/packages/flutter_background), then killing the
-    // app will not stop the native code execution and we have to do it
-    // manually.
-    invokeMethod("stopSession", null)
+    Log.d(TAG, "If we are in a new activity, most likely it is for handling a share intent from a different task/process. We can't stop the session in the original task")
+    if (!isHandlingIntent) {
+      // When the user requests for the app to manage it's own battery
+      // optimization permissions (e.g. when using the `flutter_background`
+      // plugin https://pub.dev/packages/flutter_background), then killing the
+      // app will not stop the native code execution and we have to do it
+      // manually.
+      Log.d(TAG, "onDetachedFromEngine: closing Ouisync session");
+      invokeMethod("stopSession", null)
+    } else isHandlingIntent = false
 
     synchronized(channelLock) {
       channelRefCount--
