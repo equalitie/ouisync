@@ -5,9 +5,10 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.os.Environment
-import android.webkit.MimeTypeMap
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -15,6 +16,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
+import java.util.concurrent.CountDownLatch
 
 /** OuisyncPlugin */
 class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
@@ -23,61 +25,78 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   /// This local reference serves to register the plugin with the Flutter Engine and unregister it
   /// when the Flutter Engine is detached from the Activity
   var activity : Activity? = null
+  var channel : MethodChannel? = null
 
   companion object {
     private val TAG = OuisyncPlugin::class.java.simpleName
+    private const val CHANNEL_NAME = "ie.equalit.ouisync_plugin"
 
-    private const val CHANNEL_NAME = "ouisync_plugin"
+    private var channels = HashSet<MethodChannel>()
 
-    /// The channel needs to be static so we can access it from `PipeProvider` but we need to make
-    /// sure we only create/destroy it once even when there are multiple `OuisyncPlugin` instances.
-    /// That's why we use the explicit ref count.
-    private var channel : MethodChannel? = null
-    private val channelLock = Any()
-    private var channelRefCount = 0
-
-    fun invokeMethod(method: String, arguments: Any?, callback: MethodChannel.Result? = null) {
-      channel.let {
-        if (it != null) {
-          it.invokeMethod(method, arguments, callback)
-        } else {
-          callback?.error("not attached to engine", null, null)
-        }
+    // Each instance of this class has its own method channel, but one of them is also accessible
+    // via this getter. Only those instances that are currently attached to an activity can have
+    // their channel shared here. This is because an instance can also be attached to a Service
+    // which might not have created the other (dart) end of the channel and so such channel would
+    // not be usable.
+    val sharedChannel: MethodChannel?
+      get() = synchronized(channels) {
+        channels.firstOrNull()
       }
+
+    private fun enableSharingForChannel(channel: MethodChannel) = synchronized(channels) {
+      channels.add(channel)
+    }
+
+    private fun disableSharingForChannel(channel: MethodChannel) = synchronized(channels) {
+      channels.remove(channel)
     }
   }
 
-  override fun onAttachedToActivity(activityPluginBinding: ActivityPluginBinding) {
+  override fun onAttachedToActivity(binding: ActivityPluginBinding) {
     Log.d(TAG, "onAttachedToActivity");
-    activity = activityPluginBinding.activity
-  }
+    activity = binding.activity
 
-  override fun onDetachedFromActivityForConfigChanges() {
-    Log.d(TAG, "onDetachedFromActivityForConfigChanges");
-    activity = null
-  }
-
-  override fun onReattachedToActivityForConfigChanges(activityPluginBinding: ActivityPluginBinding) {
-    Log.d(TAG, "onReattachedToActivityForConfigChanges");
-    activity = activityPluginBinding.activity
+    channel?.let {
+      enableSharingForChannel(it)
+    }
   }
 
   override fun onDetachedFromActivity() {
     Log.d(TAG, "onDetachedFromActivity");
     activity = null
+
+    channel?.let {
+      disableSharingForChannel(it)
+    }
+
+    // TODO: We are no longer using `flutter_background` and this method is never called on app
+    // termination (e.g., when the user swipes off all its activities). Figure out how to handle
+    // this. Original comment follows:
+    //
+    // When the user requests for the app to manage it's own battery
+    // optimization permissions (e.g. when using the `flutter_background`
+    // plugin https://pub.dev/packages/flutter_background), then killing the
+    // app will not stop the native code execution and we have to do it
+    // manually.
+    channel?.invokeMethod("stopSession", null)
   }
 
-  override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
+  override fun onDetachedFromActivityForConfigChanges() {
+    onDetachedFromActivity()
+  }
+
+  override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+    onAttachedToActivity(binding)
+  }
+
+  override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
     Log.d(TAG, "onAttachedToEngine");
 
-    synchronized(channelLock) {
-      channelRefCount++
+    channel = MethodChannel(binding.binaryMessenger, CHANNEL_NAME).also {
+      it.setMethodCallHandler(this)
 
-      if (channelRefCount == 1) {
-        Log.d(TAG, "create method channel")
-
-        channel = MethodChannel(flutterPluginBinding.binaryMessenger, CHANNEL_NAME)
-        channel?.setMethodCallHandler(this)
+      if (activity != null) {
+        enableSharingForChannel(it)
       }
     }
   }
@@ -85,22 +104,12 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
     Log.d(TAG, "onDetachedFromEngine");
 
-    // When the user requests for the app to manage it's own battery
-    // optimization permissions (e.g. when using the `flutter_background`
-    // plugin https://pub.dev/packages/flutter_background), then killing the
-    // app will not stop the native code execution and we have to do it
-    // manually.
-    invokeMethod("stopSession", null)
-
-    synchronized(channelLock) {
-      channelRefCount--
-
-      if (channelRefCount == 0) {
-        Log.d(TAG, "destroy method channel")
-
-        channel?.setMethodCallHandler(null)
-      }
+    channel?.let {
+      disableSharingForChannel(it)
+      it.setMethodCallHandler(null)
     }
+
+    channel = null
   }
 
   override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -134,28 +143,13 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     val authority = arguments["authority"]
     val path = arguments["path"]
     val size = arguments["size"]
-    val useDefaultApp = arguments["useDefaultApp"]
-
-    val extension = getFileExtension(path as String)
-    val mimeType = getMimeType(extension)
-
-    if (mimeType == null) {
-      Log.d(javaClass.simpleName, """PreviewFile: No mime type was found for the file extension $extension
-        We can't determine the default app for the file $path""")
-
-      return "mimeTypeNull"
-    }
-
-    Log.d(javaClass.simpleName, "File extension: $extension")
-    Log.d(javaClass.simpleName, "Mime type: $mimeType")
+    val useDefaultApp = arguments["useDefaultApp"] as Boolean? ?: false
 
     val uri = Uri.parse("content://$authority.pipe/$size$path")
-    Log.d(javaClass.simpleName, "Uri: ${uri.toString()}")
-
     val intent = getIntentForAction(uri, Intent.ACTION_VIEW)
 
     try {
-        if (useDefaultApp != null) {
+        if (useDefaultApp) {
             // Note that not using Intent.createChooser let's the user choose a
             // default app and then use that the next time the same file type is
             // opened.
@@ -168,17 +162,9 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         Log.d(javaClass.simpleName, "Exception: No default app for this file type was found")
         return "noDefaultApp"
     }
+
     return "previewOK"
   }
-
-  private fun getMimeType(extension: String): String? {
-    return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-  }
-
-  private fun getFileExtension(path: String): String {
-    return MimeTypeMap.getFileExtensionFromUrl(path)
-  }
-
 
   private fun startFileShareAction(arguments: HashMap<String, Any>) {
     val authority = arguments["authority"]
@@ -207,3 +193,4 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
       }
 }
+

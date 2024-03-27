@@ -206,12 +206,12 @@ class Session {
   /// Note that this function is idempotent with itself as well as with the
   /// `closeSync` function.
   Future<void> close() async {
-    final handle = _closeClient();
+    await _networkSubscription.close();
+
+    final handle = _client.close();
     if (handle == 0) {
       return;
     }
-
-    await _networkSubscription.close();
 
     await _invoke(
       (port) => bindings.session_close(
@@ -230,24 +230,12 @@ class Session {
   /// Note that this function is idempotent with itself as well as with the
   /// `close` function.
   void closeSync() {
-    final handle = _closeClient();
+    final handle = _client.close();
     if (handle == 0) {
       return;
     }
 
-    unawaited(_networkSubscription.close());
-
     bindings.session_close_blocking(handle);
-  }
-
-  int _closeClient() {
-    final handle = _client.close();
-
-    if (handle == 0) {
-      return 0;
-    }
-
-    return handle;
   }
 }
 

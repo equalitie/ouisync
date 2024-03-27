@@ -19,7 +19,9 @@ abstract class AbstractFileProvider: ContentProvider() {
 
     companion object {
         private val OPENABLE_PROJECTION = arrayOf(
-                OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+            OpenableColumns.DISPLAY_NAME,
+            OpenableColumns.SIZE
+        )
     }
 
     override fun query(
@@ -29,57 +31,29 @@ abstract class AbstractFileProvider: ContentProvider() {
             selectionArgs: Array<out String>?,
             sortOrder: String?
     ): Cursor? {
-        var projection = projection
-
-        if (projection == null) {
-            projection = OPENABLE_PROJECTION
-        }
-
+        val projection = projection ?: OPENABLE_PROJECTION
         val cursor = MatrixCursor(projection, 1)
-        val b = cursor.newRow()
-        for (col in projection!!) {
-            when {
-                OpenableColumns.DISPLAY_NAME == col -> {
-                    b.add(getFileName(uri))
-                    Log.d(TAG, "OpenableColumns.DISPLAY_NAME: ${getFileName(uri)}")
-                }
-                OpenableColumns.SIZE == col -> {
-                    b.add(getDataLength(uri))
-                    Log.d(TAG, "OpenableColumns.SIZE: ${getDataLength(uri)}")
-                }
-                else -> { // unknown, so just add null
-                    b.add(null)
-                    Log.d(TAG, "Unknown column $col. NULL")
-                }
+        val row = cursor.newRow()
+
+        for (col in projection) {
+            when (col) {
+                OpenableColumns.DISPLAY_NAME -> row.add(getFileName(uri))
+                OpenableColumns.SIZE         -> row.add(getDataLength(uri))
+                else                         -> row.add(null) // unknown, just add null
             }
         }
 
         return LegacyCompatCursorWrapper(cursor)
     }
 
-    override fun getType(uri: Uri): String? {
-        var type = URLConnection.guessContentTypeFromName(uri.toString());
-        Log.d(TAG, "getType: $uri -> $type")
-        return type
-    }
+    override fun getType(uri: Uri): String? =
+        URLConnection.guessContentTypeFromName(uri.toString())
 
-    protected open fun getFileName(uri: Uri): String? {
-        Log.d(TAG, "getFileName: ${uri.lastPathSegment}")
-        return uri.lastPathSegment
-    }
+    protected open fun getFileName(uri: Uri): String? =
+        uri.lastPathSegment
 
-    protected open fun getDataLength(uri: Uri): Long {
-        val segments = uri.pathSegments
-        if (segments[0].toLongOrNull() != null) {
-            Log.d(TAG, "getDataLength: ${segments[0].toLong()}")
-
-            return segments[0].toLong()
-        }
-         
-        Log.d(TAG, "getDataLength: File size couldn't be obtained. AssetFileDescriptor.UNKNOWN_LENGTH is returned")
-
-        return AssetFileDescriptor.UNKNOWN_LENGTH
-    }
+    protected open fun getDataLength(uri: Uri): Long =
+        uri.pathSegments[0].toLongOrNull() ?: AssetFileDescriptor.UNKNOWN_LENGTH
 
     override fun insert(uri: Uri, values: ContentValues?): Uri? {
         TODO("Not yet implemented")

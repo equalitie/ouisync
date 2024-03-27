@@ -6,34 +6,17 @@ import 'package:flutter/services.dart';
 import 'ouisync_plugin.dart' show Session, Repository, File;
 
 /// Enum for handling the reponse from the previewFile method
-enum PreviewFileResult { previewOK, mimeTypeNull, noDefaultApp }
+enum PreviewFileResult {
+  previewOK,
+  mimeTypeNull,
+  noDefaultApp;
 
-String previewFileResultToString(PreviewFileResult previewFileResult) {
-  return switch (previewFileResult) {
-    PreviewFileResult.previewOK => 'previewOK',
-    PreviewFileResult.mimeTypeNull => 'mimeTypeNull',
-    PreviewFileResult.noDefaultApp => 'noDefaultApp'
-  };
-}
-
-PreviewFileResult? previewFileResultFromString(String previewFileResult) {
-  switch (previewFileResult) {
-    case 'previewOK':
-      {
-        return PreviewFileResult.previewOK;
-      }
-    case 'mimeTypeNull':
-      {
-        return PreviewFileResult.mimeTypeNull;
-      }
-    case 'noDefaultApp':
-      {
-        return PreviewFileResult.noDefaultApp;
-      }
-  }
-
-  print('Failed to convert string "$previewFileResult" to enum');
-  return null;
+  static PreviewFileResult? parse(String input) => switch (input) {
+        'previewOK' => PreviewFileResult.previewOK,
+        'mimeTypeNull' => PreviewFileResult.mimeTypeNull,
+        'noDefaultApp' => PreviewFileResult.noDefaultApp,
+        _ => null,
+      };
 }
 
 /// MethodChannel handler for calling functions
@@ -43,7 +26,8 @@ class NativeChannels {
     _channel.setMethodCallHandler(_methodHandler);
   }
 
-  final MethodChannel _channel = const MethodChannel('ouisync_plugin');
+  final MethodChannel _channel =
+      const MethodChannel('ie.equalit.ouisync_plugin');
 
   // We need this session` variable to be able to close the session
   // from inside the java/kotlin code when the plugin is detached from the
@@ -107,6 +91,7 @@ class NativeChannels {
 
       case 'stopSession':
         _session.closeSync();
+        //await _session.close();
         return;
 
       default:
@@ -159,39 +144,32 @@ class NativeChannels {
   ///
   /// [path] is the location of the file to share, including its full name (<path>/<file-name.ext>).
   /// [size] is the lenght of the file (bytes).
-  Future<void> shareOuiSyncFile(String authority, String path, int size) async {
-    final dynamic result = await _channel.invokeMethod(
-        'shareFile', {"authority": authority, "path": path, "size": size});
-    print('shareFile result: $result');
-  }
+  Future<void> shareOuiSyncFile(String authority, String path, int size) =>
+      _channel.invokeMethod('shareFile', {
+        "authority": authority,
+        "path": path,
+        "size": size,
+      });
 
   /// Invokes the native method (In Android, it creates an intent using the custom PipeProvider).
   ///
   /// [path] is the location of the file to preview, including its full name (<path>/<file-name.ext>).
   /// [size] is the lenght of the file (bytes).
   Future<PreviewFileResult?> previewOuiSyncFile(
-      String authority, String path, int size,
-      {bool useDefaultApp = false}) async {
-    var args = {"authority": authority, "path": path, "size": size};
-
-    if (useDefaultApp == true) {
-      args["useDefaultApp"] = true;
-    }
-
-    final dynamic result = await _channel.invokeMethod('previewFile', args);
-    final previewFileResult = previewFileResultFromString(result);
-
-    final message = switch (previewFileResult) {
-      PreviewFileResult.previewOK => 'started for file $path',
-      PreviewFileResult.mimeTypeNull => 'failed due to unknown file extension',
-      PreviewFileResult.noDefaultApp =>
-        'failed due to not app available for this file type',
-      _ => 'status unknown'
+    String authority,
+    String path,
+    int size, {
+    bool useDefaultApp = false,
+  }) async {
+    var args = {
+      "authority": authority,
+      "path": path,
+      "size": size,
+      "useDefaultApp": useDefaultApp,
     };
 
-    print("previewFile result: View file intent $message");
-
-    return previewFileResult;
+    final result = await _channel.invokeMethod('previewFile', args);
+    return PreviewFileResult.parse(result);
   }
 }
 
