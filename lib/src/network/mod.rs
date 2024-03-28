@@ -299,6 +299,10 @@ impl Network {
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
+    ///
+    /// Note: A repository should have at most one registration - creating more than one has
+    /// undesired effects. This is currently not enforced and so it's a responsibility of the
+    /// caller.
     pub async fn register(&self, handle: RepositoryHandle) -> Registration {
         *handle.vault.monitor.info_hash.get() =
             Some(repository_info_hash(handle.vault.repository_id()));
@@ -374,28 +378,20 @@ pub struct Registration {
     key: usize,
 }
 
-// Note the async functions in this impl all return futures that don't borrow from `self`. This is
-// useful when the `Registration` is inside a blocking `Mutex` - one can lock the mutex, call the
-// function, then unlock it and only then await the future to avoid holding the mutex lock across
-// awaits.
 impl Registration {
-    pub fn set_dht_enabled(&self, enabled: bool) -> impl Future<Output = ()> + 'static {
-        let inner = self.inner.clone();
-        let key = self.key;
+    pub async fn set_dht_enabled(&self, enabled: bool) {
+        set_metadata_bool(&self.inner, self.key, DHT_ENABLED, enabled).await;
 
-        async move {
-            set_metadata_bool(&inner, key, DHT_ENABLED, enabled).await;
+        let mut state = self.inner.state.lock().unwrap();
+        let holder = &mut state.registry[self.key];
 
-            let mut state = inner.state.lock().unwrap();
-            let holder = &mut state.registry[key];
-
-            if enabled {
-                holder.dht = Some(
-                    inner.start_dht_lookup(repository_info_hash(holder.vault.repository_id())),
-                );
-            } else {
-                holder.dht = None;
-            }
+        if enabled {
+            holder.dht = Some(
+                self.inner
+                    .start_dht_lookup(repository_info_hash(holder.vault.repository_id())),
+            );
+        } else {
+            holder.dht = None;
         }
     }
 
@@ -408,16 +404,11 @@ impl Registration {
         state.registry[self.key].dht.is_some()
     }
 
-    pub fn set_pex_enabled(&self, enabled: bool) -> impl Future<Output = ()> + 'static {
-        let inner = self.inner.clone();
-        let key = self.key;
+    pub async fn set_pex_enabled(&self, enabled: bool) {
+        set_metadata_bool(&self.inner, self.key, PEX_ENABLED, enabled).await;
 
-        async move {
-            set_metadata_bool(&inner, key, PEX_ENABLED, enabled).await;
-
-            let state = inner.state.lock().unwrap();
-            state.registry[key].pex.set_enabled(enabled);
-        }
+        let state = self.inner.state.lock().unwrap();
+        state.registry[self.key].pex.set_enabled(enabled);
     }
 
     pub fn is_pex_enabled(&self) -> bool {

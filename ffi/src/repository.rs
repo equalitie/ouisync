@@ -15,29 +15,15 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     mem,
     path::PathBuf,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock as BlockingRwLock},
 };
 use thiserror::Error;
-use tokio::sync::{broadcast::error::RecvError, Notify};
+use tokio::sync::{broadcast::error::RecvError, Notify, RwLock as AsyncRwLock};
 
 pub(crate) struct RepositoryHolder {
     pub store_path: PathBuf,
     pub repository: Arc<Repository>,
-    pub registration: Mutex<Option<Registration>>,
-}
-
-impl RepositoryHolder {
-    fn with_registration<F, R>(&self, f: F) -> Result<R, Error>
-    where
-        F: FnOnce(&Registration) -> R,
-    {
-        self.registration
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(f)
-            .ok_or_else(|| RegistrationRequired.into())
-    }
+    pub registration: AsyncRwLock<Option<Registration>>,
 }
 
 pub(crate) type RepositoryHandle = Handle<Arc<RepositoryHolder>>;
@@ -72,7 +58,7 @@ pub(crate) async fn create(
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration: Mutex::new(None),
+        registration: AsyncRwLock::new(None),
     };
 
     state
@@ -117,7 +103,7 @@ pub(crate) async fn open(
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration: Mutex::new(None),
+        registration: AsyncRwLock::new(None),
     };
 
     state
@@ -175,13 +161,16 @@ pub async fn close_all_repositories(state: &State) {
     }
 }
 
-pub(crate) fn is_sync_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+pub(crate) async fn is_sync_enabled(
+    state: &State,
+    handle: RepositoryHandle,
+) -> Result<bool, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
-        .lock()
-        .unwrap()
+        .read()
+        .await
         .is_some())
 }
 
@@ -192,13 +181,14 @@ pub(crate) async fn set_sync_enabled(
 ) -> Result<(), Error> {
     let holder = state.repositories.get(handle)?;
 
-    let registration = if enabled {
-        Some(state.network.register(holder.repository.handle()).await)
+    if enabled {
+        let mut registration = holder.registration.write().await;
+        if registration.is_none() {
+            *registration = Some(state.network.register(holder.repository.handle()).await);
+        }
     } else {
-        None
-    };
-
-    *holder.registration.lock().unwrap() = registration;
+        holder.registration.write().await.take();
+    }
 
     Ok(())
 }
@@ -337,11 +327,16 @@ pub(crate) fn subscribe(
     Ok(handle)
 }
 
-pub(crate) fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
-    state
+pub(crate) async fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+    Ok(state
         .repositories
         .get(handle)?
-        .with_registration(|reg| reg.is_dht_enabled())
+        .registration
+        .read()
+        .await
+        .as_ref()
+        .ok_or(RegistrationRequired)?
+        .is_dht_enabled())
 }
 
 pub(crate) async fn set_dht_enabled(
@@ -352,16 +347,26 @@ pub(crate) async fn set_dht_enabled(
     state
         .repositories
         .get(handle)?
-        .with_registration(|reg| reg.set_dht_enabled(enabled))?
+        .registration
+        .read()
+        .await
+        .as_ref()
+        .ok_or(RegistrationRequired)?
+        .set_dht_enabled(enabled)
         .await;
     Ok(())
 }
 
-pub(crate) fn is_pex_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
-    state
+pub(crate) async fn is_pex_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+    Ok(state
         .repositories
         .get(handle)?
-        .with_registration(|reg| reg.is_pex_enabled())
+        .registration
+        .read()
+        .await
+        .as_ref()
+        .ok_or(RegistrationRequired)?
+        .is_pex_enabled())
 }
 
 pub(crate) async fn set_pex_enabled(
@@ -372,7 +377,12 @@ pub(crate) async fn set_pex_enabled(
     state
         .repositories
         .get(handle)?
-        .with_registration(|reg| reg.set_pex_enabled(enabled))?
+        .registration
+        .read()
+        .await
+        .as_ref()
+        .ok_or(RegistrationRequired)?
+        .set_pex_enabled(enabled)
         .await;
     Ok(())
 }
@@ -528,13 +538,13 @@ pub(crate) struct MetadataEdit {
 
 /// Registry of opened repositories.
 pub(crate) struct Repositories {
-    inner: RwLock<Inner>,
+    inner: BlockingRwLock<Inner>,
 }
 
 impl Repositories {
     pub fn new() -> Self {
         Self {
-            inner: RwLock::new(Inner {
+            inner: BlockingRwLock::new(Inner {
                 registry: Registry::new(),
                 index: HashMap::new(),
             }),
@@ -616,7 +626,7 @@ pub(crate) enum RepositoryEntry<'a> {
 }
 
 pub(crate) struct RepositoryVacantEntry<'a> {
-    inner: &'a RwLock<Inner>,
+    inner: &'a BlockingRwLock<Inner>,
     store_path: PathBuf,
     inserted: bool,
 }
