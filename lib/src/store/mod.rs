@@ -179,13 +179,12 @@ impl Store {
         self.acquire_read().await?.count_blocks().await
     }
 
-    /// Retrieve the syncing progress of this repository (number of downloaded blocks / number of
-    /// all blocks)
-    // TODO: Move this to Store
+    /// Retrieve the syncing progress of this repository (number of present blocks / number of all
+    /// blocks)
     pub async fn sync_progress(&self) -> Result<Progress, Error> {
         let mut reader = self.acquire_read().await?;
 
-        let total = reader.count_leaf_nodes().await?;
+        let total = reader.count_block_ids().await?;
         let present = reader.count_blocks().await?;
 
         Ok(Progress {
@@ -196,10 +195,9 @@ impl Store {
 
     /// Remove outdated older snapshots.
     ///
-    /// This preserves older snapshots that can be used as fallback for the latest snapshot and
-    /// only removes those that can't.
-    /// This also preserves all older snapshots that have the same version vector as the latest
-    /// one (that is, when the latest snapshot is a draft).
+    /// This preserves older snapshots that can be used as fallback for the latest snapshot and only
+    /// removes those that can't. This also preserves all older snapshots that have the same
+    /// version vector as the latest one (that is, when the latest snapshot is a draft).
     pub async fn remove_outdated_snapshots(&self, root_node: &RootNode) -> Result<(), Error> {
         // First remove all incomplete snapshots as they can never serve as fallback.
         let mut tx = self.begin_write().await?;
@@ -332,8 +330,9 @@ impl Reader {
         block::count(self.db()).await
     }
 
-    pub async fn count_leaf_nodes(&mut self) -> Result<u64, Error> {
-        leaf_node::count(self.db()).await
+    /// Returns the number of distinct block ids referenced in the index.
+    pub async fn count_block_ids(&mut self) -> Result<u64, Error> {
+        leaf_node::count_block_ids(self.db()).await
     }
 
     #[cfg(test)]

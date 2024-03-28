@@ -239,9 +239,10 @@ pub(super) async fn filter_nodes_with_new_blocks(
     Ok(output)
 }
 
-pub(super) async fn count(conn: &mut db::Connection) -> Result<u64, Error> {
+// Number distinct block ids across all leaf nodes.
+pub(super) async fn count_block_ids(conn: &mut db::Connection) -> Result<u64, Error> {
     Ok(db::decode_u64(
-        sqlx::query("SELECT COUNT(*) FROM snapshot_leaf_nodes")
+        sqlx::query("SELECT COUNT(DISTINCT block_id) FROM snapshot_leaf_nodes")
             .fetch_one(conn)
             .await?
             .get(0),
