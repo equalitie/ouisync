@@ -63,7 +63,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository::subscribe(&self.state, &context.notification_tx, handle)?.into()
             }
             Request::RepositoryIsSyncEnabled(handle) => {
-                repository::is_sync_enabled(&self.state, handle)?.into()
+                repository::is_sync_enabled(&self.state, handle)
+                    .await?
+                    .into()
             }
             Request::RepositorySetSyncEnabled {
                 repository,
@@ -136,7 +138,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await?
                 .into(),
             Request::RepositoryIsDhtEnabled(repository) => {
-                repository::is_dht_enabled(&self.state, repository)?.into()
+                repository::is_dht_enabled(&self.state, repository)
+                    .await?
+                    .into()
             }
             Request::RepositorySetDhtEnabled {
                 repository,
@@ -146,7 +150,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                 ().into()
             }
             Request::RepositoryIsPexEnabled(repository) => {
-                repository::is_pex_enabled(&self.state, repository)?.into()
+                repository::is_pex_enabled(&self.state, repository)
+                    .await?
+                    .into()
             }
             Request::RepositorySetPexEnabled {
                 repository,
