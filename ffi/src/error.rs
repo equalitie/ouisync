@@ -12,7 +12,7 @@ use ouisync_bridge::{
 };
 use ouisync_vfs::MountError;
 use serde::{Deserialize, Serialize};
-use std::io;
+use std::{io, iter};
 use thiserror::Error;
 
 #[derive(Debug, Error, Serialize, Deserialize)]
@@ -198,7 +198,35 @@ where
     fn from(src: T) -> Self {
         Self {
             code: src.to_error_code(),
-            message: src.to_string(),
+            message: full_description(&src),
         }
+    }
+}
+
+fn full_description(error: &dyn std::error::Error) -> String {
+    use std::fmt::Write;
+
+    iter::successors(Some(error), |error| error.source()).fold(
+        String::new(),
+        |mut message, error| {
+            let sep = if message.is_empty() { "" } else { ": " };
+            // unwrap is OK because we are just appending to a string here which can only fail on
+            // out-of-memory which we can't reasonable handle anyway.
+            write!(&mut message, "{}{}", sep, error).unwrap();
+            message
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_description() {
+        let error = OpenError::Repository(ouisync_lib::Error::PermissionDenied);
+        let error = Error::from(error);
+
+        assert_eq!(error.to_string(), "repository error: permission denied");
     }
 }
