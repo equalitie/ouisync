@@ -42,7 +42,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use camino::Utf8Path;
-use deadlock::BlockingMutex;
+use deadlock::{BlockingMutex, BlockingRwLock};
 use futures_util::{future, TryStreamExt};
 use futures_util::{stream, StreamExt};
 use metrics::Recorder;
@@ -204,7 +204,7 @@ impl Repository {
 
         let shared = Arc::new(Shared {
             vault,
-            credentials: BlockingMutex::new(credentials),
+            credentials: BlockingRwLock::new(credentials),
             branch_shared: BranchShared::new(),
         });
 
@@ -294,7 +294,7 @@ impl Repository {
         };
 
         let (id, read_key) = {
-            let cred = self.shared.credentials.lock().unwrap();
+            let cred = self.shared.credentials.read().unwrap();
             (
                 *cred.secrets.id(),
                 cred.secrets
@@ -326,7 +326,7 @@ impl Repository {
         };
 
         let (write_secrets, writer_id) = {
-            let cred = self.shared.credentials.lock().unwrap();
+            let cred = self.shared.credentials.read().unwrap();
             (
                 cred.secrets
                     .write_secrets()
@@ -346,18 +346,18 @@ impl Repository {
     ///
     /// See also [set_credentials].
     pub fn credentials(&self) -> Credentials {
-        self.shared.credentials.lock().unwrap().clone()
+        self.shared.credentials.read().unwrap().clone()
     }
 
     pub fn secrets(&self) -> AccessSecrets {
-        self.shared.credentials.lock().unwrap().secrets.clone()
+        self.shared.credentials.read().unwrap().secrets.clone()
     }
 
     /// Gets the current access mode of this repository.
     pub fn access_mode(&self) -> AccessMode {
         self.shared
             .credentials
-            .lock()
+            .read()
             .unwrap()
             .secrets
             .access_mode()
@@ -373,11 +373,19 @@ impl Repository {
         access_mode: AccessMode,
         local_secret: Option<LocalSecret>,
     ) -> Result<()> {
-        let mut tx = self.db().begin_write().await?;
-
         // Try to use the current secrets but fall back to the secrets stored in the metadata if the
         // current ones are insufficient and the stored ones have higher access mode.
-        let old_secrets = self.shared.credentials.lock().unwrap().secrets.clone();
+        let old_secrets = {
+            let creds = self.shared.credentials.read().unwrap();
+
+            if creds.secrets.access_mode() == access_mode {
+                return Ok(());
+            }
+
+            creds.secrets.clone()
+        };
+
+        let mut tx = self.db().begin_write().await?;
 
         let (secrets, local_key) = if old_secrets.access_mode() >= access_mode {
             (old_secrets, None)
@@ -394,13 +402,10 @@ impl Repository {
 
         let secrets = secrets.with_mode(access_mode);
 
-        let writer_id = match access_mode {
-            AccessMode::Write if secrets.can_write() => {
-                metadata::get_or_generate_writer_id(&mut tx, local_key.as_deref()).await?
-            }
-            AccessMode::Write | AccessMode::Read | AccessMode::Blind => {
-                metadata::generate_writer_id()
-            }
+        let writer_id = if secrets.can_write() {
+            metadata::get_or_generate_writer_id(&mut tx, local_key.as_deref()).await?
+        } else {
+            metadata::generate_writer_id()
         };
 
         tx.commit().await?;
@@ -844,7 +849,7 @@ impl Repository {
             }
         };
 
-        let writer_id = self.shared.credentials.lock().unwrap().writer_id;
+        let writer_id = self.shared.credentials.read().unwrap().writer_id;
 
         for branch in branches {
             let print = print.indent();
@@ -890,7 +895,7 @@ impl Repository {
             "Repository access mode changed"
         );
 
-        *self.shared.credentials.lock().unwrap() = credentials;
+        *self.shared.credentials.write().unwrap() = credentials;
         *self.worker_handle.lock().unwrap() = Some(spawn_worker(self.shared.clone()));
     }
 }
@@ -901,13 +906,13 @@ pub struct RepositoryHandle {
 
 struct Shared {
     vault: Vault,
-    credentials: BlockingMutex<Credentials>,
+    credentials: BlockingRwLock<Credentials>,
     branch_shared: BranchShared,
 }
 
 impl Shared {
     pub fn local_branch(&self) -> Result<Branch> {
-        let credentials = self.credentials.lock().unwrap();
+        let credentials = self.credentials.read().unwrap();
 
         Ok(self.make_branch(
             credentials.writer_id,
@@ -916,7 +921,7 @@ impl Shared {
     }
 
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
-        let credentials = self.credentials.lock().unwrap();
+        let credentials = self.credentials.read().unwrap();
         let keys = credentials.secrets.keys().ok_or(Error::PermissionDenied)?;
 
         // Only the local branch is writable.

@@ -576,29 +576,6 @@ fn just_key(key_and_salt: Cow<'_, KeyAndSalt>) -> Cow<'_, cipher::SecretKey> {
     }
 }
 
-//pub(crate) async fn get_access_secrets(
-//    conn: &mut db::Connection,
-//    local_key: Option<&cipher::SecretKey>,
-//) -> Result<AccessSecrets, StoreError> {
-//    let id = get_repository_id(conn).await?;
-//
-//    match get_write_key(conn, local_key, &id).await {
-//        Ok(Some(write_keys)) => return Ok(AccessSecrets::Write(WriteSecrets::from(write_keys))),
-//        Ok(None) => (),
-//        Err(e) => return Err(e),
-//    }
-//
-//    // No match. Maybe there's the read key?
-//    match get_read_key(conn, local_key, &id).await {
-//        Ok(Some(read_key)) => return Ok(AccessSecrets::Read { id, read_key }),
-//        Ok(None) => (),
-//        Err(e) => return Err(e),
-//    }
-//
-//    // No read key either, repository shall be open in blind mode.
-//    Ok(AccessSecrets::Blind { id })
-//}
-
 pub(crate) async fn get_access_secrets<'a>(
     tx: &mut db::WriteTransaction,
     local_secret: Option<&'a LocalSecret>,
