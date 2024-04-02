@@ -19,13 +19,18 @@ use tokio::select;
 /// - remove outdated branches and snapshots
 /// - remove unreachable blocks
 /// - find missing blocks
-pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
+pub(super) async fn run(shared: Arc<Shared>) {
     let event_scope = EventScope::new();
     let prune_counter = Counter::new();
 
+    let local_branch = shared
+        .local_branch()
+        .ok()
+        .filter(|branch| branch.keys().write().is_some())
+        .map(|branch| branch.with_event_scope(event_scope));
+
     // Maintain (merge, prune and trash)
     let maintain = async {
-        let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
         let (unlock_tx, unlock_rx) = unlock::channel();
 
         // - Ignore events from the same scope to prevent infinite loop

@@ -202,24 +202,13 @@ impl Repository {
             "Repository opened"
         );
 
-        let can_write = credentials.secrets.can_write();
-
         let shared = Arc::new(Shared {
             vault,
             credentials: BlockingMutex::new(credentials),
             branch_shared: BranchShared::new(),
         });
 
-        let local_branch = if can_write {
-            shared.local_branch().ok()
-        } else {
-            None
-        };
-
-        let worker_handle = scoped_task::spawn(
-            worker::run(shared.clone(), local_branch)
-                .instrument(shared.vault.monitor.span().clone()),
-        );
+        let worker_handle = spawn_worker(shared.clone());
         let worker_handle = BlockingMutex::new(Some(worker_handle));
 
         let progress_reporter_handle = scoped_task::spawn(
@@ -426,7 +415,7 @@ impl Repository {
                 .await?;
         }
 
-        *self.shared.credentials.lock().unwrap() = Credentials { secrets, writer_id };
+        self.update_credentials(Credentials { secrets, writer_id });
 
         Ok(())
     }
@@ -470,7 +459,7 @@ impl Repository {
                 .await?;
         }
 
-        *self.shared.credentials.lock().unwrap() = credentials;
+        self.update_credentials(credentials);
 
         Ok(())
     }
@@ -892,6 +881,18 @@ impl Repository {
     fn db(&self) -> &db::Pool {
         self.shared.vault.store().db()
     }
+
+    fn update_credentials(&self, credentials: Credentials) {
+        tracing::debug!(
+            parent: self.shared.vault.monitor.span(),
+            access = ?credentials.secrets.access_mode(),
+            writer_id = ?credentials.writer_id,
+            "Repository access mode changed"
+        );
+
+        *self.shared.credentials.lock().unwrap() = credentials;
+        *self.worker_handle.lock().unwrap() = Some(spawn_worker(self.shared.clone()));
+    }
 }
 
 pub struct RepositoryHandle {
@@ -949,6 +950,11 @@ impl Shared {
             .try_collect()
             .await
     }
+}
+
+fn spawn_worker(shared: Arc<Shared>) -> ScopedJoinHandle<()> {
+    let span = shared.vault.monitor.span().clone();
+    scoped_task::spawn(worker::run(shared).instrument(span))
 }
 
 async fn report_sync_progress(vault: Vault) {
