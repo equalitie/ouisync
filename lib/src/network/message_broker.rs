@@ -207,7 +207,7 @@ impl Link {
     async fn maintain(&mut self) {
         #[derive(Debug)]
         enum State {
-            Sleeping(Duration),
+            Sleeping(#[allow(dead_code)] Duration),
             AwaitingBarrier,
             EstablishingChannel,
             Running,

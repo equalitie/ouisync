@@ -88,7 +88,7 @@ impl fmt::Display for CountryCode {
 
 pub(crate) enum LookupError {
     NotFound,
-    Io(io::Error),
+    Io(#[allow(dead_code)] io::Error),
 }
 
 impl From<MaxMindDBError> for LookupError {

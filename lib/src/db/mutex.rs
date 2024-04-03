@@ -97,4 +97,4 @@ impl Drop for MutexTransaction {
     }
 }
 
-pub(super) struct CommittedMutexTransaction(MutexTransaction);
+pub(super) struct CommittedMutexTransaction(#[allow(dead_code)] MutexTransaction);

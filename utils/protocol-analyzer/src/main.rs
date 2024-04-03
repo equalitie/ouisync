@@ -99,7 +99,7 @@ impl Context {
 
 #[derive(Debug)]
 enum Line {
-    ThisRuntimeId(ThisRuntimeIdLine),
+    ThisRuntimeId(#[allow(dead_code)] ThisRuntimeIdLine),
     ReceivedRootNode(ReceivedRootNodeLine),
     ReceivedInnerNode(ReceivedInnerNodeLine),
     ReceivedLeafNode(ReceivedLeafNodeLine),

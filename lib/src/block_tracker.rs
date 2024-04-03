@@ -267,9 +267,7 @@ impl BlockOffer {
     pub fn accept(self) -> Option<BlockPromise> {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let Some(missing_block) = inner.missing_blocks.get_mut(&self.block_id) else {
-            return None;
-        };
+        let missing_block = inner.missing_blocks.get_mut(&self.block_id)?;
 
         match missing_block.state {
             State::Idle {

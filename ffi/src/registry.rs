@@ -68,12 +68,7 @@ where
     T: Clone,
 {
     pub fn get(&self, handle: Handle<T>) -> Result<T, InvalidHandle> {
-        self.0
-            .read()
-            .unwrap()
-            .get(handle)
-            .cloned()
-            .map(|value| value.clone())
+        self.0.read().unwrap().get(handle).cloned()
     }
 }
 

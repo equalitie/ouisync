@@ -131,8 +131,8 @@ impl<'de> Deserialize<'de> for PeerAddr {
 #[serde(remote = "PeerAddr")]
 #[serde(rename_all = "snake_case")]
 enum SerdeProxy {
-    Tcp(SocketAddr),
-    Quic(SocketAddr),
+    Tcp(#[allow(dead_code)] SocketAddr),
+    Quic(#[allow(dead_code)] SocketAddr),
 }
 
 #[cfg(test)]
