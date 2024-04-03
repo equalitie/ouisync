@@ -75,6 +75,15 @@ pub unsafe extern "C" fn session_create_dart(
     session::create(kind, configs_path, log_path, sender).into()
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn session_grab_shared(
+    context: *mut (),
+    callback: Callback,
+) -> SessionCreateResult {
+    let sender = CallbackSender::new(context, callback);
+    session::grab_shared(sender).into()
+}
+
 /// Closes the Ouisync session (common C-like API).
 ///
 /// Also gracefully disconnects from all peers and asynchronously waits for the disconnections to

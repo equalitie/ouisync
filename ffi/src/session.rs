@@ -110,6 +110,8 @@ pub enum SessionError {
     InitializeRuntime(#[source] io::Error),
     #[error("invalid utf8 string")]
     InvalidUtf8(#[from] Utf8Error),
+    #[error("session has not yet been created")]
+    SessionHasNotYetBeenCreated,
 }
 
 #[repr(C)]
@@ -159,6 +161,28 @@ pub(crate) unsafe fn create(
                 *guard = Arc::downgrade(&shared);
                 shared
             }
+        }
+    };
+
+    let (server, client_tx) = Server::new(sender);
+
+    shared
+        .runtime
+        .spawn(server.run(Handler::new(shared.state.clone())));
+
+    Ok(Session { shared, client_tx })
+}
+
+pub(crate) fn grab_shared(
+    sender: impl Sender,
+) -> Result<Session, SessionError> {
+    let shared = {
+        let guard = SHARED.lock().unwrap();
+
+        if let Some(shared) = guard.upgrade() {
+            shared
+        } else {
+            return Err(SessionError::SessionHasNotYetBeenCreated);
         }
     };
 
