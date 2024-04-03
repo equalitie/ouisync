@@ -2,7 +2,7 @@
 
 use super::{socket_server_connection, Handler, SocketClient};
 use crate::protocol::{
-    remote::{Request, ServerError},
+    remote::{Request, Response, ServerError},
     SessionCookie,
 };
 use bytes::{Bytes, BytesMut};
@@ -155,7 +155,7 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
 }
 
 pub struct RemoteClient {
-    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, (), ServerError>,
+    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response, ServerError>,
     session_cookie: SessionCookie,
 }
 
@@ -194,7 +194,9 @@ impl RemoteClient {
     }
 
     pub async fn invoke(&self, request: impl Into<Request>) -> Result<(), ServerError> {
-        self.inner.invoke(request.into()).await
+        match self.inner.invoke(request.into()).await? {
+            Response::None => Ok(()),
+        }
     }
 
     pub fn session_cookie(&self) -> &SessionCookie {
@@ -333,7 +335,7 @@ mod tests {
     #[async_trait]
     impl Handler for TestHandler {
         type Request = Request;
-        type Response = ();
+        type Response = Response;
         type Error = ServerError;
 
         async fn handle(
@@ -342,7 +344,7 @@ mod tests {
             _: &SessionContext,
         ) -> Result<Self::Response, Self::Error> {
             self.received.fetch_add(1, Ordering::Relaxed);
-            Ok(())
+            Ok(Response::None)
         }
     }
 
