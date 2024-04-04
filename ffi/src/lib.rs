@@ -75,13 +75,29 @@ pub unsafe extern "C" fn session_create_dart(
     session::create(kind, configs_path, log_path, sender).into()
 }
 
+/// Get an existing session if one was created and not yet destroyed, otherwise returns result with
+/// `error_code` set to `ErrorCode::InvalidHandle`.
+///
+/// See `session_create` for safety and argument description.
 #[no_mangle]
-pub unsafe extern "C" fn session_grab_shared(
+pub unsafe extern "C" fn session_grab(
     context: *mut (),
     callback: Callback,
 ) -> SessionCreateResult {
     let sender = CallbackSender::new(context, callback);
     session::grab_shared(sender).into()
+}
+
+/// Destroys state corresponding to this session handle but leaves the state shared with other
+/// session intact.
+///
+/// After this function call, the callback passed to `session_create` will no longer be executed
+/// and thus the `context` pointer (also passed to `session_create`) can be freed.
+#[no_mangle]
+pub unsafe extern "C" fn session_release(
+    session: SessionHandle,
+) {
+    session.release();
 }
 
 /// Closes the Ouisync session (common C-like API).

@@ -72,7 +72,7 @@ impl ToErrorCode for SessionError {
         match self {
             Self::InitializeLogger(_) | Self::InitializeRuntime(_) => ErrorCode::Other,
             Self::InvalidUtf8(_) => ErrorCode::InvalidArgument,
-            Self::SessionHasNotYetBeenCreated => ErrorCode::InvalidHandle,
+            Self::NoActiveSession => ErrorCode::InvalidHandle,
         }
     }
 }

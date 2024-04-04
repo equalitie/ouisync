@@ -10,6 +10,7 @@ use crate::{
 use bytes::Bytes;
 use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
 use state_monitor::StateMonitor;
+use scoped_task::ScopedAbortHandle;
 use std::{
     ffi::c_char,
     io,
@@ -27,6 +28,7 @@ use tokio::{runtime, time};
 pub struct Session {
     pub(crate) shared: Arc<Shared>,
     pub(crate) client_tx: ClientSender,
+    _server_abort_handle: ScopedAbortHandle,
 }
 
 /// State shared between multiple instances of the same session.
@@ -110,8 +112,8 @@ pub enum SessionError {
     InitializeRuntime(#[source] io::Error),
     #[error("invalid utf8 string")]
     InvalidUtf8(#[from] Utf8Error),
-    #[error("session has not yet been created")]
-    SessionHasNotYetBeenCreated,
+    #[error("session has not yet been created or it's been already destroyed")]
+    NoActiveSession,
 }
 
 #[repr(C)]
@@ -166,11 +168,11 @@ pub(crate) unsafe fn create(
 
     let (server, client_tx) = Server::new(sender);
 
-    shared
+    let _server_abort_handle = shared
         .runtime
-        .spawn(server.run(Handler::new(shared.state.clone())));
+        .spawn(server.run(Handler::new(shared.state.clone()))).abort_handle().into();
 
-    Ok(Session { shared, client_tx })
+    Ok(Session { shared, client_tx, _server_abort_handle })
 }
 
 pub(crate) fn grab_shared(
@@ -182,17 +184,17 @@ pub(crate) fn grab_shared(
         if let Some(shared) = guard.upgrade() {
             shared
         } else {
-            return Err(SessionError::SessionHasNotYetBeenCreated);
+            return Err(SessionError::NoActiveSession);
         }
     };
 
     let (server, client_tx) = Server::new(sender);
 
-    shared
+    let _server_abort_handle = shared
         .runtime
-        .spawn(server.run(Handler::new(shared.state.clone())));
+        .spawn(server.run(Handler::new(shared.state.clone()))).abort_handle().into();
 
-    Ok(Session { shared, client_tx })
+    Ok(Session { shared, client_tx, _server_abort_handle })
 }
 
 pub(crate) fn close(session: Session, sender: impl Sender) {
