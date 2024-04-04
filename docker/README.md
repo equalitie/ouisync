@@ -46,9 +46,9 @@ one is the binary name. It's recommented to create an alias for this (e.g. in `.
 
     alias ouisync=docker exec ouisync ouisync
 
-## Storage server
+## Cache server
 
-To setup a storage server, enable the RPC endpoint:
+To setup a cache server, enable the RPC endpoint:
 
     ouisync bind-rpc 0.0.0.0:443
 
