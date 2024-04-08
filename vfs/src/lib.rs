@@ -15,18 +15,11 @@ pub use crate::dokan::{
     single_repo_mount::{mount, MountGuard},
 };
 
-// --- MacOS -----------------------------------------------------------------------
-#[cfg(target_os = "macos")]
-mod darwin;
-
-#[cfg(target_os = "macos")]
-pub use crate::darwin::{mount, MountGuard, MultiRepoVFS};
-
 // --- Dummy -----------------------------------------------------------------------
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 mod dummy;
 
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub use dummy::{mount, MountGuard, MultiRepoVFS};
 
 // ---------------------------------------------------------------------------------
