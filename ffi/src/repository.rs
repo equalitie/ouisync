@@ -412,7 +412,7 @@ pub(crate) async fn mount_all(state: &State, mount_point: PathBuf) -> Result<(),
             mount_point,
             repos
                 .iter()
-                .map(|holder| (holder.store_path.as_ref(), &holder.repository)),
+                .map(|(_handle, holder)| (holder.store_path.as_ref(), &holder.repository)),
         )
         .await?;
 
@@ -492,13 +492,13 @@ impl Repositories {
             .map(|holder| holder.clone())
     }
 
-    pub fn collect(&self) -> Vec<Arc<RepositoryHolder>> {
+    pub fn collect(&self) -> Vec<(RepositoryHandle, Arc<RepositoryHolder>)> {
         self.inner
             .read()
             .unwrap()
             .registry
-            .values()
-            .cloned()
+            .iter()
+            .map(|(a, b)| (a.clone(), b.clone()))
             .collect()
     }
 }

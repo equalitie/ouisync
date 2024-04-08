@@ -62,6 +62,11 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositorySubscribe(handle) => {
                 repository::subscribe(&self.state, &context.notification_tx, handle)?.into()
             }
+            Request::ListRepositories => {
+                // TODO: We could collect only once
+                let handles = self.state.repositories.collect().iter().map(|(handle, _holder)| handle.id()).collect();
+                Response::Handles(handles)
+            }
             Request::RepositorySetAccess {
                 repository,
                 read,

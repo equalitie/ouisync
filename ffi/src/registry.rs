@@ -31,8 +31,8 @@ impl<T: 'static> Registry<T> {
         self.0.drain().map(|(_handle, value)| value).collect()
     }
 
-    pub fn values(&self) -> impl Iterator<Item = &T> {
-        self.0.values()
+    pub fn iter(&self) -> impl Iterator<Item = (&Handle<T>, &T)> {
+        self.0.iter()
     }
 
     pub fn get(&self, handle: Handle<T>) -> Result<&T, InvalidHandle> {
