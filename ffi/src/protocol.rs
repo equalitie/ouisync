@@ -36,6 +36,7 @@ pub(crate) enum Request {
     RepositoryClose(RepositoryHandle),
     RepositorySubscribe(RepositoryHandle),
     ListRepositories,
+    ListRepositoriesSubscribe,
     RepositoryRequiresLocalSecretForReading(RepositoryHandle),
     RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
     RepositorySetAccess {

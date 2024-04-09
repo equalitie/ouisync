@@ -80,10 +80,7 @@ pub unsafe extern "C" fn session_create_dart(
 ///
 /// See `session_create` for safety and argument description.
 #[no_mangle]
-pub unsafe extern "C" fn session_grab(
-    context: *mut (),
-    callback: Callback,
-) -> SessionCreateResult {
+pub unsafe extern "C" fn session_grab(context: *mut (), callback: Callback) -> SessionCreateResult {
     let sender = CallbackSender::new(context, callback);
     session::grab_shared(sender).into()
 }
@@ -94,9 +91,7 @@ pub unsafe extern "C" fn session_grab(
 /// After this function call, the callback passed to `session_create` will no longer be executed
 /// and thus the `context` pointer (also passed to `session_create`) can be freed.
 #[no_mangle]
-pub unsafe extern "C" fn session_release(
-    session: SessionHandle,
-) {
+pub unsafe extern "C" fn session_release(session: SessionHandle) {
     session.release();
 }
 

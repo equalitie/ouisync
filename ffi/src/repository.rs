@@ -7,8 +7,10 @@ use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
     network::{self, Registration},
-    path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository,
-    SetLocalSecret, ShareToken,
+    path,
+    sync::uninitialized_watch,
+    AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository, SetLocalSecret,
+    ShareToken,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -422,15 +424,19 @@ pub(crate) async fn mount_all(state: &State, mount_point: PathBuf) -> Result<(),
 /// Registry of opened repositories.
 pub(crate) struct Repositories {
     inner: RwLock<Inner>,
+    pub on_repository_list_changed_tx: uninitialized_watch::Sender<()>,
 }
 
 impl Repositories {
     pub fn new() -> Self {
+        let (on_repository_list_changed_tx, _) = uninitialized_watch::channel();
+
         Self {
             inner: RwLock::new(Inner {
                 registry: Registry::new(),
                 index: HashMap::new(),
             }),
+            on_repository_list_changed_tx,
         }
     }
 
@@ -459,6 +465,9 @@ impl Repositories {
                             inner: &self.inner,
                             store_path,
                             inserted: false,
+                            on_repository_list_changed_tx: self
+                                .on_repository_list_changed_tx
+                                .clone(),
                         });
                     }
                 }
@@ -476,11 +485,15 @@ impl Repositories {
         let holder = inner.registry.remove(handle)?;
         inner.index.remove(&holder.store_path);
 
+        self.on_repository_list_changed_tx.send(()).unwrap_or(());
+
         Some(holder)
     }
 
     pub fn remove_all(&self) -> Vec<Arc<RepositoryHolder>> {
-        self.inner.write().unwrap().registry.remove_all()
+        let removed = self.inner.write().unwrap().registry.remove_all();
+        self.on_repository_list_changed_tx.send(()).unwrap_or(());
+        removed
     }
 
     pub fn get(&self, handle: RepositoryHandle) -> Result<Arc<RepositoryHolder>, InvalidHandle> {
@@ -512,6 +525,7 @@ pub(crate) struct RepositoryVacantEntry<'a> {
     inner: &'a RwLock<Inner>,
     store_path: PathBuf,
     inserted: bool,
+    on_repository_list_changed_tx: uninitialized_watch::Sender<()>,
 }
 
 impl RepositoryVacantEntry<'_> {
@@ -531,6 +545,7 @@ impl RepositoryVacantEntry<'_> {
         self.inserted = true;
 
         notify.notify_waiters();
+        self.on_repository_list_changed_tx.send(()).unwrap_or(());
 
         handle
     }

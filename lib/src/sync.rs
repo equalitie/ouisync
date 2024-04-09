@@ -11,11 +11,12 @@ use tokio_stream::wrappers::WatchStream;
 
 /// Similar to tokio::sync::watch, but has no initial value. Because there is no initial value the
 /// API must be sligthly different. In particular, we don't have the `borrow` function.
-pub(crate) mod uninitialized_watch {
+pub mod uninitialized_watch {
     use futures_util::{stream, Stream};
     use tokio::sync::watch as w;
     pub use w::error::RecvError;
 
+    #[derive(Clone)]
     pub struct Sender<T>(w::Sender<Option<T>>);
 
     impl<T> Sender<T> {

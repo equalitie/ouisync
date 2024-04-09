@@ -36,6 +36,8 @@ pub enum Notification {
     Repository,
     Network(NetworkEvent),
     StateMonitor,
+    /// The list of repositories in a session has changed.
+    RepositoryListChanged,
 }
 
 /// Network notification event.

@@ -3,7 +3,7 @@ use crate::{
     error::Error,
     file, network,
     protocol::{Request, Response},
-    repository, share_token,
+    repository, session, share_token,
     state::State,
     state_monitor,
 };
@@ -64,8 +64,17 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::ListRepositories => {
                 // TODO: We could collect only once
-                let handles = self.state.repositories.collect().iter().map(|(handle, _holder)| handle.id()).collect();
+                let handles = self
+                    .state
+                    .repositories
+                    .collect()
+                    .iter()
+                    .map(|(handle, _holder)| handle.id())
+                    .collect();
                 Response::Handles(handles)
+            }
+            Request::ListRepositoriesSubscribe => {
+                session::subscribe(&self.state, &context.notification_tx).into()
             }
             Request::RepositorySetAccess {
                 repository,

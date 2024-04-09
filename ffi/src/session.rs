@@ -3,14 +3,18 @@ use crate::{
     handler::Handler,
     repository,
     sender::Sender,
-    state::State,
+    state::{State, TaskHandle},
     transport::{ClientSender, Server},
     utils,
 };
 use bytes::Bytes;
-use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
-use state_monitor::StateMonitor;
+use ouisync_bridge::{
+    logger::{LogColor, LogFormat, Logger},
+    protocol::Notification,
+    transport::NotificationSender,
+};
 use scoped_task::ScopedAbortHandle;
+use state_monitor::StateMonitor;
 use std::{
     ffi::c_char,
     io,
@@ -170,14 +174,18 @@ pub(crate) unsafe fn create(
 
     let _server_abort_handle = shared
         .runtime
-        .spawn(server.run(Handler::new(shared.state.clone()))).abort_handle().into();
+        .spawn(server.run(Handler::new(shared.state.clone())))
+        .abort_handle()
+        .into();
 
-    Ok(Session { shared, client_tx, _server_abort_handle })
+    Ok(Session {
+        shared,
+        client_tx,
+        _server_abort_handle,
+    })
 }
 
-pub(crate) fn grab_shared(
-    sender: impl Sender,
-) -> Result<Session, SessionError> {
+pub(crate) fn grab_shared(sender: impl Sender) -> Result<Session, SessionError> {
     let shared = {
         let guard = SHARED.lock().unwrap();
 
@@ -192,9 +200,15 @@ pub(crate) fn grab_shared(
 
     let _server_abort_handle = shared
         .runtime
-        .spawn(server.run(Handler::new(shared.state.clone()))).abort_handle().into();
+        .spawn(server.run(Handler::new(shared.state.clone())))
+        .abort_handle()
+        .into();
 
-    Ok(Session { shared, client_tx, _server_abort_handle })
+    Ok(Session {
+        shared,
+        client_tx,
+        _server_abort_handle,
+    })
 }
 
 pub(crate) fn close(session: Session, sender: impl Sender) {
@@ -230,4 +244,26 @@ pub(crate) fn close_blocking(session: Session) {
             state.network.shutdown(),
         ))
         .ok();
+}
+
+/// Subscribe to changes in repository list
+pub(crate) fn subscribe(state: &State, notification_tx: &NotificationSender) -> TaskHandle {
+    let mut on_repository_list_changed =
+        state.repositories.on_repository_list_changed_tx.subscribe();
+
+    let notification_tx = notification_tx.clone();
+
+    state.spawn_task(|id| async move {
+        loop {
+            match on_repository_list_changed.changed().await {
+                Ok(()) => {
+                    notification_tx
+                        .send((id, Notification::RepositoryListChanged))
+                        .await
+                        .ok();
+                }
+                Err(_) => return,
+            };
+        }
+    })
 }
