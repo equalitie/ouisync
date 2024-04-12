@@ -131,7 +131,7 @@ extension IncomingSuccessPayload: CustomStringConvertible {
 //--------------------------------------------------------------------
 
 public class Response {
-    let value: MessagePackValue
+    public let value: MessagePackValue
     init(_ value: MessagePackValue) {
         self.value = value
     }
