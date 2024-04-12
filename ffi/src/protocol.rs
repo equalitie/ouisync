@@ -56,6 +56,7 @@ pub(crate) enum Request {
         access_mode: AccessMode,
         secret: Option<LocalSecret>,
     },
+    RepositoryName(RepositoryHandle),
     RepositoryInfoHash(RepositoryHandle),
     RepositoryDatabaseId(RepositoryHandle),
     RepositoryEntryType {

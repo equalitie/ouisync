@@ -5,6 +5,7 @@ import Foundation
 import MessagePack
 
 public typealias MessageId = UInt64
+public typealias RepositoryHandle = UInt64
 public typealias ErrorCode = Int64
 
 //--------------------------------------------------------------------
@@ -34,6 +35,10 @@ public class MessageRequest {
 
     public static func subscribeToRepositoryListChange(_ messageId: MessageId) -> MessageRequest {
         return MessageRequest(messageId, "list_repositories_subscribe", MessagePackValue.nil)
+    }
+
+    public static func getRepositoryName(_ messageId: MessageId, _ handle: RepositoryHandle) -> MessageRequest {
+        return MessageRequest(messageId, "repository_name", MessagePackValue(handle))
     }
 }
 
@@ -134,6 +139,24 @@ public class Response {
     public let value: MessagePackValue
     init(_ value: MessagePackValue) {
         self.value = value
+    }
+
+    public func toData() -> Data? {
+        return value.dataValue
+    }
+
+    public func toUInt64Array() -> [UInt64]? {
+        class Fail: Error {}
+        do {
+            return try value.arrayValue?.map({ value in
+                if let byte = value.uint64Value {
+                    return byte
+                }
+                throw Fail()
+            })
+        } catch {
+            return nil
+        }
     }
 }
 

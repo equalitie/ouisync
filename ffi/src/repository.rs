@@ -1,5 +1,5 @@
 use crate::{
-    error::Error,
+    error::{Error, ErrorCode},
     registry::{Handle, InvalidHandle, Registry},
     state::{State, TaskHandle},
 };
@@ -14,6 +14,7 @@ use ouisync_lib::{
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
+    ffi::OsString,
     mem,
     path::PathBuf,
     sync::{Arc, RwLock},
@@ -219,6 +220,23 @@ pub(crate) fn info_hash(state: &State, handle: RepositoryHandle) -> Result<Strin
 pub(crate) async fn database_id(state: &State, handle: RepositoryHandle) -> Result<Vec<u8>, Error> {
     let holder = state.repositories.get(handle)?;
     Ok(holder.repository.database_id().await?.as_ref().to_vec())
+}
+
+/// Returns database name, this is derived from the database file name, but is disambiguated when there
+/// are two or more databases with the same name (but different directories).
+/// TODO: The disambiguation
+pub(crate) fn get_name(state: &State, handle: RepositoryHandle) -> Result<OsString, Error> {
+    let holder = state.repositories.get(handle)?;
+
+    let store_path = &holder.store_path;
+
+    match store_path.with_extension("").file_name() {
+        Some(store_path) => Ok(store_path.to_os_string()),
+        None => Err(Error {
+            code: ErrorCode::MalformedData,
+            message: format!("Failed to extract file name from the path {store_path:?}"),
+        }),
+    }
 }
 
 /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't

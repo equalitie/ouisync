@@ -127,6 +127,10 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositoryDatabaseId(handle) => {
                 repository::database_id(&self.state, handle).await?.into()
             }
+            Request::RepositoryName(handle) => {
+                let os_str = repository::get_name(&self.state, handle)?;
+                os_str.as_encoded_bytes().to_vec().into()
+            }
             Request::RepositoryEntryType { repository, path } => {
                 repository::entry_type(&self.state, repository, path)
                     .await?
