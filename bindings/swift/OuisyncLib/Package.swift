@@ -13,7 +13,6 @@ let package = Package(
             targets: ["OuisyncLib"]),
     ],
     dependencies: [
-        //.package(url: "https://github.com/fumoboy007/msgpack-swift", from: "2.0.1"),
         .package(url: "https://github.com/a2/MessagePack.swift.git", from: "4.0.0")
     ],
     targets: [
@@ -22,7 +21,6 @@ let package = Package(
         .target(
             name: "OuisyncLib",
             dependencies: [.product(name:"MessagePack", package: "MessagePack.swift")]),
-            //dependencies: [.product(name: "DMMessagePack", package: "msgpack-swift")]),
         .testTarget(
             name: "OuisyncLibTests",
             dependencies: ["OuisyncLib"]),
