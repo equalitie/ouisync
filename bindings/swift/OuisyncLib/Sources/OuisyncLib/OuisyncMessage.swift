@@ -7,6 +7,7 @@
 
 import Foundation
 import MessagePack
+import System
 
 //--------------------------------------------------------------------
 
@@ -29,6 +30,13 @@ public class MessageRequest {
 
     public static func getRepositoryName(_ handle: RepositoryHandle) -> MessageRequest {
         return MessageRequest("repository_name", MessagePackValue(handle))
+    }
+
+    public static func listEntries(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+        return MessageRequest("directory_open", MessagePackValue([
+            MessagePackValue("repository"): MessagePackValue(handle),
+            MessagePackValue("path"): MessagePackValue(path.description),
+        ]))
     }
 }
 
