@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import MessagePack
 
 public class OuisyncSession {
     // Used to send and receive messages from the Ouisync library
@@ -19,32 +20,36 @@ public class OuisyncSession {
         self.librarySender = libraryClient
     }
 
-    public func listRepositories() async throws -> [UInt64] {
-        let response = try await sendRequest(MessageRequest.listRepositories(generateMessageId()));
-        return response.toUInt64Array()!
-    }
-
-    public func getRepositoryName(_ handle: RepositoryHandle) async throws -> String {
-        let response = try await sendRequest(MessageRequest.getRepositoryName(generateMessageId(), handle));
-        let data = response.toData()!
-        return String(decoding: data, as: UTF8.self)
+    public func listRepositories() async throws -> [OuisyncRepository] {
+        let response = try await sendRequest(MessageRequest.listRepositories());
+        let handles = response.toUInt64Array()!
+        return handles.map({ OuisyncRepository($0, self) })
     }
 
     public func subscribeToRepositoryListChange() async throws -> NotificationStream {
-        let messageId = generateMessageId()
         let stream = NotificationStream(state)
-        let _ = try await sendRequest(MessageRequest.subscribeToRepositoryListChange(messageId));
+        let _ = try await sendRequest(MessageRequest.subscribeToRepositoryListChange());
         return stream
     }
 
     func sendRequest(_ request: MessageRequest) async throws -> Response {
-        async let onResponse = withCheckedThrowingContinuation { continuation in
-            pendingResponses[request.messageId] = continuation
+       let messageId = generateMessageId()
+
+       async let onResponse = withCheckedThrowingContinuation { continuation in
+            pendingResponses[messageId] = continuation
         }
 
-        sendDataToOuisyncLib(request.serialize());
+        sendDataToOuisyncLib(serialize(messageId, request));
 
         return try await onResponse
+    }
+
+    func serialize(_ messageId: MessageId, _ request: MessageRequest) -> [UInt8] {
+        var message: [UInt8] = []
+        message.append(contentsOf: withUnsafeBytes(of: messageId.bigEndian, Array.init))
+        let payload = [MessagePackValue.string(request.functionName): request.functionArguments]
+        message.append(contentsOf: pack(MessagePackValue.map(payload)))
+        return message
     }
 
     func generateMessageId() -> MessageId {
@@ -61,7 +66,8 @@ public class OuisyncSession {
         let maybe_message = IncomingMessage.deserialize(data)
 
         guard let message = maybe_message else {
-            NSLog(":::: 😡 Failed to parse incoming message from OuisyncLib \(data)")
+            let hex = data.map({String(format:"%02x", $0)}).joined(separator: ",")
+            NSLog(":::: 😡 Failed to parse incoming message from OuisyncLib [\(hex)]")
             return
         }
 

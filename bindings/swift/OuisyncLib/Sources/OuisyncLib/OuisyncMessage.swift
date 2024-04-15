@@ -11,34 +11,24 @@ import MessagePack
 //--------------------------------------------------------------------
 
 public class MessageRequest {
-    public let messageId: MessageId
     let functionName: String
     let functionArguments: MessagePackValue
 
-    init(_ messageId: MessageId, _ functionName: String, _ functionArguments: MessagePackValue) {
-        self.messageId = messageId
+    init(_ functionName: String, _ functionArguments: MessagePackValue) {
         self.functionName = functionName
         self.functionArguments = functionArguments
     }
 
-    public func serialize() -> [UInt8] {
-        var message: [UInt8] = []
-        message.append(contentsOf: withUnsafeBytes(of: messageId.bigEndian, Array.init))
-        let payload = [MessagePackValue.string(functionName): functionArguments]
-        message.append(contentsOf: pack(MessagePackValue.map(payload)))
-        return message
+    public static func listRepositories() -> MessageRequest {
+        return MessageRequest("list_repositories", MessagePackValue.nil)
     }
 
-    public static func listRepositories(_ messageId: MessageId) -> MessageRequest {
-        return MessageRequest(messageId, "list_repositories", MessagePackValue.nil)
+    public static func subscribeToRepositoryListChange() -> MessageRequest {
+        return MessageRequest("list_repositories_subscribe", MessagePackValue.nil)
     }
 
-    public static func subscribeToRepositoryListChange(_ messageId: MessageId) -> MessageRequest {
-        return MessageRequest(messageId, "list_repositories_subscribe", MessagePackValue.nil)
-    }
-
-    public static func getRepositoryName(_ messageId: MessageId, _ handle: RepositoryHandle) -> MessageRequest {
-        return MessageRequest(messageId, "repository_name", MessagePackValue(handle))
+    public static func getRepositoryName(_ handle: RepositoryHandle) -> MessageRequest {
+        return MessageRequest("repository_name", MessagePackValue(handle))
     }
 }
 
@@ -215,7 +205,7 @@ func parseFailure(_ value: MessagePackValue) -> ErrorResponse? {
         if arr.count != 2 {
             return nil
         }
-        if case let .int(code) = arr[0] {
+        if case let .uint(code) = arr[0] {
             if case let .string(message) = arr[1] {
                 return ErrorResponse(code, message)
             }

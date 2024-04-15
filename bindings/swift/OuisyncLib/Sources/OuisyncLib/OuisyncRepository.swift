@@ -7,17 +7,31 @@
 
 import Foundation
 
-public class OuisyncRepository {
-    let handle: RepositoryHandle
+public class OuisyncRepository: Hashable, CustomStringConvertible {
     let session: OuisyncSession
+    public let handle: RepositoryHandle
 
-    init(_ handle: RepositoryHandle, _ session: OuisyncSession) {
+    public init(_ handle: RepositoryHandle, _ session: OuisyncSession) {
         self.handle = handle
         self.session = session
     }
 
-    func getName() async throws {
-        
+    public func getName() async throws -> String {
+        let response = try await session.sendRequest(MessageRequest.getRepositoryName(handle));
+        let data = response.toData()!
+        return String(decoding: data, as: UTF8.self)
     }
 
+    public static func == (lhs: OuisyncRepository, rhs: OuisyncRepository) -> Bool {
+        return lhs.session === rhs.session && lhs.handle == rhs.handle
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(session))
+        hasher.combine(handle)
+    }
+
+    public var description: String {
+        return "OuisyncRepository(handle: \(handle))"
+    }
 }
