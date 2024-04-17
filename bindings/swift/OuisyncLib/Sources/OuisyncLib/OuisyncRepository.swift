@@ -24,24 +24,8 @@ public class OuisyncRepository: Hashable, CustomDebugStringConvertible {
         return String(decoding: data, as: UTF8.self)
     }
 
-    public func listEntries(_ path: FilePath) async throws -> [OuisyncEntry] {
-        let response = try await session.sendRequest(MessageRequest.listEntries(handle, path))
-        let array = response.value.arrayValue!
-        return array.map({map in
-            let typeNum = map["type"]!.uint8Value!
-            var type: OuisyncEntry.EntryType?
-
-            switch typeNum {
-            case 1: type = .file
-            case 2: type = .directory
-            default:
-                assertionFailure("Invalid EntryType returned from OuisyncLib \(typeNum)")
-            }
-
-            let name: String = map["name"]!.stringValue!
-
-            return OuisyncEntry(path.appending(name), type!)
-        })
+    public func getRootDirectory() -> OuisyncDirectory {
+        return OuisyncDirectory(FilePath("/"), self)
     }
 
     public static func == (lhs: OuisyncRepository, rhs: OuisyncRepository) -> Bool {

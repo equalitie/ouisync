@@ -8,33 +8,40 @@
 import Foundation
 import System
 
-public class OuisyncEntry: Equatable {
-    public enum EntryType {
-        case file
-        case directory
+public enum OuisyncEntry {
+    case file(OuisyncFile)
+    case directory(OuisyncDirectory)
+
+    static func makeFile(_ path: FilePath, _ repo: OuisyncRepository) -> OuisyncEntry {
+        return .file(OuisyncFile(path, repo))
     }
 
-    public let path: FilePath
-    public let type: EntryType
-
-    public init(_ path: FilePath, _ type: EntryType) {
-        self.path = path
-        self.type = type
+    static func makeDirectory(_ path: FilePath, _ repo: OuisyncRepository) -> OuisyncEntry {
+        return .directory(OuisyncDirectory(path, repo))
     }
 
     public func name() -> String {
-        let l = path.lastComponent
-        if l == nil && type == .directory {
-            return "/"
+        switch self {
+        case .file(let e): return e.name()
+        case .directory(let e): return e.name()
         }
-        return l!.string
     }
 
-    public static func == (lhs: OuisyncEntry, rhs: OuisyncEntry) -> Bool {
-        return lhs.type == rhs.type && lhs.path == rhs.path
+    public func isDirectory() -> Bool {
+        switch self {
+        case .file: false
+        case .directory: true
+        }
     }
 
-    func isDirectory() -> Bool {
-        return type == .directory
+    public func parent() -> OuisyncEntry? {
+        switch self {
+        case .file(let file): return .directory(file.parent())
+        case .directory(let directory):
+            guard let parent = directory.parent() else {
+                return nil
+            }
+            return .directory(parent)
+        }
     }
 }
