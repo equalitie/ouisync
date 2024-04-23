@@ -1198,12 +1198,32 @@ async fn set_access_mode_is_idempotent() {
     assert_eq!(writer_id_0, writer_id_1);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn aux_db_files_are_deleted_on_close() {
+    test_utils::init_log();
+
+    let (temp_dir, repo) = setup().await;
+
+    repo.close().await.unwrap();
+
+    let mut read_dir = fs::read_dir(temp_dir.path()).await.unwrap();
+    let mut entries = Vec::new();
+
+    while let Some(entry) = read_dir.next_entry().await.unwrap() {
+        entries.push(entry.path());
+    }
+
+    assert_eq!(entries, [temp_dir.path().join(DEFAULT_REPO_NAME)]);
+}
+
+const DEFAULT_REPO_NAME: &str = "repo.db";
+
 async fn setup() -> (TempDir, Repository) {
     test_utils::init_log();
 
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &RepositoryParams::new(base_dir.path().join("repo.db")),
+        &RepositoryParams::new(base_dir.path().join(DEFAULT_REPO_NAME)),
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
