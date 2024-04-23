@@ -2,10 +2,12 @@
 //! other in order to discover new peers.
 
 use super::{
+    connection::ConnectionDirection,
     ip,
     message::Content,
     peer_addr::PeerAddr,
     seen_peers::{SeenPeer, SeenPeers},
+    PeerSource,
 };
 use crate::{collections::HashSet, sync::AwaitDrop};
 use rand::Rng;
@@ -128,7 +130,15 @@ pub(crate) struct PexPeer {
 impl PexPeer {
     /// Call this whenever new connection to this peer has been established. The `closed` should
     /// trigger when the connection gets closed.
-    pub fn handle_connection(&self, addr: PeerAddr, closed: AwaitDrop) {
+    pub fn handle_connection(&self, addr: PeerAddr, source: PeerSource, closed: AwaitDrop) {
+        if addr.is_tcp()
+            && ConnectionDirection::from_source(source) == ConnectionDirection::Incoming
+        {
+            // Incomming TCP address can't be connected to (it has different port than the listener)
+            // so there is no point exchanging it.
+            return;
+        }
+
         if !self.state.write().unwrap().peers[self.peer_id]
             .addrs
             .insert(addr)
@@ -382,17 +392,17 @@ mod tests {
         let peer_a = discovery.new_peer();
         let addr_a = make_peer_addr();
         let close_a = DropAwaitable::new();
-        peer_a.handle_connection(addr_a, close_a.subscribe());
+        peer_a.handle_connection(addr_a, PeerSource::Dht, close_a.subscribe());
 
         let peer_b = discovery.new_peer();
         let addr_b = make_peer_addr();
         let close_b = DropAwaitable::new();
-        peer_b.handle_connection(addr_b, close_b.subscribe());
+        peer_b.handle_connection(addr_b, PeerSource::Dht, close_b.subscribe());
 
         let peer_c = discovery.new_peer();
         let addr_c = make_peer_addr();
         let close_c = DropAwaitable::new();
-        peer_c.handle_connection(addr_c, close_c.subscribe());
+        peer_c.handle_connection(addr_c, PeerSource::Dht, close_c.subscribe());
 
         let (a0, _) = peer_a.new_link(&repo_0);
         let (b0, _) = peer_b.new_link(&repo_0);

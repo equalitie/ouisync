@@ -84,7 +84,7 @@ impl MessageBroker {
 
     pub fn add_connection(&self, stream: raw::Stream, permit: ConnectionPermit) {
         self.pex_peer
-            .handle_connection(permit.addr(), permit.released());
+            .handle_connection(permit.addr(), permit.source(), permit.released());
         self.dispatcher.bind(stream, permit)
     }
 
