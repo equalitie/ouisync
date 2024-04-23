@@ -129,8 +129,11 @@ impl Pool {
     }
 
     pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
-        self.write.close().await;
+        // Make sure to first close `reads` and only then `write`. That way when closing the write
+        // connection it is the last remaining connection and so it performs a WAL checkpoint and
+        // removes the auxiliary db files (*-wal and *-shm).
         self.reads.close().await;
+        self.write.close().await;
 
         Ok(())
     }
