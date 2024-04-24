@@ -16,7 +16,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
-import java.util.concurrent.CountDownLatch
+import java.net.URLConnection
 
 /** OuisyncPlugin */
 class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
@@ -141,12 +141,17 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
   private fun startFilePreviewAction(arguments: HashMap<String, Any>): String {
     val authority = arguments["authority"]
-    val path = arguments["path"]
+    val path = arguments["path"] as String
     val size = arguments["size"]
     val useDefaultApp = arguments["useDefaultApp"] as Boolean? ?: false
 
     val uri = Uri.parse("content://$authority.pipe/$size$path")
-    val intent = getIntentForAction(uri, Intent.ACTION_VIEW)
+    val mimeType = URLConnection.guessContentTypeFromName(path) ?: "application/octet-stream"
+
+    val intent = Intent(Intent.ACTION_VIEW)
+      // Some apps (e.g., Google Files) can't open the file unless we specify the type explicitly.
+      .setDataAndType(uri, mimeType)
+      .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
     try {
         if (useDefaultApp) {
@@ -176,21 +181,12 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
     Log.d(javaClass.simpleName, "Uri: ${uri.toString()}")
 
-    val intent = getIntentForAction(uri, Intent.ACTION_SEND)
-    intent.setType("*/*")
+    val intent = Intent(Intent.ACTION_SEND)
+      .setType("*/*")
+      .putExtra(Intent.EXTRA_STREAM, uri)
+      .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
     activity?.startActivity(Intent.createChooser(intent, title))
   }
-
-  private fun getIntentForAction(
-          intentData: Uri,
-          intentAction: String
-  ) = Intent().apply {
-        data = intentData
-        action = intentAction
-
-        putExtra(Intent.EXTRA_STREAM, intentData)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-      }
 }
 

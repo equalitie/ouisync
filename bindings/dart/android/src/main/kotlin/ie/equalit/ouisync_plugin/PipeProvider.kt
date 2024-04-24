@@ -26,23 +26,16 @@ class PipeProvider: AbstractFileProvider() {
             get() = android.os.Build.VERSION.SDK_INT >= 26
     }
 
-    private var _handler: Handler? = null
-
-    private val handler: Handler
-        @Synchronized get() {
-            if (_handler == null) {
-                Log.d(TAG, "Creating worker thread")
-
-                val thread = HandlerThread("${javaClass.simpleName} worker thread")
-                thread.start();
-                _handler = Handler(thread.getLooper())
-            }
-
-            return _handler!!
-        }
+    private lateinit var handler: Handler
 
     override fun onCreate(): Boolean {
         Log.d(TAG, "onCreate")
+
+        val thread = HandlerThread("${javaClass.simpleName} worker thread")
+        thread.start();
+
+        handler = Handler(thread.getLooper())
+
         return true
     }
 
