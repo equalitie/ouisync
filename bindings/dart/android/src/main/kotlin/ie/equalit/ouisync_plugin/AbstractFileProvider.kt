@@ -43,6 +43,7 @@ abstract class AbstractFileProvider: ContentProvider() {
             }
         }
 
+        // TODO: Do we actually need the wrapper?
         return LegacyCompatCursorWrapper(cursor)
     }
 
