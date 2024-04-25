@@ -92,7 +92,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositorySetCredentials {
                 repository,
                 credentials,
-            } => repository::set_credentials(&self.state, repository, credentials)
+            } => repository::set_credentials(&self.state, repository, credentials.into())
                 .await?
                 .into(),
             Request::RepositorySetAccessMode {
@@ -244,7 +244,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                 file::read(&self.state, file, offset, len).await?.into()
             }
             Request::FileWrite { file, offset, data } => {
-                file::write(&self.state, file, offset, data).await?.into()
+                file::write(&self.state, file, offset, data.into())
+                    .await?
+                    .into()
             }
             Request::FileTruncate { file, len } => {
                 file::truncate(&self.state, file, len).await?.into()
