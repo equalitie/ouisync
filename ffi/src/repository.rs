@@ -460,17 +460,8 @@ pub(crate) async fn mirror_exists(
 }
 
 /// Mount all opened repositories
-pub(crate) async fn mount_all(state: &State, mount_point: PathBuf) -> Result<(), Error> {
-    let repos = state.repositories.collect();
-    state
-        .mounter
-        .mount_all(
-            mount_point,
-            repos
-                .iter()
-                .map(|holder| (holder.store_path.as_ref(), &holder.repository)),
-        )
-        .await?;
+pub(crate) async fn mount_root(state: &State, mount_point: PathBuf) -> Result<(), Error> {
+    state.mounter.mount_root(mount_point).await?;
 
     Ok(())
 }
@@ -602,16 +593,6 @@ impl Repositories {
 
     pub fn get(&self, handle: RepositoryHandle) -> Result<Arc<RepositoryHolder>, InvalidHandle> {
         self.inner.read().unwrap().registry.get(handle).cloned()
-    }
-
-    pub fn collect(&self) -> Vec<Arc<RepositoryHolder>> {
-        self.inner
-            .read()
-            .unwrap()
-            .registry
-            .values()
-            .cloned()
-            .collect()
     }
 }
 

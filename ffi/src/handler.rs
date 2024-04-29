@@ -202,7 +202,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .into()
             }
             Request::RepositoryMountAll(mount_point) => {
-                repository::mount_all(&self.state, mount_point)
+                repository::mount_root(&self.state, mount_point)
                     .await?
                     .into()
             }
