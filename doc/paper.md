@@ -511,7 +511,7 @@ Ouisync uses the following cryptographic primitives:
 * List approaches how Ouisync can improve anonymity and confidentiality (Tor, multi-hop
   syncing,...) and their pros and cons.
 
-[link-csprng] https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator
+[link-csprng]: https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator
 [link-kdf](https://en.wikipedia.org/wiki/Key_derivation_function)
 [link-dag](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
 [link-ouisync-app](https://github.com/equalitie/ouisync-app)
