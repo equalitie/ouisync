@@ -334,7 +334,7 @@ abundance of caution deduplication is currently disabled. If a more thorough sec
 proves that the risk is negligible then it can be enabled in the future. To do that, only the nonce
 formula needs to be changed to `HASH(read_key || plaintext_context)`.
 
-The reason the encryption doesn't use authentication ([AEAD](link-wiki-aead)) is that authentication
+The reason the encryption doesn't use authentication ([AEAD][link-wiki-aead]) is that authentication
 is implemented at the level of snapshots using the write key. This is detailed in the following
 section.
 
@@ -353,7 +353,7 @@ replica. It exists as a means to differentiate the branches.
 
 A snapshot is a subset of a branch and represents a single edit of a repository (e.g., creating a
 file, writing to a file, moving/renaming a file, etc...). Snapshot is represented as a [Merkle
-tree](link-wiki-merkle-tree) with one **Root node**, `N` layers of **Inner nodes** (currently `N=3`)
+tree][link-wiki-merkle-tree] with one **Root node**, `N` layers of **Inner nodes** (currently `N=3`)
 and one layer of **Leaf nodes**. Each root and `N-1` inner node layers contains up to 256 children.
 The last (`N`th) inner node layer can have any number of children but having it bigger than 256 by
 orders of magnitude might degrade performance.
@@ -361,12 +361,12 @@ orders of magnitude might degrade performance.
 Assuming max 256 nodes in the `N`th inner node layer yields the maximum number of blocks being
 `256^4`, or `128` terabytes.
 
-The root node contains the writer ID, [version vector](link-wiki-version-vector), hash of its
+The root node contains the writer ID, [version vector][link-wiki-version-vector], hash of its
 children and a cryptographic signature.
 
 The version vector consist of `(writer_id, version: unsigned integer)`  pairs and serves to causally
 order the snapshots (forms a [happened-before
-relation](https://en.wikipedia.org/wiki/Happened-before)).  If a snapshot `A` has version vector
+relation][https://en.wikipedia.org/wiki/Happened-before]).  If a snapshot `A` has version vector
 that is *happened-before* that of a snapshot `B`, then it's said that `A` is outdated relative to
 `B`. Outdated snapshots are removed in a processes called **Pruning**. In some cases, outdated
 snapshots may be preserved (temporarily or permanently), for example to support *backups*. If two
@@ -426,7 +426,7 @@ This section describes the way local password works:
 
 The Ouisync repository database contains a table for storing **Metadata**. They are arbitrary
 key/value pairs of byte strings. The values can optionaly be encrypted. When the user opts to use
-local password, a **Local secret key** is first generated using a [KDF](link-kdf) from the user
+local password, a **Local secret key** is first generated using a [KDF][link-kdf] from the user
 provided local password and a randomly generated salt (the salt is then stored in the metadata).
 Then the actual access secret (read key / write key) is encrypted using this local secret and the
 resulting ciphertext stored in the metadata. To open the repository, the user needs to provide the
@@ -512,10 +512,10 @@ Ouisync uses the following cryptographic primitives:
   syncing,...) and their pros and cons.
 
 [link-csprng]: https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator
-[link-kdf](https://en.wikipedia.org/wiki/Key_derivation_function)
-[link-dag](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
-[link-ouisync-app](https://github.com/equalitie/ouisync-app)
-[link-ouisync-library](https://github.com/equalitie/ouisync)
-[link-wiki-aead](https://en.wikipedia.org/wiki/Authenticated_encryption#Authenticated_encryption_with_associated_data_(AEAD))
-[link-wiki-merkle-tree](https://en.wikipedia.org/wiki/Merkle_tree)
+[link-kdf]: https://en.wikipedia.org/wiki/Key_derivation_function
+[link-dag]: https://en.wikipedia.org/wiki/Directed_acyclic_graph
+[link-ouisync-app]: https://github.com/equalitie/ouisync-app
+[link-ouisync-library]: https://github.com/equalitie/ouisync
+[link-wiki-aead]: https://en.wikipedia.org/wiki/Authenticated_encryption#Authenticated_encryption_with_associated_data_(AEAD)
+[link-wiki-merkle-tree]: https://en.wikipedia.org/wiki/Merkle_tree
 [link-wiki-version-vector](https://en.wikipedia.org/wiki/Version_vector)
