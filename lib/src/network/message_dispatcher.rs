@@ -252,7 +252,7 @@ type ChannelQueueSender = UnboundedSender<(PermitId, Vec<u8>)>;
 
 struct RecvState {
     multi_stream: Arc<MultiStream>,
-    queues: Arc<BlockingMutex<HashMap<MessageChannelId, ChannelQueue>>>,
+    queues: BlockingMutex<HashMap<MessageChannelId, ChannelQueue>>,
     single_sorter: Semaphore,
 }
 
@@ -260,7 +260,7 @@ impl RecvState {
     fn new() -> Self {
         Self {
             multi_stream: Arc::new(MultiStream::new()),
-            queues: Arc::new(BlockingMutex::new(HashMap::default())),
+            queues: BlockingMutex::new(HashMap::default()),
             single_sorter: Semaphore::new(1),
         }
     }
