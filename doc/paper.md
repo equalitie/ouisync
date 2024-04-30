@@ -81,51 +81,49 @@ attacks. Such adversary may be as simple as the admin of the WiFi router
 currently in use, or a state actor performing these actions on the global
 internet.
 
-The user-level adversary is set to be the one who may or may not possess one of the three Ouisync
-tokens and may or may not be using the same WiFi router. This adversary does not have a physical
+The user-level adversary is set to be the one who may (or may not) possess one of the three Ouisync
+tokens and may (or may not) be using the same WiFi router. This adversary does not have a physical
 access to the device.
 
-The adversary with a physical access to the device is self explanatory. Here we
-can distinquish between those that have the phone locked (e.g. someone who
-found the phone) or unlocked (e.g. someone who can force the user to unlock
-it).
+The adversary with physical access to the device is one who got hold of the device. For example by borrowing it, theft or device seizure. 
+Here we can distinguish between those that have the phone locked (e.g. someone who found the phone) or unlocked (e.g. someone who can force 
+the user to unlock it).
 
-### Threat model
-
-Ouisync gives strong protection to the user data in a repository in a sense that an adversary
+Ouisync gives strong protection to the user data in a repository. An adversary
 without the read or write token can not guess what the content of the repository is other than by
 looking at the repository size.  This means the file contents, sizes, permissions, file and
-directory counts as well as the directory structure is not be accessible without the read or write
+directory counts as well as the directory structure is not accessible without the read or write
 token. This is achieved by encrypting the file and directory contents and splitting them into blocks
 of data equal in size (sharding).
 
-Additionally, assuming the blind token is private, Ouisync also guarantees that a network-level and
+Additionally, assuming the blind token is kept private, Ouisync also guarantees that a network-level and
 user-level adversary is not able to download the encrypted repository data and metadata (blocks and
-the index). This is to protect from attacks where an adversay preemptively downloads found (locally
-or on the BitTorrent DHT) repositories in a hope that a read or write token is leaked in the future
-or a cryptographic exploit is found.
+the index). This is done to protect from attacks where an adversay preemptively downloads found (locally
+or on the BitTorrent DHT) repositories in the hope of retrieving the  read or write token later on, or in the case that a cryptographic 
+exploit is found.
 
 Finally, for as long as the repository is locked on the user's device, Ouisync also
 cryptographically hides from an adversary having physical access to the device whether the device
 owner has a read or write access to the repository. See the [Plausible deniability
 section](#plausible-deniability) for details.
 
-Ouisync currently does _not_ attempt to hide the IP addresses of peers using Ouisync alone or
-sharing particular repositories. This is an aspect Ouisync might attempt to tackle in the future,
-but right now the only protection from user-level and network-level adversaries collecting user's IP
-address is to turn off BitTorrent DHT and/or local discoveries.
+Ouisync currently does _not_ attempt to hide the IP addresses of peers using Ouisync alone or sharing particular repositories. This is an 
+aspect Ouisync might attempt to tackle in the future, but right now the only protection from user-level and network-level adversaries 
+collecting user's IP address is to turn off BitTorrent DHT and/or local discoveries.
 
-### Confidentiality and Anonymity
 
-Confidentiality
+### Confidentiality and Anonymity 
+
+**Confidentiality**
 
 > "information is not made available nor disclosed to unauthorized entities."
 
-Anonymity
+**Anonymity**
 
-> "property that guarantees user’s identity will not be disclosed without consent."
+> "property that guarantees a user’s identity will not be disclosed without consent."
 
-#### Ouisync use detection
+
+#### Ouisync usage detection
 
 In order to find replicas, Ouisync emits messages that a user-level and
 network-level adversary may detect to determine which IP addresses on the local
@@ -141,55 +139,48 @@ These messages include:
 
 #### Repository enumeration
 
-Ouisync will only reveal intent to sync a repository to other replicas if they also
-possess the blind token to that same repository.
+Ouisync will only reveal intent to sync a repository to other replicas if they also possess the blind token to that same repository.
 
-A user-level adversary without any token is able to count the number of repositories
-on a replica by establishing a connection and performing initial handshake.
+A user-level adversary without any token is able to count the number of repositories on a replica by establishing a connection and 
+performing the initial handshake.
 
-A network-level adversary (with or without tokens) may enumerate DHT info
-hashes sent from a selected IP address.
+A network-level adversary (with or without tokens) may enumerate DHT info hashes sent from a selected IP address.
 
-An adversary with a physical access to the device is currently able to retrieve
-blind tokens from repositories even without unlocking said device.
+An adversary with physical access to the device is currently able to retrieve blind tokens from repositories even without unlocking said 
+device.
 
-Overcoming these anonymity issues remains a [future work](#future-work).
+Overcoming these issues with anonymity remain part of our [future work](#future-work).
 
 #### Peer Enumeration
 
-A network-level adversary is able to read the plain text DHT messages to learn
-about DHT infohashes that a replica on a particular IP is announcing to.
+A network-level adversary is able to read the plain text DHT messages to learn about DHT infohashes that a replica on a particular IP is 
+announcing to.
 
-A user-level adversary with a token or the DHT infohash is able to "visit" the
-BitTorrent DHT swarm corresponding to the token and enumerate IP addresses
-involved in syncing that repository.
+A user-level adversary with a token or the DHT infohash is able to "visit" the BitTorrent DHT swarm corresponding to the token and enumerate 
+IP addresses involved in syncing that repository.
 
-A user-level adversary without any token is able to run a BitTorrent DHT
-crawler to find every existing swarm in it. These swarms can then be filtered
-to only include those that have peers communicating with the Ouisync protocol.
+A user-level adversary without any token is able to run a BitTorrent DHT crawler to find every existing swarm in it. These swarms can then 
+be filtered to only include those that have peers communicating with the Ouisync protocol.
 
-By enumerating peers in these swarms, the adversary is capable of _estimating_
-social graphs (if two different IP addresses are announced in a swarm with
-otherwise low number of peers, then the probability of the users behind those
-IP addresses knowing each other goes up).
+By enumerating peers in these swarms, the adversary is capable of _estimating_ social graphs (if two different IP addresses are announced in a swarm with otherwise low number of peers, then the probability of  users behind those IP addresses knowing each other increases).
 
 ### Integrity and Authenticity
 
-Integrity:
+**Integrity:**
 
 > "data is protected from unauthorized changes to ensure that it is reliable and correct."
 
-Authenticity:
+**Authenticity:**
 
 > "means that one can establish that the content originated from a trusted entity."
 
 Every Ouisync snapshot consists of a merkle-tree-like data structure which has hashes of the
-encrypted blocks as its leafs. The root hash of the merkle tree is signed by the private key
+encrypted blocks as its leaves. The root hash of the merkle tree is signed by the private key
 contained in the write token. By verifying this signature, replicas quickly determine
 the integrity and authenticity of every snapshot.
 
 Each snapshot is also associated with a monotonically increasing version
-vector. This way old snapshots are not re-introduced to replicas which already
+vector. In this way old snapshots are not re-introduced to replicas which already
 have newer version of the repository.
 
 See the [Storage](#storage) section for details.
@@ -201,20 +192,24 @@ user can plausibly deny that they possess the read or write access secret to a l
 stored on their device. Ouisync does it by making repositories with blind access indistinguishable
 from those with read/write access for as long as they are locked.
 
+Note however, that the GUI application allows the user to “Remember Password” (where the secret is 32 
+Bytes generated either randomly or through a password hashing function). The plausible deniability argument does not hold when this option 
+is enabled.
+
 This is achieved by always filling in fields with random data which would normally not be present or
 would be empty. This includes the encrypted read and write keys in the metadata table (see section
 [Metadata and local passwords](#metadata-and-local-passwords) for more information).
 
-Because one of the main use cases of Ouisync is storing other people's data without having access to
-them, a user can always claim than any locked repository on their device is just a blind repository
+Since storing other people's data without being able to access it is one of the 
+three Ouisync features, a user can always claim that any locked repository on their device is just a blind repository 
 they store on someone else's behalf.
 
 Ouisync also supports another type of plausible deniability: user can plausibly deny they have
-a write access to a repository while admitting they only have a read access. To do this they must
+a write access to a repository while admitting they only have read access. To do this they must
 use two separate local passwords: one for reading and one for writing. The metadata contains two
 separate entries, one to store the read key encrypted with the local read password and one to store
 the write key encrypted with the local write password. If the user truly has only read access the
-write secret entry is filled with random junk instead, analogously to the blind case. Note that even
+write secret entry is filled with random junk instead, analogously to the blind token usecase. Note that even
 if only one local password is used, the metadata still contains two separate entries, one for the
 write key and one for the read key. They are just encrypted using the same password.
 
