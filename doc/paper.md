@@ -341,7 +341,7 @@ section.
 #### Index
 
 In order to find which blocks belong to a particular blob (and in which order) a separate structure
-called **Index** is used. This can be conceptually though of as a lookup table whose keys are
+called **Index** is used. This can be conceptually thought of as a lookup table whose keys are
 `(blob_id, block_numer)` pairs and values are block ids. The way the index is actually stored in the
 database is quite different from this conceptual view and this section describes it in detail.
 
@@ -349,7 +349,7 @@ Index consist of **Branches** and those in turn consist of **Snapshots**:
 
 A branch is a subset of the index associated with a particular *writer replica* which is identified
 by an unique identifier called the **Writer ID**. A branch contains all the content created by that
-replica. It exist as a means to differentiate the branches.
+replica. It exists as a means to differentiate the branches.
 
 A snapshot is a subset of a branch and represents a single edit of a repository (e.g., creating a
 file, writing to a file, moving/renaming a file, etc...). Snapshot is represented as a [Merkle
@@ -396,17 +396,14 @@ number and sizes of the blobs in the repository to anyone who doesn't posses the
 To find a block ID corresponding to a given *locator* in a given *branch*, the following algorithm
 is used:
 
-1. The latest root node in the branch is loaded (the latest meaning its version vector is
-happened-after that of all the other root nodes in the same branch. Because of the invariant, there
-is always exactly one such node).
-2. The inner node that is a child of the root node from the previous step and whose bucket is the
-first byte of the locator hash is loaded.
-3. The inner node that is a child of the inner node from the previous step and whose bucket is the
-second byte of the locator hash is loaded.
-4. The inner node that is a child of the inner node from the previous step and whose bucket is the
-third byte of the locator hash is loaded
-5. The leaf node that is a child of the inner node from the previous step and whose locator hash
-matches the locator that's being looked up is loaded and its block id is returned.
+1.	The latest root node in the branch is loaded (the latest meaning its version vector is happened-after that of all the other root nodes
+in the same branch. Because of the invariant, there is always exactly one such node).
+2.	The inner node that is a child of the root node from the previous step and whose bucket is the first byte of the locator hash is loaded.
+3.	The inner node that is a child of the inner node from the previous step and whose bucket is the second byte of the locator hash is
+loaded.
+4.	The inner node that is a child of the inner node from the previous step and whose bucket is the third byte of the locator hash is loaded
+5.	The leaf node that is a child of the inner node from the previous step and whose locator hash matches the locator that's being looked up
+is loaded and its block id is returned.
 
 Currently Ouisync uses 3 inner layers but the above algorithm could be extended to any number of
 inner layers up to 32 which is the byte length of the locator hash.
@@ -415,7 +412,7 @@ A snapshot typically shares most of its nodes with other snapshots (even across 
 inner or leaf node has always only one parent within a single branch but can have multiple parents
 across branches. Thus while the snapshot is a tree, the index is a [DAG](link-dag) . This allows
 very efficient transfer across replicas as only the nodes and blocks that are different need to be
-transferred. This means that snapshot can be conceptually though of as diff.
+transferred. This means that snapshot can be conceptually thought of as diff.
 
 #### Metadata and local passwords
 
@@ -478,7 +475,7 @@ share it because only they can decrypt such messages.
 
 Ouisync uses transport encryption and authentication in order to prevent eavesdropping and
 man-in-the-middle attacks.  This means that unless the man-in-the-middle attacker has the blind
-token they and an eaverdroper, will not be able to decrypt the synchronization messages. These
+token and an eaverdroper, they will not be able to decrypt the synchronization messages. These
 include:
 
 * The writer IDs
