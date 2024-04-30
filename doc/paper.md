@@ -366,7 +366,7 @@ children and a cryptographic signature.
 
 The version vector consist of `(writer_id, version: unsigned integer)`  pairs and serves to causally
 order the snapshots (forms a [happened-before
-relation][https://en.wikipedia.org/wiki/Happened-before]).  If a snapshot `A` has version vector
+relation][link-wiki-happened-before]).  If a snapshot `A` has version vector
 that is *happened-before* that of a snapshot `B`, then it's said that `A` is outdated relative to
 `B`. Outdated snapshots are removed in a processes called **Pruning**. In some cases, outdated
 snapshots may be preserved (temporarily or permanently), for example to support *backups*. If two
@@ -518,4 +518,5 @@ Ouisync uses the following cryptographic primitives:
 [link-ouisync-library]: https://github.com/equalitie/ouisync
 [link-wiki-aead]: https://en.wikipedia.org/wiki/Authenticated_encryption#Authenticated_encryption_with_associated_data_(AEAD)
 [link-wiki-merkle-tree]: https://en.wikipedia.org/wiki/Merkle_tree
-[link-wiki-version-vector](https://en.wikipedia.org/wiki/Version_vector)
+[link-wiki-version-vector]: https://en.wikipedia.org/wiki/Version_vector
+[link-wiki-happened-before]: https://en.wikipedia.org/wiki/Happened-before
