@@ -4,57 +4,57 @@
 
 Ouisync is a decentralized technology and client application for sharing files and syncing repositories between devices, peer to peer. 
 It uses the BitTorrent DHT for addressing and implements encryption of all content transmitted and stored on a user’s device. 
-This paper outlines the main components of Ouisync operations and usage, describes the project’s threat model and goes into some detail of its technical implementation. For user focused documentation refer to the [FAQ on the Ouisync website](https://ouisync.net/support/).
+This paper outlines the main components of Ouisync operations and usage, describes the project’s threat model and goes into some detail of 
+its technical implementation. For user focused documentation refer to the [FAQ on the Ouisync website](https://ouisync.net/support/).
 
+### Concepts
 
+The core functionality of Ouisync deals with **Repositories**.
+A repository is a folder on a local device that is managed by the Ouisync application.The user can add and manipulate files in a Repository, 
+imported from the local device to the Ouisync application. A Repository can be and  shared with other peers (also called **Replicas**). A 
+repository is created using one of the following Access modes:
 
-
-The core concept of Ouisync is that of a **Repository**. It is a folder that is managed by Ouisync
-and shared with other peers (also called **Replicas**). A repository can be opened in one of
-three **Access modes**:
-
-- **Blind** mode : allow syncing the repository with other peers but not reading or writing its
-    content.
-- **Read** mode: allow syncing and reading, but not writing
-- **Write** mode: allow syncing, reading and writing
-
+- **Blind** mode : peers can sync the Repository but cannot access or modify the files in it.
+- **Read** mode: peers can read but not write to the Repository.
+- **Write** mode: allow syncing, reading and writing.
+  
 Each repository is associated with a **Share token** (or just "Token") which is both a globally
 unique identifier of the repository and also its access keys. There are three types of tokens
 corresponding to each access mode (blind, read and write).
 
-The content of a repository (files and directories) is stored in a custom format designed for
-security and efficient synchronization. It consist of three basic parts:
+The contents of a repository (files and directories) are stored in a custom format designed for
+security and efficient synchronization. The format consists of three parts:
 
-- **Blocks** : encrypted fixed-size chunks the files and directories are split into
-- **Index** : a lookup table to find which blocks belong to which files/directories, it's second
-  purpose is to determine which blocks belong to the repository
+- **Blocks** : encrypted fixed-size chunks the files and directories are split into.
+- **Index** : a lookup table to find which blocks belong to which files/directories, also used to determine which blocks belong to the repository.
 - **Metadata** : arbitrary key-value pairs associated with the repository but not synced with other
-    replicas
+    replicas.
 
 Files and directories are encrypted and split into equally sized blocks to hide the content and any
 metadata associated with them.
 
-To support concurrent editing the index consist of **Branches**. Branches are further split into
-**Snapshots** where each snapshot corresponds to a state of the repository at some particular point
-in time. Within a single branch, all snapshots are from a single replica and form a linear history
-of edits.
+To support concurrent editing of files within a Repository by two or more peers, the index is divided into **Branches**. Branches are 
+further split into **Snapshots** where each snapshot corresponds to a state of the repository at some particular point in time. Within a 
+single branch, all snapshots are from a single replica and form a linear history of edits.
+Synchronization uses a custom peer-to-peer, end-to-end encrypted protocol which is efficient and secure. Furthermore, the protocol doesn't 
+require access to the global internet and is specifically designed to work also in isolated networks and under various adversarial 
+conditions.
 
-Synchronization uses a custom peer-to-peer, end-to-end encrypted protocol which is efficient and
-secure. Furthermore, the protocol doesn't require access to the global internet and is specifically
-designed to work also in isolated networks and under various adversarial conditions.
+### Threat model
+
+Ouisync was created for unrestricted and uninhibited data exchange with a focus on users living in highly restricted (and/or censored) 
+network environments. For this reason the protocol is decentralized, files and repositories are encrypted in transit and at-rest. However, 
+no system is fullproof in every scenario and Ouisync has distinct threat scenarios, which are described below.
 
 ### Actors and tokens
 
 Ouisync recognizes three types of non-adversary actors based on whether they posses one of the
 following three cryptographic tokens or the BitTorrent infohash:
 
-* Write token - The user of this replica may decrypt the repository content
-  as well as make modifications to it
+* Write token - The user of this replica may decrypt the repository content as well as make modifications to it.
 * Read token - The user can decrypt the content.
-* Blind token - The user is able to exchange the encrypted repository content
-  with replicas having that same repository
-* BitTorrent DHT info hash - The user is able to locate other replicas of this
-  repository on the BitTorrent DHT
+* Blind token - The user is able to exchange the encrypted repository’s content with replicas having that same repository.
+* BitTorrent DHT info hash - The user is able to locate other replicas of this repository on the BitTorrent DHT.
 
 For information about how these tokens are implemented and how the privileges are enforced see the
 section [Access secrets and share tokens](#access-secrets-and-share-tokens).
@@ -63,9 +63,9 @@ Actors may de-escalate token privileges in the direction Write token -> Read
 token -> Blind token -> DHT infohash.  Escalation in the other direction is
 cryptographically not possible.
 
-Each type of token can be further categorized as public or private depending on
-whether it's in a posession of a private group of users or it's been made
-public (intentionally or by accident).
+Each type of token can be further categorized as public or private depending on whether it's shared inside a private group of users or made 
+public (intentionally or by accident). To maintain the intergrity of Ouisync tokens, particularly the read and write tokens, it is important 
+to share them securely off-channel (e.g. via secure messengers).
 
 ### Adversary types
 
