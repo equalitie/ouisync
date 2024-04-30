@@ -2,6 +2,12 @@
 
 ### Overview
 
+Ouisync is a decentralized technology and client application for sharing files and syncing repositories between devices, peer to peer. 
+It uses the BitTtorrent DHT for addressing and implements encryption of all content transmitted and stored on a user’s device.
+
+
+
+
 The core concept of Ouisync is that of a **Repository**. It is a folder that is managed by Ouisync
 and shared with other peers (also called **Replicas**). A repository can be opened in one of
 three **Access modes**:
