@@ -287,7 +287,7 @@ files and directories.
 
 Each blob is associated with a unique, 256-bit long number called the **Blob ID**. The root
 directory's blob ID is hardcoded constant of all-zeroes. All the other blob IDs are randomly
-generated (with a [CSPRNG](link-csprng)). To find a blob id for a particular blob at a given path,
+generated (with a [CSPRNG][link-csprng]). To find a blob id for a particular blob at a given path,
 one needs to open it's parent directory and lookup the blob ID by the blob name. To open the parent,
 it's parent might need to be opened first, and so on all the way to the root (the root's blob id is
 constant so doesn't need to be looked up).
@@ -511,7 +511,7 @@ Ouisync uses the following cryptographic primitives:
 * List approaches how Ouisync can improve anonymity and confidentiality (Tor, multi-hop
   syncing,...) and their pros and cons.
 
-[link-csprng]:https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator
+[link-csprng]: https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator
 [link-kdf](https://en.wikipedia.org/wiki/Key_derivation_function)
 [link-dag](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
 [link-ouisync-app](https://github.com/equalitie/ouisync-app)
