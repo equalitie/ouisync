@@ -218,7 +218,7 @@ write key and one for the read key. They are just encrypted using the same passw
 ### Disclaimer
 
 This documentation is not a formal specification. Currently the only truly authoritative source of
-truth is the source code ([app]((https://github.com/equalitie/ouisync-app)), [library](https://github.com/equalitie/ouisync)).
+truth is the source code ([app]((https://github.com/equalitie/ouisync-app), [library](https://github.com/equalitie/ouisync)).
 
 ### Access secrets and share tokens
 
