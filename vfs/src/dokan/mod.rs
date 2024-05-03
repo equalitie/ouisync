@@ -322,12 +322,18 @@ impl VirtualFilesystem {
         create_disposition: u32,
         create_options: u32,
     ) -> Result<CreateFileInfo<EntryHandle>, Error> {
-        tracing::debug!("enter");
-
         let create_disposition = create_disposition.try_into()?;
         let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
         let create_dir = create_options & FILE_DIRECTORY_FILE > 0;
         let delete_access = access_mask.has_delete();
+
+        tracing::trace!(
+            "enter delete_on_close:{:?}, create_dir:{:?}, delete_access:{:?}, create_disposition:{:?}",
+            delete_on_close,
+            create_dir,
+            delete_access,
+            create_disposition,
+        );
 
         let path = to_path(file_name)?;
 
@@ -381,7 +387,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
 
         match &context.entry {
             Entry::File(entry) => {
@@ -528,7 +534,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         match &context.entry {
             Entry::File(entry) => {
                 let mut lock = entry.file.lock().await;
@@ -559,7 +565,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<FileInfo, Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
 
         let (attributes, file_size) = match &context.entry {
             Entry::File(entry) => {
@@ -658,7 +664,7 @@ impl VirtualFilesystem {
             .map_err(Error::into)
     }
 
-    #[instrument(skip_all, fields(?_file_name), err(Debug))]
+    #[instrument(skip_all, fields(?_file_name, file_attributes = file_attribute_to_string(_file_attributes)), err(Debug))]
     async fn async_set_file_attributes<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &self,
         _file_name: &U16CStr,
@@ -724,7 +730,7 @@ impl VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         let file_entry = context.entry.as_file()?;
         file_entry.shared.write().await.delete_on_close = info.delete_on_close();
         Ok(())
@@ -748,7 +754,7 @@ impl VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         let dir_entry = context.entry.as_directory()?;
         let path = to_path(file_name)?;
         let mut shared = dir_entry.shared.write().await;
@@ -785,7 +791,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         handle: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
 
         let src_path = to_path(file_name)?;
         let dst_path = to_path(new_file_name)?;
@@ -857,7 +863,7 @@ impl VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         // TODO: How do the fwo functions differ?
         self.async_set_allocation_size(file_name, offset, info, context)
             .await
@@ -883,7 +889,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         let desired_len: u64 = alloc_size
             .try_into()
             .map_err(|_| STATUS_INVALID_PARAMETER)?;
@@ -969,7 +975,7 @@ impl VirtualFilesystem {
         &self,
         _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<VolumeInfo, Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         Ok(VolumeInfo {
             name: U16CString::from_str("ouisync").unwrap(),
             serial_number: 0,
@@ -1417,4 +1423,62 @@ pub(crate) fn default_mount_flags() -> MountFlags {
     //flags |= MountFlags::DEBUG | MountFlags::STDERR;
     //flags |= MountFlags::REMOVABLE;
     MountFlags::empty()
+}
+
+// For debugging
+fn file_attribute_to_string(file_attributes: u32) -> String {
+    let mut ret = String::new();
+
+    let mut check = |attr: u32, attr_name: &str| {
+        if file_attributes & attr > 0 {
+            if !ret.is_empty() {
+                ret += "|";
+            }
+            ret += attr_name;
+        }
+    };
+
+    check(winnt::FILE_ATTRIBUTE_READONLY, "FILE_ATTRIBUTE_READONLY");
+    check(winnt::FILE_ATTRIBUTE_HIDDEN, "FILE_ATTRIBUTE_HIDDEN");
+    check(winnt::FILE_ATTRIBUTE_SYSTEM, "FILE_ATTRIBUTE_SYSTEM");
+    check(winnt::FILE_ATTRIBUTE_DIRECTORY, "FILE_ATTRIBUTE_DIRECTORY");
+    check(winnt::FILE_ATTRIBUTE_ARCHIVE, "FILE_ATTRIBUTE_ARCHIVE");
+    check(winnt::FILE_ATTRIBUTE_DEVICE, "FILE_ATTRIBUTE_DEVICE");
+    check(winnt::FILE_ATTRIBUTE_NORMAL, "FILE_ATTRIBUTE_NORMAL");
+    check(winnt::FILE_ATTRIBUTE_TEMPORARY, "FILE_ATTRIBUTE_TEMPORARY");
+    check(
+        winnt::FILE_ATTRIBUTE_SPARSE_FILE,
+        "FILE_ATTRIBUTE_SPARSE_FILE",
+    );
+    check(
+        winnt::FILE_ATTRIBUTE_REPARSE_POINT,
+        "FILE_ATTRIBUTE_REPARSE_POINT",
+    );
+    check(
+        winnt::FILE_ATTRIBUTE_COMPRESSED,
+        "FILE_ATTRIBUTE_COMPRESSED",
+    );
+    check(winnt::FILE_ATTRIBUTE_OFFLINE, "FILE_ATTRIBUTE_OFFLINE");
+    check(
+        winnt::FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
+        "FILE_ATTRIBUTE_NOT_CONTENT_INDEXED",
+    );
+    check(winnt::FILE_ATTRIBUTE_ENCRYPTED, "FILE_ATTRIBUTE_ENCRYPTED");
+    check(
+        winnt::FILE_ATTRIBUTE_INTEGRITY_STREAM,
+        "FILE_ATTRIBUTE_INTEGRITY_STREAM",
+    );
+    check(winnt::FILE_ATTRIBUTE_EA, "FILE_ATTRIBUTE_EA");
+    check(winnt::FILE_ATTRIBUTE_PINNED, "FILE_ATTRIBUTE_PINNED");
+    check(winnt::FILE_ATTRIBUTE_UNPINNED, "FILE_ATTRIBUTE_UNPINNED");
+    check(
+        winnt::FILE_ATTRIBUTE_RECALL_ON_OPEN,
+        "FILE_ATTRIBUTE_RECALL_ON_OPEN",
+    );
+    check(
+        winnt::FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
+        "FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS",
+    );
+
+    ret
 }

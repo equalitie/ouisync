@@ -781,10 +781,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
         let debug_id = self.generate_debug_id();
 
         if self.debug_type == DebugType::Full {
-            println!(
-                "{debug_id} Enter: close_file {:?}",
-                file_name.to_string_lossy()
-            );
+            println!("{debug_id} Enter: close_file {:?}", file_name.as_ustr());
         }
 
         self.close_file_(file_name, info, context);
