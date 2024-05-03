@@ -389,6 +389,13 @@ impl VirtualFilesystem {
     ) {
         tracing::trace!("enter");
 
+        // We need to lock `self.handles` here to prevent anything from opening the file while this
+        // function runs. It is because if the file is marked for removal here and if some other
+        // function opens the file, then the function `self.repo.remove_entry` will fail with
+        // `Error::Locked`.
+        // Also see this issue: https://github.com/equalitie/ouisync-app/issues/414
+        let mut handles = self.handles.lock().await;
+
         match &context.entry {
             Entry::File(entry) => {
                 let mut file_lock = entry.file.lock().await;
@@ -411,12 +418,6 @@ impl VirtualFilesystem {
             }
             Entry::Directory(_) => (),
         };
-
-        // We need to lock `self.handles` here to prevent anything from opening the file while this
-        // function runs. It is because if the file is marked for removal here and if some other
-        // function opens the file, then the function `self.repo.remove_entry` will fail with
-        // `Error::Locked`.
-        let mut handles = self.handles.lock().await;
 
         if let Some(to_delete) = self
             .close_shared(context.entry.shared(), &mut handles)
