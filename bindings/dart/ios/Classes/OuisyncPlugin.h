@@ -79,6 +79,10 @@ enum ErrorCode {
    * Invalid handle to a resource (e.g., Repository, File, ...)
    */
   InvalidHandle = 15,
+  /**
+   * Entry has been changed and no longer matches the expected value
+   */
+  EntryChanged = 16,
   VfsInvalidMountPoint = 2048,
   VfsDriverInstall = (2048 + 1),
   VfsBackend = (2048 + 2),
