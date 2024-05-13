@@ -94,7 +94,7 @@ impl VirtualFilesystem {
         // want to open if it does already exist.
         create_directory: bool,
         create_disposition: CreateDisposition,
-        delete_access: bool,
+        access_mask: AccessMask,
         shared: Arc<AsyncRwLock<Shared>>,
     ) -> Result<(Entry, bool), Error> {
         use ouisync_lib::Error as E;
@@ -119,7 +119,7 @@ impl VirtualFilesystem {
                     return Err(E::EntryNotFound.into());
                 }
 
-                let entry = if delete_access {
+                let entry = if access_mask.has_delete() {
                     if create_directory {
                         Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
                     } else {
@@ -145,7 +145,7 @@ impl VirtualFilesystem {
             Err(other) => return Err(other.into()),
         };
 
-        let entry = if delete_access {
+        let entry = if access_mask.has_delete() {
             match existing_entry {
                 JointEntryRef::File(_) => Entry::new_file(
                     OpenState::Lazy {
@@ -161,7 +161,10 @@ impl VirtualFilesystem {
         } else {
             match existing_entry {
                 JointEntryRef::File(file_entry) => {
-                    let file = file_entry.open().await?;
+                    let mut file = file_entry.open().await?;
+                    if access_mask.has_append() {
+                        file.seek(SeekFrom::End(0));
+                    }
                     Entry::new_file(OpenState::Open(file), shared)
                 }
                 JointEntryRef::Directory(_) => {
@@ -186,7 +189,7 @@ impl VirtualFilesystem {
         create_directory: bool,
         create_disposition: CreateDisposition,
         delete_on_close: bool,
-        delete_access: bool,
+        access_mask: AccessMask,
     ) -> Result<(Entry, bool, u64), Error> {
         tracing::trace!("enter");
 
@@ -197,7 +200,7 @@ impl VirtualFilesystem {
                 &path,
                 create_directory,
                 create_disposition,
-                delete_access,
+                access_mask,
                 shared,
             )
             .await;
@@ -317,17 +320,23 @@ impl VirtualFilesystem {
         file_name: &U16CStr,
         _security_context: &IO_SECURITY_CONTEXT,
         access_mask: AccessMask,
-        _file_attributes: u32,
+        file_attributes: u32,
         _share_access: u32,
         create_disposition: u32,
         create_options: u32,
     ) -> Result<CreateFileInfo<EntryHandle>, Error> {
-        tracing::debug!("enter");
-
         let create_disposition = create_disposition.try_into()?;
         let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
         let create_dir = create_options & FILE_DIRECTORY_FILE > 0;
-        let delete_access = access_mask.has_delete();
+
+        tracing::trace!(
+            "enter delete_on_close:{:?}, create_dir:{:?}, access_mask:{:?}, create_disposition:{:?}, file_attributes:{:?}",
+            delete_on_close,
+            create_dir,
+            access_mask,
+            create_disposition,
+            file_attributes
+        );
 
         let path = to_path(file_name)?;
 
@@ -337,7 +346,7 @@ impl VirtualFilesystem {
                 create_dir,
                 create_disposition,
                 delete_on_close,
-                delete_access,
+                access_mask,
             )
             .await?;
 
@@ -381,7 +390,14 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
+
+        // We need to lock `self.handles` here to prevent anything from opening the file while this
+        // function runs. It is because if the file is marked for removal here and if some other
+        // function opens the file, then the function `self.repo.remove_entry` will fail with
+        // `Error::Locked`.
+        // Also see this issue: https://github.com/equalitie/ouisync-app/issues/414
+        let mut handles = self.handles.lock().await;
 
         match &context.entry {
             Entry::File(entry) => {
@@ -405,12 +421,6 @@ impl VirtualFilesystem {
             }
             Entry::Directory(_) => (),
         };
-
-        // We need to lock `self.handles` here to prevent anything from opening the file while this
-        // function runs. It is because if the file is marked for removal here and if some other
-        // function opens the file, then the function `self.repo.remove_entry` will fail with
-        // `Error::Locked`.
-        let mut handles = self.handles.lock().await;
 
         if let Some(to_delete) = self
             .close_shared(context.entry.shared(), &mut handles)
@@ -528,7 +538,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         match &context.entry {
             Entry::File(entry) => {
                 let mut lock = entry.file.lock().await;
@@ -559,7 +569,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<FileInfo, Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
 
         let (attributes, file_size) = match &context.entry {
             Entry::File(entry) => {
@@ -658,7 +668,7 @@ impl VirtualFilesystem {
             .map_err(Error::into)
     }
 
-    #[instrument(skip_all, fields(?_file_name), err(Debug))]
+    #[instrument(skip_all, fields(?_file_name, file_attributes = file_attribute_to_string(_file_attributes)), err(Debug))]
     async fn async_set_file_attributes<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &self,
         _file_name: &U16CStr,
@@ -724,7 +734,7 @@ impl VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         let file_entry = context.entry.as_file()?;
         file_entry.shared.write().await.delete_on_close = info.delete_on_close();
         Ok(())
@@ -748,7 +758,7 @@ impl VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         let dir_entry = context.entry.as_directory()?;
         let path = to_path(file_name)?;
         let mut shared = dir_entry.shared.write().await;
@@ -785,7 +795,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         handle: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
 
         let src_path = to_path(file_name)?;
         let dst_path = to_path(new_file_name)?;
@@ -857,7 +867,7 @@ impl VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         // TODO: How do the fwo functions differ?
         self.async_set_allocation_size(file_name, offset, info, context)
             .await
@@ -883,7 +893,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         let desired_len: u64 = alloc_size
             .try_into()
             .map_err(|_| STATUS_INVALID_PARAMETER)?;
@@ -969,7 +979,7 @@ impl VirtualFilesystem {
         &self,
         _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<VolumeInfo, Error> {
-        tracing::debug!("enter");
+        tracing::trace!("enter");
         Ok(VolumeInfo {
             name: U16CString::from_str("ouisync").unwrap(),
             serial_number: 0,
@@ -1346,6 +1356,9 @@ impl AccessMask {
     fn has_delete(&self) -> bool {
         self.mask & winnt::DELETE > 0
     }
+    fn has_append(&self) -> bool {
+        self.mask & winnt::FILE_APPEND_DATA > 0
+    }
 }
 
 impl From<winnt::ACCESS_MASK> for AccessMask {
@@ -1364,43 +1377,34 @@ impl fmt::Debug for AccessMask {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut mask = self.mask;
         let mut first = true;
-        if mask & winnt::DELETE > 0 {
-            first = false;
-            write!(f, "DELETE")?;
-            mask ^= winnt::DELETE;
-        }
-        if mask & winnt::READ_CONTROL > 0 {
-            if !first {
-                write!(f, "|")?;
+
+        let to_test = [
+            (winnt::DELETE, "DELETE"),
+            (winnt::READ_CONTROL, "READ_CONTROL"),
+            (winnt::WRITE_DAC, "WRITE_DAC"),
+            (winnt::WRITE_OWNER, "WRITE_OWNER"),
+            (winnt::SYNCHRONIZE, "SYNCHRONIZE"),
+            (winnt::FILE_READ_DATA, "FILE_READ_DATA"),
+            (winnt::FILE_READ_ATTRIBUTES, "FILE_READ_ATTRIBUTES"),
+            (winnt::FILE_READ_EA, "FILE_READ_EA"),
+            (winnt::FILE_WRITE_DATA, "FILE_WRITE_DATA"),
+            (winnt::FILE_WRITE_ATTRIBUTES, "FILE_WRITE_ATTRIBUTES"),
+            (winnt::FILE_WRITE_EA, "FILE_WRITE_EA"),
+            (winnt::FILE_APPEND_DATA, "FILE_APPEND_DATA"),
+            (winnt::FILE_EXECUTE, "FILE_EXECUTE"),
+        ];
+
+        for (flag, name) in to_test {
+            if mask & flag > 0 {
+                if !first {
+                    write!(f, "|")?;
+                }
+                first = false;
+                write!(f, "{}", name)?;
+                mask ^= flag;
             }
-            first = false;
-            write!(f, "READ_CONTROL")?;
-            mask ^= winnt::READ_CONTROL;
         }
-        if mask & winnt::WRITE_DAC > 0 {
-            if !first {
-                write!(f, "|")?;
-            }
-            first = false;
-            write!(f, "WRITE_DAC")?;
-            mask ^= winnt::WRITE_DAC;
-        }
-        if mask & winnt::WRITE_OWNER > 0 {
-            if !first {
-                write!(f, "|")?;
-            }
-            first = false;
-            write!(f, "WRITE_OWNER")?;
-            mask ^= winnt::WRITE_OWNER;
-        }
-        if mask & winnt::SYNCHRONIZE > 0 {
-            if !first {
-                write!(f, "|")?;
-            }
-            first = false;
-            write!(f, "SYNCHRONIZE")?;
-            mask ^= winnt::SYNCHRONIZE;
-        }
+
         if mask > 0 {
             if !first {
                 write!(f, "|")?;
@@ -1417,4 +1421,62 @@ pub(crate) fn default_mount_flags() -> MountFlags {
     //flags |= MountFlags::DEBUG | MountFlags::STDERR;
     //flags |= MountFlags::REMOVABLE;
     MountFlags::empty()
+}
+
+// For debugging
+fn file_attribute_to_string(file_attributes: u32) -> String {
+    let mut ret = String::new();
+
+    let mut check = |attr: u32, attr_name: &str| {
+        if file_attributes & attr > 0 {
+            if !ret.is_empty() {
+                ret += "|";
+            }
+            ret += attr_name;
+        }
+    };
+
+    check(winnt::FILE_ATTRIBUTE_READONLY, "FILE_ATTRIBUTE_READONLY");
+    check(winnt::FILE_ATTRIBUTE_HIDDEN, "FILE_ATTRIBUTE_HIDDEN");
+    check(winnt::FILE_ATTRIBUTE_SYSTEM, "FILE_ATTRIBUTE_SYSTEM");
+    check(winnt::FILE_ATTRIBUTE_DIRECTORY, "FILE_ATTRIBUTE_DIRECTORY");
+    check(winnt::FILE_ATTRIBUTE_ARCHIVE, "FILE_ATTRIBUTE_ARCHIVE");
+    check(winnt::FILE_ATTRIBUTE_DEVICE, "FILE_ATTRIBUTE_DEVICE");
+    check(winnt::FILE_ATTRIBUTE_NORMAL, "FILE_ATTRIBUTE_NORMAL");
+    check(winnt::FILE_ATTRIBUTE_TEMPORARY, "FILE_ATTRIBUTE_TEMPORARY");
+    check(
+        winnt::FILE_ATTRIBUTE_SPARSE_FILE,
+        "FILE_ATTRIBUTE_SPARSE_FILE",
+    );
+    check(
+        winnt::FILE_ATTRIBUTE_REPARSE_POINT,
+        "FILE_ATTRIBUTE_REPARSE_POINT",
+    );
+    check(
+        winnt::FILE_ATTRIBUTE_COMPRESSED,
+        "FILE_ATTRIBUTE_COMPRESSED",
+    );
+    check(winnt::FILE_ATTRIBUTE_OFFLINE, "FILE_ATTRIBUTE_OFFLINE");
+    check(
+        winnt::FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
+        "FILE_ATTRIBUTE_NOT_CONTENT_INDEXED",
+    );
+    check(winnt::FILE_ATTRIBUTE_ENCRYPTED, "FILE_ATTRIBUTE_ENCRYPTED");
+    check(
+        winnt::FILE_ATTRIBUTE_INTEGRITY_STREAM,
+        "FILE_ATTRIBUTE_INTEGRITY_STREAM",
+    );
+    check(winnt::FILE_ATTRIBUTE_EA, "FILE_ATTRIBUTE_EA");
+    check(winnt::FILE_ATTRIBUTE_PINNED, "FILE_ATTRIBUTE_PINNED");
+    check(winnt::FILE_ATTRIBUTE_UNPINNED, "FILE_ATTRIBUTE_UNPINNED");
+    check(
+        winnt::FILE_ATTRIBUTE_RECALL_ON_OPEN,
+        "FILE_ATTRIBUTE_RECALL_ON_OPEN",
+    );
+    check(
+        winnt::FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
+        "FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS",
+    );
+
+    ret
 }
