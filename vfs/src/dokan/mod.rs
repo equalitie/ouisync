@@ -94,7 +94,7 @@ impl VirtualFilesystem {
         // want to open if it does already exist.
         create_directory: bool,
         create_disposition: CreateDisposition,
-        delete_access: bool,
+        access_mask: AccessMask,
         shared: Arc<AsyncRwLock<Shared>>,
     ) -> Result<(Entry, bool), Error> {
         use ouisync_lib::Error as E;
@@ -119,7 +119,7 @@ impl VirtualFilesystem {
                     return Err(E::EntryNotFound.into());
                 }
 
-                let entry = if delete_access {
+                let entry = if access_mask.has_delete() {
                     if create_directory {
                         Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
                     } else {
@@ -145,7 +145,7 @@ impl VirtualFilesystem {
             Err(other) => return Err(other.into()),
         };
 
-        let entry = if delete_access {
+        let entry = if access_mask.has_delete() {
             match existing_entry {
                 JointEntryRef::File(_) => Entry::new_file(
                     OpenState::Lazy {
@@ -161,7 +161,10 @@ impl VirtualFilesystem {
         } else {
             match existing_entry {
                 JointEntryRef::File(file_entry) => {
-                    let file = file_entry.open().await?;
+                    let mut file = file_entry.open().await?;
+                    if access_mask.has_append() {
+                        file.seek(SeekFrom::End(0));
+                    }
                     Entry::new_file(OpenState::Open(file), shared)
                 }
                 JointEntryRef::Directory(_) => {
@@ -186,7 +189,7 @@ impl VirtualFilesystem {
         create_directory: bool,
         create_disposition: CreateDisposition,
         delete_on_close: bool,
-        delete_access: bool,
+        access_mask: AccessMask,
     ) -> Result<(Entry, bool, u64), Error> {
         tracing::trace!("enter");
 
@@ -197,7 +200,7 @@ impl VirtualFilesystem {
                 &path,
                 create_directory,
                 create_disposition,
-                delete_access,
+                access_mask,
                 shared,
             )
             .await;
@@ -317,7 +320,7 @@ impl VirtualFilesystem {
         file_name: &U16CStr,
         _security_context: &IO_SECURITY_CONTEXT,
         access_mask: AccessMask,
-        _file_attributes: u32,
+        file_attributes: u32,
         _share_access: u32,
         create_disposition: u32,
         create_options: u32,
@@ -325,14 +328,14 @@ impl VirtualFilesystem {
         let create_disposition = create_disposition.try_into()?;
         let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
         let create_dir = create_options & FILE_DIRECTORY_FILE > 0;
-        let delete_access = access_mask.has_delete();
 
         tracing::trace!(
-            "enter delete_on_close:{:?}, create_dir:{:?}, delete_access:{:?}, create_disposition:{:?}",
+            "enter delete_on_close:{:?}, create_dir:{:?}, access_mask:{:?}, create_disposition:{:?}, file_attributes:{:?}",
             delete_on_close,
             create_dir,
-            delete_access,
+            access_mask,
             create_disposition,
+            file_attributes
         );
 
         let path = to_path(file_name)?;
@@ -343,7 +346,7 @@ impl VirtualFilesystem {
                 create_dir,
                 create_disposition,
                 delete_on_close,
-                delete_access,
+                access_mask,
             )
             .await?;
 
@@ -1353,6 +1356,9 @@ impl AccessMask {
     fn has_delete(&self) -> bool {
         self.mask & winnt::DELETE > 0
     }
+    fn has_append(&self) -> bool {
+        self.mask & winnt::FILE_APPEND_DATA > 0
+    }
 }
 
 impl From<winnt::ACCESS_MASK> for AccessMask {
@@ -1371,43 +1377,34 @@ impl fmt::Debug for AccessMask {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut mask = self.mask;
         let mut first = true;
-        if mask & winnt::DELETE > 0 {
-            first = false;
-            write!(f, "DELETE")?;
-            mask ^= winnt::DELETE;
-        }
-        if mask & winnt::READ_CONTROL > 0 {
-            if !first {
-                write!(f, "|")?;
+
+        let to_test = [
+            (winnt::DELETE, "DELETE"),
+            (winnt::READ_CONTROL, "READ_CONTROL"),
+            (winnt::WRITE_DAC, "WRITE_DAC"),
+            (winnt::WRITE_OWNER, "WRITE_OWNER"),
+            (winnt::SYNCHRONIZE, "SYNCHRONIZE"),
+            (winnt::FILE_READ_DATA, "FILE_READ_DATA"),
+            (winnt::FILE_READ_ATTRIBUTES, "FILE_READ_ATTRIBUTES"),
+            (winnt::FILE_READ_EA, "FILE_READ_EA"),
+            (winnt::FILE_WRITE_DATA, "FILE_WRITE_DATA"),
+            (winnt::FILE_WRITE_ATTRIBUTES, "FILE_WRITE_ATTRIBUTES"),
+            (winnt::FILE_WRITE_EA, "FILE_WRITE_EA"),
+            (winnt::FILE_APPEND_DATA, "FILE_APPEND_DATA"),
+            (winnt::FILE_EXECUTE, "FILE_EXECUTE"),
+        ];
+
+        for (flag, name) in to_test {
+            if mask & flag > 0 {
+                if !first {
+                    write!(f, "|")?;
+                }
+                first = false;
+                write!(f, "{}", name)?;
+                mask ^= flag;
             }
-            first = false;
-            write!(f, "READ_CONTROL")?;
-            mask ^= winnt::READ_CONTROL;
         }
-        if mask & winnt::WRITE_DAC > 0 {
-            if !first {
-                write!(f, "|")?;
-            }
-            first = false;
-            write!(f, "WRITE_DAC")?;
-            mask ^= winnt::WRITE_DAC;
-        }
-        if mask & winnt::WRITE_OWNER > 0 {
-            if !first {
-                write!(f, "|")?;
-            }
-            first = false;
-            write!(f, "WRITE_OWNER")?;
-            mask ^= winnt::WRITE_OWNER;
-        }
-        if mask & winnt::SYNCHRONIZE > 0 {
-            if !first {
-                write!(f, "|")?;
-            }
-            first = false;
-            write!(f, "SYNCHRONIZE")?;
-            mask ^= winnt::SYNCHRONIZE;
-        }
+
         if mask > 0 {
             if !first {
                 write!(f, "|")?;
