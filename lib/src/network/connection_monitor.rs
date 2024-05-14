@@ -53,12 +53,6 @@ impl ConnectionMonitor {
         &self.span
     }
 
-    pub fn start(&self) {
-        *self.permit_id.get() = None;
-        *self.runtime_id.get() = None;
-        self.span.record("runtime_id", field::Empty);
-    }
-
     pub fn mark_as_awaiting_permit(&self) {
         *self.state.get() = State::AwaitingPermit;
     }

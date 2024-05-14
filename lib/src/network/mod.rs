@@ -705,10 +705,6 @@ impl Inner {
     }
 
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
-        let monitor = self.span.in_scope(|| {
-            ConnectionMonitor::new(&self.connections_monitor, peer.initial_addr(), source)
-        });
-
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(100))
             .with_max_interval(Duration::from_secs(8))
@@ -718,7 +714,9 @@ impl Inner {
         let mut next_sleep = None;
 
         loop {
-            monitor.start();
+            let monitor = self.span.in_scope(|| {
+                ConnectionMonitor::new(&self.connections_monitor, peer.initial_addr(), source)
+            });
 
             // TODO: We should also check whether the user still wants to accept connections from
             // the given `source` (the preference may have changed in the mean time).
