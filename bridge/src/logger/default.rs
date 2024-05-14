@@ -11,7 +11,13 @@ use tracing::{
     Event, Id, Metadata, Subscriber,
 };
 use tracing_subscriber::{
-    fmt::{self, time::SystemTime},
+    field::RecordFields,
+    fmt::{
+        self,
+        format::{DefaultFields, Writer},
+        time::SystemTime,
+        FormatFields,
+    },
     layer::{Context, Layer, SubscriberExt},
     util::SubscriberInitExt,
 };
@@ -53,6 +59,9 @@ impl Inner {
                 .event_format(Formatter::<SystemTime>::default())
                 .with_ansi(false)
                 .with_writer(Mutex::new(common::create_file_writer(path)))
+                // HACK: Workaround for https://github.com/tokio-rs/tracing/issues/1372. See
+                // `TypedFields` for more detauls.
+                .fmt_fields(TypedFields::default())
         });
 
         tracing_subscriber::registry()
@@ -167,5 +176,23 @@ where
             Self::A(l) => l.on_id_change(old, new, ctx),
             Self::B(l) => l.on_id_change(old, new, ctx),
         }
+    }
+}
+
+// A newtype for `DefaultFields`. Needed to work around
+// https://github.com/tokio-rs/tracing/issues/1372: By using a different type of `FormatFields` for
+// each layer we force them to record the fields into their own span extension instead of all
+// layers recording into the same extension. This avoid duplicating the fields in their respective
+// outputs.
+#[derive(Default)]
+struct TypedFields(DefaultFields);
+
+impl<'writer> FormatFields<'writer> for TypedFields {
+    fn format_fields<R: RecordFields>(
+        &self,
+        writer: Writer<'writer>,
+        fields: R,
+    ) -> std::fmt::Result {
+        self.0.format_fields(writer, fields)
     }
 }
