@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command},
     sync::mpsc,
     thread,
     time::Duration,
@@ -21,32 +21,45 @@ fn main() -> Result<()> {
 
     build()?;
 
-    for index in 0..options.writer_count {
-        spawn(index, Mode::Writer, &options.working_directory)
-    }
-
-    for index in 0..options.reader_count {
-        spawn(index, Mode::Reader, &options.working_directory)
-    }
-
     let (tx, rx) = mpsc::sync_channel(0);
     ctrlc::set_handler(move || {
         tx.send(()).ok();
     })?;
+
+    let mut children = Vec::new();
+
+    for index in 0..options.writer_count {
+        let child = spawn(index, Mode::Writer, &options.working_directory);
+        children.push(child);
+    }
+
+    for index in 0..options.reader_count {
+        let child = spawn(index, Mode::Reader, &options.working_directory);
+        children.push(child);
+    }
+
     rx.recv().ok();
+
+    for mut child in children {
+        terminate(&child);
+        child.wait().unwrap();
+    }
 
     Ok(())
 }
 
-fn spawn(index: u64, mode: Mode, working_directory: &Path) {
+fn spawn(index: u64, mode: Mode, working_directory: &Path) -> Child {
     let name = make_name(index, mode);
     let working_directory = working_directory.to_owned();
+    let (tx, rx) = mpsc::sync_channel(0);
 
     thread::spawn(move || {
-        if let Err(error) = Replica::new(name.clone(), mode, working_directory).run() {
+        if let Err(error) = Replica::new(name.clone(), mode, working_directory, tx).run() {
             eprintln!("[{}] {}", name, error);
         }
     });
+
+    rx.recv().unwrap()
 }
 
 /// Utility to run swarm of ouisync replicas on the local machine, for testing.
@@ -107,11 +120,17 @@ struct Replica {
     name: String,
     mode: Mode,
     working_directory: PathBuf,
+    child_tx: mpsc::SyncSender<Child>,
     socket: PathBuf,
 }
 
 impl Replica {
-    fn new(name: String, mode: Mode, working_directory: PathBuf) -> Self {
+    fn new(
+        name: String,
+        mode: Mode,
+        working_directory: PathBuf,
+        child_tx: mpsc::SyncSender<Child>,
+    ) -> Self {
         let socket = working_directory
             .join("socks")
             .join(&name)
@@ -121,6 +140,7 @@ impl Replica {
             name,
             mode,
             working_directory,
+            child_tx,
             socket,
         }
     }
@@ -139,17 +159,40 @@ impl Replica {
         let (reader, stdout_writer) = os_pipe::pipe()?;
         let stderr_writer = stdout_writer.try_clone()?;
 
-        self.command()
+        let child = self
+            .command()
             .arg("--config-dir")
             .arg(config_path)
             .arg("--store-dir")
             .arg(store_path)
-            .arg("start")
             .arg("--log-color")
             .arg("always")
+            .arg("start")
             .stdout(stdout_writer)
             .stderr(stderr_writer)
             .spawn()?;
+
+        self.child_tx.send(child).unwrap();
+
+        // Spawn a thread that captures the output of the child process and prefixes each of its
+        // lines with the child name and then pipes it to the stdout of the main process.
+        let name = self.name.clone();
+        let output_handle = thread::spawn(move || {
+            let mut reader = BufReader::new(reader);
+            let mut writer = io::stdout();
+            let mut line = String::new();
+
+            loop {
+                line.clear();
+                if reader.read_line(&mut line)? == 0 {
+                    break;
+                }
+
+                write!(writer, "[{:4}] {}", name, line)?;
+            }
+
+            Ok::<_, anyhow::Error>(())
+        });
 
         while !self.socket.try_exists()? {
             thread::sleep(Duration::from_millis(50));
@@ -189,20 +232,7 @@ impl Replica {
             .arg(mount_path)
             .run()?;
 
-        let mut reader = BufReader::new(reader);
-        let mut writer = io::stdout();
-        let mut line = String::new();
-
-        loop {
-            line.clear();
-            if reader.read_line(&mut line)? == 0 {
-                break;
-            }
-
-            write!(writer, "[{:4}] {}", self.name, line)?;
-        }
-
-        Ok(())
+        output_handle.join().unwrap()
     }
 
     fn command(&self) -> Command {
@@ -273,4 +303,20 @@ fn remove_dir_all_if_exists(path: impl AsRef<Path>) -> io::Result<()> {
 enum Mode {
     Writer,
     Reader,
+}
+
+// Gracefully terminate the process, unlike `Child::kill` which sends `SIGKILL` and thus doesn't
+// allow destructors to run.
+#[cfg(any(target_os = "linux", target_os = "osx"))]
+fn terminate(process: &Child) {
+    // SAFETY: we are just sending a `SIGTERM` signal to the process, there should be no reason for
+    // undefined behaviour here.
+    unsafe {
+        libc::kill(process.id() as libc::pid_t, libc::SIGTERM);
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_is = "osx")))]
+fn terminate(_process: &Child) {
+    todo!()
 }
