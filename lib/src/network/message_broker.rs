@@ -155,8 +155,6 @@ impl MessageBroker {
             tracker: self.tracker.clone(),
         };
 
-        tracing::info!(?role, "Link created");
-
         drop(span_enter);
 
         let task = async move {
@@ -164,8 +162,6 @@ impl MessageBroker {
                 _ = link.maintain() => (),
                 _ = abort_rx => (),
             }
-
-            tracing::info!("Link destroyed")
         };
         let task = task.instrument(span);
 
@@ -312,14 +308,20 @@ async fn run_link(
     let (response_tx, response_rx) = mpsc::channel(1);
     let (content_tx, content_rx) = mpsc::channel(1);
 
+    tracing::info!("Link opened");
+
     // Run everything in parallel:
-    select! {
+    let flow = select! {
         flow = run_client(repo.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
         flow = run_server(repo.clone(), content_tx.clone(), request_rx, choker) => flow,
         flow = recv_messages(stream, request_tx, response_tx, pex_rx) => flow,
         flow = send_messages(content_rx, sink) => flow,
         _ = pex_tx.run(content_tx) => ControlFlow::Continue,
-    }
+    };
+
+    tracing::info!("Link closed");
+
+    flow
 }
 
 // Handle incoming messages

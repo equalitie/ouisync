@@ -191,7 +191,7 @@ impl Inner {
             self.vault.monitor.responses_received.increment(1);
 
             // TODO: The `BlockOffer` response doesn't require write access to the store and so
-            // can be processed faster than the other response types and. Furthermode, it can be
+            // can be processed faster than the other response types and furthermore, it can be
             // processed concurrently. Consider using a separate queue and a separate `select`
             // branch for it to speed things up.
 
