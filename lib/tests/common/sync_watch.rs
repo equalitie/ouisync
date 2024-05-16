@@ -54,7 +54,7 @@ impl Receiver {
 
         loop {
             let progress = repo.sync_progress().await.unwrap();
-            debug!(progress = %progress.percent());
+            // debug!(progress = %progress.percent());
 
             if progress.total > 0 && progress.value == progress.total {
                 let this_vv = branch.version_vector().await.unwrap();

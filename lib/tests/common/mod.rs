@@ -29,6 +29,7 @@ use std::{
     future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
+    str::FromStr,
     sync::Arc,
     thread,
 };
@@ -171,6 +172,10 @@ pub(crate) mod actor {
     use ouisync::{AccessMode, RepositoryParams};
     use state_monitor::StateMonitor;
     use tokio::sync::watch;
+
+    pub(crate) fn name() -> String {
+        ACTOR.with(|actor| actor.name.clone())
+    }
 
     pub(crate) fn create_unbound_network() -> Network {
         Network::new(None, StateMonitor::make_root())
@@ -368,7 +373,7 @@ impl Drop for TempDir {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub(crate) enum Proto {
     Tcp,
     Quic,
@@ -389,6 +394,38 @@ impl Proto {
         }
     }
 }
+
+impl FromStr for Proto {
+    type Err = ProtoParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        match input.trim().to_lowercase().as_str() {
+            "tcp" => Ok(Self::Tcp),
+            "quic" => Ok(Self::Quic),
+            _ => Err(ProtoParseError),
+        }
+    }
+}
+
+impl fmt::Display for Proto {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tcp => write!(f, "TCP"),
+            Self::Quic => write!(f, "QUIC"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ProtoParseError;
+
+impl fmt::Display for ProtoParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse protocol")
+    }
+}
+
+impl std::error::Error for ProtoParseError {}
 
 // Keep calling `f` until it returns `true`. Wait for repo notification between calls.
 
