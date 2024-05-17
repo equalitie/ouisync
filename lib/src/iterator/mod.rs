@@ -2,9 +2,6 @@ mod accumulate;
 mod combinations;
 mod sorted_union;
 
-use crate::collections::{hash_set, HashSet};
-use std::hash::Hash;
-
 #[cfg(test)]
 pub(crate) use self::combinations::PairCombinations;
 pub(crate) use self::{accumulate::Accumulate, sorted_union::SortedUnion};
@@ -35,28 +32,6 @@ where
     }
 
     true
-}
-
-/// Owned version of `HashSet::intersection`
-pub(crate) struct IntoIntersection<T> {
-    iter: hash_set::IntoIter<T>,
-    other: HashSet<T>,
-}
-
-impl<T> Iterator for IntoIntersection<T>
-where
-    T: Eq + Hash,
-{
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let e = self.iter.next()?;
-            if self.other.contains(&e) {
-                return Some(e);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

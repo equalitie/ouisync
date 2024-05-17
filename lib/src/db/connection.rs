@@ -14,24 +14,24 @@ pub(crate) struct Connection(pub(super) SqliteConnection);
 impl<'t> Executor<'t> for &'t mut Connection {
     type Database = Sqlite;
 
-    fn fetch_many<'e, 'q: 'e, E: 'q>(
+    fn fetch_many<'e, 'q: 'e, E>(
         self,
         query: E,
     ) -> BoxStream<'e, Result<Either<SqliteQueryResult, SqliteRow>, Error>>
     where
         't: 'e,
-        E: Execute<'q, Sqlite>,
+        E: Execute<'q, Sqlite> + 'q,
     {
         self.0.fetch_many(query)
     }
 
-    fn fetch_optional<'e, 'q: 'e, E: 'q>(
+    fn fetch_optional<'e, 'q: 'e, E>(
         self,
         query: E,
     ) -> BoxFuture<'e, Result<Option<SqliteRow>, Error>>
     where
         't: 'e,
-        E: Execute<'q, Sqlite>,
+        E: Execute<'q, Sqlite> + 'q,
     {
         self.0.fetch_optional(query)
     }
