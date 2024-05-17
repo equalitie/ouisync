@@ -11,11 +11,23 @@ use std::{
     sync::{mpsc, Arc},
     thread,
 };
+use tracing::span;
 use widestring::{U16CStr, U16CString};
 use winapi::um::winnt;
 
 struct SingleRepoVFS {
     vfs: VirtualFilesystem,
+    span: Option<tracing::Span>,
+}
+
+impl SingleRepoVFS {
+    fn enter_span(&self) -> Option<span::Entered<'_>> {
+        if let Some(span) = &self.span {
+            Some(span.enter())
+        } else {
+            None
+        }
+    }
 }
 
 //  https://dokan-dev.github.io/dokany-doc/html/struct_d_o_k_a_n___o_p_e_r_a_t_i_o_n_s.html
@@ -33,6 +45,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         create_options: u32,
         _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<CreateFileInfo<Self::Context>> {
+        let _span_guard = self.enter_span();
+
         self.vfs.create_file(
             file_name,
             security_context,
@@ -58,6 +72,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) {
+        let _span_guard = self.enter_span();
         self.vfs.close_file(file_name, info, context)
     }
 
@@ -69,6 +84,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
+        let _span_guard = self.enter_span();
         self.vfs.read_file(file_name, offset, buffer, info, context)
     }
 
@@ -80,6 +96,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
+        let _span_guard = self.enter_span();
         self.vfs
             .write_file(file_name, offset, buffer, info, context)
     }
@@ -90,6 +107,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs.flush_file_buffers(file_name, info, context)
     }
 
@@ -99,6 +117,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<FileInfo> {
+        let _span_guard = self.enter_span();
         self.vfs.get_file_information(file_name, info, context)
     }
 
@@ -109,6 +128,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs
             .find_files(file_name, fill_find_data, info, context)
     }
@@ -121,6 +141,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs
             .find_files_with_pattern(file_name, pattern, fill_find_data, info, context)
     }
@@ -132,6 +153,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs
             .set_file_attributes(file_name, file_attributes, info, context)
     }
@@ -145,6 +167,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs.set_file_time(
             file_name,
             creation_time,
@@ -161,6 +184,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs.delete_file(file_name, info, context)
     }
 
@@ -170,6 +194,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs.delete_directory(file_name, info, context)
     }
 
@@ -181,6 +206,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs
             .move_file(file_name, new_file_name, replace_if_existing, info, context)
     }
@@ -192,6 +218,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs.set_end_of_file(file_name, offset, info, context)
     }
 
@@ -202,6 +229,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs
             .set_allocation_size(file_name, alloc_size, info, context)
     }
@@ -210,6 +238,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         &'h self,
         info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<DiskSpaceInfo> {
+        let _span_guard = self.enter_span();
         self.vfs.get_disk_free_space(info)
     }
 
@@ -217,6 +246,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         &'h self,
         info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<VolumeInfo> {
+        let _span_guard = self.enter_span();
         self.vfs.get_volume_information(info)
     }
 
@@ -225,10 +255,12 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
         mount_point: &U16CStr,
         info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs.mounted(mount_point, info)
     }
 
     fn unmounted(&'h self, info: &OperationInfo<'c, 'h, Self>) -> OperationResult<()> {
+        let _span_guard = self.enter_span();
         self.vfs.unmounted(info)
     }
 }
@@ -237,6 +269,15 @@ pub fn mount(
     runtime_handle: tokio::runtime::Handle,
     repository: Arc<Repository>,
     mount_point: impl AsRef<Path>,
+) -> Result<MountGuard, io::Error> {
+    mount_with_span(runtime_handle, repository, mount_point, None)
+}
+
+pub fn mount_with_span(
+    runtime_handle: tokio::runtime::Handle,
+    repository: Arc<Repository>,
+    mount_point: impl AsRef<Path>,
+    span: Option<tracing::Span>,
 ) -> Result<MountGuard, io::Error> {
     let options = MountOptions {
         single_thread: false,
@@ -267,6 +308,7 @@ pub fn mount(
                 Arc::new(EntryIdGenerator::new()),
                 repository,
             ),
+            span,
         };
         let mut mounter = FileSystemMounter::new(&handler, &mount_point, &options);
 
