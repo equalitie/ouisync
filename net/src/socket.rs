@@ -61,7 +61,6 @@ pub(crate) trait Socket: Sized {
     const RAW_TYPE: socket2::Type;
 
     fn from_raw(raw: socket2::Socket) -> io::Result<Self>;
-    fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
 impl Socket for TcpListener {
@@ -76,10 +75,6 @@ impl Socket for TcpListener {
 
         TcpListener::from_std(raw.into())
     }
-
-    fn local_addr(&self) -> io::Result<SocketAddr> {
-        TcpListener::local_addr(self)
-    }
 }
 
 impl Socket for UdpSocket {
@@ -87,9 +82,5 @@ impl Socket for UdpSocket {
 
     fn from_raw(raw: socket2::Socket) -> io::Result<Self> {
         UdpSocket::from_std(raw.into())
-    }
-
-    fn local_addr(&self) -> io::Result<SocketAddr> {
-        UdpSocket::local_addr(self)
     }
 }

@@ -229,13 +229,6 @@ impl ContentStreamTrait for ContentStream {
 #[derive(Debug)]
 pub(super) struct ChannelClosed;
 
-/// Live* collection of active connections of a `MessageDispatcher`.
-///
-/// *) It means it gets automatically updated as connections are added/removed to/from the
-/// dispatcher.
-#[derive(Clone)]
-pub(super) struct LiveConnectionInfoSet {}
-
 struct ChannelQueue {
     reference_count: usize,
     rx: Arc<AsyncMutex<ChannelQueueReceiver>>,

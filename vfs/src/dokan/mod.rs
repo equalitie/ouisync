@@ -384,7 +384,7 @@ impl VirtualFilesystem {
     }
 
     #[instrument(skip_all, fields(?file_name))]
-    async fn async_close_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+    async fn async_cleanup<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &self,
         file_name: &U16CStr,
         _info: &OperationInfo<'c, 'h, Super>,
@@ -432,6 +432,26 @@ impl VirtualFilesystem {
                 tracing::warn!("Failed to delete file \"{to_delete:?}\" on close: {error:?}");
             }
         }
+    }
+
+    #[instrument(skip_all, fields(?_file_name))]
+    async fn async_close_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &self,
+        _file_name: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Super>,
+        _context: &'c EntryHandle,
+    ) {
+        tracing::trace!("enter");
+    }
+
+    fn cleanup<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) {
+        self.rt
+            .block_on(self.async_cleanup(file_name, info, context))
     }
 
     fn close_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
