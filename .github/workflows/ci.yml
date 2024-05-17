@@ -33,6 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Show rustc version
+        run: rustc --version
+
       - name: Add rust target
         if: matrix.target != ''
         run: rustup target add ${{ matrix.target }}
