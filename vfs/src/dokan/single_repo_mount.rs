@@ -60,10 +60,12 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
 
     fn cleanup(
         &'h self,
-        _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c Self::Context,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c Self::Context,
     ) {
+        let _span_guard = self.enter_span();
+        self.vfs.cleanup(file_name, info, context)
     }
 
     fn close_file(
