@@ -3,7 +3,7 @@ use super::{
     choke,
     client::Client,
     connection::ConnectionPermit,
-    constants::MAX_REQUESTS_IN_FLIGHT,
+    constants::MAX_IN_FLIGHT_REQUESTS_PER_PEER,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannelId, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
@@ -15,6 +15,7 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
+    network::constants::MAX_PENDING_REQUESTS_PER_CLIENT,
     repository::{LocalId, Vault},
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -71,7 +72,7 @@ impl MessageBroker {
             that_runtime_id,
             dispatcher: MessageDispatcher::new(),
             links: HashMap::default(),
-            request_limiter: Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
+            request_limiter: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS_PER_PEER)),
             pex_peer,
             monitor,
             tracker,
@@ -304,7 +305,10 @@ async fn run_link(
     pex_rx: &mut PexReceiver,
     choker: choke::Choker,
 ) -> ControlFlow {
-    let (request_tx, request_rx) = mpsc::channel(1);
+    // If the peer is choked we may still receive requests from them but we won't process them until
+    // the peer is unchoked. Therefore, the capacity of this channel must be large enough to
+    // accomodate any such requests.
+    let (request_tx, request_rx) = mpsc::channel(MAX_PENDING_REQUESTS_PER_CLIENT);
     let (response_tx, response_rx) = mpsc::channel(1);
     let (content_tx, content_rx) = mpsc::channel(1);
 

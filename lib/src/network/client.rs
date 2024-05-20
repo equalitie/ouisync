@@ -1,5 +1,5 @@
 use super::{
-    constants::MAX_PENDING_RESPONSES,
+    constants::MAX_PENDING_REQUESTS_PER_CLIENT,
     debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Content, Response, ResponseDisambiguator},
     pending::{PendingRequest, PendingRequests, PendingResponse, ProcessedResponse},
@@ -43,10 +43,10 @@ impl Client {
         // processing responses (which sometimes takes a while).
         let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
 
-        // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
-        // some unsolicited responses and also the peer may be malicious and send us too many
-        // responses (so we shoulnd't use unbounded_channel).
-        let (recv_queue_tx, recv_queue_rx) = mpsc::channel(2 * MAX_PENDING_RESPONSES);
+        // We're making sure to not send more requests than MAX_PENDING_REQUESTS_PER_CLIENT, but
+        // there may be some unsolicited responses and also the peer may be malicious and send us
+        // too many responses (so we shoulnd't use unbounded_channel).
+        let (recv_queue_tx, recv_queue_rx) = mpsc::channel(2 * MAX_PENDING_REQUESTS_PER_CLIENT);
 
         let inner = Inner {
             vault,
@@ -144,7 +144,7 @@ impl Inner {
         send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
     ) {
         // Limits requests per link (peer + repo)
-        let link_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_RESPONSES));
+        let link_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_REQUESTS_PER_CLIENT));
 
         loop {
             let Some((request, timestamp)) = send_queue_rx.recv().await else {

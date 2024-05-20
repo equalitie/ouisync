@@ -20,12 +20,12 @@ use std::{
         Arc,
     },
     task::{Context, Poll, Waker},
+    time::Duration,
 };
 use tokio::{
     runtime, select,
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
     sync::{Mutex as AsyncMutex, Notify, Semaphore},
-    time::{self, Duration},
 };
 
 // Time after which if no message is received, the connection is dropped.
@@ -396,15 +396,13 @@ struct MultiStream {
 
 impl MultiStream {
     fn new() -> Self {
-        const MAX_QUEUED_MESSAGES: usize = 32;
-
         let inner = Arc::new(BlockingMutex::new(MultiStreamInner {
             streams: SelectAll::new(),
             waker: None,
         }));
 
         let stream_added = Arc::new(Notify::new());
-        let (tx, rx) = mpsc::channel(MAX_QUEUED_MESSAGES);
+        let (tx, rx) = mpsc::channel(1);
 
         let _runner =
             scoped_task::spawn(multi_stream_runner(inner.clone(), tx, stream_added.clone()));
@@ -471,18 +469,9 @@ async fn multi_stream_runner(
     stream_added.notified().await;
 
     while let Some((permit_id, message)) = (Recv { inner: &inner }).await {
-        // Close the connection if the sender is sending too many messages that we're not handling
-        // in a reasonable time. Note that if we don't have some of the repositories that the peer
-        // has, then they'll send some small number of messages from their Barrier code. That's
-        // fine because that number does not exceed MAX_QUEUED_MESSAGES and so the above `tx.send`
-        // won't block for long.
-
-        // FIXME: When this timeout is triggered it closes this stream which closes all its channels
-        // and the links attached to them. This can cause sync to stop. We should find a better way
-        // to handle this or at least restart the channels when this happens.
-        match time::timeout(KEEP_ALIVE_RECV_INTERVAL, tx.send((permit_id, message))).await {
-            Ok(Ok(())) => (),
-            Err(_) | Ok(Err(_)) => break,
+        match tx.send((permit_id, message)).await {
+            Ok(()) => (),
+            Err(_) => break,
         }
     }
 }
