@@ -476,6 +476,10 @@ async fn multi_stream_runner(
         // has, then they'll send some small number of messages from their Barrier code. That's
         // fine because that number does not exceed MAX_QUEUED_MESSAGES and so the above `tx.send`
         // won't block for long.
+
+        // FIXME: When this timeout is triggered it closes this stream which closes all its channels
+        // and the links attached to them. This can cause sync to stop. We should find a better way
+        // to handle this or at least restart the channels when this happens.
         match time::timeout(KEEP_ALIVE_RECV_INTERVAL, tx.send((permit_id, message))).await {
             Ok(Ok(())) => (),
             Err(_) | Ok(Err(_)) => break,
