@@ -6,11 +6,11 @@
 mod common;
 
 use clap::Parser;
-use common::{actor, sync_watch, Env, Proto, DEFAULT_REPO};
+use common::{actor, sync_reporter::SyncReporter, sync_watch, Env, Proto, DEFAULT_REPO};
 use ouisync::{AccessMode, File};
 use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{fmt, process::ExitCode, sync::Arc, time::Instant};
-use tokio::sync::Barrier;
+use tokio::{select, sync::Barrier};
 
 fn main() -> ExitCode {
     let options = Options::parse();
@@ -36,6 +36,8 @@ fn main() -> ExitCode {
     // remain online for other actors to sync from.
     let barrier = Arc::new(Barrier::new(actors.len()));
 
+    let reporter = SyncReporter::new();
+
     let file_name = "file.dat";
     let file_seed = 0;
 
@@ -53,6 +55,7 @@ fn main() -> ExitCode {
             .flatten();
         let watch_rx = watch_rx.clone();
         let barrier = barrier.clone();
+        let reporter = reporter.clone();
 
         env.actor(&actor.to_string(), async move {
             let network = actor::create_network(proto).await;
@@ -67,16 +70,28 @@ fn main() -> ExitCode {
             let repo = actor::create_repo_with_mode(DEFAULT_REPO, access_mode).await;
             let _reg = network.register(repo.handle()).await;
 
-            if let Some(watch_tx) = watch_tx {
-                drop(watch_rx);
-
+            // One writer creates the file initially.
+            if watch_tx.is_some() {
                 let mut file = repo.create_file(file_name).await.unwrap();
                 write_random_file(&mut file, file_seed, file_size).await;
+            }
 
-                watch_tx.run(&repo).await;
-            } else {
-                watch_rx.run(&repo).await;
+            let run = async {
+                if let Some(watch_tx) = watch_tx {
+                    drop(watch_rx);
+                    watch_tx.run(&repo).await;
+                } else {
+                    watch_rx.run(&repo).await;
+                }
+            };
 
+            select! {
+                _ = run => (),
+                _ = reporter.run(&repo) => (),
+            }
+
+            // Check the file content matches the original file.
+            {
                 let mut file = repo.open_file(file_name).await.unwrap();
                 check_random_file(&mut file, file_seed, file_size).await;
             }
@@ -119,8 +134,8 @@ struct Options {
     #[arg(short, long, value_parser, default_value_t = Proto::Quic)]
     pub protocol: Proto,
 
-    // `cargo bench` passes the `--bench` flag down to the bench binary so we need to accept it even
-    // if we don't use it.
+    // The following arguments may be passed down from `cargo bench` so we need to accept them even
+    // if we don't use them.
     #[arg(
         long = "bench",
         hide = true,
@@ -128,6 +143,14 @@ struct Options {
         hide_long_help = true
     )]
     _bench: bool,
+
+    #[arg(
+        long = "profile-time",
+        hide = true,
+        hide_short_help = true,
+        hide_long_help = true
+    )]
+    _profile_time: Option<String>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]

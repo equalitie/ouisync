@@ -5,7 +5,7 @@ use std::{
 };
 
 /// Progress of a task.
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Progress {
     pub value: u64,
     pub total: u64,
