@@ -7,9 +7,15 @@ mod common;
 
 use clap::Parser;
 use common::{actor, sync_reporter::SyncReporter, sync_watch, Env, Proto, DEFAULT_REPO};
-use ouisync::{AccessMode, File};
+use hdrhistogram::{Histogram, SyncHistogram};
+use ouisync::{network::TrafficStats, AccessMode, File, StorageSize};
 use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
-use std::{fmt, process::ExitCode, sync::Arc, time::Instant};
+use std::{
+    fmt,
+    process::ExitCode,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::{select, sync::Barrier};
 
 fn main() -> ExitCode {
@@ -36,7 +42,9 @@ fn main() -> ExitCode {
     // remain online for other actors to sync from.
     let barrier = Arc::new(Barrier::new(actors.len()));
 
-    let reporter = SyncReporter::new();
+    let progress_reporter = SyncReporter::new();
+    let mut send_histogram = SyncHistogram::from(Histogram::<u64>::new(3).unwrap());
+    let mut recv_histogram = SyncHistogram::from(Histogram::<u64>::new(3).unwrap());
 
     let file_name = "file.dat";
     let file_seed = 0;
@@ -55,7 +63,9 @@ fn main() -> ExitCode {
             .flatten();
         let watch_rx = watch_rx.clone();
         let barrier = barrier.clone();
-        let reporter = reporter.clone();
+        let progress_reporter = progress_reporter.clone();
+        let mut send_histogram_recorder = send_histogram.recorder();
+        let mut recv_histogram_recorder = recv_histogram.recorder();
 
         env.actor(&actor.to_string(), async move {
             let network = actor::create_network(proto).await;
@@ -76,6 +86,7 @@ fn main() -> ExitCode {
                 write_random_file(&mut file, file_seed, file_size).await;
             }
 
+            // Wait until fully synced + report progress
             let run = async {
                 if let Some(watch_tx) = watch_tx {
                     drop(watch_rx);
@@ -87,7 +98,7 @@ fn main() -> ExitCode {
 
             select! {
                 _ = run => (),
-                _ = reporter.run(&repo) => (),
+                _ = progress_reporter.run(&repo) => (),
             }
 
             // Check the file content matches the original file.
@@ -99,17 +110,31 @@ fn main() -> ExitCode {
             info!("done");
 
             barrier.wait().await;
+
+            let TrafficStats { send, recv } = network.traffic_stats();
+
+            info!(send, recv);
+
+            send_histogram_recorder.record(send).unwrap();
+            recv_histogram_recorder.record(recv).unwrap();
         });
     }
 
     drop(watch_rx);
 
     let start = Instant::now();
-    info!("simulation started");
+
     drop(env);
-    info!(
-        "simulation completed in {:.3}s",
-        start.elapsed().as_secs_f64()
+
+    send_histogram.refresh();
+    recv_histogram.refresh();
+
+    println!();
+    println!(
+        "duration: {}, send: {{ {} }}, recv: {{ {} }}",
+        Seconds(start.elapsed()),
+        DisplayHistogram(&send_histogram),
+        DisplayHistogram(&recv_histogram)
     );
 
     ExitCode::SUCCESS
@@ -242,5 +267,28 @@ impl RandomChunks {
         );
 
         true
+    }
+}
+
+struct DisplayHistogram<'a>(&'a Histogram<u64>);
+
+impl fmt::Display for DisplayHistogram<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "min: {}, max: {}, mean: {}, stdev: {}",
+            StorageSize::from_bytes(self.0.min()),
+            StorageSize::from_bytes(self.0.max()),
+            StorageSize::from_bytes(self.0.mean().round() as u64),
+            StorageSize::from_bytes(self.0.stdev().round() as u64),
+        )
+    }
+}
+
+struct Seconds(Duration);
+
+impl fmt::Display for Seconds {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:.2} s", self.0.as_secs_f64())
     }
 }

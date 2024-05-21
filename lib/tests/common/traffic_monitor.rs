@@ -1,3 +1,4 @@
+use metrics_ext::WatchRecorderSubscriber;
 use ouisync::Repository;
 use state_monitor::StateMonitor;
 use tokio::{select, sync::watch};
@@ -14,8 +15,7 @@ pub(crate) struct TrafficMonitor {
 }
 
 impl TrafficMonitor {
-    pub fn new() -> Self {
-        let subscriber = actor::recorder_subscriber();
+    pub fn new(subscriber: WatchRecorderSubscriber) -> Self {
         let requests_pending_rx = subscriber.gauge("requests pending".into());
 
         Self {

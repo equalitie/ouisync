@@ -232,7 +232,8 @@ fn change_access_mode() {
     let content2 = common::random_bytes(3 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     async fn create_repo_and_reopen_in_blind_mode() -> Repository {
-        let (params, secrets) = actor::get_repo_params_and_secrets(DEFAULT_REPO);
+        let params = actor::get_repo_params(DEFAULT_REPO);
+        let secrets = actor::get_repo_secrets(DEFAULT_REPO);
         let repo = Repository::create(
             &params,
             ouisync::Access::WriteUnlocked {

@@ -170,6 +170,7 @@ pub(crate) mod env {
 pub(crate) mod actor {
     use super::*;
     use metrics::Key;
+    use metrics_ext::Pair;
     use ouisync::{AccessMode, RepositoryParams};
     use state_monitor::StateMonitor;
     use tokio::sync::watch;
@@ -227,29 +228,43 @@ pub(crate) mod actor {
         }
     }
 
-    pub(crate) fn get_repo_params_and_secrets(
+    pub(crate) fn get_repo_params(name: &str) -> RepositoryParams<DefaultRecorder> {
+        get_repo_params_without_recorder(name).with_recorder(get_default_repo_recorder())
+    }
+
+    pub(crate) fn get_repo_params_with_recorder<R>(
         name: &str,
-    ) -> (
-        RepositoryParams<metrics_ext::AddLabels<metrics_ext::Shared>>,
-        AccessSecrets,
-    ) {
+        recorder: R,
+    ) -> RepositoryParams<Pair<DefaultRecorder, R>> {
+        get_repo_params_without_recorder(name)
+            .with_recorder(Pair(get_default_repo_recorder(), recorder))
+    }
+
+    pub(crate) fn get_repo_params_without_recorder(name: &str) -> RepositoryParams<NoopRecorder> {
         ACTOR.with(|actor| {
-            let recorder = metrics_ext::AddLabels::new(
+            RepositoryParams::new(actor.repo_path(name))
+                .with_device_id(actor.device_id)
+                .with_parent_monitor(actor.monitor.clone())
+        })
+    }
+
+    pub(crate) fn get_default_repo_recorder() -> DefaultRecorder {
+        ACTOR.with(|actor| {
+            metrics_ext::AddLabels::new(
                 vec![Label::new("actor", actor.name.clone())],
                 actor.context.recorder.clone(),
-            );
+            )
+        })
+    }
 
-            let params = RepositoryParams::new(actor.repo_path(name))
-                .with_device_id(actor.device_id)
-                .with_recorder(recorder)
-                .with_parent_monitor(actor.monitor.clone());
+    type DefaultRecorder = metrics_ext::AddLabels<metrics_ext::Shared>;
 
-            let secrets = actor
+    pub(crate) fn get_repo_secrets(name: &str) -> AccessSecrets {
+        ACTOR.with(|actor| {
+            actor
                 .context
                 .repo_map
-                .get_or_insert_with(name.to_owned(), AccessSecrets::random_write);
-
-            (params, secrets)
+                .get_or_insert_with(name.to_owned(), AccessSecrets::random_write)
         })
     }
 
@@ -258,7 +273,8 @@ pub(crate) mod actor {
     }
 
     pub(crate) async fn create_repo_with_mode(name: &str, mode: AccessMode) -> Repository {
-        let (params, secrets) = get_repo_params_and_secrets(name);
+        let params = get_repo_params(name);
+        let secrets = get_repo_secrets(name);
 
         Repository::create(&params, Access::new(None, None, secrets.with_mode(mode)))
             .await
@@ -285,10 +301,6 @@ pub(crate) mod actor {
         let (repo, reg) = create_linked_repo(DEFAULT_REPO, &network).await;
         (network, repo, reg)
     }
-
-    pub(crate) fn recorder_subscriber() -> WatchRecorderSubscriber {
-        ACTOR.with(|actor| actor.context.recorder_subscriber.clone())
-    }
 }
 
 task_local! {
@@ -300,7 +312,6 @@ struct Context {
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
     recorder: metrics_ext::Shared,
-    recorder_subscriber: WatchRecorderSubscriber,
     monitor: StateMonitor,
 }
 
@@ -308,16 +319,13 @@ impl Context {
     fn new(runtime: &Handle) -> Self {
         init_log();
 
-        let watch_recorder = WatchRecorder::new();
-        let recorder_subscriber = watch_recorder.subscriber();
-        let recorder = init_recorder(runtime, watch_recorder);
+        let recorder = init_recorder(runtime);
 
         Self {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
             recorder,
-            recorder_subscriber,
             monitor: StateMonitor::make_root(),
         }
     }
@@ -329,12 +337,14 @@ struct Actor {
     base_dir: PathBuf,
     device_id: DeviceId,
     monitor: StateMonitor,
+    recorder: WatchRecorder,
 }
 
 impl Actor {
     fn new(name: String, context: Arc<Context>) -> Self {
         let base_dir = context.base_dir.path().join(&name);
         let monitor = context.monitor.make_child(&name);
+        let recorder = WatchRecorder::new();
 
         Actor {
             name,
@@ -342,6 +352,7 @@ impl Actor {
             base_dir,
             device_id: rand::random(),
             monitor,
+            recorder,
         }
     }
 
@@ -715,17 +726,15 @@ pub(crate) fn init_log() {
 }
 
 #[cfg(feature = "prometheus")]
-fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
-    use metrics_ext::{Pair, Shared};
-
-    Shared::new(Pair(watch_recorder, init_prometheus_recorder(runtime)))
+fn init_recorder(runtime: &Handle) -> metrics_ext::Shared {
+    use metrics_ext::Shared;
+    Shared::new(init_prometheus_recorder(runtime))
 }
 
 #[cfg(feature = "influxdb")]
-fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
-    use metrics_ext::{Pair, Shared};
-
-    Shared::new(Pair(watch_recorder, init_influxdb_recorder(runtime)))
+fn init_recorder(runtime: &Handle) -> metrics_ext::Shared {
+    use metrics_ext::Shared;
+    Shared::new(init_influxdb_recorder(runtime))
 }
 
 #[cfg(all(feature = "prometheus", feature = "influxdb"))]
@@ -733,19 +742,15 @@ fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext
     use metrics_ext::{Pair, Shared};
 
     Shared::new(Pair(
-        watch_recorder,
-        Pair(
-            init_prometheus_recorder(runtime),
-            init_influxdb_recorder(runtime),
-        ),
+        init_prometheus_recorder(runtime),
+        init_influxdb_recorder(runtime),
     ))
 }
 
 #[cfg(not(any(feature = "prometheus", feature = "influxdb")))]
-fn init_recorder(_runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
-    use metrics_ext::{Pair, Shared};
-
-    Shared::new(watch_recorder)
+fn init_recorder(_runtime: &Handle) -> metrics_ext::Shared {
+    use metrics_ext::Shared;
+    Shared::new(NoopRecorder)
 }
 
 #[cfg(feature = "prometheus")]

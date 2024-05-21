@@ -7,6 +7,7 @@ use self::common::{
     actor, dump, sync_watch, traffic_monitor::TrafficMonitor, Env, Proto, DEFAULT_REPO,
 };
 use assert_matches::assert_matches;
+use metrics_ext::WatchRecorder;
 use ouisync::{
     Access, AccessMode, EntryType, Error, Repository, StorageSize, StoreError, VersionVector,
     BLOB_HEADER_SIZE, BLOCK_SIZE,
@@ -528,7 +529,8 @@ fn recreate_local_branch() {
         let network = actor::create_network(proto).await;
 
         // 1. Create the repo but don't link it yet.
-        let (params, secrets) = actor::get_repo_params_and_secrets(DEFAULT_REPO);
+        let params = actor::get_repo_params(DEFAULT_REPO);
+        let secrets = actor::get_repo_secrets(DEFAULT_REPO);
         let repo = Repository::create(&params, Access::new(None, None, secrets))
             .await
             .unwrap();
@@ -1110,11 +1112,20 @@ fn quota_exceed() {
 
     env.actor("reader", {
         async move {
-            let mut traffic = TrafficMonitor::new();
+            let watch_recorder = WatchRecorder::new();
+            let mut traffic = TrafficMonitor::new(watch_recorder.subscriber());
 
             let network = actor::create_network(Proto::Tcp).await;
 
-            let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
+            let params = actor::get_repo_params_with_recorder(DEFAULT_REPO, watch_recorder);
+            let secrets = actor::get_repo_secrets(DEFAULT_REPO);
+            let repo = Repository::create(
+                &params,
+                Access::new(None, None, secrets.with_mode(AccessMode::Read)),
+            )
+            .await
+            .unwrap();
+
             repo.set_quota(Some(quota)).await.unwrap();
 
             let _reg = network.register(repo.handle()).await;
@@ -1176,13 +1187,21 @@ fn quota_concurrent_writes() {
     }
 
     env.actor("reader", async move {
-        let mut traffic = TrafficMonitor::new();
+        let watch_recorder = WatchRecorder::new();
+        let mut traffic = TrafficMonitor::new(watch_recorder.subscriber());
 
         let network = actor::create_network(Proto::Tcp).await;
         network.add_user_provided_peer(&actor::lookup_addr("writer-0").await);
         network.add_user_provided_peer(&actor::lookup_addr("writer-1").await);
 
-        let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
+        let params = actor::get_repo_params_with_recorder(DEFAULT_REPO, watch_recorder);
+        let secrets = actor::get_repo_secrets(DEFAULT_REPO);
+        let repo = Repository::create(
+            &params,
+            Access::new(None, None, secrets.with_mode(AccessMode::Read)),
+        )
+        .await
+        .unwrap();
         repo.set_quota(Some(quota)).await.unwrap();
 
         let _reg = network.register(repo.handle()).await;
