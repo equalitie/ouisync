@@ -4,7 +4,7 @@
 mod macros;
 
 pub(crate) mod dump;
-pub(crate) mod sync_reporter;
+pub(crate) mod progress;
 pub(crate) mod sync_watch;
 pub(crate) mod traffic_monitor;
 mod wait_map;

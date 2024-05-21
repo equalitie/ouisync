@@ -6,12 +6,12 @@
 mod common;
 
 use clap::Parser;
-use common::{actor, sync_reporter::SyncReporter, sync_watch, Env, Proto, DEFAULT_REPO};
+use common::{actor, progress::ProgressReporter, sync_watch, Env, Proto, DEFAULT_REPO};
 use hdrhistogram::{Histogram, SyncHistogram};
 use ouisync::{network::TrafficStats, AccessMode, File, StorageSize};
 use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{
-    fmt,
+    fmt, io,
     process::ExitCode,
     sync::Arc,
     time::{Duration, Instant},
@@ -42,7 +42,7 @@ fn main() -> ExitCode {
     // remain online for other actors to sync from.
     let barrier = Arc::new(Barrier::new(actors.len()));
 
-    let progress_reporter = SyncReporter::new();
+    let progress_reporter = options.progress.then(ProgressReporter::new);
     let mut send_histogram = SyncHistogram::from(Histogram::<u64>::new(3).unwrap());
     let mut recv_histogram = SyncHistogram::from(Histogram::<u64>::new(3).unwrap());
 
@@ -96,9 +96,13 @@ fn main() -> ExitCode {
                 }
             };
 
-            select! {
-                _ = run => (),
-                _ = progress_reporter.run(&repo) => (),
+            if let Some(progress_reporter) = progress_reporter {
+                select! {
+                    _ = run => (),
+                    _ = progress_reporter.run(&repo) => (),
+                }
+            } else {
+                run.await;
             }
 
             // Check the file content matches the original file.
@@ -125,17 +129,19 @@ fn main() -> ExitCode {
     let start = Instant::now();
 
     drop(env);
+    drop(progress_reporter);
 
     send_histogram.refresh();
     recv_histogram.refresh();
 
     println!();
-    println!(
-        "duration: {}, send: {{ {} }}, recv: {{ {} }}",
-        Seconds(start.elapsed()),
-        DisplayHistogram(&send_histogram),
-        DisplayHistogram(&recv_histogram)
-    );
+    print_summary(
+        &mut io::stdout().lock(),
+        start.elapsed(),
+        &send_histogram,
+        &recv_histogram,
+    )
+    .unwrap();
 
     ExitCode::SUCCESS
 }
@@ -158,6 +164,10 @@ struct Options {
     /// Network protocol to use (QUIC or TCP).
     #[arg(short, long, value_parser, default_value_t = Proto::Quic)]
     pub protocol: Proto,
+
+    /// Whether to show progress bars.
+    #[arg(long)]
+    pub progress: bool,
 
     // The following arguments may be passed down from `cargo bench` so we need to accept them even
     // if we don't use them.
@@ -270,25 +280,44 @@ impl RandomChunks {
     }
 }
 
-struct DisplayHistogram<'a>(&'a Histogram<u64>);
-
-impl fmt::Display for DisplayHistogram<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "min: {}, max: {}, mean: {}, stdev: {}",
-            StorageSize::from_bytes(self.0.min()),
-            StorageSize::from_bytes(self.0.max()),
-            StorageSize::from_bytes(self.0.mean().round() as u64),
-            StorageSize::from_bytes(self.0.stdev().round() as u64),
-        )
-    }
-}
-
 struct Seconds(Duration);
 
 impl fmt::Display for Seconds {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:.2} s", self.0.as_secs_f64())
     }
+}
+
+fn print_summary<W: io::Write>(
+    writer: &mut W,
+    duration: Duration,
+    send_histogram: &Histogram<u64>,
+    recv_histogram: &Histogram<u64>,
+) -> io::Result<()> {
+    writeln!(writer, "duration:   {}", Seconds(duration))?;
+
+    for (histogram, label) in [(send_histogram, "send"), (recv_histogram, "recv")] {
+        writeln!(
+            writer,
+            "{label}.min:   {}",
+            StorageSize::from_bytes(histogram.min())
+        )?;
+        writeln!(
+            writer,
+            "{label}.max:   {}",
+            StorageSize::from_bytes(histogram.max())
+        )?;
+        writeln!(
+            writer,
+            "{label}.mean:  {}",
+            StorageSize::from_bytes(histogram.mean().round() as u64)
+        )?;
+        writeln!(
+            writer,
+            "{label}.stdev: {}",
+            StorageSize::from_bytes(histogram.stdev().round() as u64)
+        )?;
+    }
+
+    Ok(())
 }
