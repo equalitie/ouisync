@@ -5,17 +5,22 @@
 #[macro_use]
 mod common;
 
+#[path = "utils/summary.rs"]
+mod summary;
+
 use clap::Parser;
 use common::{actor, progress::ProgressReporter, sync_watch, Env, Proto, DEFAULT_REPO};
-use hdrhistogram::{Histogram, SyncHistogram};
-use ouisync::{network::TrafficStats, AccessMode, File, StorageSize};
+use ouisync::{AccessMode, File};
 use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{
-    fmt, io,
+    fmt,
+    fs::OpenOptions,
+    io::{self, Write},
+    path::PathBuf,
     process::ExitCode,
     sync::Arc,
-    time::{Duration, Instant},
 };
+use summary::SummaryRecorder;
 use tokio::{select, sync::Barrier};
 
 fn main() -> ExitCode {
@@ -43,8 +48,7 @@ fn main() -> ExitCode {
     let barrier = Arc::new(Barrier::new(actors.len()));
 
     let progress_reporter = options.progress.then(ProgressReporter::new);
-    let mut send_histogram = SyncHistogram::from(Histogram::<u64>::new(3).unwrap());
-    let mut recv_histogram = SyncHistogram::from(Histogram::<u64>::new(3).unwrap());
+    let summary_recorder = SummaryRecorder::new();
 
     let file_name = "file.dat";
     let file_seed = 0;
@@ -64,8 +68,7 @@ fn main() -> ExitCode {
         let watch_rx = watch_rx.clone();
         let barrier = barrier.clone();
         let progress_reporter = progress_reporter.clone();
-        let mut send_histogram_recorder = send_histogram.recorder();
-        let mut recv_histogram_recorder = recv_histogram.recorder();
+        let summary_recorder = summary_recorder.actor();
 
         env.actor(&actor.to_string(), async move {
             let network = actor::create_network(proto).await;
@@ -115,33 +118,32 @@ fn main() -> ExitCode {
 
             barrier.wait().await;
 
-            let TrafficStats { send, recv } = network.traffic_stats();
-
-            info!(send, recv);
-
-            send_histogram_recorder.record(send).unwrap();
-            recv_histogram_recorder.record(recv).unwrap();
+            summary_recorder.record(&network);
         });
     }
 
     drop(watch_rx);
-
-    let start = Instant::now();
-
     drop(env);
     drop(progress_reporter);
 
-    send_histogram.refresh();
-    recv_histogram.refresh();
+    let summary = summary_recorder.finalize();
 
     println!();
-    print_summary(
-        &mut io::stdout().lock(),
-        start.elapsed(),
-        &send_histogram,
-        &recv_histogram,
-    )
-    .unwrap();
+    serde_json::to_writer_pretty(io::stdout().lock(), &summary).unwrap();
+    println!();
+
+    if let Some(path) = options.output {
+        let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(file) => file,
+            Err(error) => {
+                eprintln!("error: failed to open/create {}: {}", path.display(), error);
+                return ExitCode::FAILURE;
+            }
+        };
+
+        serde_json::to_writer(&mut file, &summary).unwrap();
+        file.write_all(b"\n").unwrap();
+    }
 
     ExitCode::SUCCESS
 }
@@ -168,6 +170,11 @@ struct Options {
     /// Whether to show progress bars.
     #[arg(long)]
     pub progress: bool,
+
+    /// File to append the summary to. Will be created if not exists. If ommited prints the summary
+    /// to stdout.
+    #[arg(short, long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
 
     // The following arguments may be passed down from `cargo bench` so we need to accept them even
     // if we don't use them.
@@ -278,46 +285,4 @@ impl RandomChunks {
 
         true
     }
-}
-
-struct Seconds(Duration);
-
-impl fmt::Display for Seconds {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:.2} s", self.0.as_secs_f64())
-    }
-}
-
-fn print_summary<W: io::Write>(
-    writer: &mut W,
-    duration: Duration,
-    send_histogram: &Histogram<u64>,
-    recv_histogram: &Histogram<u64>,
-) -> io::Result<()> {
-    writeln!(writer, "duration:   {}", Seconds(duration))?;
-
-    for (histogram, label) in [(send_histogram, "send"), (recv_histogram, "recv")] {
-        writeln!(
-            writer,
-            "{label}.min:   {}",
-            StorageSize::from_bytes(histogram.min())
-        )?;
-        writeln!(
-            writer,
-            "{label}.max:   {}",
-            StorageSize::from_bytes(histogram.max())
-        )?;
-        writeln!(
-            writer,
-            "{label}.mean:  {}",
-            StorageSize::from_bytes(histogram.mean().round() as u64)
-        )?;
-        writeln!(
-            writer,
-            "{label}.stdev: {}",
-            StorageSize::from_bytes(histogram.stdev().round() as u64)
-        )?;
-    }
-
-    Ok(())
 }

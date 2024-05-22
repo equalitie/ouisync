@@ -101,18 +101,16 @@ fn is_complete(progress: &Progress) -> bool {
 
 fn all_progress_style() -> ProgressStyle {
     ProgressStyle::with_template(
-        "{prefix:5} {spinner:.green} [{elapsed_precise}] [{wide_bar:.green.bold/blue}] {percent_precise}%",
+        "{prefix:5} [{elapsed_precise}] [{wide_bar:.green.bold/blue}] {percent_precise}% {bytes_per_sec:.dim}",
     )
     .unwrap()
     .progress_chars("#>-")
 }
 
 fn one_progress_style() -> ProgressStyle {
-    ProgressStyle::with_template(
-        "{prefix:5} {spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}",
-    )
-    .unwrap()
-    .progress_chars("#>-")
+    ProgressStyle::with_template("{prefix:5} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}")
+        .unwrap()
+        .progress_chars("#>-")
 }
 
 struct ProgressBarFinisher<'a>(&'a ProgressBar);
