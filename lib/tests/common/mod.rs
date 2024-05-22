@@ -28,6 +28,7 @@ use state_monitor::StateMonitor;
 use std::{
     fmt,
     future::Future,
+    io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     str::FromStr,
@@ -43,7 +44,10 @@ use tokio::{
 use tracing::metadata::LevelFilter;
 use tracing::{instrument, Instrument, Span};
 use tracing_subscriber::{
-    fmt::time::SystemTime, layer::SubscriberExt, util::SubscriberInitExt, Layer,
+    fmt::{time::SystemTime, MakeWriter, TestWriter},
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+    EnvFilter, Layer,
 };
 
 pub(crate) const DEFAULT_REPO: &str = "default";
@@ -93,6 +97,10 @@ pub(crate) mod env {
                 tasks: Vec::new(),
             }
         }
+
+        // pub fn with_log_writer<W>(writer: W) -> Self {
+
+        // }
 
         pub fn actor<Fut>(&mut self, name: &str, f: Fut)
         where
@@ -705,21 +713,24 @@ fn to_megabytes(bytes: usize) -> usize {
 }
 
 pub(crate) fn init_log() {
-    // Log to stdout
-    let stdout_layer = tracing_subscriber::fmt::layer()
+    // log output is captured by default and only shown on failure. Run tests with `--nocapture` to
+    // override.
+    init_log_with_writer(TestWriter::default())
+}
+
+pub(crate) fn init_log_with_writer<W>(writer: W)
+where
+    W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+{
+    tracing_subscriber::fmt()
         .event_format(Formatter::<SystemTime>::default())
-        // log output is captured by default and only shown on failure. Run tests with
-        // `--nocapture` to override.
-        .with_test_writer()
-        .with_filter(
+        .with_writer(writer)
+        .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
                 // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
-        );
-
-    tracing_subscriber::registry()
-        .with(stdout_layer)
+        )
         .try_init()
         // `Err` here just means the logger is already initialized, it's OK to ignore it.
         .unwrap_or(());

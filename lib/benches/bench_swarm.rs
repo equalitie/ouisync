@@ -37,6 +37,9 @@ fn main() -> ExitCode {
         .collect();
     let proto = options.protocol;
 
+    let progress_reporter = ProgressReporter::new();
+    common::init_log_with_writer(progress_reporter.stdout_writer());
+
     let mut env = Env::new();
 
     // Wait until everyone is fully synced.
@@ -47,7 +50,6 @@ fn main() -> ExitCode {
     // remain online for other actors to sync from.
     let barrier = Arc::new(Barrier::new(actors.len()));
 
-    let progress_reporter = options.progress.then(ProgressReporter::new);
     let summary_recorder = SummaryRecorder::new();
 
     let file_name = "file.dat";
@@ -99,13 +101,9 @@ fn main() -> ExitCode {
                 }
             };
 
-            if let Some(progress_reporter) = progress_reporter {
-                select! {
-                    _ = run => (),
-                    _ = progress_reporter.run(&repo) => (),
-                }
-            } else {
-                run.await;
+            select! {
+                _ = run => (),
+                _ = progress_reporter.run(&repo) => (),
             }
 
             // Check the file content matches the original file.
@@ -166,10 +164,6 @@ struct Options {
     /// Network protocol to use (QUIC or TCP).
     #[arg(short, long, value_parser, default_value_t = Proto::Quic)]
     pub protocol: Proto,
-
-    /// Whether to show progress bars.
-    #[arg(long)]
-    pub progress: bool,
 
     /// File to append the summary to. Will be created if not exists. If ommited prints the summary
     /// to stdout.

@@ -3,6 +3,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use ouisync::{Progress, Repository, BLOCK_SIZE};
 use std::{
     fmt::Write,
+    io::{self, Stderr, Stdout},
     sync::{Arc, Mutex as BlockingMutex},
     time::{Duration, Instant},
 };
@@ -33,6 +34,20 @@ impl ProgressReporter {
             one_progress,
             bars,
             all_bar,
+        }
+    }
+
+    pub fn stdout_writer(&self) -> MakeWriter<fn() -> Stdout> {
+        MakeWriter {
+            bars: self.bars.clone(),
+            inner: io::stdout,
+        }
+    }
+
+    pub fn stderr_writer(&self) -> MakeWriter<fn() -> Stderr> {
+        MakeWriter {
+            bars: self.bars.clone(),
+            inner: io::stderr,
         }
     }
 
@@ -118,5 +133,46 @@ struct ProgressBarFinisher<'a>(&'a ProgressBar);
 impl Drop for ProgressBarFinisher<'_> {
     fn drop(&mut self) {
         self.0.finish_and_clear();
+    }
+}
+
+pub struct Writer<W> {
+    bars: MultiProgress,
+    inner: W,
+}
+
+impl<W> io::Write for Writer<W>
+where
+    W: io::Write,
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.bars.suspend(|| self.inner.write(buf))
+    }
+
+    fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        self.bars.suspend(|| self.inner.write_vectored(bufs))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.bars.suspend(|| self.inner.flush())
+    }
+}
+
+pub struct MakeWriter<T> {
+    bars: MultiProgress,
+    inner: T,
+}
+
+impl<'w, T> tracing_subscriber::fmt::MakeWriter<'w> for MakeWriter<T>
+where
+    T: tracing_subscriber::fmt::MakeWriter<'w>,
+{
+    type Writer = Writer<T::Writer>;
+
+    fn make_writer(&'w self) -> Self::Writer {
+        Writer {
+            bars: self.bars.clone(),
+            inner: self.inner.make_writer(),
+        }
     }
 }
