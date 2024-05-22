@@ -10,7 +10,11 @@ mod summary;
 
 use clap::Parser;
 use common::{actor, progress::ProgressReporter, sync_watch, Env, Proto, DEFAULT_REPO};
-use ouisync::{AccessMode, File};
+use metrics::{Counter, Gauge, Recorder};
+use ouisync::{
+    network::{Network, TrafficStats},
+    Access, AccessMode, File, Repository,
+};
 use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{
     fmt,
@@ -19,9 +23,10 @@ use std::{
     path::PathBuf,
     process::ExitCode,
     sync::Arc,
+    time::Duration,
 };
 use summary::SummaryRecorder;
-use tokio::{select, sync::Barrier};
+use tokio::{select, sync::Barrier, time};
 
 fn main() -> ExitCode {
     let options = Options::parse();
@@ -75,46 +80,60 @@ fn main() -> ExitCode {
         env.actor(&actor.to_string(), async move {
             let network = actor::create_network(proto).await;
 
+            let recorder = actor::get_default_recorder();
+            let progress_monitor = ProgressMonitor::new(&recorder);
+            let throughput_monitor = ThroughputMonitor::new(&recorder);
+
+            // Create the repo
+            let params = actor::get_repo_params(DEFAULT_REPO).with_recorder(recorder);
+            let secrets = actor::get_repo_secrets(DEFAULT_REPO);
+            let repo = Repository::create(
+                &params,
+                Access::new(None, None, secrets.with_mode(access_mode)),
+            )
+            .await
+            .unwrap();
+            let _reg = network.register(repo.handle()).await;
+
+            // Create the file by one of the writers
+            if watch_tx.is_some() {
+                let mut file = repo.create_file(file_name).await.unwrap();
+                write_random_file(&mut file, file_seed, file_size).await;
+            }
+
             // Connect to the other peers
             for other_actor in other_actors {
                 let addr = actor::lookup_addr(&other_actor.to_string()).await;
                 network.add_user_provided_peer(&addr);
             }
 
-            // Create the repo
-            let repo = actor::create_repo_with_mode(DEFAULT_REPO, access_mode).await;
-            let _reg = network.register(repo.handle()).await;
-
-            // One writer creates the file initially.
-            if watch_tx.is_some() {
-                let mut file = repo.create_file(file_name).await.unwrap();
-                write_random_file(&mut file, file_seed, file_size).await;
-            }
-
-            // Wait until fully synced + report progress
             let run = async {
+                // Wait until fully synced
                 if let Some(watch_tx) = watch_tx {
                     drop(watch_rx);
                     watch_tx.run(&repo).await;
                 } else {
                     watch_rx.run(&repo).await;
                 }
+
+                // Check the file content matches the original file.
+                {
+                    let mut file = repo.open_file(file_name).await.unwrap();
+                    check_random_file(&mut file, file_seed, file_size).await;
+                }
+
+                // Wait until everyone finished
+                barrier.wait().await;
             };
 
             select! {
                 _ = run => (),
                 _ = progress_reporter.run(&repo) => (),
-            }
-
-            // Check the file content matches the original file.
-            {
-                let mut file = repo.open_file(file_name).await.unwrap();
-                check_random_file(&mut file, file_seed, file_size).await;
+                _ = progress_monitor.run(&repo) => (),
+                _ = throughput_monitor.run(&network) => (),
             }
 
             info!("done");
-
-            barrier.wait().await;
 
             summary_recorder.record(&network);
         });
@@ -278,5 +297,58 @@ impl RandomChunks {
         );
 
         true
+    }
+}
+
+struct ProgressMonitor {
+    progress: Gauge,
+}
+
+impl ProgressMonitor {
+    fn new(recorder: &impl Recorder) -> Self {
+        metrics::with_local_recorder(recorder, || Self {
+            progress: metrics::gauge!("progress"),
+        })
+    }
+
+    async fn run(&self, repo: &Repository) {
+        use tokio::sync::broadcast::error::RecvError;
+
+        let mut rx = repo.subscribe();
+
+        loop {
+            let progress = repo.sync_progress().await.unwrap();
+            self.progress.set(progress.ratio());
+
+            match rx.recv().await {
+                Ok(_) | Err(RecvError::Lagged(_)) => (),
+                Err(RecvError::Closed) => break,
+            }
+        }
+    }
+}
+
+struct ThroughputMonitor {
+    bytes_sent: Counter,
+    bytes_received: Counter,
+}
+
+impl ThroughputMonitor {
+    fn new(recorder: &impl Recorder) -> Self {
+        metrics::with_local_recorder(recorder, || Self {
+            bytes_sent: metrics::counter!("bytes_sent"),
+            bytes_received: metrics::counter!("bytes_received"),
+        })
+    }
+
+    async fn run(&self, network: &Network) {
+        loop {
+            let TrafficStats { send, recv } = network.traffic_stats();
+
+            self.bytes_sent.absolute(send);
+            self.bytes_received.absolute(recv);
+
+            time::sleep(Duration::from_millis(250)).await;
+        }
     }
 }

@@ -98,10 +98,6 @@ pub(crate) mod env {
             }
         }
 
-        // pub fn with_log_writer<W>(writer: W) -> Self {
-
-        // }
-
         pub fn actor<Fut>(&mut self, name: &str, f: Fut)
         where
             Fut: Future<Output = ()> + Send + 'static,
@@ -236,27 +232,16 @@ pub(crate) mod actor {
         }
     }
 
-    pub(crate) fn get_repo_params(name: &str) -> RepositoryParams<DefaultRecorder> {
-        get_repo_params_without_recorder(name).with_recorder(get_default_repo_recorder())
-    }
-
-    pub(crate) fn get_repo_params_with_recorder<R>(
-        name: &str,
-        recorder: R,
-    ) -> RepositoryParams<Pair<DefaultRecorder, R>> {
-        get_repo_params_without_recorder(name)
-            .with_recorder(Pair(get_default_repo_recorder(), recorder))
-    }
-
-    pub(crate) fn get_repo_params_without_recorder(name: &str) -> RepositoryParams<NoopRecorder> {
+    pub(crate) fn get_repo_params(name: &str) -> RepositoryParams<NoopRecorder> {
         ACTOR.with(|actor| {
             RepositoryParams::new(actor.repo_path(name))
                 .with_device_id(actor.device_id)
                 .with_parent_monitor(actor.monitor.clone())
+                .with_recorder(NoopRecorder)
         })
     }
 
-    pub(crate) fn get_default_repo_recorder() -> DefaultRecorder {
+    pub(crate) fn get_default_recorder() -> DefaultRecorder {
         ACTOR.with(|actor| {
             metrics_ext::AddLabels::new(
                 vec![Label::new("actor", actor.name.clone())],
@@ -265,7 +250,7 @@ pub(crate) mod actor {
         })
     }
 
-    type DefaultRecorder = metrics_ext::AddLabels<metrics_ext::Shared>;
+    pub(crate) type DefaultRecorder = metrics_ext::AddLabels<metrics_ext::Shared>;
 
     pub(crate) fn get_repo_secrets(name: &str) -> AccessSecrets {
         ACTOR.with(|actor| {

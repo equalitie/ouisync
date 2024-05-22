@@ -1117,7 +1117,7 @@ fn quota_exceed() {
 
             let network = actor::create_network(Proto::Tcp).await;
 
-            let params = actor::get_repo_params_with_recorder(DEFAULT_REPO, watch_recorder);
+            let params = actor::get_repo_params(DEFAULT_REPO).with_recorder(watch_recorder);
             let secrets = actor::get_repo_secrets(DEFAULT_REPO);
             let repo = Repository::create(
                 &params,
@@ -1194,7 +1194,7 @@ fn quota_concurrent_writes() {
         network.add_user_provided_peer(&actor::lookup_addr("writer-0").await);
         network.add_user_provided_peer(&actor::lookup_addr("writer-1").await);
 
-        let params = actor::get_repo_params_with_recorder(DEFAULT_REPO, watch_recorder);
+        let params = actor::get_repo_params(DEFAULT_REPO).with_recorder(watch_recorder);
         let secrets = actor::get_repo_secrets(DEFAULT_REPO);
         let repo = Repository::create(
             &params,

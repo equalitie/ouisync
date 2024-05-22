@@ -1,13 +1,14 @@
 use super::actor;
-use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
-use ouisync::{Progress, Repository, BLOCK_SIZE};
+use futures_util::StreamExt;
+use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressState, ProgressStyle};
+use ouisync::{network::Network, Progress, Repository, BLOCK_SIZE};
 use std::{
     fmt::Write,
     io::{self, Stderr, Stdout},
     sync::{Arc, Mutex as BlockingMutex},
     time::{Duration, Instant},
 };
-use tokio::sync::broadcast::error::RecvError;
+use tokio::{select, sync::broadcast::error::RecvError, time};
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -15,7 +16,6 @@ const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Clone)]
 pub struct ProgressReporter {
     all_progress: Arc<BlockingMutex<Progress>>,
-    one_progress: Progress,
     bars: MultiProgress,
     all_bar: ProgressBar,
 }
@@ -23,7 +23,6 @@ pub struct ProgressReporter {
 impl ProgressReporter {
     pub fn new() -> Self {
         let all_progress = Arc::new(BlockingMutex::new(Progress::default()));
-        let one_progress = Progress::default();
         let bars = MultiProgress::new();
 
         let all_bar = bars.add(ProgressBar::new(1).with_style(all_progress_style()));
@@ -31,7 +30,6 @@ impl ProgressReporter {
 
         Self {
             all_progress,
-            one_progress,
             bars,
             all_bar,
         }
@@ -53,27 +51,30 @@ impl ProgressReporter {
 
     pub async fn run(mut self, repo: &Repository) {
         let mut rx = repo.subscribe();
-        let one_bar = self
-            .bars
-            .add(ProgressBar::new(1).with_style(one_progress_style()));
-        one_bar.set_prefix(actor::name());
 
+        let one_bar = self.bars.add(
+            ProgressBar::new(1)
+                .with_style(one_progress_style())
+                .with_prefix(actor::name()),
+        );
         let _finisher = ProgressBarFinisher(&one_bar);
+
+        let mut old_one_progress = Progress::default();
 
         loop {
             let new_one_progress = repo.sync_progress().await.unwrap();
 
             let all_progress = {
                 let mut all_progress = self.all_progress.lock().unwrap();
-                *all_progress = sub(*all_progress, self.one_progress);
+                *all_progress = sub(*all_progress, old_one_progress);
                 *all_progress = add(*all_progress, new_one_progress);
                 *all_progress
             };
 
-            self.one_progress = new_one_progress;
+            old_one_progress = new_one_progress;
 
-            one_bar.set_length((self.one_progress.total * BLOCK_SIZE as u64).max(1));
-            one_bar.set_position(self.one_progress.value * BLOCK_SIZE as u64);
+            one_bar.set_length((old_one_progress.total * BLOCK_SIZE as u64).max(1));
+            one_bar.set_position(old_one_progress.value * BLOCK_SIZE as u64);
 
             self.all_bar
                 .set_length((all_progress.total * BLOCK_SIZE as u64).max(1));
@@ -91,7 +92,7 @@ impl ProgressReporter {
 impl Drop for ProgressReporter {
     fn drop(&mut self) {
         if Arc::strong_count(&self.all_progress) <= 1 {
-            self.all_bar.finish_and_clear();
+            let _ = ProgressBarFinisher(&self.all_bar);
         }
     }
 }
@@ -116,23 +117,25 @@ fn is_complete(progress: &Progress) -> bool {
 
 fn all_progress_style() -> ProgressStyle {
     ProgressStyle::with_template(
-        "{prefix:5} [{elapsed_precise}] [{wide_bar:.green.bold/blue}] {percent_precise}% {bytes_per_sec:.dim}",
+        "{prefix:5} [{elapsed_precise}] [{wide_bar:.green.bold/blue}] {percent_precise}%",
     )
     .unwrap()
     .progress_chars("#>-")
 }
 
 fn one_progress_style() -> ProgressStyle {
-    ProgressStyle::with_template("{prefix:5} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}")
-        .unwrap()
-        .progress_chars("#>-")
+    ProgressStyle::with_template(
+        "{prefix:5} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
+    )
+    .unwrap()
+    .progress_chars("#>-")
 }
 
 struct ProgressBarFinisher<'a>(&'a ProgressBar);
 
 impl Drop for ProgressBarFinisher<'_> {
     fn drop(&mut self) {
-        self.0.finish_and_clear();
+        self.0.finish();
     }
 }
 
