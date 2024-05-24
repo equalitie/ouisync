@@ -293,7 +293,7 @@ impl Drop for UniqueLock {
 /// Lock that can be upgraded from read to write.
 pub(crate) enum UpgradableLock {
     Read(ReadLock),
-    Write(WriteLock),
+    Write(#[allow(dead_code)] WriteLock),
 }
 
 impl UpgradableLock {

@@ -781,10 +781,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
         let debug_id = self.generate_debug_id();
 
         if self.debug_type == DebugType::Full {
-            println!(
-                "{debug_id} Enter: close_file {:?}",
-                file_name.to_string_lossy()
-            );
+            println!("{debug_id} Enter: close_file {:?}", file_name.as_ustr());
         }
 
         self.close_file_(file_name, info, context);
@@ -1014,7 +1011,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
         if self.debug_type == DebugType::Full {
             println!(
                 "{debug_id} Enter: find_files_with_pattern {:?}",
-                file_name.to_string_lossy()
+                file_name.as_ustr()
             );
         }
 
@@ -1054,7 +1051,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
         if self.debug_type == DebugType::Full {
             println!(
                 "{debug_id} Enter: set_file_attributes {:?}",
-                file_name.to_string_lossy()
+                file_name.as_ustr()
             );
         }
 
@@ -1094,10 +1091,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
         let debug_id = self.generate_debug_id();
 
         if self.debug_type == DebugType::Full {
-            println!(
-                "{debug_id} Enter: set_file_time {:?}",
-                file_name.to_string_lossy()
-            );
+            println!("{debug_id} Enter: set_file_time {:?}", file_name.as_ustr());
         }
 
         let r = self.set_file_time_(
@@ -1140,10 +1134,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
         let debug_id = self.generate_debug_id();
 
         if self.debug_type == DebugType::Full {
-            println!(
-                "{debug_id} Enter: delete_file {:?}",
-                file_name.to_string_lossy()
-            );
+            println!("{debug_id} Enter: delete_file {:?}", file_name.as_ustr());
         }
 
         let r = self.delete_file_(file_name, info, context);
@@ -1181,7 +1172,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
         if self.debug_type == DebugType::Full {
             println!(
                 "{debug_id} Enter: delete_directory {:?}",
-                file_name.to_string_lossy()
+                file_name.as_ustr()
             );
         }
 

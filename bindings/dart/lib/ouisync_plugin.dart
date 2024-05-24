@@ -206,12 +206,12 @@ class Session {
   /// Note that this function is idempotent with itself as well as with the
   /// `closeSync` function.
   Future<void> close() async {
-    final handle = _closeClient();
+    await _networkSubscription.close();
+
+    final handle = _client.close();
     if (handle == 0) {
       return;
     }
-
-    await _networkSubscription.close();
 
     await _invoke(
       (port) => bindings.session_close(
@@ -230,24 +230,12 @@ class Session {
   /// Note that this function is idempotent with itself as well as with the
   /// `close` function.
   void closeSync() {
-    final handle = _closeClient();
+    final handle = _client.close();
     if (handle == 0) {
       return;
     }
 
-    unawaited(_networkSubscription.close());
-
     bindings.session_close_blocking(handle);
-  }
-
-  int _closeClient() {
-    final handle = _client.close();
-
-    if (handle == 0) {
-      return 0;
-    }
-
-    return handle;
   }
 }
 
@@ -388,6 +376,17 @@ class Repository {
     await _subscription.close();
     await _client.invoke('repository_close', _handle);
   }
+
+  /// Checks whether syncing with other replicas is enabled.
+  Future<bool> get isSyncEnabled =>
+      _client.invoke<bool>('repository_is_sync_enabled', _handle);
+
+  /// Enables or disables syncing with other replicas.
+  Future<void> setSyncEnabled(bool enabled) =>
+      _client.invoke('repository_set_sync_enabled', {
+        'repository': _handle,
+        'enabled': enabled,
+      });
 
   /// Sets, unsets or changes local secrets for accessing the repository or disables the given
   /// access mode.
@@ -562,6 +561,26 @@ class Repository {
   Future<PasswordSalt> getWritePasswordSalt() => _client
       .invoke<Uint8List>("get_write_password_salt", _handle)
       .then((bytes) => PasswordSalt(bytes));
+
+  Future<String?> getMetadata(String key) =>
+      _client.invoke<String?>('repository_get_metadata', {
+        'repository': _handle,
+        'key': key,
+      });
+
+  Future<void> setMetadata(
+    Map<String, ({String? oldValue, String? newValue})> edits,
+  ) =>
+      _client.invoke<void>('repository_set_metadata', {
+        'repository': _handle,
+        'edits': edits.entries
+            .map((entry) => {
+                  'key': entry.key,
+                  'old': entry.value.oldValue,
+                  'new': entry.value.newValue,
+                })
+            .toList(),
+      });
 }
 
 sealed class AccessChange {

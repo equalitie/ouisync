@@ -133,9 +133,9 @@ impl RepositoryMonitor {
 }
 
 pub(crate) struct JobMonitor {
-    tx: watch::Sender<bool>,
     name: String,
-    counter: AtomicU64,
+    count_running_tx: watch::Sender<usize>,
+    count_total: AtomicU64,
     time: Histogram,
 }
 
@@ -151,7 +151,7 @@ impl JobMonitor {
     }
 
     fn from_parts(name: &str, time: Histogram, state: MonitoredValue<JobState>) -> Self {
-        let (tx, mut rx) = watch::channel(false);
+        let (count_running_tx, mut count_running_rx) = watch::channel(0);
 
         task::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(1));
@@ -161,17 +161,21 @@ impl JobMonitor {
 
             loop {
                 select! {
-                    result = rx.changed() => {
+                    result = count_running_rx.changed() => {
                         if result.is_err() {
                             *state.get() = JobState::Idle;
                             break;
                         }
 
-                        if *rx.borrow() {
-                            start = Some(Instant::now());
-                        } else {
-                            start = None;
-                            *state.get() = JobState::Idle;
+                        match (start, *count_running_rx.borrow()) {
+                            (Some(_), 0) => {
+                                start = None;
+                                *state.get() = JobState::Idle;
+                            }
+                            (None, 1) => {
+                                start = Some(Instant::now());
+                            }
+                            (Some(_) | None, _) => (),
                         }
                     }
                     _ = interval.tick(), if start.is_some() => {
@@ -182,22 +186,22 @@ impl JobMonitor {
         });
 
         Self {
-            tx,
             name: name.to_string(),
-            counter: AtomicU64::new(0),
+            count_running_tx,
+            count_total: AtomicU64::new(0),
             time,
         }
     }
 
+    /// Runs a monitored job.
+    ///
+    /// A single `JobMonitor` can monitor multiple concurrent jobs but they are threated as a single
+    /// unit - the monitoring starts when the first job starts and stops when the last job stops.
     pub(crate) async fn run<F, E>(&self, f: F) -> bool
     where
         F: Future<Output = Result<(), E>>,
         E: fmt::Debug,
     {
-        if self.tx.send_replace(true) {
-            panic!("job monitor can monitor at most one job at a time");
-        }
-
         async move {
             let guard = JobGuard::start(self);
             let start = Instant::now();
@@ -214,7 +218,7 @@ impl JobMonitor {
         .instrument(tracing::info_span!(
             "job",
             message = self.name,
-            id = self.counter.fetch_add(1, Ordering::Relaxed),
+            id = self.count_total.fetch_add(1, Ordering::Relaxed),
         ))
         .await
     }
@@ -229,8 +233,9 @@ pub(crate) struct JobGuard<'a> {
 impl<'a> JobGuard<'a> {
     fn start(monitor: &'a JobMonitor) -> Self {
         let span = Span::current();
-
         tracing::trace!(parent: &span, "Job started");
+
+        monitor.count_running_tx.send_modify(|count| *count += 1);
 
         Self {
             monitor,
@@ -251,7 +256,9 @@ impl Drop for JobGuard<'_> {
             tracing::trace!(parent: &self.span, "Job interrupted");
         }
 
-        self.monitor.tx.send(false).ok();
+        self.monitor
+            .count_running_tx
+            .send_modify(|count| *count -= 1);
     }
 }
 

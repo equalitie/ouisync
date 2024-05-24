@@ -4,7 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::{
-    protocol::remote::{v0, v1, Request, ServerError},
+    protocol::remote::{v0, v1, Request, Response, ServerError},
     transport::SessionContext,
 };
 use ouisync_lib::{crypto::sign::Signature, AccessSecrets, RepositoryId, ShareToken};
@@ -29,7 +29,7 @@ impl RemoteHandler {
 #[async_trait]
 impl ouisync_bridge::transport::Handler for RemoteHandler {
     type Request = Request;
-    type Response = ();
+    type Response = Response;
     type Error = ServerError;
 
     async fn handle(
@@ -59,7 +59,7 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                         )
                         .await?;
 
-                        Ok(())
+                        Ok(().into())
                     }
                 }
             }
@@ -71,7 +71,7 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                     verify_proof(context, &repository_id, &proof)?;
                     create_repository(&state, AccessSecrets::Blind { id: repository_id }).await?;
 
-                    Ok(())
+                    Ok(().into())
                 }
                 v1::Request::Delete {
                     repository_id,
@@ -86,7 +86,7 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                         .await
                         .map_err(|error| ServerError::Internal(error.to_string()))?;
 
-                    Ok(())
+                    Ok(().into())
                 }
                 v1::Request::Exists { repository_id } => {
                     let name = make_name(&repository_id);
@@ -94,7 +94,7 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                     state
                         .repositories
                         .contains(&name)
-                        .then_some(())
+                        .then_some(().into())
                         .ok_or(ServerError::NotFound)
                 }
             },

@@ -31,12 +31,9 @@ xpc-connection = "0.2.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 deadlock = { path = "../deadlock" }
-# Patch to force compilation of dokan2.dll when `DOKAN_DLL_OUTPUT_PATH` is
-# defined even if dokan is installed.
-# https://github.com/dokan-dev/dokan-rust/pull/7
-dokan = { git = "https://github.com/inetic/dokan-rust", branch = "env-to-recompile-dll" }
-dokan-sys = { git = "https://github.com/inetic/dokan-rust", branch = "env-to-recompile-dll" }
-widestring = "0.4.3"
+dokan = { git = "https://github.com/dokan-dev/dokan-rust", rev = "d1ed57a508d93b3bbb04c37e9ba56ef9692176f7" }
+dokan-sys = { git = "https://github.com/dokan-dev/dokan-rust", rev = "d1ed57a508d93b3bbb04c37e9ba56ef9692176f7" }
+widestring = "1.0.2"
 winapi = { version = "0.3.9", features = ["ntstatus", "winnt"]  }
 
 [dev-dependencies]

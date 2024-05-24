@@ -12,8 +12,6 @@ pub(crate) mod hash_map {
 }
 
 pub(crate) mod hash_set {
-    pub use std::collections::hash_set::IntoIter;
-
     use super::hash_map::RandomState;
 
     pub type HashSet<T, S = RandomState> = std::collections::HashSet<T, S>;

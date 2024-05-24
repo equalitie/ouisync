@@ -154,7 +154,13 @@ impl fmt::Display for ParseLogColorError {
 impl std::error::Error for ParseLogColorError {}
 
 fn log_panic(info: &PanicInfo) {
-    match (info.payload().downcast_ref::<&str>(), info.location()) {
+    match (
+        info.payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str())),
+        info.location(),
+    ) {
         (Some(message), Some(location)) => tracing::error!(
             "panic '{}' at {}:{}:{}",
             message,

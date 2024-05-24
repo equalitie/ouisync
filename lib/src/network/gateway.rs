@@ -300,21 +300,14 @@ impl Stacks {
 
     fn start_punching_holes(&self, addr: PeerAddr) -> Option<scoped_task::ScopedJoinHandle<()>> {
         if !addr.is_quic() {
-            tracing::debug!("Hole punching not started - not QUIC address");
             return None;
         }
 
         if !ip::is_global(&addr.ip()) {
-            tracing::debug!("Hole punching not started - not global address");
             return None;
         }
 
-        let stack = if let Some(stack) = self.quic_stack_for(&addr.ip()) {
-            stack
-        } else {
-            tracing::debug!("Hole punching not started - no QUIC stack");
-            return None;
-        };
+        let stack = self.quic_stack_for(&addr.ip())?;
 
         let sender = stack.hole_puncher.clone();
         let task = scoped_task::spawn(

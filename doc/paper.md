@@ -2,52 +2,59 @@
 
 ### Overview
 
-The core concept of Ouisync is that of a **Repository**. It is a folder that is managed by Ouisync
-and shared with other peers (also called **Replicas**). A repository can be opened in one of
-three **Access modes**:
+Ouisync is a decentralized technology and client application for sharing files and syncing repositories between devices, peer to peer. 
+It uses the BitTorrent DHT for addressing and implements encryption of all content transmitted and stored on a user’s device. 
+This paper outlines the main components of Ouisync operations and usage, describes the project’s threat model and goes into some detail of 
+its technical implementation. For user focused documentation refer to the [FAQ on the Ouisync website](https://ouisync.net/support/).
 
-- **Blind** mode : allow syncing the repository with other peers but not reading or writing its
-    content.
-- **Read** mode: allow syncing and reading, but not writing
-- **Write** mode: allow syncing, reading and writing
+### Concepts
 
+The core functionality of Ouisync deals with **Repositories**.
+A repository is a folder on a local device that is managed by the Ouisync application.The user can add and manipulate files in a Repository, 
+imported from the local device to the Ouisync application. A Repository can be and  shared with other peers (also called **Replicas**). A 
+repository is created using one of the following Access modes:
+
+- **Blind** mode : peers can sync the Repository but cannot access or modify the files in it.
+- **Read** mode: peers can read but not write to the Repository.
+- **Write** mode: allow syncing, reading and writing.
+  
 Each repository is associated with a **Share token** (or just "Token") which is both a globally
 unique identifier of the repository and also its access keys. There are three types of tokens
 corresponding to each access mode (blind, read and write).
 
-The content of a repository (files and directories) is stored in a custom format designed for
-security and efficient synchronization. It consist of three basic parts:
+The contents of a repository (files and directories) are stored in a custom format designed for
+security and efficient synchronization. The format consists of three parts:
 
-- **Blocks** : encrypted fixed-size chunks the files and directories are split into
-- **Index** : a lookup table to find which blocks belong to which files/directories, it's second
-  purpose is to determine which blocks belong to the repository
+- **Blocks** : encrypted fixed-size chunks the files and directories are split into.
+- **Index** : a lookup table to find which blocks belong to which files/directories, also used to determine which blocks belong to the repository.
 - **Metadata** : arbitrary key-value pairs associated with the repository but not synced with other
-    replicas
+    replicas.
 
 Files and directories are encrypted and split into equally sized blocks to hide the content and any
 metadata associated with them.
 
-To support concurrent editing the index consist of **Branches**. Branches are further split into
-**Snapshots** where each snapshot corresponds to a state of the repository at some particular point
-in time. Within a single branch, all snapshots are from a single replica and form a linear history
-of edits.
+To support concurrent editing of files within a Repository by two or more peers, the index is divided into **Branches**. Branches are 
+further split into **Snapshots** where each snapshot corresponds to a state of the repository at some particular point in time. Within a 
+single branch, all snapshots are from a single replica and form a linear history of edits.
+Synchronization uses a custom peer-to-peer, end-to-end encrypted protocol which is efficient and secure. Furthermore, the protocol doesn't 
+require access to the global internet and is specifically designed to work also in isolated networks and under various adversarial 
+conditions.
 
-Synchronization uses a custom peer-to-peer, end-to-end encrypted protocol which is efficient and
-secure. Furthermore, the protocol doesn't require access to the global internet and is specifically
-designed to work also in isolated networks and under various adversarial conditions.
+### Threat model
+
+Ouisync was created for unrestricted and uninhibited data exchange with a focus on users living in highly restricted (and/or censored) 
+network environments. For this reason the protocol is decentralized, files and repositories are encrypted in transit and at-rest. However, 
+no system is fullproof in every scenario and Ouisync has distinct threat scenarios, which are described below.
 
 ### Actors and tokens
 
 Ouisync recognizes three types of non-adversary actors based on whether they posses one of the
 following three cryptographic tokens or the BitTorrent infohash:
 
-* Write token - The user of this replica may decrypt the repository content
-  as well as make modifications to it
+* Write token - The user of this replica may decrypt the repository content as well as make modifications to it.
 * Read token - The user can decrypt the content.
-* Blind token - The user is able to exchange the encrypted repository content
-  with replicas having that same repository
-* BitTorrent DHT info hash - The user is able to locate other replicas of this
-  repository on the BitTorrent DHT
+* Blind token - The user is able to exchange the encrypted repository’s content with replicas having that same repository.
+* BitTorrent DHT info hash - The user is able to locate other replicas of this repository on the BitTorrent DHT.
 
 For information about how these tokens are implemented and how the privileges are enforced see the
 section [Access secrets and share tokens](#access-secrets-and-share-tokens).
@@ -56,9 +63,9 @@ Actors may de-escalate token privileges in the direction Write token -> Read
 token -> Blind token -> DHT infohash.  Escalation in the other direction is
 cryptographically not possible.
 
-Each type of token can be further categorized as public or private depending on
-whether it's in a posession of a private group of users or it's been made
-public (intentionally or by accident).
+Each type of token can be further categorized as public or private depending on whether it's shared inside a private group of users or made 
+public (intentionally or by accident). To maintain the intergrity of Ouisync tokens, particularly the read and write tokens, it is important 
+to share them securely off-channel (e.g. via secure messengers).
 
 ### Adversary types
 
@@ -74,51 +81,49 @@ attacks. Such adversary may be as simple as the admin of the WiFi router
 currently in use, or a state actor performing these actions on the global
 internet.
 
-The user-level adversary is set to be the one who may or may not possess one of the three Ouisync
-tokens and may or may not be using the same WiFi router. This adversary does not have a physical
+The user-level adversary is set to be the one who may (or may not) possess one of the three Ouisync
+tokens and may (or may not) be using the same WiFi router. This adversary does not have a physical
 access to the device.
 
-The adversary with a physical access to the device is self explanatory. Here we
-can distinquish between those that have the phone locked (e.g. someone who
-found the phone) or unlocked (e.g. someone who can force the user to unlock
-it).
+The adversary with physical access to the device is one who got hold of the device. For example by borrowing it, theft or device seizure. 
+Here we can distinguish between those that have the phone locked (e.g. someone who found the phone) or unlocked (e.g. someone who can force 
+the user to unlock it).
 
-### Threat model
-
-Ouisync gives strong protection to the user data in a repository in a sense that an adversary
+Ouisync gives strong protection to the user data in a repository. An adversary
 without the read or write token can not guess what the content of the repository is other than by
 looking at the repository size.  This means the file contents, sizes, permissions, file and
-directory counts as well as the directory structure is not be accessible without the read or write
+directory counts as well as the directory structure is not accessible without the read or write
 token. This is achieved by encrypting the file and directory contents and splitting them into blocks
 of data equal in size (sharding).
 
-Additionally, assuming the blind token is private, Ouisync also guarantees that a network-level and
+Additionally, assuming the blind token is kept private, Ouisync also guarantees that a network-level and
 user-level adversary is not able to download the encrypted repository data and metadata (blocks and
-the index). This is to protect from attacks where an adversay preemptively downloads found (locally
-or on the BitTorrent DHT) repositories in a hope that a read or write token is leaked in the future
-or a cryptographic exploit is found.
+the index). This is done to protect from attacks where an adversay preemptively downloads found (locally
+or on the BitTorrent DHT) repositories in the hope of retrieving the  read or write token later on, or in the case that a cryptographic 
+exploit is found.
 
 Finally, for as long as the repository is locked on the user's device, Ouisync also
 cryptographically hides from an adversary having physical access to the device whether the device
 owner has a read or write access to the repository. See the [Plausible deniability
 section](#plausible-deniability) for details.
 
-Ouisync currently does _not_ attempt to hide the IP addresses of peers using Ouisync alone or
-sharing particular repositories. This is an aspect Ouisync might attempt to tackle in the future,
-but right now the only protection from user-level and network-level adversaries collecting user's IP
-address is to turn off BitTorrent DHT and/or local discoveries.
+Ouisync currently does _not_ attempt to hide the IP addresses of peers using Ouisync alone or sharing particular repositories. This is an 
+aspect Ouisync might attempt to tackle in the future, but right now the only protection from user-level and network-level adversaries 
+collecting user's IP address is to turn off BitTorrent DHT and/or local discoveries.
 
-### Confidentiality and Anonymity
 
-Confidentiality
+### Confidentiality and Anonymity 
+
+**Confidentiality**
 
 > "information is not made available nor disclosed to unauthorized entities."
 
-Anonymity
+**Anonymity**
 
-> "property that guarantees user’s identity will not be disclosed without consent."
+> "property that guarantees a user’s identity will not be disclosed without consent."
 
-#### Ouisync use detection
+
+#### Ouisync usage detection
 
 In order to find replicas, Ouisync emits messages that a user-level and
 network-level adversary may detect to determine which IP addresses on the local
@@ -134,55 +139,48 @@ These messages include:
 
 #### Repository enumeration
 
-Ouisync will only reveal intent to sync a repository to other replicas if they also
-possess the blind token to that same repository.
+Ouisync will only reveal intent to sync a repository to other replicas if they also possess the blind token to that same repository.
 
-A user-level adversary without any token is able to count the number of repositories
-on a replica by establishing a connection and performing initial handshake.
+A user-level adversary without any token is able to count the number of repositories on a replica by establishing a connection and 
+performing the initial handshake.
 
-A network-level adversary (with or without tokens) may enumerate DHT info
-hashes sent from a selected IP address.
+A network-level adversary (with or without tokens) may enumerate DHT info hashes sent from a selected IP address.
 
-An adversary with a physical access to the device is currently able to retrieve
-blind tokens from repositories even without unlocking said device.
+An adversary with physical access to the device is currently able to retrieve blind tokens from repositories even without unlocking said 
+device.
 
-Overcoming these anonymity issues remains a [future work](#future-work).
+Overcoming these issues with anonymity remain part of our [future work](#future-work).
 
 #### Peer Enumeration
 
-A network-level adversary is able to read the plain text DHT messages to learn
-about DHT infohashes that a replica on a particular IP is announcing to.
+A network-level adversary is able to read the plain text DHT messages to learn about DHT infohashes that a replica on a particular IP is 
+announcing to.
 
-A user-level adversary with a token or the DHT infohash is able to "visit" the
-BitTorrent DHT swarm corresponding to the token and enumerate IP addresses
-involved in syncing that repository.
+A user-level adversary with a token or the DHT infohash is able to "visit" the BitTorrent DHT swarm corresponding to the token and enumerate 
+IP addresses involved in syncing that repository.
 
-A user-level adversary without any token is able to run a BitTorrent DHT
-crawler to find every existing swarm in it. These swarms can then be filtered
-to only include those that have peers communicating with the Ouisync protocol.
+A user-level adversary without any token is able to run a BitTorrent DHT crawler to find every existing swarm in it. These swarms can then 
+be filtered to only include those that have peers communicating with the Ouisync protocol.
 
-By enumerating peers in these swarms, the adversary is capable of _estimating_
-social graphs (if two different IP addresses are announced in a swarm with
-otherwise low number of peers, then the probability of the users behind those
-IP addresses knowing each other goes up).
+By enumerating peers in these swarms, the adversary is capable of _estimating_ social graphs (if two different IP addresses are announced in a swarm with otherwise low number of peers, then the probability of  users behind those IP addresses knowing each other increases).
 
 ### Integrity and Authenticity
 
-Integrity:
+**Integrity:**
 
 > "data is protected from unauthorized changes to ensure that it is reliable and correct."
 
-Authenticity:
+**Authenticity:**
 
 > "means that one can establish that the content originated from a trusted entity."
 
 Every Ouisync snapshot consists of a merkle-tree-like data structure which has hashes of the
-encrypted blocks as its leafs. The root hash of the merkle tree is signed by the private key
+encrypted blocks as its leaves. The root hash of the merkle tree is signed by the private key
 contained in the write token. By verifying this signature, replicas quickly determine
 the integrity and authenticity of every snapshot.
 
 Each snapshot is also associated with a monotonically increasing version
-vector. This way old snapshots are not re-introduced to replicas which already
+vector. In this way old snapshots are not re-introduced to replicas which already
 have newer version of the repository.
 
 See the [Storage](#storage) section for details.
@@ -194,20 +192,24 @@ user can plausibly deny that they possess the read or write access secret to a l
 stored on their device. Ouisync does it by making repositories with blind access indistinguishable
 from those with read/write access for as long as they are locked.
 
+Note however, that the GUI application allows the user to “Remember Password” (where the secret is 32 
+Bytes generated either randomly or through a password hashing function). The plausible deniability argument does not hold when this option 
+is enabled.
+
 This is achieved by always filling in fields with random data which would normally not be present or
 would be empty. This includes the encrypted read and write keys in the metadata table (see section
 [Metadata and local passwords](#metadata-and-local-passwords) for more information).
 
-Because one of the main use cases of Ouisync is storing other people's data without having access to
-them, a user can always claim than any locked repository on their device is just a blind repository
+Since storing other people's data without being able to access it is one of the 
+three Ouisync features, a user can always claim that any locked repository on their device is just a blind repository 
 they store on someone else's behalf.
 
 Ouisync also supports another type of plausible deniability: user can plausibly deny they have
-a write access to a repository while admitting they only have a read access. To do this they must
+a write access to a repository while admitting they only have read access. To do this they must
 use two separate local passwords: one for reading and one for writing. The metadata contains two
 separate entries, one to store the read key encrypted with the local read password and one to store
 the write key encrypted with the local write password. If the user truly has only read access the
-write secret entry is filled with random junk instead, analogously to the blind case. Note that even
+write secret entry is filled with random junk instead, analogously to the blind token usecase. Note that even
 if only one local password is used, the metadata still contains two separate entries, one for the
 write key and one for the read key. They are just encrypted using the same password.
 
@@ -216,7 +218,7 @@ write key and one for the read key. They are just encrypted using the same passw
 ### Disclaimer
 
 This documentation is not a formal specification. Currently the only truly authoritative source of
-truth is the source code ([app](link-ouisync-app), [library](link-ouisync-library)).
+truth is the source code ([app](https://github.com/equalitie/ouisync-app), [library](https://github.com/equalitie/ouisync)).
 
 ### Access secrets and share tokens
 
@@ -285,7 +287,7 @@ files and directories.
 
 Each blob is associated with a unique, 256-bit long number called the **Blob ID**. The root
 directory's blob ID is hardcoded constant of all-zeroes. All the other blob IDs are randomly
-generated (with a [CSPRNG](link-csprng)). To find a blob id for a particular blob at a given path,
+generated (with a [CSPRNG][link-csprng]). To find a blob id for a particular blob at a given path,
 one needs to open it's parent directory and lookup the blob ID by the blob name. To open the parent,
 it's parent might need to be opened first, and so on all the way to the root (the root's blob id is
 constant so doesn't need to be looked up).
@@ -332,14 +334,14 @@ abundance of caution deduplication is currently disabled. If a more thorough sec
 proves that the risk is negligible then it can be enabled in the future. To do that, only the nonce
 formula needs to be changed to `HASH(read_key || plaintext_context)`.
 
-The reason the encryption doesn't use authentication ([AEAD](link-wiki-aead)) is that authentication
+The reason the encryption doesn't use authentication ([AEAD][link-wiki-aead]) is that authentication
 is implemented at the level of snapshots using the write key. This is detailed in the following
 section.
 
 #### Index
 
 In order to find which blocks belong to a particular blob (and in which order) a separate structure
-called **Index** is used. This can be conceptually though of as a lookup table whose keys are
+called **Index** is used. This can be conceptually thought of as a lookup table whose keys are
 `(blob_id, block_numer)` pairs and values are block ids. The way the index is actually stored in the
 database is quite different from this conceptual view and this section describes it in detail.
 
@@ -347,11 +349,11 @@ Index consist of **Branches** and those in turn consist of **Snapshots**:
 
 A branch is a subset of the index associated with a particular *writer replica* which is identified
 by an unique identifier called the **Writer ID**. A branch contains all the content created by that
-replica. It exist as a means to differentiate the branches.
+replica. It exists as a means to differentiate the branches.
 
 A snapshot is a subset of a branch and represents a single edit of a repository (e.g., creating a
 file, writing to a file, moving/renaming a file, etc...). Snapshot is represented as a [Merkle
-tree](link-wiki-merkle-tree) with one **Root node**, `N` layers of **Inner nodes** (currently `N=3`)
+tree][link-wiki-merkle-tree] with one **Root node**, `N` layers of **Inner nodes** (currently `N=3`)
 and one layer of **Leaf nodes**. Each root and `N-1` inner node layers contains up to 256 children.
 The last (`N`th) inner node layer can have any number of children but having it bigger than 256 by
 orders of magnitude might degrade performance.
@@ -359,12 +361,12 @@ orders of magnitude might degrade performance.
 Assuming max 256 nodes in the `N`th inner node layer yields the maximum number of blocks being
 `256^4`, or `128` terabytes.
 
-The root node contains the writer ID, [version vector](link-wiki-version-vector), hash of its
+The root node contains the writer ID, [version vector][link-wiki-version-vector], hash of its
 children and a cryptographic signature.
 
 The version vector consist of `(writer_id, version: unsigned integer)`  pairs and serves to causally
 order the snapshots (forms a [happened-before
-relation](https://en.wikipedia.org/wiki/Happened-before)).  If a snapshot `A` has version vector
+relation][link-wiki-happened-before]).  If a snapshot `A` has version vector
 that is *happened-before* that of a snapshot `B`, then it's said that `A` is outdated relative to
 `B`. Outdated snapshots are removed in a processes called **Pruning**. In some cases, outdated
 snapshots may be preserved (temporarily or permanently), for example to support *backups*. If two
@@ -394,17 +396,14 @@ number and sizes of the blobs in the repository to anyone who doesn't posses the
 To find a block ID corresponding to a given *locator* in a given *branch*, the following algorithm
 is used:
 
-1. The latest root node in the branch is loaded (the latest meaning its version vector is
-happened-after that of all the other root nodes in the same branch. Because of the invariant, there
-is always exactly one such node).
-2. The inner node that is a child of the root node from the previous step and whose bucket is the
-first byte of the locator hash is loaded.
-3. The inner node that is a child of the inner node from the previous step and whose bucket is the
-second byte of the locator hash is loaded.
-4. The inner node that is a child of the inner node from the previous step and whose bucket is the
-third byte of the locator hash is loaded
-5. The leaf node that is a child of the inner node from the previous step and whose locator hash
-matches the locator that's being looked up is loaded and its block id is returned.
+1.	The latest root node in the branch is loaded (the latest meaning its version vector is happened-after that of all the other root nodes
+in the same branch. Because of the invariant, there is always exactly one such node).
+2.	The inner node that is a child of the root node from the previous step and whose bucket is the first byte of the locator hash is loaded.
+3.	The inner node that is a child of the inner node from the previous step and whose bucket is the second byte of the locator hash is
+loaded.
+4.	The inner node that is a child of the inner node from the previous step and whose bucket is the third byte of the locator hash is loaded
+5.	The leaf node that is a child of the inner node from the previous step and whose locator hash matches the locator that's being looked up
+is loaded and its block id is returned.
 
 Currently Ouisync uses 3 inner layers but the above algorithm could be extended to any number of
 inner layers up to 32 which is the byte length of the locator hash.
@@ -413,7 +412,7 @@ A snapshot typically shares most of its nodes with other snapshots (even across 
 inner or leaf node has always only one parent within a single branch but can have multiple parents
 across branches. Thus while the snapshot is a tree, the index is a [DAG](link-dag) . This allows
 very efficient transfer across replicas as only the nodes and blocks that are different need to be
-transferred. This means that snapshot can be conceptually though of as diff.
+transferred. This means that snapshot can be conceptually thought of as diff.
 
 #### Metadata and local passwords
 
@@ -427,7 +426,7 @@ This section describes the way local password works:
 
 The Ouisync repository database contains a table for storing **Metadata**. They are arbitrary
 key/value pairs of byte strings. The values can optionaly be encrypted. When the user opts to use
-local password, a **Local secret key** is first generated using a [KDF](link-kdf) from the user
+local password, a **Local secret key** is first generated using a [KDF][link-kdf] from the user
 provided local password and a randomly generated salt (the salt is then stored in the metadata).
 Then the actual access secret (read key / write key) is encrypted using this local secret and the
 resulting ciphertext stored in the metadata. To open the repository, the user needs to provide the
@@ -476,7 +475,7 @@ share it because only they can decrypt such messages.
 
 Ouisync uses transport encryption and authentication in order to prevent eavesdropping and
 man-in-the-middle attacks.  This means that unless the man-in-the-middle attacker has the blind
-token they and an eaverdroper, will not be able to decrypt the synchronization messages. These
+token and an eaverdroper, they will not be able to decrypt the synchronization messages. These
 include:
 
 * The writer IDs
@@ -512,11 +511,12 @@ Ouisync uses the following cryptographic primitives:
 * List approaches how Ouisync can improve anonymity and confidentiality (Tor, multi-hop
   syncing,...) and their pros and cons.
 
-[link-csprng](https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator)
-[link-kdf](https://en.wikipedia.org/wiki/Key_derivation_function)
-[link-dag](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
-[link-ouisync-app](https://github.com/equalitie/ouisync-app)
-[link-ouisync-library](https://github.com/equalitie/ouisync)
-[link-wiki-aead](https://en.wikipedia.org/wiki/Authenticated_encryption#Authenticated_encryption_with_associated_data_(AEAD))
-[link-wiki-merkle-tree](https://en.wikipedia.org/wiki/Merkle_tree)
-[link-wiki-version-vector](https://en.wikipedia.org/wiki/Version_vector)
+[link-csprng]: https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator
+[link-kdf]: https://en.wikipedia.org/wiki/Key_derivation_function
+[link-dag]: https://en.wikipedia.org/wiki/Directed_acyclic_graph
+[link-ouisync-app]: https://github.com/equalitie/ouisync-app
+[link-ouisync-library]: https://github.com/equalitie/ouisync
+[link-wiki-aead]: https://en.wikipedia.org/wiki/Authenticated_encryption#Authenticated_encryption_with_associated_data_(AEAD)
+[link-wiki-merkle-tree]: https://en.wikipedia.org/wiki/Merkle_tree
+[link-wiki-version-vector]: https://en.wikipedia.org/wiki/Version_vector
+[link-wiki-happened-before]: https://en.wikipedia.org/wiki/Happened-before

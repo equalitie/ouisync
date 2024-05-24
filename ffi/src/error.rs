@@ -1,4 +1,8 @@
-use crate::{registry::InvalidHandle, session::SessionError};
+use crate::{
+    registry::InvalidHandle,
+    repository::{EntryChanged, RegistrationRequired},
+    session::SessionError,
+};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_bridge::{
     config::ConfigError,
@@ -8,7 +12,7 @@ use ouisync_bridge::{
 };
 use ouisync_vfs::MountError;
 use serde::{Deserialize, Serialize};
-use std::io;
+use std::{io, iter};
 use thiserror::Error;
 
 #[derive(Debug, Error, Serialize, Deserialize)]
@@ -54,6 +58,8 @@ pub enum ErrorCode {
     ConnectionLost = 14,
     /// Invalid handle to a resource (e.g., Repository, File, ...)
     InvalidHandle = 15,
+    /// Entry has been changed and no longer matches the expected value
+    EntryChanged = 16,
 
     VfsInvalidMountPoint = 2048,
     VfsDriverInstall = 2048 + 1,
@@ -106,6 +112,12 @@ impl ToErrorCode for ouisync_lib::Error {
                 ErrorCode::Other
             }
         }
+    }
+}
+
+impl ToErrorCode for ouisync_lib::StoreError {
+    fn to_error_code(&self) -> ErrorCode {
+        ErrorCode::Store
     }
 }
 
@@ -162,6 +174,18 @@ impl ToErrorCode for InvalidHandle {
     }
 }
 
+impl ToErrorCode for RegistrationRequired {
+    fn to_error_code(&self) -> ErrorCode {
+        ErrorCode::OperationNotSupported
+    }
+}
+
+impl ToErrorCode for EntryChanged {
+    fn to_error_code(&self) -> ErrorCode {
+        ErrorCode::EntryChanged
+    }
+}
+
 impl ToErrorCode for io::Error {
     fn to_error_code(&self) -> ErrorCode {
         ErrorCode::Other
@@ -175,7 +199,35 @@ where
     fn from(src: T) -> Self {
         Self {
             code: src.to_error_code(),
-            message: src.to_string(),
+            message: full_description(&src),
         }
+    }
+}
+
+fn full_description(error: &dyn std::error::Error) -> String {
+    use std::fmt::Write;
+
+    iter::successors(Some(error), |error| error.source()).fold(
+        String::new(),
+        |mut message, error| {
+            let sep = if message.is_empty() { "" } else { ": " };
+            // unwrap is OK because we are just appending to a string here which can only fail on
+            // out-of-memory which we can't reasonable handle anyway.
+            write!(&mut message, "{}{}", sep, error).unwrap();
+            message
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_description() {
+        let error = OpenError::Repository(ouisync_lib::Error::PermissionDenied);
+        let error = Error::from(error);
+
+        assert_eq!(error.to_string(), "repository error: permission denied");
     }
 }

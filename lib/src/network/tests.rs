@@ -1,7 +1,7 @@
 use super::{
     choke,
     client::Client,
-    constants::MAX_REQUESTS_IN_FLIGHT,
+    constants::MAX_IN_FLIGHT_REQUESTS_PER_PEER,
     message::{Content, Request, Response},
     server::Server,
 };
@@ -618,7 +618,7 @@ fn create_client(repo: Vault) -> ClientData {
         repo,
         send_tx,
         recv_rx,
-        Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
+        Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS_PER_PEER)),
     );
 
     (client, send_rx, recv_tx)

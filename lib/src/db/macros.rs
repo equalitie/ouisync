@@ -4,7 +4,7 @@ macro_rules! impl_executor_by_deref {
         impl<'t> sqlx::Executor<'t> for &'t mut $type {
             type Database = sqlx::Sqlite;
 
-            fn fetch_many<'e, 'q: 'e, E: 'q>(
+            fn fetch_many<'e, 'q: 'e, E>(
                 self,
                 query: E,
             ) -> futures_util::stream::BoxStream<
@@ -16,12 +16,12 @@ macro_rules! impl_executor_by_deref {
             >
             where
                 't: 'e,
-                E: sqlx::Execute<'q, sqlx::Sqlite>,
+                E: sqlx::Execute<'q, sqlx::Sqlite> + 'q,
             {
                 (&mut **self).fetch_many(query)
             }
 
-            fn fetch_optional<'e, 'q: 'e, E: 'q>(
+            fn fetch_optional<'e, 'q: 'e, E>(
                 self,
                 query: E,
             ) -> futures_util::future::BoxFuture<
@@ -30,7 +30,7 @@ macro_rules! impl_executor_by_deref {
             >
             where
                 't: 'e,
-                E: sqlx::Execute<'q, sqlx::Sqlite>,
+                E: sqlx::Execute<'q, sqlx::Sqlite> + 'q,
             {
                 (&mut **self).fetch_optional(query)
             }

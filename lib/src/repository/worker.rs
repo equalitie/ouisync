@@ -19,13 +19,18 @@ use tokio::select;
 /// - remove outdated branches and snapshots
 /// - remove unreachable blocks
 /// - find missing blocks
-pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
+pub(super) async fn run(shared: Arc<Shared>) {
     let event_scope = EventScope::new();
     let prune_counter = Counter::new();
 
+    let local_branch = shared
+        .local_branch()
+        .ok()
+        .filter(|branch| branch.keys().write().is_some())
+        .map(|branch| branch.with_event_scope(event_scope));
+
     // Maintain (merge, prune and trash)
     let maintain = async {
-        let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
         let (unlock_tx, unlock_rx) = unlock::channel();
 
         // - Ignore events from the same scope to prevent infinite loop
@@ -138,7 +143,7 @@ async fn maintain(
     success = success && job_success;
 
     // Collect unreachable blocks
-    if shared.credentials.lock().unwrap().secrets.can_read() {
+    if shared.credentials.read().unwrap().secrets.can_read() {
         let job_success = shared
             .vault
             .monitor
@@ -361,7 +366,7 @@ mod prune {
             .try_collect()
             .await?;
 
-        let writer_id = shared.credentials.lock().unwrap().writer_id;
+        let writer_id = shared.credentials.read().unwrap().writer_id;
 
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
             versioned::partition(all, PreferBranch(Some(&writer_id)));

@@ -73,38 +73,61 @@ impl Metadata {
     where
         T: MetadataGet + fmt::Debug,
     {
-        let mut conn = self.db.acquire().await.map_err(|error| {
-            tracing::error!(?error);
-            error
-        })?;
-        let value = get_public(&mut conn, name.as_bytes())
-            .await
-            .map_err(|error| {
-                tracing::error!(?error);
-                error
-            })?;
-
-        Ok(value)
+        let mut conn = self.db.acquire().await?;
+        get_public(&mut conn, name.as_bytes()).await
     }
 
-    #[instrument(skip(self), err(Debug))]
     pub async fn set<'a, T>(&self, name: &'a str, value: T) -> Result<(), StoreError>
     where
         T: MetadataSet<'a> + fmt::Debug,
     {
-        let mut tx = self.db.begin_write().await?;
-        set_public(&mut tx, name.as_bytes(), value).await?;
+        let mut tx = self.write().await?;
+        tx.set(name, value).await?;
         tx.commit().await?;
 
         Ok(())
     }
 
-    #[instrument(skip(self), err(Debug))]
     pub async fn remove(&self, name: &str) -> Result<(), StoreError> {
-        let mut tx = self.db.begin_write().await?;
-        remove_public(&mut tx, name.as_bytes()).await?;
+        let mut tx = self.write().await?;
+        tx.remove(name).await?;
         tx.commit().await?;
 
+        Ok(())
+    }
+
+    pub async fn write(&self) -> Result<MetadataWriter, StoreError> {
+        Ok(MetadataWriter {
+            tx: self.db.begin_write().await?,
+        })
+    }
+}
+
+pub struct MetadataWriter {
+    tx: db::WriteTransaction,
+}
+
+impl MetadataWriter {
+    pub async fn get<T>(&mut self, name: &str) -> Result<Option<T>, StoreError>
+    where
+        T: MetadataGet + fmt::Debug,
+    {
+        get_public(&mut self.tx, name.as_bytes()).await
+    }
+
+    pub async fn set<'a, T>(&mut self, name: &'a str, value: T) -> Result<(), StoreError>
+    where
+        T: MetadataSet<'a> + fmt::Debug,
+    {
+        set_public(&mut self.tx, name.as_bytes(), value).await
+    }
+
+    pub async fn remove(&mut self, name: &str) -> Result<(), StoreError> {
+        remove_public(&mut self.tx, name.as_bytes()).await
+    }
+
+    pub async fn commit(self) -> Result<(), StoreError> {
+        self.tx.commit().await?;
         Ok(())
     }
 }
@@ -552,29 +575,6 @@ fn just_key(key_and_salt: Cow<'_, KeyAndSalt>) -> Cow<'_, cipher::SecretKey> {
         Cow::Owned(key_and_salt) => Cow::Owned(key_and_salt.key),
     }
 }
-
-//pub(crate) async fn get_access_secrets(
-//    conn: &mut db::Connection,
-//    local_key: Option<&cipher::SecretKey>,
-//) -> Result<AccessSecrets, StoreError> {
-//    let id = get_repository_id(conn).await?;
-//
-//    match get_write_key(conn, local_key, &id).await {
-//        Ok(Some(write_keys)) => return Ok(AccessSecrets::Write(WriteSecrets::from(write_keys))),
-//        Ok(None) => (),
-//        Err(e) => return Err(e),
-//    }
-//
-//    // No match. Maybe there's the read key?
-//    match get_read_key(conn, local_key, &id).await {
-//        Ok(Some(read_key)) => return Ok(AccessSecrets::Read { id, read_key }),
-//        Ok(None) => (),
-//        Err(e) => return Err(e),
-//    }
-//
-//    // No read key either, repository shall be open in blind mode.
-//    Ok(AccessSecrets::Blind { id })
-//}
 
 pub(crate) async fn get_access_secrets<'a>(
     tx: &mut db::WriteTransaction,

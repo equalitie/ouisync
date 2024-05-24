@@ -2,6 +2,7 @@
 /// repetition.
 ///
 /// Example: [1, 2, 3] -> [(1, 2), (1, 3), (2, 3)]
+#[cfg(test)]
 pub(crate) struct PairCombinations<I>
 where
     I: Iterator,
@@ -11,6 +12,7 @@ where
     b_iter: I,
 }
 
+#[cfg(test)]
 impl<I> PairCombinations<I>
 where
     I: Iterator + Clone,
@@ -32,6 +34,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<I> Iterator for PairCombinations<I>
 where
     I: Iterator + Clone,

@@ -1,16 +1,13 @@
 //! Utilities for sending and receiving messages across the network.
 
 use super::{
-    connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf, PermitId},
+    connection::{ConnectionPermit, ConnectionPermitHalf, PermitId},
     keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{Message, MessageChannelId, Type},
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
-use crate::{
-    collections::{hash_map, HashMap, HashSet},
-    iterator::IntoIntersection,
-};
+use crate::collections::{hash_map, HashMap};
 use async_trait::async_trait;
 use deadlock::BlockingMutex;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
@@ -23,12 +20,12 @@ use std::{
         Arc,
     },
     task::{Context, Poll, Waker},
+    time::Duration,
 };
 use tokio::{
     runtime, select,
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
     sync::{Mutex as AsyncMutex, Notify, Semaphore},
-    time::{self, Duration},
 };
 
 // Time after which if no message is received, the connection is dropped.
@@ -74,14 +71,6 @@ impl MessageDispatcher {
         ContentSink {
             channel,
             state: self.send.clone(),
-        }
-    }
-
-    /// Returns the active connections of this dispatcher.
-    pub fn connection_infos(&self) -> LiveConnectionInfoSet {
-        LiveConnectionInfoSet {
-            recv: self.recv.clone(),
-            send: self.send.clone(),
         }
     }
 
@@ -240,26 +229,6 @@ impl ContentStreamTrait for ContentStream {
 #[derive(Debug)]
 pub(super) struct ChannelClosed;
 
-/// Live* collection of active connections of a `MessageDispatcher`.
-///
-/// *) It means it gets automatically updated as connections are added/removed to/from the
-/// dispatcher.
-#[derive(Clone)]
-pub(super) struct LiveConnectionInfoSet {
-    recv: Arc<RecvState>,
-    send: Arc<MultiSink>,
-}
-
-impl LiveConnectionInfoSet {
-    /// Returns the current infos.
-    pub fn iter(&self) -> impl Iterator<Item = ConnectionInfo> {
-        let recv = self.recv.multi_stream.connection_infos();
-        let send = self.send.connection_infos();
-
-        IntoIntersection::new(recv, send)
-    }
-}
-
 struct ChannelQueue {
     reference_count: usize,
     rx: Arc<AsyncMutex<ChannelQueueReceiver>>,
@@ -276,7 +245,7 @@ type ChannelQueueSender = UnboundedSender<(PermitId, Vec<u8>)>;
 
 struct RecvState {
     multi_stream: Arc<MultiStream>,
-    queues: Arc<BlockingMutex<HashMap<MessageChannelId, ChannelQueue>>>,
+    queues: BlockingMutex<HashMap<MessageChannelId, ChannelQueue>>,
     single_sorter: Semaphore,
 }
 
@@ -284,7 +253,7 @@ impl RecvState {
     fn new() -> Self {
         Self {
             multi_stream: Arc::new(MultiStream::new()),
-            queues: Arc::new(BlockingMutex::new(HashMap::default())),
+            queues: BlockingMutex::new(HashMap::default()),
             single_sorter: Semaphore::new(1),
         }
     }
@@ -366,10 +335,6 @@ impl PermittedStream {
             permit,
         }
     }
-
-    fn connection_info(&self) -> ConnectionInfo {
-        self.permit.info()
-    }
 }
 
 impl Stream for PermittedStream {
@@ -387,19 +352,15 @@ impl Stream for PermittedStream {
 // Contains a connection permit which gets released on drop.
 struct PermittedSink {
     inner: KeepAliveSink<raw::OwnedWriteHalf>,
-    permit: ConnectionPermitHalf,
+    _permit: ConnectionPermitHalf,
 }
 
 impl PermittedSink {
     fn new(stream: raw::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
             inner: KeepAliveSink::new(MessageSink::new(stream), KEEP_ALIVE_SEND_INTERVAL),
-            permit,
+            _permit: permit,
         }
-    }
-
-    fn connection_info(&self) -> ConnectionInfo {
-        self.permit.info()
     }
 }
 
@@ -435,15 +396,13 @@ struct MultiStream {
 
 impl MultiStream {
     fn new() -> Self {
-        const MAX_QUEUED_MESSAGES: usize = 32;
-
         let inner = Arc::new(BlockingMutex::new(MultiStreamInner {
             streams: SelectAll::new(),
             waker: None,
         }));
 
         let stream_added = Arc::new(Notify::new());
-        let (tx, rx) = mpsc::channel(MAX_QUEUED_MESSAGES);
+        let (tx, rx) = mpsc::channel(1);
 
         let _runner =
             scoped_task::spawn(multi_stream_runner(inner.clone(), tx, stream_added.clone()));
@@ -484,16 +443,6 @@ impl MultiStream {
     fn is_empty(&self) -> bool {
         self.inner.lock().unwrap().streams.is_empty()
     }
-
-    fn connection_infos(&self) -> HashSet<ConnectionInfo> {
-        self.inner
-            .lock()
-            .unwrap()
-            .streams
-            .iter()
-            .map(|stream| stream.connection_info())
-            .collect()
-    }
 }
 
 struct MultiStreamInner {
@@ -520,14 +469,9 @@ async fn multi_stream_runner(
     stream_added.notified().await;
 
     while let Some((permit_id, message)) = (Recv { inner: &inner }).await {
-        // Close the connection if the sender is sending too many messages that we're not handling
-        // in a reasonable time. Note that if we don't have some of the repositories that the peer
-        // has, then they'll send some small number of messages from their Barrier code. That's
-        // fine because that number does not exceed MAX_QUEUED_MESSAGES and so the above `tx.send`
-        // won't block for long.
-        match time::timeout(KEEP_ALIVE_RECV_INTERVAL, tx.send((permit_id, message))).await {
-            Ok(Ok(())) => (),
-            Err(_) | Ok(Err(_)) => break,
+        match tx.send((permit_id, message)).await {
+            Ok(()) => (),
+            Err(_) => break,
         }
     }
 }
@@ -606,15 +550,6 @@ impl MultiSink {
 
     fn is_empty(&self) -> bool {
         self.sinks.lock().unwrap().is_empty()
-    }
-
-    fn connection_infos(&self) -> HashSet<ConnectionInfo> {
-        self.sinks
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|sink| sink.connection_info())
-            .collect()
     }
 }
 

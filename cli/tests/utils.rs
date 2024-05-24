@@ -223,7 +223,7 @@ impl Drop for Bin {
 }
 
 thread_local! {
-    static NEXT_ID: Cell<u32> = Cell::new(0);
+    static NEXT_ID: Cell<u32> = const { Cell::new(0) };
 }
 
 // Friendly id of a `Bin` used to prefix log messages to simplify debugging.

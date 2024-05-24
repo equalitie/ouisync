@@ -76,6 +76,18 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::ListRepositoriesSubscribe => {
                 session::subscribe(&self.state, &context.notification_tx).into()
             }
+            Request::RepositoryIsSyncEnabled(handle) => {
+                repository::is_sync_enabled(&self.state, handle)
+                    .await?
+                    .into()
+            }
+            Request::RepositorySetSyncEnabled {
+                repository,
+                enabled,
+            } => {
+                repository::set_sync_enabled(&self.state, repository, enabled).await?;
+                ().into()
+            }
             Request::RepositorySetAccess {
                 repository,
                 read,
@@ -94,7 +106,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositorySetCredentials {
                 repository,
                 credentials,
-            } => repository::set_credentials(&self.state, repository, credentials)
+            } => repository::set_credentials(&self.state, repository, credentials.into())
                 .await?
                 .into(),
             Request::RepositorySetAccessMode {
@@ -144,7 +156,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await?
                 .into(),
             Request::RepositoryIsDhtEnabled(repository) => {
-                repository::is_dht_enabled(&self.state, repository)?.into()
+                repository::is_dht_enabled(&self.state, repository)
+                    .await?
+                    .into()
             }
             Request::RepositorySetDhtEnabled {
                 repository,
@@ -154,7 +168,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                 ().into()
             }
             Request::RepositoryIsPexEnabled(repository) => {
-                repository::is_pex_enabled(&self.state, repository)?.into()
+                repository::is_pex_enabled(&self.state, repository)
+                    .await?
+                    .into()
             }
             Request::RepositorySetPexEnabled {
                 repository,
@@ -204,7 +220,17 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .into()
             }
             Request::RepositoryMountAll(mount_point) => {
-                repository::mount_all(&self.state, mount_point)
+                repository::mount_root(&self.state, mount_point)
+                    .await?
+                    .into()
+            }
+            Request::RepositoryGetMetadata { repository, key } => {
+                repository::metadata_get(&self.state, repository, key)
+                    .await?
+                    .into()
+            }
+            Request::RepositorySetMetadata { repository, edits } => {
+                repository::metadata_set(&self.state, repository, edits)
                     .await?
                     .into()
             }
@@ -236,7 +262,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                 file::read(&self.state, file, offset, len).await?.into()
             }
             Request::FileWrite { file, offset, data } => {
-                file::write(&self.state, file, offset, data).await?.into()
+                file::write(&self.state, file, offset, data.into())
+                    .await?
+                    .into()
             }
             Request::FileTruncate { file, len } => {
                 file::truncate(&self.state, file, len).await?.into()

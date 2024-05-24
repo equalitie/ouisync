@@ -7,53 +7,44 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.ParcelFileDescriptor
-import android.os.storage.StorageManager;
+import android.os.storage.StorageManager
+import android.system.ErrnoException
+import android.system.OsConstants
 import android.util.Log
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.Result
 import java.io.FileNotFoundException
 import java.io.IOException
-import java.io.InputStream
-import java.io.OutputStream
-import java.util.concurrent.Callable
-import java.util.concurrent.FutureTask
-import java.util.concurrent.Semaphore
+import java.util.concurrent.CompletableFuture
 
 class PipeProvider: AbstractFileProvider() {
     companion object {
         private const val CHUNK_SIZE = 64000
-        private val TAG = PipeProvider::class.java.simpleName
+        internal val TAG = PipeProvider::class.java.simpleName
 
         private val supportsProxyFileDescriptor: Boolean
             get() = android.os.Build.VERSION.SDK_INT >= 26
     }
 
-    private var _handler: Handler? = null
-
-    private val handler: Handler
-        @Synchronized get() {
-            if (_handler == null) {
-                Log.d(TAG, "Creating worker thread")
-
-                val thread = HandlerThread("${javaClass.simpleName} worker thread")
-                thread.start();
-                _handler = Handler(thread.getLooper())
-            }
-
-            return _handler!!
-        }
+    private lateinit var handler: Handler
 
     override fun onCreate(): Boolean {
+        Log.d(TAG, "onCreate")
+
+        val thread = HandlerThread("${javaClass.simpleName} worker thread")
+        thread.start();
+
+        handler = Handler(thread.getLooper())
+
         return true
     }
 
     // TODO: Handle `mode`
-    @Throws(FileNotFoundException::class)
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
         Log.d(TAG, "Opening file '$uri' in mode '$mode'")
 
         val path = getPathFromUri(uri);
-        Log.d(TAG, "Pipe path=" + path);
+
         if (supportsProxyFileDescriptor) {
             var size = super.getDataLength(uri);
 
@@ -70,7 +61,6 @@ class PipeProvider: AbstractFileProvider() {
         }
     }
 
-    @Throws(FileNotFoundException::class)
     private fun openProxyFile(path: String, size: Long): ParcelFileDescriptor? {
         var storage = context!!.getSystemService(Context.STORAGE_SERVICE) as StorageManager;
 
@@ -82,22 +72,13 @@ class PipeProvider: AbstractFileProvider() {
         )
     }
 
-    @Throws(FileNotFoundException::class)
     private fun openPipe(path: String): ParcelFileDescriptor? {
-        var pipe: Array<ParcelFileDescriptor?>?
-
-        try {
-            pipe = ParcelFileDescriptor.createPipe()
-        } catch (e: IOException) {
-            Log.e(TAG, "Exception opening pipe", e)
-            throw FileNotFoundException("Could not open pipe for: $path")
-        }
-
+        val pipe = ParcelFileDescriptor.createPipe()
         var reader = pipe[0]
         var writer = pipe[1]
         var dstFd = writer!!.detachFd();
 
-        runInUiThread {
+        runInMainThread {
             copyFileToRawFd(path, dstFd, object: MethodChannel.Result {
                 override fun success(a: Any?) {
                     writer.close()
@@ -108,7 +89,9 @@ class PipeProvider: AbstractFileProvider() {
                     writer.close()
                 }
 
-                override fun notImplemented() {}
+                override fun notImplemented() {
+                    writer.close()
+                }
             })
         }
 
@@ -142,14 +125,11 @@ class PipeProvider: AbstractFileProvider() {
             var id = this.id
 
             if (id == null) {
-                id = invokeBlocking<Int> { result -> openFile(path, result) }
-                  ?: throw FileNotFoundException("file not found: $path")
+                id = openFile(path) ?: throw ErrnoException("openFile", OsConstants.ENOENT)
                 this.id = id
             }
 
-            val chunk = invokeBlocking<ByteArray> { result ->
-                readFile(id, chunkSize, offset, result)
-            }
+            val chunk = readFile(id, chunkSize, offset)
 
             if (chunk != null) {
                 chunk.copyInto(outData)
@@ -163,80 +143,71 @@ class PipeProvider: AbstractFileProvider() {
             val id = this.id
 
             if (id != null) {
-                invokeBlocking<Unit> { result -> closeFile(id, result) }
+                closeFile(id)
             }
         }
     }
 }
 
-private fun openFile(path: String, result: MethodChannel.Result) {
-    val arguments = hashMapOf<String, Any>("path" to path)
-    OuisyncPlugin.invokeMethod("openFile", arguments, result)
+private fun openFile(path: String): Int? {
+    val arguments = hashMapOf("path" to path)
+    return invokeBlocking("openFile", arguments)
 }
 
-private fun closeFile(id: Int, result: MethodChannel.Result) {
-    val arguments = hashMapOf<String, Any>("id" to id)
-    OuisyncPlugin.invokeMethod("closeFile", arguments, result)
+private fun closeFile(id: Int) {
+    val arguments = hashMapOf("id" to id)
+    invokeBlocking<Unit>("closeFile", arguments)
 }
 
-private fun readFile(id: Int, chunkSize: Int, offset: Long, result: MethodChannel.Result) {
-    val arguments = hashMapOf<String, Any>("id" to id, "chunkSize" to chunkSize, "offset" to offset)
-    OuisyncPlugin.invokeMethod("readFile", arguments, result)
+private fun readFile(id: Int, chunkSize: Int, offset: Long): ByteArray? {
+    val arguments = hashMapOf("id" to id, "chunkSize" to chunkSize, "offset" to offset)
+    return invokeBlocking("readFile", arguments)
 }
 
 private fun copyFileToRawFd(srcPath: String, dstFd: Int, result: MethodChannel.Result) {
-    val arguments = hashMapOf<String, Any>("srcPath" to srcPath, "dstFd" to dstFd)
-    OuisyncPlugin.invokeMethod("copyFileToRawFd", arguments, result)
+    val arguments = hashMapOf("srcPath" to srcPath, "dstFd" to dstFd)
+    val channel = OuisyncPlugin.sharedChannel
+
+    if (channel != null) {
+        channel.invokeMethod("copyFileToRawFd", arguments, result)
+    } else {
+        result.notImplemented()
+    }
 }
 
-// Implementation of MethodChannel.Result which blocks until the result is available.
-class BlockingResult<T>: MethodChannel.Result {
-    private val semaphore = Semaphore(1)
-    private var result: Any? = null
+private fun <T> invokeBlocking(method: String, arguments: Any?): T? {
+    val channel = OuisyncPlugin.sharedChannel
 
-    init {
-        semaphore.acquire(1)
+    if (channel == null) {
+        Log.w(PipeProvider.TAG, "Method channel does not exist")
+        return null
     }
 
-    // Wait until the result is available and returns it. If the invoked method failed, throws an
-    // exception.
-    fun wait(): T? {
-        semaphore.acquire(1)
+    val future = CompletableFuture<T?>()
 
-        try {
-            val result = this.result
-
-            if (result is Throwable) {
-                throw result
-            } else {
-                return result as T?
+    runInMainThread {
+        channel.invokeMethod(method, arguments, object : MethodChannel.Result {
+            override fun success(a: Any?) {
+                future.complete(a as T?)
             }
-        } finally {
-            semaphore.release(1)
-        }
+
+            override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+                future.completeExceptionally(
+                    Exception(channelMethodErrorMessage(errorCode, errorMessage, errorDetails))
+                )
+            }
+
+            override fun notImplemented() {
+                future.completeExceptionally(NotImplementedError("method '$method' not implemented"))
+            }
+        })
     }
 
-    override fun success(a: Any?) {
-        result = a
-        semaphore.release(1)
-    }
-
-    override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
-        result = Exception(channelMethodErrorMessage(errorCode, errorMessage, errorDetails))
-        semaphore.release(1)
-    }
-
-    override fun notImplemented() {}
+    return future.get()
 }
 
-private fun <T> invokeBlocking(f: (MethodChannel.Result) -> Unit): T? {
-    val result = BlockingResult<T>()
-    runInUiThread { f(result) }
-    return result.wait()
-}
-
-private fun runInUiThread(f: () -> Unit) {
-    Handler(Looper.getMainLooper()).post { f() }
+private fun runInMainThread(f: () -> Unit) {
+    Handler(Looper.getMainLooper()).post(f)
 }
 
 private fun channelMethodErrorMessage(code: String?, message: String?, details: Any?): String =

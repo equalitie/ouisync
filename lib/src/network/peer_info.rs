@@ -2,7 +2,7 @@ use super::{peer_addr::PeerAddr, peer_source::PeerSource, peer_state::PeerState}
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 
 /// Information about a peer.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Debug)]
 pub struct PeerInfo {
     #[serde(with = "as_str")]
     pub addr: PeerAddr,

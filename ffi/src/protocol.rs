@@ -1,5 +1,8 @@
 use crate::{
-    directory::Directory, file::FileHandle, registry::Handle, repository::RepositoryHandle,
+    directory::Directory,
+    file::FileHandle,
+    registry::Handle,
+    repository::{MetadataEdit, RepositoryHandle},
     state::TaskHandle,
 };
 use camino::Utf8PathBuf;
@@ -37,6 +40,11 @@ pub(crate) enum Request {
     RepositorySubscribe(RepositoryHandle),
     ListRepositories,
     ListRepositoriesSubscribe,
+    RepositoryIsSyncEnabled(RepositoryHandle),
+    RepositorySetSyncEnabled {
+        repository: RepositoryHandle,
+        enabled: bool,
+    },
     RepositoryRequiresLocalSecretForReading(RepositoryHandle),
     RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
     RepositorySetAccess {
@@ -47,8 +55,7 @@ pub(crate) enum Request {
     RepositoryCredentials(RepositoryHandle),
     RepositorySetCredentials {
         repository: RepositoryHandle,
-        #[serde(with = "serde_bytes")]
-        credentials: Vec<u8>,
+        credentials: Bytes,
     },
     RepositoryAccessMode(RepositoryHandle),
     RepositorySetAccessMode {
@@ -98,6 +105,14 @@ pub(crate) enum Request {
         host: String,
     },
     RepositoryMountAll(PathBuf),
+    RepositoryGetMetadata {
+        repository: RepositoryHandle,
+        key: String,
+    },
+    RepositorySetMetadata {
+        repository: RepositoryHandle,
+        edits: Vec<MetadataEdit>,
+    },
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
@@ -140,8 +155,7 @@ pub(crate) enum Request {
     FileWrite {
         file: FileHandle,
         offset: u64,
-        #[serde(with = "serde_bytes")]
-        data: Vec<u8>,
+        data: Bytes,
     },
     FileTruncate {
         file: FileHandle,
@@ -203,7 +217,7 @@ pub(crate) enum Response {
     U8(u8),
     U32(u32),
     U64(u64),
-    Bytes(#[serde(with = "serde_bytes")] Vec<u8>),
+    Bytes(Bytes),
     String(String),
     Handle(u64),
     Handles(Vec<u64>),
@@ -271,7 +285,7 @@ impl From<u64> for Response {
 
 impl From<Vec<u8>> for Response {
     fn from(value: Vec<u8>) -> Self {
-        Self::Bytes(value)
+        Self::Bytes(value.into())
     }
 }
 
@@ -548,6 +562,30 @@ pub mod as_vec_str {
     }
 }
 
+/// Simple wrapper for `Vec<u8>` with a custom `Debug` impl that doesn't print the whole content to
+/// prevent spamming logs.
+#[derive(Eq, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct Bytes(#[serde(with = "serde_bytes")] Vec<u8>);
+
+impl From<Vec<u8>> for Bytes {
+    fn from(v: Vec<u8>) -> Self {
+        Self(v)
+    }
+}
+
+impl From<Bytes> for Vec<u8> {
+    fn from(b: Bytes) -> Self {
+        b.0
+    }
+}
+
+impl fmt::Debug for Bytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{} bytes]", self.0.len())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,7 +608,7 @@ mod tests {
             Request::RepositoryClose(Handle::from_id(1)),
             Request::RepositorySetCredentials {
                 repository: Handle::from_id(1),
-                credentials: credentials.encode(),
+                credentials: credentials.encode().into(),
             },
         ];
 
@@ -599,7 +637,7 @@ mod tests {
             Response::U64(1),
             Response::U64(2),
             Response::U64(u64::MAX),
-            Response::Bytes(b"hello world".to_vec()),
+            Response::Bytes(b"hello world".to_vec().into()),
             Response::Handle(1),
             Response::PeerInfos(vec![
                 PeerInfo {

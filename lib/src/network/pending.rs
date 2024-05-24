@@ -164,24 +164,26 @@ impl PendingRequests {
         let response = ProcessedResponse::from(response);
         let key = response.to_key();
 
-        let (client_permit, block_promise) = if let Some(request_data) =
-            self.map.lock().unwrap().remove(&key)
-        {
-            request_removed(&self.monitor, &key);
+        let (client_permit, block_promise) =
+            if let Some(request_data) = self.map.lock().unwrap().remove(&key) {
+                request_removed(&self.monitor, &key);
 
-            self.monitor
-                .request_latency
-                .record(request_data.timestamp.elapsed());
+                self.monitor
+                    .request_latency
+                    .record(request_data.timestamp.elapsed());
 
-            // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
-            // only `drop` it once the request is processed.
-            let link_permit = Some(ClientPermit(request_data.link_permit, self.monitor.clone()));
-            let block_promise = request_data.block_promise;
+                // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
+                // only `drop` it once the request is processed.
+                let client_permit = Some(ClientPermit {
+                    _link_permit: request_data.link_permit,
+                    monitor: self.monitor.clone(),
+                });
+                let block_promise = request_data.block_promise;
 
-            (link_permit, block_promise)
-        } else {
-            (None, None)
-        };
+                (client_permit, block_promise)
+            } else {
+                (None, None)
+            };
 
         PendingResponse {
             response,
@@ -246,10 +248,13 @@ struct RequestData {
     _peer_permit: OwnedSemaphorePermit,
 }
 
-pub(super) struct ClientPermit(OwnedSemaphorePermit, Arc<RepositoryMonitor>);
+pub(super) struct ClientPermit {
+    _link_permit: OwnedSemaphorePermit,
+    monitor: Arc<RepositoryMonitor>,
+}
 
 impl Drop for ClientPermit {
     fn drop(&mut self) {
-        self.1.requests_pending.decrement(1.0);
+        self.monitor.requests_pending.decrement(1.0);
     }
 }

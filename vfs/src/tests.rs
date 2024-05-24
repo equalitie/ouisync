@@ -20,13 +20,15 @@ use tokio::{
 
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_repository() {
-    let (base_dir, _guard) = setup().await;
+    let (base_dir, _guard, span) = setup("").await;
+    let _span_guard = span.enter();
     assert!(read_dir(base_dir.path().join("mnt")).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_directory() {
-    let (base_dir, _guard) = setup().await;
+    let (base_dir, _guard, span) = setup("").await;
+    let _span_guard = span.enter();
 
     let name_small = OsStr::new("small.txt");
     let len_small = 10;
@@ -74,7 +76,8 @@ async fn read_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_read_non_existing_directory() {
-    let (base_dir, _guard) = setup().await;
+    let (base_dir, _guard, span) = setup("").await;
+    let _span_guard = span.enter();
 
     match fs::read_dir(base_dir.path().join("mnt").join("missing")).await {
         Err(error) if error.kind() == ErrorKind::NotFound => (),
@@ -85,7 +88,8 @@ async fn attempt_to_read_non_existing_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_remove_directory() {
-    let (base_dir, _guard) = setup().await;
+    let (base_dir, _guard, span) = setup("").await;
+    let _span_guard = span.enter();
 
     fs::create_dir(base_dir.path().join("mnt").join("dir"))
         .await
@@ -103,7 +107,8 @@ async fn create_and_remove_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_remove_non_empty_directory() {
-    let (base_dir, _guard) = setup().await;
+    let (base_dir, _guard, span) = setup("").await;
+    let _span_guard = span.enter();
 
     fs::create_dir(base_dir.path().join("mnt").join("dir"))
         .await
@@ -139,7 +144,8 @@ async fn write_and_read_large_file() {
 }
 
 async fn write_and_read_file_case(len: usize, rng_seed: u64) {
-    let (base_dir, _guard) = setup().await;
+    let (base_dir, _guard, span) = setup(&format!("{len},{rng_seed}")).await;
+    let _span_guard = span.enter();
 
     let rng = StdRng::seed_from_u64(rng_seed);
     let orig_data: Vec<u8> = rng.sample_iter(Standard).take(len).collect();
@@ -159,7 +165,8 @@ async fn write_and_read_file_case(len: usize, rng_seed: u64) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append_to_file() {
-    let (base_dir, _guard) = setup().await;
+    let (base_dir, _guard, span) = setup("").await;
+    let _span_guard = span.enter();
 
     let path = base_dir.path().join("mnt").join("file.txt");
 
@@ -183,7 +190,8 @@ fn seek_and_read(
 }
 
 async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
-    let (base_dir, _guard) = setup().await;
+    let (base_dir, _guard, span) = setup(&format!("{len},{offset},{rng_seed}")).await;
+    let _span_guard = span.enter();
 
     let path = base_dir.path().join("mnt").join("file.txt");
 
@@ -203,7 +211,8 @@ async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn move_file() {
-    let (base_dir, _guard) = setup().await;
+    let (base_dir, _guard, span) = setup("").await;
+    let _span_guard = span.enter();
 
     let src_name = OsStr::new("src.txt");
     let src_path = base_dir.path().join("mnt").join(src_name);
@@ -229,7 +238,13 @@ fn run<F: Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-async fn setup() -> (TempDir, MountGuard) {
+// NOTE: there is an issue on Windows where all output from FileSystemHandler seems
+// to be redirected to stderr, because of that the log lines are not captured by
+// `cargo test` and therefore log lines from all the tests appear interleaved. Until
+// that issue is fixed, I had to add spans to every test to be able to filter per-test
+// output.
+// https://github.com/dokan-dev/dokan-rust/issues/9
+async fn setup(params: &str) -> (TempDir, MountGuard, tracing::Span) {
     use std::thread;
     use tracing::Instrument;
 
@@ -237,7 +252,11 @@ async fn setup() -> (TempDir, MountGuard) {
 
     let base_dir = TempDir::new().unwrap();
 
-    let span = tracing::info_span!("test", name = thread::current().name());
+    let span = tracing::trace_span!(
+        "test",
+        test_name = format!("{}({params})", thread::current().name().unwrap())
+    );
+
     let params = RepositoryParams::new(base_dir.path().join("repo.db"));
     let repo = Repository::create(
         &params,
@@ -245,7 +264,7 @@ async fn setup() -> (TempDir, MountGuard) {
             secrets: WriteSecrets::random(),
         },
     )
-    .instrument(span)
+    .instrument(span.clone())
     .await
     .unwrap();
     let repo = Arc::new(repo);
@@ -253,9 +272,24 @@ async fn setup() -> (TempDir, MountGuard) {
     let mount_dir = base_dir.path().join("mnt");
     fs::create_dir(&mount_dir).await.unwrap();
 
+    #[cfg(target_os = "windows")]
+    let guard = super::dokan::single_repo_mount::mount_with_span(
+        tokio::runtime::Handle::current(),
+        repo,
+        mount_dir,
+        Some(span.clone()),
+    )
+    .unwrap();
+
+    #[cfg(not(target_os = "windows"))]
     let guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir).unwrap();
 
-    (base_dir, guard)
+    // TODO: There is likely a bug in Dokan causing the repository not to appear as mounted righ
+    // after the `mount` (or `mount_with_span`) finishes, which makes the tests fail.
+    #[cfg(target_os = "windows")]
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+    (base_dir, guard, span)
 }
 
 async fn read_dir(path: impl AsRef<Path>) -> HashMap<OsString, Metadata> {
@@ -274,7 +308,10 @@ fn init_log() {
     use tracing_subscriber::EnvFilter;
 
     tracing_subscriber::fmt()
-        .pretty()
+        .compact()
+        // Target just adds "ouisync_vfs::dokan" to each line.
+        .with_target(false)
+        .without_time()
         .with_env_filter(
             EnvFilter::builder()
                 .with_default_directive(LevelFilter::OFF.into())

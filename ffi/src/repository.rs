@@ -12,22 +12,32 @@ use ouisync_lib::{
     AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository, SetLocalSecret,
     ShareToken,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, HashMap},
     ffi::OsString,
     mem,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock as BlockingRwLock},
 };
-use tokio::sync::{broadcast::error::RecvError, Notify};
+use thiserror::Error;
+use tokio::sync::{broadcast::error::RecvError, Notify, RwLock as AsyncRwLock};
 
 pub(crate) struct RepositoryHolder {
     pub store_path: PathBuf,
     pub repository: Arc<Repository>,
-    pub registration: Registration,
+    pub registration: AsyncRwLock<Option<Registration>>,
 }
 
 pub(crate) type RepositoryHandle = Handle<Arc<RepositoryHolder>>;
+
+#[derive(Debug, Error)]
+#[error("operation requires network registration")]
+pub(crate) struct RegistrationRequired;
+
+#[derive(Debug, Error)]
+#[error("entry has been changed")]
+pub(crate) struct EntryChanged;
 
 pub(crate) async fn create(
     state: &State,
@@ -48,11 +58,10 @@ pub(crate) async fn create(
     )
     .await?;
 
-    let registration = state.network.register(repository.handle()).await;
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration,
+        registration: AsyncRwLock::new(None),
     };
 
     state
@@ -94,11 +103,10 @@ pub(crate) async fn open(
     )
     .await?;
 
-    let registration = state.network.register(repository.handle()).await;
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration,
+        registration: AsyncRwLock::new(None),
     };
 
     state
@@ -154,6 +162,38 @@ pub async fn close_all_repositories(state: &State) {
             );
         }
     }
+}
+
+pub(crate) async fn is_sync_enabled(
+    state: &State,
+    handle: RepositoryHandle,
+) -> Result<bool, Error> {
+    Ok(state
+        .repositories
+        .get(handle)?
+        .registration
+        .read()
+        .await
+        .is_some())
+}
+
+pub(crate) async fn set_sync_enabled(
+    state: &State,
+    handle: RepositoryHandle,
+    enabled: bool,
+) -> Result<(), Error> {
+    let holder = state.repositories.get(handle)?;
+
+    if enabled {
+        let mut registration = holder.registration.write().await;
+        if registration.is_none() {
+            *registration = Some(state.network.register(holder.repository.handle()).await);
+        }
+    } else {
+        holder.registration.write().await.take();
+    }
+
+    Ok(())
 }
 
 pub(crate) fn credentials(state: &State, handle: RepositoryHandle) -> Result<Vec<u8>, Error> {
@@ -307,11 +347,15 @@ pub(crate) fn subscribe(
     Ok(handle)
 }
 
-pub(crate) fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+pub(crate) async fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
+        .read()
+        .await
+        .as_ref()
+        .ok_or(RegistrationRequired)?
         .is_dht_enabled())
 }
 
@@ -324,16 +368,24 @@ pub(crate) async fn set_dht_enabled(
         .repositories
         .get(handle)?
         .registration
+        .read()
+        .await
+        .as_ref()
+        .ok_or(RegistrationRequired)?
         .set_dht_enabled(enabled)
         .await;
     Ok(())
 }
 
-pub(crate) fn is_pex_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+pub(crate) async fn is_pex_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
+        .read()
+        .await
+        .as_ref()
+        .ok_or(RegistrationRequired)?
         .is_pex_enabled())
 }
 
@@ -346,6 +398,10 @@ pub(crate) async fn set_pex_enabled(
         .repositories
         .get(handle)?
         .registration
+        .read()
+        .await
+        .as_ref()
+        .ok_or(RegistrationRequired)?
         .set_pex_enabled(enabled)
         .await;
     Ok(())
@@ -424,24 +480,76 @@ pub(crate) async fn mirror_exists(
 }
 
 /// Mount all opened repositories
-pub(crate) async fn mount_all(state: &State, mount_point: PathBuf) -> Result<(), Error> {
-    let repos = state.repositories.collect();
-    state
-        .mounter
-        .mount_all(
-            mount_point,
-            repos
-                .iter()
-                .map(|(_handle, holder)| (holder.store_path.as_ref(), &holder.repository)),
-        )
-        .await?;
+pub(crate) async fn mount_root(state: &State, mount_point: PathBuf) -> Result<(), Error> {
+    state.mounter.mount_root(mount_point).await?;
 
     Ok(())
 }
 
+/// Reads a metadata entry
+pub(crate) async fn metadata_get(
+    state: &State,
+    handle: RepositoryHandle,
+    key: String,
+) -> Result<Option<String>, Error> {
+    Ok(state
+        .repositories
+        .get(handle)?
+        .repository
+        .metadata()
+        .get(&key)
+        .await?)
+}
+
+/// Atomically updates multiple metadata entries
+pub(crate) async fn metadata_set(
+    state: &State,
+    handle: RepositoryHandle,
+    edits: Vec<MetadataEdit>,
+) -> Result<(), Error> {
+    let mut tx = state
+        .repositories
+        .get(handle)?
+        .repository
+        .metadata()
+        .write()
+        .await?;
+
+    for edit in edits {
+        if tx.get(&edit.key).await? != edit.old {
+            return Err(EntryChanged.into());
+        }
+
+        if let Some(new) = edit.new {
+            tx.set(&edit.key, new).await?;
+        } else {
+            tx.remove(&edit.key).await?;
+        }
+    }
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// Edit of a single metadata entry.
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub(crate) struct MetadataEdit {
+    /// The key of the entry.
+    pub key: String,
+    /// The current value of the entry or `None` if the entry does not exist yet. This is used for
+    /// concurrency control - if the current value is different from this it's assumed it has been
+    /// modified by some other task and the whole `RepositorySetMetadata` operation is rolled back.
+    /// If that happens, the user should read the current value again, adjust the new value if
+    /// needed and retry the operation.
+    pub old: Option<String>,
+    /// The value to set the entry to or `None` to remove the entry.
+    pub new: Option<String>,
+}
+
 /// Registry of opened repositories.
 pub(crate) struct Repositories {
-    inner: RwLock<Inner>,
+    inner: BlockingRwLock<Inner>,
     pub on_repository_list_changed_tx: uninitialized_watch::Sender<()>,
 }
 
@@ -450,7 +558,7 @@ impl Repositories {
         let (on_repository_list_changed_tx, _) = uninitialized_watch::channel();
 
         Self {
-            inner: RwLock::new(Inner {
+            inner: BlockingRwLock::new(Inner {
                 registry: Registry::new(),
                 index: HashMap::new(),
             }),
@@ -521,6 +629,7 @@ impl Repositories {
             .registry
             .get(handle)
             .map(|holder| holder.clone())
+        //self.inner.read().unwrap().registry.get(handle).cloned()
     }
 
     pub fn collect(&self) -> Vec<(RepositoryHandle, Arc<RepositoryHolder>)> {
@@ -540,7 +649,7 @@ pub(crate) enum RepositoryEntry<'a> {
 }
 
 pub(crate) struct RepositoryVacantEntry<'a> {
-    inner: &'a RwLock<Inner>,
+    inner: &'a BlockingRwLock<Inner>,
     store_path: PathBuf,
     inserted: bool,
     on_repository_list_changed_tx: uninitialized_watch::Sender<()>,

@@ -212,7 +212,13 @@ pub(crate) fn grab_shared(sender: impl Sender) -> Result<Session, SessionError> 
 }
 
 pub(crate) fn close(session: Session, sender: impl Sender) {
-    let Ok(shared) = Arc::try_unwrap(session.shared) else {
+    let Session {
+        shared,
+        client_tx: _,
+        _server_abort_handle,
+    } = session;
+
+    let Ok(shared) = Arc::try_unwrap(shared) else {
         sender.send(Bytes::new());
         return;
     };
@@ -229,7 +235,13 @@ pub(crate) fn close(session: Session, sender: impl Sender) {
 }
 
 pub(crate) fn close_blocking(session: Session) {
-    let Ok(shared) = Arc::try_unwrap(session.shared) else {
+    let Session {
+        shared,
+        client_tx: _,
+        _server_abort_handle,
+    } = session;
+
+    let Ok(shared) = Arc::try_unwrap(shared) else {
         return;
     };
 

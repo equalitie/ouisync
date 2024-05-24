@@ -238,6 +238,14 @@ class Subscription {
 
     try {
       _id = await _client.invoke('${_name}_subscribe', _arg) as int;
+
+      // This subscription might have been `close`d in the meantime. Don't register the sink so
+      // that if a notification is still received from the backend it won't get added to the now
+      // closed controller (which would throw an exception).
+      if (_controller.isClosed) {
+        return;
+      }
+
       _client._subscriptions[_id] = _controller.sink;
     } catch (e) {
       print('failed to subscribe to $_name: $e');

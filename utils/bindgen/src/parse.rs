@@ -154,9 +154,7 @@ fn parse_enum(item: ItemEnum) -> Option<Enum> {
 
     let doc = extract_doc(&item.attrs);
 
-    let Some(repr) = extract_repr(&item.attrs) else {
-        return None;
-    };
+    let repr = extract_repr(&item.attrs)?;
 
     let Ok(repr) = repr.parse::<EnumRepr>() else {
         return None;
