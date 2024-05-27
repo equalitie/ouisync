@@ -19,6 +19,7 @@ use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{
     fmt,
     fs::OpenOptions,
+    future,
     io::{self, Write},
     path::PathBuf,
     process::ExitCode,
@@ -42,8 +43,10 @@ fn main() -> ExitCode {
         .collect();
     let proto = options.protocol;
 
-    let progress_reporter = ProgressReporter::new();
-    common::init_log_with_writer(progress_reporter.stdout_writer());
+    let progress_reporter = options.progress.then(ProgressReporter::new);
+    if let Some(progress_reporter) = &progress_reporter {
+        common::init_log_with_writer(progress_reporter.stdout_writer());
+    }
 
     let mut env = Env::new();
 
@@ -107,7 +110,7 @@ fn main() -> ExitCode {
                 network.add_user_provided_peer(&addr);
             }
 
-            let run = async {
+            let run_sync = async {
                 // Wait until fully synced
                 if let Some(watch_tx) = watch_tx {
                     drop(watch_rx);
@@ -126,9 +129,17 @@ fn main() -> ExitCode {
                 barrier.wait().await;
             };
 
+            let run_progress_reporter = async {
+                if let Some(progress_reporter) = progress_reporter {
+                    progress_reporter.run(&repo).await
+                } else {
+                    future::pending().await
+                }
+            };
+
             select! {
-                _ = run => (),
-                _ = progress_reporter.run(&repo) => (),
+                _ = run_sync => (),
+                _ = run_progress_reporter => (),
                 _ = progress_monitor.run(&repo) => (),
                 _ = throughput_monitor.run(&network) => (),
             }
@@ -193,6 +204,10 @@ struct Options {
     /// mutliple versions of this benchmark.
     #[arg(short, long, default_value_t)]
     pub label: String,
+
+    /// Show progress bar.
+    #[arg(long)]
+    pub progress: bool,
 
     // The following arguments may be passed down from `cargo bench` so we need to accept them even
     // if we don't use them.
