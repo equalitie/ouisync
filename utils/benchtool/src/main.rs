@@ -1,5 +1,5 @@
 use anyhow::{format_err, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::Parser;
 use comfy_table::{Attribute, Cell, CellAlignment, Table};
 use indicatif::HumanBytes;
 use rand::seq::SliceRandom;
@@ -22,101 +22,57 @@ const BENCH_DIR: &str = "benches";
 fn main() -> Result<()> {
     let options = Options::parse();
 
-    match options.command {
-        Command::Build(args) => build(args),
-        Command::List(args) => list(args),
-        Command::Run(args) => run(args),
-        Command::Clean(args) => clean(args),
+    build(&options)?;
+
+    if !options.no_run {
+        run(&options)?;
     }
+
+    Ok(())
 }
 
 /// Build, run and compare different versions of the same benchmark.
 #[derive(Parser, Debug)]
 struct Options {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand, Debug)]
-enum Command {
-    /// Build a bench version
-    Build(BuildArgs),
-    /// List all bench binaries
-    List(ListArgs),
-    /// Run and compare benches
-    Run(RunArgs),
-    /// Remove all bench binaries
-    Clean(CleanArgs),
-}
-
-#[derive(Args, Debug)]
-struct BuildArgs {
-    #[command(flatten)]
-    common: CommonArgs,
-
     /// Package to build
     #[arg(short, long, value_name = "SPEC")]
     package: Option<String>,
+
+    /// Directory for all generated artifacts
+    #[arg(long, value_name = "PATH")]
+    target_dir: Option<PathBuf>,
 
     /// Space or comma separated list of features to activate
     #[arg(short = 'F', long)]
     features: Vec<String>,
 
-    /// Label to append to the bench binary name. Default is the current git commit hash.
-    #[arg(short, long)]
-    label: Option<String>,
-
-    /// Bench target(s) to build
-    #[arg(value_name = "NAME")]
-    benches: Vec<String>,
-}
-
-#[derive(Args, Debug)]
-struct ListArgs {
-    #[command(flatten)]
-    common: CommonArgs,
-
-    /// Bench(es) to list the versions of.
-    #[arg(value_name = "NAME")]
-    benches: Vec<String>,
-}
-
-#[derive(Args, Debug)]
-struct RunArgs {
-    #[command(flatten)]
-    common: CommonArgs,
-
-    /// Run each bench version this many times and average the results.
-    #[arg(short, long, default_value_t = 1)]
-    samples: usize,
-
-    /// Bench to run and compare.
-    #[arg(value_name = "NAME")]
-    bench: String,
-
-    /// Args to the bench.
-    #[arg(trailing_var_arg = true)]
-    args: Vec<OsString>,
-}
-
-#[derive(Args, Debug)]
-struct CleanArgs {
-    #[command(flatten)]
-    common: CommonArgs,
-}
-
-#[derive(Args, Debug)]
-struct CommonArgs {
     /// Coloring: auto, always, never
     #[arg(long, default_value = "auto")]
     color: String,
 
-    /// Directory for all generated artifacts
-    #[arg(long, value_name = "PATH")]
-    target_dir: Option<PathBuf>,
+    /// Label to append to the bench binary name. Used to identify bench versions when comparing
+    /// results. Default is the current git commit hash.
+    #[arg(short, long)]
+    label: Option<String>,
+
+    /// Run each bench version this many times and average the results.
+    #[arg(short, long, default_value_t = 1, conflicts_with = "no_run")]
+    samples: usize,
+
+    /// Build but don't run the bench.
+    #[arg(long)]
+    no_run: bool,
+
+    /// Bench target to build and run.
+    #[arg(value_name = "NAME")]
+    bench: String,
+
+    /// Args to the bench target.
+    #[arg(trailing_var_arg = true, conflicts_with = "no_run")]
+    args: Vec<OsString>,
 }
 
-impl CommonArgs {
+impl Options {
     fn bench_dir(&self) -> PathBuf {
         self.target_dir
             .as_ref()
@@ -126,117 +82,28 @@ impl CommonArgs {
     }
 }
 
-#[derive(Deserialize)]
-struct BuildMessage<'a> {
-    #[serde(borrow)]
-    executable: Option<&'a Path>,
-}
-
-#[derive(Default, Debug, Deserialize)]
-struct Summary {
-    #[serde(default)]
-    label: String,
-    #[serde(deserialize_with = "deserialize_duration")]
-    duration: Duration,
-    send: BytesSummary,
-    recv: BytesSummary,
-}
-
-impl Summary {
-    fn avg<'a>(iter: impl IntoIterator<Item = &'a Summary>) -> Self {
-        let (sum, count) =
-            iter.into_iter()
-                .fold((Summary::default(), 0u32), |(sum, count), item| {
-                    (
-                        Summary {
-                            label: if sum.label.is_empty() {
-                                item.label.clone()
-                            } else {
-                                sum.label
-                            },
-                            duration: sum.duration + item.duration,
-                            send: sum.send + item.send,
-                            recv: sum.recv + item.recv,
-                        },
-                        count + 1,
-                    )
-                });
-
-        sum / count
-    }
-}
-
-impl Div<u32> for Summary {
-    type Output = Self;
-
-    fn div(self, rhs: u32) -> Self::Output {
-        Self {
-            label: self.label,
-            duration: self.duration / rhs,
-            send: self.send / rhs,
-            recv: self.recv / rhs,
-        }
-    }
-}
-
-#[derive(Default, Copy, Clone, Debug, Deserialize)]
-struct BytesSummary {
-    min: u64,
-    max: u64,
-    mean: u64,
-    stdev: u64,
-}
-
-impl Add for BytesSummary {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            min: self.min + rhs.min,
-            max: self.max + rhs.max,
-            mean: self.mean + rhs.mean,
-            stdev: self.stdev + rhs.stdev,
-        }
-    }
-}
-
-impl Div<u32> for BytesSummary {
-    type Output = Self;
-
-    fn div(self, rhs: u32) -> Self::Output {
-        Self {
-            min: self.min / rhs as u64,
-            max: self.max / rhs as u64,
-            mean: self.mean / rhs as u64,
-            stdev: self.stdev / rhs as u64,
-        }
-    }
-}
-
-fn build(args: BuildArgs) -> Result<()> {
+fn build(options: &Options) -> Result<()> {
     let mut command = process::Command::new("cargo");
     command
         .arg("build")
         .arg("--message-format")
         .arg("json")
         .arg("--color")
-        .arg(&args.common.color);
+        .arg(&options.color);
 
-    if let Some(value) = &args.common.target_dir {
+    if let Some(value) = &options.target_dir {
         command.arg("--target-dir").arg(value);
     }
 
-    if let Some(value) = args.package {
+    if let Some(value) = &options.package {
         command.arg("--package").arg(value);
     }
 
-    for value in args.features {
+    for value in &options.features {
         command.arg("--features").arg(value);
     }
 
-    for value in args.benches {
-        command.arg("--bench").arg(value);
-    }
+    command.arg("--bench").arg(&options.bench);
 
     println!(
         "Running `{} {}`",
@@ -257,10 +124,10 @@ fn build(args: BuildArgs) -> Result<()> {
     }
 
     let stdout = BufReader::new(&output.stdout[..]);
-    let dst_dir = args.common.bench_dir();
+    let dst_dir = options.bench_dir();
 
-    let label = match args.label {
-        Some(label) => label,
+    let label = match &options.label {
+        Some(label) => label.to_owned(),
         None => get_git_commit()?,
     };
 
@@ -284,24 +151,14 @@ fn build(args: BuildArgs) -> Result<()> {
     Ok(())
 }
 
-fn list(args: ListArgs) -> Result<()> {
-    let dir = args.common.bench_dir();
-
-    for entry in fs::read_dir(dir)? {
-        println!("{}", entry?.path().display());
-    }
-
-    Ok(())
-}
-
-fn run(args: RunArgs) -> Result<()> {
-    let dir = args.common.bench_dir();
-    let mut bench_versions = list_bench_versions(&dir, &args.bench)?;
+fn run(options: &Options) -> Result<()> {
+    let dir = options.bench_dir();
+    let mut bench_versions = list_bench_versions(&dir, &options.bench)?;
     let mut output = NamedTempFile::new()?;
     let mut rng = rand::thread_rng();
 
-    for i in 0..args.samples {
-        println!("Running sample {}/{}", i + 1, args.samples);
+    for i in 0..options.samples {
+        println!("Running sample {}/{}", i + 1, options.samples);
         println!();
 
         bench_versions.shuffle(&mut rng);
@@ -316,7 +173,7 @@ fn run(args: RunArgs) -> Result<()> {
                 .arg("--output")
                 .arg(output.path());
 
-            for arg in &args.args {
+            for arg in &options.args {
                 command.arg(arg);
             }
 
@@ -368,11 +225,6 @@ fn list_bench_versions(dir: &Path, bench: &str) -> Result<Vec<PathBuf>> {
         })
         .filter_map(Result::transpose)
         .collect()
-}
-
-fn clean(args: CleanArgs) -> Result<()> {
-    fs::remove_dir_all(args.common.bench_dir())?;
-    Ok(())
 }
 
 fn default_target_dir() -> PathBuf {
@@ -498,4 +350,91 @@ fn build_comparison_table(summaries: Vec<Summary>) -> Table {
     }
 
     table
+}
+
+#[derive(Deserialize)]
+struct BuildMessage<'a> {
+    #[serde(borrow)]
+    executable: Option<&'a Path>,
+}
+
+#[derive(Default, Debug, Deserialize)]
+struct Summary {
+    #[serde(default)]
+    label: String,
+    #[serde(deserialize_with = "deserialize_duration")]
+    duration: Duration,
+    send: BytesSummary,
+    recv: BytesSummary,
+}
+
+impl Summary {
+    fn avg<'a>(iter: impl IntoIterator<Item = &'a Summary>) -> Self {
+        let (sum, count) =
+            iter.into_iter()
+                .fold((Summary::default(), 0u32), |(sum, count), item| {
+                    (
+                        Summary {
+                            label: if sum.label.is_empty() {
+                                item.label.clone()
+                            } else {
+                                sum.label
+                            },
+                            duration: sum.duration + item.duration,
+                            send: sum.send + item.send,
+                            recv: sum.recv + item.recv,
+                        },
+                        count + 1,
+                    )
+                });
+
+        sum / count
+    }
+}
+
+impl Div<u32> for Summary {
+    type Output = Self;
+
+    fn div(self, rhs: u32) -> Self::Output {
+        Self {
+            label: self.label,
+            duration: self.duration / rhs,
+            send: self.send / rhs,
+            recv: self.recv / rhs,
+        }
+    }
+}
+
+#[derive(Default, Copy, Clone, Debug, Deserialize)]
+struct BytesSummary {
+    min: u64,
+    max: u64,
+    mean: u64,
+    stdev: u64,
+}
+
+impl Add for BytesSummary {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            min: self.min + rhs.min,
+            max: self.max + rhs.max,
+            mean: self.mean + rhs.mean,
+            stdev: self.stdev + rhs.stdev,
+        }
+    }
+}
+
+impl Div<u32> for BytesSummary {
+    type Output = Self;
+
+    fn div(self, rhs: u32) -> Self::Output {
+        Self {
+            min: self.min / rhs as u64,
+            max: self.max / rhs as u64,
+            mean: self.mean / rhs as u64,
+            stdev: self.stdev / rhs as u64,
+        }
+    }
 }
