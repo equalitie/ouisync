@@ -31,11 +31,12 @@ impl SummaryRecorder {
         }
     }
 
-    pub fn finalize(mut self) -> Summary {
+    pub fn finalize(mut self, label: String) -> Summary {
         self.send.refresh();
         self.recv.refresh();
 
         Summary {
+            label,
             duration: self.start.elapsed(),
             send: mem::replace(&mut self.send, Histogram::new(3).unwrap()),
             recv: mem::replace(&mut self.recv, Histogram::new(3).unwrap()),
@@ -61,6 +62,8 @@ impl ActorSummaryRecorder {
 
 #[derive(Serialize)]
 pub(crate) struct Summary {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub label: String,
     #[serde(serialize_with = "serialize_duration")]
     pub duration: Duration,
     #[serde(serialize_with = "serialize_histogram")]

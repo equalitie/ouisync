@@ -143,11 +143,7 @@ fn main() -> ExitCode {
     drop(env);
     drop(progress_reporter);
 
-    let summary = summary_recorder.finalize();
-
-    println!();
-    serde_json::to_writer_pretty(io::stdout().lock(), &summary).unwrap();
-    println!();
+    let summary = summary_recorder.finalize(options.label);
 
     if let Some(path) = options.output {
         let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
@@ -160,6 +156,10 @@ fn main() -> ExitCode {
 
         serde_json::to_writer(&mut file, &summary).unwrap();
         file.write_all(b"\n").unwrap();
+    } else {
+        println!();
+        serde_json::to_writer_pretty(io::stdout().lock(), &summary).unwrap();
+        println!();
     }
 
     ExitCode::SUCCESS
@@ -188,6 +188,11 @@ struct Options {
     /// to stdout.
     #[arg(short, long, value_name = "PATH")]
     pub output: Option<PathBuf>,
+
+    /// Human-readable label for this execution of the benchmark. Useful to distinguish outputs of
+    /// mutliple versions of this benchmark.
+    #[arg(short, long, default_value_t)]
+    pub label: String,
 
     // The following arguments may be passed down from `cargo bench` so we need to accept them even
     // if we don't use them.

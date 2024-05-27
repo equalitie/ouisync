@@ -1,12 +1,10 @@
 use super::actor;
-use futures_util::StreamExt;
-use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressState, ProgressStyle};
-use ouisync::{network::Network, Progress, Repository, BLOCK_SIZE};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use ouisync::{Progress, Repository, BLOCK_SIZE};
 use std::{
-    fmt::Write,
     io::{self, Stderr, Stdout},
     sync::{Arc, Mutex as BlockingMutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{select, sync::broadcast::error::RecvError, time};
 
