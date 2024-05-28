@@ -14,7 +14,7 @@ name = "protocol-analyzer"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1.0.75"
+anyhow = { workspace = true }
 clap = { workspace = true  }
 tokio = { workspace = true, features = ["signal", "io-std", "fs", "macros", "rt-multi-thread", "io-util"] }
 tokio-stream = { workspace = true, features = ["sync"] }

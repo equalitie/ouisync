@@ -1,0 +1,20 @@
+[package]
+name = "benchtool"
+description = "Utility to run and compare multiple versions of the same benchmarks"
+publish = false
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow      = { workspace = true }
+clap        = { workspace = true }
+comfy-table = "7.1.1"
+indicatif   = "0.17.8"
+rand        = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+tempfile    = { workspace = true }
