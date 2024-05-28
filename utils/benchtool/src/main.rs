@@ -22,7 +22,9 @@ const BENCH_DIR: &str = "benches";
 fn main() -> Result<()> {
     let options = Options::parse();
 
-    build(&options)?;
+    if !options.no_build {
+        build(&options)?;
+    }
 
     if !options.no_run {
         run(&options)?;
@@ -66,19 +68,23 @@ struct Options {
     label: Option<String>,
 
     /// Run each bench version this many times and average the results.
-    #[arg(short, long, default_value_t = 1, conflicts_with = "no_run")]
+    #[arg(short, long, default_value_t = 1)]
     samples: usize,
 
-    /// Build but don't run the bench.
+    /// Build but don't run the benches.
     #[arg(long)]
     no_run: bool,
+
+    /// Only run the existing benches, don't build.
+    #[arg(long)]
+    no_build: bool,
 
     /// Bench target to build and run.
     #[arg(value_name = "NAME")]
     bench: String,
 
     /// Args to the bench target.
-    #[arg(trailing_var_arg = true, conflicts_with = "no_run")]
+    #[arg(trailing_var_arg = true)]
     args: Vec<OsString>,
 }
 
