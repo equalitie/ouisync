@@ -94,7 +94,6 @@ assert_matches = { workspace = true }
 clap = { workspace = true }
 criterion = { version = "0.4", features = ["html_reports"] }
 hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"] }
-indicatif = "0.17.8"
 metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = "1.0"

@@ -110,6 +110,10 @@ pub(crate) mod env {
 
             self.tasks.push(self.runtime.spawn(f));
         }
+
+        pub fn runtime(&self) -> Handle {
+            self.runtime.handle().clone()
+        }
     }
 
     impl Drop for Env {
@@ -159,6 +163,10 @@ pub(crate) mod env {
             let f = f.instrument(span);
 
             self.runner.client(name, f);
+        }
+
+        pub fn runtime(&self) -> Handle {
+            unimplemented!("not supported in simulation")
         }
     }
 

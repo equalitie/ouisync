@@ -43,11 +43,6 @@ fn main() -> ExitCode {
         .collect();
     let proto = options.protocol;
 
-    let progress_reporter = options.progress.then(ProgressReporter::new);
-    if let Some(progress_reporter) = &progress_reporter {
-        common::init_log_with_writer(progress_reporter.stdout_writer());
-    }
-
     let mut env = Env::new();
 
     // Wait until everyone is fully synced.
@@ -59,6 +54,10 @@ fn main() -> ExitCode {
     let barrier = Arc::new(Barrier::new(actors.len()));
 
     let summary_recorder = SummaryRecorder::new();
+    let progress_reporter = {
+        let _enter = env.runtime().enter();
+        options.progress.then(ProgressReporter::new)
+    };
 
     let file_name = "file.dat";
     let file_seed = 0;
