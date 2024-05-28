@@ -32,7 +32,17 @@ fn main() -> Result<()> {
 }
 
 /// Build, run and compare different versions of the same benchmark.
+///
+/// Typical usage is to build a bench in the master branch, then switch to a branch that contains
+/// potential perf improvements, build the same bench there, run both versions and compare the
+/// results:
+///
+///     > git checkout master
+///     > cargo run -p benchtool -- <BENCH_NAME> --no-run
+///     > git checkout perf-improvements
+///     > cargo run -p benchtool -- <BENCH_NAME> --samples 10
 #[derive(Parser, Debug)]
+#[command(verbatim_doc_comment)]
 struct Options {
     /// Package to build
     #[arg(short, long, value_name = "SPEC")]
@@ -51,7 +61,7 @@ struct Options {
     color: String,
 
     /// Label to append to the bench binary name. Used to identify bench versions when comparing
-    /// results. Default is the current git commit hash.
+    /// results. Default is the current git branch name.
     #[arg(short, long)]
     label: Option<String>,
 
@@ -128,7 +138,7 @@ fn build(options: &Options) -> Result<()> {
 
     let label = match &options.label {
         Some(label) => label.to_owned(),
-        None => get_git_commit()?,
+        None => get_default_label()?,
     };
 
     for line in stdout.lines() {
@@ -243,7 +253,7 @@ fn make_bench_file_name(src: &Path, label: &str) -> PathBuf {
         .map(|(prefix, _)| prefix)
         .unwrap_or(name);
 
-    let mut name = PathBuf::from(format!("{name}-{label}"));
+    let mut name = PathBuf::from(format!("{name}@{label}"));
 
     if let Some(ext) = ext {
         name.set_extension(ext);
@@ -255,7 +265,7 @@ fn make_bench_file_name(src: &Path, label: &str) -> PathBuf {
 fn extract_bench_label(path: &Path) -> &str {
     path.file_stem()
         .and_then(|stem| stem.to_str())
-        .and_then(|stem| stem.rsplit_once('-'))
+        .and_then(|stem| stem.rsplit_once('@'))
         .map(|(_, suffix)| suffix)
         .unwrap_or_default()
 }
@@ -272,6 +282,30 @@ fn get_git_commit() -> Result<String> {
     )?
     .trim()
     .to_owned())
+}
+
+fn get_git_branch() -> Result<String> {
+    Ok(str::from_utf8(
+        process::Command::new("git")
+            .arg("rev-parse")
+            .arg("--abbrev-ref")
+            .arg("HEAD")
+            .output()?
+            .stdout
+            .as_ref(),
+    )?
+    .trim()
+    .to_owned())
+}
+
+fn get_default_label() -> Result<String> {
+    let branch = get_git_branch()?;
+
+    if branch != "HEAD" {
+        Ok(branch)
+    } else {
+        get_git_commit()
+    }
 }
 
 fn format_command(command: &process::Command) -> String {
