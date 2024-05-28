@@ -10,15 +10,15 @@ rust-version.workspace = true
 version.workspace = true
 
 [[bench]]
-name = "bench_lib"
+name = "basic"
 harness = false
 
 [[bench]]
-name = "bench_large_file"
+name = "large_file"
 harness = false
 
 [[bench]]
-name = "bench_swarm"
+name = "swarm"
 harness = false
 
 [dependencies]
