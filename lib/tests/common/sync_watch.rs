@@ -63,7 +63,7 @@ impl Receiver {
 
                 debug!(?this_vv, that_vv = ?*that_vv);
 
-                if this_vv == *that_vv {
+                if !that_vv.is_empty() && this_vv == *that_vv {
                     break;
                 }
             }

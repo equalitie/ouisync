@@ -121,7 +121,11 @@ fn main() -> ExitCode {
 
                 // Check the file content matches the original file.
                 {
-                    let mut file = repo.open_file(file_name).await.unwrap();
+                    let mut file = repo
+                        .open_file(file_name)
+                        .await
+                        .inspect_err(|error| error!(?error))
+                        .unwrap();
                     check_random_file(&mut file, file_seed, file_size).await;
                 }
 
