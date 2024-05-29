@@ -2,7 +2,6 @@ pub mod dht_discovery;
 pub mod peer_addr;
 
 mod barrier;
-mod choke;
 mod client;
 mod connection;
 mod connection_monitor;
@@ -48,6 +47,7 @@ pub use net::stun::NatBehavior;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     connection_monitor::ConnectionMonitor,
+    constants::MAX_UNCHOKED_COUNT,
     dht_discovery::{DhtContactsStoreTrait, DhtDiscovery},
     gateway::{Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
@@ -79,7 +79,7 @@ use std::{
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::mpsc,
+    sync::{mpsc, Semaphore},
     task::{AbortHandle, JoinSet},
     time::Duration,
 };
@@ -331,17 +331,18 @@ impl Network {
         let pex = self.inner.pex_discovery.new_repository();
         pex.set_enabled(pex_enabled);
 
-        let choke_manager = choke::Manager::new();
+        // TODO: This should be global, not per repo
+        let response_limiter = Arc::new(Semaphore::new(MAX_UNCHOKED_COUNT));
 
         let mut network_state = self.inner.state.lock().unwrap();
 
-        network_state.create_link(handle.vault.clone(), &pex, &choke_manager);
+        network_state.create_link(handle.vault.clone(), &pex, response_limiter.clone());
 
         let key = network_state.registry.insert(RegistrationHolder {
             vault: handle.vault,
             dht,
             pex,
-            choke_manager,
+            response_limiter,
         });
 
         Registration {
@@ -440,7 +441,7 @@ struct RegistrationHolder {
     vault: Vault,
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexRepository,
-    choke_manager: choke::Manager,
+    response_limiter: Arc<Semaphore>,
 }
 
 struct Inner {
@@ -477,10 +478,10 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, repo: Vault, pex: &PexRepository, choke_manager: &choke::Manager) {
+    fn create_link(&mut self, repo: Vault, pex: &PexRepository, response_limiter: Arc<Semaphore>) {
         if let Some(brokers) = &mut self.message_brokers {
             for broker in brokers.values_mut() {
-                broker.create_link(repo.clone(), pex, choke_manager)
+                broker.create_link(repo.clone(), pex, response_limiter.clone())
             }
         }
     }
@@ -862,7 +863,7 @@ impl Inner {
                         broker.create_link(
                             holder.vault.clone(),
                             &holder.pex,
-                            &holder.choke_manager,
+                            holder.response_limiter.clone(),
                         );
                     }
 

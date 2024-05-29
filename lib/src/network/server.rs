@@ -1,125 +1,112 @@
 use super::{
-    choke::Choker,
+    constants::{MAX_INACTIVITY_DURATION, MAX_PENDING_REQUESTS_PER_CLIENT, MAX_UNCHOKED_DURATION},
     debug_payload::{DebugRequest, DebugResponse},
     message::{Content, Request, Response, ResponseDisambiguator},
 };
 use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
-    event,
+    event::{Event, Payload},
     protocol::{BlockContent, BlockId, RootNode, RootNodeFilter},
     repository::Vault,
     store,
 };
-use futures_util::{
-    stream::{self, FuturesUnordered},
-    Stream, StreamExt, TryStreamExt,
-};
-use std::{collections::HashSet, pin::pin};
+use futures_util::TryStreamExt;
+use std::sync::Arc;
 use tokio::{
     select,
     sync::{
         broadcast::{self, error::RecvError},
-        mpsc,
+        mpsc, Semaphore,
     },
+    time::{self, Instant},
 };
 use tracing::instrument;
 
 pub(crate) struct Server {
     inner: Inner,
-    rx: mpsc::Receiver<Request>,
-    choker: Choker,
+    request_rx: mpsc::Receiver<Request>,
+    command_rx: mpsc::Receiver<Command>,
 }
 
 impl Server {
     pub fn new(
         vault: Vault,
-        tx: mpsc::Sender<Content>,
-        rx: mpsc::Receiver<Request>,
-        choker: Choker,
+        content_tx: mpsc::Sender<Content>,
+        request_rx: mpsc::Receiver<Request>,
+        response_limiter: Arc<Semaphore>,
     ) -> Self {
+        let (command_tx, command_rx) = mpsc::channel(MAX_PENDING_REQUESTS_PER_CLIENT + 1);
+
         Self {
-            inner: Inner { vault, tx },
-            rx,
-            choker,
+            inner: Inner {
+                vault,
+                command_tx,
+                content_tx,
+                response_limiter,
+            },
+            request_rx,
+            command_rx,
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let Self { inner, rx, choker } = self;
+        let Self {
+            inner,
+            request_rx,
+            command_rx,
+        } = self;
 
-        inner.run(rx, choker).await
+        inner.run(request_rx, command_rx).await
     }
 }
 
 struct Inner {
     vault: Vault,
-    tx: mpsc::Sender<Content>,
+    command_tx: mpsc::Sender<Command>,
+    content_tx: mpsc::Sender<Content>,
+    response_limiter: Arc<Semaphore>,
 }
 
 impl Inner {
-    async fn run(&self, rx: &mut mpsc::Receiver<Request>, choker: &mut Choker) -> Result<()> {
+    async fn run(
+        &self,
+        request_rx: &mut mpsc::Receiver<Request>,
+        command_rx: &mut mpsc::Receiver<Command>,
+    ) -> Result<()> {
         // Important: make sure to create the event subscription first, before calling
         // `handle_all_branches_changed` otherwise we might miss some events.
-        let mut events = pin!(events(self.vault.event_tx.subscribe()));
-
-        // Because we're using the choker, we can't handle events that we receive on `events` right
-        // a way. We need to wait for being unchoked. In the meanwhile we "accumulate" events from
-        // `events` into the `accumulator` and once we get unchoked we process them all at once.
-        // Note that this allows us to process each branch event only once even if we received
-        // multiple events per particular branch.
-        let mut accumulator = EventAccumulator::default();
-        let mut choked = true;
-
-        // This is to handle multiple requests / events at once.
-        // TODO: Do we need to limit the number of concurrent request handlers? We have a limit on
-        // the number of read DB transactions, so that might be enough, but perhaps we also want to
-        // limit per peer?
-        let mut request_handlers = FuturesUnordered::new();
-        let mut event_handlers = FuturesUnordered::new();
+        let mut event_rx = self.vault.event_tx.subscribe();
 
         // Send the initial root messages, but only after we get unchoked (which can happen
         // immediatelly)
-        accumulator.insert(Event::Unknown);
+        self.handle_unknown_event().await?;
 
+        select! {
+            result = self.handle_requests(request_rx) => result,
+            result = self.handle_events(&mut event_rx) => result,
+            _ = self.send_responses(command_rx) => Ok(()),
+        }
+    }
+
+    async fn handle_requests(&self, request_rx: &mut mpsc::Receiver<Request>) -> Result<()> {
         loop {
-            select! {
-                request = rx.recv(), if !choked => {
-                    let Some(request)  = request else {
+            match request_rx.recv().await {
+                Some(request) => self.handle_request(request).await?,
+                None => return Ok(()),
+            }
+
+            loop {
+                match time::timeout(MAX_INACTIVITY_DURATION, request_rx.recv()).await {
+                    Ok(Some(request)) => self.handle_request(request).await?,
+                    Ok(None) => return Ok(()),
+                    Err(_) => {
+                        self.send_command(Command::Release).await;
                         break;
-                    };
-
-                    let handler = self.handle_request(request);
-                    request_handlers.push(handler);
-                }
-                event = events.next() => {
-                    let Some(event) = event else {
-                        break;
-                    };
-
-                    if choked {
-                        accumulator.insert(event);
-                    } else {
-                        event_handlers.push(self.handle_event(event));
-                    }
-                },
-                new_choked = choker.changed() => {
-                    choked = new_choked;
-
-                    if choked {
-                        continue;
-                    }
-
-                    for event in accumulator.drain() {
-                        event_handlers.push(self.handle_event(event));
                     }
                 }
-                Some(result) = request_handlers.next() => result?,
-                Some(result) = event_handlers.next() => result?,
             }
         }
-
-        Ok(())
     }
 
     async fn handle_request(&self, request: Request) -> Result<()> {
@@ -156,17 +143,17 @@ impl Inner {
                     debug.send(),
                 );
 
-                self.send_response(response).await;
+                self.enqueue_response(response).await;
                 Ok(())
             }
             Err(store::Error::BranchNotFound) => {
                 tracing::trace!("root node not found");
-                self.send_response(Response::RootNodeError(writer_id, debug.send()))
+                self.enqueue_response(Response::RootNodeError(writer_id, debug.send()))
                     .await;
                 Ok(())
             }
             Err(error) => {
-                self.send_response(Response::RootNodeError(writer_id, debug.send()))
+                self.enqueue_response(Response::RootNodeError(writer_id, debug.send()))
                     .await;
                 Err(error.into())
             }
@@ -193,7 +180,7 @@ impl Inner {
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
-                self.send_response(Response::InnerNodes(
+                self.enqueue_response(Response::InnerNodes(
                     inner_nodes,
                     disambiguator,
                     debug.clone().send(),
@@ -203,12 +190,12 @@ impl Inner {
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
-                self.send_response(Response::LeafNodes(leaf_nodes, disambiguator, debug.send()))
+                self.enqueue_response(Response::LeafNodes(leaf_nodes, disambiguator, debug.send()))
                     .await;
             }
         } else {
             tracing::trace!("child nodes not found");
-            self.send_response(Response::ChildNodesError(
+            self.enqueue_response(Response::ChildNodesError(
                 parent_hash,
                 disambiguator,
                 debug.send(),
@@ -234,29 +221,39 @@ impl Inner {
         match result {
             Ok(nonce) => {
                 tracing::trace!("block found");
-                self.send_response(Response::Block(content, nonce, debug.send()))
+                self.enqueue_response(Response::Block(content, nonce, debug.send()))
                     .await;
                 Ok(())
             }
             Err(store::Error::BlockNotFound) => {
                 tracing::trace!("block not found");
-                self.send_response(Response::BlockError(block_id, debug.send()))
+                self.enqueue_response(Response::BlockError(block_id, debug.send()))
                     .await;
                 Ok(())
             }
             Err(error) => {
-                self.send_response(Response::BlockError(block_id, debug.send()))
+                self.enqueue_response(Response::BlockError(block_id, debug.send()))
                     .await;
                 Err(error.into())
             }
         }
     }
 
-    async fn handle_event(&self, event: Event) -> Result<()> {
-        match event {
-            Event::BranchChanged(branch_id) => self.handle_branch_changed_event(branch_id).await,
-            Event::BlockReceived(block_id) => self.handle_block_received_event(block_id).await,
-            Event::Unknown => self.handle_unknown_event().await,
+    async fn handle_events(&self, event_rx: &mut broadcast::Receiver<Event>) -> Result<()> {
+        loop {
+            match event_rx.recv().await {
+                Ok(Event { payload, .. }) => match payload {
+                    Payload::BranchChanged(branch_id) => {
+                        self.handle_branch_changed_event(branch_id).await?
+                    }
+                    Payload::BlockReceived(block_id) => {
+                        self.handle_block_received_event(block_id).await?;
+                    }
+                    Payload::MaintenanceCompleted => continue,
+                },
+                Err(RecvError::Lagged(_)) => self.handle_unknown_event().await?,
+                Err(RecvError::Closed) => return Ok(()),
+            }
         }
     }
 
@@ -274,7 +271,7 @@ impl Inner {
     }
 
     async fn handle_block_received_event(&self, block_id: BlockId) -> Result<()> {
-        self.send_response(Response::BlockOffer(block_id, DebugResponse::unsolicited()))
+        self.enqueue_response(Response::BlockOffer(block_id, DebugResponse::unsolicited()))
             .await;
         Ok(())
     }
@@ -315,7 +312,7 @@ impl Inner {
 
         // TODO: maybe this should use different metric counter, to distinguish
         // solicited/unsolicited responses?
-        self.send_response(response).await;
+        self.enqueue_response(response).await;
 
         Ok(())
     }
@@ -356,57 +353,69 @@ impl Inner {
             .await?)
     }
 
+    async fn send_command(&self, command: Command) {
+        // unwrap is OK because the receiver lives longer than the sender.
+        self.command_tx.send(command).await.unwrap();
+    }
+
+    async fn enqueue_response(&self, response: Response) {
+        self.send_command(Command::Send(response)).await;
+    }
+
+    async fn send_responses(&self, command_rx: &mut mpsc::Receiver<Command>) {
+        // Choking algorithm: acquire unchoke permit only if we have at least one response to send.
+        // Then hold it until the max unchoked duration passes of until the peer becomes inactive.
+
+        loop {
+            let Some(command) = command_rx.recv().await else {
+                return;
+            };
+
+            let response = match command {
+                Command::Send(response) => response,
+                Command::Release => continue,
+            };
+
+            // unwrap is OK because we never close the semaphore.
+            let _permit = self.response_limiter.acquire().await.unwrap();
+            let permit_expiry = Instant::now() + MAX_UNCHOKED_DURATION;
+
+            tracing::debug!("unchoked");
+
+            self.send_response(response).await;
+
+            loop {
+                match time::timeout_at(permit_expiry, command_rx.recv()).await {
+                    Ok(Some(Command::Send(response))) => self.send_response(response).await,
+                    Ok(Some(Command::Release)) => {
+                        tracing::debug!("choked (inactivity)");
+                        break;
+                    }
+                    Ok(None) => return,
+                    Err(_) => {
+                        tracing::debug!("choked (timeout)");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     async fn send_response(&self, response: Response) {
-        if self.tx.send(Content::Response(response)).await.is_ok() {
+        if self
+            .content_tx
+            .send(Content::Response(response))
+            .await
+            .is_ok()
+        {
             self.vault.monitor.responses_sent.increment(1);
         }
     }
 }
 
-fn events(rx: broadcast::Receiver<event::Event>) -> impl Stream<Item = Event> {
-    stream::unfold(rx, |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(event::Event { payload, .. }) => match payload {
-                    event::Payload::BranchChanged(branch_id) => {
-                        return Some((Event::BranchChanged(branch_id), rx))
-                    }
-                    event::Payload::BlockReceived(block_id) => {
-                        return Some((Event::BlockReceived(block_id), rx))
-                    }
-                    event::Payload::MaintenanceCompleted => continue,
-                },
-                Err(RecvError::Lagged(_)) => return Some((Event::Unknown, rx)),
-                Err(RecvError::Closed) => return None,
-            }
-        }
-    })
-}
-
-#[derive(Eq, PartialEq, Clone, Debug, Hash)]
-enum Event {
-    BranchChanged(PublicKey),
-    BlockReceived(BlockId),
-    Unknown,
-}
-
-#[derive(Default)]
-struct EventAccumulator(HashSet<Event>);
-
-impl EventAccumulator {
-    fn insert(&mut self, event: Event) {
-        if self.0.contains(&Event::Unknown) {
-            return;
-        }
-
-        if matches!(event, Event::Unknown) {
-            self.0.clear();
-        }
-
-        self.0.insert(event);
-    }
-
-    fn drain(&mut self) -> impl Iterator<Item = Event> + '_ {
-        self.0.drain()
-    }
+enum Command {
+    // Send the response to the peer.
+    Send(Response),
+    // Peer became inactive - release the unchoke permit.
+    Release,
 }
