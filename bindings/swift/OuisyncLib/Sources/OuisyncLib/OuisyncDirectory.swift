@@ -70,8 +70,6 @@ public class OuisyncDirectory: CustomDebugStringConvertible {
         }
     }
 
-
-
     public var debugDescription: String {
         return "OuisyncDirectory(\(path), \(repository))"
     }

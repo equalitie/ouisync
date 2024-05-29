@@ -101,9 +101,9 @@ public class OuisyncSession {
         }
     }
 
-    fileprivate func handleError(_ messageId: MessageId, _ response: ErrorResponse) {
+    fileprivate func handleError(_ messageId: MessageId, _ response: OuisyncError) {
         guard let pendingResponse = pendingResponses.removeValue(forKey: messageId) else {
-            NSLog("❗ Failed to match response to a request")
+            NSLog("❗ Failed to match error response to a request")
             return
         }
         pendingResponse.resume(throwing: response)

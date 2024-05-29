@@ -108,7 +108,7 @@ extension IncomingMessage: CustomStringConvertible {
 public enum IncomingPayload {
     case response(Response)
     case notification(OuisyncNotification)
-    case error(ErrorResponse)
+    case error(OuisyncError)
 }
 
 extension IncomingPayload: CustomStringConvertible {
@@ -192,23 +192,6 @@ extension OuisyncNotification: CustomStringConvertible {
 
 //--------------------------------------------------------------------
 
-public class ErrorResponse : Error {
-    let errorCode: ErrorCode
-    let message: String
-    init(_ errorCode: ErrorCode, _ message: String) {
-        self.errorCode = errorCode
-        self.message = message
-    }
-}
-
-extension ErrorResponse: CustomStringConvertible {
-    public var description: String {
-        return "ErrorResponse(\(errorCode), \(message))"
-    }
-}
-
-//--------------------------------------------------------------------
-
 func parseResponse(_ value: MessagePackValue) -> Response? {
     if case let .map(m) = value {
         if m.count != 1 {
@@ -219,14 +202,20 @@ func parseResponse(_ value: MessagePackValue) -> Response? {
     return nil
 }
 
-func parseFailure(_ value: MessagePackValue) -> ErrorResponse? {
+func parseFailure(_ value: MessagePackValue) -> OuisyncError? {
     if case let .array(arr) = value {
         if arr.count != 2 {
             return nil
         }
         if case let .uint(code) = arr[0] {
             if case let .string(message) = arr[1] {
-                return ErrorResponse(code, message)
+                guard let codeU16 = UInt16(exactly: code) else {
+                    fatalError("Error code from backend is out of range")
+                }
+                guard let codeEnum = OuisyncErrorCode(rawValue: codeU16) else {
+                    fatalError("Invalid error code from backend")
+                }
+                return OuisyncError(codeEnum, message)
             }
         }
     }
