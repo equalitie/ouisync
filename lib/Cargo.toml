@@ -10,15 +10,15 @@ rust-version.workspace = true
 version.workspace = true
 
 [[bench]]
-name = "bench_lib"
+name = "basic"
 harness = false
 
 [[bench]]
-name = "bench_large_file"
+name = "large_file"
 harness = false
 
 [[bench]]
-name = "bench_swarm"
+name = "swarm"
 harness = false
 
 [dependencies]
@@ -93,15 +93,15 @@ network-interface = "0.1.3"
 assert_matches = { workspace = true }
 clap = { workspace = true }
 criterion = { version = "0.4", features = ["html_reports"] }
+hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"] }
 metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
-parse-size = "1.0"
 proptest = "1.0"
 rmp-serde = { workspace = true }
 serde_json = { workspace = true }
 serde_test = "1.0.176"
 similar-asserts = "1.5.0"
-tempfile = "3.2"
+tempfile = { workspace = true }
 test-strategy = "0.2.1"
 tokio = { workspace = true, features = ["process", "test-util"] }
 

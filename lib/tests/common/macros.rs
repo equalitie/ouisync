@@ -47,3 +47,9 @@ macro_rules! trace {
         event!(tracing::Level::TRACE, $($tokens)*)
     }
 }
+
+macro_rules! event_enabled {
+    ($($tokens:tt)*) => {
+        tracing::event_enabled!(target: "ouisync-test", $($tokens)*)
+    }
+}

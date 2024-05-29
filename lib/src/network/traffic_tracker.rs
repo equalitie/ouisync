@@ -24,10 +24,7 @@ impl TrafficTracker {
     }
 
     pub fn get(&self) -> TrafficStats {
-        TrafficStats {
-            send: self.counters.send.load(Ordering::Acquire),
-            recv: self.counters.recv.load(Ordering::Acquire),
-        }
+        self.counters.get()
     }
 }
 
@@ -44,4 +41,13 @@ pub struct TrafficStats {
 struct Counters {
     send: AtomicU64,
     recv: AtomicU64,
+}
+
+impl Counters {
+    fn get(&self) -> TrafficStats {
+        TrafficStats {
+            send: self.send.load(Ordering::Acquire),
+            recv: self.recv.load(Ordering::Acquire),
+        }
+    }
 }

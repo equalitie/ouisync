@@ -14,7 +14,7 @@ criterion_main!(default);
 fn write_file(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
 
-    let mut group = c.benchmark_group("lib/write_file");
+    let mut group = c.benchmark_group("write_file");
     group.sample_size(10);
 
     let buffer_size = 4096;
@@ -56,7 +56,7 @@ fn write_file(c: &mut Criterion) {
 fn read_file(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
 
-    let mut group = c.benchmark_group("lib/read_file");
+    let mut group = c.benchmark_group("read_file");
     group.sample_size(10);
 
     let buffer_size = 4096;
@@ -109,7 +109,7 @@ fn read_file(c: &mut Criterion) {
 fn sync(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
 
-    let mut group = c.benchmark_group("lib/sync");
+    let mut group = c.benchmark_group("sync");
     group.sample_size(10);
 
     for m in [1, 8] {

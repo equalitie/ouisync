@@ -40,7 +40,7 @@ winapi = { version = "0.3.9", features = ["ntstatus", "winnt"]  }
 criterion = { version = "0.4", features = ["html_reports"] }
 proptest = "1.0"
 rand = "0.8.5"
-tempfile = "3.2"
+tempfile = { workspace = true }
 test-strategy = "0.2.1"
 tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
 
