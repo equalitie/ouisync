@@ -130,6 +130,10 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
+    DirectoryExists {
+        repository: RepositoryHandle,
+        path: Utf8PathBuf,
+    },
     DirectoryRemove {
         repository: RepositoryHandle,
         path: Utf8PathBuf,

@@ -28,12 +28,23 @@ public class MessageRequest {
         return MessageRequest("list_repositories_subscribe", MessagePackValue.nil)
     }
 
+    public static func subscribeToRepositoryChange(_ handle: RepositoryHandle) -> MessageRequest {
+        return MessageRequest("repository_subscribe", MessagePackValue(handle))
+    }
+
     public static func getRepositoryName(_ handle: RepositoryHandle) -> MessageRequest {
         return MessageRequest("repository_name", MessagePackValue(handle))
     }
 
     public static func listEntries(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
         return MessageRequest("directory_open", MessagePackValue([
+            MessagePackValue("repository"): MessagePackValue(handle),
+            MessagePackValue("path"): MessagePackValue(path.description),
+        ]))
+    }
+
+    public static func directoryExists(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+        return MessageRequest("directory_exists", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
@@ -135,26 +146,26 @@ extension IncomingSuccessPayload: CustomStringConvertible {
 
 public class Response {
     public let value: MessagePackValue
+
+    // Note about unwraps in these methods. It is expected that the
+    // caller knows what type the response is. If the expected and
+    // the actual types differ, then it is likely that there is a
+    // mismatch between the front end and the backend in the FFI API.
+
     init(_ value: MessagePackValue) {
         self.value = value
     }
 
-    public func toData() -> Data? {
-        return value.dataValue
+    public func toData() -> Data {
+        return value.dataValue!
     }
 
-    public func toUInt64Array() -> [UInt64]? {
-        class Fail: Error {}
-        do {
-            return try value.arrayValue?.map({ value in
-                if let byte = value.uint64Value {
-                    return byte
-                }
-                throw Fail()
-            })
-        } catch {
-            return nil
-        }
+    public func toUInt64Array() -> [UInt64] {
+        return value.arrayValue!.map({ $0.uint64Value! })
+    }
+
+    public func toUInt64() -> UInt64 {
+        return value.uint64Value!
     }
 }
 

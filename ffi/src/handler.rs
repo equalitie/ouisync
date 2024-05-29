@@ -242,6 +242,11 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::DirectoryOpen { repository, path } => {
                 directory::open(&self.state, repository, path).await?.into()
             }
+            Request::DirectoryExists { repository, path } => {
+                directory::exists(&self.state, repository, path)
+                    .await?
+                    .into()
+            }
             Request::DirectoryRemove {
                 repository,
                 path,

@@ -46,6 +46,19 @@ pub(crate) async fn open(
     Ok(Directory(entries))
 }
 
+pub(crate) async fn exists(
+    state: &State,
+    repo: RepositoryHandle,
+    path: Utf8PathBuf,
+) -> Result<bool, Error> {
+    let repo = state.repositories.get(repo)?;
+    match repo.repository.open_directory(path).await {
+        Ok(_) => Ok(true),
+        Err(ouisync_lib::Error::EntryNotFound) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Removes the directory at the given path from the repository. If `recursive` is true it removes
 /// also the contents, otherwise the directory must be empty.
 pub(crate) async fn remove(

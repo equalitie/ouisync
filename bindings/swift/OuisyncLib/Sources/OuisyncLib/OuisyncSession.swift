@@ -14,7 +14,7 @@ public class OuisyncSession {
 
     var nextMessageId: MessageId = 0
     var pendingResponses: [MessageId: CheckedContinuation<Response, any Error>] = [:]
-    var state: NotificationStream.State = NotificationStream.State()
+    var notificationSubscriptions: NotificationStream.State = NotificationStream.State()
 
     public init(_ libraryClient: OuisyncLibrarySenderProtocol) {
         self.librarySender = libraryClient
@@ -22,17 +22,21 @@ public class OuisyncSession {
 
     public func listRepositories() async throws -> [OuisyncRepository] {
         let response = try await sendRequest(MessageRequest.listRepositories());
-        let handles = response.toUInt64Array()!
+        let handles = response.toUInt64Array()
         return handles.map({ OuisyncRepository($0, self) })
     }
 
     public func subscribeToRepositoryListChange() async throws -> NotificationStream {
-        let stream = NotificationStream(state)
-        let _ = try await sendRequest(MessageRequest.subscribeToRepositoryListChange());
-        return stream
+        let subscriptionId = try await sendRequest(MessageRequest.subscribeToRepositoryListChange()).toUInt64();
+        return NotificationStream(subscriptionId, notificationSubscriptions)
     }
 
-    func sendRequest(_ request: MessageRequest) async throws -> Response {
+    public func subscribeToRepositoryChange(_ repo: RepositoryHandle) async throws -> NotificationStream {
+        let subscriptionId = try await sendRequest(MessageRequest.subscribeToRepositoryChange(repo)).toUInt64();
+        return NotificationStream(subscriptionId, notificationSubscriptions)
+    }
+
+    internal func sendRequest(_ request: MessageRequest) async throws -> Response {
        let messageId = generateMessageId()
 
        async let onResponse = withCheckedThrowingContinuation { continuation in
@@ -44,7 +48,7 @@ public class OuisyncSession {
         return try await onResponse
     }
 
-    func serialize(_ messageId: MessageId, _ request: MessageRequest) -> [UInt8] {
+    fileprivate func serialize(_ messageId: MessageId, _ request: MessageRequest) -> [UInt8] {
         var message: [UInt8] = []
         message.append(contentsOf: withUnsafeBytes(of: messageId.bigEndian, Array.init))
         let payload = [MessagePackValue.string(request.functionName): request.functionArguments]
@@ -52,13 +56,13 @@ public class OuisyncSession {
         return message
     }
 
-    func generateMessageId() -> MessageId {
+    fileprivate func generateMessageId() -> MessageId {
         let messageId = nextMessageId
         nextMessageId += 1
         return messageId
     }
 
-    func sendDataToOuisyncLib(_ data: [UInt8]) {
+    fileprivate func sendDataToOuisyncLib(_ data: [UInt8]) {
         librarySender.sendDataToOuisyncLib(data);
     }
 
@@ -67,11 +71,9 @@ public class OuisyncSession {
 
         guard let message = maybe_message else {
             let hex = data.map({String(format:"%02x", $0)}).joined(separator: ",")
-            NSLog(":::: 😡 Failed to parse incoming message from OuisyncLib [\(hex)]")
-            return
+            // Likely cause is a version mismatch between the backend (Rust) and frontend (Swift) code.
+            fatalError("Failed to parse incoming message from OuisyncLib [\(hex)]")
         }
-
-        NSLog(":::: 🙂 Received message from OuisyncLib \(message)")
 
         switch message.payload {
         case .response(let response):
@@ -83,23 +85,25 @@ public class OuisyncSession {
         }
     }
 
-    func handleResponse(_ messageId: MessageId, _ response: Response) {
+    fileprivate func handleResponse(_ messageId: MessageId, _ response: Response) {
         guard let pendingResponse = pendingResponses.removeValue(forKey: messageId) else {
-            NSLog(":::: 😡 Failed to match response to a request")
+            NSLog("❗ Failed to match response to a request")
             return
         }
         pendingResponse.resume(returning: response)
     }
 
-    func handleNotification(_ messageId: MessageId, _ response: OuisyncNotification) {
-        for tx in state.registrations.values {
-            tx.yield(response)
+    fileprivate func handleNotification(_ messageId: MessageId, _ response: OuisyncNotification) {
+        if let tx = notificationSubscriptions.registrations[messageId] {
+            tx.yield(())
+        } else {
+            NSLog("❗ Received unsolicited notification")
         }
     }
 
-    func handleError(_ messageId: MessageId, _ response: ErrorResponse) {
+    fileprivate func handleError(_ messageId: MessageId, _ response: ErrorResponse) {
         guard let pendingResponse = pendingResponses.removeValue(forKey: messageId) else {
-            NSLog(":::: 😡 Failed to match response to a request")
+            NSLog("❗ Failed to match response to a request")
             return
         }
         pendingResponse.resume(throwing: response)
@@ -112,7 +116,7 @@ public protocol OuisyncLibrarySenderProtocol {
 
 public class NotificationStream {
     typealias Id = UInt64
-    typealias Rx = AsyncStream<OuisyncNotification>
+    typealias Rx = AsyncStream<()>
     typealias RxIter = Rx.AsyncIterator
     typealias Tx = Rx.Continuation
 
@@ -120,31 +124,30 @@ public class NotificationStream {
         var registrations: [Id: Tx] = [:]
     }
 
-    static var nextId: Id = 0
-    let id: Id
+    let subscriptionId: Id
     let rx: Rx
     var rx_iter: RxIter
     var state: State
 
-    init(_ state: State) {
-        id = NotificationStream.nextId;
-        NotificationStream.nextId += 1
-
+    init(_ subscriptionId: Id, _ state: State) {
+        self.subscriptionId = subscriptionId
         var tx: Tx!
         rx = Rx { tx = $0 }
         self.rx_iter = rx.makeAsyncIterator()
 
         self.state = state
 
-        state.registrations[id] = tx
+        state.registrations[subscriptionId] = tx
     }
 
-    public func next() async -> OuisyncNotification? {
+    public func next() async -> ()? {
         return await rx_iter.next()
     }
 
     deinit {
-        state.registrations.removeValue(forKey: id)
+        // TODO: We should have a `close() async` function where we unsubscripbe
+        // from the notifications.
+        state.registrations.removeValue(forKey: subscriptionId)
     }
 }
 

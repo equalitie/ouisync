@@ -55,6 +55,11 @@ public class OuisyncDirectory: CustomDebugStringConvertible {
         return OuisyncDirectory(parentPath, repository)
     }
 
+    public func exists() async throws -> Bool {
+        let response = try await repository.session.sendRequest(MessageRequest.directoryExists(repository.handle, path))
+        return response.value.boolValue!
+    }
+
     public static func parent(_ path: FilePath) -> FilePath? {
         if path.components.isEmpty {
             return nil
@@ -64,6 +69,8 @@ public class OuisyncDirectory: CustomDebugStringConvertible {
             return parentPath
         }
     }
+
+
 
     public var debugDescription: String {
         return "OuisyncDirectory(\(path), \(repository))"

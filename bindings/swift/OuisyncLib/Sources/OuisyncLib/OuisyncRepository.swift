@@ -20,7 +20,7 @@ public class OuisyncRepository: Hashable, CustomDebugStringConvertible {
 
     public func getName() async throws -> String {
         let response = try await session.sendRequest(MessageRequest.getRepositoryName(handle))
-        let data = response.toData()!
+        let data = response.toData()
         return String(decoding: data, as: UTF8.self)
     }
 
