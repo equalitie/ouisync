@@ -48,6 +48,34 @@ public class MessageRequest {
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
     }
+
+    public static func fileOpen(_ repoHandle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+        return MessageRequest("file_open", MessagePackValue([
+            MessagePackValue("repository"): MessagePackValue(repoHandle),
+            MessagePackValue("path"): MessagePackValue(path.description),
+        ]))
+    }
+
+    public static func fileExists(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+        return MessageRequest("file_exists", MessagePackValue([
+            MessagePackValue("repository"): MessagePackValue(handle),
+            MessagePackValue("path"): MessagePackValue(path.description),
+        ]))
+    }
+
+    public static func fileClose(_ fileHandle: FileHandle) -> MessageRequest {
+        return MessageRequest("file_close", MessagePackValue([
+            MessagePackValue("file"): MessagePackValue(fileHandle),
+        ]))
+    }
+
+    public static func fileRead(_ fileHandle: FileHandle, _ offset: UInt64, _ len: UInt64) -> MessageRequest {
+        return MessageRequest("file_read", MessagePackValue([
+            MessagePackValue("file"): MessagePackValue(fileHandle),
+            MessagePackValue("offset"): MessagePackValue(offset),
+            MessagePackValue("len"): MessagePackValue(len),
+        ]))
+    }
 }
 
 //--------------------------------------------------------------------
@@ -165,6 +193,10 @@ public class Response {
 
     public func toUInt64() -> UInt64 {
         return value.uint64Value!
+    }
+
+    public func toBool() -> Bool {
+        return value.boolValue!
     }
 }
 

@@ -38,9 +38,10 @@ public class OuisyncSession {
     internal func sendRequest(_ request: MessageRequest) async throws -> Response {
        let messageId = generateMessageId()
 
-       async let onResponse = withCheckedThrowingContinuation { continuation in
-            pendingResponses[messageId] = continuation
-        }
+       async let onResponse = withCheckedThrowingContinuation { [weak self] continuation in
+           guard let session = self else { return }
+           session.pendingResponses[messageId] = continuation
+       }
 
         sendDataToOuisyncLib(serialize(messageId, request));
 

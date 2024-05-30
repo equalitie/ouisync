@@ -260,6 +260,9 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::FileCreate { repository, path } => {
                 file::create(&self.state, repository, path).await?.into()
             }
+            Request::FileExists { repository, path } => {
+                file::exists(&self.state, repository, path).await?.into()
+            }
             Request::FileRemove { repository, path } => {
                 file::remove(&self.state, repository, path).await?.into()
             }

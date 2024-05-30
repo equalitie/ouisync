@@ -9,28 +9,18 @@ import System
 
 public class OuisyncFile {
     public let repository: OuisyncRepository
-    public let path: FilePath
+    let handle: FileHandle
 
-    public init(_ path: FilePath, _ repository: OuisyncRepository) {
+    init(_ handle: FileHandle, _ repository: OuisyncRepository) {
         self.repository = repository
-        self.path = path
+        self.handle = handle
     }
 
-    public func name() -> String {
-        return OuisyncFile.name(path)
+    public func read(_ offset: UInt64, _ length: UInt64) async throws -> Data {
+        return try await repository.session.sendRequest(.fileRead(handle, offset, length)).toData()
     }
 
-    public static func name(_ path: FilePath) -> String {
-        return path.lastComponent!.string
-    }
-
-    public func parent() -> OuisyncDirectory {
-        return OuisyncDirectory(OuisyncFile.parent(path), repository)
-    }
-
-    public static func parent(_ path: FilePath) -> FilePath {
-        var parentPath = path
-        parentPath.components.removeLast()
-        return parentPath
+    public func close() async throws {
+        let _ = try await repository.session.sendRequest(.fileClose(handle))
     }
 }

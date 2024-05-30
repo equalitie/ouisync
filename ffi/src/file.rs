@@ -29,6 +29,39 @@ pub(crate) async fn open(
     Ok(handle)
 }
 
+pub(crate) async fn exists(
+    state: &State,
+    repo: RepositoryHandle,
+    path: Utf8PathBuf,
+) -> Result<bool, Error> {
+    let repo = state.repositories.get(repo)?;
+
+    let parent_path = match path.as_path().parent() {
+        Some(parent_path) => parent_path,
+        None => return Ok(false),
+    };
+
+    let file_name = match path.as_path().file_name() {
+        Some(file_name) => file_name,
+        // This shouldn't happen because we just determined above that the path
+        // has a parent, so it has to have a file_name.
+        None => unreachable!("Path has no file name"),
+    };
+
+    let directory = match repo.repository.open_directory(parent_path).await {
+        Ok(directory) => directory,
+        Err(ouisync_lib::Error::EntryNotFound) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+
+    match directory.lookup_unique(file_name) {
+        Ok(entry) => Ok(entry.file().is_ok()),
+        Err(ouisync_lib::Error::EntryNotFound) => Ok(false),
+        Err(ouisync_lib::Error::AmbiguousEntry) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub(crate) async fn create(
     state: &State,
     repo: RepositoryHandle,

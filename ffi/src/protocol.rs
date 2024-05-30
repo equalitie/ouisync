@@ -143,6 +143,10 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
+    FileExists {
+        repository: RepositoryHandle,
+        path: Utf8PathBuf,
+    },
     FileCreate {
         repository: RepositoryHandle,
         path: Utf8PathBuf,

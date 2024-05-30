@@ -18,13 +18,12 @@ public class OuisyncRepository: Hashable, CustomDebugStringConvertible {
     }
 
     public func getName() async throws -> String {
-        let response = try await session.sendRequest(MessageRequest.getRepositoryName(handle))
-        let data = response.toData()
+        let data = try await session.sendRequest(.getRepositoryName(handle)).toData()
         return String(decoding: data, as: UTF8.self)
     }
 
-    public func getRootDirectory() -> OuisyncDirectory {
-        return OuisyncDirectory(FilePath("/"), self)
+    public func getRootDirectory() -> OuisyncDirectoryEntry {
+        return OuisyncDirectoryEntry(FilePath("/"), self)
     }
 
     public static func == (lhs: OuisyncRepository, rhs: OuisyncRepository) -> Bool {

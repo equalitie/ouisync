@@ -8,3 +8,4 @@ import Foundation
 
 public typealias MessageId = UInt64
 public typealias RepositoryHandle = UInt64
+public typealias FileHandle = UInt64
