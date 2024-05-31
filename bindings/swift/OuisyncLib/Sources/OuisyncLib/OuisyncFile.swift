@@ -17,7 +17,11 @@ public class OuisyncFile {
     }
 
     public func read(_ offset: UInt64, _ length: UInt64) async throws -> Data {
-        return try await repository.session.sendRequest(.fileRead(handle, offset, length)).toData()
+        try await repository.session.sendRequest(.fileRead(handle, offset, length)).toData()
+    }
+
+    public func size() async throws -> UInt64 {
+        try await repository.session.sendRequest(.fileLen(handle)).toUInt64()
     }
 
     public func close() async throws {

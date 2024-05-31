@@ -38,20 +38,47 @@ public enum OuisyncErrorCode: UInt16 {
     /// Entry has been changed and no longer matches the expected value
     case EntryChanged = 16
 
-    case VfsInvalidMountPoint = 2048
-    case VfsDriverInstall = 2049
-    case VfsBackend = 2050
+    // These can't happen and apple devices
+    // case VfsInvalidMountPoint = 2048
+    // case VfsDriverInstall = 2049
+    // case VfsBackend = 2050
 
     /// Unspecified error
     case Other = 65535
 }
 
-public class OuisyncError : Error {
+public class OuisyncError : Error, CustomDebugStringConvertible {
     public let code: OuisyncErrorCode
     public let message: String
 
     init(_ code: OuisyncErrorCode, _ message: String) {
         self.code = code
         self.message = message
+    }
+
+    public var debugDescription: String {
+        let codeStr: String
+
+        switch code {
+        case .Store: codeStr = "Store error"
+        case .PermissionDenied: codeStr = "Insuficient permission to perform the intended operation"
+        case .MalformedData: codeStr = "Malformed data"
+        case .EntryExists: codeStr = "Entry already exists"
+        case .EntryNotFound: codeStr = "Entry doesn't exist"
+        case .AmbiguousEntry: codeStr = "Multiple matching entries found"
+        case .DirectoryNotEmpty: codeStr = "The intended operation requires the directory to be empty but it isn't"
+        case .OperationNotSupported: codeStr = "The indended operation is not supported"
+        case .Config: codeStr = "Failed to read from or write into the config file"
+        case .InvalidArgument: codeStr = "Argument passed to a function is not valid"
+        case .MalformedMessage: codeStr = "Request or response is malformed"
+        case .StorageVersionMismatch: codeStr = "Storage format version mismatch"
+        case .ConnectionLost: codeStr = "Connection lost"
+        case .InvalidHandle: codeStr = "Invalid handle to a resource (e.g., Repository, File, ...)"
+        case .EntryChanged: codeStr = "Entry has been changed and no longer matches the expected value"
+
+        case .Other: codeStr = "Unspecified error"
+        }
+
+        return "OuisyncError(code:\"\(codeStr)\", message:\(message)"
     }
 }

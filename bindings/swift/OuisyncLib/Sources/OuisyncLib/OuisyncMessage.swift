@@ -76,6 +76,10 @@ public class MessageRequest {
             MessagePackValue("len"): MessagePackValue(len),
         ]))
     }
+
+    public static func fileLen(_ fileHandle: FileHandle) -> MessageRequest {
+        return MessageRequest("file_len", MessagePackValue(fileHandle))
+    }
 }
 
 //--------------------------------------------------------------------
