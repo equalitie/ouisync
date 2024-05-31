@@ -623,13 +623,7 @@ impl Repositories {
     }
 
     pub fn get(&self, handle: RepositoryHandle) -> Result<Arc<RepositoryHolder>, InvalidHandle> {
-        self.inner
-            .read()
-            .unwrap()
-            .registry
-            .get(handle)
-            .map(|holder| holder.clone())
-        //self.inner.read().unwrap().registry.get(handle).cloned()
+        self.inner.read().unwrap().registry.get(handle).cloned()
     }
 
     pub fn collect(&self) -> Vec<(RepositoryHandle, Arc<RepositoryHolder>)> {
@@ -638,7 +632,7 @@ impl Repositories {
             .unwrap()
             .registry
             .iter()
-            .map(|(a, b)| (a.clone(), b.clone()))
+            .map(|(a, b)| (*a, b.clone()))
             .collect()
     }
 }

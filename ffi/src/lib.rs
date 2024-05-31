@@ -78,7 +78,11 @@ pub unsafe extern "C" fn session_create_dart(
 /// Get an existing session if one was created and not yet destroyed, otherwise returns result with
 /// `error_code` set to `ErrorCode::InvalidHandle`.
 ///
-/// See `session_create` for safety and argument description.
+/// # Safety
+///
+/// - `context` must be a valid pointer to a value that outlives the `Session` and that is safe
+///   to be sent to other threads or null.
+/// - `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
 #[no_mangle]
 pub unsafe extern "C" fn session_grab(context: *mut (), callback: Callback) -> SessionCreateResult {
     let sender = CallbackSender::new(context, callback);
