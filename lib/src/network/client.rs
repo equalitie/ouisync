@@ -23,16 +23,15 @@ use tracing::{instrument, Level};
 
 pub(super) struct Client {
     inner: Inner,
-    rx: mpsc::Receiver<Response>,
+    response_rx: mpsc::Receiver<Response>,
     send_queue_rx: mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-    recv_queue_rx: mpsc::Receiver<(PendingResponse, Instant)>,
 }
 
 impl Client {
     pub fn new(
         vault: Vault,
-        tx: mpsc::Sender<Content>,
-        rx: mpsc::Receiver<Response>,
+        content_tx: mpsc::Sender<Content>,
+        response_rx: mpsc::Receiver<Response>,
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pending_requests = PendingRequests::new(vault.monitor.clone());
@@ -43,27 +42,20 @@ impl Client {
         // processing responses (which sometimes takes a while).
         let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
 
-        // We're making sure to not send more requests than MAX_PENDING_REQUESTS_PER_CLIENT, but
-        // there may be some unsolicited responses and also the peer may be malicious and send us
-        // too many responses (so we shoulnd't use unbounded_channel).
-        let (recv_queue_tx, recv_queue_rx) = mpsc::channel(2 * MAX_PENDING_REQUESTS_PER_CLIENT);
-
         let inner = Inner {
             vault,
             pending_requests,
             peer_request_limiter,
             receive_filter,
             block_tracker,
-            tx,
+            content_tx,
             send_queue_tx,
-            recv_queue_tx,
         };
 
         Self {
             inner,
-            rx,
+            response_rx,
             send_queue_rx,
-            recv_queue_rx,
         }
     }
 }
@@ -72,12 +64,11 @@ impl Client {
     pub async fn run(&mut self) -> Result<()> {
         let Self {
             inner,
-            rx,
+            response_rx,
             send_queue_rx,
-            recv_queue_rx,
         } = self;
 
-        inner.run(rx, send_queue_rx, recv_queue_rx).await
+        inner.run(response_rx, send_queue_rx).await
     }
 }
 
@@ -87,32 +78,22 @@ struct Inner {
     peer_request_limiter: Arc<Semaphore>,
     receive_filter: ReceiveFilter,
     block_tracker: TrackerClient,
-    tx: mpsc::Sender<Content>,
+    content_tx: mpsc::Sender<Content>,
     send_queue_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
-    recv_queue_tx: mpsc::Sender<(PendingResponse, Instant)>,
 }
 
 impl Inner {
     async fn run(
         &mut self,
-        rx: &mut mpsc::Receiver<Response>,
+        response_rx: &mut mpsc::Receiver<Response>,
         send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-        recv_queue_rx: &mut mpsc::Receiver<(PendingResponse, Instant)>,
     ) -> Result<()> {
         self.receive_filter.reset().await?;
 
-        let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
         let mut block_offers = self.block_tracker.offers();
-
+        let mut handle_responses = pin!(self.handle_responses(response_rx));
         let mut send_requests = pin!(self.send_requests(send_queue_rx));
-
-        // NOTE: It is important to keep `remove`ing requests from `pending_requests` in parallel
-        // with response handling. It is because response handling may take a long time (e.g. due
-        // to acquiring database write transaction if there are other write transactions currently
-        // going on - such as when forking) and so waiting for it could cause some requests in
-        // `pending_requests` to time out.
-        let mut enqueue_responses = pin!(self.enqueue_responses(rx));
-        let mut handle_responses = pin!(self.handle_responses(recv_queue_rx));
+        let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
 
         loop {
             select! {
@@ -120,12 +101,11 @@ impl Inner {
                     let debug = PendingDebugRequest::start();
                     self.enqueue_request(PendingRequest::Block(block_offer, debug));
                 }
-                _ = &mut send_requests => break,
-                _ = &mut enqueue_responses => break,
                 result = &mut handle_responses => {
                     result?;
                     break;
                 }
+                _ = &mut send_requests => break,
                 result = reload_index_rx.changed(), if !reload_index_rx.is_closed() => {
                     self.refresh_branches(result.ok().into_iter().flatten());
                 }
@@ -178,58 +158,28 @@ impl Inner {
                 continue;
             };
 
-            self.tx.send(Content::Request(request)).await.unwrap_or(());
+            self.content_tx
+                .send(Content::Request(request))
+                .await
+                .unwrap_or(());
         }
     }
 
-    async fn enqueue_responses(&self, rx: &mut mpsc::Receiver<Response>) {
-        loop {
-            let Some(response) = rx.recv().await else {
-                break;
-            };
-
+    async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
+        while let Some(response) = rx.recv().await {
             self.vault.monitor.responses_received.increment(1);
-
-            // TODO: The `BlockOffer` response doesn't require write access to the store and so
-            // can be processed faster than the other response types and furthermore, it can be
-            // processed concurrently. Consider using a separate queue and a separate `select`
-            // branch for it to speed things up.
 
             let response = self.pending_requests.remove(response);
 
-            if self
-                .recv_queue_tx
-                .send((response, Instant::now()))
-                .await
-                .is_err()
-            {
-                break;
-            }
+            let start = Instant::now();
+            self.handle_response(response).await?;
+            self.vault
+                .monitor
+                .response_handle_time
+                .record(start.elapsed());
         }
-    }
 
-    async fn handle_responses(
-        &self,
-        recv_queue_rx: &mut mpsc::Receiver<(PendingResponse, Instant)>,
-    ) -> Result<()> {
-        loop {
-            match recv_queue_rx.recv().await {
-                Some((response, timestamp)) => {
-                    self.vault
-                        .monitor
-                        .response_queue_time
-                        .record(timestamp.elapsed());
-
-                    let start = Instant::now();
-                    self.handle_response(response).await?;
-                    self.vault
-                        .monitor
-                        .response_handle_time
-                        .record(start.elapsed());
-                }
-                None => return Ok(()),
-            };
-        }
+        Ok(())
     }
 
     async fn handle_response(&self, response: PendingResponse) -> Result<()> {
