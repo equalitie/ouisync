@@ -17,8 +17,11 @@ use std::{fmt, io::Write};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
+    /// Request the latest root node of the given writer.
     RootNode(PublicKey, DebugRequest),
+    /// Request child nodes of the given parent node.
     ChildNodes(Hash, ResponseDisambiguator, DebugRequest),
+    /// Request block with the given id.
     Block(BlockId, DebugRequest),
 }
 

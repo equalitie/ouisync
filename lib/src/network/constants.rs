@@ -22,6 +22,6 @@ pub(super) const MAX_UNCHOKED_COUNT: usize = 3;
 /// Maximum duration that a peer remains unchoked.
 pub(super) const MAX_UNCHOKED_DURATION: Duration = Duration::from_secs(30);
 
-/// Maximum time to wait for a request before the peer is considered inactive. Inactive peers can be
-/// choked before their `MAX_UNCHOKED_DURATION` is up.
-pub(super) const MAX_INACTIVITY_DURATION: Duration = Duration::from_secs(1);
+/// If we don't receive any message from the peer for this long we consider the peer
+/// as "uninterested". Uninterested peers can be choked even before their unchoke period ends.
+pub(super) const INTEREST_TIMEOUT: Duration = Duration::from_secs(3);

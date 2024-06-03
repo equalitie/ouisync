@@ -1,5 +1,5 @@
 use super::{
-    constants::{MAX_INACTIVITY_DURATION, MAX_PENDING_REQUESTS_PER_CLIENT, MAX_UNCHOKED_DURATION},
+    constants::{INTEREST_TIMEOUT, MAX_UNCHOKED_DURATION},
     debug_payload::{DebugRequest, DebugResponse},
     message::{Content, Request, Response, ResponseDisambiguator},
 };
@@ -26,7 +26,7 @@ use tracing::instrument;
 pub(crate) struct Server {
     inner: Inner,
     request_rx: mpsc::Receiver<Request>,
-    command_rx: mpsc::Receiver<Command>,
+    response_rx: mpsc::Receiver<Response>,
 }
 
 impl Server {
@@ -36,17 +36,17 @@ impl Server {
         request_rx: mpsc::Receiver<Request>,
         response_limiter: Arc<Semaphore>,
     ) -> Self {
-        let (command_tx, command_rx) = mpsc::channel(MAX_PENDING_REQUESTS_PER_CLIENT + 1);
+        let (response_tx, response_rx) = mpsc::channel(1);
 
         Self {
             inner: Inner {
                 vault,
-                command_tx,
+                response_tx,
                 content_tx,
                 response_limiter,
             },
             request_rx,
-            command_rx,
+            response_rx,
         }
     }
 
@@ -54,16 +54,16 @@ impl Server {
         let Self {
             inner,
             request_rx,
-            command_rx,
+            response_rx,
         } = self;
 
-        inner.run(request_rx, command_rx).await
+        inner.run(request_rx, response_rx).await
     }
 }
 
 struct Inner {
     vault: Vault,
-    command_tx: mpsc::Sender<Command>,
+    response_tx: mpsc::Sender<Response>,
     content_tx: mpsc::Sender<Content>,
     response_limiter: Arc<Semaphore>,
 }
@@ -72,41 +72,23 @@ impl Inner {
     async fn run(
         &self,
         request_rx: &mut mpsc::Receiver<Request>,
-        command_rx: &mut mpsc::Receiver<Command>,
+        response_rx: &mut mpsc::Receiver<Response>,
     ) -> Result<()> {
-        // Important: make sure to create the event subscription first, before calling
-        // `handle_all_branches_changed` otherwise we might miss some events.
         let mut event_rx = self.vault.event_tx.subscribe();
-
-        // Send the initial root messages, but only after we get unchoked (which can happen
-        // immediatelly)
-        self.handle_unknown_event().await?;
 
         select! {
             result = self.handle_requests(request_rx) => result,
             result = self.handle_events(&mut event_rx) => result,
-            _ = self.send_responses(command_rx) => Ok(()),
+            _ = self.send_responses(response_rx) => Ok(()),
         }
     }
 
     async fn handle_requests(&self, request_rx: &mut mpsc::Receiver<Request>) -> Result<()> {
-        loop {
-            match request_rx.recv().await {
-                Some(request) => self.handle_request(request).await?,
-                None => return Ok(()),
-            }
-
-            loop {
-                match time::timeout(MAX_INACTIVITY_DURATION, request_rx.recv()).await {
-                    Ok(Some(request)) => self.handle_request(request).await?,
-                    Ok(None) => return Ok(()),
-                    Err(_) => {
-                        self.send_command(Command::Release).await;
-                        break;
-                    }
-                }
-            }
+        while let Some(request) = request_rx.recv().await {
+            self.handle_request(request).await?;
         }
+
+        Ok(())
     }
 
     async fn handle_request(&self, request: Request) -> Result<()> {
@@ -240,6 +222,10 @@ impl Inner {
     }
 
     async fn handle_events(&self, event_rx: &mut broadcast::Receiver<Event>) -> Result<()> {
+        // Initially notify the peer about all root nodes we have.
+        self.handle_unknown_event().await?;
+
+        // Then keep notifying every change.
         loop {
             match event_rx.recv().await {
                 Ok(Event { payload, .. }) => match payload {
@@ -353,49 +339,22 @@ impl Inner {
             .await?)
     }
 
-    async fn send_command(&self, command: Command) {
-        // unwrap is OK because the receiver lives longer than the sender.
-        self.command_tx.send(command).await.unwrap();
-    }
-
     async fn enqueue_response(&self, response: Response) {
-        self.send_command(Command::Send(response)).await;
+        // unwrap is OK because the receiver lives longer than the sender.
+        self.response_tx.send(response).await.unwrap();
     }
 
-    async fn send_responses(&self, command_rx: &mut mpsc::Receiver<Command>) {
-        // Choking algorithm: acquire unchoke permit only if we have at least one response to send.
-        // Then hold it until the max unchoked duration passes of until the peer becomes inactive.
-
+    async fn send_responses(&self, response_rx: &mut mpsc::Receiver<Response>) {
         loop {
-            let Some(command) = command_rx.recv().await else {
-                return;
-            };
-
-            let response = match command {
-                Command::Send(response) => response,
-                Command::Release => continue,
-            };
-
-            // unwrap is OK because we never close the semaphore.
             let _permit = self.response_limiter.acquire().await.unwrap();
             let permit_expiry = Instant::now() + MAX_UNCHOKED_DURATION;
 
-            tracing::debug!("unchoked");
-
-            self.send_response(response).await;
-
             loop {
-                match time::timeout_at(permit_expiry, command_rx.recv()).await {
-                    Ok(Some(Command::Send(response))) => self.send_response(response).await,
-                    Ok(Some(Command::Release)) => {
-                        tracing::debug!("choked (inactivity)");
-                        break;
-                    }
-                    Ok(None) => return,
-                    Err(_) => {
-                        tracing::debug!("choked (timeout)");
-                        break;
-                    }
+                select! {
+                    Some(response) = response_rx.recv() => self.send_response(response).await,
+                    _ = time::sleep_until(permit_expiry) => break,
+                    _ = time::sleep(INTEREST_TIMEOUT) => break,
+                    else => return,
                 }
             }
         }
@@ -411,11 +370,4 @@ impl Inner {
             self.vault.monitor.responses_sent.increment(1);
         }
     }
-}
-
-enum Command {
-    // Send the response to the peer.
-    Send(Response),
-    // Peer became inactive - release the unchoke permit.
-    Release,
 }

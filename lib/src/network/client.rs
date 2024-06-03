@@ -1,7 +1,7 @@
 use super::{
     constants::MAX_PENDING_REQUESTS_PER_CLIENT,
     debug_payload::{DebugResponse, PendingDebugRequest},
-    message::{Content, Response, ResponseDisambiguator},
+    message::{Content, Request, Response, ResponseDisambiguator},
     pending::{PendingRequest, PendingRequests, PendingResponse, ProcessedResponse},
 };
 use crate::{
@@ -14,10 +14,10 @@ use crate::{
     repository::{BlockRequestMode, Vault},
     store::{self, ReceiveFilter},
 };
-use std::{pin::pin, sync::Arc, time::Instant};
+use std::{future, sync::Arc, time::Instant};
 use tokio::{
     select,
-    sync::{mpsc, Semaphore},
+    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
 use tracing::{instrument, Level};
 
@@ -46,6 +46,7 @@ impl Client {
             vault,
             pending_requests,
             peer_request_limiter,
+            link_request_limiter: Arc::new(Semaphore::new(MAX_PENDING_REQUESTS_PER_CLIENT)),
             receive_filter,
             block_tracker,
             content_tx,
@@ -76,6 +77,7 @@ struct Inner {
     vault: Vault,
     pending_requests: PendingRequests,
     peer_request_limiter: Arc<Semaphore>,
+    link_request_limiter: Arc<Semaphore>,
     receive_filter: ReceiveFilter,
     block_tracker: TrackerClient,
     content_tx: mpsc::Sender<Content>,
@@ -90,29 +92,12 @@ impl Inner {
     ) -> Result<()> {
         self.receive_filter.reset().await?;
 
-        let mut block_offers = self.block_tracker.offers();
-        let mut handle_responses = pin!(self.handle_responses(response_rx));
-        let mut send_requests = pin!(self.send_requests(send_queue_rx));
-        let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
-
-        loop {
-            select! {
-                block_offer = block_offers.next() => {
-                    let debug = PendingDebugRequest::start();
-                    self.enqueue_request(PendingRequest::Block(block_offer, debug));
-                }
-                result = &mut handle_responses => {
-                    result?;
-                    break;
-                }
-                _ = &mut send_requests => break,
-                result = reload_index_rx.changed(), if !reload_index_rx.is_closed() => {
-                    self.refresh_branches(result.ok().into_iter().flatten());
-                }
-            }
+        select! {
+            result = self.handle_responses(response_rx) => result,
+            _ = self.send_requests(send_queue_rx) => Ok(()),
+            _ = self.handle_available_block_offers() => Ok(()),
+            _ = self.handle_reload_index() => Ok(()),
         }
-
-        Ok(())
     }
 
     fn enqueue_request(&self, request: PendingRequest) {
@@ -123,46 +108,55 @@ impl Inner {
         &self,
         send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
     ) {
-        // Limits requests per link (peer + repo)
-        let link_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_REQUESTS_PER_CLIENT));
-
         loop {
             let Some((request, timestamp)) = send_queue_rx.recv().await else {
                 break;
             };
 
-            // Unwraps OK because we never `close()` the semaphores.
-            //
-            // NOTE that the order here is important, we don't want to block the other clients
-            // on this peer if we have too many responses queued up (which is what the
-            // `link_permit` is responsible for limiting)..
-            let link_permit = link_request_limiter.clone().acquire_owned().await.unwrap();
-
-            let peer_permit = self
-                .peer_request_limiter
-                .clone()
-                .acquire_owned()
-                .await
-                .unwrap();
+            let permits = self.acquire_send_permits().await;
 
             self.vault
                 .monitor
                 .request_queue_time
                 .record(timestamp.elapsed());
 
-            let Some(request) = self
+            if let Some(request) = self
                 .pending_requests
-                .insert(request, link_permit, peer_permit)
-            else {
-                // The same request is already in-flight.
-                continue;
-            };
-
-            self.content_tx
-                .send(Content::Request(request))
-                .await
-                .unwrap_or(());
+                .insert(request, permits.link, permits.peer)
+            {
+                self.send_request(request).await;
+            }
         }
+    }
+
+    async fn send_request(&self, request: Request) {
+        self.content_tx
+            .send(Content::Request(request))
+            .await
+            .unwrap_or(());
+    }
+
+    async fn acquire_send_permits(&self) -> SendPermits {
+        // Unwraps OK because we never `close()` the semaphores.
+        //
+        // NOTE that the order here is important, we don't want to block the other clients
+        // on this peer if we have too many responses queued up (which is what the
+        // `link_permit` is responsible for limiting)..
+        let link = self
+            .link_request_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+
+        let peer = self
+            .peer_request_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+
+        SendPermits { link, peer }
     }
 
     async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
@@ -187,7 +181,6 @@ impl Inner {
             ProcessedResponse::RootNode(proof, block_presence, debug) => {
                 self.handle_root_node(proof, block_presence, debug).await
             }
-
             ProcessedResponse::InnerNodes(nodes, _, debug) => {
                 self.handle_inner_nodes(nodes, debug).await
             }
@@ -400,10 +393,30 @@ impl Inner {
         block_id: BlockId,
         _debug_payload: DebugResponse,
     ) -> Result<()> {
-        tracing::trace!("Client received block not found {:?}", block_id);
+        tracing::trace!("Received block not found {:?}", block_id);
         self.vault
             .receive_block_not_found(block_id, &self.receive_filter)
             .await
+    }
+
+    async fn handle_available_block_offers(&self) {
+        let mut block_offers = self.block_tracker.offers();
+
+        loop {
+            let block_offer = block_offers.next().await;
+            let debug = PendingDebugRequest::start();
+            self.enqueue_request(PendingRequest::Block(block_offer, debug));
+        }
+    }
+
+    async fn handle_reload_index(&self) {
+        let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
+
+        while let Ok(branch_ids) = reload_index_rx.changed().await {
+            self.refresh_branches(branch_ids);
+        }
+
+        future::pending().await
     }
 
     // Request again the branches that became completed. This is to cover the following edge
@@ -468,4 +481,9 @@ impl Inner {
             );
         }
     }
+}
+
+struct SendPermits {
+    peer: OwnedSemaphorePermit,
+    link: OwnedSemaphorePermit,
 }
