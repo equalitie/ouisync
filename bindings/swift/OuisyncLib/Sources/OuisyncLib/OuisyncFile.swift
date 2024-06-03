@@ -20,6 +20,10 @@ public class OuisyncFile {
         try await repository.session.sendRequest(.fileRead(handle, offset, length)).toData()
     }
 
+    public func write(_ offset: UInt64, _ data: Data) async throws {
+        let _ = try await repository.session.sendRequest(.fileWrite(handle, offset, data))
+    }
+
     public func size() async throws -> UInt64 {
         try await repository.session.sendRequest(.fileLen(handle)).toUInt64()
     }

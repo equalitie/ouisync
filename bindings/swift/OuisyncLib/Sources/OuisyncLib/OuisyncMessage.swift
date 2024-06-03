@@ -49,6 +49,13 @@ public class MessageRequest {
         ]))
     }
 
+    public static func directoryCreate(_ repoHandle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+        return MessageRequest("directory_create", MessagePackValue([
+            MessagePackValue("repository"): MessagePackValue(repoHandle),
+            MessagePackValue("path"): MessagePackValue(path.description),
+        ]))
+    }
+
     public static func fileOpen(_ repoHandle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
         return MessageRequest("file_open", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(repoHandle),
@@ -79,6 +86,21 @@ public class MessageRequest {
 
     public static func fileLen(_ fileHandle: FileHandle) -> MessageRequest {
         return MessageRequest("file_len", MessagePackValue(fileHandle))
+    }
+
+    public static func fileCreate(_ repoHandle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+        return MessageRequest("file_create", MessagePackValue([
+            MessagePackValue("repository"): MessagePackValue(repoHandle),
+            MessagePackValue("path"): MessagePackValue(path.description),
+        ]))
+    }
+
+    public static func fileWrite(_ fileHandle: FileHandle, _ offset: UInt64, _ data: Data) -> MessageRequest {
+        return MessageRequest("file_write", MessagePackValue([
+            MessagePackValue("file"): MessagePackValue(fileHandle),
+            MessagePackValue("offset"): MessagePackValue(offset),
+            MessagePackValue("data"): MessagePackValue(data),
+        ]))
     }
 }
 
@@ -233,6 +255,9 @@ func parseResponse(_ value: MessagePackValue) -> Response? {
             return nil
         }
         return Response(m.first!.value)
+    } else if case let .string(str) = value, str == "none" {
+        // A function was called which has a `void` return value.
+        return Response(.nil)
     }
     return nil
 }

@@ -26,6 +26,15 @@ public class OuisyncRepository: Hashable, CustomDebugStringConvertible {
         return OuisyncDirectoryEntry(FilePath("/"), self)
     }
 
+    public func createFile(_ path: FilePath) async throws -> OuisyncFile {
+        let handle = try await session.sendRequest(.fileCreate(handle, path)).toUInt64()
+        return OuisyncFile(handle, self)
+    }
+
+    public func createDirectory(_ path: FilePath) async throws {
+        let _ = try await session.sendRequest(.directoryCreate(handle, path))
+    }
+
     public static func == (lhs: OuisyncRepository, rhs: OuisyncRepository) -> Bool {
         return lhs.session === rhs.session && lhs.handle == rhs.handle
     }
