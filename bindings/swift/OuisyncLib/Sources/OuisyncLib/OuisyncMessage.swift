@@ -35,6 +35,14 @@ public class MessageRequest {
         return MessageRequest("repository_name", MessagePackValue(handle))
     }
 
+    public static func repositoryMoveEntry(_ repoHandle: RepositoryHandle, _ srcPath: FilePath, _ dstPath: FilePath) -> MessageRequest {
+        return MessageRequest("repository_move_entry", MessagePackValue([
+            MessagePackValue("repository"): MessagePackValue(repoHandle),
+            MessagePackValue("src"): MessagePackValue(srcPath.description),
+            MessagePackValue("dst"): MessagePackValue(dstPath.description),
+        ]))
+    }
+
     public static func listEntries(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
         return MessageRequest("directory_open", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
@@ -44,6 +52,13 @@ public class MessageRequest {
 
     public static func directoryExists(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
         return MessageRequest("directory_exists", MessagePackValue([
+            MessagePackValue("repository"): MessagePackValue(handle),
+            MessagePackValue("path"): MessagePackValue(path.description),
+        ]))
+    }
+
+    public static func directoryRemove(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+        return MessageRequest("directory_remove", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
@@ -70,10 +85,15 @@ public class MessageRequest {
         ]))
     }
 
-    public static func fileClose(_ fileHandle: FileHandle) -> MessageRequest {
-        return MessageRequest("file_close", MessagePackValue([
-            MessagePackValue("file"): MessagePackValue(fileHandle),
+    public static func fileRemove(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+        return MessageRequest("file_remove", MessagePackValue([
+            MessagePackValue("repository"): MessagePackValue(handle),
+            MessagePackValue("path"): MessagePackValue(path.description),
         ]))
+    }
+
+    public static func fileClose(_ fileHandle: FileHandle) -> MessageRequest {
+        return MessageRequest("file_close", MessagePackValue(fileHandle))
     }
 
     public static func fileRead(_ fileHandle: FileHandle, _ offset: UInt64, _ len: UInt64) -> MessageRequest {

@@ -62,6 +62,10 @@ public class OuisyncFileEntry {
         return try await repository.session.sendRequest(.fileExists(repository.handle, path)).toBool()
     }
 
+    public func remove() async throws {
+        let _ = try await repository.session.sendRequest(.fileRemove(repository.handle, path))
+    }
+
     public static func parent(_ path: FilePath) -> FilePath {
         var parentPath = path
         parentPath.components.removeLast()
@@ -124,6 +128,10 @@ public class OuisyncDirectoryEntry: CustomDebugStringConvertible {
     public func exists() async throws -> Bool {
         let response = try await repository.session.sendRequest(MessageRequest.directoryExists(repository.handle, path))
         return response.value.boolValue!
+    }
+
+    public func remove() async throws {
+        let _ = try await repository.session.sendRequest(.directoryRemove(repository.handle, path))
     }
 
     public static func parent(_ path: FilePath) -> FilePath? {

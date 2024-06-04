@@ -35,6 +35,10 @@ public class OuisyncRepository: Hashable, CustomDebugStringConvertible {
         let _ = try await session.sendRequest(.directoryCreate(handle, path))
     }
 
+    public func moveEntry(_ sourcePath: FilePath, _ destinationPath: FilePath) async throws {
+        let _ = try await session.sendRequest(.repositoryMoveEntry(handle, sourcePath, destinationPath))
+    }
+
     public static func == (lhs: OuisyncRepository, rhs: OuisyncRepository) -> Bool {
         return lhs.session === rhs.session && lhs.handle == rhs.handle
     }
