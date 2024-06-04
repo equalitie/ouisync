@@ -31,17 +31,17 @@ use crate::sync::{uninitialized_watch, AwaitDrop, DropAwaitable};
 pub(super) struct ConnectionDeduplicator {
     next_id: AtomicU64,
     connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
-    on_change_tx: Arc<uninitialized_watch::Sender<()>>,
+    on_change_tx: uninitialized_watch::Sender<()>,
 }
 
 impl ConnectionDeduplicator {
     pub fn new() -> Self {
-        let (tx, _) = uninitialized_watch::channel();
+        let (on_change_tx, _) = uninitialized_watch::channel();
 
         Self {
             next_id: AtomicU64::new(0),
             connections: Arc::new(BlockingMutex::new(HashMap::default())),
-            on_change_tx: Arc::new(tx),
+            on_change_tx,
         }
     }
 
@@ -164,7 +164,7 @@ pub(super) struct ConnectionPermit {
     connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
     info: ConnectionInfo,
     id: PermitId,
-    on_deduplicator_change: Arc<uninitialized_watch::Sender<()>>,
+    on_deduplicator_change: uninitialized_watch::Sender<()>,
 }
 
 impl ConnectionPermit {
@@ -238,7 +238,7 @@ impl ConnectionPermit {
                 dir: ConnectionDirection::Incoming,
             },
             id: 0,
-            on_deduplicator_change: Arc::new(uninitialized_watch::channel().0),
+            on_deduplicator_change: uninitialized_watch::channel().0,
         }
     }
 

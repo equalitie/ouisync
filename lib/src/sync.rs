@@ -16,6 +16,7 @@ pub(crate) mod uninitialized_watch {
     use tokio::sync::watch as w;
     pub use w::error::RecvError;
 
+    #[derive(Clone)]
     pub struct Sender<T>(w::Sender<Option<T>>);
 
     impl<T> Sender<T> {

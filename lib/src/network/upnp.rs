@@ -35,7 +35,7 @@ struct TrackedDevice {
 
 pub(crate) struct PortForwarder {
     mappings: Arc<BlockingMutex<Mappings>>,
-    on_change_tx: Arc<watch::Sender<()>>,
+    on_change_tx: watch::Sender<()>,
     task: BlockingMutex<Weak<ScopedJoinHandle<()>>>,
     monitor: StateMonitor,
     span: Span,
@@ -44,11 +44,10 @@ pub(crate) struct PortForwarder {
 impl PortForwarder {
     pub fn new(monitor: StateMonitor) -> Self {
         let mappings = Arc::new(BlockingMutex::new(Default::default()));
-        let (on_change_tx, _) = watch::channel(());
 
         Self {
             mappings,
-            on_change_tx: Arc::new(on_change_tx),
+            on_change_tx: watch::Sender::new(()),
             task: BlockingMutex::new(Weak::new()),
             monitor,
             span: Span::current(),
@@ -296,7 +295,7 @@ type Mappings = HashMap<MappingData, usize>;
 
 pub(crate) struct Mapping {
     data: MappingData,
-    on_change_tx: Arc<watch::Sender<()>>,
+    on_change_tx: watch::Sender<()>,
     mappings: Arc<BlockingMutex<Mappings>>,
     _task: Arc<ScopedJoinHandle<()>>,
     span: Span,
