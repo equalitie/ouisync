@@ -33,8 +33,9 @@ impl State {
         let config = ConfigStore::new(configs_path);
 
         let network = Network::new(
-            Some(config.dht_contacts_store()),
             root_monitor.make_child("Network"),
+            Some(config.dht_contacts_store()),
+            None,
         );
 
         let repos_monitor = root_monitor.make_child("Repositories");

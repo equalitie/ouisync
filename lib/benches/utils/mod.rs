@@ -127,7 +127,7 @@ impl Actor {
     pub(crate) async fn new(rng: &mut StdRng, base_dir: &Path) -> Self {
         let monitor = StateMonitor::make_root();
 
-        let network = Network::new(None, monitor.clone());
+        let network = Network::new(monitor.clone(), None, None);
         network
             .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
             .await;

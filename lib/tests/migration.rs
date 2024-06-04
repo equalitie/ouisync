@@ -173,7 +173,7 @@ async fn test_sync(work_dir: &Path, input_dump: &Path) {
 }
 
 async fn create_network() -> Network {
-    let network = Network::new(None, StateMonitor::make_root());
+    let network = Network::new(StateMonitor::make_root(), None, None);
     network
         .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;

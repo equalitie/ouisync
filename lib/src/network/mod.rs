@@ -96,10 +96,10 @@ pub struct Network {
 }
 
 impl Network {
-    #[allow(clippy::new_without_default)] // Default doesn't seem right for this
     pub fn new(
-        dht_contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
         monitor: StateMonitor,
+        dht_contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
+        this_runtime_id: Option<SecretRuntimeId>,
     ) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(incoming_tx);
@@ -123,7 +123,7 @@ impl Network {
 
         let user_provided_peers = SeenPeers::new();
 
-        let this_runtime_id = SecretRuntimeId::random();
+        let this_runtime_id = this_runtime_id.unwrap_or_else(SecretRuntimeId::random);
         let this_runtime_id_public = this_runtime_id.public();
 
         let connections_monitor = monitor.make_child("Connections");
