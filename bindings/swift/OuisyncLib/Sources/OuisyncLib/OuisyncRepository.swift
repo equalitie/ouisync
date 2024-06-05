@@ -22,6 +22,14 @@ public class OuisyncRepository: Hashable, CustomDebugStringConvertible {
         return String(decoding: data, as: UTF8.self)
     }
 
+    public func fileEntry(_ path: FilePath) -> OuisyncFileEntry {
+        OuisyncFileEntry(path, self)
+    }
+
+    public func directoryEntry(_ path: FilePath) -> OuisyncDirectoryEntry {
+        OuisyncDirectoryEntry(path, self)
+    }
+
     public func getRootDirectory() -> OuisyncDirectoryEntry {
         return OuisyncDirectoryEntry(FilePath("/"), self)
     }
