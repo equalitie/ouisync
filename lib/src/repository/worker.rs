@@ -280,6 +280,7 @@ mod scan {
                 })?;
         let mut block_number = 0;
         let mut file_progress_cache_reset = false;
+        let mut require_batch = shared.vault.block_tracker.require_batch();
 
         while let Some(block_id) = blob_block_ids.try_next().await.map_err(|error| {
             tracing::trace!(block_number, ?error, "try_next failed");
@@ -293,7 +294,7 @@ mod scan {
                 .block_exists(&block_id)
                 .await?
             {
-                shared.vault.block_tracker.require(block_id);
+                require_batch.add(block_id);
 
                 if !file_progress_cache_reset {
                     file_progress_cache_reset = true;

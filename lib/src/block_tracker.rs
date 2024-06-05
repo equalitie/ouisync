@@ -30,28 +30,15 @@ impl BlockTracker {
 
     /// Mark the block with the given id as required.
     pub fn require(&self, block_id: BlockId) {
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        let missing_block = inner
-            .missing_blocks
-            .entry(block_id)
-            .or_insert_with(|| MissingBlock {
-                offers: HashMap::default(),
-                state: State::Idle {
-                    required: false,
-                    approved: false,
-                },
-            });
-
-        match &mut missing_block.state {
-            State::Idle { required: true, .. } | State::Accepted(_) => return,
-            State::Idle { required, .. } => {
-                *required = true;
-            }
+        if self.shared.inner.lock().unwrap().require(block_id) {
+            self.shared.notify()
         }
+    }
 
-        if !missing_block.offers.is_empty() {
-            self.shared.notify();
+    pub fn require_batch(&self) -> RequireBatch<'_> {
+        RequireBatch {
+            shared: &self.shared,
+            notify: false,
         }
     }
 
@@ -101,6 +88,27 @@ impl BlockTracker {
 pub(crate) enum OfferState {
     Pending,
     Approved,
+}
+
+pub(crate) struct RequireBatch<'a> {
+    shared: &'a Shared,
+    notify: bool,
+}
+
+impl RequireBatch<'_> {
+    pub fn add(&mut self, block_id: BlockId) {
+        if self.shared.inner.lock().unwrap().require(block_id) {
+            self.notify = true;
+        }
+    }
+}
+
+impl Drop for RequireBatch<'_> {
+    fn drop(&mut self) {
+        if self.notify {
+            self.shared.notify();
+        }
+    }
 }
 
 pub(crate) struct TrackerClient {
@@ -366,6 +374,31 @@ impl Shared {
 struct Inner {
     missing_blocks: HashMap<BlockId, MissingBlock>,
     offering_clients: Slab<HashSet<BlockId>>,
+}
+
+impl Inner {
+    /// Mark the block with the given id as required. Returns true if the block wasn't already
+    /// required and if it has at least one offer. Otherwise returns false.
+    fn require(&mut self, block_id: BlockId) -> bool {
+        let missing_block = self
+            .missing_blocks
+            .entry(block_id)
+            .or_insert_with(|| MissingBlock {
+                offers: HashMap::default(),
+                state: State::Idle {
+                    required: false,
+                    approved: false,
+                },
+            });
+
+        match &mut missing_block.state {
+            State::Idle { required: true, .. } | State::Accepted(_) => false,
+            State::Idle { required, .. } => {
+                *required = true;
+                !missing_block.offers.is_empty()
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
