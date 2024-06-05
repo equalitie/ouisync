@@ -105,6 +105,13 @@ public class MessageRequest {
         ]))
     }
 
+    public static func fileTruncate(_ fileHandle: FileHandle, _ len: UInt64) -> MessageRequest {
+        return MessageRequest("file_truncate", MessagePackValue([
+            MessagePackValue("file"): MessagePackValue(fileHandle),
+            MessagePackValue("len"): MessagePackValue(len),
+        ]))
+    }
+
     public static func fileLen(_ fileHandle: FileHandle) -> MessageRequest {
         return MessageRequest("file_len", MessagePackValue(fileHandle))
     }

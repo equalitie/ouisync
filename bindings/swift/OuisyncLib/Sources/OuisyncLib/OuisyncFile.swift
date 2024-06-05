@@ -28,6 +28,10 @@ public class OuisyncFile {
         try await repository.session.sendRequest(.fileLen(handle)).toUInt64()
     }
 
+    public func truncate(_ len: UInt64) async throws {
+        let _ = try await repository.session.sendRequest(.fileTruncate(handle, len))
+    }
+
     public func close() async throws {
         let _ = try await repository.session.sendRequest(.fileClose(handle))
     }
