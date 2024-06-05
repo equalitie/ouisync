@@ -22,13 +22,8 @@ const BENCH_DIR: &str = "benches";
 fn main() -> Result<()> {
     let options = Options::parse();
 
-    if !options.no_build {
-        build(&options)?;
-    }
-
-    if !options.no_run {
-        run(&options)?;
-    }
+    build(&options)?;
+    run(&options)?;
 
     Ok(())
 }
@@ -40,9 +35,9 @@ fn main() -> Result<()> {
 /// results:
 ///
 ///     > git checkout master
-///     > cargo run -p benchtool -- <BENCH_NAME> --no-run
+///     > cargo run -p benchtool -- <BENCH_NAME> --build
 ///     > git checkout perf-improvements
-///     > cargo run -p benchtool -- <BENCH_NAME> --samples 10
+///     > cargo run -p benchtool -- <BENCH_NAME> --run --samples 10
 #[derive(Parser, Debug)]
 #[command(verbatim_doc_comment)]
 struct Options {
@@ -62,24 +57,21 @@ struct Options {
     #[arg(long, default_value = "auto")]
     color: String,
 
-    /// Label to append to the bench binary name. Used to identify bench versions when comparing
-    /// results. Default is the current git branch name.
-    #[arg(short, long)]
-    label: Option<String>,
+    /// Build the bench. The resulting bench binary is labeled with LABEL if specified or the
+    /// current git branch name if not.
+    #[arg(short, long, value_name = "LABEL")]
+    build: Option<Option<String>>,
+
+    /// Run the bench. If LABEL is specified runs only the bench version with that label, otherwise
+    /// run all versions in random order.
+    #[arg(short, long, value_name = "LABEL")]
+    run: Option<Option<String>>,
 
     /// Run each bench version this many times and average the results.
     #[arg(short, long, default_value_t = 1)]
     samples: usize,
 
-    /// Build but don't run the benches.
-    #[arg(long)]
-    no_run: bool,
-
-    /// Only run the existing benches, don't build.
-    #[arg(long)]
-    no_build: bool,
-
-    /// Bench target to build and run.
+    /// Bench target to build and/or run.
     #[arg(value_name = "NAME")]
     bench: String,
 
@@ -99,6 +91,10 @@ impl Options {
 }
 
 fn build(options: &Options) -> Result<()> {
+    let Some(label) = &options.build else {
+        return Ok(());
+    };
+
     let mut command = process::Command::new("cargo");
     command
         .arg("build")
@@ -142,7 +138,7 @@ fn build(options: &Options) -> Result<()> {
     let stdout = BufReader::new(&output.stdout[..]);
     let dst_dir = options.bench_dir();
 
-    let label = match &options.label {
+    let label = match label {
         Some(label) => label.to_owned(),
         None => get_default_label()?,
     };
@@ -168,8 +164,12 @@ fn build(options: &Options) -> Result<()> {
 }
 
 fn run(options: &Options) -> Result<()> {
+    let Some(label) = &options.run else {
+        return Ok(());
+    };
+
     let dir = options.bench_dir();
-    let mut bench_versions = list_bench_versions(&dir, &options.bench)?;
+    let mut bench_versions = list_bench_versions(&dir, &options.bench, label.as_deref())?;
     let mut output = NamedTempFile::new()?;
     let mut rng = rand::thread_rng();
 
@@ -222,22 +222,32 @@ fn run(options: &Options) -> Result<()> {
     Ok(())
 }
 
-fn list_bench_versions(dir: &Path, bench: &str) -> Result<Vec<PathBuf>> {
+fn list_bench_versions(dir: &Path, bench: &str, label: Option<&str>) -> Result<Vec<PathBuf>> {
+    let suffix = label.map(|label| format!("@{label}"));
+
     fs::read_dir(dir)?
         .map(|entry| {
             let path = entry?.path();
-
-            if path
+            let name = match path
+                .with_extension("")
                 .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .starts_with(bench)
+                .and_then(|name| name.to_str())
             {
-                Ok(Some(path))
-            } else {
-                Ok(None)
+                Some(name) => name.to_owned(),
+                None => return Ok(None),
+            };
+
+            if !name.starts_with(bench) {
+                return Ok(None);
             }
+
+            if let Some(suffix) = &suffix {
+                if !name.ends_with(suffix) {
+                    return Ok(None);
+                }
+            }
+
+            Ok(Some(path))
         })
         .filter_map(Result::transpose)
         .collect()
