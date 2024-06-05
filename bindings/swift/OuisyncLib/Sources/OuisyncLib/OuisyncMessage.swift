@@ -57,10 +57,11 @@ public class MessageRequest {
         ]))
     }
 
-    public static func directoryRemove(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+    public static func directoryRemove(_ handle: RepositoryHandle, _ path: FilePath, _ recursive: Bool) -> MessageRequest {
         return MessageRequest("directory_remove", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
             MessagePackValue("path"): MessagePackValue(path.description),
+            MessagePackValue("recursive"): MessagePackValue(recursive),
         ]))
     }
 

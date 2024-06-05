@@ -7,6 +7,11 @@
 import Foundation
 import System
 
+public enum OuisyncEntryType {
+    case file
+    case directory
+}
+
 public enum OuisyncEntry {
     case file(OuisyncFileEntry)
     case directory(OuisyncDirectoryEntry)
@@ -18,10 +23,10 @@ public enum OuisyncEntry {
         }
     }
 
-    public func isDirectory() -> Bool {
+    public func type() -> OuisyncEntryType {
         switch self {
-        case .file: false
-        case .directory: true
+        case .file: return .file
+        case .directory: return .directory
         }
     }
 
@@ -62,8 +67,8 @@ public class OuisyncFileEntry {
         return try await repository.session.sendRequest(.fileExists(repository.handle, path)).toBool()
     }
 
-    public func remove() async throws {
-        let _ = try await repository.session.sendRequest(.fileRemove(repository.handle, path))
+    public func delete() async throws {
+        try await repository.deleteFile(path)
     }
 
     public static func parent(_ path: FilePath) -> FilePath {
@@ -130,8 +135,8 @@ public class OuisyncDirectoryEntry: CustomDebugStringConvertible {
         return response.value.boolValue!
     }
 
-    public func remove() async throws {
-        let _ = try await repository.session.sendRequest(.directoryRemove(repository.handle, path))
+    public func delete(recursive: Bool) async throws {
+        try await repository.deleteDirectory(path, recursive: recursive)
     }
 
     public static func parent(_ path: FilePath) -> FilePath? {

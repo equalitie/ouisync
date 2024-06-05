@@ -31,8 +31,16 @@ public class OuisyncRepository: Hashable, CustomDebugStringConvertible {
         return OuisyncFile(handle, self)
     }
 
+    public func deleteFile(_ path: FilePath) async throws {
+        let _ = try await session.sendRequest(.fileRemove(handle, path))
+    }
+
     public func createDirectory(_ path: FilePath) async throws {
         let _ = try await session.sendRequest(.directoryCreate(handle, path))
+    }
+
+    public func deleteDirectory(_ path: FilePath, recursive: Bool) async throws {
+        let _ = try await session.sendRequest(.directoryRemove(handle, path, recursive))
     }
 
     public func moveEntry(_ sourcePath: FilePath, _ destinationPath: FilePath) async throws {
