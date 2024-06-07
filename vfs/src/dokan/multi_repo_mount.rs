@@ -350,10 +350,25 @@ impl Handler {
 
     fn cleanup_<'c, 'h: 'c>(
         &'h self,
-        _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c MultiRepoEntryHandle,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c MultiRepoEntryHandle,
     ) {
+        let context = match context {
+            MultiRepoEntryHandle::EntryHandle { vfs: _, handle } => handle,
+            MultiRepoEntryHandle::RepoList => return,
+        };
+
+        let (vfs, file_name) = match self.get_repo_and_path(file_name) {
+            Ok((Some(vfs), file_name)) => (vfs, file_name),
+            Ok((None, _file_name)) => return,
+            Err(error) => {
+                tracing::error!("Failed to close file {:?}: {error:?}", file_name,);
+                return;
+            }
+        };
+
+        vfs.cleanup(&file_name, info, context)
     }
 
     fn close_file_<'c, 'h: 'c>(
@@ -371,10 +386,7 @@ impl Handler {
             Ok((Some(vfs), file_name)) => (vfs, file_name),
             Ok((None, _file_name)) => return,
             Err(error) => {
-                tracing::error!(
-                    "Failed to close file {:?}: {error:?}",
-                    file_name.to_string_lossy()
-                );
+                tracing::error!("Failed to close file {:?}: {error:?}", file_name,);
                 return;
             }
         };
