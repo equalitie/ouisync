@@ -64,8 +64,8 @@ struct Options {
 
     /// Run the bench. If LABEL is specified runs only the bench version with that label, otherwise
     /// run all versions in random order.
-    #[arg(short, long, value_name = "LABEL")]
-    run: Option<Option<String>>,
+    #[arg(short, long, value_delimiter = ',' , num_args = 0.., value_name = "LABEL")]
+    run: Option<Vec<String>>,
 
     /// Run each bench version this many times and average the results.
     #[arg(short, long, default_value_t = 1)]
@@ -169,7 +169,7 @@ fn run(options: &Options) -> Result<()> {
     };
 
     let dir = options.bench_dir();
-    let mut bench_versions = list_bench_versions(&dir, &options.bench, label.as_deref())?;
+    let mut bench_versions = list_bench_versions(&dir, &options.bench, label.as_ref())?;
     let mut output = NamedTempFile::new()?;
     let mut rng = rand::thread_rng();
 
@@ -222,8 +222,8 @@ fn run(options: &Options) -> Result<()> {
     Ok(())
 }
 
-fn list_bench_versions(dir: &Path, bench: &str, label: Option<&str>) -> Result<Vec<PathBuf>> {
-    let suffix = label.map(|label| format!("@{label}"));
+fn list_bench_versions(dir: &Path, bench: &str, labels: &[String]) -> Result<Vec<PathBuf>> {
+    let suffixes: Vec<_> = labels.iter().map(|label| format!("@{label}")).collect();
 
     fs::read_dir(dir)?
         .map(|entry| {
@@ -241,10 +241,8 @@ fn list_bench_versions(dir: &Path, bench: &str, label: Option<&str>) -> Result<V
                 return Ok(None);
             }
 
-            if let Some(suffix) = &suffix {
-                if !name.ends_with(suffix) {
-                    return Ok(None);
-                }
+            if !suffixes.is_empty() && !suffixes.iter().any(|suffix| name.ends_with(suffix)) {
+                return Ok(None);
             }
 
             Ok(Some(path))
