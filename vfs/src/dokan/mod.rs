@@ -445,7 +445,7 @@ impl VirtualFilesystem {
     }
 
     fn cleanup<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -514,6 +514,8 @@ impl VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<u32, Error> {
+        tracing::trace!("enter");
+
         let file_entry = context.entry.as_file()?;
 
         let mut lock = file_entry.file.lock().await;
