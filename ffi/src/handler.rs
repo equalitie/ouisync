@@ -281,6 +281,11 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::FileProgress(file) => file::progress(&self.state, file).await?.into(),
             Request::FileFlush(file) => file::flush(&self.state, file).await?.into(),
             Request::FileClose(file) => file::close(&self.state, file).await?.into(),
+            Request::FileGetVersionVectorHash(file) => {
+                file::get_version_vector_hash(&self.state, file)
+                    .await?
+                    .into()
+            }
             Request::NetworkInit(defaults) => {
                 ouisync_bridge::network::init(&self.state.network, &self.state.config, defaults)
                     .await;

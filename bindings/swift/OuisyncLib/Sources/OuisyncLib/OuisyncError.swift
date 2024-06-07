@@ -79,6 +79,6 @@ public class OuisyncError : Error, CustomDebugStringConvertible {
         case .Other: codeStr = "Unspecified error"
         }
 
-        return "OuisyncError(code:\"\(codeStr)\", message:\(message)"
+        return "OuisyncError(code:\"\(codeStr)\", message:\"\(message)\")"
     }
 }

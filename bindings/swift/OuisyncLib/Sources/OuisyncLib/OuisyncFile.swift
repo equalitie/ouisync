@@ -17,22 +17,30 @@ public class OuisyncFile {
     }
 
     public func read(_ offset: UInt64, _ length: UInt64) async throws -> Data {
-        try await repository.session.sendRequest(.fileRead(handle, offset, length)).toData()
+        try await session.sendRequest(.fileRead(handle, offset, length)).toData()
     }
 
     public func write(_ offset: UInt64, _ data: Data) async throws {
-        let _ = try await repository.session.sendRequest(.fileWrite(handle, offset, data))
+        let _ = try await session.sendRequest(.fileWrite(handle, offset, data))
     }
 
     public func size() async throws -> UInt64 {
-        try await repository.session.sendRequest(.fileLen(handle)).toUInt64()
+        try await session.sendRequest(.fileLen(handle)).toUInt64()
     }
 
     public func truncate(_ len: UInt64) async throws {
-        let _ = try await repository.session.sendRequest(.fileTruncate(handle, len))
+        let _ = try await session.sendRequest(.fileTruncate(handle, len))
     }
 
     public func close() async throws {
-        let _ = try await repository.session.sendRequest(.fileClose(handle))
+        let _ = try await session.sendRequest(.fileClose(handle))
+    }
+
+    public func versionVectorHash() async throws -> Data {
+        try await session.sendRequest(.fileGetVersionVectorHash(handle)).toData()
+    }
+
+    var session: OuisyncSession {
+        repository.session
     }
 }

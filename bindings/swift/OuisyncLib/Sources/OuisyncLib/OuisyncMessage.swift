@@ -116,6 +116,10 @@ public class MessageRequest {
         return MessageRequest("file_len", MessagePackValue(fileHandle))
     }
 
+    public static func fileGetVersionVectorHash(_ fileHandle: FileHandle) -> MessageRequest {
+        return MessageRequest("file_get_version_vector_hash", MessagePackValue(fileHandle))
+    }
+
     public static func fileCreate(_ repoHandle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
         return MessageRequest("file_create", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(repoHandle),

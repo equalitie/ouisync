@@ -173,6 +173,7 @@ pub(crate) enum Request {
     FileProgress(FileHandle),
     FileFlush(FileHandle),
     FileClose(FileHandle),
+    FileGetVersionVectorHash(FileHandle),
     NetworkInit(NetworkDefaults),
     NetworkSubscribe,
     NetworkBind {
