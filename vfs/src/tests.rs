@@ -8,8 +8,9 @@ use std::{
     fs::Metadata,
     future::Future,
     io::{ErrorKind, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
+    thread,
 };
 use tempfile::TempDir;
 use test_strategy::proptest;
@@ -20,15 +21,13 @@ use tokio::{
 
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_repository() {
-    let (base_dir, _guard, span) = setup("").await;
-    let _span_guard = span.enter();
-    assert!(read_dir(base_dir.path().join("mnt")).await.is_empty());
+    let setup = Setup::new("").await;
+    assert!(read_dir(setup.mount_dir_path()).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_directory() {
-    let (base_dir, _guard, span) = setup("").await;
-    let _span_guard = span.enter();
+    let setup = Setup::new("").await;
 
     let name_small = OsStr::new("small.txt");
     let len_small = 10;
@@ -43,7 +42,7 @@ async fn read_directory() {
         .sample_iter(Standard)
         .take(len_small)
         .collect();
-    fs::write(base_dir.path().join("mnt").join(name_small), &content)
+    fs::write(setup.mount_dir_path().join(name_small), &content)
         .await
         .unwrap();
 
@@ -52,16 +51,16 @@ async fn read_directory() {
         .sample_iter(Standard)
         .take(len_large)
         .collect();
-    fs::write(base_dir.path().join("mnt").join(name_large), &content)
+    fs::write(setup.mount_dir_path().join(name_large), &content)
         .await
         .unwrap();
 
     // Subdirectory
-    fs::create_dir(base_dir.path().join("mnt").join(name_dir))
+    fs::create_dir(setup.mount_dir_path().join(name_dir))
         .await
         .unwrap();
 
-    let entries = read_dir(base_dir.path().join("mnt")).await;
+    let entries = read_dir(setup.mount_dir_path()).await;
 
     assert_eq!(entries.len(), 3);
 
@@ -76,10 +75,9 @@ async fn read_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_read_non_existing_directory() {
-    let (base_dir, _guard, span) = setup("").await;
-    let _span_guard = span.enter();
+    let setup = Setup::new("").await;
 
-    match fs::read_dir(base_dir.path().join("mnt").join("missing")).await {
+    match fs::read_dir(setup.mount_dir_path().join("missing")).await {
         Err(error) if error.kind() == ErrorKind::NotFound => (),
         Err(error) => panic!("unexpected error {error}"),
         Ok(_) => panic!("unexpected success"),
@@ -88,42 +86,37 @@ async fn attempt_to_read_non_existing_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_remove_directory() {
-    let (base_dir, _guard, span) = setup("").await;
-    let _span_guard = span.enter();
+    let setup = Setup::new("").await;
 
-    fs::create_dir(base_dir.path().join("mnt").join("dir"))
+    fs::create_dir(setup.mount_dir_path().join("dir"))
         .await
         .unwrap();
 
-    let entries = read_dir(base_dir.path().join("mnt")).await;
+    let entries = read_dir(setup.mount_dir_path()).await;
     assert_eq!(entries.len(), 1);
     assert!(entries.contains_key(OsStr::new("dir")));
 
-    fs::remove_dir(base_dir.path().join("mnt").join("dir"))
+    fs::remove_dir(setup.mount_dir_path().join("dir"))
         .await
         .unwrap();
-    assert!(read_dir(base_dir.path().join("mnt")).await.is_empty());
+    assert!(read_dir(setup.mount_dir_path()).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_remove_non_empty_directory() {
-    let (base_dir, _guard, span) = setup("").await;
-    let _span_guard = span.enter();
+    let setup = Setup::new("").await;
 
-    fs::create_dir(base_dir.path().join("mnt").join("dir"))
+    fs::create_dir(setup.mount_dir_path().join("dir"))
         .await
         .unwrap();
-    fs::write(
-        base_dir.path().join("mnt").join("dir").join("file.txt"),
-        &[],
-    )
-    .await
-    .unwrap();
+    fs::write(setup.mount_dir_path().join("dir").join("file.txt"), &[])
+        .await
+        .unwrap();
 
-    assert!(fs::remove_dir(base_dir.path().join("mnt").join("dir"))
+    assert!(fs::remove_dir(setup.mount_dir_path().join("dir"))
         .await
         .is_err());
-    assert!(read_dir(base_dir.path().join("mnt"))
+    assert!(read_dir(setup.mount_dir_path())
         .await
         .contains_key(OsStr::new("dir")));
 }
@@ -144,13 +137,12 @@ async fn write_and_read_large_file() {
 }
 
 async fn write_and_read_file_case(len: usize, rng_seed: u64) {
-    let (base_dir, _guard, span) = setup(&format!("{len},{rng_seed}")).await;
-    let _span_guard = span.enter();
+    let setup = Setup::new(&format!("{len},{rng_seed}")).await;
 
     let rng = StdRng::seed_from_u64(rng_seed);
     let orig_data: Vec<u8> = rng.sample_iter(Standard).take(len).collect();
 
-    let path = base_dir.path().join("mnt").join("file.txt");
+    let path = setup.mount_dir_path().join("file.txt");
 
     let mut file = File::create(&path).await.unwrap();
     file.write_all(&orig_data).await.unwrap();
@@ -165,10 +157,9 @@ async fn write_and_read_file_case(len: usize, rng_seed: u64) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append_to_file() {
-    let (base_dir, _guard, span) = setup("").await;
-    let _span_guard = span.enter();
+    let setup = Setup::new("").await;
 
-    let path = base_dir.path().join("mnt").join("file.txt");
+    let path = setup.mount_dir_path().join("file.txt");
 
     fs::write(&path, b"foo").await.unwrap();
 
@@ -190,10 +181,9 @@ fn seek_and_read(
 }
 
 async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
-    let (base_dir, _guard, span) = setup(&format!("{len},{offset},{rng_seed}")).await;
-    let _span_guard = span.enter();
+    let setup = Setup::new(&format!("{len},{offset},{rng_seed}")).await;
 
-    let path = base_dir.path().join("mnt").join("file.txt");
+    let path = setup.mount_dir_path().join("file.txt");
 
     let rng = StdRng::seed_from_u64(rng_seed);
     let content: Vec<_> = rng.sample_iter(Standard).take(len).collect();
@@ -211,18 +201,17 @@ async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn move_file() {
-    let (base_dir, _guard, span) = setup("").await;
-    let _span_guard = span.enter();
+    let setup = Setup::new("").await;
 
     let src_name = OsStr::new("src.txt");
-    let src_path = base_dir.path().join("mnt").join(src_name);
+    let src_path = setup.mount_dir_path().join(src_name);
     let dst_name = OsStr::new("dst.txt");
-    let dst_path = base_dir.path().join("mnt").join(dst_name);
+    let dst_path = setup.mount_dir_path().join(dst_name);
 
     fs::write(&src_path, b"blah").await.unwrap();
     fs::rename(&src_path, &dst_path).await.unwrap();
 
-    let entries = read_dir(base_dir.path().join("mnt")).await;
+    let entries = read_dir(setup.mount_dir_path()).await;
     assert!(!entries.contains_key(src_name));
     assert!(entries.contains_key(dst_name));
 }
@@ -238,24 +227,39 @@ fn run<F: Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-// NOTE: there is an issue on Windows where all output from FileSystemHandler seems
-// to be redirected to stderr, because of that the log lines are not captured by
-// `cargo test` and therefore log lines from all the tests appear interleaved. Until
-// that issue is fixed, I had to add spans to every test to be able to filter per-test
-// output.
-// https://github.com/dokan-dev/dokan-rust/issues/9
-async fn setup(params: &str) -> (TempDir, MountGuard, tracing::Span) {
-    use std::thread;
+struct Setup {
+    base_dir: TempDir,
+    _span_guard: tracing::span::EnteredSpan,
+    _mount_guard: MountGuard,
+}
+
+impl Setup {
+    // NOTE: there is an issue on Windows where all output from FileSystemHandler seems
+    // to be redirected to stderr, because of that the log lines are not captured by
+    // `cargo test` and therefore log lines from all the tests appear interleaved. Until
+    // that issue is fixed, I had to add spans to every test to be able to filter per-test
+    // output.
+    // https://github.com/dokan-dev/dokan-rust/issues/9
+    async fn new(span_params: &str) -> Self {
+        init_log();
+
+        let span = tracing::trace_span!(
+            "test",
+            test_name = format!("{}({span_params})", thread::current().name().unwrap())
+        );
+
+        setup_with_single_repo_mount(span).await
+    }
+
+    fn mount_dir_path(&self) -> PathBuf {
+        self.base_dir.path().join("mnt")
+    }
+}
+
+async fn setup_with_single_repo_mount(span: tracing::Span) -> Setup {
     use tracing::Instrument;
 
-    init_log();
-
     let base_dir = TempDir::new().unwrap();
-
-    let span = tracing::trace_span!(
-        "test",
-        test_name = format!("{}({params})", thread::current().name().unwrap())
-    );
 
     let params = RepositoryParams::new(base_dir.path().join("repo.db"));
     let repo = Repository::create(
@@ -273,7 +277,7 @@ async fn setup(params: &str) -> (TempDir, MountGuard, tracing::Span) {
     fs::create_dir(&mount_dir).await.unwrap();
 
     #[cfg(target_os = "windows")]
-    let guard = super::dokan::single_repo_mount::mount_with_span(
+    let _mount_guard = super::dokan::single_repo_mount::mount_with_span(
         tokio::runtime::Handle::current(),
         repo,
         mount_dir,
@@ -282,14 +286,18 @@ async fn setup(params: &str) -> (TempDir, MountGuard, tracing::Span) {
     .unwrap();
 
     #[cfg(not(target_os = "windows"))]
-    let guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir).unwrap();
+    let _mount_guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir).unwrap();
 
     // TODO: There is likely a bug in Dokan causing the repository not to appear as mounted righ
     // after the `mount` (or `mount_with_span`) finishes, which makes the tests fail.
     #[cfg(target_os = "windows")]
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
 
-    (base_dir, guard, span)
+    Setup {
+        base_dir,
+        _span_guard: span.entered(),
+        _mount_guard,
+    }
 }
 
 async fn read_dir(path: impl AsRef<Path>) -> HashMap<OsString, Metadata> {
