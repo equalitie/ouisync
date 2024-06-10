@@ -9,8 +9,8 @@ use self::common::{
 use assert_matches::assert_matches;
 use metrics_ext::WatchRecorder;
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Repository, StorageSize, StoreError, VersionVector,
-    BLOB_HEADER_SIZE, BLOCK_SIZE,
+    sync::uninitialized_watch, Access, AccessMode, EntryType, Error, Repository, StorageSize,
+    StoreError, VersionVector, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
@@ -511,6 +511,63 @@ fn concurrent_modify_open_file() {
             file.flush().await.unwrap();
 
             tx.closed().await;
+        }
+    });
+}
+
+#[test]
+fn reading_file_vv_should_succeed_once_file_handle_is_acquired() {
+    let mut env = Env::new();
+    let (notify_bob_opened_the_file, mut on_bob_opened_the_file) = uninitialized_watch::channel();
+    let (alices_final_version_vector_tx, alices_final_version_vector_rx) =
+        uninitialized_watch::channel();
+    let (notify_bob_finished, mut on_bob_finished) = uninitialized_watch::channel();
+
+    env.actor("alice", {
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            // Create empty file and wait until Bob sees it
+            let mut file = repo.create_file("file.txt").await.unwrap();
+
+            on_bob_opened_the_file.changed().await.unwrap();
+
+            for _ in 0..256 {
+                file.write_all(&common::random_bytes(1024)).await.unwrap();
+                file.flush().await.unwrap();
+            }
+
+            let _ = alices_final_version_vector_tx.send(file.version_vector().await.unwrap());
+
+            on_bob_finished.changed().await.unwrap()
+        }
+    });
+
+    env.actor("bob", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.add_user_provided_peer(&actor::lookup_addr("alice").await);
+
+            // Wait until the file gets merged
+            common::expect_entry_exists(&repo, "file.txt", EntryType::File).await;
+
+            let file = repo.open_file("file.txt").await.unwrap();
+
+            notify_bob_opened_the_file
+                .send(())
+                .expect("Reading vv once handle is acquired should succeed");
+
+            loop {
+                let vv = file.version_vector().await.unwrap();
+
+                let alices_final_version_vector = alices_final_version_vector_rx.borrow();
+
+                if alices_final_version_vector.as_ref() == Some(&vv) {
+                    break;
+                }
+            }
+
+            notify_bob_finished.send(()).unwrap()
         }
     });
 }

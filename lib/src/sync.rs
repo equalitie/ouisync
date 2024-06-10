@@ -11,7 +11,7 @@ use tokio_stream::wrappers::WatchStream;
 
 /// Similar to tokio::sync::watch, but has no initial value. Because there is no initial value the
 /// API must be sligthly different. In particular, we don't have the `borrow` function.
-pub(crate) mod uninitialized_watch {
+pub mod uninitialized_watch {
     use futures_util::{stream, Stream};
     use tokio::sync::watch as w;
     pub use w::error::RecvError;
@@ -62,6 +62,10 @@ pub(crate) mod uninitialized_watch {
             // information by checking whether `has_changed` returns an error as it only does so
             // when the chanel has been closed.
             self.0.has_changed().is_err()
+        }
+
+        pub fn borrow(&self) -> w::Ref<'_, Option<T>> {
+            self.0.borrow()
         }
     }
 

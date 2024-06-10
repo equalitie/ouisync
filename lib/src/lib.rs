@@ -34,7 +34,7 @@ mod protocol;
 mod repository;
 mod storage_size;
 mod store;
-mod sync;
+pub mod sync;
 #[cfg(test)]
 mod test_utils;
 #[cfg_attr(test, macro_use)]
