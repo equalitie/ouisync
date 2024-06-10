@@ -21,7 +21,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+[target.'cfg(any(target_os = "linux"))'.dependencies]
 fuser = "0.14.0"
 libc = "0.2.139"
 bitflags = "2.4.0"
