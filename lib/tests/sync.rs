@@ -553,12 +553,13 @@ fn reading_file_vv_should_succeed_once_file_handle_is_acquired() {
 
             let file = repo.open_file("file.txt").await.unwrap();
 
-            notify_bob_opened_the_file
-                .send(())
-                .expect("Reading vv once handle is acquired should succeed");
+            notify_bob_opened_the_file.send(()).unwrap();
 
             loop {
-                let vv = file.version_vector().await.unwrap();
+                let vv = file
+                    .version_vector()
+                    .await
+                    .expect("Reading vv once handle is acquired should succeed");
 
                 let alices_final_version_vector = alices_final_version_vector_rx.borrow();
 
