@@ -3,7 +3,6 @@ use crate::{
     protocol::BlockId,
 };
 use deadlock::BlockingMutex;
-use slab::Slab;
 use std::{collections::hash_map::Entry, sync::Arc};
 use tokio::sync::watch;
 
@@ -21,7 +20,8 @@ impl BlockTracker {
             shared: Arc::new(Shared {
                 inner: BlockingMutex::new(Inner {
                     missing_blocks: HashMap::default(),
-                    offering_clients: Slab::new(),
+                    clients: HashMap::default(),
+                    next_client_id: 0,
                 }),
                 notify_tx,
             }),
@@ -66,14 +66,7 @@ impl BlockTracker {
     }
 
     pub fn client(&self) -> TrackerClient {
-        let client_id = self
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .offering_clients
-            .insert(HashSet::default());
-
+        let client_id = self.shared.inner.lock().unwrap().insert_client();
         let notify_rx = self.shared.notify_tx.subscribe();
 
         TrackerClient {
@@ -133,7 +126,13 @@ impl TrackerClient {
     pub fn register(&self, block_id: BlockId, state: OfferState) -> bool {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        if !inner.offering_clients[self.client_id].insert(block_id) {
+        // unwrap is OK because if `self` exists the `inner.clients` entry must exists as well.
+        if !inner
+            .clients
+            .get_mut(&self.client_id)
+            .unwrap()
+            .insert(block_id)
+        {
             // Already offered
             return false;
         }
@@ -176,7 +175,8 @@ impl TrackerClient {
 impl Drop for TrackerClient {
     fn drop(&mut self) {
         let mut inner = self.shared.inner.lock().unwrap();
-        let block_ids = inner.offering_clients.remove(self.client_id);
+        // unwrap is ok because if `self` exists the `clients` entry must exists as well.
+        let block_ids = inner.clients.remove(&self.client_id).unwrap();
         let mut notify = false;
 
         for block_id in block_ids {
@@ -224,7 +224,7 @@ impl BlockOffers {
         let inner = &mut *inner;
 
         // TODO: OPTIMIZE (but profile first) this linear lookup
-        for block_id in &inner.offering_clients[self.client_id] {
+        for block_id in inner.clients.get(&self.client_id).into_iter().flatten() {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
 
@@ -316,7 +316,14 @@ impl Drop for BlockOffer {
                 // safe to remove it. If the peer sends us another leaf node response with the same
                 // block id, we register the offer again.
                 entry.remove();
-                inner.offering_clients[self.client_id].remove(&self.block_id);
+                // unwrap is ok because if the client has been already destroyed then
+                // `missing_block.offers[&self.client_id]` would not exists and this function would
+                // have exited earlier.
+                inner
+                    .clients
+                    .get_mut(&self.client_id)
+                    .unwrap()
+                    .remove(&self.block_id);
             }
             Offer::Available => unreachable!(),
         }
@@ -344,7 +351,7 @@ impl BlockPromise {
         };
 
         for (client_id, _) in missing_block.offers {
-            if let Some(block_ids) = inner.offering_clients.get_mut(client_id) {
+            if let Some(block_ids) = inner.clients.get_mut(&client_id) {
                 block_ids.remove(&self.0.block_id);
             }
         }
@@ -364,19 +371,30 @@ impl Shared {
 
 // Invariant: for all `block_id` and `client_id` such that
 //
-//     missing_blocks[block_id].offering_clients.contains(client_id)
+//     missing_blocks[block_id].offers.contains_key(client_id)
 //
 // it must hold that
 //
-//     offering_clients[client_id].contains(block_id)
+//     clients[client_id].contains(block_id)
 //
 // and vice-versa.
 struct Inner {
     missing_blocks: HashMap<BlockId, MissingBlock>,
-    offering_clients: Slab<HashSet<BlockId>>,
+    clients: HashMap<ClientId, HashSet<BlockId>>,
+    next_client_id: ClientId,
 }
 
 impl Inner {
+    fn insert_client(&mut self) -> ClientId {
+        let client_id = self.next_client_id;
+        self.next_client_id = self
+            .next_client_id
+            .checked_add(1)
+            .expect("too many clients");
+        self.clients.insert(client_id, HashSet::new());
+        client_id
+    }
+
     /// Mark the block with the given id as required. Returns true if the block wasn't already
     /// required and if it has at least one offer. Otherwise returns false.
     fn require(&mut self, block_id: BlockId) -> bool {
