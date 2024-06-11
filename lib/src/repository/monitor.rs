@@ -44,8 +44,6 @@ pub(crate) struct RepositoryMonitor {
     pub responses_sent: Counter,
     // Total number of responses received.
     pub responses_received: Counter,
-    // Time a response spends in the receive queue.
-    pub response_queue_time: Histogram,
     // Time to handle a response.
     pub response_handle_time: Histogram,
 
@@ -82,7 +80,6 @@ impl RepositoryMonitor {
 
         let responses_sent = create_counter(recorder, "responses sent", Unit::Count);
         let responses_received = create_counter(recorder, "responses received", Unit::Count);
-        let response_queue_time = create_histogram(recorder, "response queue time", Unit::Seconds);
         let response_handle_time =
             create_histogram(recorder, "response handle time", Unit::Seconds);
 
@@ -106,7 +103,6 @@ impl RepositoryMonitor {
 
             responses_sent,
             responses_received,
-            response_queue_time,
             response_handle_time,
 
             scan_job,

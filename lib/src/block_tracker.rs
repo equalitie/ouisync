@@ -3,7 +3,6 @@ use crate::{
     protocol::BlockId,
 };
 use deadlock::BlockingMutex;
-use slab::Slab;
 use std::{collections::hash_map::Entry, sync::Arc};
 use tokio::sync::watch;
 
@@ -21,7 +20,8 @@ impl BlockTracker {
             shared: Arc::new(Shared {
                 inner: BlockingMutex::new(Inner {
                     missing_blocks: HashMap::default(),
-                    offering_clients: Slab::new(),
+                    clients: HashMap::default(),
+                    next_client_id: 0,
                 }),
                 notify_tx,
             }),
@@ -30,28 +30,15 @@ impl BlockTracker {
 
     /// Mark the block with the given id as required.
     pub fn require(&self, block_id: BlockId) {
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        let missing_block = inner
-            .missing_blocks
-            .entry(block_id)
-            .or_insert_with(|| MissingBlock {
-                offers: HashMap::default(),
-                state: State::Idle {
-                    required: false,
-                    approved: false,
-                },
-            });
-
-        match &mut missing_block.state {
-            State::Idle { required: true, .. } | State::Accepted(_) => return,
-            State::Idle { required, .. } => {
-                *required = true;
-            }
+        if self.shared.inner.lock().unwrap().require(block_id) {
+            self.shared.notify()
         }
+    }
 
-        if !missing_block.offers.is_empty() {
-            self.shared.notify();
+    pub fn require_batch(&self) -> RequireBatch<'_> {
+        RequireBatch {
+            shared: &self.shared,
+            notify: false,
         }
     }
 
@@ -79,14 +66,7 @@ impl BlockTracker {
     }
 
     pub fn client(&self) -> TrackerClient {
-        let client_id = self
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .offering_clients
-            .insert(HashSet::default());
-
+        let client_id = self.shared.inner.lock().unwrap().insert_client();
         let notify_rx = self.shared.notify_tx.subscribe();
 
         TrackerClient {
@@ -101,6 +81,27 @@ impl BlockTracker {
 pub(crate) enum OfferState {
     Pending,
     Approved,
+}
+
+pub(crate) struct RequireBatch<'a> {
+    shared: &'a Shared,
+    notify: bool,
+}
+
+impl RequireBatch<'_> {
+    pub fn add(&mut self, block_id: BlockId) {
+        if self.shared.inner.lock().unwrap().require(block_id) {
+            self.notify = true;
+        }
+    }
+}
+
+impl Drop for RequireBatch<'_> {
+    fn drop(&mut self) {
+        if self.notify {
+            self.shared.notify();
+        }
+    }
 }
 
 pub(crate) struct TrackerClient {
@@ -125,7 +126,13 @@ impl TrackerClient {
     pub fn register(&self, block_id: BlockId, state: OfferState) -> bool {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        if !inner.offering_clients[self.client_id].insert(block_id) {
+        // unwrap is OK because if `self` exists the `inner.clients` entry must exists as well.
+        if !inner
+            .clients
+            .get_mut(&self.client_id)
+            .unwrap()
+            .insert(block_id)
+        {
             // Already offered
             return false;
         }
@@ -167,25 +174,14 @@ impl TrackerClient {
 
 impl Drop for TrackerClient {
     fn drop(&mut self) {
-        let mut inner = self.shared.inner.lock().unwrap();
-        let block_ids = inner.offering_clients.remove(self.client_id);
-        let mut notify = false;
-
-        for block_id in block_ids {
-            // unwrap is ok because of the invariant in `Inner`
-            let missing_block = inner.missing_blocks.get_mut(&block_id).unwrap();
-
-            missing_block.offers.remove(&self.client_id);
-
-            if missing_block.unaccept_by(self.client_id) {
-                notify = true;
-            }
-
-            // TODO: if the block hasn't other offers and isn't required, remove it
-        }
-
-        if notify {
-            self.shared.notify()
+        if self
+            .shared
+            .inner
+            .lock()
+            .unwrap()
+            .remove_client(self.client_id)
+        {
+            self.shared.notify();
         }
     }
 }
@@ -212,39 +208,19 @@ impl BlockOffers {
 
     /// Returns the next offer or `None` if none exists currently.
     pub fn try_next(&self) -> Option<BlockOffer> {
-        let mut inner = self.shared.inner.lock().unwrap();
-        let inner = &mut *inner;
+        let block_id = self
+            .shared
+            .inner
+            .lock()
+            .unwrap()
+            .propose_offer(self.client_id)?;
 
-        // TODO: OPTIMIZE (but profile first) this linear lookup
-        for block_id in &inner.offering_clients[self.client_id] {
-            // unwrap is ok because of the invariant in `Inner`
-            let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
-
-            match missing_block.state {
-                State::Idle {
-                    required: true,
-                    approved: true,
-                } => (),
-                State::Idle { .. } | State::Accepted(_) => continue,
-            }
-
-            // unwrap is ok because of the invariant.
-            let offer = missing_block.offers.get_mut(&self.client_id).unwrap();
-            match offer {
-                Offer::Available => {
-                    *offer = Offer::Proposed;
-                }
-                Offer::Proposed | Offer::Accepted => continue,
-            }
-
-            return Some(BlockOffer {
-                shared: self.shared.clone(),
-                client_id: self.client_id,
-                block_id: *block_id,
-            });
-        }
-
-        None
+        Some(BlockOffer {
+            shared: self.shared.clone(),
+            client_id: self.client_id,
+            block_id,
+            complete: false,
+        })
     }
 }
 
@@ -253,6 +229,7 @@ pub(crate) struct BlockOffer {
     shared: Arc<Shared>,
     client_id: ClientId,
     block_id: BlockId,
+    complete: bool,
 }
 
 impl BlockOffer {
@@ -265,55 +242,33 @@ impl BlockOffer {
     /// peer) but only one returns `Some` here. The returned `BlockPromise` is a commitment to send
     /// the block request through this client.
     pub fn accept(self) -> Option<BlockPromise> {
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        let missing_block = inner.missing_blocks.get_mut(&self.block_id)?;
-
-        match missing_block.state {
-            State::Idle {
-                required: true,
-                approved: true,
-            } => (),
-            State::Idle { .. } | State::Accepted(_) => return None,
+        if self
+            .shared
+            .inner
+            .lock()
+            .unwrap()
+            .accept_offer(&self.block_id, self.client_id)
+        {
+            Some(BlockPromise(self))
+        } else {
+            None
         }
-
-        missing_block.state = State::Accepted(self.client_id);
-        missing_block.offers.insert(self.client_id, Offer::Accepted);
-
-        drop(inner);
-
-        Some(BlockPromise(self))
     }
 }
 
 impl Drop for BlockOffer {
     fn drop(&mut self) {
-        let mut inner = self.shared.inner.lock().unwrap();
-        let inner = &mut *inner;
-
-        let Some(missing_block) = inner.missing_blocks.get_mut(&self.block_id) else {
+        if self.complete {
             return;
-        };
-
-        let Entry::Occupied(mut entry) = missing_block.offers.entry(self.client_id) else {
-            return;
-        };
-
-        match entry.get() {
-            Offer::Proposed => {
-                entry.insert(Offer::Available);
-            }
-            Offer::Accepted => {
-                // Dropping an accepted offer means the request either failed or timeouted so it's
-                // safe to remove it. If the peer sends us another leaf node response with the same
-                // block id, we register the offer again.
-                entry.remove();
-                inner.offering_clients[self.client_id].remove(&self.block_id);
-            }
-            Offer::Available => unreachable!(),
         }
 
-        if missing_block.unaccept_by(self.client_id) {
+        if self
+            .shared
+            .inner
+            .lock()
+            .unwrap()
+            .cancel_offer(&self.block_id, self.client_id)
+        {
             self.shared.notify();
         }
     }
@@ -328,18 +283,14 @@ impl BlockPromise {
     }
 
     /// Mark the block request as successfully completed.
-    pub fn complete(self) {
-        let mut inner = self.0.shared.inner.lock().unwrap();
-
-        let Some(missing_block) = inner.missing_blocks.remove(&self.0.block_id) else {
-            return;
-        };
-
-        for (client_id, _) in missing_block.offers {
-            if let Some(block_ids) = inner.offering_clients.get_mut(client_id) {
-                block_ids.remove(&self.0.block_id);
-            }
-        }
+    pub fn complete(mut self) {
+        self.0.complete = true;
+        self.0
+            .shared
+            .inner
+            .lock()
+            .unwrap()
+            .complete(&self.0.block_id);
     }
 }
 
@@ -356,16 +307,162 @@ impl Shared {
 
 // Invariant: for all `block_id` and `client_id` such that
 //
-//     missing_blocks[block_id].offering_clients.contains(client_id)
+//     missing_blocks[block_id].offers.contains_key(client_id)
 //
 // it must hold that
 //
-//     offering_clients[client_id].contains(block_id)
+//     clients[client_id].contains(block_id)
 //
 // and vice-versa.
 struct Inner {
     missing_blocks: HashMap<BlockId, MissingBlock>,
-    offering_clients: Slab<HashSet<BlockId>>,
+    clients: HashMap<ClientId, HashSet<BlockId>>,
+    next_client_id: ClientId,
+}
+
+impl Inner {
+    fn insert_client(&mut self) -> ClientId {
+        let client_id = self.next_client_id;
+        self.next_client_id = self
+            .next_client_id
+            .checked_add(1)
+            .expect("too many clients");
+        self.clients.insert(client_id, HashSet::new());
+        client_id
+    }
+
+    fn remove_client(&mut self, client_id: ClientId) -> bool {
+        // unwrap is ok because if `self` exists the `clients` entry must exists as well.
+        let block_ids = self.clients.remove(&client_id).unwrap();
+        let mut notify = false;
+
+        for block_id in block_ids {
+            // unwrap is ok because of the invariant in `Inner`
+            let missing_block = self.missing_blocks.get_mut(&block_id).unwrap();
+
+            missing_block.offers.remove(&client_id);
+
+            if missing_block.unaccept_by(client_id) {
+                notify = true;
+            }
+
+            // TODO: if the block hasn't other offers and isn't required, remove it
+        }
+
+        notify
+    }
+
+    /// Mark the block with the given id as required. Returns true if the block wasn't already
+    /// required and if it has at least one offer. Otherwise returns false.
+    fn require(&mut self, block_id: BlockId) -> bool {
+        let missing_block = self
+            .missing_blocks
+            .entry(block_id)
+            .or_insert_with(|| MissingBlock {
+                offers: HashMap::default(),
+                state: State::Idle {
+                    required: false,
+                    approved: false,
+                },
+            });
+
+        match &mut missing_block.state {
+            State::Idle { required: true, .. } | State::Accepted(_) => false,
+            State::Idle { required, .. } => {
+                *required = true;
+                !missing_block.offers.is_empty()
+            }
+        }
+    }
+
+    fn complete(&mut self, block_id: &BlockId) {
+        let Some(missing_block) = self.missing_blocks.remove(block_id) else {
+            return;
+        };
+
+        for (client_id, _) in missing_block.offers {
+            if let Some(block_ids) = self.clients.get_mut(&client_id) {
+                block_ids.remove(block_id);
+            }
+        }
+    }
+
+    fn propose_offer(&mut self, client_id: ClientId) -> Option<BlockId> {
+        // TODO: OPTIMIZE (but profile first) this linear lookup
+        for block_id in self.clients.get(&client_id).into_iter().flatten() {
+            // unwrap is ok because of the invariant in `Inner`
+            let missing_block = self.missing_blocks.get_mut(block_id).unwrap();
+
+            match missing_block.state {
+                State::Idle {
+                    required: true,
+                    approved: true,
+                } => (),
+                State::Idle { .. } | State::Accepted(_) => continue,
+            }
+
+            // unwrap is ok because of the invariant.
+            let offer = missing_block.offers.get_mut(&client_id).unwrap();
+            match offer {
+                Offer::Available => {
+                    *offer = Offer::Proposed;
+                }
+                Offer::Proposed | Offer::Accepted => continue,
+            }
+
+            return Some(*block_id);
+        }
+
+        None
+    }
+
+    fn accept_offer(&mut self, block_id: &BlockId, client_id: ClientId) -> bool {
+        let Some(missing_block) = self.missing_blocks.get_mut(block_id) else {
+            return false;
+        };
+
+        match missing_block.state {
+            State::Idle {
+                required: true,
+                approved: true,
+            } => (),
+            State::Idle { .. } | State::Accepted(_) => return false,
+        }
+
+        missing_block.state = State::Accepted(client_id);
+        missing_block.offers.insert(client_id, Offer::Accepted);
+
+        true
+    }
+
+    fn cancel_offer(&mut self, block_id: &BlockId, client_id: ClientId) -> bool {
+        let Some(missing_block) = self.missing_blocks.get_mut(block_id) else {
+            return false;
+        };
+
+        let Entry::Occupied(mut entry) = missing_block.offers.entry(client_id) else {
+            return false;
+        };
+
+        match entry.get() {
+            Offer::Proposed => {
+                entry.insert(Offer::Available);
+            }
+            Offer::Accepted => {
+                // Cancelling an accepted offer means the request either failed or timeouted so it's
+                // safe to remove it. If the peer sends us another leaf node response with the same
+                // block id, we register the offer again.
+                entry.remove();
+                // unwrap is ok because if the client has been already destroyed then
+                // `missing_block.offers[&self.client_id]` would not exists and this function would
+                // have exited earlier.
+                self.clients.get_mut(&client_id).unwrap().remove(block_id);
+            }
+            Offer::Available => unreachable!(),
+        }
+
+        missing_block.unaccept_by(client_id)
+    }
 }
 
 #[derive(Debug)]

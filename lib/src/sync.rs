@@ -233,10 +233,6 @@ pub(crate) mod broadcast_hash_set {
 
             Ok(new_set)
         }
-
-        pub fn is_closed(&self) -> bool {
-            self.watch_rx.is_closed()
-        }
     }
 
     impl<T> Drop for Receiver<T> {
@@ -657,6 +653,10 @@ pub(crate) mod delay_map {
         pub fn len(&self) -> usize {
             self.items.len()
         }
+
+        // pub fn is_empty(&self) -> bool {
+        //     self.items.is_empty()
+        // }
 
         /// Poll for the next expired item. This can be wrapped in `future::poll_fn` and awaited.
         /// Returns `Poll::Ready(None)` if the map is empty.

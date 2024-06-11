@@ -183,7 +183,10 @@ pub(crate) mod actor {
     use super::*;
     use metrics::Key;
     use metrics_ext::Pair;
-    use ouisync::{AccessMode, RepositoryParams};
+    use ouisync::{
+        crypto::{sign::Keypair, Hash, Hashable},
+        AccessMode, RepositoryParams,
+    };
     use state_monitor::StateMonitor;
     use tokio::sync::watch;
 
@@ -192,7 +195,13 @@ pub(crate) mod actor {
     }
 
     pub(crate) fn create_unbound_network() -> Network {
-        Network::new(None, StateMonitor::make_root())
+        // Derive runtime id from the actor name so that the runtime ids don't change across
+        // multiple test invocation. This simplifies debugging.
+        let runtime_id = Keypair::try_from(name().as_bytes().hash().as_ref())
+            .unwrap()
+            .into();
+
+        Network::new(StateMonitor::make_root(), None, Some(runtime_id))
     }
 
     pub(crate) async fn create_network(proto: Proto) -> Network {

@@ -281,7 +281,7 @@ mod tests {
     async fn network_disable_enable_idle() {
         let config_dir = TempDir::new().unwrap();
         let config = ConfigStore::new(config_dir.path());
-        let network = Network::new(None, StateMonitor::make_root());
+        let network = Network::new(StateMonitor::make_root(), None, None);
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 
@@ -301,7 +301,7 @@ mod tests {
     async fn network_disable_enable_pending_connection() {
         let config_dir = TempDir::new().unwrap();
         let config = ConfigStore::new(config_dir.path());
-        let network = Network::new(None, StateMonitor::make_root());
+        let network = Network::new(StateMonitor::make_root(), None, None);
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 
@@ -331,7 +331,7 @@ mod tests {
 
         let config_dir = TempDir::new().unwrap();
         let config = ConfigStore::new(config_dir.path());
-        let network = Network::new(None, StateMonitor::make_root());
+        let network = Network::new(StateMonitor::make_root(), None, None);
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 

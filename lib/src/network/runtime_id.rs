@@ -2,7 +2,7 @@ use crate::crypto::{
     sign::{Keypair, PublicKey, Signature},
     Digest, Hashable,
 };
-use rand::{rngs::OsRng, Rng};
+use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -16,6 +16,12 @@ pub struct SecretRuntimeId {
 }
 
 impl SecretRuntimeId {
+    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+        Self {
+            keypair: Keypair::generate(rng),
+        }
+    }
+
     pub fn random() -> Self {
         Self {
             keypair: Keypair::random(),
@@ -26,6 +32,12 @@ impl SecretRuntimeId {
         PublicRuntimeId {
             public: self.keypair.public_key(),
         }
+    }
+}
+
+impl From<Keypair> for SecretRuntimeId {
+    fn from(keypair: Keypair) -> Self {
+        Self { keypair }
     }
 }
 
