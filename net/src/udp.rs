@@ -42,11 +42,16 @@ mod implementation {
         }
 
         pub async fn bind_multicast(interface: Ipv4Addr) -> io::Result<Self> {
+            // Note: Don't bind to Ipv4Addr::UNSPECIFIED here, on some systems (or all, not sure)
+            // the system would bind to the first network interface that "matches". If there are
+            // two or more network interfaces the second call to this function would try to bind
+            // to the same interface and we'd get the "Address already in use" error.
             let socket: tokio::net::UdpSocket = socket::bind_with_reuse_addr(
-                SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into(),
+                SocketAddrV4::new(interface, MULTICAST_PORT).into(),
                 ReuseAddr::Required,
             )
             .await?;
+
             socket.join_multicast_v4(MULTICAST_ADDR, interface)?;
 
             Ok(Self(socket))

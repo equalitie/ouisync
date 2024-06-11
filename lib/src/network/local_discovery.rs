@@ -158,7 +158,7 @@ impl PerInterfaceLocalDiscovery {
                 seen_peers.clone(),
                 monitor.clone(),
             )
-            .instrument(span.clone()),
+            .instrument(tracing::info_span!(parent: span.clone(), "beacon")),
         );
 
         let receiver_handle = scoped_task::spawn(
@@ -170,7 +170,7 @@ impl PerInterfaceLocalDiscovery {
                 seen_peers,
                 monitor,
             )
-            .instrument(span.clone()),
+            .instrument(tracing::info_span!(parent: span.clone(), "recv_loop")),
         );
 
         Ok(Self {
@@ -375,10 +375,18 @@ impl SocketProvider {
         match &*guard {
             Some(socket) => socket.clone(),
             None => {
+                let mut error_reported = false;
+
                 let socket = loop {
                     match UdpSocket::bind_multicast(self.interface).await {
                         Ok(socket) => break Arc::new(socket),
-                        Err(_) => sleep(ERROR_DELAY).await,
+                        Err(error) => {
+                            if !error_reported {
+                                tracing::warn!("Failed to bind to multicast socket: {error:?}");
+                                error_reported = true;
+                            }
+                            sleep(ERROR_DELAY).await;
+                        }
                     }
                 };
 
