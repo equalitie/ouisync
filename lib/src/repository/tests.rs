@@ -1198,6 +1198,8 @@ async fn set_access_mode_is_idempotent() {
     assert_eq!(writer_id_0, writer_id_1);
 }
 
+// FIXME: This sometimes fails because of a bug in sqlx: https://github.com/launchbadge/sqlx/issues/3217
+#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn aux_db_files_are_deleted_on_close() {
     test_utils::init_log();

@@ -177,7 +177,7 @@ async fn collect(
         active_peers.clear();
 
         for peer in peer_info_collector.collect() {
-            let PeerState::Active(id) = peer.state else {
+            let PeerState::Active { id, .. } = peer.state else {
                 continue;
             };
 

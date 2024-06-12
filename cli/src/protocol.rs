@@ -1,10 +1,16 @@
+use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{builder::BoolishValueParser, Subcommand};
 use ouisync_lib::{
     network::{PeerSource, PeerState},
     AccessMode, PeerAddr, PeerInfo, StorageSize,
 };
 use serde::{Deserialize, Serialize};
-use std::{fmt, io, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    fmt, io,
+    net::SocketAddr,
+    path::PathBuf,
+    time::{Duration, SystemTime},
+};
 
 use crate::repository::{FindError, InvalidRepositoryName};
 
@@ -158,7 +164,11 @@ pub(crate) enum Request {
         #[arg(required = true, value_name = "PROTO/IP:PORT")]
         addrs: Vec<PeerAddr>,
     },
-    /// List all known peers
+    /// List all known peers.
+    ///
+    /// Prints one peer per line, each line consists of the following space-separated fields: ip,
+    /// port, protocol, source, state, runtime id, active since, bytes sent, bytes received, last
+    /// received at.
     ListPeers,
     /// Enable or disable DHT
     Dht {
@@ -461,23 +471,35 @@ impl fmt::Display for PeerInfoDisplay<'_> {
                 PeerState::Known => "known",
                 PeerState::Connecting => "connecting",
                 PeerState::Handshaking => "handshaking",
-                PeerState::Active(_) => "active",
+                PeerState::Active { .. } => "active",
             },
         )?;
 
-        if let PeerState::Active(id) = &self.0.state {
-            write!(f, " {}", id.as_public_key())?;
+        if let PeerState::Active { id, since } = &self.0.state {
+            write!(
+                f,
+                " {} {} {} {} {}",
+                id.as_public_key(),
+                format_time(*since),
+                self.0.stats.send,
+                self.0.stats.recv,
+                format_time(self.0.stats.recv_at),
+            )?;
         }
 
         Ok(())
     }
 }
 
+fn format_time(time: SystemTime) -> String {
+    DateTime::<Utc>::from(time).to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ouisync_lib::{
-        network::{PeerSource, PeerState},
+        network::{PeerSource, PeerState, TrafficStats},
         SecretRuntimeId,
     };
     use rand::{rngs::StdRng, SeedableRng};
@@ -494,7 +516,8 @@ mod tests {
             PeerInfoDisplay(&PeerInfo {
                 addr: PeerAddr::Quic(addr),
                 source: PeerSource::Dht,
-                state: PeerState::Connecting
+                state: PeerState::Connecting,
+                stats: TrafficStats::default(),
             })
             .to_string(),
             "127.0.0.1 1248 quic dht connecting"
@@ -504,10 +527,31 @@ mod tests {
             PeerInfoDisplay(&PeerInfo {
                 addr: PeerAddr::Quic(addr),
                 source: PeerSource::Dht,
-                state: PeerState::Active(runtime_id),
+                state: PeerState::Active {
+                    id: runtime_id,
+                    since: DateTime::parse_from_rfc3339("2024-06-12T02:30:00Z")
+                        .unwrap()
+                        .into(),
+                },
+                stats: TrafficStats {
+                    send: 1024,
+                    recv: 4096,
+                    recv_at: DateTime::parse_from_rfc3339("2024-06-12T14:00:00Z")
+                        .unwrap()
+                        .into(),
+                },
             })
             .to_string(),
-            "127.0.0.1 1248 quic dht active ee1aa49a4459dfe813a3cf6eb882041230c7b2558469de81f87c9bf23bf10a03"
+            "127.0.0.1 \
+             1248 \
+             quic \
+             dht \
+             active \
+             ee1aa49a4459dfe813a3cf6eb882041230c7b2558469de81f87c9bf23bf10a03 \
+             2024-06-12T02:30:00Z \
+             1024 \
+             4096 \
+             2024-06-12T14:00:00Z"
         );
     }
 }

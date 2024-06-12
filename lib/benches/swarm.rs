@@ -366,7 +366,7 @@ impl ThroughputMonitor {
 
     async fn run(&self, network: &Network) {
         loop {
-            let TrafficStats { send, recv } = network.traffic_stats();
+            let TrafficStats { send, recv, .. } = network.traffic_stats();
 
             self.bytes_sent.absolute(send);
             self.bytes_received.absolute(recv);

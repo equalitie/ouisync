@@ -1,6 +1,6 @@
 use super::{
     peer_addr::PeerAddr, peer_info::PeerInfo, peer_source::PeerSource, peer_state::PeerState,
-    runtime_id::PublicRuntimeId,
+    runtime_id::PublicRuntimeId, traffic_tracker::TrafficTracker,
 };
 use crate::collections::{hash_map::Entry, HashMap};
 use deadlock::BlockingMutex;
@@ -11,6 +11,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    time::SystemTime,
 };
 
 pub(super) type PermitId = u64;
@@ -64,6 +65,7 @@ impl ConnectionDeduplicator {
                     id,
                     state: PeerState::Known,
                     source,
+                    tracker: TrafficTracker::new(),
                     on_release: on_release_tx,
                 });
                 self.on_change_tx.send(()).unwrap_or(());
@@ -105,7 +107,12 @@ impl ConnectionDeduplicator {
         connections
             .get(&incoming)
             .or_else(|| connections.get(&outgoing))
-            .map(|peer| PeerInfo::new(addr, peer.source, peer.state))
+            .map(|peer| PeerInfo {
+                addr,
+                source: peer.source,
+                state: peer.state,
+                stats: peer.tracker.get(),
+            })
     }
 
     pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
@@ -128,7 +135,12 @@ impl PeerInfoCollector {
             .lock()
             .unwrap()
             .iter()
-            .map(|(key, peer)| PeerInfo::new(key.addr, peer.source, peer.state))
+            .map(|(key, peer)| PeerInfo {
+                addr: key.addr,
+                source: peer.source,
+                state: peer.state,
+                stats: peer.tracker.get(),
+            })
             .collect()
     }
 }
@@ -137,6 +149,7 @@ pub(super) struct Peer {
     id: PermitId,
     state: PeerState,
     source: PeerSource,
+    tracker: TrafficTracker,
     on_release: DropAwaitable,
 }
 
@@ -194,7 +207,10 @@ impl ConnectionPermit {
     }
 
     pub fn mark_as_active(&self, runtime_id: PublicRuntimeId) {
-        self.set_state(PeerState::Active(runtime_id));
+        self.set_state(PeerState::Active {
+            id: runtime_id,
+            since: SystemTime::now(),
+        });
     }
 
     fn set_state(&self, new_state: PeerState) {
@@ -226,18 +242,32 @@ impl ConnectionPermit {
         self.with_peer(|peer| peer.source)
     }
 
+    pub fn tracker(&self) -> TrafficTracker {
+        self.with_peer(|peer| peer.tracker.clone())
+    }
+
     /// Dummy connection permit for tests.
     #[cfg(test)]
     pub fn dummy() -> Self {
         use std::net::Ipv4Addr;
 
+        let info = ConnectionInfo {
+            addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
+            dir: ConnectionDirection::Incoming,
+        };
+        let id = 0;
+        let peer = Peer {
+            id,
+            state: PeerState::Known,
+            source: PeerSource::UserProvided,
+            tracker: TrafficTracker::new(),
+            on_release: DropAwaitable::new(),
+        };
+
         Self {
-            connections: Arc::new(BlockingMutex::new(HashMap::default())),
-            info: ConnectionInfo {
-                addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
-                dir: ConnectionDirection::Incoming,
-            },
-            id: 0,
+            connections: Arc::new(BlockingMutex::new([(info, peer)].into_iter().collect())),
+            info,
+            id,
             on_deduplicator_change: uninitialized_watch::channel().0,
         }
     }
@@ -276,6 +306,10 @@ pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 impl ConnectionPermitHalf {
     pub fn id(&self) -> PermitId {
         self.0.id
+    }
+
+    pub fn tracker(&self) -> TrafficTracker {
+        self.0.tracker()
     }
 }
 

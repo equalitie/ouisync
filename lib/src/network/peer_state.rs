@@ -1,18 +1,22 @@
 use super::runtime_id::PublicRuntimeId;
+use crate::time;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{
     de::{self, SeqAccess, Unexpected, Visitor},
-    ser::SerializeTuple,
+    ser::{Error as _, SerializeTuple},
     Deserialize, Deserializer, Serialize, Serializer,
 };
-use std::fmt;
+use std::{fmt, time::SystemTime};
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum PeerState {
     Known,
     Connecting,
     Handshaking,
-    Active(PublicRuntimeId),
+    Active {
+        id: PublicRuntimeId,
+        since: SystemTime,
+    },
 }
 
 impl Serialize for PeerState {
@@ -24,10 +28,13 @@ impl Serialize for PeerState {
             Self::Known => PeerStateKind::Known.serialize(s),
             Self::Connecting => PeerStateKind::Connecting.serialize(s),
             Self::Handshaking => PeerStateKind::Handshaking.serialize(s),
-            Self::Active(id) => {
-                let mut t = s.serialize_tuple(2)?;
+            Self::Active { id, since } => {
+                let mut t = s.serialize_tuple(3)?;
                 t.serialize_element(&PeerStateKind::Active)?;
                 t.serialize_element(id)?;
+                t.serialize_element(
+                    &time::to_millis_since_epoch(*since).map_err(S::Error::custom)?,
+                )?;
                 t.end()
             }
         }
@@ -47,7 +54,7 @@ impl<'de> Deserialize<'de> for PeerState {
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 write!(
                     f,
-                    "one of {}, {}, {} or a pair of {} and a byte array",
+                    "one of {}, {}, {} or a tuple of {}, a byte array and a timestamp",
                     u8::from(PeerStateKind::Known),
                     u8::from(PeerStateKind::Connecting),
                     u8::from(PeerStateKind::Handshaking),
@@ -99,11 +106,18 @@ impl<'de> Deserialize<'de> for PeerState {
                     Some(PeerStateKind::Connecting) => Ok(PeerState::Connecting),
                     Some(PeerStateKind::Handshaking) => Ok(PeerState::Handshaking),
                     Some(PeerStateKind::Active) => {
-                        if let Some(id) = seq.next_element()? {
-                            Ok(PeerState::Active(id))
-                        } else {
-                            Err(<A::Error as de::Error>::invalid_length(1, &self))
-                        }
+                        let Some(id) = seq.next_element()? else {
+                            return Err(<A::Error as de::Error>::invalid_length(1, &self));
+                        };
+
+                        let Some(since) = seq.next_element()? else {
+                            return Err(<A::Error as de::Error>::invalid_length(2, &self));
+                        };
+
+                        Ok(PeerState::Active {
+                            id,
+                            since: time::from_millis_since_epoch(since),
+                        })
                     }
                     None => Err(<A::Error as de::Error>::invalid_length(0, &self)),
                 }
@@ -134,6 +148,8 @@ pub enum PeerStateKind {
 
 #[cfg(test)]
 mod tests {
+    use self::time::{from_millis_since_epoch, to_millis_since_epoch};
+
     use super::*;
     use crate::network::runtime_id::SecretRuntimeId;
     use serde_test::{assert_tokens, Token};
@@ -152,11 +168,15 @@ mod tests {
             &[Token::U8(PeerStateKind::Handshaking.into())],
         );
         assert_tokens(
-            &PeerState::Active(id),
+            &PeerState::Active {
+                id,
+                since: SystemTime::UNIX_EPOCH,
+            },
             &[
-                Token::Tuple { len: 2 },
+                Token::Tuple { len: 3 },
                 Token::U8(PeerStateKind::Active.into()),
                 Token::BorrowedBytes(Box::leak(id.as_ref().to_vec().into_boxed_slice())),
+                Token::U64(0),
                 Token::TupleEnd,
             ],
         );
@@ -168,7 +188,13 @@ mod tests {
             PeerState::Known,
             PeerState::Connecting,
             PeerState::Handshaking,
-            PeerState::Active(SecretRuntimeId::random().public()),
+            PeerState::Active {
+                id: SecretRuntimeId::random().public(),
+                // The timestamp is serialized as the number of milliseconds since the epoch so we
+                // need to round it to whole milliseconds otherwise the deserialized value would
+                // not be exactly equal to the original one.
+                since: round_to_millis(SystemTime::now()),
+            },
         ];
 
         for state in states {
@@ -176,5 +202,9 @@ mod tests {
             let d: PeerState = serde_json::from_str(&s).unwrap();
             assert_eq!(d, state);
         }
+    }
+
+    fn round_to_millis(time: SystemTime) -> SystemTime {
+        from_millis_since_epoch(to_millis_since_epoch(time).unwrap())
     }
 }
