@@ -41,7 +41,9 @@ android {
     }
 
     compileSdkVersion 34
-    ndkVersion '25.2.9519653'
+
+    // At time of writing, this is the LTS version
+    ndkVersion '26.3.11579264'
 
     sourceSets {
         main.java.srcDirs += 'src/main/kotlin'
@@ -106,8 +108,8 @@ cargo {
     // More info: https://github.com/bbqsrc/cargo-ndk/issues/94.
     exec { spec, toolchain ->
         if (toolchain.target == 'x86_64-linux-android') {
-            def clangVersion = '14.0.7'
-            def libDir = "${android.sdkDirectory}/ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/${clangVersion}/lib/linux"
+            def clangVersion = '17'
+            def libDir = "${android.sdkDirectory}/ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/${clangVersion}/lib/linux"
 
             spec.environment('RUSTFLAGS', "-L${libDir} -lstatic=clang_rt.builtins-x86_64-android")
         }
