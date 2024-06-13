@@ -38,8 +38,9 @@ impl State {
         let config = ConfigStore::new(&dirs.config_dir);
 
         let network = Network::new(
-            Some(config.dht_contacts_store()),
             monitor.make_child("Network"),
+            Some(config.dht_contacts_store()),
+            None,
         );
 
         network::init(

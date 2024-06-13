@@ -19,6 +19,7 @@ anyhow = "1.0.57"
 async-trait = { workspace = true }
 bytes = "1.4.0"
 camino = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 dirs = "4.0.0"
 futures-util = { workspace = true }

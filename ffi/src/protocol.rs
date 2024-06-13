@@ -597,6 +597,8 @@ impl fmt::Debug for Bytes {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use super::*;
     use ouisync_lib::{
         network::{PeerSource, PeerState},
@@ -653,13 +655,18 @@ mod tests {
                     addr: PeerAddr::Quic(([192, 168, 1, 204], 65535).into()),
                     source: PeerSource::LocalDiscovery,
                     state: PeerState::Connecting,
+                    stats: TrafficStats::default(),
                 },
                 PeerInfo {
                     addr: PeerAddr::Quic(
                         ([0x2001, 0xdb8, 0x0, 0x0, 0x0, 0x8a2e, 0x370, 0x7334], 12345).into(),
                     ),
                     source: PeerSource::Dht,
-                    state: PeerState::Active(SecretRuntimeId::random().public()),
+                    state: PeerState::Active {
+                        id: SecretRuntimeId::random().public(),
+                        since: SystemTime::UNIX_EPOCH,
+                    },
+                    stats: TrafficStats::default(),
                 },
             ]),
             Response::PeerAddrs(vec![PeerAddr::Tcp(([192, 168, 1, 234], 45678).into())]),

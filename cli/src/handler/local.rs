@@ -5,8 +5,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::{network, transport::SessionContext};
-use ouisync_lib::{crypto::Password, LocalSecret, PeerAddr, SetLocalSecret, ShareToken};
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use ouisync_lib::{crypto::Password, LocalSecret, SetLocalSecret, ShareToken};
+use std::{sync::Arc, time::Duration};
 
 #[derive(Clone)]
 pub(crate) struct LocalHandler {
@@ -248,30 +248,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 network::bind(&self.state.network, &self.state.config, &addrs).await;
                 Ok(().into())
             }
-            Request::ListPorts => {
-                let ports: Vec<_> = self
-                    .state
-                    .network
-                    .listener_local_addrs()
-                    .into_iter()
-                    .map(|addr| match addr {
-                        PeerAddr::Quic(SocketAddr::V4(addr)) => {
-                            format!("QUIC, IPv4: {}", addr.port())
-                        }
-                        PeerAddr::Quic(SocketAddr::V6(addr)) => {
-                            format!("QUIC, IPv6: {}", addr.port())
-                        }
-                        PeerAddr::Tcp(SocketAddr::V4(addr)) => {
-                            format!("TCP, IPv4: {}", addr.port())
-                        }
-                        PeerAddr::Tcp(SocketAddr::V6(addr)) => {
-                            format!("TCP, IPv6: {}", addr.port())
-                        }
-                    })
-                    .collect();
-
-                Ok(ports.into())
-            }
+            Request::ListBinds => Ok(self.state.network.listener_local_addrs().into()),
             Request::LocalDiscovery { enabled } => {
                 if let Some(enabled) = enabled {
                     network::set_local_discovery_enabled(

@@ -146,6 +146,8 @@ impl PendingRequests {
             REQUEST_TIMEOUT,
         );
 
+        tracing::trace!(pending_requests = map.len());
+
         // The expiration tracker task is started each time an item is inserted into previously
         // empty map and stopped when the map becomes empty again.
         if map.len() == 1 {
@@ -164,31 +166,36 @@ impl PendingRequests {
         let response = ProcessedResponse::from(response);
         let key = response.to_key();
 
-        let (client_permit, block_promise) =
-            if let Some(request_data) = self.map.lock().unwrap().remove(&key) {
-                request_removed(&self.monitor, &key);
+        let mut map = self.map.lock().unwrap();
 
-                self.monitor
-                    .request_latency
-                    .record(request_data.timestamp.elapsed());
+        if let Some(request_data) = map.remove(&key) {
+            tracing::trace!(pending_requests = map.len());
 
-                // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
-                // only `drop` it once the request is processed.
-                let client_permit = Some(ClientPermit {
-                    _link_permit: request_data.link_permit,
-                    monitor: self.monitor.clone(),
-                });
-                let block_promise = request_data.block_promise;
+            request_removed(&self.monitor, &key);
 
-                (client_permit, block_promise)
-            } else {
-                (None, None)
-            };
+            self.monitor
+                .request_latency
+                .record(request_data.timestamp.elapsed());
 
-        PendingResponse {
-            response,
-            _client_permit: client_permit,
-            block_promise,
+            // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
+            // only `drop` it once the request is processed.
+            let client_permit = Some(ClientPermit {
+                _link_permit: request_data.link_permit,
+                monitor: self.monitor.clone(),
+            });
+            let block_promise = request_data.block_promise;
+
+            PendingResponse {
+                response,
+                _client_permit: client_permit,
+                block_promise,
+            }
+        } else {
+            PendingResponse {
+                response,
+                _client_permit: None,
+                block_promise: None,
+            }
         }
     }
 }

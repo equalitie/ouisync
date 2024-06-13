@@ -30,6 +30,11 @@ impl MultiRepoMount for MultiRepoVFS {
 
 pub struct MountGuard;
 
+// To satisfy clippy: https://rust-lang.github.io/rust-clippy/master/index.html#drop_non_drop
+impl Drop for MountGuard {
+    fn drop(&mut self) {}
+}
+
 pub fn mount(
     _runtime_handle: tokio::runtime::Handle,
     _repository: Arc<Repository>,

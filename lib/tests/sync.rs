@@ -66,6 +66,11 @@ fn sync_two_peers_two_repos_large() {
     sync_swarm_case(2, 2, LARGE_SIZE)
 }
 
+#[test]
+fn sync_many_peers_one_repo_large() {
+    sync_swarm_case(10, 1, LARGE_SIZE)
+}
+
 fn sync_swarm_case(num_peers: usize, num_repos: usize, file_size: usize) {
     assert!(num_peers > 1);
     assert!(num_repos > 0);

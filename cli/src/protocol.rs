@@ -1,7 +1,16 @@
+use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{builder::BoolishValueParser, Subcommand};
-use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, StorageSize};
+use ouisync_lib::{
+    network::{PeerSource, PeerState},
+    AccessMode, PeerAddr, PeerInfo, StorageSize,
+};
 use serde::{Deserialize, Serialize};
-use std::{fmt, io, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    fmt, io,
+    net::SocketAddr,
+    path::PathBuf,
+    time::{Duration, SystemTime},
+};
 
 use crate::repository::{FindError, InvalidRepositoryName};
 
@@ -130,8 +139,8 @@ pub(crate) enum Request {
         #[arg(value_name = "PROTO/IP:PORT")]
         addrs: Vec<PeerAddr>,
     },
-    /// List protocol ports we are listening on
-    ListPorts,
+    /// List addresses and ports we are listening on
+    ListBinds,
     /// Enable or disable local discovery
     LocalDiscovery {
         /// Whether to enable or disable. If omitted, prints the current state.
@@ -155,7 +164,11 @@ pub(crate) enum Request {
         #[arg(required = true, value_name = "PROTO/IP:PORT")]
         addrs: Vec<PeerAddr>,
     },
-    /// List all known peers
+    /// List all known peers.
+    ///
+    /// Prints one peer per line, each line consists of the following space-separated fields: ip,
+    /// port, protocol, source, state, runtime id, active since, bytes sent, bytes received, last
+    /// received at.
     ListPeers,
     /// Enable or disable DHT
     Dht {
@@ -229,6 +242,7 @@ pub(crate) enum Response {
     String(String),
     Strings(Vec<String>),
     PeerInfo(Vec<PeerInfo>),
+    PeerAddrs(Vec<PeerAddr>),
     SocketAddrs(Vec<SocketAddr>),
     StorageSize(StorageSize),
     QuotaInfo(QuotaInfo),
@@ -265,6 +279,12 @@ impl From<Vec<PeerInfo>> for Response {
     }
 }
 
+impl From<Vec<PeerAddr>> for Response {
+    fn from(value: Vec<PeerAddr>) -> Self {
+        Self::PeerAddrs(value)
+    }
+}
+
 impl From<Vec<SocketAddr>> for Response {
     fn from(value: Vec<SocketAddr>) -> Self {
         Self::SocketAddrs(value)
@@ -298,7 +318,14 @@ impl fmt::Display for Response {
             }
             Self::PeerInfo(value) => {
                 for peer in value {
-                    writeln!(f, "{} ({:?}, {:?})", peer.addr, peer.source, peer.state)?;
+                    writeln!(f, "{}", PeerInfoDisplay(peer))?;
+                }
+
+                Ok(())
+            }
+            Self::PeerAddrs(addrs) => {
+                for addr in addrs {
+                    writeln!(f, "{}", PeerAddrDisplay(addr))?;
                 }
 
                 Ok(())
@@ -405,5 +432,126 @@ fn percent(num: u64, den: u64) -> f64 {
         100.0 * num as f64 / den as f64
     } else {
         0.0
+    }
+}
+
+struct PeerAddrDisplay<'a>(&'a PeerAddr);
+
+impl fmt::Display for PeerAddrDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{} {} {}",
+            self.0.ip(),
+            self.0.port(),
+            match self.0 {
+                PeerAddr::Tcp(_) => "tcp",
+                PeerAddr::Quic(_) => "quic",
+            },
+        )
+    }
+}
+
+struct PeerInfoDisplay<'a>(&'a PeerInfo);
+
+impl fmt::Display for PeerInfoDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{} {} {}",
+            PeerAddrDisplay(&self.0.addr),
+            match self.0.source {
+                PeerSource::UserProvided => "user-provided",
+                PeerSource::Listener => "listener",
+                PeerSource::LocalDiscovery => "local-discovery",
+                PeerSource::Dht => "dht",
+                PeerSource::PeerExchange => "pex",
+            },
+            match self.0.state {
+                PeerState::Known => "known",
+                PeerState::Connecting => "connecting",
+                PeerState::Handshaking => "handshaking",
+                PeerState::Active { .. } => "active",
+            },
+        )?;
+
+        if let PeerState::Active { id, since } = &self.0.state {
+            write!(
+                f,
+                " {} {} {} {} {}",
+                id.as_public_key(),
+                format_time(*since),
+                self.0.stats.send,
+                self.0.stats.recv,
+                format_time(self.0.stats.recv_at),
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+fn format_time(time: SystemTime) -> String {
+    DateTime::<Utc>::from(time).to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ouisync_lib::{
+        network::{PeerSource, PeerState, TrafficStats},
+        SecretRuntimeId,
+    };
+    use rand::{rngs::StdRng, SeedableRng};
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn peer_info_display() {
+        let mut rng = StdRng::seed_from_u64(0);
+
+        let addr: SocketAddr = (Ipv4Addr::LOCALHOST, 1248).into();
+        let runtime_id = SecretRuntimeId::generate(&mut rng).public();
+
+        assert_eq!(
+            PeerInfoDisplay(&PeerInfo {
+                addr: PeerAddr::Quic(addr),
+                source: PeerSource::Dht,
+                state: PeerState::Connecting,
+                stats: TrafficStats::default(),
+            })
+            .to_string(),
+            "127.0.0.1 1248 quic dht connecting"
+        );
+
+        assert_eq!(
+            PeerInfoDisplay(&PeerInfo {
+                addr: PeerAddr::Quic(addr),
+                source: PeerSource::Dht,
+                state: PeerState::Active {
+                    id: runtime_id,
+                    since: DateTime::parse_from_rfc3339("2024-06-12T02:30:00Z")
+                        .unwrap()
+                        .into(),
+                },
+                stats: TrafficStats {
+                    send: 1024,
+                    recv: 4096,
+                    recv_at: DateTime::parse_from_rfc3339("2024-06-12T14:00:00Z")
+                        .unwrap()
+                        .into(),
+                },
+            })
+            .to_string(),
+            "127.0.0.1 \
+             1248 \
+             quic \
+             dht \
+             active \
+             ee1aa49a4459dfe813a3cf6eb882041230c7b2558469de81f87c9bf23bf10a03 \
+             2024-06-12T02:30:00Z \
+             1024 \
+             4096 \
+             2024-06-12T14:00:00Z"
+        );
     }
 }

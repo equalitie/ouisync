@@ -92,7 +92,7 @@ fn default_socket() -> PathBuf {
 mod platform {
     use super::*;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn default_socket() -> PathBuf {
         // FIXME: when running as root, we should use `/run`
         dirs::runtime_dir()

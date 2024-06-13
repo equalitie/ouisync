@@ -1,7 +1,7 @@
 use super::{
     constants::MAX_PENDING_REQUESTS_PER_CLIENT,
     debug_payload::{DebugResponse, PendingDebugRequest},
-    message::{Content, Response, ResponseDisambiguator},
+    message::{Content, Request, Response, ResponseDisambiguator},
     pending::{PendingRequest, PendingRequests, PendingResponse, ProcessedResponse},
 };
 use crate::{
@@ -14,25 +14,24 @@ use crate::{
     repository::{BlockRequestMode, Vault},
     store::{self, ReceiveFilter},
 };
-use std::{pin::pin, sync::Arc, time::Instant};
+use std::{future, sync::Arc, time::Instant};
 use tokio::{
     select,
-    sync::{mpsc, Semaphore},
+    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
 use tracing::{instrument, Level};
 
 pub(super) struct Client {
     inner: Inner,
-    rx: mpsc::Receiver<Response>,
+    response_rx: mpsc::Receiver<Response>,
     send_queue_rx: mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-    recv_queue_rx: mpsc::Receiver<(PendingResponse, Instant)>,
 }
 
 impl Client {
     pub fn new(
         vault: Vault,
-        tx: mpsc::Sender<Content>,
-        rx: mpsc::Receiver<Response>,
+        content_tx: mpsc::Sender<Content>,
+        response_rx: mpsc::Receiver<Response>,
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pending_requests = PendingRequests::new(vault.monitor.clone());
@@ -43,27 +42,21 @@ impl Client {
         // processing responses (which sometimes takes a while).
         let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
 
-        // We're making sure to not send more requests than MAX_PENDING_REQUESTS_PER_CLIENT, but
-        // there may be some unsolicited responses and also the peer may be malicious and send us
-        // too many responses (so we shoulnd't use unbounded_channel).
-        let (recv_queue_tx, recv_queue_rx) = mpsc::channel(2 * MAX_PENDING_REQUESTS_PER_CLIENT);
-
         let inner = Inner {
             vault,
             pending_requests,
             peer_request_limiter,
+            link_request_limiter: Arc::new(Semaphore::new(MAX_PENDING_REQUESTS_PER_CLIENT)),
             receive_filter,
             block_tracker,
-            tx,
+            content_tx,
             send_queue_tx,
-            recv_queue_tx,
         };
 
         Self {
             inner,
-            rx,
+            response_rx,
             send_queue_rx,
-            recv_queue_rx,
         }
     }
 }
@@ -72,12 +65,11 @@ impl Client {
     pub async fn run(&mut self) -> Result<()> {
         let Self {
             inner,
-            rx,
+            response_rx,
             send_queue_rx,
-            recv_queue_rx,
         } = self;
 
-        inner.run(rx, send_queue_rx, recv_queue_rx).await
+        inner.run(response_rx, send_queue_rx).await
     }
 }
 
@@ -85,54 +77,27 @@ struct Inner {
     vault: Vault,
     pending_requests: PendingRequests,
     peer_request_limiter: Arc<Semaphore>,
+    link_request_limiter: Arc<Semaphore>,
     receive_filter: ReceiveFilter,
     block_tracker: TrackerClient,
-    tx: mpsc::Sender<Content>,
+    content_tx: mpsc::Sender<Content>,
     send_queue_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
-    recv_queue_tx: mpsc::Sender<(PendingResponse, Instant)>,
 }
 
 impl Inner {
     async fn run(
         &mut self,
-        rx: &mut mpsc::Receiver<Response>,
+        response_rx: &mut mpsc::Receiver<Response>,
         send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-        recv_queue_rx: &mut mpsc::Receiver<(PendingResponse, Instant)>,
     ) -> Result<()> {
         self.receive_filter.reset().await?;
 
-        let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
-        let mut block_offers = self.block_tracker.offers();
-
-        let mut send_requests = pin!(self.send_requests(send_queue_rx));
-
-        // NOTE: It is important to keep `remove`ing requests from `pending_requests` in parallel
-        // with response handling. It is because response handling may take a long time (e.g. due
-        // to acquiring database write transaction if there are other write transactions currently
-        // going on - such as when forking) and so waiting for it could cause some requests in
-        // `pending_requests` to time out.
-        let mut enqueue_responses = pin!(self.enqueue_responses(rx));
-        let mut handle_responses = pin!(self.handle_responses(recv_queue_rx));
-
-        loop {
-            select! {
-                block_offer = block_offers.next() => {
-                    let debug = PendingDebugRequest::start();
-                    self.enqueue_request(PendingRequest::Block(block_offer, debug));
-                }
-                _ = &mut send_requests => break,
-                _ = &mut enqueue_responses => break,
-                result = &mut handle_responses => {
-                    result?;
-                    break;
-                }
-                result = reload_index_rx.changed(), if !reload_index_rx.is_closed() => {
-                    self.refresh_branches(result.ok().into_iter().flatten());
-                }
-            }
+        select! {
+            result = self.handle_responses(response_rx) => result,
+            _ = self.send_requests(send_queue_rx) => Ok(()),
+            _ = self.handle_available_block_offers() => Ok(()),
+            _ = self.handle_reload_index() => Ok(()),
         }
-
-        Ok(())
     }
 
     fn enqueue_request(&self, request: PendingRequest) {
@@ -143,93 +108,72 @@ impl Inner {
         &self,
         send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
     ) {
-        // Limits requests per link (peer + repo)
-        let link_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_REQUESTS_PER_CLIENT));
-
         loop {
             let Some((request, timestamp)) = send_queue_rx.recv().await else {
                 break;
             };
 
-            // Unwraps OK because we never `close()` the semaphores.
-            //
-            // NOTE that the order here is important, we don't want to block the other clients
-            // on this peer if we have too many responses queued up (which is what the
-            // `link_permit` is responsible for limiting)..
-            let link_permit = link_request_limiter.clone().acquire_owned().await.unwrap();
-
-            let peer_permit = self
-                .peer_request_limiter
-                .clone()
-                .acquire_owned()
-                .await
-                .unwrap();
+            let permits = self.acquire_send_permits().await;
 
             self.vault
                 .monitor
                 .request_queue_time
                 .record(timestamp.elapsed());
 
-            let Some(request) = self
+            if let Some(request) = self
                 .pending_requests
-                .insert(request, link_permit, peer_permit)
-            else {
-                // The same request is already in-flight.
-                continue;
-            };
-
-            self.tx.send(Content::Request(request)).await.unwrap_or(());
-        }
-    }
-
-    async fn enqueue_responses(&self, rx: &mut mpsc::Receiver<Response>) {
-        loop {
-            let Some(response) = rx.recv().await else {
-                break;
-            };
-
-            self.vault.monitor.responses_received.increment(1);
-
-            // TODO: The `BlockOffer` response doesn't require write access to the store and so
-            // can be processed faster than the other response types and furthermore, it can be
-            // processed concurrently. Consider using a separate queue and a separate `select`
-            // branch for it to speed things up.
-
-            let response = self.pending_requests.remove(response);
-
-            if self
-                .recv_queue_tx
-                .send((response, Instant::now()))
-                .await
-                .is_err()
+                .insert(request, permits.link, permits.peer)
             {
-                break;
+                self.send_request(request).await;
             }
         }
     }
 
-    async fn handle_responses(
-        &self,
-        recv_queue_rx: &mut mpsc::Receiver<(PendingResponse, Instant)>,
-    ) -> Result<()> {
-        loop {
-            match recv_queue_rx.recv().await {
-                Some((response, timestamp)) => {
-                    self.vault
-                        .monitor
-                        .response_queue_time
-                        .record(timestamp.elapsed());
+    async fn send_request(&self, request: Request) {
+        self.content_tx
+            .send(Content::Request(request))
+            .await
+            .unwrap_or(());
+    }
 
-                    let start = Instant::now();
-                    self.handle_response(response).await?;
-                    self.vault
-                        .monitor
-                        .response_handle_time
-                        .record(start.elapsed());
-                }
-                None => return Ok(()),
-            };
+    async fn acquire_send_permits(&self) -> SendPermits {
+        // Unwraps OK because we never `close()` the semaphores.
+        //
+        // NOTE that the order here is important, we don't want to block the other clients
+        // on this peer if we have too many responses queued up (which is what the
+        // `link_permit` is responsible for limiting)..
+        let link = self
+            .link_request_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+
+        let peer = self
+            .peer_request_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+
+        SendPermits { link, peer }
+    }
+
+    async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
+        while let Some(response) = rx.recv().await {
+            self.vault.monitor.responses_received.increment(1);
+
+            let response = self.pending_requests.remove(response);
+
+            let start = Instant::now();
+            self.handle_response(response).await?;
+            self.vault
+                .monitor
+                .response_handle_time
+                .record(start.elapsed());
         }
+
+        Ok(())
     }
 
     async fn handle_response(&self, response: PendingResponse) -> Result<()> {
@@ -237,7 +181,6 @@ impl Inner {
             ProcessedResponse::RootNode(proof, block_presence, debug) => {
                 self.handle_root_node(proof, block_presence, debug).await
             }
-
             ProcessedResponse::InnerNodes(nodes, _, debug) => {
                 self.handle_inner_nodes(nodes, debug).await
             }
@@ -450,10 +393,30 @@ impl Inner {
         block_id: BlockId,
         _debug_payload: DebugResponse,
     ) -> Result<()> {
-        tracing::trace!("Client received block not found {:?}", block_id);
+        tracing::trace!("Received block not found {:?}", block_id);
         self.vault
             .receive_block_not_found(block_id, &self.receive_filter)
             .await
+    }
+
+    async fn handle_available_block_offers(&self) {
+        let mut block_offers = self.block_tracker.offers();
+
+        loop {
+            let block_offer = block_offers.next().await;
+            let debug = PendingDebugRequest::start();
+            self.enqueue_request(PendingRequest::Block(block_offer, debug));
+        }
+    }
+
+    async fn handle_reload_index(&self) {
+        let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
+
+        while let Ok(branch_ids) = reload_index_rx.changed().await {
+            self.refresh_branches(branch_ids);
+        }
+
+        future::pending().await
     }
 
     // Request again the branches that became completed. This is to cover the following edge
@@ -518,4 +481,9 @@ impl Inner {
             );
         }
     }
+}
+
+struct SendPermits {
+    peer: OwnedSemaphorePermit,
+    link: OwnedSemaphorePermit,
 }

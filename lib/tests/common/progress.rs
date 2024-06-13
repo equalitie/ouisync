@@ -1,5 +1,6 @@
 use ouisync::{Progress, Repository};
 use std::{
+    fmt,
     sync::{Arc, Mutex as BlockingMutex},
     time::{Duration, Instant},
 };
@@ -47,6 +48,7 @@ async fn handle(mut rx: mpsc::Receiver<Command>) {
     let mut num_synced = 0;
     let mut change = false;
     let mut wakeup = Instant::now();
+    let start = Instant::now();
 
     loop {
         let command = select! {
@@ -75,7 +77,7 @@ async fn handle(mut rx: mpsc::Receiver<Command>) {
             }
             Command::Report => {
                 if change {
-                    report(progress, num_synced, num_actors)
+                    report(progress, start, num_synced, num_actors)
                 }
 
                 change = false;
@@ -103,17 +105,19 @@ fn is_complete(progress: &Progress) -> bool {
     progress.total > 0 && progress.value >= progress.total
 }
 
-fn report(progress: Progress, num_synced: usize, num_actors: usize) {
+fn report(progress: Progress, start: Instant, num_synced: usize, num_actors: usize) {
     if event_enabled!(tracing::Level::INFO) {
         info!(
-            "progress: {:.2} ({}/{})",
+            "[{}] {:.2} ({}/{})",
+            DisplayDuration(start.elapsed()),
             progress.percent(),
             num_synced,
             num_actors
         )
     } else {
         println!(
-            "progress: {:.2} ({}/{})",
+            "[{}] {:.2} ({}/{})",
+            DisplayDuration(start.elapsed()),
             progress.percent(),
             num_synced,
             num_actors
@@ -125,4 +129,19 @@ enum Command {
     Join,
     Record { old: Progress, new: Progress },
     Report,
+}
+
+struct DisplayDuration(Duration);
+
+impl fmt::Display for DisplayDuration {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = self.0.as_secs();
+        let m = s / 60;
+        let h = m / 60;
+
+        let s = s - m * 60;
+        let m = m - h * 60;
+
+        write!(f, "{h:02}:{m:02}:{s:02}")
+    }
 }

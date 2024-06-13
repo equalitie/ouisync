@@ -242,7 +242,7 @@ async fn expect_peer_known(network: &Network, peer_name: &str) {
 
 async fn expect_peer_active(network: &Network, peer_name: &str) {
     expect_peer_state(network, peer_name, |state| {
-        matches!(state, PeerState::Active(_))
+        matches!(state, PeerState::Active { .. })
     })
     .await
 }
