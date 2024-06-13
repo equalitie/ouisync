@@ -31,10 +31,12 @@ impl Inner {
             LogColor::Never => false,
             LogColor::Auto => {
                 // Disable colors in output on Windows as `cmd` doesn't seem to support it.
+                // Also for MacOS, colors work in the terminal, but not in xcode and even in
+                // xcode the below `is_terminal()` returns true.
                 //
                 // TODO: consider using `ansi_term::enable_ansi_support()`
                 // (see https://github.com/ogham/rust-ansi-term#basic-usage for more info)
-                !cfg!(target_os = "windows") && io::stdout().is_terminal()
+                !cfg!(any(target_os = "windows", target_os = "macos")) && io::stdout().is_terminal()
             }
         };
 
