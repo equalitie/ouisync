@@ -398,10 +398,18 @@ impl SocketProvider {
         match &*guard {
             Some(socket) => socket.clone(),
             None => {
+                let mut last_error: Option<io::ErrorKind> = None;
+
                 let socket = loop {
                     match UdpSocket::bind_multicast(self.interface).await {
                         Ok(socket) => break Arc::new(socket),
-                        Err(_) => sleep(ERROR_DELAY).await,
+                        Err(error) => {
+                            if last_error != Some(error.kind()) {
+                                tracing::warn!("Failed to bind to multicast socket: {error:?}");
+                                last_error = Some(error.kind());
+                            }
+                            sleep(ERROR_DELAY).await;
+                        }
                     }
                 };
 
