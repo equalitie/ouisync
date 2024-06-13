@@ -1,7 +1,7 @@
 use super::message::{Header, Message};
 use futures_util::{ready, Sink, Stream};
 use std::{
-    fmt, io, mem,
+    io, mem,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -64,7 +64,7 @@ impl<W> Sink<Message> for MessageSink<W>
 where
     W: AsyncWrite + Unpin,
 {
-    type Error = SendError;
+    type Error = io::Error;
 
     fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
         self.encoder.start(item)
@@ -86,7 +86,8 @@ where
                 ..
             } => {
                 let result = ready!(Pin::new(&mut self.write).poll_flush(cx));
-                self.encoder.switch_to_idle(result)
+                self.encoder.state = EncodeState::Idle;
+                Poll::Ready(result)
             }
             EncodeState::Sending { .. } => unreachable!(),
         }
@@ -102,26 +103,11 @@ where
                 ..
             } => {
                 let result = ready!(Pin::new(&mut self.write).poll_shutdown(cx));
-                self.encoder.switch_to_idle(result)
+                self.encoder.state = EncodeState::Idle;
+                Poll::Ready(result)
             }
             EncodeState::Sending { .. } => unreachable!(),
         }
-    }
-}
-
-#[derive(Error)]
-#[error("failed to send message")]
-pub(crate) struct SendError {
-    #[source]
-    pub source: io::Error,
-    pub message: Message,
-}
-
-impl fmt::Debug for SendError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("SendError")
-            .field("source", &self.source)
-            .finish_non_exhaustive()
     }
 }
 
@@ -169,17 +155,14 @@ impl Encoder {
         }
     }
 
-    fn start(&mut self, message: Message) -> Result<(), SendError> {
+    fn start(&mut self, message: Message) -> Result<(), io::Error> {
         assert!(
             !self.is_sending(),
             "start_send called while already sending"
         );
 
         if message.content.len() > MAX_MESSAGE_SIZE as usize {
-            return Err(SendError {
-                source: io::Error::new(io::ErrorKind::InvalidInput, LengthError),
-                message,
-            });
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, LengthError));
         }
 
         self.state = EncodeState::Sending {
@@ -195,7 +178,7 @@ impl Encoder {
         &mut self,
         mut io: Pin<&mut W>,
         cx: &mut Context,
-    ) -> Poll<Result<(), SendError>>
+    ) -> Poll<Result<(), io::Error>>
     where
         W: AsyncWrite,
     {
@@ -215,7 +198,10 @@ impl Encoder {
                                 self.offset = 0;
                             }
                             Ok(false) => (),
-                            Err(error) => return self.switch_to_idle_on_error(error),
+                            Err(error) => {
+                                self.state = EncodeState::Idle;
+                                return Poll::Ready(Err(error));
+                            }
                         }
                     }
                     SendingPhase::Len => {
@@ -231,7 +217,10 @@ impl Encoder {
                                 self.offset = 0;
                             }
                             Ok(false) => (),
-                            Err(error) => return self.switch_to_idle_on_error(error),
+                            Err(error) => {
+                                self.state = EncodeState::Idle;
+                                return Poll::Ready(Err(error));
+                            }
                         }
                     }
                     SendingPhase::Content => {
@@ -246,31 +235,15 @@ impl Encoder {
                                 self.offset = 0;
                             }
                             Ok(false) => (),
-                            Err(error) => return self.switch_to_idle_on_error(error),
+                            Err(error) => {
+                                self.state = EncodeState::Idle;
+                                return Poll::Ready(Err(error));
+                            }
                         }
                     }
                     SendingPhase::Done => return Poll::Ready(Ok(())),
                 },
             }
-        }
-    }
-
-    fn switch_to_idle_on_error(&mut self, source: io::Error) -> Poll<Result<(), SendError>> {
-        let message = match mem::replace(&mut self.state, EncodeState::Idle) {
-            EncodeState::Idle => Message::new_keep_alive(),
-            EncodeState::Sending { message, .. } => message,
-        };
-
-        Poll::Ready(Err(SendError { source, message }))
-    }
-
-    fn switch_to_idle(&mut self, result: io::Result<()>) -> Poll<Result<(), SendError>> {
-        match result {
-            Ok(()) => {
-                self.state = EncodeState::Idle;
-                Poll::Ready(Ok(()))
-            }
-            Err(error) => self.switch_to_idle_on_error(error),
         }
     }
 }

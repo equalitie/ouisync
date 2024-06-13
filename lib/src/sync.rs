@@ -83,7 +83,7 @@ pub(crate) mod uninitialized_watch {
 //       // Do some async tasks.
 //     });
 //
-//     on_dropped.recv().await;
+//     on_dropped.await;
 //
 pub struct DropAwaitable {
     tx: watch::Sender<()>,

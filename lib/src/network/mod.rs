@@ -42,6 +42,7 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     traffic_tracker::TrafficStats,
 };
+use futures_util::future;
 pub use net::stun::NatBehavior;
 
 use self::{
@@ -359,18 +360,12 @@ impl Network {
     pub async fn shutdown(&self) {
         // TODO: Would be a nice-to-have to also wait for all the spawned tasks here (e.g. dicovery
         // mechanisms).
-        let mut message_brokers = {
-            let mut state = self.inner.state.lock().unwrap();
-            match state.message_brokers.take() {
-                Some(brokers) => brokers,
-                None => {
-                    tracing::warn!("Network already shut down");
-                    return;
-                }
-            }
+        let Some(message_brokers) = self.inner.state.lock().unwrap().message_brokers.take() else {
+            tracing::warn!("Network already shut down");
+            return;
         };
 
-        shutdown_brokers(&mut message_brokers).await;
+        shutdown_brokers(message_brokers).await;
     }
 }
 
@@ -564,19 +559,14 @@ impl Inner {
 
     // Disconnect from all currently connected peers, regardless of their source.
     async fn disconnect_all(&self) {
-        let mut message_brokers = {
-            let mut state = self.state.lock().unwrap();
-            match &mut state.message_brokers {
-                Some(brokers) => {
-                    let mut new = HashMap::default();
-                    std::mem::swap(brokers, &mut new);
-                    new
-                }
-                None => return,
-            }
+        let Some(message_brokers) = mem::replace(
+            &mut self.state.lock().unwrap().message_brokers,
+            Some(HashMap::default()),
+        ) else {
+            return;
         };
 
-        shutdown_brokers(&mut message_brokers).await;
+        shutdown_brokers(message_brokers).await;
     }
 
     fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {
@@ -837,39 +827,33 @@ impl Inner {
                 None => return false,
             };
 
-            match brokers.entry(that_runtime_id) {
-                Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
-                Entry::Vacant(entry) => {
-                    let monitor = self
-                        .peers_monitor
-                        .make_child(format!("{:?}", that_runtime_id.as_public_key()));
+            let broker = brokers.entry(that_runtime_id).or_insert_with(|| {
+                let mut broker = self.span.in_scope(|| {
+                    MessageBroker::new(
+                        self.this_runtime_id.public(),
+                        that_runtime_id,
+                        self.pex_discovery.new_peer(),
+                        self.peers_monitor
+                            .make_child(format!("{:?}", that_runtime_id.as_public_key())),
+                        self.traffic_tracker.clone(),
+                    )
+                });
 
-                    let mut broker = self.span.in_scope(|| {
-                        MessageBroker::new(
-                            self.this_runtime_id.public(),
-                            that_runtime_id,
-                            stream,
-                            permit,
-                            self.pex_discovery.new_peer(),
-                            monitor,
-                            self.traffic_tracker.clone(),
-                        )
-                    });
-
-                    // TODO: for DHT connection we should only link the repository for which we did the
-                    // lookup but make sure we correctly handle edge cases, for example, when we have
-                    // more than one repository shared with the peer.
-                    for (_, holder) in &state.registry {
-                        broker.create_link(
-                            holder.vault.clone(),
-                            &holder.pex,
-                            holder.response_limiter.clone(),
-                        );
-                    }
-
-                    entry.insert(broker);
+                // TODO: for DHT connection we should only link the repository for which we did the
+                // lookup but make sure we correctly handle edge cases, for example, when we have
+                // more than one repository shared with the peer.
+                for (_, holder) in &state.registry {
+                    broker.create_link(
+                        holder.vault.clone(),
+                        &holder.pex,
+                        holder.response_limiter.clone(),
+                    );
                 }
-            };
+
+                broker
+            });
+
+            broker.add_connection(stream, permit);
         }
 
         let _remover = MessageBrokerEntryGuard {
@@ -1110,14 +1094,11 @@ pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
         .unwrap()
 }
 
-async fn shutdown_brokers(message_brokers: &mut HashMap<PublicRuntimeId, MessageBroker>) {
-    let mut futures = Vec::with_capacity(message_brokers.len());
-
-    for (_runtime_id, broker) in message_brokers.drain() {
-        futures.push(async move {
-            broker.shutdown().await;
-        });
-    }
-
-    futures_util::future::join_all(futures).await;
+async fn shutdown_brokers(message_brokers: HashMap<PublicRuntimeId, MessageBroker>) {
+    future::join_all(
+        message_brokers
+            .into_values()
+            .map(|message_broker| message_broker.shutdown()),
+    )
+    .await;
 }
