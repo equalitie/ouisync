@@ -9,8 +9,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    str::{self, FromStr},
-    thread,
+    str, thread,
     time::Duration,
 };
 use tempfile::TempDir;
@@ -101,11 +100,18 @@ impl Bin {
 
     #[track_caller]
     pub fn get_port(&self) -> u16 {
-        parse_prefixed_line(
-            &self.id,
-            "TCP, IPv4:",
-            self.client_command().arg("list-ports").output().unwrap(),
+        str::from_utf8(
+            &self
+                .client_command()
+                .arg("list-binds")
+                .output()
+                .unwrap()
+                .stdout,
         )
+        .unwrap()
+        .lines()
+        .find_map(|line| line.split(' ').nth(1)?.parse().ok())
+        .unwrap()
     }
 
     #[track_caller]
@@ -139,18 +145,23 @@ impl Bin {
     /// Create a share token for the repository
     #[track_caller]
     pub fn share(&self) -> String {
-        parse_prefixed_line(
-            &self.id,
-            "",
-            self.client_command()
+        str::from_utf8(
+            &self
+                .client_command()
                 .arg("share")
                 .arg("--name")
                 .arg(DEFAULT_REPO)
                 .arg("--mode")
                 .arg("write")
                 .output()
-                .unwrap(),
+                .unwrap()
+                .stdout,
         )
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_owned()
     }
 
     #[track_caller]
@@ -168,15 +179,21 @@ impl Bin {
 
     #[track_caller]
     pub fn bind_rpc(&self) -> u16 {
-        let addr: SocketAddr = parse_prefixed_line(
-            &self.id,
-            "",
-            self.client_command()
+        let addr: SocketAddr = str::from_utf8(
+            &self
+                .client_command()
                 .arg("bind-rpc")
                 .arg(&format!("{}:0", Ipv4Addr::LOCALHOST))
                 .output()
-                .unwrap(),
-        );
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
 
         addr.port()
     }
@@ -301,22 +318,6 @@ where
 }
 
 #[track_caller]
-fn parse_prefixed_line<T>(id: &Id, prefix: &str, output: Output) -> T
-where
-    T: FromStr,
-    T::Err: fmt::Debug,
-{
-    if !output.status.success() {
-        fail(id, output);
-    }
-
-    let line = find_prefixed_line(id, prefix, &output.stdout);
-    let line = line[prefix.len()..].trim();
-
-    line.parse().unwrap()
-}
-
-#[track_caller]
 fn expect_output(id: &Id, expected: &str, output: Output) {
     if !output.status.success() {
         fail(id, output);
@@ -332,21 +333,6 @@ fn print_output(id: &Id, output: &[u8]) {
     for line in lines {
         println!("[{id}]     {line}");
     }
-}
-
-#[track_caller]
-fn find_prefixed_line<'a>(id: &'_ Id, prefix: &'_ str, output: &'a [u8]) -> &'a str {
-    let lines = str::from_utf8(output).unwrap().lines();
-
-    for line in lines {
-        if line.starts_with(prefix) {
-            return line;
-        } else {
-            println!("[{id}] {line}");
-        }
-    }
-
-    panic!("Output does not contain line prefixed with '{prefix}'");
 }
 
 fn fail(id: &Id, output: Output) -> ! {

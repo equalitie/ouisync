@@ -51,7 +51,7 @@ pub(crate) struct ActorSummaryRecorder {
 
 impl ActorSummaryRecorder {
     pub fn record(mut self, network: &Network) {
-        let TrafficStats { send, recv } = network.traffic_stats();
+        let TrafficStats { send, recv, .. } = network.traffic_stats();
 
         info!(send, recv);
 

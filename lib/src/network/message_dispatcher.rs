@@ -6,6 +6,7 @@ use super::{
     message::{Message, MessageChannelId, Type},
     message_io::{MessageSink, MessageStream, SendError},
     raw,
+    traffic_tracker::TrackingWrapper,
 };
 use crate::collections::{hash_map, HashMap};
 use async_trait::async_trait;
@@ -324,14 +325,17 @@ impl RecvState {
 // Stream of `Message` backed by a `raw::Stream`. Closes on first error. Contains a connection
 // permit which gets released on drop.
 struct PermittedStream {
-    inner: KeepAliveStream<raw::OwnedReadHalf>,
+    inner: KeepAliveStream<TrackingWrapper<raw::OwnedReadHalf>>,
     permit: ConnectionPermitHalf,
 }
 
 impl PermittedStream {
     fn new(stream: raw::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
-            inner: KeepAliveStream::new(MessageStream::new(stream), KEEP_ALIVE_RECV_INTERVAL),
+            inner: KeepAliveStream::new(
+                MessageStream::new(TrackingWrapper::new(stream, permit.tracker())),
+                KEEP_ALIVE_RECV_INTERVAL,
+            ),
             permit,
         }
     }
@@ -351,14 +355,17 @@ impl Stream for PermittedStream {
 // Sink for `Message` backed by a `raw::Stream`.
 // Contains a connection permit which gets released on drop.
 struct PermittedSink {
-    inner: KeepAliveSink<raw::OwnedWriteHalf>,
+    inner: KeepAliveSink<TrackingWrapper<raw::OwnedWriteHalf>>,
     _permit: ConnectionPermitHalf,
 }
 
 impl PermittedSink {
     fn new(stream: raw::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
-            inner: KeepAliveSink::new(MessageSink::new(stream), KEEP_ALIVE_SEND_INTERVAL),
+            inner: KeepAliveSink::new(
+                MessageSink::new(TrackingWrapper::new(stream, permit.tracker())),
+                KEEP_ALIVE_SEND_INTERVAL,
+            ),
             _permit: permit,
         }
     }
