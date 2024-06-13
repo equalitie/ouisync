@@ -89,6 +89,9 @@ def abiTargets = {
 }()
 
 cargo {
+    // MacOS no longer has `python` (only has `python3`) and `python3` is present on all other
+    // systems.
+    pythonCommand = "python3"
     module = "../../.."
     libname = "ouisync_ffi"
     targets = abiTargets
