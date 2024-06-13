@@ -7,15 +7,16 @@ use tokio::{
 /// Binds socket to the given address. If the port is already taken, binds to a random available
 /// port which can be retrieved by calling `local_addr` on the returned socket.
 pub(crate) async fn bind<T: Socket>(mut addr: SocketAddr) -> io::Result<T> {
-    // Enable reuse address (`SO_REUSEADDR`) on the socket so that when the network or the whole
-    // app is restarted, we can immediatelly re-bind to the same address as before.
-    let socket: T = match bind_with_reuse_addr(addr, ReuseAddr::Preferred).await {
+    // Enable reuse address (`SO_REUSEADDR`) and port (`SO_REUSEPORT`) on the socket so that when
+    // the network or the whole app is restarted, we can immediatelly re-bind to the same address
+    // as before.
+    let socket: T = match bind_with_reuse(addr, WithReuse::Preferred).await {
         Ok(socket) => Ok(socket),
         Err(e) => {
             // Try again with random port, unless we already used random port initially.
             if addr.port() != 0 {
                 addr.set_port(0);
-                bind_with_reuse_addr(addr, ReuseAddr::Preferred).await
+                bind_with_reuse(addr, WithReuse::Preferred).await
             } else {
                 Err(e)
             }
@@ -25,7 +26,7 @@ pub(crate) async fn bind<T: Socket>(mut addr: SocketAddr) -> io::Result<T> {
     Ok(socket)
 }
 
-pub(crate) enum ReuseAddr {
+pub(crate) enum WithReuse {
     // Reuse address is required. If we fail to set it, we also fail to create the socket.
     Required,
     // Reuse address is a nice-to-have. If we fail to set it, we proceed with the socket creation
@@ -33,19 +34,29 @@ pub(crate) enum ReuseAddr {
     Preferred,
 }
 
-pub(crate) async fn bind_with_reuse_addr<T: Socket>(
+pub(crate) async fn bind_with_reuse<T: Socket>(
     addr: SocketAddr,
-    reuse_addr: ReuseAddr,
+    with_reuse: WithReuse,
 ) -> io::Result<T> {
     // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
     // one set reuse_address(true) before "binding" the socket.
     let domain = socket2::Domain::for_address(addr);
     let socket = socket2::Socket::new(domain, T::RAW_TYPE, None)?;
 
+    #[cfg(not(target_os = "windows"))]
+    if addr.port() != 0 {
+        if let Err(error) = socket.set_reuse_port(true) {
+            match with_reuse {
+                WithReuse::Required => return Err(error),
+                WithReuse::Preferred => (),
+            }
+        }
+    }
+
     if let Err(error) = socket.set_reuse_address(true) {
-        match reuse_addr {
-            ReuseAddr::Required => return Err(error),
-            ReuseAddr::Preferred => (),
+        match with_reuse {
+            WithReuse::Required => return Err(error),
+            WithReuse::Preferred => (),
         }
     }
 

@@ -30,7 +30,7 @@ pub trait DatagramSocket {
 #[cfg(not(feature = "simulation"))]
 mod implementation {
     use super::*;
-    use crate::socket::{self, ReuseAddr};
+    use crate::socket::{self, WithReuse};
     use std::net::SocketAddrV4;
 
     pub struct UdpSocket(tokio::net::UdpSocket);
@@ -42,11 +42,12 @@ mod implementation {
         }
 
         pub async fn bind_multicast(interface: Ipv4Addr) -> io::Result<Self> {
-            let socket: tokio::net::UdpSocket = socket::bind_with_reuse_addr(
+            let socket: tokio::net::UdpSocket = socket::bind_with_reuse(
                 SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into(),
-                ReuseAddr::Required,
+                WithReuse::Required,
             )
             .await?;
+
             socket.join_multicast_v4(MULTICAST_ADDR, interface)?;
 
             Ok(Self(socket))
