@@ -36,19 +36,21 @@ public class OuisyncSession {
     }
 
     internal func sendRequest(_ request: MessageRequest) async throws -> Response {
-       let messageId = generateMessageId()
+        let messageId = generateMessageId()
 
-       async let onResponse = withCheckedThrowingContinuation { [weak self] continuation in
-           guard let session = self else { return }
-           session.pendingResponses[messageId] = continuation
-       }
+        async let onResponse = withCheckedThrowingContinuation { [weak self] continuation in
+            guard let session = self else { return }
 
-        sendDataToOuisyncLib(serialize(messageId, request));
+            synchronized(session) {
+                session.pendingResponses[messageId] = continuation
+                session.sendDataToOuisyncLib(Self.serialize(messageId, request));
+            }
+        }
 
         return try await onResponse
     }
 
-    fileprivate func serialize(_ messageId: MessageId, _ request: MessageRequest) -> [UInt8] {
+    fileprivate static func serialize(_ messageId: MessageId, _ request: MessageRequest) -> [UInt8] {
         var message: [UInt8] = []
         message.append(contentsOf: withUnsafeBytes(of: messageId.bigEndian, Array.init))
         let payload = [MessagePackValue.string(request.functionName): request.functionArguments]
@@ -66,6 +68,8 @@ public class OuisyncSession {
         librarySender.sendDataToOuisyncLib(data);
     }
 
+    // Use this function to pass data from the backend.
+    // It may be called from a separate thread.
     public func onReceiveDataFromOuisyncLib(_ data: [UInt8]) {
         let maybe_message = IncomingMessage.deserialize(data)
 
@@ -86,15 +90,20 @@ public class OuisyncSession {
     }
 
     fileprivate func handleResponse(_ messageId: MessageId, _ response: Response) {
-        guard let pendingResponse = pendingResponses.removeValue(forKey: messageId) else {
-            NSLog("❗ Failed to match response to a request")
+        let maybePendingResponse = synchronized(self) { pendingResponses.removeValue(forKey: messageId) }
+
+        guard let pendingResponse = maybePendingResponse else {
+            NSLog("❗ Failed to match response to a request. messageId:\(messageId), repsponse:\(response) ")
             return
         }
+
         pendingResponse.resume(returning: response)
     }
 
     fileprivate func handleNotification(_ messageId: MessageId, _ response: OuisyncNotification) {
-        if let tx = notificationSubscriptions.registrations[messageId] {
+        let maybeTx = synchronized(self) { notificationSubscriptions.registrations[messageId] }
+
+        if let tx = maybeTx {
             tx.yield(())
         } else {
             NSLog("❗ Received unsolicited notification")
@@ -102,12 +111,22 @@ public class OuisyncSession {
     }
 
     fileprivate func handleError(_ messageId: MessageId, _ response: OuisyncError) {
-        guard let pendingResponse = pendingResponses.removeValue(forKey: messageId) else {
+        let maybePendingResponse = synchronized(self) { pendingResponses.removeValue(forKey: messageId) }
+
+        guard let pendingResponse = maybePendingResponse else {
             NSLog("❗ Failed to match error response to a request")
             return
         }
+
         pendingResponse.resume(throwing: response)
     }
+
+}
+
+fileprivate func synchronized<T>(_ lock: AnyObject, _ closure: () throws -> T) rethrows -> T {
+    objc_sync_enter(lock)
+    defer { objc_sync_exit(lock) }
+    return try closure()
 }
 
 public protocol OuisyncLibrarySenderProtocol {
