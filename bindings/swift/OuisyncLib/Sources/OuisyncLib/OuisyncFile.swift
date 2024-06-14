@@ -36,10 +36,6 @@ public class OuisyncFile {
         let _ = try await session.sendRequest(.fileClose(handle))
     }
 
-    public func versionVectorHash() async throws -> Data {
-        try await session.sendRequest(.fileGetVersionVectorHash(handle)).toData()
-    }
-
     var session: OuisyncSession {
         repository.session
     }

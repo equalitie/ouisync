@@ -6,6 +6,7 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
+    crypto::Hashable,
     network::{self, Registration},
     path,
     sync::uninitialized_watch,
@@ -293,6 +294,38 @@ pub(crate) async fn entry_type(
         Err(ouisync_lib::Error::EntryNotFound) => Ok(None),
         Err(error) => Err(error.into()),
     }
+}
+
+/// Returns the hash of the version vector of a repository entry. If the entry is the root then
+/// return hash of version vectors of all the branches.
+///
+/// The use case here is for the callers to be able to find out whether an entry has changed.
+///
+/// The function returns `EntryNotFound` if the entry doesn't exists.
+pub(crate) async fn entry_version_hash(
+    state: &State,
+    handle: RepositoryHandle,
+    path: Utf8PathBuf,
+) -> Result<Vec<u8>, Error> {
+    let holder = state.repositories.get(handle)?;
+
+    let hash = match path::decompose(path.as_ref()) {
+        Some((parent, name)) => {
+            let parent_dir = holder.repository.open_directory(parent).await?;
+            parent_dir.lookup_unique(name)?.version_vector().hash()
+        }
+        None => {
+            let branches = holder.repository.load_branches().await?;
+            let mut vvs = Vec::with_capacity(branches.len());
+            for branch in branches {
+                let vv_hash = branch.version_vector().await?.hash();
+                vvs.push(vv_hash);
+            }
+            vvs.hash()
+        }
+    };
+
+    Ok(hash.as_ref().into())
 }
 
 /// Move/rename entry from src to dst.

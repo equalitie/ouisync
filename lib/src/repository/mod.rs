@@ -716,6 +716,10 @@ impl Repository {
         self.shared.get_branch(id)
     }
 
+    pub async fn load_branches(&self) -> Result<Vec<Branch>> {
+        self.shared.load_branches().await
+    }
+
     /// Returns version vector of the given branch. Work in all access moded.
     pub async fn get_branch_version_vector(&self, writer_id: &PublicKey) -> Result<VersionVector> {
         Ok(self

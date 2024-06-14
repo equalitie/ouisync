@@ -1,7 +1,7 @@
 use crate::{error::Error, registry::Handle, repository::RepositoryHandle, state::State};
 use camino::Utf8PathBuf;
 use deadlock::AsyncMutex;
-use ouisync_lib::{crypto::Hashable, Branch, File};
+use ouisync_lib::{Branch, File};
 use std::{io::SeekFrom, sync::Arc};
 
 pub struct FileHolder {
@@ -101,16 +101,6 @@ pub(crate) async fn close(state: &State, handle: FileHandle) -> Result<(), Error
     }
 
     Ok(())
-}
-
-pub(crate) async fn get_version_vector_hash(
-    state: &State,
-    handle: FileHandle,
-) -> Result<Vec<u8>, Error> {
-    let holder = state.files.get(handle)?;
-    let file = holder.file.lock().await;
-    let vv = file.version_vector().await?;
-    Ok(vv.hash().as_ref().into())
 }
 
 pub(crate) async fn flush(state: &State, handle: FileHandle) -> Result<(), Error> {

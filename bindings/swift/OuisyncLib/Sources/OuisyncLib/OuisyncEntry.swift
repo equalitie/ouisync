@@ -71,6 +71,10 @@ public class OuisyncFileEntry {
         try await repository.deleteFile(path)
     }
 
+    public func getVersionHash() async throws -> Data {
+        try await repository.getEntryVersionHash(path)
+    }
+
     public static func parent(_ path: FilePath) -> FilePath {
         var parentPath = path
         parentPath.components.removeLast()
@@ -79,6 +83,11 @@ public class OuisyncFileEntry {
 
     public func open() async throws -> OuisyncFile {
         let fileHandle = try await repository.session.sendRequest(.fileOpen(repository.handle, path)).toUInt64()
+        return OuisyncFile(fileHandle, repository)
+    }
+
+    public func create() async throws -> OuisyncFile {
+        let fileHandle = try await repository.session.sendRequest(.fileCreate(repository.handle, path)).toUInt64()
         return OuisyncFile(fileHandle, repository)
     }
 }
@@ -137,6 +146,10 @@ public class OuisyncDirectoryEntry: CustomDebugStringConvertible {
 
     public func delete(recursive: Bool) async throws {
         try await repository.deleteDirectory(path, recursive: recursive)
+    }
+
+    public func getVersionHash() async throws -> Data {
+        try await repository.getEntryVersionHash(path)
     }
 
     public static func parent(_ path: FilePath) -> FilePath? {

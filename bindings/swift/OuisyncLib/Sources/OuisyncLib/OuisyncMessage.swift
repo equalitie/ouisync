@@ -50,6 +50,13 @@ public class MessageRequest {
         ]))
     }
 
+    public static func getEntryVersionHash(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
+        return MessageRequest("repository_entry_version_hash", MessagePackValue([
+          MessagePackValue("repository"): MessagePackValue(handle),
+          MessagePackValue("path"): MessagePackValue(path.description),
+        ]))
+    }
+
     public static func directoryExists(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
         return MessageRequest("directory_exists", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
@@ -114,10 +121,6 @@ public class MessageRequest {
 
     public static func fileLen(_ fileHandle: FileHandle) -> MessageRequest {
         return MessageRequest("file_len", MessagePackValue(fileHandle))
-    }
-
-    public static func fileGetVersionVectorHash(_ fileHandle: FileHandle) -> MessageRequest {
-        return MessageRequest("file_get_version_vector_hash", MessagePackValue(fileHandle))
     }
 
     public static func fileCreate(_ repoHandle: RepositoryHandle, _ path: FilePath) -> MessageRequest {

@@ -26,6 +26,10 @@ public class OuisyncRepository: Hashable, CustomDebugStringConvertible {
         OuisyncFileEntry(path, self)
     }
 
+    public func getEntryVersionHash(_ path: FilePath) async throws -> Data {
+        try await session.sendRequest(.getEntryVersionHash(handle, path)).toData()
+    }
+
     public func directoryEntry(_ path: FilePath) -> OuisyncDirectoryEntry {
         OuisyncDirectoryEntry(path, self)
     }

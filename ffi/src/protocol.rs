@@ -70,6 +70,10 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
+    RepositoryEntryVersionHash {
+        repository: RepositoryHandle,
+        path: Utf8PathBuf,
+    },
     RepositoryMoveEntry {
         repository: RepositoryHandle,
         src: Utf8PathBuf,
@@ -173,7 +177,6 @@ pub(crate) enum Request {
     FileProgress(FileHandle),
     FileFlush(FileHandle),
     FileClose(FileHandle),
-    FileGetVersionVectorHash(FileHandle),
     NetworkInit(NetworkDefaults),
     NetworkSubscribe,
     NetworkBind {
