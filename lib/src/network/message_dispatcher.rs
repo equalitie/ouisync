@@ -472,14 +472,19 @@ async fn multi_stream_runner(
     tx: mpsc::Sender<(PermitId, Message)>,
     stream_added: Arc<Notify>,
 ) {
-    // Wait for at least one stream to be added.
-    stream_added.notified().await;
+    loop {
+        // Wait for at least one stream to be added.
+        stream_added.notified().await;
 
-    while let Some((permit_id, message)) = (Recv { inner: &inner }).await {
-        match tx.send((permit_id, message)).await {
-            Ok(()) => (),
-            Err(_) => break,
+        while let Some((permit_id, message)) = (Recv { inner: &inner }).await {
+            match tx.send((permit_id, message)).await {
+                Ok(()) => (),
+                Err(_) => break,
+            }
         }
+
+        // Even though the last stream was removed, more streams might still be added so we are not
+        // done yet.
     }
 }
 
