@@ -12,6 +12,7 @@ use crate::{
     },
     repository::RepositoryId,
 };
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use std::{fmt, io::Write};
 
@@ -61,30 +62,13 @@ pub(crate) enum Response {
     BlockError(BlockId, DebugResponse),
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(
+    Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug, IntoPrimitive, TryFromPrimitive,
+)]
+#[repr(u8)]
 pub(crate) enum Type {
-    KeepAlive,
-    Barrier,
-    Content,
-}
-
-impl Type {
-    fn as_u8(&self) -> u8 {
-        match self {
-            Type::KeepAlive => 0,
-            Type::Barrier => 1,
-            Type::Content => 2,
-        }
-    }
-
-    fn from_u8(tag: u8) -> Option<Type> {
-        match tag {
-            0 => Some(Type::KeepAlive),
-            1 => Some(Type::Barrier),
-            2 => Some(Type::Content),
-            _ => None,
-        }
-    }
+    KeepAlive = 0,
+    Content = 2,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
@@ -101,7 +85,7 @@ impl Header {
         let mut hdr = [0; Self::SIZE];
         let mut w = ArrayWriter { array: &mut hdr };
 
-        w.write_u8(self.tag.as_u8());
+        w.write_u8(self.tag.into());
         w.write_channel(&self.channel);
 
         hdr
@@ -109,16 +93,10 @@ impl Header {
 
     pub(crate) fn deserialize(hdr: &[u8; Self::SIZE]) -> Option<Header> {
         let mut r = ArrayReader { array: &hdr[..] };
+        let tag = Type::try_from(r.read_u8()).ok()?;
+        let channel = r.read_channel();
 
-        let tag = match Type::from_u8(r.read_u8()) {
-            Some(tag) => tag,
-            None => return None,
-        };
-
-        Some(Header {
-            tag,
-            channel: r.read_channel(),
-        })
+        Some(Header { tag, channel })
     }
 }
 
