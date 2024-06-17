@@ -4,29 +4,27 @@ use super::{
     connection::{ConnectionPermit, ConnectionPermitHalf, PermitId},
     keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{Message, MessageChannelId, Type},
-    message_io::{MessageSink, MessageStream, SendError},
+    message_io::{MessageSink, MessageStream},
     raw,
     traffic_tracker::TrackingWrapper,
 };
-use crate::collections::{hash_map, HashMap};
+use crate::{collections::HashMap, sync::AwaitDrop};
 use async_trait::async_trait;
-use deadlock::BlockingMutex;
-use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
-use scoped_task::ScopedJoinHandle;
+use futures_util::{future, ready, stream::SelectAll, FutureExt, Sink, SinkExt, Stream, StreamExt};
 use std::{
-    future::Future,
+    io,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    task::{Context, Poll, Waker},
+    task::{Context, Poll},
     time::Duration,
 };
 use tokio::{
-    runtime, select,
-    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
-    sync::{Mutex as AsyncMutex, Notify, Semaphore},
+    select,
+    sync::{mpsc, oneshot},
+    task,
 };
 
 // Time after which if no message is received, the connection is dropped.
@@ -34,127 +32,118 @@ const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
 // How often to send keep-alive messages if no regular messages have been sent.
 const KEEP_ALIVE_SEND_INTERVAL: Duration = Duration::from_secs(30);
 
+const CONTENT_STREAM_BUFFER_SIZE: usize = 1024;
+
 /// Reads/writes messages from/to the underlying TCP or QUIC streams and dispatches them to
 /// individual streams/sinks based on their channel ids (in the MessageDispatcher's and
 /// MessageBroker's contexts, there is a one-to-one relationship between the channel id and a
 /// repository id).
 #[derive(Clone)]
 pub(super) struct MessageDispatcher {
-    recv: Arc<RecvState>,
-    send: Arc<MultiSink>,
+    command_tx: mpsc::UnboundedSender<Command>,
+    sink_tx: mpsc::Sender<Message>,
+    connection_count: Arc<AtomicUsize>,
 }
 
 impl MessageDispatcher {
     pub fn new() -> Self {
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (sink_tx, sink_rx) = mpsc::channel(1);
+        let connection_count = Arc::new(AtomicUsize::new(0));
+
+        let worker = Worker::new(command_rx, sink_rx, connection_count.clone());
+        task::spawn(worker.run());
+
         Self {
-            recv: Arc::new(RecvState::new()),
-            send: Arc::new(MultiSink::new()),
+            command_tx,
+            sink_tx,
+            connection_count,
         }
     }
 
     /// Bind this dispatcher to the given TCP of QUIC socket. Can be bound to multiple sockets and
     /// the failed ones are automatically removed.
-    pub fn bind(&self, stream: raw::Stream, permit: ConnectionPermit) {
-        let (reader, writer) = stream.into_split();
-        let (reader_permit, writer_permit) = permit.split();
-
-        self.recv.add(PermittedStream::new(reader, reader_permit));
-        self.send.add(PermittedSink::new(writer, writer_permit));
+    pub fn bind(&self, socket: raw::Stream, permit: ConnectionPermit) {
+        self.command_tx.send(Command::Bind { socket, permit }).ok();
     }
 
-    /// Opens a stream for receiving messages with the given id.
+    /// Is this dispatcher bound to at least one connection?
+    pub fn is_bound(&self) -> bool {
+        self.connection_count.load(Ordering::Acquire) > 0
+    }
+
+    /// Opens a stream for receiving messages on the given channel. Any messages received on
+    /// `channel` before the stream's been opened are discarded. When a stream is opened, all
+    /// previously opened streams on the same channel (if any) get automatically closed.
     pub fn open_recv(&self, channel: MessageChannelId) -> ContentStream {
-        ContentStream::new(channel, self.recv.clone())
+        let (stream_tx, stream_rx) = mpsc::channel(CONTENT_STREAM_BUFFER_SIZE);
+
+        self.command_tx
+            .send(Command::Open { channel, stream_tx })
+            .ok();
+
+        ContentStream {
+            channel,
+            command_tx: self.command_tx.clone(),
+            stream_rx,
+            last_transport_id: None,
+            parked_message: None,
+        }
     }
 
-    /// Opens a sink for sending messages with the given id.
+    /// Opens a sink for sending messages on the given channel.
     pub fn open_send(&self, channel: MessageChannelId) -> ContentSink {
         ContentSink {
             channel,
-            state: self.send.clone(),
+            sink_tx: self.sink_tx.clone(),
         }
     }
 
-    pub async fn close(&self) {
-        self.recv.multi_stream.close();
-        self.send.close().await;
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.recv.multi_stream.is_empty() || self.send.is_empty()
-    }
-}
-
-impl Drop for MessageDispatcher {
-    fn drop(&mut self) {
-        if self.is_closed() {
-            return;
-        }
-
-        self.recv.multi_stream.close();
-
-        let send = self.send.clone();
-
-        if let Ok(handle) = runtime::Handle::try_current() {
-            handle.spawn(async move { send.close().await });
-        }
+    /// Gracefully shuts down this dispatcher. This closes all bound connections and all open
+    /// message streams and sinks.
+    ///
+    /// Note: the dispatcher also shutdowns automatically when it and all its message streams and
+    /// sinks have been dropped. Calling this function is still useful when one wants to force the
+    /// existing streams/sinks to close and/or to wait until the shutdown has been completed.
+    pub async fn shutdown(self) {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send(Command::Shutdown { tx }).ok();
+        rx.await.ok();
     }
 }
 
 pub(super) struct ContentStream {
     channel: MessageChannelId,
-    state: Arc<RecvState>,
+    command_tx: mpsc::UnboundedSender<Command>,
+    stream_rx: mpsc::Receiver<(PermitId, Vec<u8>)>,
     last_transport_id: Option<PermitId>,
+    parked_message: Option<Vec<u8>>,
 }
 
 impl ContentStream {
-    fn new(channel: MessageChannelId, state: Arc<RecvState>) -> Self {
-        state.add_channel(channel);
-
-        Self {
-            channel,
-            state,
-            last_transport_id: None,
-        }
-    }
-
     /// Receive the next message content.
     pub async fn recv(&mut self) -> Result<Vec<u8>, ContentStreamError> {
-        let arc = match self
-            .state
-            .queues
-            .lock()
-            .unwrap()
-            .get_mut(&self.channel)
-            .map(|queue| queue.rx.clone())
-        {
-            Some(rx) => rx,
-            None => return Err(ContentStreamError::ChannelClosed),
-        };
-
-        let mut lock = arc.lock().await;
-
-        if let Some((transport, data)) = lock.parked_message.take() {
-            self.last_transport_id = Some(transport);
-            return Ok(data);
+        if let Some(content) = self.parked_message.take() {
+            return Ok(content);
         }
 
-        let (transport, data) = match self.state.recv_on_queue(&mut lock.receiver).await {
-            Some((transport, data)) => (transport, data),
-            None => return Err(ContentStreamError::ChannelClosed),
-        };
+        let (permit_id, content) = self
+            .stream_rx
+            .recv()
+            .await
+            .ok_or(ContentStreamError::ChannelClosed)?;
 
         if let Some(last_transport_id) = self.last_transport_id {
-            if last_transport_id == transport {
-                Ok(data)
+            if last_transport_id == permit_id {
+                Ok(content)
             } else {
-                self.last_transport_id = Some(transport);
-                lock.parked_message = Some((transport, data));
+                self.last_transport_id = Some(permit_id);
+                self.parked_message = Some(content);
                 Err(ContentStreamError::TransportChanged)
             }
         } else {
-            self.last_transport_id = Some(transport);
-            Ok(data)
+            self.last_transport_id = Some(permit_id);
+            Ok(content)
         }
     }
 
@@ -165,7 +154,11 @@ impl ContentStream {
 
 impl Drop for ContentStream {
     fn drop(&mut self) {
-        self.state.remove_channel(&self.channel);
+        self.command_tx
+            .send(Command::Close {
+                channel: self.channel,
+            })
+            .ok();
     }
 }
 
@@ -178,7 +171,7 @@ pub(super) enum ContentStreamError {
 #[derive(Clone)]
 pub(super) struct ContentSink {
     channel: MessageChannelId,
-    state: Arc<MultiSink>,
+    sink_tx: mpsc::Sender<Message>,
 }
 
 impl ContentSink {
@@ -188,18 +181,20 @@ impl ContentSink {
 
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
-        self.state
+        self.sink_tx
             .send(Message {
                 tag: Type::Content,
                 channel: self.channel,
                 content,
             })
             .await
+            .map_err(|_| ChannelClosed)
     }
 }
 
 //------------------------------------------------------------------------
 // These traits are useful for testing.
+// TODO: Move these traits and impls to barrier.rs as they are not used anywhere else.
 
 #[async_trait]
 pub(super) trait ContentSinkTrait {
@@ -225,383 +220,307 @@ impl ContentStreamTrait for ContentStream {
     }
 }
 
-//------------------------------------------------------------------------
-
 #[derive(Debug)]
 pub(super) struct ChannelClosed;
-
-struct ChannelQueue {
-    reference_count: usize,
-    rx: Arc<AsyncMutex<ChannelQueueReceiver>>,
-    // TODO: This probably shouldn't be unbounded.
-    tx: ChannelQueueSender,
-}
-
-struct ChannelQueueReceiver {
-    parked_message: Option<(PermitId, Vec<u8>)>,
-    receiver: UnboundedReceiver<(PermitId, Vec<u8>)>,
-}
-
-type ChannelQueueSender = UnboundedSender<(PermitId, Vec<u8>)>;
-
-struct RecvState {
-    multi_stream: Arc<MultiStream>,
-    queues: BlockingMutex<HashMap<MessageChannelId, ChannelQueue>>,
-    single_sorter: Semaphore,
-}
-
-impl RecvState {
-    fn new() -> Self {
-        Self {
-            multi_stream: Arc::new(MultiStream::new()),
-            queues: BlockingMutex::new(HashMap::default()),
-            single_sorter: Semaphore::new(1),
-        }
-    }
-
-    fn add(&self, stream: PermittedStream) {
-        self.multi_stream.add(stream);
-    }
-
-    fn add_channel(&self, channel_id: MessageChannelId) {
-        match self.queues.lock().unwrap().entry(channel_id) {
-            hash_map::Entry::Occupied(mut entry) => entry.get_mut().reference_count += 1,
-            hash_map::Entry::Vacant(entry) => {
-                let (tx, rx) = mpsc::unbounded_channel();
-                entry.insert(ChannelQueue {
-                    reference_count: 1,
-                    rx: Arc::new(AsyncMutex::new(ChannelQueueReceiver {
-                        parked_message: None,
-                        receiver: rx,
-                    })),
-                    tx,
-                });
-            }
-        }
-    }
-
-    async fn recv_on_queue(
-        &self,
-        queue_rx: &mut UnboundedReceiver<(PermitId, Vec<u8>)>,
-    ) -> Option<(PermitId, Vec<u8>)> {
-        select! {
-            maybe_message = queue_rx.recv() => maybe_message,
-            _ = self.sort_incoming_messages_into_queues() => None,
-        }
-    }
-
-    async fn sort_incoming_messages_into_queues(&self) {
-        // The `recv_on_queue` function may be called multiple times (once per channel), but this
-        // function must be called at most once, otherwise messages could get reordered.
-        let _permit = self.single_sorter.acquire().await;
-
-        while let Some((transport, message)) = self.multi_stream.recv().await {
-            if let Some(queue) = self.queues.lock().unwrap().get_mut(&message.channel) {
-                queue.tx.send((transport, message.content)).unwrap_or(());
-            }
-        }
-    }
-
-    fn remove_channel(&self, channel_id: &MessageChannelId) {
-        let mut queues = self.queues.lock().unwrap();
-
-        match queues.entry(*channel_id) {
-            hash_map::Entry::Occupied(mut entry) => {
-                let value = entry.get_mut();
-                assert_ne!(value.reference_count, 0);
-                value.reference_count -= 1;
-                if value.reference_count == 0 {
-                    entry.remove();
-                }
-            }
-            hash_map::Entry::Vacant(_) => unreachable!(),
-        }
-    }
-}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Internal
 
-// Stream of `Message` backed by a `raw::Stream`. Closes on first error. Contains a connection
-// permit which gets released on drop.
-struct PermittedStream {
-    inner: KeepAliveStream<TrackingWrapper<raw::OwnedReadHalf>>,
+// Stream for receiving messages from a single connection. Contains a connection permit half which
+// gets released on drop. Automatically closes when the corresponding `ConnectionSink` closes.
+struct ConnectionStream {
+    reader: KeepAliveStream<TrackingWrapper<raw::OwnedReadHalf>>,
     permit: ConnectionPermitHalf,
+    permit_released: AwaitDrop,
+    connection_count: Arc<AtomicUsize>,
 }
 
-impl PermittedStream {
-    fn new(stream: raw::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
+impl ConnectionStream {
+    fn new(
+        reader: raw::OwnedReadHalf,
+        permit: ConnectionPermitHalf,
+        connection_count: Arc<AtomicUsize>,
+    ) -> Self {
+        connection_count.fetch_add(1, Ordering::Release);
+
+        let permit_released = permit.released();
+
         Self {
-            inner: KeepAliveStream::new(
-                MessageStream::new(TrackingWrapper::new(stream, permit.tracker())),
+            reader: KeepAliveStream::new(
+                MessageStream::new(TrackingWrapper::new(reader, permit.tracker())),
                 KEEP_ALIVE_RECV_INTERVAL,
             ),
             permit,
+            permit_released,
+            connection_count,
         }
     }
 }
 
-impl Stream for PermittedStream {
+impl Stream for ConnectionStream {
     type Item = (PermitId, Message);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match ready!(self.inner.poll_next_unpin(cx)) {
+        // Check if our sink was closed.
+        match self.permit_released.poll_unpin(cx) {
+            Poll::Pending => (),
+            Poll::Ready(()) => {
+                return Poll::Ready(None);
+            }
+        }
+
+        match ready!(self.reader.poll_next_unpin(cx)) {
             Some(Ok(message)) => Poll::Ready(Some((self.permit.id(), message))),
             Some(Err(_)) | None => Poll::Ready(None),
         }
     }
 }
 
-// Sink for `Message` backed by a `raw::Stream`.
-// Contains a connection permit which gets released on drop.
-struct PermittedSink {
-    inner: KeepAliveSink<TrackingWrapper<raw::OwnedWriteHalf>>,
-    _permit: ConnectionPermitHalf,
+impl Drop for ConnectionStream {
+    fn drop(&mut self) {
+        self.connection_count.fetch_sub(1, Ordering::Release);
+    }
 }
 
-impl PermittedSink {
-    fn new(stream: raw::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
+// Sink for sending messages on a single connection. Contains a connection permit half which gets
+// released on drop. Automatically closes when the corresponding `ConnectionStream` is closed.
+struct ConnectionSink {
+    writer: KeepAliveSink<TrackingWrapper<raw::OwnedWriteHalf>>,
+    _permit: ConnectionPermitHalf,
+    permit_released: AwaitDrop,
+}
+
+impl ConnectionSink {
+    fn new(writer: raw::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
+        let permit_released = permit.released();
+
         Self {
-            inner: KeepAliveSink::new(
-                MessageSink::new(TrackingWrapper::new(stream, permit.tracker())),
+            writer: KeepAliveSink::new(
+                MessageSink::new(TrackingWrapper::new(writer, permit.tracker())),
                 KEEP_ALIVE_SEND_INTERVAL,
             ),
             _permit: permit,
+            permit_released,
         }
     }
 }
 
-// `Sink` impl just trivially delegates to the underlying sink.
-impl Sink<Message> for PermittedSink {
-    type Error = SendError;
+impl Sink<Message> for ConnectionSink {
+    type Error = io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready_unpin(cx)
+        // Check if our stream was closed.
+        match self.permit_released.poll_unpin(cx) {
+            Poll::Pending => (),
+            Poll::Ready(()) => {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "message channel closed",
+                )));
+            }
+        }
+
+        self.writer.poll_ready_unpin(cx)
     }
 
     fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        self.inner.start_send_unpin(item)
+        self.writer.start_send_unpin(item)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_flush_unpin(cx)
+        self.writer.poll_flush_unpin(cx)
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_close_unpin(cx)
+        self.writer.poll_close_unpin(cx)
     }
 }
 
-// Stream that reads `Message`s from multiple underlying raw (byte) streams concurrently.
-struct MultiStream {
-    explicitly_closed: AtomicBool,
-    rx: AsyncMutex<mpsc::Receiver<(PermitId, Message)>>,
-    inner: Arc<BlockingMutex<MultiStreamInner>>,
-    stream_added: Arc<Notify>,
-    _runner: ScopedJoinHandle<()>,
+struct Worker {
+    command_rx: mpsc::UnboundedReceiver<Command>,
+    connection_count: Arc<AtomicUsize>,
+    send: SendState,
+    recv: RecvState,
 }
 
-impl MultiStream {
-    fn new() -> Self {
-        let inner = Arc::new(BlockingMutex::new(MultiStreamInner {
-            streams: SelectAll::new(),
-            waker: None,
-        }));
-
-        let stream_added = Arc::new(Notify::new());
-        let (tx, rx) = mpsc::channel(1);
-
-        let _runner =
-            scoped_task::spawn(multi_stream_runner(inner.clone(), tx, stream_added.clone()));
-
+impl Worker {
+    fn new(
+        command_rx: mpsc::UnboundedReceiver<Command>,
+        sink_rx: mpsc::Receiver<Message>,
+        connection_count: Arc<AtomicUsize>,
+    ) -> Self {
         Self {
-            explicitly_closed: AtomicBool::new(false),
-            rx: AsyncMutex::new(rx),
-            inner,
-            stream_added,
-            _runner,
+            command_rx,
+            connection_count,
+            send: SendState {
+                sink_rx,
+                sinks: Vec::new(),
+            },
+            recv: RecvState {
+                streams: SelectAll::default(),
+                channels: HashMap::default(),
+                message: None,
+            },
         }
     }
 
-    fn add(&self, stream: PermittedStream) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.streams.push(stream);
-        inner.wake();
-        self.stream_added.notify_one();
-    }
-
-    // Receive next message from this stream.
-    async fn recv(&self) -> Option<(PermitId, Message)> {
-        if self.explicitly_closed.load(Ordering::Relaxed) {
-            return None;
-        }
-        self.rx.lock().await.recv().await
-    }
-
-    // Closes this stream. Any subsequent `recv` will immediately return `None` unless new
-    // streams are added first.
-    fn close(&self) {
-        self.explicitly_closed.store(true, Ordering::Relaxed);
-        let mut inner = self.inner.lock().unwrap();
-        inner.streams.clear();
-        inner.wake();
-    }
-
-    fn is_empty(&self) -> bool {
-        self.inner.lock().unwrap().streams.is_empty()
-    }
-}
-
-struct MultiStreamInner {
-    streams: SelectAll<PermittedStream>,
-    waker: Option<Waker>,
-}
-
-impl MultiStreamInner {
-    fn wake(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            waker.wake()
-        }
-    }
-}
-
-// We need this runner because we want to detect when a peer has disconnected even if the user has
-// not called `MultiStream::recv`.
-async fn multi_stream_runner(
-    inner: Arc<BlockingMutex<MultiStreamInner>>,
-    tx: mpsc::Sender<(PermitId, Message)>,
-    stream_added: Arc<Notify>,
-) {
-    loop {
-        // Wait for at least one stream to be added.
-        stream_added.notified().await;
-
-        while let Some((permit_id, message)) = (Recv { inner: &inner }).await {
-            match tx.send((permit_id, message)).await {
-                Ok(()) => (),
-                Err(_) => break,
-            }
-        }
-
-        // Even though the last stream was removed, more streams might still be added so we are not
-        // done yet.
-    }
-}
-
-// Future returned from [`MultiStream::recv`].
-struct Recv<'a> {
-    inner: &'a BlockingMutex<MultiStreamInner>,
-}
-
-impl Future for Recv<'_> {
-    type Output = Option<(PermitId, Message)>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let mut inner = self.inner.lock().unwrap();
-
-        match inner.streams.poll_next_unpin(cx) {
-            Poll::Ready(message) => Poll::Ready(message),
-            Poll::Pending => {
-                if inner.waker.is_none() {
-                    inner.waker = Some(cx.waker().clone());
-                }
-
-                Poll::Pending
-            }
-        }
-    }
-}
-
-// Sink that writes to multiple underlying TCP streams sequentially until one of them succeeds,
-// automatically removing the failed ones.
-//
-// NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it, only
-// provides an async `send` method.
-struct MultiSink {
-    single_send: AsyncMutex<()>,
-    sinks: BlockingMutex<Vec<PermittedSink>>,
-}
-
-impl MultiSink {
-    fn new() -> Self {
-        Self {
-            single_send: AsyncMutex::new(()),
-            sinks: BlockingMutex::new(Vec::new()),
-        }
-    }
-
-    fn add(&self, sink: PermittedSink) {
-        self.sinks.lock().unwrap().push(sink);
-    }
-
-    async fn close(&self) {
-        // TODO: Other functions should fail if called after the call to this function.
-
-        let mut sinks = {
-            let mut sinks = self.sinks.lock().unwrap();
-            std::mem::take(&mut *sinks)
-        };
-
-        let mut futures = Vec::with_capacity(sinks.len());
-
-        for mut sink in sinks.drain(..) {
-            futures.push(async move { sink.close().await.unwrap_or(()) });
-        }
-
-        futures_util::future::join_all(futures).await;
-    }
-
-    async fn send(&self, message: Message) -> Result<(), ChannelClosed> {
-        let _lock = self.single_send.lock().await;
-        Send {
-            message: Some(message),
-            sinks: &self.sinks,
-        }
-        .await
-    }
-
-    fn is_empty(&self) -> bool {
-        self.sinks.lock().unwrap().is_empty()
-    }
-}
-
-// Future returned from [`MultiSink::send`].
-struct Send<'a> {
-    message: Option<Message>,
-    sinks: &'a BlockingMutex<Vec<PermittedSink>>,
-}
-
-impl Future for Send<'_> {
-    type Output = Result<(), ChannelClosed>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut sinks = self.sinks.lock().unwrap();
-
+    async fn run(mut self) {
         loop {
-            let sink = if let Some(sink) = sinks.first_mut() {
-                sink
-            } else {
-                return Poll::Ready(Err(ChannelClosed));
-            };
+            select! {
+                command = self.command_rx.recv() => {
+                    if let Some(command) = command {
+                        self.handle_command(command).await;
+                    } else {
+                        break;
+                    }
+                }
+                _ = self.send.run()=> unreachable!(),
+                _ = self.recv.run()=> unreachable!(),
+            }
+        }
 
-            let message = match sink.poll_ready_unpin(cx) {
-                Poll::Ready(Ok(())) => self.message.take().expect("polled Send after completion"),
-                Poll::Ready(Err(error)) => {
-                    sinks.swap_remove(0);
-                    self.message = Some(error.message);
+        self.shutdown().await;
+    }
+
+    async fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::Open { channel, stream_tx } => {
+                self.recv.channels.insert(channel, stream_tx);
+            }
+            Command::Close { channel } => {
+                self.recv.channels.remove(&channel);
+            }
+            Command::Bind { socket, permit } => {
+                let (reader, writer) = socket.into_split();
+                let (send_permit, recv_permit) = permit.into_split();
+
+                self.send
+                    .sinks
+                    .push(ConnectionSink::new(writer, send_permit));
+
+                self.recv.streams.push(ConnectionStream::new(
+                    reader,
+                    recv_permit,
+                    self.connection_count.clone(),
+                ));
+            }
+            Command::Shutdown { tx } => {
+                self.shutdown().await;
+                tx.send(()).ok();
+            }
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        future::join_all(
+            self.send
+                .sinks
+                .drain(..)
+                .map(|mut sink| async move { sink.close().await.ok() }),
+        )
+        .await;
+
+        self.send.sink_rx.close();
+
+        self.recv.streams.clear();
+        self.recv.channels.clear();
+    }
+}
+
+enum Command {
+    Open {
+        channel: MessageChannelId,
+        stream_tx: mpsc::Sender<(PermitId, Vec<u8>)>,
+    },
+    Close {
+        channel: MessageChannelId,
+    },
+    Bind {
+        socket: raw::Stream,
+        permit: ConnectionPermit,
+    },
+    Shutdown {
+        tx: oneshot::Sender<()>,
+    },
+}
+
+struct SendState {
+    sink_rx: mpsc::Receiver<Message>,
+    sinks: Vec<ConnectionSink>,
+}
+
+impl SendState {
+    // Keep sending outgoing messages. This function never returns, but it's safe to cancel.
+    async fn run(&mut self) {
+        while let Some(sink) = self.sinks.first_mut() {
+            // The order of operations here is important for cancel-safety: first wait for the sink
+            // to become ready for sending, then receive the message to be sent and finally send
+            // the message on the sink. This order ensures that if this function is cancelled at
+            // any point, the message to be sent is never lost.
+            match future::poll_fn(|cx| sink.poll_ready_unpin(cx)).await {
+                Ok(()) => (),
+                Err(_) => {
+                    self.sinks.swap_remove(0);
                     continue;
                 }
-                Poll::Pending => return Poll::Pending,
+            }
+
+            let Some(message) = self.sink_rx.recv().await else {
+                break;
             };
 
             match sink.start_send_unpin(message) {
-                Ok(()) => return Poll::Ready(Ok(())),
-                Err(error) => {
-                    sinks.swap_remove(0);
-                    self.message = Some(error.message);
+                Ok(()) => (),
+                Err(_) => {
+                    self.sinks.swap_remove(0);
+                    continue;
                 }
             }
         }
+
+        future::pending().await
+    }
+}
+
+struct RecvState {
+    streams: SelectAll<ConnectionStream>,
+    channels: HashMap<MessageChannelId, mpsc::Sender<(PermitId, Vec<u8>)>>,
+    message: Option<(MessageChannelId, PermitId, Vec<u8>)>,
+}
+
+impl RecvState {
+    // Keeps receiving incomming messages and dispatches them to their respective message channels.
+    // This function never returns but it's safe to cancel.
+    async fn run(&mut self) {
+        loop {
+            let (channel, permit_id, content) = match self.message.take() {
+                Some(message) => message,
+                None => match self.streams.next().await {
+                    Some((permit_id, message)) => (message.channel, permit_id, message.content),
+                    None => break,
+                },
+            };
+
+            let Some(tx) = self.channels.get(&channel) else {
+                continue;
+            };
+
+            // Cancel safety: Remember the message while we are awaiting the send permit, so that if
+            // this function is cancelled here we can resume sending of the message on the next
+            // invocation.
+            self.message = Some((channel, permit_id, content));
+
+            let Ok(send_permit) = tx.reserve().await else {
+                continue;
+            };
+
+            // unwrap is ok because `self.message` is `Some` here.
+            let (_, permit_id, content) = self.message.take().unwrap();
+
+            send_permit.send((permit_id, content));
+        }
+
+        future::pending().await
     }
 }
 
@@ -609,17 +528,23 @@ impl Future for Send<'_> {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
+    use futures_util::stream;
     use net::tcp::{TcpListener, TcpStream};
-    use std::{net::Ipv4Addr, str::from_utf8};
+    use std::{collections::BTreeSet, net::Ipv4Addr, str::from_utf8};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recv_on_stream() {
-        let (mut client, server) = setup().await;
-
         let channel = MessageChannelId::random();
         let send_content = b"hello world";
 
-        client
+        let server_dispatcher = MessageDispatcher::new();
+        let mut server_stream = server_dispatcher.open_recv(channel);
+
+        let (client_socket, server_socket) = create_connected_sockets().await;
+        let mut client_sink = MessageSink::new(client_socket);
+        server_dispatcher.bind(server_socket, ConnectionPermit::dummy());
+
+        client_sink
             .send(Message {
                 tag: Type::Content,
                 channel,
@@ -628,24 +553,28 @@ mod tests {
             .await
             .unwrap();
 
-        let mut server_stream = server.open_recv(channel);
-
         let recv_content = server_stream.recv().await.unwrap();
         assert_eq!(recv_content, send_content);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recv_on_two_streams() {
-        let (mut client, server) = setup().await;
-
         let channel0 = MessageChannelId::random();
         let channel1 = MessageChannelId::random();
 
         let send_content0 = b"one two three";
         let send_content1 = b"four five six";
 
+        let server_dispatcher = MessageDispatcher::new();
+        let server_stream0 = server_dispatcher.open_recv(channel0);
+        let server_stream1 = server_dispatcher.open_recv(channel1);
+
+        let (client_socket, server_socket) = create_connected_sockets().await;
+        let mut client_sink = MessageSink::new(client_socket);
+        server_dispatcher.bind(server_socket, ConnectionPermit::dummy());
+
         for (channel, content) in [(channel0, send_content0), (channel1, send_content1)] {
-            client
+            client_sink
                 .send(Message {
                     tag: Type::Content,
                     channel,
@@ -654,9 +583,6 @@ mod tests {
                 .await
                 .unwrap();
         }
-
-        let server_stream0 = server.open_recv(channel0);
-        let server_stream1 = server.open_recv(channel1);
 
         for (mut server_stream, send_content) in [
             (server_stream0, send_content0),
@@ -671,17 +597,23 @@ mod tests {
     async fn send_on_two_streams_parallel() {
         use tokio::{task, time::timeout};
 
-        let (client, server) = setup_two_dispatchers().await;
-
         let channel0 = MessageChannelId::random();
         let channel1 = MessageChannelId::random();
 
+        let client_dispatcher = MessageDispatcher::new();
+        let client_sink0 = client_dispatcher.open_send(channel0);
+        let client_sink1 = client_dispatcher.open_send(channel1);
+
+        let server_dispatcher = MessageDispatcher::new();
+        let server_stream0 = server_dispatcher.open_recv(channel0);
+        let server_stream1 = server_dispatcher.open_recv(channel1);
+
+        let (client_socket, server_socket) = create_connected_sockets().await;
+        client_dispatcher.bind(client_socket, ConnectionPermit::dummy());
+        server_dispatcher.bind(server_socket, ConnectionPermit::dummy());
+
         let num_messages = 20;
-
         let mut send_tasks = vec![];
-
-        let client_sink0 = client.open_send(channel0);
-        let client_sink1 = client.open_send(channel1);
 
         let build_message = |channel, i| format!("{:?}:{}", channel, i).as_bytes().to_vec();
 
@@ -700,9 +632,6 @@ mod tests {
                 .expect("Send failed");
         }
 
-        let server_stream0 = server.open_recv(channel0);
-        let server_stream1 = server.open_recv(channel1);
-
         for mut server_stream in [server_stream0, server_stream1] {
             for i in 0..num_messages {
                 let recv_content = server_stream.recv().await.unwrap();
@@ -715,16 +644,22 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn drop_stream() {
-        let (mut client, server) = setup().await;
-
+    async fn duplicate_stream() {
         let channel = MessageChannelId::random();
 
         let send_content0 = b"one two three";
         let send_content1 = b"four five six";
 
+        let server_dispatcher = MessageDispatcher::new();
+        let mut server_stream0 = server_dispatcher.open_recv(channel);
+        let mut server_stream1 = server_dispatcher.open_recv(channel);
+
+        let (client_socket, server_socket) = create_connected_sockets().await;
+        let mut client_sink = MessageSink::new(client_socket);
+        server_dispatcher.bind(server_socket, ConnectionPermit::dummy());
+
         for content in [send_content0, send_content1] {
-            client
+            client_sink
                 .send(Message {
                     tag: Type::Content,
                     channel,
@@ -734,83 +669,112 @@ mod tests {
                 .unwrap();
         }
 
-        let mut server_stream0 = server.open_recv(channel);
-        let mut server_stream1 = server.open_recv(channel);
-
-        let recv_content = server_stream0.recv().await.unwrap();
-        assert_eq!(
-            from_utf8(&recv_content).unwrap(),
-            from_utf8(send_content0).unwrap()
+        assert_matches!(
+            server_stream0.recv().await,
+            Err(ContentStreamError::ChannelClosed)
         );
-
-        drop(server_stream0);
-
-        let recv_content = server_stream1.recv().await.unwrap();
-        assert_eq!(recv_content, send_content1)
+        assert_eq!(server_stream1.recv().await.unwrap(), send_content0);
+        assert_eq!(server_stream1.recv().await.unwrap(), send_content1);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn drop_dispatcher() {
-        let (_client, server) = setup().await;
-
+    async fn multiple_connections_recv() {
         let channel = MessageChannelId::random();
 
-        let mut server_stream = server.open_recv(channel);
+        let send_content0 = b"one two three";
+        let send_content1 = b"four five six";
 
-        drop(server);
+        let server_dispatcher = MessageDispatcher::new();
+        let mut server_stream = server_dispatcher.open_recv(channel);
+
+        let (client_socket0, server_socket0) = create_connected_sockets().await;
+        let (client_socket1, server_socket1) = create_connected_sockets().await;
+
+        let client_sink0 = MessageSink::new(client_socket0);
+        let client_sink1 = MessageSink::new(client_socket1);
+
+        server_dispatcher.bind(server_socket0, ConnectionPermit::dummy());
+        server_dispatcher.bind(server_socket1, ConnectionPermit::dummy());
+
+        for (mut client_sink, content) in
+            [(client_sink0, send_content0), (client_sink1, send_content1)]
+        {
+            client_sink
+                .send(Message {
+                    tag: Type::Content,
+                    channel,
+                    content: content.to_vec(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let recv_content0 = server_stream.recv().await.unwrap();
+        let recv_content1 = server_stream.recv().await.unwrap();
+
+        // The messages may be received in any order
+        assert_eq!(
+            [recv_content0.as_slice(), recv_content1.as_slice()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            [send_content0.as_slice(), send_content1.as_slice()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multiple_connections_send() {
+        let channel = MessageChannelId::random();
+
+        let send_content0 = b"one two three";
+        let send_content1 = b"four five six";
+
+        let server_dispatcher = MessageDispatcher::new();
+        let server_sink = server_dispatcher.open_send(channel);
+
+        let (client_socket0, server_socket0) = create_connected_sockets().await;
+        let (client_socket1, server_socket1) = create_connected_sockets().await;
+
+        let client_stream0 = MessageStream::new(client_socket0);
+        let client_stream1 = MessageStream::new(client_socket1);
+
+        server_dispatcher.bind(server_socket0, ConnectionPermit::dummy());
+        server_dispatcher.bind(server_socket1, ConnectionPermit::dummy());
+
+        for content in [send_content0, send_content1] {
+            server_sink.send(content.to_vec()).await.unwrap();
+        }
+
+        // The messages may be received on any stream
+        let recv_contents: BTreeSet<_> = stream::select(client_stream0, client_stream1)
+            .map(|message| message.unwrap().content)
+            .take(2)
+            .collect()
+            .await;
+
+        assert_eq!(
+            recv_contents,
+            [send_content0.to_vec(), send_content1.to_vec()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shutdown() {
+        let server_dispatcher = MessageDispatcher::new();
+        let mut server_stream = server_dispatcher.open_recv(MessageChannelId::random());
+        let server_sink = server_dispatcher.open_send(MessageChannelId::random());
+
+        server_dispatcher.shutdown().await;
 
         assert_matches!(
             server_stream.recv().await,
             Err(ContentStreamError::ChannelClosed)
         );
-    }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn multi_stream_close() {
-        let (client, server) = create_connected_sockets().await;
-        let (server_reader, _server_writer) = server.into_split();
-
-        let stream = MultiStream::new();
-        stream.add(PermittedStream::new(
-            server_reader,
-            ConnectionPermit::dummy().split().0,
-        ));
-
-        let mut client = MessageSink::new(client);
-        client
-            .send(Message {
-                tag: Type::Content,
-                channel: MessageChannelId::random(),
-                content: b"hello world".to_vec(),
-            })
-            .await
-            .unwrap();
-
-        stream.close();
-
-        assert!(stream.recv().await.is_none());
-    }
-
-    async fn setup() -> (MessageSink<raw::Stream>, MessageDispatcher) {
-        let (client, server) = create_connected_sockets().await;
-        let client_writer = MessageSink::new(client);
-
-        let server_dispatcher = MessageDispatcher::new();
-        server_dispatcher.bind(server, ConnectionPermit::dummy());
-
-        (client_writer, server_dispatcher)
-    }
-
-    async fn setup_two_dispatchers() -> (MessageDispatcher, MessageDispatcher) {
-        let (client, server) = create_connected_sockets().await;
-
-        let client_dispatcher = MessageDispatcher::new();
-        client_dispatcher.bind(client, ConnectionPermit::dummy());
-
-        let server_dispatcher = MessageDispatcher::new();
-        server_dispatcher.bind(server, ConnectionPermit::dummy());
-
-        (client_dispatcher, server_dispatcher)
+        assert_matches!(server_sink.send(vec![]).await, Err(ChannelClosed));
     }
 
     async fn create_connected_sockets() -> (raw::Stream, raw::Stream) {

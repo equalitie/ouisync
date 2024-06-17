@@ -45,27 +45,20 @@ pub(super) struct MessageBroker {
     pex_peer: PexPeer,
     monitor: StateMonitor,
     tracker: TrafficTracker,
-    span: Span,
+    span: SpanGuard,
 }
 
 impl MessageBroker {
     pub fn new(
         this_runtime_id: PublicRuntimeId,
         that_runtime_id: PublicRuntimeId,
-        stream: raw::Stream,
-        permit: ConnectionPermit,
         pex_peer: PexPeer,
         monitor: StateMonitor,
         tracker: TrafficTracker,
     ) -> Self {
-        let span = tracing::info_span!(
-            "message_broker",
-            message = ?that_runtime_id.as_public_key(),
-        );
+        let span = SpanGuard::new(&that_runtime_id);
 
-        tracing::info!(parent: &span, "Message broker created");
-
-        let this = Self {
+        Self {
             this_runtime_id,
             that_runtime_id,
             dispatcher: MessageDispatcher::new(),
@@ -75,10 +68,7 @@ impl MessageBroker {
             monitor,
             tracker,
             span,
-        };
-
-        this.add_connection(stream, permit);
-        this
+        }
     }
 
     pub fn add_connection(&self, stream: raw::Stream, permit: ConnectionPermit) {
@@ -89,7 +79,7 @@ impl MessageBroker {
 
     /// Has this broker at least one live connection?
     pub fn has_connections(&self) -> bool {
-        !self.dispatcher.is_closed()
+        !self.dispatcher.is_bound()
     }
 
     /// Try to establish a link between a local repository and a remote repository. The remote
@@ -103,7 +93,7 @@ impl MessageBroker {
     ) {
         let monitor = self.monitor.make_child(vault.monitor.name());
         let span = tracing::info_span!(
-            parent: &self.span,
+            parent: &self.span.0,
             "link",
             message = vault.monitor.name(),
         );
@@ -173,14 +163,29 @@ impl MessageBroker {
         self.links.remove(&id);
     }
 
-    pub async fn shutdown(&self) {
-        self.dispatcher.close().await;
+    pub async fn shutdown(self) {
+        self.dispatcher.shutdown().await;
     }
 }
 
-impl Drop for MessageBroker {
+struct SpanGuard(Span);
+
+impl SpanGuard {
+    fn new(that_runtime_id: &PublicRuntimeId) -> Self {
+        let span = tracing::info_span!(
+            "message_broker",
+            message = ?that_runtime_id.as_public_key(),
+        );
+
+        tracing::info!(parent: &span, "Message broker created");
+
+        Self(span)
+    }
+}
+
+impl Drop for SpanGuard {
     fn drop(&mut self) {
-        tracing::info!(parent: &self.span, "Message broker destroyed");
+        tracing::info!(parent: &self.0, "Message broker destroyed");
     }
 }
 

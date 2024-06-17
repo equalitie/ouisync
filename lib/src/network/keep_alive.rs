@@ -1,6 +1,6 @@
 use super::{
     message::Message,
-    message_io::{MessageSink, MessageStream, SendError},
+    message_io::{MessageSink, MessageStream},
 };
 use futures_util::{ready, FutureExt, Sink, SinkExt, Stream, StreamExt};
 use std::{
@@ -17,7 +17,7 @@ use tokio::{
     time::{self, Duration},
 };
 use tokio_stream::Timeout;
-use tokio_util::sync::{PollSendError, PollSender};
+use tokio_util::sync::PollSender;
 
 /// Adapter for `MessageStream` which yields error when no message is received within the specified
 /// timeout.
@@ -75,7 +75,7 @@ where
 /// called and another item is sent, the result of the previous send is lost.
 pub(super) struct KeepAliveSink<W> {
     command_tx: PollSender<SinkCommand>,
-    result_rx: Option<oneshot::Receiver<Result<(), SendError>>>,
+    result_rx: Option<oneshot::Receiver<io::Result<()>>>,
     _type: PhantomData<W>,
 }
 
@@ -100,12 +100,12 @@ impl<W> Sink<Message> for KeepAliveSink<W>
 where
     W: AsyncWrite + Unpin,
 {
-    type Error = SendError;
+    type Error = io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match ready!(self.command_tx.poll_ready_unpin(cx)) {
             Ok(()) => Poll::Ready(Ok(())),
-            Err(error) => Poll::Ready(Err(make_send_error(error, sink_closed_error()))),
+            Err(_) => Poll::Ready(Err(sink_closed_error())),
         }
     }
 
@@ -120,15 +120,15 @@ where
                 self.result_rx = Some(result_rx);
                 Ok(())
             }
-            Err(error) => Err(make_send_error(error, sink_closed_error())),
+            Err(_) => Err(sink_closed_error()),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match ready!(self.command_tx.poll_flush_unpin(cx)) {
             Ok(()) => (),
-            Err(error) => {
-                return Poll::Ready(Err(make_send_error(error, sink_closed_error())));
+            Err(_) => {
+                return Poll::Ready(Err(sink_closed_error()));
             }
         }
 
@@ -144,9 +144,9 @@ where
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match ready!(self.command_tx.poll_close_unpin(cx)) {
             Ok(()) => Poll::Ready(Ok(())),
-            Err(error) => Poll::Ready(Err(make_send_error(
-                error,
-                io::Error::new(io::ErrorKind::Other, "sink close failed"),
+            Err(_) => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::Other,
+                "sink close failed",
             ))),
         }
     }
@@ -154,7 +154,7 @@ where
 
 struct SinkCommand {
     message: Message,
-    result_tx: oneshot::Sender<Result<(), SendError>>,
+    result_tx: oneshot::Sender<io::Result<()>>,
 }
 
 async fn sink_worker<W>(
@@ -183,16 +183,6 @@ async fn sink_worker<W>(
                     .unwrap_or(());
             }
         }
-    }
-}
-
-fn make_send_error(command_tx_error: PollSendError<SinkCommand>, source: io::Error) -> SendError {
-    SendError {
-        source,
-        message: command_tx_error
-            .into_inner()
-            .map(|command| command.message)
-            .unwrap_or_else(Message::new_keep_alive),
     }
 }
 

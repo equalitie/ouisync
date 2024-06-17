@@ -186,7 +186,7 @@ impl ConnectionPermit {
     /// of them closes, the whole connection closes. So both the reader and the writer should be
     /// associated with one half of the permit so that when any of them closes, the permit is
     /// released.
-    pub fn split(self) -> (ConnectionPermitHalf, ConnectionPermitHalf) {
+    pub fn into_split(self) -> (ConnectionPermitHalf, ConnectionPermitHalf) {
         (
             ConnectionPermitHalf(Self {
                 connections: self.connections.clone(),
@@ -310,6 +310,10 @@ impl ConnectionPermitHalf {
 
     pub fn tracker(&self) -> TrafficTracker {
         self.0.tracker()
+    }
+
+    pub fn released(&self) -> AwaitDrop {
+        self.0.released()
     }
 }
 

@@ -19,8 +19,9 @@ members = [
     "utils/swarm",
     "utils/protocol-analyzer",
     "vfs",
-    "utils/repogen"
-, "utils/benchtool"]
+    "utils/repogen",
+    "utils/benchtool"
+]
 resolver = "2"
 
 [workspace.package]
