@@ -93,8 +93,7 @@ public class OuisyncSession {
         let maybePendingResponse = synchronized(self) { pendingResponses.removeValue(forKey: messageId) }
 
         guard let pendingResponse = maybePendingResponse else {
-            NSLog("❗ Failed to match response to a request. messageId:\(messageId), repsponse:\(response) ")
-            return
+            fatalError("❗ Failed to match response to a request. messageId:\(messageId), repsponse:\(response) ")
         }
 
         pendingResponse.resume(returning: response)
@@ -114,8 +113,7 @@ public class OuisyncSession {
         let maybePendingResponse = synchronized(self) { pendingResponses.removeValue(forKey: messageId) }
 
         guard let pendingResponse = maybePendingResponse else {
-            NSLog("❗ Failed to match error response to a request")
-            return
+            fatalError("❗ Failed to match error response to a request. messageId:\(messageId), response:\(response)")
         }
 
         pendingResponse.resume(throwing: response)
