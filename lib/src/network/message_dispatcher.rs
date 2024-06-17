@@ -528,8 +528,9 @@ impl RecvState {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
+    use futures_util::stream;
     use net::tcp::{TcpListener, TcpStream};
-    use std::{net::Ipv4Addr, str::from_utf8};
+    use std::{collections::BTreeSet, net::Ipv4Addr, str::from_utf8};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recv_on_stream() {
@@ -674,6 +675,90 @@ mod tests {
         );
         assert_eq!(server_stream1.recv().await.unwrap(), send_content0);
         assert_eq!(server_stream1.recv().await.unwrap(), send_content1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multiple_connections_recv() {
+        let channel = MessageChannelId::random();
+
+        let send_content0 = b"one two three";
+        let send_content1 = b"four five six";
+
+        let server_dispatcher = MessageDispatcher::new();
+        let mut server_stream = server_dispatcher.open_recv(channel);
+
+        let (client_socket0, server_socket0) = create_connected_sockets().await;
+        let (client_socket1, server_socket1) = create_connected_sockets().await;
+
+        let client_sink0 = MessageSink::new(client_socket0);
+        let client_sink1 = MessageSink::new(client_socket1);
+
+        server_dispatcher.bind(server_socket0, ConnectionPermit::dummy());
+        server_dispatcher.bind(server_socket1, ConnectionPermit::dummy());
+
+        for (mut client_sink, content) in
+            [(client_sink0, send_content0), (client_sink1, send_content1)]
+        {
+            client_sink
+                .send(Message {
+                    tag: Type::Content,
+                    channel,
+                    content: content.to_vec(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let recv_content0 = server_stream.recv().await.unwrap();
+        let recv_content1 = server_stream.recv().await.unwrap();
+
+        // The messages may be received in any order
+        assert_eq!(
+            [recv_content0.as_slice(), recv_content1.as_slice()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            [send_content0.as_slice(), send_content1.as_slice()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multiple_connections_send() {
+        let channel = MessageChannelId::random();
+
+        let send_content0 = b"one two three";
+        let send_content1 = b"four five six";
+
+        let server_dispatcher = MessageDispatcher::new();
+        let server_sink = server_dispatcher.open_send(channel);
+
+        let (client_socket0, server_socket0) = create_connected_sockets().await;
+        let (client_socket1, server_socket1) = create_connected_sockets().await;
+
+        let client_stream0 = MessageStream::new(client_socket0);
+        let client_stream1 = MessageStream::new(client_socket1);
+
+        server_dispatcher.bind(server_socket0, ConnectionPermit::dummy());
+        server_dispatcher.bind(server_socket1, ConnectionPermit::dummy());
+
+        for content in [send_content0, send_content1] {
+            server_sink.send(content.to_vec()).await.unwrap();
+        }
+
+        // The messages may be received on any stream
+        let recv_contents: BTreeSet<_> = stream::select(client_stream0, client_stream1)
+            .map(|message| message.unwrap().content)
+            .take(2)
+            .collect()
+            .await;
+
+        assert_eq!(
+            recv_contents,
+            [send_content0.to_vec(), send_content1.to_vec()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
