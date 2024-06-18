@@ -63,7 +63,7 @@ scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 slab = "0.4.6"
-sqlx = { version = "0.7.2", default-features = false, features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "0.7.4", default-features = false, features = ["runtime-tokio", "sqlite"] }
 ssdp-client = "1.0"
 state_monitor = { path = "../state_monitor" }
 subtle = { version = "2.5.0", default-features = false, features = ["core_hint_black_box"] }
