@@ -34,6 +34,7 @@ use thiserror::Error;
 use tokio::{fs, task};
 
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(crate) use self::connection::Connection;
 
@@ -53,7 +54,11 @@ impl Pool {
             .synchronous(SqliteSynchronous::Normal)
             .pragma("recursive_triggers", "ON");
 
-        let pool_options = SqlitePoolOptions::new().test_before_acquire(false);
+        let pool_options = SqlitePoolOptions::new()
+            // Disable the test as it breaks cancel-safety (also it's unnecessary in our case)
+            .test_before_acquire(false)
+            // Expire idle connections to conserve resources (threads, file descriptors)
+            .idle_timeout(IDLE_TIMEOUT);
 
         let write = pool_options
             .clone()
