@@ -441,6 +441,7 @@ impl Setup {
 
         // TODO: There is likely a bug in Dokan causing the repository not to appear as mounted righ
         // after the `mount` (or `mount_with_span`) finishes, which makes the tests fail.
+        #[cfg(target_os = "windows")]
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
 
         Self {
