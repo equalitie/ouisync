@@ -186,7 +186,7 @@ impl ConnectionPermit {
     /// of them closes, the whole connection closes. So both the reader and the writer should be
     /// associated with one half of the permit so that when any of them closes, the permit is
     /// released.
-    pub fn split(self) -> (ConnectionPermitHalf, ConnectionPermitHalf) {
+    pub fn into_split(self) -> (ConnectionPermitHalf, ConnectionPermitHalf) {
         (
             ConnectionPermitHalf(Self {
                 connections: self.connections.clone(),
@@ -227,7 +227,10 @@ impl ConnectionPermit {
 
     /// Returns a `AwaitDrop` that gets notified when this permit gets released.
     pub fn released(&self) -> AwaitDrop {
+        // We can't use unwrap here because this method is used in `ConnectionPermitHalf` which can
+        // outlive the entry if the other half gets dropped.
         self.with_peer(|peer| peer.on_release.subscribe())
+            .unwrap_or_else(|| DropAwaitable::new().subscribe())
     }
 
     pub fn addr(&self) -> PeerAddr {
@@ -239,11 +242,8 @@ impl ConnectionPermit {
     }
 
     pub fn source(&self) -> PeerSource {
-        self.with_peer(|peer| peer.source)
-    }
-
-    pub fn tracker(&self) -> TrafficTracker {
-        self.with_peer(|peer| peer.tracker.clone())
+        // unwrap is ok because if `self` exists then the entry should exists as well.
+        self.with_peer(|peer| peer.source).unwrap()
     }
 
     /// Dummy connection permit for tests.
@@ -272,12 +272,11 @@ impl ConnectionPermit {
         }
     }
 
-    fn with_peer<F, R>(&self, f: F) -> R
+    fn with_peer<F, R>(&self, f: F) -> Option<R>
     where
         F: FnOnce(&Peer) -> R,
     {
-        // unwrap is ok because if `self` exists then the entry should exists as well.
-        f(self.connections.lock().unwrap().get(&self.info).unwrap())
+        self.connections.lock().unwrap().get(&self.info).map(f)
     }
 }
 
@@ -289,13 +288,20 @@ impl fmt::Debug for ConnectionPermit {
 
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
-        if let Entry::Occupied(entry) = self.connections.lock().unwrap().entry(self.info) {
-            if entry.get().id == self.id {
-                entry.remove();
-            }
+        let Ok(mut connections) = self.connections.lock() else {
+            return;
+        };
+
+        let Entry::Occupied(entry) = connections.entry(self.info) else {
+            return;
+        };
+
+        if entry.get().id != self.id {
+            return;
         }
 
-        self.on_deduplicator_change.send(()).unwrap_or(());
+        entry.remove();
+        self.on_deduplicator_change.send(()).ok();
     }
 }
 
@@ -309,7 +315,13 @@ impl ConnectionPermitHalf {
     }
 
     pub fn tracker(&self) -> TrafficTracker {
-        self.0.tracker()
+        self.0
+            .with_peer(|peer| peer.tracker.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn released(&self) -> AwaitDrop {
+        self.0.released()
     }
 }
 
