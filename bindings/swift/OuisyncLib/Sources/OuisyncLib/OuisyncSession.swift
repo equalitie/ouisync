@@ -59,9 +59,11 @@ public class OuisyncSession {
     }
 
     fileprivate func generateMessageId() -> MessageId {
-        let messageId = nextMessageId
-        nextMessageId += 1
-        return messageId
+        synchronized(self) {
+            let messageId = nextMessageId
+            nextMessageId += 1
+            return messageId
+        }
     }
 
     fileprivate func sendDataToOuisyncLib(_ data: [UInt8]) {
