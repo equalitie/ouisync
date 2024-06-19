@@ -16,7 +16,7 @@ use stun_codec::{
 use tokio::{select, sync::Notify, time};
 
 stun_codec::define_attribute_enums! {
-    Attribute, AttributeDecoded, AttributeEncoder,
+    Attribute, AttributeDecoder, AttributeEncoder,
     [
         // RFC 5389
         XorMappedAddress,
