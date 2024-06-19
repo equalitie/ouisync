@@ -1,3 +1,4 @@
+use crate::KEEP_ALIVE_INTERVAL;
 use bytes::BytesMut;
 use std::{
     io,
@@ -15,12 +16,9 @@ use tokio::{
         broadcast::{self, error::RecvError},
         Mutex as AsyncMutex,
     },
-    time::Duration,
 };
 
 const CERT_DOMAIN: &str = "ouisync.net";
-const KEEP_ALIVE_INTERVAL_MS: u32 = 15_000;
-const MAX_IDLE_TIMEOUT_MS: u32 = 3 * KEEP_ALIVE_INTERVAL_MS + 2_000;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -403,8 +401,8 @@ fn make_client_config() -> quinn::ClientConfig {
         // to be on the client side with the reasoning that the server side has a better chance of
         // being behind a non restrictive NAT, and so that sending the packets from the client side
         // shall assist in hole punching.
-        .keep_alive_interval(Some(Duration::from_millis(KEEP_ALIVE_INTERVAL_MS.into())))
-        .max_idle_timeout(Some(quinn::VarInt::from_u32(MAX_IDLE_TIMEOUT_MS).into()));
+        .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL))
+        .max_idle_timeout((2 * KEEP_ALIVE_INTERVAL).try_into().ok());
 
     client_config.transport_config(Arc::new(transport_config));
     client_config
@@ -424,7 +422,7 @@ fn make_server_config() -> Result<quinn::ServerConfig> {
 
     transport_config
         .max_concurrent_uni_streams(0_u8.into())
-        .max_idle_timeout(Some(quinn::VarInt::from_u32(MAX_IDLE_TIMEOUT_MS).into()));
+        .max_idle_timeout((2 * KEEP_ALIVE_INTERVAL).try_into().ok());
 
     server_config.transport_config(Arc::new(transport_config));
 

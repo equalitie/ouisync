@@ -11,7 +11,6 @@ mod debug_payload;
 mod gateway;
 mod interface;
 mod ip;
-mod keep_alive;
 mod local_discovery;
 mod message;
 mod message_broker;

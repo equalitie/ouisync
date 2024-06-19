@@ -16,15 +16,16 @@ quinn-proto = "0.10.2"
 rand = { package = "ouisync-rand", path = "../rand" }
 rcgen = { workspace = true }
 rustls = { workspace = true, features = ["quic", "dangerous_configuration"] }
-socket2 = "0.4.4" # To be able to setsockopts before a socket is bound
+socket2 = "0.5.7" # To be able to setsockopts before a socket is bound
 stun_codec = "0.3.4"
 thiserror = "1.0.31"
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
 turmoil = { workspace = true, optional = true }
 
 [dev-dependencies]
-clap  = { workspace = true }
-tokio = { workspace = true }
+anyhow = { workspace = true }
+clap   = { workspace = true }
+tokio  = { workspace = true }
 
 [features]
 simulation = ["turmoil"]

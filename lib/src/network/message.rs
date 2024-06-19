@@ -12,7 +12,6 @@ use crate::{
     },
     repository::RepositoryId,
 };
-use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use std::{fmt, io::Write};
 
@@ -62,18 +61,10 @@ pub(crate) enum Response {
     BlockError(BlockId, DebugResponse),
 }
 
-#[derive(
-    Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug, IntoPrimitive, TryFromPrimitive,
-)]
-#[repr(u8)]
-pub(crate) enum Type {
-    KeepAlive = 0,
-    Content = 2,
-}
+const LEGACY_TAG: u8 = 2;
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) struct Header {
-    pub tag: Type,
     pub channel: MessageChannelId,
 }
 
@@ -85,7 +76,7 @@ impl Header {
         let mut hdr = [0; Self::SIZE];
         let mut w = ArrayWriter { array: &mut hdr };
 
-        w.write_u8(self.tag.into());
+        w.write_u8(LEGACY_TAG);
         w.write_channel(&self.channel);
 
         hdr
@@ -93,38 +84,25 @@ impl Header {
 
     pub(crate) fn deserialize(hdr: &[u8; Self::SIZE]) -> Option<Header> {
         let mut r = ArrayReader { array: &hdr[..] };
-        let tag = Type::try_from(r.read_u8()).ok()?;
+        // Tag is no longer used but we still read it for backwards compatibility.
+        let _ = r.read_u8();
         let channel = r.read_channel();
 
-        Some(Header { tag, channel })
+        Some(Header { channel })
     }
 }
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Message {
-    pub tag: Type,
     pub channel: MessageChannelId,
     pub content: Vec<u8>,
 }
 
 impl Message {
-    pub fn new_keep_alive() -> Self {
-        Self {
-            tag: Type::KeepAlive,
-            channel: MessageChannelId::default(),
-            content: Vec::new(),
-        }
-    }
-
     pub fn header(&self) -> Header {
         Header {
-            tag: self.tag,
             channel: self.channel,
         }
-    }
-
-    pub fn is_keep_alive(&self) -> bool {
-        self.tag == Type::KeepAlive
     }
 }
 
@@ -132,24 +110,10 @@ impl fmt::Debug for Message {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Message {{ tag: {:?}, channel: {:?}, content-hash: {:?} }}",
-            self.tag,
+            "Message {{ channel: {:?}, content-hash: {:?} }}",
             self.channel,
             self.content.hash()
         )
-    }
-}
-
-impl From<(Header, Vec<u8>)> for Message {
-    fn from(hdr_and_content: (Header, Vec<u8>)) -> Message {
-        let hdr = hdr_and_content.0;
-        let content = hdr_and_content.1;
-
-        Self {
-            tag: hdr.tag,
-            channel: hdr.channel,
-            content,
-        }
     }
 }
 
@@ -266,7 +230,6 @@ mod tests {
     #[test]
     fn header_serialization() {
         let header = Header {
-            tag: Type::Content,
             channel: MessageChannelId::random(),
         };
 
