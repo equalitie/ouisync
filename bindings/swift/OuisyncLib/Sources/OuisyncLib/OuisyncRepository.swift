@@ -43,6 +43,11 @@ public class OuisyncRepository: Hashable, CustomDebugStringConvertible {
         return OuisyncFile(handle, self)
     }
 
+    public func openFile(_ path: FilePath) async throws -> OuisyncFile {
+        let handle = try await session.sendRequest(.fileOpen(handle, path)).toUInt64()
+        return OuisyncFile(handle, self)
+    }
+
     public func deleteFile(_ path: FilePath) async throws {
         let _ = try await session.sendRequest(.fileRemove(handle, path))
     }

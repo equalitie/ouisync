@@ -82,13 +82,11 @@ public class OuisyncFileEntry {
     }
 
     public func open() async throws -> OuisyncFile {
-        let fileHandle = try await repository.session.sendRequest(.fileOpen(repository.handle, path)).toUInt64()
-        return OuisyncFile(fileHandle, repository)
+        try await repository.openFile(path)
     }
 
     public func create() async throws -> OuisyncFile {
-        let fileHandle = try await repository.session.sendRequest(.fileCreate(repository.handle, path)).toUInt64()
-        return OuisyncFile(fileHandle, repository)
+        try await repository.createFile(path)
     }
 }
 
