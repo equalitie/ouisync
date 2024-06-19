@@ -151,7 +151,7 @@ public class NotificationStream {
     init(_ subscriptionId: Id, _ state: State) {
         self.subscriptionId = subscriptionId
         var tx: Tx!
-        rx = Rx { tx = $0 }
+        rx = Rx (bufferingPolicy: Tx.BufferingPolicy.bufferingOldest(1), { tx = $0 })
         self.rx_iter = rx.makeAsyncIterator()
 
         self.state = state
