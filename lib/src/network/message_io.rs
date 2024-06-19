@@ -346,7 +346,10 @@ impl Decoder {
                         self.buffer.resize(Header::SIZE, 0);
                         self.offset = 0;
 
-                        return Poll::Ready(Ok((header, Vec::new()).into()));
+                        return Poll::Ready(Ok(Message {
+                            channel: header.channel,
+                            content: Vec::new(),
+                        }));
                     }
                 }
                 DecodePhase::Content { header } => {
@@ -356,7 +359,10 @@ impl Decoder {
                     self.buffer.resize(Header::SIZE, 0);
                     self.offset = 0;
 
-                    return Poll::Ready(Ok((header, content).into()));
+                    return Poll::Ready(Ok(Message {
+                        channel: header.channel,
+                        content,
+                    }));
                 }
             }
         }
