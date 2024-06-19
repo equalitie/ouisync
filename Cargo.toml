@@ -25,7 +25,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.8.6"
+version = "0.8.7"
 authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
 repository = "https://github.com/equalitie/ouisync"
 license = "MPL-2.0"
