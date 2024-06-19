@@ -5,6 +5,7 @@ use ouisync_net::{
     tcp::{TcpListener, TcpStream},
 };
 use std::{
+    future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str,
     time::Duration,
@@ -35,18 +36,22 @@ struct Options {
     #[arg(short, long)]
     role: Role,
 
+    /// Protocol to use
+    #[arg(short, long)]
+    proto: Proto,
+
     /// If server, the address to bind to [default: 0.0.0.0]. If client the address to connect to
     /// [default: 127.0.0.1].
     #[arg(short, long)]
     addr: Option<IpAddr>,
 
-    /// If server, the port to listen on. If client to port to connect to.
-    #[arg(short, long, default_value_t = DEFAULT_PORT)]
+    /// If server, the port to listen on. If client the port to connect to.
+    #[arg(short = 'P', long, default_value_t = DEFAULT_PORT)]
     port: u16,
 
-    /// Protocol to use
-    #[arg(short = 'P', long)]
-    proto: Proto,
+    /// If client, the number of messages to send (default is inifnity). If server, ignored.
+    #[arg(short, long)]
+    count: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -65,20 +70,20 @@ async fn run_client(options: &Options) -> Result<()> {
     let addr: SocketAddr = (options.addr.unwrap_or(DEFAULT_CONNECT_ADDR), options.port).into();
 
     match options.proto {
-        Proto::Tcp => run_tcp_client(addr).await,
-        Proto::Quic => run_quic_client(addr).await,
+        Proto::Tcp => run_tcp_client(addr, options.count).await,
+        Proto::Quic => run_quic_client(addr, options.count).await,
     }
 }
 
-async fn run_tcp_client(addr: SocketAddr) -> Result<()> {
+async fn run_tcp_client(addr: SocketAddr, count: Option<usize>) -> Result<()> {
     let stream = TcpStream::connect(addr).await?;
-    run_client_connection(stream).await
+    run_client_connection(stream, count).await
 }
 
-async fn run_quic_client(addr: SocketAddr) -> Result<()> {
+async fn run_quic_client(addr: SocketAddr, count: Option<usize>) -> Result<()> {
     let (connector, _, _) = quic::configure((Ipv4Addr::UNSPECIFIED, 0).into()).await?;
     let connection = connector.connect(addr).await?;
-    run_client_connection(connection).await
+    run_client_connection(connection, count).await
 }
 
 async fn run_server(options: &Options) -> Result<()> {
@@ -116,12 +121,22 @@ async fn run_quic_server(addr: SocketAddr) -> Result<()> {
     }
 }
 
-async fn run_client_connection<T: AsyncRead + AsyncWrite + Unpin>(mut stream: T) -> Result<()> {
+async fn run_client_connection<T: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: T,
+    count: Option<usize>,
+) -> Result<()> {
     println!("connected");
 
     let message = "hello world";
+    let mut i = 0;
 
     loop {
+        if count.map(|count| i >= count).unwrap_or(false) {
+            break;
+        }
+
+        i = i.saturating_add(1);
+
         println!("sending  \"{message}\"");
         write_message(&mut stream, message).await?;
 
@@ -130,6 +145,8 @@ async fn run_client_connection<T: AsyncRead + AsyncWrite + Unpin>(mut stream: T)
 
         time::sleep(SEND_DELAY).await;
     }
+
+    future::pending().await
 }
 
 async fn run_server_connection<T: AsyncRead + AsyncWrite + Unpin>(mut stream: T, addr: SocketAddr) {

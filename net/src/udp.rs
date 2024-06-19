@@ -30,23 +30,33 @@ pub trait DatagramSocket {
 #[cfg(not(feature = "simulation"))]
 mod implementation {
     use super::*;
-    use crate::socket::{self, ReuseAddr};
-    use std::net::SocketAddrV4;
+    use crate::socket;
+    use socket2::{Domain, Socket, Type};
 
     pub struct UdpSocket(tokio::net::UdpSocket);
 
     impl UdpSocket {
         /// Binds UDP socket to the given address. If the port is taken, uses a random one,
         pub async fn bind(addr: SocketAddr) -> io::Result<Self> {
-            Ok(Self(socket::bind(addr).await?))
+            let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, None)?;
+            socket.set_nonblocking(true)?;
+            // Ignore errors - reuse address is nice to have but not required.
+            socket.set_reuse_address(true).ok();
+            socket::bind_with_fallback(&socket, addr)?;
+
+            Ok(Self(tokio::net::UdpSocket::from_std(socket.into())?))
         }
 
         pub async fn bind_multicast(interface: Ipv4Addr) -> io::Result<Self> {
-            let socket: tokio::net::UdpSocket = socket::bind_with_reuse_addr(
-                SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into(),
-                ReuseAddr::Required,
-            )
-            .await?;
+            let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, MULTICAST_PORT));
+
+            let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, None)?;
+            socket.set_nonblocking(true)?;
+            // reuse address is required here.
+            socket.set_reuse_address(true)?;
+            socket::bind_with_fallback(&socket, addr)?;
+
+            let socket = tokio::net::UdpSocket::from_std(socket.into())?;
             socket.join_multicast_v4(MULTICAST_ADDR, interface)?;
 
             Ok(Self(socket))
