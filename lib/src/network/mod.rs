@@ -9,7 +9,6 @@ mod constants;
 mod crypto;
 mod debug_payload;
 mod gateway;
-mod interface;
 mod ip;
 mod local_discovery;
 mod message;
