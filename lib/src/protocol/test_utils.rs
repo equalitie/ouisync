@@ -10,7 +10,6 @@ use crate::{
         get_bucket, Block, BlockId, InnerNode, InnerNodes, LeafNode, LeafNodes, INNER_LAYER_COUNT,
     },
     repository::Vault,
-    store::ReceiveFilter,
     version_vector::VersionVector,
 };
 use rand::{distributions::Standard, Rng};
@@ -135,7 +134,6 @@ pub(crate) async fn receive_nodes(
     write_keys: &Keypair,
     branch_id: PublicKey,
     version_vector: VersionVector,
-    receive_filter: &ReceiveFilter,
     snapshot: &Snapshot,
 ) {
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
@@ -147,7 +145,7 @@ pub(crate) async fn receive_nodes(
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             vault
-                .receive_inner_nodes(nodes.clone().into(), receive_filter, None)
+                .receive_inner_nodes(nodes.clone().into(), None)
                 .await
                 .unwrap();
         }

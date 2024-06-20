@@ -12,7 +12,7 @@ use crate::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, RootNodeFilter, UntrustedProof,
     },
     repository::{BlockRequestMode, Vault},
-    store::{self, ReceiveFilter},
+    store,
 };
 use std::{future, sync::Arc, time::Instant};
 use tokio::{
@@ -35,7 +35,6 @@ impl Client {
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pending_requests = PendingRequests::new(vault.monitor.clone());
-        let receive_filter = vault.store().receive_filter();
         let block_tracker = vault.block_tracker.client();
 
         // We run the sender in a separate task so we can keep sending requests while we're
@@ -47,7 +46,6 @@ impl Client {
             pending_requests,
             peer_request_limiter,
             link_request_limiter: Arc::new(Semaphore::new(MAX_PENDING_REQUESTS_PER_CLIENT)),
-            receive_filter,
             block_tracker,
             content_tx,
             send_queue_tx,
@@ -78,7 +76,6 @@ struct Inner {
     pending_requests: PendingRequests,
     peer_request_limiter: Arc<Semaphore>,
     link_request_limiter: Arc<Semaphore>,
-    receive_filter: ReceiveFilter,
     block_tracker: TrackerClient,
     content_tx: mpsc::Sender<Content>,
     send_queue_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
@@ -90,8 +87,6 @@ impl Inner {
         response_rx: &mut mpsc::Receiver<Response>,
         send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
     ) -> Result<()> {
-        self.receive_filter.reset().await?;
-
         select! {
             result = self.handle_responses(response_rx) => result,
             _ = self.send_requests(send_queue_rx) => Ok(()),
@@ -251,10 +246,7 @@ impl Inner {
         let total = nodes.len();
 
         let quota = self.vault.quota().await?.map(Into::into);
-        let status = self
-            .vault
-            .receive_inner_nodes(nodes, &self.receive_filter, quota)
-            .await?;
+        let status = self.vault.receive_inner_nodes(nodes, quota).await?;
 
         let debug = debug_payload.follow_up();
 
@@ -394,9 +386,7 @@ impl Inner {
         _debug_payload: DebugResponse,
     ) -> Result<()> {
         tracing::trace!("Received block not found {:?}", block_id);
-        self.vault
-            .receive_block_not_found(block_id, &self.receive_filter)
-            .await
+        Ok(())
     }
 
     async fn handle_available_block_offers(&self) {

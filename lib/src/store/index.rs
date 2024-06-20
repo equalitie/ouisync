@@ -5,7 +5,7 @@ use super::{
     error::Error,
     inner_node,
     quota::{self, QuotaError},
-    receive_filter, root_node,
+    root_node,
 };
 use crate::{
     collections::HashMap,
@@ -24,15 +24,6 @@ pub(super) struct ReceiveStatus {
     pub old_approved: bool,
     /// List of branches whose snapshots have been approved.
     pub new_approved: Vec<PublicKey>,
-}
-
-/// Reason for updating the summary
-#[derive(Debug)]
-pub(super) enum UpdateSummaryReason {
-    /// Updating summary because a block was removed
-    BlockRemoved,
-    /// Updating summary for some other reason
-    Other,
 }
 
 /// Does a parent node (root or inner) with the given hash exist?
@@ -55,7 +46,6 @@ pub(super) async fn update_summaries(
     write_tx: &mut db::WriteTransaction,
     cache_tx: &mut CacheTransaction,
     mut nodes: Vec<Hash>,
-    reason: UpdateSummaryReason,
 ) -> Result<HashMap<Hash, NodeState>, Error> {
     let mut states = HashMap::default();
 
@@ -70,15 +60,6 @@ pub(super) async fn update_summaries(
             for (parent_hash, bucket) in node_infos {
                 cache_tx.update_inner_summary(parent_hash, bucket, summary);
                 nodes.push(parent_hash);
-            }
-
-            match reason {
-                // If block was removed we need to remove the corresponding receive filter entries
-                // so if the block becomes needed again we can request it again.
-                UpdateSummaryReason::BlockRemoved => {
-                    receive_filter::remove(write_tx, &hash).await?
-                }
-                UpdateSummaryReason::Other => (),
             }
         } else {
             // ... no hits. Let's try root nodes.
@@ -109,8 +90,7 @@ pub(super) async fn finalize(
     // CAVEAT: the quota check would need some kind of unique lock to prevent multiple
     // concurrent checks to succeed where they would otherwise fail if ran sequentially.
 
-    let states =
-        update_summaries(write_tx, cache_tx, vec![hash], UpdateSummaryReason::Other).await?;
+    let states = update_summaries(write_tx, cache_tx, vec![hash]).await?;
 
     let mut old_approved = false;
     let mut new_approved = Vec::new();
@@ -482,10 +462,9 @@ mod tests {
             cache_tx: &mut CacheTransaction,
             hash: Hash,
         ) {
-            for (hash, state) in
-                update_summaries(write_tx, cache_tx, vec![hash], UpdateSummaryReason::Other)
-                    .await
-                    .unwrap()
+            for (hash, state) in update_summaries(write_tx, cache_tx, vec![hash])
+                .await
+                .unwrap()
             {
                 match state {
                     NodeState::Complete => {
@@ -534,14 +513,9 @@ mod tests {
         .unwrap();
 
         if snapshot.leaf_count() == 0 {
-            update_summaries(
-                &mut write_tx,
-                &mut cache_tx,
-                vec![root_node.proof.hash],
-                UpdateSummaryReason::Other,
-            )
-            .await
-            .unwrap();
+            update_summaries(&mut write_tx, &mut cache_tx, vec![root_node.proof.hash])
+                .await
+                .unwrap();
         }
 
         for layer in snapshot.inner_layers() {
@@ -556,14 +530,9 @@ mod tests {
             leaf_node::save_all(&mut write_tx, &nodes.clone().into_missing(), parent_hash)
                 .await
                 .unwrap();
-            update_summaries(
-                &mut write_tx,
-                &mut cache_tx,
-                vec![*parent_hash],
-                UpdateSummaryReason::Other,
-            )
-            .await
-            .unwrap();
+            update_summaries(&mut write_tx, &mut cache_tx, vec![*parent_hash])
+                .await
+                .unwrap();
         }
 
         // Check that initially all blocks are missing
