@@ -1,0 +1,4 @@
+-- Remove receive filter
+DROP TABLE received_nodes;
+DROP TRIGGER received_inner_nodes_delete_on_snapshot_deleted;
+DROP TRIGGER received_inner_nodes_delete_on_no_blocks_missing_after_insert;

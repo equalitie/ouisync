@@ -392,7 +392,6 @@ async fn receive_bumped_root_node() {
     let (_base_dir, vault, secrets) = setup().await;
 
     let branch_id = PublicKey::random();
-    let receive_filter = vault.store().receive_filter();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
     let vv0 = VersionVector::first(branch_id);
@@ -402,7 +401,6 @@ async fn receive_bumped_root_node() {
         &secrets.write_keys,
         branch_id,
         vv0.clone(),
-        &receive_filter,
         &snapshot,
     )
     .await;
@@ -467,12 +465,10 @@ async fn receive_valid_child_nodes() {
         .await
         .unwrap();
 
-    let receive_filter = vault.store().receive_filter();
-
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
             vault
-                .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter, None)
+                .receive_inner_nodes(inner_nodes.clone().into(), None)
                 .await
                 .unwrap();
 
@@ -511,12 +507,11 @@ async fn receive_child_nodes_with_missing_root_parent() {
     let (_base_dir, vault, _secrets) = setup().await;
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
-    let receive_filter = vault.store().receive_filter();
 
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
         let status = vault
-            .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter, None)
+            .receive_inner_nodes(inner_nodes.clone().into(), None)
             .await
             .unwrap();
         assert!(status.new_approved.is_empty());
@@ -560,8 +555,6 @@ async fn receive_valid_blocks() {
     let (_base_dir, vault, secrets) = setup().await;
 
     let branch_id = PublicKey::random();
-    let receive_filter = vault.store().receive_filter();
-
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
 
     receive_nodes(
@@ -569,7 +562,6 @@ async fn receive_valid_blocks() {
         &secrets.write_keys,
         branch_id,
         VersionVector::first(branch_id),
-        &receive_filter,
         &snapshot,
     )
     .await;
@@ -837,49 +829,6 @@ async fn prune_snapshots_keep_missing_and_insert_missing() {
     assert_eq!(count_snapshots(&index, &remote_id).await, 1);
 }
 
-#[tokio::test]
-async fn receive_existing_snapshot() {
-    let mut rng = StdRng::seed_from_u64(0);
-    let (_base_dir, vault, secrets) = setup_with_rng(&mut rng).await;
-
-    let remote_id = PublicKey::generate(&mut rng);
-    let snapshot = Snapshot::generate(&mut rng, 32);
-    let vv = VersionVector::first(remote_id);
-
-    let receive_filter = vault.store().receive_filter();
-
-    receive_nodes(
-        &vault,
-        &secrets.write_keys,
-        remote_id,
-        vv.clone(),
-        &receive_filter,
-        &snapshot,
-    )
-    .await;
-
-    // Same root node that we already received
-    let proof = Proof::new(remote_id, vv, *snapshot.root_hash(), &secrets.write_keys);
-    let status = vault
-        .receive_root_node(proof.into(), MultiBlockPresence::Full)
-        .await
-        .unwrap();
-
-    assert!(status.request_children);
-
-    for layer in snapshot.inner_layers() {
-        for (_, nodes) in layer.inner_maps() {
-            let status = vault
-                .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
-                .await
-                .unwrap();
-
-            assert!(status.request_children.is_empty());
-            assert!(status.new_approved.is_empty());
-        }
-    }
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn block_ids_local() {
     let (_base_dir, vault, secrets) = setup().await;
@@ -908,7 +857,6 @@ async fn block_ids_local() {
 #[tokio::test(flavor = "multi_thread")]
 async fn block_ids_remote() {
     let (_base_dir, vault, secrets) = setup().await;
-    let receive_filter = vault.store().receive_filter();
 
     let branch_id = PublicKey::random();
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
@@ -918,7 +866,6 @@ async fn block_ids_remote() {
         &secrets.write_keys,
         branch_id,
         VersionVector::first(branch_id),
-        &receive_filter,
         &snapshot,
     )
     .await;
@@ -933,7 +880,6 @@ async fn block_ids_remote() {
 #[tokio::test(flavor = "multi_thread")]
 async fn block_ids_excludes_missing_blocks() {
     let (_base_dir, vault, secrets) = setup().await;
-    let receive_filter = vault.store().receive_filter();
 
     let branch_id = PublicKey::random();
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
@@ -943,7 +889,6 @@ async fn block_ids_excludes_missing_blocks() {
         &secrets.write_keys,
         branch_id,
         VersionVector::first(branch_id),
-        &receive_filter,
         &snapshot,
     )
     .await;
@@ -966,7 +911,6 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
         }
     };
 
-    let receive_filter = vault.store().receive_filter();
     let version_vector = VersionVector::first(branch_id);
     let proof = Proof::new(
         branch_id,
@@ -983,7 +927,7 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             vault
-                .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
+                .receive_inner_nodes(nodes.clone().into(), None)
                 .await
                 .unwrap();
         }
@@ -1003,7 +947,6 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
 #[tokio::test(flavor = "multi_thread")]
 async fn block_ids_multiple_branches() {
     let (_base_dir, vault, secrets) = setup().await;
-    let receive_filter = vault.store().receive_filter();
 
     let branch_id_0 = PublicKey::random();
     let branch_id_1 = PublicKey::random();
@@ -1021,7 +964,6 @@ async fn block_ids_multiple_branches() {
         &secrets.write_keys,
         branch_id_0,
         VersionVector::first(branch_id_0),
-        &receive_filter,
         &snapshot_0,
     )
     .await;
@@ -1031,7 +973,6 @@ async fn block_ids_multiple_branches() {
         &secrets.write_keys,
         branch_id_1,
         VersionVector::first(branch_id_1),
-        &receive_filter,
         &snapshot_1,
     )
     .await;
@@ -1052,7 +993,6 @@ async fn block_ids_multiple_branches() {
 #[tokio::test(flavor = "multi_thread")]
 async fn block_ids_pagination() {
     let (_base_dir, vault, secrets) = setup().await;
-    let receive_filter = vault.store().receive_filter();
 
     let branch_id = PublicKey::random();
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 3);
@@ -1062,7 +1002,6 @@ async fn block_ids_pagination() {
         &secrets.write_keys,
         branch_id,
         VersionVector::first(branch_id),
-        &receive_filter,
         &snapshot,
     )
     .await;
@@ -1098,7 +1037,6 @@ async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let (_base_dir, vault, secrets) = setup().await;
-    let receive_filter = vault.store().receive_filter();
 
     let all_blocks: Vec<(Hash, Block)> =
         (&mut rng).sample_iter(Standard).take(block_count).collect();
@@ -1130,7 +1068,6 @@ async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u
             &secrets.write_keys,
             branch_id,
             VersionVector::first(branch_id),
-            &receive_filter,
             &snapshot,
         )
         .await;
@@ -1201,9 +1138,7 @@ async fn receive_snapshot(
     };
     let vv = vv.incremented(writer_id);
 
-    let receive_filter = vault.store().receive_filter();
-
-    receive_nodes(vault, write_keys, writer_id, vv, &receive_filter, snapshot).await
+    receive_nodes(vault, write_keys, writer_id, vv, snapshot).await
 }
 
 async fn receive_block(vault: &Vault, block: &Block) {

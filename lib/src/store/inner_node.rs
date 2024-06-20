@@ -1,10 +1,10 @@
-use super::{error::Error, leaf_node, ReceiveFilter};
+use super::{error::Error, leaf_node};
 use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
     protocol::{InnerNode, InnerNodes, LeafNodes, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
 };
-use futures_util::{future, Stream, TryStreamExt};
+use futures_util::{future, TryStreamExt};
 use sqlx::Row;
 use std::convert::TryInto;
 
@@ -55,18 +55,6 @@ pub(super) async fn load_children(
     .try_collect()
     .await
     .map_err(From::from)
-}
-
-/// Load all inner nodes with the specified parent hash.
-pub(super) fn load_parent_hashes<'a>(
-    conn: &'a mut db::Connection,
-    hash: &'a Hash,
-) -> impl Stream<Item = Result<Hash, Error>> + 'a {
-    sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
-        .bind(hash)
-        .fetch(conn)
-        .map_ok(|row| row.get(0))
-        .err_into()
 }
 
 pub(super) async fn load(
@@ -247,18 +235,10 @@ async fn inherit_summary(conn: &mut db::Connection, node: &mut InnerNode) -> Res
 pub(super) async fn filter_nodes_with_new_blocks(
     tx: &mut db::WriteTransaction,
     remote_nodes: &InnerNodes,
-    receive_filter: &ReceiveFilter,
 ) -> Result<Vec<InnerNode>, Error> {
     let mut output = Vec::with_capacity(remote_nodes.len());
 
     for (_, remote_node) in remote_nodes {
-        if !receive_filter
-            .check(tx, &remote_node.hash, &remote_node.summary.block_presence)
-            .await?
-        {
-            continue;
-        }
-
         let local_node = load(tx, &remote_node.hash).await?;
         let insert = if let Some(local_node) = local_node {
             local_node.summary.is_outdated(&remote_node.summary)
