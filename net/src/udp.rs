@@ -52,8 +52,16 @@ mod implementation {
 
             let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, None)?;
             socket.set_nonblocking(true)?;
-            // reuse address is required here.
             socket.set_reuse_address(true)?;
+            #[cfg(not(windows))]
+            socket.set_reuse_port(true)?;
+
+            // Receive broadcasts from other apps on this device
+            socket.set_multicast_loop_v4(true)?;
+
+            // Receive broadcasts from outside of this subnet.
+            socket.set_multicast_ttl_v4(255)?;
+
             socket::bind_with_fallback(&socket, addr)?;
 
             let socket = tokio::net::UdpSocket::from_std(socket.into())?;
