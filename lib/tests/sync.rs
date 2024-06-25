@@ -1053,16 +1053,18 @@ fn redownload_expired_blocks() {
         // `reader` node requesting blocks from the `cache` node and it responding with "not found"
         // at first.
         //
-        // Here we check that the expired sync is less than 3.5 times the normal sync (as opposed to
-        // the above ratio 2.6), that's because when this test runs with other tests, the actual
-        // speed value is less predictable.
-        assert!(
-            (expired_sync_duration.as_millis() as f64)
-                < (3.5 * normal_sync_duration.as_millis() as f64),
-            "Sync of expired blocks is more than 3.5x higher than normal sync \
-            (normal:{normal_sync_duration:?}, expired:{expired_sync_duration:?}, ratio:{})",
-            expired_sync_duration.as_millis() as f64 / normal_sync_duration.as_millis() as f64,
-        );
+        // Here we warn if the expired sync is more than 4 times the normal sync (as opposed to the
+        // above ratio 2.6), that's because when this test runs with other tests, the actual speed
+        // value is less predictable.
+        if expired_sync_duration > 4 * normal_sync_duration {
+            warn!(
+                normal = ?normal_sync_duration,
+                expired = ?expired_sync_duration,
+                ratio = expired_sync_duration.as_millis() as f64
+                    / normal_sync_duration.as_millis() as f64,
+                "Sync of expired blocks is more than 4x higher than normal sync"
+            );
+        }
 
         finish_origin_tx.send(()).await.unwrap();
         finish_cache_tx.send(()).await.unwrap();

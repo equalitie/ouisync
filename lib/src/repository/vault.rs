@@ -14,8 +14,8 @@ use crate::{
     },
     storage_size::StorageSize,
     store::{
-        self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, ReceiveFilter, RootNodeReceiveStatus,
-        Store, WriteTransaction,
+        self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, RootNodeReceiveStatus, Store,
+        WriteTransaction,
     },
 };
 use futures_util::TryStreamExt;
@@ -96,11 +96,10 @@ impl Vault {
     pub async fn receive_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodes>,
-        receive_filter: &ReceiveFilter,
         quota: Option<StorageSize>,
     ) -> Result<InnerNodeReceiveStatus> {
         let mut tx = self.store().begin_write().await?;
-        let status = tx.receive_inner_nodes(nodes, receive_filter, quota).await?;
+        let status = tx.receive_inner_nodes(nodes, quota).await?;
         self.finalize_receive(tx, &status.new_approved).await?;
 
         Ok(status)
@@ -149,28 +148,6 @@ impl Vault {
             }
         })
         .await?;
-
-        Ok(())
-    }
-
-    /// Receive a message that the block has been found on the peer.
-    pub async fn receive_block_not_found(
-        &self,
-        block_id: BlockId,
-        receive_filter: &ReceiveFilter,
-    ) -> Result<()> {
-        // We received a 'block not found' because we sent a request for the block, and we sent
-        // that request because the index that we downloaded from the peer indicated that the peer
-        // had the block. But it could have been lying and the block at the peer could have
-        // expired. If that's the case, then the peer should have updated their index and we'll
-        // need to re-download the part referring to the `block_id`. Thus we need to remove that
-        // part from the `receive_filter`.
-
-        self.store()
-            .begin_write()
-            .await?
-            .remove_from_receive_filter_index_nodes_for(block_id, receive_filter)
-            .await?;
 
         Ok(())
     }

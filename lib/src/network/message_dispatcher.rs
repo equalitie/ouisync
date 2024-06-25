@@ -2,8 +2,7 @@
 
 use super::{
     connection::{ConnectionPermit, ConnectionPermitHalf, PermitId},
-    keep_alive::{KeepAliveSink, KeepAliveStream},
-    message::{Message, MessageChannelId, Type},
+    message::{Message, MessageChannelId},
     message_io::{MessageSink, MessageStream},
     raw,
     traffic_tracker::TrackingWrapper,
@@ -19,18 +18,12 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::Duration,
 };
 use tokio::{
     select,
     sync::{mpsc, oneshot},
     task,
 };
-
-// Time after which if no message is received, the connection is dropped.
-const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
-// How often to send keep-alive messages if no regular messages have been sent.
-const KEEP_ALIVE_SEND_INTERVAL: Duration = Duration::from_secs(30);
 
 const CONTENT_STREAM_BUFFER_SIZE: usize = 1024;
 
@@ -183,7 +176,6 @@ impl ContentSink {
     pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
         self.sink_tx
             .send(Message {
-                tag: Type::Content,
                 channel: self.channel,
                 content,
             })
@@ -229,7 +221,7 @@ pub(super) struct ChannelClosed;
 // Stream for receiving messages from a single connection. Contains a connection permit half which
 // gets released on drop. Automatically closes when the corresponding `ConnectionSink` closes.
 struct ConnectionStream {
-    reader: KeepAliveStream<TrackingWrapper<raw::OwnedReadHalf>>,
+    reader: MessageStream<TrackingWrapper<raw::OwnedReadHalf>>,
     permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
     connection_count: Arc<AtomicUsize>,
@@ -246,10 +238,7 @@ impl ConnectionStream {
         let permit_released = permit.released();
 
         Self {
-            reader: KeepAliveStream::new(
-                MessageStream::new(TrackingWrapper::new(reader, permit.tracker())),
-                KEEP_ALIVE_RECV_INTERVAL,
-            ),
+            reader: MessageStream::new(TrackingWrapper::new(reader, permit.tracker())),
             permit,
             permit_released,
             connection_count,
@@ -285,7 +274,7 @@ impl Drop for ConnectionStream {
 // Sink for sending messages on a single connection. Contains a connection permit half which gets
 // released on drop. Automatically closes when the corresponding `ConnectionStream` is closed.
 struct ConnectionSink {
-    writer: KeepAliveSink<TrackingWrapper<raw::OwnedWriteHalf>>,
+    writer: MessageSink<TrackingWrapper<raw::OwnedWriteHalf>>,
     _permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
 }
@@ -295,10 +284,7 @@ impl ConnectionSink {
         let permit_released = permit.released();
 
         Self {
-            writer: KeepAliveSink::new(
-                MessageSink::new(TrackingWrapper::new(writer, permit.tracker())),
-                KEEP_ALIVE_SEND_INTERVAL,
-            ),
+            writer: MessageSink::new(TrackingWrapper::new(writer, permit.tracker())),
             _permit: permit,
             permit_released,
         }
@@ -530,7 +516,7 @@ mod tests {
     use assert_matches::assert_matches;
     use futures_util::stream;
     use net::tcp::{TcpListener, TcpStream};
-    use std::{collections::BTreeSet, net::Ipv4Addr, str::from_utf8};
+    use std::{collections::BTreeSet, net::Ipv4Addr, str::from_utf8, time::Duration};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recv_on_stream() {
@@ -546,7 +532,6 @@ mod tests {
 
         client_sink
             .send(Message {
-                tag: Type::Content,
                 channel,
                 content: send_content.to_vec(),
             })
@@ -576,7 +561,6 @@ mod tests {
         for (channel, content) in [(channel0, send_content0), (channel1, send_content1)] {
             client_sink
                 .send(Message {
-                    tag: Type::Content,
                     channel,
                     content: content.to_vec(),
                 })
@@ -661,7 +645,6 @@ mod tests {
         for content in [send_content0, send_content1] {
             client_sink
                 .send(Message {
-                    tag: Type::Content,
                     channel,
                     content: content.to_vec(),
                 })
@@ -701,7 +684,6 @@ mod tests {
         {
             client_sink
                 .send(Message {
-                    tag: Type::Content,
                     channel,
                     content: content.to_vec(),
                 })

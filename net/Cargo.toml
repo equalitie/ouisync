@@ -23,8 +23,9 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-th
 turmoil = { workspace = true, optional = true }
 
 [dev-dependencies]
-clap  = { workspace = true }
-tokio = { workspace = true }
+anyhow = { workspace = true }
+clap   = { workspace = true }
+tokio  = { workspace = true }
 
 [features]
 simulation = ["turmoil"]

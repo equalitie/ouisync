@@ -432,17 +432,7 @@ async fn save_snapshot(
     let mut version_vector = VersionVector::new();
     version_vector.insert(writer_id, 2); // to force overwrite the initial root node
 
-    let receive_filter = vault.store().receive_filter();
-
-    receive_nodes(
-        vault,
-        write_keys,
-        writer_id,
-        version_vector,
-        &receive_filter,
-        snapshot,
-    )
-    .await;
+    receive_nodes(vault, write_keys, writer_id, version_vector, snapshot).await;
 }
 
 async fn wait_until_snapshots_in_sync(

@@ -2,8 +2,7 @@ use super::{
     block,
     cache::{Cache, CacheTransaction},
     error::Error,
-    index::{self, UpdateSummaryReason},
-    leaf_node, root_node,
+    index, leaf_node, root_node,
 };
 use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
@@ -410,14 +409,7 @@ async fn set_as_missing_if_expired(
             .try_collect()
             .await?;
 
-        for (hash, _state) in index::update_summaries(
-            &mut tx,
-            &mut cache,
-            nodes,
-            UpdateSummaryReason::BlockRemoved,
-        )
-        .await?
-        {
+        for (hash, _state) in index::update_summaries(&mut tx, &mut cache, nodes).await? {
             try_collect_into(
                 root_node::load_writer_ids_by_hash(&mut tx, &hash),
                 &mut branches,

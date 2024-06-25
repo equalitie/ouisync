@@ -451,6 +451,7 @@ mod tests {
         let mut dst = fs::File::create(&dst_path).await.unwrap();
         src.seek(SeekFrom::Start(0));
         src.copy_to_writer(&mut dst).await.unwrap();
+        dst.sync_all().await.unwrap();
         drop(dst);
 
         let mut dst = fs::File::open(&dst_path).await.unwrap();

@@ -1,9 +1,4 @@
-use super::{
-    cache::CacheTransaction,
-    error::Error,
-    index::{self, UpdateSummaryReason},
-    leaf_node,
-};
+use super::{cache::CacheTransaction, error::Error, index, leaf_node};
 use crate::{
     db,
     protocol::{Block, BlockContent, BlockId, BlockNonce, BLOCK_SIZE},
@@ -25,7 +20,7 @@ pub(super) async fn receive(
         .try_collect()
         .await?;
 
-    index::update_summaries(write_tx, cache_tx, nodes, UpdateSummaryReason::Other).await?;
+    index::update_summaries(write_tx, cache_tx, nodes).await?;
 
     write(write_tx, block).await?;
 

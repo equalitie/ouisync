@@ -5,7 +5,8 @@ pub use self::implementation::*;
 mod implementation {
     pub use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-    use crate::socket;
+    use crate::{socket, KEEP_ALIVE_INTERVAL};
+    use socket2::{Domain, Socket, TcpKeepalive, Type};
     use std::{
         io,
         net::SocketAddr,
@@ -20,7 +21,22 @@ mod implementation {
     impl TcpListener {
         /// Binds TCP socket to the given address. If the port is taken, uses a random one,
         pub async fn bind(addr: impl Into<SocketAddr>) -> io::Result<Self> {
-            Ok(Self(socket::bind(addr.into()).await?))
+            let addr = addr.into();
+
+            let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
+            socket.set_nonblocking(true)?;
+            // Ignore errors - reuse address is nice to have but not required.
+            socket.set_reuse_address(true).ok();
+            set_keep_alive(&socket)?;
+            socket::bind_with_fallback(&socket, addr)?;
+
+            // Marks the socket as ready for accepting incoming connections. This needs to be set
+            // for TCP listeners otherwise we get "Invalid argument" error when calling `accept`.
+            //
+            // See https://stackoverflow.com/a/10002936/170073 for explanation of the parameter.
+            socket.listen(128)?;
+
+            Ok(Self(tokio::net::TcpListener::from_std(socket.into())?))
         }
 
         pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
@@ -40,12 +56,37 @@ mod implementation {
 
     impl TcpStream {
         pub async fn connect(addr: SocketAddr) -> io::Result<Self> {
-            Ok(Self(tokio::net::TcpStream::connect(addr).await?))
+            let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
+            socket.set_nonblocking(true)?;
+            set_keep_alive(&socket)?;
+
+            Ok(Self(
+                tokio::net::TcpSocket::from_std_stream(socket.into())
+                    .connect(addr)
+                    .await?,
+            ))
         }
 
         pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
             self.0.into_split()
         }
+    }
+
+    fn set_keep_alive(socket: &Socket) -> io::Result<()> {
+        let options = TcpKeepalive::new()
+            .with_time(KEEP_ALIVE_INTERVAL)
+            .with_interval(KEEP_ALIVE_INTERVAL);
+
+        // this options is not supported on windows
+        #[cfg(any(
+            target_os = "android",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "macos",
+        ))]
+        let options = options.with_retries(1);
+
+        socket.set_tcp_keepalive(&options)
     }
 
     impl AsyncRead for TcpStream {

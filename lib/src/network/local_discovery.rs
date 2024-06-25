@@ -1,10 +1,11 @@
 use super::{
-    interface::{self, InterfaceChange},
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::collections::{HashMap, HashSet};
+use crate::collections::HashMap;
 use deadlock::AsyncMutex;
+use futures_util::StreamExt;
+use if_watch::{tokio::IfWatcher, IfEvent};
 use net::udp::{DatagramSocket, UdpSocket, MULTICAST_ADDR, MULTICAST_PORT};
 use rand::rngs::OsRng;
 use rand::Rng;
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use state_monitor::StateMonitor;
 use std::{
     future, io,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 use tokio::{
@@ -51,12 +52,26 @@ impl LocalDiscovery {
                     per_interface_discovery: HashMap::default(),
                 };
 
-                let mut interface_watcher = interface::watch_ipv4_multicast_interfaces();
+                let mut interface_watcher = match IfWatcher::new() {
+                    Ok(watch) => watch,
+                    Err(error) => {
+                        tracing::error!(?error, "failed to initialize network interface watcher");
+                        return;
+                    }
+                };
 
-                while let Some(change) = interface_watcher.recv().await {
-                    match change {
-                        InterfaceChange::Added(set) => inner.add(set, &monitor),
-                        InterfaceChange::Removed(set) => inner.remove(set),
+                while let Some(event) = interface_watcher.next().await {
+                    let event = match event {
+                        Ok(event) => event,
+                        Err(error) => {
+                            tracing::error!(?error, "failed to poll network interface watcher");
+                            break;
+                        }
+                    };
+
+                    match event {
+                        IfEvent::Up(addr) => inner.add(addr.addr(), &monitor),
+                        IfEvent::Down(addr) => inner.remove(addr.addr()),
                     }
                 }
             }
@@ -92,39 +107,47 @@ struct LocalDiscoveryInner {
 }
 
 impl LocalDiscoveryInner {
-    fn add(&mut self, new_interfaces: HashSet<Ipv4Addr>, parent_monitor: &StateMonitor) {
+    fn add(&mut self, interface: IpAddr, parent_monitor: &StateMonitor) {
         use crate::collections::hash_map::Entry;
 
-        for interface in new_interfaces {
-            match self.per_interface_discovery.entry(interface) {
-                Entry::Vacant(entry) => {
-                    let _enter = tracing::info_span!("local_discovery", %interface).entered();
-                    let discovery = PerInterfaceLocalDiscovery::new(
-                        self.peer_tx.clone(),
-                        self.listener_port,
-                        interface,
-                        parent_monitor,
-                    );
+        if interface.is_loopback() {
+            return;
+        }
 
-                    match discovery {
-                        Ok(discovery) => {
-                            entry.insert(discovery);
-                            tracing::info!("Local discovery started");
-                        }
-                        Err(error) => {
-                            tracing::warn!(?error, "Failed to start local discovery");
-                        }
+        let IpAddr::V4(interface) = interface else {
+            return;
+        };
+
+        match self.per_interface_discovery.entry(interface) {
+            Entry::Vacant(entry) => {
+                let _enter = tracing::info_span!("local_discovery", %interface).entered();
+                let discovery = PerInterfaceLocalDiscovery::new(
+                    self.peer_tx.clone(),
+                    self.listener_port,
+                    interface,
+                    parent_monitor,
+                );
+
+                match discovery {
+                    Ok(discovery) => {
+                        entry.insert(discovery);
+                        tracing::info!("Local discovery started");
+                    }
+                    Err(error) => {
+                        tracing::warn!(?error, "Failed to start local discovery");
                     }
                 }
-                Entry::Occupied(_) => unreachable!(),
             }
+            Entry::Occupied(_) => unreachable!(),
         }
     }
 
-    fn remove(&mut self, removed_interfaces: HashSet<Ipv4Addr>) {
-        for interface in removed_interfaces {
-            self.per_interface_discovery.remove(&interface);
-        }
+    fn remove(&mut self, interface: IpAddr) {
+        let IpAddr::V4(interface) = interface else {
+            return;
+        };
+
+        self.per_interface_discovery.remove(&interface);
     }
 }
 
