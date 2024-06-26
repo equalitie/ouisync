@@ -33,7 +33,7 @@ set(DOKAN_DLL_OUTPUT_PATH "${CMAKE_CURRENT_BINARY_DIR}")
 
 # This forces the rust-dokan dependency to create the dokan2.dll library and
 # place in the ${binary_output_dir} directory.
-corrosion_set_env_vars(ouisync-ffi "DOKAN_DLL_OUTPUT_PATH=${DOKAN_DLL_OUTPUT_PATH}")
+corrosion_set_env_vars(ouisync_ffi "DOKAN_DLL_OUTPUT_PATH=${DOKAN_DLL_OUTPUT_PATH}")
 
 # This value is used when generating builds using this plugin, so it must
 # not be changed
