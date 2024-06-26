@@ -71,3 +71,6 @@ debug = 1
 # Build dependencies with optimizations even in dev mode
 [profile.dev.package."*"]
 opt-level = 3
+
+[patch.crates-io]
+subtle = { git = "https://github.com/madadam/subtle.git", branch = "only_one_black_box" }
