@@ -52,8 +52,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
 
 # List of absolute paths to libraries that should be bundled with the plugin
 set(ouisync_plugin_bundled_libraries
-  $<$<CONFIG:Debug>:${CMAKE_CURRENT_BINARY_DIR}/Debug/ouisync_ffi.dll>
-  $<$<CONFIG:Release>:${CMAKE_CURRENT_BINARY_DIR}/Release/ouisync_ffi.dll>
+  ${CMAKE_CURRENT_BINARY_DIR}/ouisync_ffi.dll
   ${DOKAN_DLL_OUTPUT_PATH}/dokan2.dll
   PARENT_SCOPE
 )
