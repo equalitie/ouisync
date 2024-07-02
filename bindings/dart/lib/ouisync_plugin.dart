@@ -581,6 +581,12 @@ class Repository {
                 })
             .toList(),
       });
+
+  /// Mount the repository. Currently supported only on the desktop platforms.
+  Future<void> mount() => _client.invoke<void>("repository_mount", _handle);
+
+  /// Unmount the repository.
+  Future<void> unmount() => _client.invoke<void>("repository_unmount", _handle);
 }
 
 sealed class AccessChange {

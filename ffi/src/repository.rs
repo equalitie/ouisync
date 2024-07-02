@@ -64,11 +64,6 @@ pub(crate) async fn create(
         repository: Arc::new(repository),
         registration: AsyncRwLock::new(None),
     };
-
-    state
-        .mounter
-        .mount(&holder.store_path, &holder.repository)?;
-
     let handle = entry.insert(holder);
 
     Ok(handle)
@@ -109,11 +104,6 @@ pub(crate) async fn open(
         repository: Arc::new(repository),
         registration: AsyncRwLock::new(None),
     };
-
-    state
-        .mounter
-        .mount(&holder.store_path, &holder.repository)?;
-
     let handle = entry.insert(holder);
 
     Ok(handle)
@@ -278,6 +268,16 @@ pub(crate) fn get_name(state: &State, handle: RepositoryHandle) -> Result<OsStri
             message: format!("Failed to extract file name from the path {store_path:?}"),
         }),
     }
+}
+
+pub(crate) fn mount(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
+    let holder = state.repositories.get(handle)?;
+    state.mounter.mount(&holder.store_path, &holder.repository)
+}
+
+pub(crate) fn unmount(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
+    let holder = state.repositories.get(handle)?;
+    state.mounter.unmount(&holder.store_path)
 }
 
 /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
