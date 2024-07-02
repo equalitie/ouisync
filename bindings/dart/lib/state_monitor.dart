@@ -85,6 +85,12 @@ class StateMonitorNode {
     return int.tryParse(str);
   }
 
+  double? parseDoubleValue(String name) {
+    final str = values[name];
+    if (str == null) return null;
+    return double.tryParse(str);
+  }
+
   @override
   String toString() =>
       "StateMonitorNode { values:$values, children:$children }";
