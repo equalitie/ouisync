@@ -117,6 +117,8 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         edits: Vec<MetadataEdit>,
     },
+    RepositoryMount(RepositoryHandle),
+    RepositoryUnmount(RepositoryHandle),
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
