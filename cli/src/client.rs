@@ -9,7 +9,7 @@ use anyhow::Result;
 use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
 use state_monitor::StateMonitor;
 use std::{
-    io,
+    env, io,
     path::{Path, PathBuf},
 };
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -60,6 +60,16 @@ pub(crate) async fn run(
                 mode,
                 password,
             }
+        }
+        Request::Export { name, output } => {
+            // Ensure the output path is relative to the client, not the server.
+            let output = if output.is_absolute() {
+                output
+            } else {
+                env::current_dir()?.join(output)
+            };
+
+            Request::Export { name, output }
         }
         _ => request,
     };

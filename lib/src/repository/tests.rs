@@ -1257,6 +1257,17 @@ async fn export() {
     let mut file = dst_repo.open_file("test.dat").await.unwrap();
     let dst_content = file.read_to_end().await.unwrap();
     assert_eq!(dst_content, src_content);
+
+    // Verify we can lock the repo and then unlock it without password
+    dst_repo
+        .set_access_mode(AccessMode::Blind, None)
+        .await
+        .unwrap();
+    dst_repo
+        .set_access_mode(AccessMode::Read, None)
+        .await
+        .unwrap();
+    assert_eq!(dst_repo.access_mode(), AccessMode::Read);
 }
 
 const DEFAULT_REPO_NAME: &str = "repo.db";

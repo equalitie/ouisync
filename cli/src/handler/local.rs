@@ -2,6 +2,7 @@ use crate::{
     protocol::{Error, QuotaInfo, Request, Response},
     repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
+    DB_EXTENSION,
 };
 use async_trait::async_trait;
 use ouisync_bridge::{network, transport::SessionContext};
@@ -376,6 +377,18 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                         .await?;
                     Ok(Response::BlockExpiration(block_expiration))
                 }
+            }
+            Request::Export { name, output } => {
+                let holder = self.state.repositories.find(&name)?;
+                let output = if output.extension().is_some() {
+                    output
+                } else {
+                    output.with_extension(DB_EXTENSION)
+                };
+
+                holder.repository.export(&output).await?;
+
+                Ok(output.to_string_lossy().into_owned().into())
             }
         }
     }

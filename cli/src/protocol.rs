@@ -80,6 +80,16 @@ pub(crate) enum Request {
         #[arg(short, long)]
         name: String,
     },
+    /// Export a repository to a file
+    Export {
+        /// Name of the repository to export
+        #[arg(short, long)]
+        name: String,
+
+        /// File path to export the repository to
+        #[arg(short, long, value_name = "PATH")]
+        output: PathBuf,
+    },
     /// Print share token for a repository
     Share {
         /// Name of the repository to share
