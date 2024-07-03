@@ -1,6 +1,6 @@
 use super::metadata;
 use crate::{
-    access_control::AccessSecrets,
+    access_control::{AccessMode, AccessSecrets},
     crypto::sign,
     error::{Error, Result},
 };
@@ -19,6 +19,13 @@ impl Credentials {
         Self {
             secrets,
             writer_id: metadata::generate_writer_id(),
+        }
+    }
+
+    pub fn with_mode(self, access_mode: AccessMode) -> Self {
+        Self {
+            secrets: self.secrets.with_mode(access_mode),
+            ..self
         }
     }
 

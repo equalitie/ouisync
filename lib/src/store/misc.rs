@@ -1,10 +1,11 @@
 use super::error::Error;
 use crate::db;
 use sqlx::Row;
+use std::path::Path;
 use tracing::instrument;
 
 #[instrument(skip_all)]
-pub(super) async fn check(conn: &mut db::Connection) -> Result<bool, Error> {
+pub(super) async fn check_integrity(conn: &mut db::Connection) -> Result<bool, Error> {
     // Check orphaned nodes
     let count = db::decode_u64(
         sqlx::query(
@@ -50,4 +51,12 @@ pub(super) async fn check(conn: &mut db::Connection) -> Result<bool, Error> {
     // TODO: Check for blocks with invalid ids
 
     Ok(true)
+}
+
+pub(super) async fn export(conn: &mut db::Connection, dst: &Path) -> Result<(), Error> {
+    sqlx::query("VACUUM INTO ?")
+        .bind(dst.to_str().ok_or(Error::MalformedData)?)
+        .execute(conn)
+        .await?;
+    Ok(())
 }

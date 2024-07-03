@@ -1218,6 +1218,47 @@ async fn aux_db_files_are_deleted_on_close() {
     assert_eq!(entries, [temp_dir.path().join(DEFAULT_REPO_NAME)]);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn export() {
+    let (base_dir, src_repo) = setup().await;
+
+    // Create some content
+    let src_content = random_bytes(1024);
+
+    let mut file = src_repo.create_file("test.dat").await.unwrap();
+    file.write_all(&src_content).await.unwrap();
+    file.flush().await.unwrap();
+    drop(file);
+
+    let dst_path = base_dir.path().join("export.db");
+    src_repo.export(&dst_path).await.unwrap();
+
+    // Verify the export has no aux files
+    let mut read_dir = fs::read_dir(base_dir.path()).await.unwrap();
+    let mut entries = Vec::new();
+
+    while let Some(path) = read_dir.next_entry().await.unwrap().map(|e| e.path()) {
+        if path.starts_with(&dst_path) {
+            entries.push(path);
+        }
+    }
+
+    assert_eq!(entries, [dst_path.clone()]);
+
+    // Open the exported repo
+    let dst_repo = Repository::open(&RepositoryParams::new(dst_path), None, AccessMode::Write)
+        .await
+        .unwrap();
+
+    // Verify the repo is read-only with no password
+    assert_eq!(dst_repo.access_mode(), AccessMode::Read);
+
+    // Verify we can read the content
+    let mut file = dst_repo.open_file("test.dat").await.unwrap();
+    let dst_content = file.read_to_end().await.unwrap();
+    assert_eq!(dst_content, src_content);
+}
+
 const DEFAULT_REPO_NAME: &str = "repo.db";
 
 async fn setup() -> (TempDir, Repository) {

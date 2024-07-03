@@ -45,7 +45,7 @@ use camino::Utf8Path;
 use deadlock::{BlockingMutex, BlockingRwLock};
 use futures_util::{future, TryStreamExt};
 use futures_util::{stream, StreamExt};
-use metrics::Recorder;
+use metrics::{NoopRecorder, Recorder};
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
 use std::{borrow::Cow, io, path::Path, pin::pin, sync::Arc};
@@ -108,7 +108,7 @@ impl Repository {
             writer_id,
         };
 
-        Self::new(pool, credentials, monitor).await
+        Self::new(pool, credentials, monitor).init().await
     }
 
     /// Opens an existing repository.
@@ -153,14 +153,10 @@ impl Repository {
 
         let credentials = Credentials { secrets, writer_id };
 
-        Self::new(pool, credentials, monitor).await
+        Self::new(pool, credentials, monitor).init().await
     }
 
-    async fn new(
-        pool: db::Pool,
-        credentials: Credentials,
-        monitor: RepositoryMonitor,
-    ) -> Result<Self> {
+    fn new(pool: db::Pool, credentials: Credentials, monitor: RepositoryMonitor) -> Self {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
 
         let block_request_mode = if credentials.secrets.can_read() {
@@ -177,51 +173,59 @@ impl Repository {
             monitor,
         );
 
-        if let Some(keys) = credentials
-            .secrets
-            .write_secrets()
-            .map(|secrets| &secrets.write_keys)
-        {
-            vault
-                .store()
-                .migrate_data(credentials.writer_id, keys)
-                .await?;
-        }
-
-        {
-            let mut conn = vault.store().db().acquire().await?;
-            if let Some(block_expiration) = metadata::block_expiration::get(&mut conn).await? {
-                vault.set_block_expiration(Some(block_expiration)).await?;
-            }
-        }
-
-        tracing::debug!(
-            parent: vault.monitor.span(),
-            access = ?credentials.secrets.access_mode(),
-            writer_id = ?credentials.writer_id,
-            "Repository opened"
-        );
-
         let shared = Arc::new(Shared {
             vault,
             credentials: BlockingRwLock::new(credentials),
             branch_shared: BranchShared::new(),
         });
 
-        let worker_handle = spawn_worker(shared.clone());
-        let worker_handle = BlockingMutex::new(Some(worker_handle));
-
-        let progress_reporter_handle = scoped_task::spawn(
-            report_sync_progress(shared.vault.clone())
-                .instrument(shared.vault.monitor.span().clone()),
-        );
-        let progress_reporter_handle = BlockingMutex::new(Some(progress_reporter_handle));
-
-        Ok(Self {
+        Self {
             shared,
-            worker_handle,
-            progress_reporter_handle,
-        })
+            worker_handle: BlockingMutex::new(None),
+            progress_reporter_handle: BlockingMutex::new(None),
+        }
+    }
+
+    async fn init(self) -> Result<Self> {
+        let credentials = self.credentials();
+
+        if let Some(keys) = credentials
+            .secrets
+            .write_secrets()
+            .map(|secrets| &secrets.write_keys)
+        {
+            self.shared
+                .vault
+                .store()
+                .migrate_data(credentials.writer_id, keys)
+                .await?;
+        }
+
+        {
+            let mut conn = self.shared.vault.store().db().acquire().await?;
+            if let Some(block_expiration) = metadata::block_expiration::get(&mut conn).await? {
+                self.shared
+                    .vault
+                    .set_block_expiration(Some(block_expiration))
+                    .await?;
+            }
+        }
+
+        tracing::debug!(
+            parent: self.shared.vault.monitor.span(),
+            access = ?credentials.secrets.access_mode(),
+            writer_id = ?credentials.writer_id,
+            "Repository opened"
+        );
+
+        *self.worker_handle.lock().unwrap() = Some(spawn_worker(self.shared.clone()));
+
+        *self.progress_reporter_handle.lock().unwrap() = Some(scoped_task::spawn(
+            report_sync_progress(self.shared.vault.clone())
+                .instrument(self.shared.vault.monitor.span().clone()),
+        ));
+
+        Ok(self)
     }
 
     pub async fn database_id(&self) -> Result<DatabaseId> {
@@ -535,6 +539,71 @@ impl Repository {
     /// Get the state monitor node of this repository.
     pub fn monitor(&self) -> &StateMonitor {
         self.shared.vault.monitor.node()
+    }
+
+    /// Export the repository to the given file.
+    ///
+    /// The repository is currently exported as read-only with no password. In the future other
+    /// modes might be added.
+    pub async fn export(&self, dst: &Path) -> Result<()> {
+        /// RAII to delete the exported repo in case the process fails or is interupted to avoid
+        /// exporting the repo with a wrong access mode.
+        struct Cleanup<'a> {
+            path: &'a Path,
+            armed: bool,
+        }
+
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                if !self.armed {
+                    return;
+                }
+
+                if let Err(error) = std::fs::remove_file(self.path) {
+                    tracing::error!(
+                        path = ?self.path,
+                        ?error,
+                        "failed to delete partially exported repository",
+                    );
+                }
+            }
+        }
+
+        let mut cleanup = Cleanup {
+            path: dst,
+            armed: true,
+        };
+
+        // Export the repo to `dst`
+        self.shared.vault.store().export(dst).await?;
+
+        // Open it and strip write access and read password (if any).
+        let pool = db::open(dst).await?;
+        let credentials = self.credentials().with_mode(AccessMode::Read);
+        let access_mode = credentials.secrets.access_mode();
+        let monitor = RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder);
+        let repo = Self::new(pool, credentials, monitor);
+
+        match access_mode {
+            AccessMode::Blind => {
+                repo.set_access(Some(AccessChange::Disable), Some(AccessChange::Disable))
+                    .await?
+            }
+            AccessMode::Read => {
+                repo.set_access(
+                    Some(AccessChange::Enable(None)),
+                    Some(AccessChange::Disable),
+                )
+                .await?
+            }
+            AccessMode::Write => unreachable!(),
+        }
+
+        repo.close().await?;
+
+        cleanup.armed = false;
+
+        Ok(())
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.

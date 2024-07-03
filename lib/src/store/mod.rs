@@ -6,9 +6,9 @@ mod changeset;
 mod error;
 mod index;
 mod inner_node;
-mod integrity;
 mod leaf_node;
 mod migrations;
+mod misc;
 mod patch;
 mod quota;
 mod root_node;
@@ -50,6 +50,7 @@ use futures_util::{Stream, TryStreamExt};
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
+    path::Path,
     sync::Arc,
     time::Duration,
 };
@@ -88,7 +89,7 @@ impl Store {
 
     /// Check data integrity
     pub async fn check_integrity(&self) -> Result<bool, Error> {
-        integrity::check(self.acquire_read().await?.db()).await
+        misc::check_integrity(self.acquire_read().await?.db()).await
     }
 
     pub async fn set_block_expiration(
@@ -136,6 +137,11 @@ impl Store {
     #[cfg(test)]
     pub async fn block_expiration_tracker(&self) -> Option<Arc<BlockExpirationTracker>> {
         self.block_expiration_tracker.read().await.as_ref().cloned()
+    }
+
+    /// Export the whole repository db to the given file.
+    pub async fn export(&self, dst: &Path) -> Result<(), Error> {
+        misc::export(&mut *self.db.acquire().await?, dst).await
     }
 
     /// Acquires a `Reader`
