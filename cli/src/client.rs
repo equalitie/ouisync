@@ -61,16 +61,16 @@ pub(crate) async fn run(
                 password,
             }
         }
-        Request::Export { name, output } => {
-            // Ensure the output path is relative to the client, not the server.
-            let output = if output.is_absolute() {
-                output
-            } else {
-                env::current_dir()?.join(output)
-            };
+        Request::Export { name, output } => Request::Export {
+            name,
+            output: to_absolute(output)?,
+        },
+        Request::Import { name, mode, input } => Request::Import {
+            name,
+            mode,
+            input: to_absolute(input)?,
+        },
 
-            Request::Export { name, output }
-        }
         _ => request,
     };
 
@@ -140,5 +140,13 @@ async fn get_or_read(value: Option<String>, prompt: &str) -> Result<Option<Strin
         Ok(Some(value).filter(|s| !s.is_empty()))
     } else {
         Ok(value)
+    }
+}
+
+fn to_absolute(path: PathBuf) -> Result<PathBuf, io::Error> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(env::current_dir()?.join(path))
     }
 }

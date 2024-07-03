@@ -1,5 +1,5 @@
 use chrono::{DateTime, SecondsFormat, Utc};
-use clap::{builder::BoolishValueParser, Subcommand};
+use clap::{builder::BoolishValueParser, Subcommand, ValueEnum};
 use ouisync_lib::{
     network::{PeerSource, PeerState},
     AccessMode, PeerAddr, PeerInfo, StorageSize,
@@ -89,6 +89,20 @@ pub(crate) enum Request {
         /// File path to export the repository to
         #[arg(short, long, value_name = "PATH")]
         output: PathBuf,
+    },
+    /// Import a repository from a file
+    Import {
+        /// File path to import the repository from
+        #[arg(short, long, value_name = "PATH")]
+        input: PathBuf,
+
+        /// Name for the repository. Default is the filename the repository is imported from.
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// How to import the repository
+        #[arg(short, long, value_enum, default_value_t = ImportMode::Copy)]
+        mode: ImportMode,
     },
     /// Print share token for a repository
     Share {
@@ -243,6 +257,14 @@ pub(crate) enum Request {
         /// Set duration after which blocks are removed if not used (in seconds).
         value: Option<u64>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum)]
+pub(crate) enum ImportMode {
+    Copy,
+    Move,
+    SoftLink,
+    HardLink,
 }
 
 #[derive(Serialize, Deserialize)]

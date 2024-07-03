@@ -1,6 +1,6 @@
 use crate::{
-    protocol::{Error, QuotaInfo, Request, Response},
-    repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
+    protocol::{Error, ImportMode, QuotaInfo, Request, Response},
+    repository::{self, InvalidRepositoryName, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
     DB_EXTENSION,
 };
@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use ouisync_bridge::{network, transport::SessionContext};
 use ouisync_lib::{crypto::Password, LocalSecret, SetLocalSecret, ShareToken};
 use std::{sync::Arc, time::Duration};
+use tokio::fs;
 
 #[derive(Clone)]
 pub(crate) struct LocalHandler {
@@ -21,6 +22,43 @@ impl LocalHandler {
 
     pub async fn close(&self) {
         self.state.close().await
+    }
+
+    async fn open_repository(
+        &self,
+        name: RepositoryName,
+        password: Option<Password>,
+    ) -> Result<(), Error> {
+        if self.state.repositories.contains(&name) {
+            Err(ouisync_lib::Error::EntryExists)?;
+        }
+
+        let store_path = self.state.store_path(&name);
+        let repository = ouisync_bridge::repository::open(
+            store_path,
+            password.map(LocalSecret::Password),
+            &self.state.config,
+            &self.state.repositories_monitor,
+        )
+        .await?;
+
+        let holder = RepositoryHolder::new(repository, name.clone(), &self.state.network).await;
+        let holder = Arc::new(holder);
+        if !self.state.repositories.try_insert(holder.clone()) {
+            Err(ouisync_lib::Error::EntryExists)?;
+        }
+
+        tracing::info!(%name, "repository opened");
+
+        holder
+            .repository
+            .metadata()
+            .set(OPEN_ON_START, true)
+            .await
+            .ok();
+        holder.mount(&self.state.mount_dir).await.ok();
+
+        Ok(())
     }
 }
 
@@ -112,45 +150,19 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 Ok(().into())
             }
             Request::Delete { name } => {
-                self.state.repositories.remove(&name);
+                if let Some(holder) = self.state.repositories.remove(&name) {
+                    holder.repository.close().await?;
+                }
 
                 repository::delete_store(&self.state.store_dir, &name).await?;
 
                 Ok(().into())
             }
             Request::Open { name, password } => {
-                if self.state.repositories.contains(&name) {
-                    Err(ouisync_lib::Error::EntryExists)?;
-                }
-
                 let name = RepositoryName::try_from(name)?;
+                let password = password.map(Password::from);
 
-                let store_path = self.state.store_path(&name);
-
-                let repository = ouisync_bridge::repository::open(
-                    store_path,
-                    password.map(Password::from).map(LocalSecret::Password),
-                    &self.state.config,
-                    &self.state.repositories_monitor,
-                )
-                .await?;
-
-                let holder =
-                    RepositoryHolder::new(repository, name.clone(), &self.state.network).await;
-                let holder = Arc::new(holder);
-                if !self.state.repositories.try_insert(holder.clone()) {
-                    Err(ouisync_lib::Error::EntryExists)?;
-                }
-
-                tracing::info!(%name, "repository opened");
-
-                holder
-                    .repository
-                    .metadata()
-                    .set(OPEN_ON_START, true)
-                    .await
-                    .ok();
-                holder.mount(&self.state.mount_dir).await.ok();
+                self.open_repository(name, password).await?;
 
                 Ok(().into())
             }
@@ -167,6 +179,58 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     .remove(OPEN_ON_START)
                     .await
                     .ok();
+
+                Ok(().into())
+            }
+            Request::Export { name, output } => {
+                let holder = self.state.repositories.find(&name)?;
+                let output = if output.extension().is_some() {
+                    output
+                } else {
+                    output.with_extension(DB_EXTENSION)
+                };
+
+                holder.repository.export(&output).await?;
+
+                Ok(output.to_string_lossy().into_owned().into())
+            }
+            Request::Import { input, name, mode } => {
+                let name = if let Some(name) = name {
+                    name
+                } else {
+                    input
+                        .file_stem()
+                        .ok_or(InvalidRepositoryName)?
+                        .to_str()
+                        .ok_or(InvalidRepositoryName)?
+                        .to_owned()
+                };
+                let name = RepositoryName::try_from(name)?;
+                let store_path = self.state.store_path(&name);
+
+                match mode {
+                    ImportMode::Copy => {
+                        fs::copy(input, store_path).await?;
+                    }
+                    ImportMode::Move => {
+                        fs::rename(input, store_path).await?;
+                    }
+                    ImportMode::SoftLink => {
+                        #[cfg(unix)]
+                        fs::symlink(input, store_path).await?;
+
+                        #[cfg(windows)]
+                        fs::symlink_file(input, store_path).await?;
+
+                        #[cfg(not(any(unix, windows)))]
+                        return Err(Error::new("symlinks not supported on this platform"));
+                    }
+                    ImportMode::HardLink => {
+                        fs::hard_link(input, store_path).await?;
+                    }
+                }
+
+                self.open_repository(name, None).await?;
 
                 Ok(().into())
             }
@@ -377,18 +441,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                         .await?;
                     Ok(Response::BlockExpiration(block_expiration))
                 }
-            }
-            Request::Export { name, output } => {
-                let holder = self.state.repositories.find(&name)?;
-                let output = if output.extension().is_some() {
-                    output
-                } else {
-                    output.with_extension(DB_EXTENSION)
-                };
-
-                holder.repository.export(&output).await?;
-
-                Ok(output.to_string_lossy().into_owned().into())
             }
         }
     }
