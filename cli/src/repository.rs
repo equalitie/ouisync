@@ -1,5 +1,4 @@
-use crate::{options::Dirs, utils, DB_EXTENSION};
-use anyhow::{Context as _, Result};
+use crate::{options::Dirs, protocol::Error, utils, DB_EXTENSION};
 use camino::Utf8Path;
 use ouisync_bridge::{config::ConfigStore, protocol::remote::v1, transport::RemoteClient};
 use ouisync_lib::{
@@ -121,7 +120,7 @@ impl RepositoryHolder {
         }
     }
 
-    pub async fn mount(&self, mount_dir: &Path) -> Result<()> {
+    pub async fn mount(&self, mount_dir: &Path) -> io::Result<()> {
         let point: Option<String> = self
             .repository
             .metadata()
@@ -142,7 +141,7 @@ impl RepositoryHolder {
                         "Failed to create mount point"
                     );
 
-                    return Err(error.into());
+                    return Err(error);
                 }
             };
 
@@ -166,7 +165,7 @@ impl RepositoryHolder {
                         ?error,
                         "Failed to mount repository"
                     );
-                    return Err(error.into());
+                    return Err(error);
                 }
             };
 
@@ -218,17 +217,16 @@ impl RepositoryHolder {
     }
 
     /// Create a mirror of the repository on the given remote host.
-    pub async fn mirror(&self, host: &str, config: Arc<rustls::ClientConfig>) -> Result<()> {
+    pub async fn mirror(&self, host: &str, config: Arc<rustls::ClientConfig>) -> Result<(), Error> {
         let secrets = self
             .repository
             .secrets()
             .into_write_secrets()
-            .context("permission denied")?;
+            .ok_or_else(|| Error::new("permission denied"))?;
 
-        let client = RemoteClient::connect(host, config).await.map_err(|error| {
-            tracing::error!(?error, host, "connection failed");
-            error
-        })?;
+        let client = RemoteClient::connect(host, config)
+            .await
+            .inspect_err(|error| tracing::error!(?error, host, "connection failed"))?;
 
         let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
         let request = v1::Request::Create {
@@ -236,10 +234,10 @@ impl RepositoryHolder {
             proof,
         };
 
-        client.invoke(request).await.map_err(|error| {
-            tracing::error!(?error, host, "request failed");
-            error
-        })?;
+        client
+            .invoke(request)
+            .await
+            .inspect_err(|error| tracing::error!(?error, host, "request failed"))?;
 
         Ok(())
     }

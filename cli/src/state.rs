@@ -1,10 +1,10 @@
 use crate::{
     metrics::MetricsServer,
     options::Dirs,
+    protocol::Error,
     repository::{self, RepositoryMap},
     server::ServerContainer,
 };
-use anyhow::{format_err, Result};
 use futures_util::future;
 use ouisync_bridge::{
     config::ConfigStore,
@@ -34,7 +34,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn init(dirs: &Dirs, monitor: StateMonitor) -> Result<Arc<Self>> {
+    pub async fn init(dirs: &Dirs, monitor: StateMonitor) -> Result<Arc<Self>, Error> {
         let config = ConfigStore::new(&dirs.config_dir);
 
         let network = Network::new(
@@ -110,14 +110,14 @@ impl State {
         repository::store_path(&self.store_dir, name)
     }
 
-    pub async fn get_server_config(&self) -> Result<Arc<rustls::ServerConfig>> {
+    pub async fn get_server_config(&self) -> Result<Arc<rustls::ServerConfig>, Error> {
         self.server_config
             .get_or_try_init(|| make_server_config(self.config.dir()))
             .await
             .cloned()
     }
 
-    pub async fn get_client_config(&self) -> Result<Arc<rustls::ClientConfig>> {
+    pub async fn get_client_config(&self) -> Result<Arc<rustls::ClientConfig>, Error> {
         self.client_config
             .get_or_try_init(|| make_client_config(self.config.dir()))
             .await
@@ -125,19 +125,18 @@ impl State {
     }
 }
 
-async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfig>> {
+async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfig>, Error> {
     let cert_path = config_dir.join("cert.pem");
     let key_path = config_dir.join("key.pem");
 
     let certs = transport::tls::load_certificates_from_file(&cert_path)
         .await
-        .map_err(|error| {
+        .inspect_err(|error| {
             tracing::error!(
                 "failed to load TLS certificate from {}: {}",
                 cert_path.display(),
                 error,
-            );
-            error
+            )
         })?;
 
     if certs.is_empty() {
@@ -146,21 +145,20 @@ async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfi
             cert_path.display()
         );
 
-        return Err(format_err!(
+        return Err(Error::new(format!(
             "no certificates found in {}",
             cert_path.display()
-        ));
+        )));
     }
 
     let keys = transport::tls::load_keys_from_file(&key_path)
         .await
-        .map_err(|error| {
+        .inspect_err(|error| {
             tracing::error!(
                 "failed to load TLS key from {}: {}",
                 key_path.display(),
                 error
-            );
-            error
+            )
         })?;
 
     let key = keys.into_iter().next().ok_or_else(|| {
@@ -169,13 +167,13 @@ async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfi
             cert_path.display()
         );
 
-        format_err!("no keys found in {}", key_path.display())
+        Error::new(format!("no keys found in {}", key_path.display()))
     })?;
 
     Ok(transport::make_server_config(certs, key)?)
 }
 
-async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfig>> {
+async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfig>, Error> {
     // Load custom root certificates (if any)
     let additional_root_certs =
         transport::tls::load_certificates_from_dir(&config_dir.join("root_certs")).await?;

@@ -5,7 +5,6 @@ use crate::{
     state::State,
     transport::{local::LocalClient, native::NativeClient},
 };
-use anyhow::Result;
 use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
 use state_monitor::StateMonitor;
 use std::{
@@ -20,7 +19,7 @@ pub(crate) async fn run(
     log_format: LogFormat,
     log_color: LogColor,
     request: Request,
-) -> Result<()> {
+) -> Result<(), Error> {
     let _logger = Logger::new(None, None, log_format, log_color)?;
     let client = connect(&socket, &dirs).await?;
 
@@ -88,7 +87,7 @@ pub(crate) async fn run(
     Ok(())
 }
 
-async fn connect(path: &Path, dirs: &Dirs) -> Result<Client> {
+async fn connect(path: &Path, dirs: &Dirs) -> Result<Client, Error> {
     match LocalClient::connect(path).await {
         Ok(client) => Ok(Client::Local(client)),
         Err(error) => match error.kind() {
@@ -126,7 +125,7 @@ impl Client {
 
 /// If value is `Some("-")`, reads the value from stdin, otherwise returns it unchanged.
 // TODO: support invisible input for passwords, etc.
-async fn get_or_read(value: Option<String>, prompt: &str) -> Result<Option<String>> {
+async fn get_or_read(value: Option<String>, prompt: &str) -> Result<Option<String>, io::Error> {
     if value
         .as_ref()
         .map(|value| value.trim() == "-")

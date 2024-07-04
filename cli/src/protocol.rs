@@ -6,13 +6,11 @@ use ouisync_lib::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fmt, io,
+    fmt, iter,
     net::SocketAddr,
     path::PathBuf,
     time::{Duration, SystemTime},
 };
-
-use crate::repository::{FindError, InvalidRepositoryName};
 
 #[derive(Subcommand, Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
@@ -384,40 +382,56 @@ impl fmt::Display for Response {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Error(String);
+pub struct Error {
+    message: String,
+    sources: Vec<String>,
+}
 
 impl Error {
     pub fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self {
+            message: message.into(),
+            sources: Vec::new(),
+        }
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        if f.alternate() {
+            write!(f, "Error: {}", self.message)?;
+
+            if !self.sources.is_empty() {
+                writeln!(f)?;
+                writeln!(f)?;
+                write!(f, "Caused by:")?;
+            }
+
+            for (index, source) in self.sources.iter().enumerate() {
+                writeln!(f)?;
+                write!(f, "{index:>4}: {source}")?;
+            }
+
+            Ok(())
+        } else {
+            write!(f, "{}", self.message)
+        }
     }
 }
 
-impl std::error::Error for Error {}
+impl<E> From<E> for Error
+where
+    E: std::error::Error,
+{
+    fn from(src: E) -> Self {
+        let message = src.to_string();
+        let sources = iter::successors(src.source(), |error| error.source())
+            .map(|error| error.to_string())
+            .collect();
 
-macro_rules! impl_from {
-    ($ty:ty) => {
-        impl From<$ty> for Error {
-            fn from(src: $ty) -> Self {
-                Self(src.to_string())
-            }
-        }
-    };
+        Self { message, sources }
+    }
 }
-
-impl_from!(InvalidRepositoryName);
-impl_from!(FindError);
-impl_from!(ouisync_lib::Error);
-impl_from!(ouisync_bridge::config::ConfigError);
-impl_from!(ouisync_bridge::repository::OpenError);
-impl_from!(ouisync_bridge::transport::TransportError);
-impl_from!(anyhow::Error);
-impl_from!(io::Error);
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct QuotaInfo {

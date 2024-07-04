@@ -10,19 +10,19 @@ mod state;
 mod transport;
 mod utils;
 
-use anyhow::Result;
 use clap::Parser;
 use options::Options;
 use protocol::Request;
+use std::process::ExitCode;
 
 pub(crate) const APP_NAME: &str = "ouisync";
 pub(crate) const DB_EXTENSION: &str = "ouisyncdb";
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
     let options = Options::parse();
 
-    if let Request::Start = &options.request {
+    let result = if let Request::Start = &options.request {
         server::run(
             options.dirs,
             options.socket,
@@ -39,5 +39,13 @@ async fn main() -> Result<()> {
             options.request,
         )
         .await
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{:#}", error);
+            ExitCode::FAILURE
+        }
     }
 }

@@ -1,10 +1,10 @@
 use crate::{
     handler::{local::LocalHandler, remote::RemoteHandler},
     options::Dirs,
+    protocol::Error,
     state::State,
     transport::local::LocalServer,
 };
-use anyhow::Result;
 use ouisync_bridge::{
     config::{ConfigError, ConfigKey},
     logger::{LogColor, LogFormat, Logger},
@@ -25,7 +25,7 @@ pub(crate) async fn run(
     socket: PathBuf,
     log_format: LogFormat,
     log_color: LogColor,
-) -> Result<()> {
+) -> Result<(), Error> {
     let monitor = StateMonitor::make_root();
     let _logger = Logger::new(None, Some(monitor.clone()), log_format, log_color)?;
 
@@ -79,7 +79,7 @@ impl ServerContainer {
         Self::default()
     }
 
-    pub async fn init(&self, state: Arc<State>) -> Result<()> {
+    pub async fn init(&self, state: Arc<State>) -> Result<(), Error> {
         let entry = state.config.entry(BIND_RPC_KEY);
         let addrs = match entry.get().await {
             Ok(addrs) => addrs,
@@ -93,7 +93,11 @@ impl ServerContainer {
         Ok(())
     }
 
-    pub async fn set(&self, state: Arc<State>, addrs: &[SocketAddr]) -> Result<Vec<SocketAddr>> {
+    pub async fn set(
+        &self,
+        state: Arc<State>,
+        addrs: &[SocketAddr],
+    ) -> Result<Vec<SocketAddr>, Error> {
         let entry = state.config.entry(BIND_RPC_KEY);
 
         let (handles, addrs) = start(state, addrs).await?;
@@ -110,7 +114,7 @@ impl ServerContainer {
 async fn start(
     state: Arc<State>,
     addrs: &[SocketAddr],
-) -> Result<(Vec<ScopedAbortHandle>, Vec<SocketAddr>)> {
+) -> Result<(Vec<ScopedAbortHandle>, Vec<SocketAddr>), Error> {
     let mut handles = Vec::with_capacity(addrs.len());
     let mut local_addrs = Vec::with_capacity(addrs.len());
 
