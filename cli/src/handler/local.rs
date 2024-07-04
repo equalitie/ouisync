@@ -194,7 +194,12 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 Ok(output.to_string_lossy().into_owned().into())
             }
-            Request::Import { input, name, mode } => {
+            Request::Import {
+                name,
+                mode,
+                force,
+                input,
+            } => {
                 let name = if let Some(name) = name {
                     name
                 } else {
@@ -207,6 +212,18 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 };
                 let name = RepositoryName::try_from(name)?;
                 let store_path = self.state.store_path(&name);
+
+                if fs::try_exists(&store_path).await? {
+                    if force {
+                        if let Some(holder) = self.state.repositories.remove(&name) {
+                            holder.repository.close().await?;
+                        }
+                    } else {
+                        return Err(Error::new(
+                            "repository already exists (use --force to overwrite)",
+                        ));
+                    }
+                }
 
                 match mode {
                     ImportMode::Copy => {

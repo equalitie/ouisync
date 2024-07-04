@@ -86,16 +86,12 @@ pub(crate) enum Request {
         #[arg(short, long)]
         name: String,
 
-        /// File path to export the repository to
-        #[arg(short, long, value_name = "PATH")]
+        /// File to export the repository to
+        #[arg(value_name = "PATH")]
         output: PathBuf,
     },
     /// Import a repository from a file
     Import {
-        /// File path to import the repository from
-        #[arg(short, long, value_name = "PATH")]
-        input: PathBuf,
-
         /// Name for the repository. Default is the filename the repository is imported from.
         #[arg(short, long)]
         name: Option<String>,
@@ -103,6 +99,14 @@ pub(crate) enum Request {
         /// How to import the repository
         #[arg(short, long, value_enum, default_value_t = ImportMode::Copy)]
         mode: ImportMode,
+
+        /// Overwrite the destination if it exists
+        #[arg(short, long)]
+        force: bool,
+
+        /// File to import the repository from
+        #[arg(value_name = "PATH")]
+        input: PathBuf,
     },
     /// Print share token for a repository
     Share {
@@ -120,6 +124,7 @@ pub(crate) enum Request {
     },
     /// Mount repository
     Mount {
+        /// Name of the repository to mount
         #[arg(short, long, required_unless_present = "all", conflicts_with = "all")]
         name: Option<String>,
 
@@ -127,12 +132,14 @@ pub(crate) enum Request {
         #[arg(short, long)]
         all: bool,
 
+        /// Path to mount the repository at
         #[arg(short, long, conflicts_with = "all")]
         path: Option<PathBuf>,
     },
     /// Unmount repository
     #[command(alias = "umount")]
     Unmount {
+        /// Name of the repository to unmount
         #[arg(short, long, required_unless_present = "all", conflicts_with = "all")]
         name: Option<String>,
 

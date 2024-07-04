@@ -65,9 +65,15 @@ pub(crate) async fn run(
             name,
             output: to_absolute(output)?,
         },
-        Request::Import { name, mode, input } => Request::Import {
+        Request::Import {
             name,
             mode,
+            force,
+            input,
+        } => Request::Import {
+            name,
+            mode,
+            force,
             input: to_absolute(input)?,
         },
 
