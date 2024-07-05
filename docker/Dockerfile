@@ -1,4 +1,4 @@
-FROM rust:alpine as builder
+FROM rust:alpine AS builder
 
 RUN apk update && apk add musl-dev fuse3-dev fuse3-static pkgconfig
 
@@ -8,7 +8,7 @@ COPY . .
 RUN cargo build --package ouisync-cli --release --bins && \
     cp target/release/ouisync /usr/bin/
 
-FROM scratch as runtime
+FROM scratch AS runtime
 
 EXPOSE 20209/tcp 20209/udp
 
