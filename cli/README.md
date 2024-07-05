@@ -98,6 +98,10 @@ To obtain the share token of a repository, run
 
 Note the `--name` argument works also with prefix of the name as long as it's unique.
 
+The share token can be optionally converted to a QR-code using e.g, [qrencode](https://fukuchi.org/works/qrencode/):
+
+    ouisync share --name NAME | qrencode -o qr.png
+
 #### Mount
 
 To access the repository files it needs to be mounted first
@@ -126,6 +130,16 @@ This is useful for executing bulk commands, e.g,:
     for repo in $(ouisync ls); do
         ouisync quota -n $repo 100MiB
     done
+
+#### Export and import
+
+A Ouisync repository can be exported to a file in order to back it up, transfer it on a thumbdrive, etc...:
+
+    ouisync export --name NAME path/to/file
+
+To import the file back to Ouisync (on another device, say), use:
+
+    ouisync import path/to/file
 
 #### Other
 

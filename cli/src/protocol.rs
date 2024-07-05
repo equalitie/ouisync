@@ -79,6 +79,11 @@ pub(crate) enum Request {
         name: String,
     },
     /// Export a repository to a file
+    ///
+    /// Note currently this strips write access and removes local password (if any) from the
+    /// exported repository. So if the repository is currently opened in write mode or read mode,
+    /// it's exported in read mode. If it's in blind mode it's also exported in blind mode. This
+    /// limitation might be lifted in the future.
     Export {
         /// Name of the repository to export
         #[arg(short, long)]
