@@ -1,17 +1,26 @@
-version: "3.9"
-
 services:
   ouisync:
     image: equalitie/ouisync:latest
     container_name: ouisync
     ports:
-      - "443:443/tcp"     # RPC
-      - "444:444/tcp"     # Prometheus metrics
-      - "20209:20209/tcp" # Sync protocol
-      - "20209:20209/udp" # Sync protocol
+      # Sync protocol TCP endpoint (required)
+      - "20209:20209/tcp"
+      # Sync protocol UDP endpoint (required)
+      - "20209:20209/udp"
+      # Cache server remote API endpoint (needed only if Ouisync is deployed as a cache server)
+      - "443:443/tcp"
+      # Prometheus metrics scrape endpoint (optional)
+      - "444:444/tcp"
     volumes:
+      # Config files
       - "config:/config"
+      # Repositories
       - "store:/store"
+      # Repository mountpoints (optional)
+      # - "/mnt/ouisync:/mount"
+
+      # Paths to the TLS certificate and private key. Needed only when the cache server endpoint is
+      # enabled.
       - "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem:/config/cert.pem"
       - "/etc/letsencrypt/live/${DOMAIN}/privkey.pem:/config/key.pem"
 
