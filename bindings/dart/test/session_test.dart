@@ -1,6 +1,6 @@
 import 'dart:io' as io;
 import 'package:test/test.dart';
-import 'package:ouisync_plugin/ouisync_plugin.dart';
+import 'package:ouisync/ouisync.dart';
 
 void main() {
   late io.Directory temp;
