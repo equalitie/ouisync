@@ -8,7 +8,7 @@ import 'package:ffi/ffi.dart';
 import 'package:msgpack_dart/msgpack_dart.dart';
 
 import 'bindings.dart';
-import 'ouisync_plugin.dart' show Error;
+import 'ouisync.dart' show Error;
 
 /// Client to interface with ouisync
 class Client {

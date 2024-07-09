@@ -1,4 +1,4 @@
-name: ouisync_plugin
+name: ouisync
 description: A flutter plugin providing high-level dart API for the ouisync native library
 version: 0.1.0
 homepage: null

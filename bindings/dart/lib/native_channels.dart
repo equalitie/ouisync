@@ -3,7 +3,7 @@ import 'dart:collection';
 
 import 'package:flutter/services.dart';
 
-import 'ouisync_plugin.dart' show Session, Repository, File;
+import 'ouisync.dart' show Session, Repository, File;
 
 /// Enum for handling the reponse from the previewFile method
 enum PreviewFileResult {

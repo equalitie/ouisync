@@ -1,4 +1,4 @@
-part of 'ouisync_plugin.dart';
+part of 'ouisync.dart';
 
 // Used for opening a reository.
 sealed class LocalSecret {

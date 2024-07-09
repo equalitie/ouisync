@@ -1,4 +1,4 @@
-#include "include/ouisync_plugin/ouisync_plugin.h"
+#include "include/ouisync/ouisync_plugin.h"
 
 #include <flutter_linux/flutter_linux.h>
 #include <gtk/gtk.h>
