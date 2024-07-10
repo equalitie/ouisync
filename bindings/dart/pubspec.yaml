@@ -35,7 +35,7 @@ flutter:
   plugin:
     platforms:
       android:
-        package: ie.equalit.ouisync_plugin
+        package: org.equalitie.ouisync
         pluginClass: OuisyncPlugin
       ios:
         pluginClass: OuisyncPlugin

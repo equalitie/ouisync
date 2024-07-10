@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="ie.equalit.ouisync_plugin_example"
+    package="org.equalitie.ouisync_example"
      xmlns:tools="http://schemas.android.com/tools">
    <application
         android:label="ouisync_plugin_example"
@@ -35,7 +35,7 @@
         </activity>
         <provider
           tools:replace="android:authorities"
-          android:name="ie.equalit.ouisync_plugin.PipeProvider"
+          android:name="org.equalitie.ouisync.PipeProvider"
           android:authorities="${applicationId}.pipe"
           android:exported="true"/>
         <!-- Don't delete the meta-data below.

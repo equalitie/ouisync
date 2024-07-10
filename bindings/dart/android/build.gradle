@@ -1,4 +1,4 @@
-group 'ie.equalit.ouisync_plugin'
+group 'org.equalitie.ouisync'
 version '1.0-SNAPSHOT'
 
 buildscript {

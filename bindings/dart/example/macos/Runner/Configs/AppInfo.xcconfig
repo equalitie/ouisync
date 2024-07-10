@@ -8,7 +8,7 @@
 PRODUCT_NAME = ouisync_plugin_example
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = ie.equalit.ouisyncPluginExample
+PRODUCT_BUNDLE_IDENTIFIER = org.equalitie.ouisyncExample
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2024 ie.equalit. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2024 org.equalitie. All rights reserved.

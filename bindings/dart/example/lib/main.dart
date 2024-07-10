@@ -210,7 +210,7 @@ class _MyAppState extends State<MyApp> {
       onPressed: () async {
         Navigator.of(context).pop();
         await nativeChannels.previewOuiSyncFile(
-            "ie.equalit.ouisync_plugin_example", path, size);
+            "org.equalitie.ouisync_example", path, size);
       },
     );
     Widget shareFileButton = TextButton(
@@ -218,7 +218,7 @@ class _MyAppState extends State<MyApp> {
         onPressed: () async {
           Navigator.of(context).pop();
           await nativeChannels.shareOuiSyncFile(
-              "ie.equalit.ouisync_plugin_example", path, size);
+              "org.equalitie.ouisync_example", path, size);
         });
     Widget cancelButton = TextButton(
       child: Text("Cancel"),
