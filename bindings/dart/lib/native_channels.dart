@@ -3,7 +3,7 @@ import 'dart:collection';
 
 import 'package:flutter/services.dart';
 
-import 'ouisync_plugin.dart' show Session, Repository, File;
+import 'ouisync.dart' show Session, Repository, File;
 
 /// Enum for handling the reponse from the previewFile method
 enum PreviewFileResult {
@@ -26,8 +26,7 @@ class NativeChannels {
     _channel.setMethodCallHandler(_methodHandler);
   }
 
-  final MethodChannel _channel =
-      const MethodChannel('ie.equalit.ouisync_plugin');
+  final MethodChannel _channel = const MethodChannel('org.equalitie.ouisync');
 
   // We need this session` variable to be able to close the session
   // from inside the java/kotlin code when the plugin is detached from the

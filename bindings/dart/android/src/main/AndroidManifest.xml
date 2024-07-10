@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  package="ie.equalit.ouisync_plugin"
+  package="org.equalitie.ouisync"
   xmlns:tools="http://schemas.android.com/tools">
 
   <application>

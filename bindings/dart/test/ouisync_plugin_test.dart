@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io' as io;
 import 'package:test/test.dart';
-import 'package:ouisync_plugin/ouisync_plugin.dart';
-import 'package:ouisync_plugin/state_monitor.dart';
+import 'package:ouisync/ouisync.dart';
+import 'package:ouisync/state_monitor.dart';
 
 void main() {
   late io.Directory temp;

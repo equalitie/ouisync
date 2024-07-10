@@ -1,4 +1,4 @@
-package ie.equalit.ouisync_plugin
+package org.equalitie.ouisync
 
 import android.content.Context
 import android.content.res.AssetFileDescriptor

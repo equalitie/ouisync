@@ -4,8 +4,8 @@ import 'dart:async';
 import 'package:async/async.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:ouisync_plugin/ouisync_plugin.dart';
-import 'package:ouisync_plugin/native_channels.dart';
+import 'package:ouisync/ouisync.dart';
+import 'package:ouisync/native_channels.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -210,7 +210,7 @@ class _MyAppState extends State<MyApp> {
       onPressed: () async {
         Navigator.of(context).pop();
         await nativeChannels.previewOuiSyncFile(
-            "ie.equalit.ouisync_plugin_example", path, size);
+            "org.equalitie.ouisync_example", path, size);
       },
     );
     Widget shareFileButton = TextButton(
@@ -218,7 +218,7 @@ class _MyAppState extends State<MyApp> {
         onPressed: () async {
           Navigator.of(context).pop();
           await nativeChannels.shareOuiSyncFile(
-              "ie.equalit.ouisync_plugin_example", path, size);
+              "org.equalitie.ouisync_example", path, size);
         });
     Widget cancelButton = TextButton(
       child: Text("Cancel"),

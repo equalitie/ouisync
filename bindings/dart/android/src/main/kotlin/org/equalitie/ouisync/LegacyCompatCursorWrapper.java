@@ -1,4 +1,4 @@
-package ie.equalit.ouisync_plugin;
+package org.equalitie.ouisync;
 
 import android.database.Cursor;
 import android.database.CursorWrapper;

@@ -2,7 +2,7 @@
 # https://github.com/corrosion-rs/corrosion
 cmake_minimum_required(VERSION 3.19)
 
-set(PROJECT_NAME "ouisync_plugin")
+set(PROJECT_NAME "ouisync")
 
 project(${PROJECT_NAME} LANGUAGES CXX)
 
@@ -37,7 +37,7 @@ corrosion_set_env_vars(ouisync_ffi "DOKAN_DLL_OUTPUT_PATH=${DOKAN_DLL_OUTPUT_PAT
 
 # This value is used when generating builds using this plugin, so it must
 # not be changed
-set(PLUGIN_NAME "ouisync_plugin_plugin")
+set(PLUGIN_NAME "ouisync_plugin")
 
 add_library(${PLUGIN_NAME} SHARED
   "ouisync_plugin.cpp"
@@ -51,7 +51,7 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
 
 # List of absolute paths to libraries that should be bundled with the plugin
-set(ouisync_plugin_bundled_libraries
+set(ouisync_bundled_libraries
   ${CMAKE_CURRENT_BINARY_DIR}/ouisync_ffi.dll
   ${DOKAN_DLL_OUTPUT_PATH}/dokan2.dll
   PARENT_SCOPE

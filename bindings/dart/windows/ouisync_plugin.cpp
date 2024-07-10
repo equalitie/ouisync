@@ -1,4 +1,4 @@
-#include "include/ouisync_plugin/ouisync_plugin.h"
+#include "include/ouisync/ouisync_plugin.h"
 
 // This must be included before many other Windows headers.
 #include <windows.h>

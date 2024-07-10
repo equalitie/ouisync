@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
-import 'package:ouisync_plugin/ouisync_plugin.dart';
+import 'package:ouisync/ouisync.dart';
 import 'package:test/test.dart';
 
 void main() {
