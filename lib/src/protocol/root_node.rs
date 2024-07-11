@@ -8,7 +8,7 @@ use crate::{
 pub(crate) type SnapshotId = u32;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
-pub(crate) struct RootNode {
+pub struct RootNode {
     pub snapshot_id: SnapshotId,
     pub proof: Proof,
     pub summary: Summary,

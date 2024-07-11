@@ -8,8 +8,10 @@
 mod macros;
 
 pub mod crypto;
+pub mod db;
 pub mod network;
 pub mod path;
+pub mod protocol;
 pub mod sync;
 
 mod access_control;
@@ -18,7 +20,6 @@ mod block_tracker;
 mod branch;
 mod collections;
 mod conflict;
-mod db;
 mod debug;
 mod device_id;
 mod directory;
@@ -31,7 +32,6 @@ mod iterator;
 mod joint_directory;
 mod joint_entry;
 mod progress;
-mod protocol;
 mod repository;
 mod storage_size;
 mod store;

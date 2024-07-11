@@ -14,7 +14,7 @@ use twox_hash::xxh3::{Hash128, HasherExt};
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub(crate) struct Summary {
+pub struct Summary {
     // TODO: The `state` field is not used by the peer after deserialization. Consider using
     // `#[serde(skip)]` on it.
     pub state: NodeState,
@@ -95,7 +95,7 @@ impl Summary {
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[repr(u8)]
-pub(crate) enum NodeState {
+pub enum NodeState {
     Incomplete = 0, // Some nodes are missing
     Complete = 1,   // All nodes are present, but the quota check wasn't performed yet
     Approved = 2,   // Quota check passed
@@ -150,7 +150,7 @@ pub(crate) struct InvalidValue(u8);
 
 /// Information about the presence of a single block.
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) enum SingleBlockPresence {
+pub enum SingleBlockPresence {
     Missing,
     Present,
     Expired,
@@ -211,7 +211,7 @@ impl fmt::Debug for SingleBlockPresence {
 
 /// Summary information about the presence of multiple blocks belonging to a subtree.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub(crate) enum MultiBlockPresence {
+pub enum MultiBlockPresence {
     /// All blocks missing
     None,
     /// Some blocks present. The contained checksum is used to determine whether two subtrees have

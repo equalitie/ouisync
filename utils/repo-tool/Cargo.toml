@@ -1,0 +1,16 @@
+[package]
+name = "ouisync-repo-tool"
+description = "Utility to inspect repositories"
+publish = false
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ouisync = { path = "../../lib" }
+tokio = { workspace = true, features = ["signal", "io-std"] }
+sqlx = { workspace = true }
+futures-util = { workspace = true }

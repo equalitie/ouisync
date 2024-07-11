@@ -9,7 +9,7 @@ use sqlx::{
 /// Database connection
 #[derive(Debug, RefCast)]
 #[repr(transparent)]
-pub(crate) struct Connection(pub(super) SqliteConnection);
+pub struct Connection(pub(super) SqliteConnection);
 
 impl<'t> Executor<'t> for &'t mut Connection {
     type Database = Sqlite;

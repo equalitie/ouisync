@@ -36,11 +36,11 @@ use tokio::{fs, task};
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub(crate) use self::connection::Connection;
+pub use self::connection::Connection;
 
 /// Database connection pool.
 #[derive(Clone)]
-pub(crate) struct Pool {
+pub struct Pool {
     // Pool with multiple read-only connections
     reads: SqlitePool,
     // Pool with a single writable connection.
@@ -110,7 +110,7 @@ impl Pool {
 }
 
 /// Database connection from pool
-pub(crate) struct PoolConnection {
+pub struct PoolConnection {
     inner: sqlx::pool::PoolConnection<Sqlite>,
     _track_lifetime: ExpectShortLifetime,
 }
@@ -352,6 +352,14 @@ pub(crate) async fn open(path: impl AsRef<Path>) -> Result<Pool, Error> {
     let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
 
     migrations::run(&pool).await?;
+
+    Ok(pool)
+}
+
+/// Opens a connection to the specified database. Fails if the db doesn't exist.
+pub async fn open_without_migrations(path: impl AsRef<Path>) -> Result<Pool, Error> {
+    let connect_options = SqliteConnectOptions::new().filename(path);
+    let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
 
     Ok(pool)
 }
