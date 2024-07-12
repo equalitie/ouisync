@@ -36,7 +36,7 @@ void OuisyncPlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows *registrar) {
   auto channel =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-          registrar->messenger(), "ouisync_plugin",
+          registrar->messenger(), "ouisync",
           &flutter::StandardMethodCodec::GetInstance());
 
   auto plugin = std::make_unique<OuisyncPlugin>();

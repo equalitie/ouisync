@@ -1,6 +1,6 @@
 # ouisync_plugin_example
 
-Demonstrates how to use the ouisync_plugin plugin.
+Demonstrates how to use the ouisync plugin plugin.
 
 ## Getting Started
 

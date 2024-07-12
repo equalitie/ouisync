@@ -2,7 +2,7 @@ import FlutterMacOS
 import Cocoa
 import XCTest
 
-@testable import ouisync_plugin
+@testable import ouisync
 
 // This demonstrates a simple unit test of the Swift portion of this plugin's implementation.
 //
