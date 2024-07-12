@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{slice, vec};
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub(crate) struct LeafNode {
+pub struct LeafNode {
     pub locator: Hash,
     pub block_id: BlockId,
     pub block_presence: SingleBlockPresence,
@@ -47,7 +47,7 @@ impl Hashable for LeafNode {
 
 /// Collection that acts as a ordered set of `LeafNode`s
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct LeafNodes(Vec<LeafNode>);
+pub struct LeafNodes(Vec<LeafNode>);
 
 impl LeafNodes {
     pub fn is_empty(&self) -> bool {

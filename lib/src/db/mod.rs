@@ -152,7 +152,7 @@ impl DerefMut for PoolConnection {
 /// transaction represents an immutable snapshot of the database at the point the transaction was
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
-pub(crate) struct ReadTransaction {
+pub struct ReadTransaction {
     inner: PoolConnection,
     closed: bool,
 }
@@ -221,7 +221,7 @@ struct Committed(#[allow(dead_code)] ReadTransaction);
 /// rolls it back). Performing read-only operations concurrently while a write transaction is in
 /// use is still allowed. Those operations will not see the writes performed via the write
 /// transaction until that transaction is committed however.
-pub(crate) struct WriteTransaction {
+pub struct WriteTransaction {
     inner: ReadTransaction,
 }
 

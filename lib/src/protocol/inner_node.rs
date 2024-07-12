@@ -8,7 +8,7 @@ use std::collections::{btree_map, BTreeMap};
 pub(crate) const INNER_LAYER_COUNT: usize = 3;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub(crate) struct InnerNode {
+pub struct InnerNode {
     pub hash: Hash,
     pub summary: Summary,
 }
@@ -31,7 +31,7 @@ impl Hashable for InnerNode {
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct InnerNodes(BTreeMap<u8, InnerNode>);
+pub struct InnerNodes(BTreeMap<u8, InnerNode>);
 
 impl InnerNodes {
     pub fn is_empty(&self) -> bool {
@@ -133,7 +133,7 @@ impl Hashable for InnerNodes {
 // Cached hash of an empty InnerNodeMap.
 pub(crate) static EMPTY_INNER_HASH: Lazy<Hash> = Lazy::new(|| InnerNodes::default().hash());
 
-pub(crate) struct InnerNodesIter<'a>(btree_map::Iter<'a, u8, InnerNode>);
+pub struct InnerNodesIter<'a>(btree_map::Iter<'a, u8, InnerNode>);
 
 impl<'a> Iterator for InnerNodesIter<'a> {
     type Item = (u8, &'a InnerNode);
@@ -143,7 +143,7 @@ impl<'a> Iterator for InnerNodesIter<'a> {
     }
 }
 
-pub(crate) struct InnerNodesIterMut<'a>(btree_map::IterMut<'a, u8, InnerNode>);
+pub struct InnerNodesIterMut<'a>(btree_map::IterMut<'a, u8, InnerNode>);
 
 impl<'a> Iterator for InnerNodesIterMut<'a> {
     type Item = (u8, &'a mut InnerNode);

@@ -94,4 +94,4 @@ fn signature_material(writer_id: &PublicKey, version_vector: &VersionVector, has
 
 #[derive(Debug, Error)]
 #[error("proof is invalid")]
-pub(crate) struct ProofError(pub UntrustedProof);
+pub struct ProofError(pub UntrustedProof);
