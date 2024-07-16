@@ -6,7 +6,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::{network, transport::SessionContext};
-use ouisync_lib::{crypto::Password, LocalSecret, SetLocalSecret, ShareToken};
+use ouisync_lib::{crypto::Password, Credentials, LocalSecret, SetLocalSecret, ShareToken};
 use std::{sync::Arc, time::Duration};
 use tokio::fs;
 
@@ -458,6 +458,15 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                         .await?;
                     Ok(Response::BlockExpiration(block_expiration))
                 }
+            }
+            Request::SetAccess { name, token } => {
+                use std::str::FromStr;
+
+                let holder = self.state.repositories.find(&name)?;
+                let token = ShareToken::from_str(&token)?;
+                let new_credentials = Credentials::with_random_writer_id(token.into_secrets());
+                holder.repository.set_credentials(new_credentials).await?;
+                Ok(().into())
             }
         }
     }

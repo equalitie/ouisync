@@ -11,6 +11,21 @@ fn main() {
         "-v" | "--version" => {
             println!("{}", env!("CARGO_PKG_VERSION"));
         }
+        "-i" | "--info" => {
+            let Some(token) = env::args().nth(2) else {
+                println!("Missing [TOKEN] argument");
+                println!();
+                help();
+                return;
+            };
+
+            let Ok(token) = token.parse() else {
+                println!("Failed to parse [TOKEN]");
+                return;
+            };
+
+            show_token_information(&token);
+        }
         "-h" | "--help" => {
             println!("Generate and convert Ouisync share tokens");
             println!();
@@ -38,6 +53,10 @@ fn run(mode: AccessMode, input: Option<&str>) {
     println!("{}", ShareToken::from(token.into_secrets().with_mode(mode)));
 }
 
+fn show_token_information(token: &ShareToken) {
+    println!("AccessMode: {:?}", token.access_mode());
+}
+
 fn help() {
     println!("Usage: {} [OPTIONS]", env!("CARGO_PKG_NAME"));
     println!();
@@ -45,6 +64,7 @@ fn help() {
     println!("  -w, --write          Generate new write token");
     println!("  -r, --read [TOKEN]   If TOKEN given, convert it to read token, otherwise generate new read token");
     println!("  -b, --blind [TOKEN]  If TOKEN given, convert it to blind token, otherwise generate new blind token");
+    println!("  -i, --info [TOKEN]   Print information about the given token");
     println!("  -v, --version        Print version");
     println!("  -h, --help           Print help");
     println!();

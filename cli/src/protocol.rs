@@ -267,6 +267,16 @@ pub(crate) enum Request {
         /// Set duration after which blocks are removed if not used (in seconds).
         value: Option<u64>,
     },
+    /// Set access to a repository corresponding to the share token
+    SetAccess {
+        /// Name of the repository which access shall be changed
+        #[arg(short, long)]
+        name: String,
+
+        /// Repository token
+        #[arg(short, long)]
+        token: String,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum)]
