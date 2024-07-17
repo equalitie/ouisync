@@ -34,12 +34,13 @@ and development files.
 
 Install Rust using instructions from [rust-lang.org](https://www.rust-lang.org/tools/install).
 
-## Testing
-
-This project is tested with BrowserStack.
-
 Build
 
     $ cargo build --release
 
 The results will then be found in the `./target/release/` directory.
+
+## Testing
+
+This project is tested with BrowserStack.
+
