@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -10,20 +11,29 @@ import 'package:msgpack_dart/msgpack_dart.dart';
 import 'bindings.dart';
 import 'ouisync.dart' show Error;
 
-/// Client to interface with ouisync
-class Client {
+abstract class Client {
+    Future<T> invoke<T>(String method, [Object? args]);
+    Future<void> close();
+    bool get isClosed;
+    Subscription subscribe(String name, Object? arg);
+}
+
+/// Client to interface with ouisync running in the same process as the FlutterEngine.
+/// Ouisync backend (Rust) function invokations are done through FFI.
+class DirectClient extends Client {
   int _handle;
   final Stream<Uint8List> _stream;
   var _nextMessageId = 0;
   final _responses = HashMap<int, Completer<Object?>>();
   final _subscriptions = HashMap<int, StreamSink<Object?>>();
 
-  Client(this._handle, ReceivePort port) : _stream = port.cast<Uint8List>() {
+  DirectClient(this._handle, ReceivePort port) : _stream = port.cast<Uint8List>() {
     unawaited(_receive());
   }
 
   int get handle => _handle;
 
+  @override
   Future<T> invoke<T>(String method, [Object? args]) async {
     final id = _nextMessageId++;
     final completer = Completer();
@@ -57,12 +67,36 @@ class Client {
     }
   }
 
-  int close() {
+  @override
+  Future<void> close() async {
     final handle = _handle;
     _handle = 0;
-    return handle;
+
+    if (handle == 0) {
+      return;
+    }
+
+    await _invoke_native_async(
+      (port) => bindings.session_close(
+        handle,
+        NativeApi.postCObject,
+        port,
+      ),
+    );
   }
 
+  void closeSync() {
+    final handle = _handle;
+    _handle = 0;
+
+    if (handle == 0) {
+      return;
+    }
+
+    bindings.session_close_blocking(handle);
+  }
+
+  @override
   bool get isClosed => _handle == 0;
 
   void _send(Uint8List data) {
@@ -176,17 +210,39 @@ class Client {
       sink.addError(error);
     }
   }
+
+  @override
+  Subscription subscribe(String name, Object? arg) {
+      return _DirectClientSubscription(this, name, arg);
+  }
+
+  Future<void> copyToRawFd(int fileHandle, int fd) {
+      return _invoke_native_async(
+        (port) => bindings.file_copy_to_raw_fd(
+          handle,
+          fileHandle,
+          fd,
+          NativeApi.postCObject,
+          port,
+        ),
+      );
+  }
 }
 
-class Subscription {
-  final Client _client;
+abstract class Subscription {
+  Stream<Object?> get stream;
+  Future<void> close();
+}
+
+class _DirectClientSubscription extends Subscription {
+  final DirectClient _client;
   final StreamController<Object?> _controller;
   final String _name;
   final Object? _arg;
   int _id = 0;
   _SubscriptionState _state = _SubscriptionState.idle;
 
-  Subscription(this._client, this._name, this._arg)
+  _DirectClientSubscription(this._client, this._name, this._arg)
       : _controller = StreamController.broadcast() {
     _controller.onListen = () => _switch(_SubscriptionState.subscribing);
     _controller.onCancel = () => _switch(_SubscriptionState.unsubscribing);
@@ -194,6 +250,7 @@ class Subscription {
 
   Stream<Object?> get stream => _controller.stream;
 
+  @override
   Future<void> close() async {
     if (_controller.hasListener) {
       await _controller.close();
@@ -274,3 +331,30 @@ enum _SubscriptionState {
   subscribing,
   unsubscribing,
 }
+
+// Helper to invoke a native async function.
+Future<void> _invoke_native_async(void Function(int) fun) async {
+  final recvPort = ReceivePort();
+
+  try {
+    fun(recvPort.sendPort.nativePort);
+
+    final bytes = await recvPort.cast<Uint8List>().first;
+
+    if (bytes.isEmpty) {
+      return;
+    }
+
+    final code = ErrorCode.decode(bytes.buffer.asByteData().getUint16(0));
+    final message = utf8.decode(bytes.sublist(2));
+
+    if (code == ErrorCode.ok) {
+      return;
+    } else {
+      throw Error(code, message);
+    }
+  } finally {
+    recvPort.close();
+  }
+}
+

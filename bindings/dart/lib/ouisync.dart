@@ -36,7 +36,7 @@ class Session {
   String? _mountPoint;
 
   Session._(this._client)
-      : _networkSubscription = Subscription(_client, "network", null);
+      : _networkSubscription = _client.subscribe("network", null);
 
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
@@ -71,7 +71,7 @@ class Session {
       throw Error(errorCode, errorMessage);
     }
 
-    final client = Client(handle, recvPort);
+    final client = DirectClient(handle, recvPort);
 
     return Session._(client);
   }
@@ -207,19 +207,7 @@ class Session {
   /// `closeSync` function.
   Future<void> close() async {
     await _networkSubscription.close();
-
-    final handle = _client.close();
-    if (handle == 0) {
-      return;
-    }
-
-    await _invoke(
-      (port) => bindings.session_close(
-        handle,
-        NativeApi.postCObject,
-        port,
-      ),
-    );
+    await _client.close();
   }
 
   /// Try to gracefully close connections to peers then close the session.
@@ -227,15 +215,18 @@ class Session {
   /// shutdown (on app exit). In those situations the network needs to be shut
   /// down using a blocking call.
   ///
+  /// This function closes the session only if the client used is the DirectClient.
+  /// Otherwise it throws.
+  ///
   /// Note that this function is idempotent with itself as well as with the
   /// `close` function.
   void closeSync() {
-    final handle = _client.close();
-    if (handle == 0) {
-      return;
+    final client = _client;
+    if (client is DirectClient) {
+        client.closeSync();
+    } else {
+        throw "closeSync is currently only implemented for DirectClient";
     }
-
-    bindings.session_close_blocking(handle);
   }
 }
 
@@ -312,7 +303,7 @@ class Repository {
   final Subscription _subscription;
 
   Repository._(this._client, this._handle, this._store)
-      : _subscription = Subscription(_client, "repository", _handle);
+      : _subscription = _client.subscribe("repository", _handle);
 
   /// Creates a new repository and set access to it based on the following table:
   ///
@@ -903,20 +894,20 @@ class File {
   Future<int> get progress => _client.invoke<int>('file_progress', _handle);
 
   /// Copy the contents of the file into the provided raw file descriptor.
-  Future<void> copyToRawFd(int fd) {
+  /// TODO: Right now this function only works when using the DirectClient,
+  /// otherwise throws.
+  Future<void> copyToRawFd(int fd) async {
     if (debugTrace) {
       print("File.copyToRawFd");
     }
 
-    return _invoke(
-      (port) => bindings.file_copy_to_raw_fd(
-        _client.handle,
-        _handle,
-        fd,
-        NativeApi.postCObject,
-        port,
-      ),
-    );
+    final client = _client;
+
+    if (client is DirectClient) {
+        await client.copyToRawFd(_handle, fd);
+    } else {
+        throw "copyToRawFd is currently implemented only for DirectClient";
+    }
   }
 }
 
@@ -949,32 +940,6 @@ T _withPoolSync<T>(T Function(_Pool) fun) {
     return fun(pool);
   } finally {
     pool.release();
-  }
-}
-
-// Helper to invoke a native async function.
-Future<void> _invoke(void Function(int) fun) async {
-  final recvPort = ReceivePort();
-
-  try {
-    fun(recvPort.sendPort.nativePort);
-
-    final bytes = await recvPort.cast<Uint8List>().first;
-
-    if (bytes.isEmpty) {
-      return;
-    }
-
-    final code = ErrorCode.decode(bytes.buffer.asByteData().getUint16(0));
-    final message = utf8.decode(bytes.sublist(2));
-
-    if (code == ErrorCode.ok) {
-      return;
-    } else {
-      throw Error(code, message);
-    }
-  } finally {
-    recvPort.close();
   }
 }
 

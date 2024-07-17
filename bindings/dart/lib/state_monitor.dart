@@ -109,7 +109,7 @@ class StateMonitor {
       StateMonitor._(_client, [..._path, childId]);
 
   Subscription subscribe() =>
-      Subscription(_client, "state_monitor", _path.map((id) => id.toString()));
+      _client.subscribe("state_monitor", _path.map((id) => id.toString()));
 
   @override
   String toString() => "StateMonitor($_path)";
