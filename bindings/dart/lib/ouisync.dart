@@ -36,7 +36,7 @@ class Session {
   String? _mountPoint;
 
   Session._(this._client)
-      : _networkSubscription = _client.subscribe("network", null);
+      : _networkSubscription = Subscription(_client, "network", null);
 
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
@@ -303,7 +303,7 @@ class Repository {
   final Subscription _subscription;
 
   Repository._(this._client, this._handle, this._store)
-      : _subscription = _client.subscribe("repository", _handle);
+      : _subscription = Subscription(_client, "repository", _handle);
 
   /// Creates a new repository and set access to it based on the following table:
   ///
