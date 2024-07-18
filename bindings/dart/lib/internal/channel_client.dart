@@ -9,9 +9,13 @@ class ChannelClient extends Client {
         _channel.setMethodCallHandler(_handleMethodCall);
     }
 
+    Future<void> initialize() async {
+        await _channel.invokeMethod("initialize");
+    }
+
     @override
     Future<T> invoke<T>(String method, [Object? args]) async {
-        return await _channel.invokeMethod(method, args);
+        return await _channel.invokeMethod("invoke", [method, args]);
     }
 
     @override
