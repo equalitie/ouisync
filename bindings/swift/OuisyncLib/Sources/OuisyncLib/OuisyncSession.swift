@@ -43,19 +43,11 @@ public class OuisyncSession {
 
             synchronized(session) {
                 session.pendingResponses[messageId] = continuation
-                session.sendDataToOuisyncLib(Self.serialize(messageId, request));
+                session.sendDataToOuisyncLib(OutgoingMessage(messageId, request).serialize());
             }
         }
 
         return try await onResponse
-    }
-
-    fileprivate static func serialize(_ messageId: MessageId, _ request: MessageRequest) -> [UInt8] {
-        var message: [UInt8] = []
-        message.append(contentsOf: withUnsafeBytes(of: messageId.bigEndian, Array.init))
-        let payload = [MessagePackValue.string(request.functionName): request.functionArguments]
-        message.append(contentsOf: pack(MessagePackValue.map(payload)))
-        return message
     }
 
     fileprivate func generateMessageId() -> MessageId {

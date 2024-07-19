@@ -141,29 +141,72 @@ public class MessageRequest {
 
 //--------------------------------------------------------------------
 
-public class IncomingMessage {
+public class OutgoingMessage { // TODO: Rename to RequestMessage
+    public let messageId: MessageId
+    public let request: MessageRequest
+
+    init(_ messageId: MessageId, _ request: MessageRequest) {
+        self.messageId = messageId
+        self.request = request
+    }
+
+    public func serialize() -> [UInt8] {
+        var message: [UInt8] = []
+        message.append(contentsOf: withUnsafeBytes(of: messageId.bigEndian, Array.init))
+        let payload = [MessagePackValue.string(request.functionName): request.functionArguments]
+        message.append(contentsOf: pack(MessagePackValue.map(payload)))
+        return message
+    }
+
+    public static func deserialize(_ data: [UInt8]) -> OutgoingMessage? {
+        guard let (id, data) = readMessageId(data) else {
+            return nil
+        }
+
+        let unpacked = (try? unpack(data))?.0
+
+        guard case let .map(m) = unpacked else { return nil }
+        if m.count != 1 { return nil }
+        guard let e = m.first else { return nil }
+        guard let functionName = e.key.stringValue else { return nil }
+        let functionArguments = e.value
+
+        return OutgoingMessage(id, MessageRequest(functionName, functionArguments))
+    }
+}
+
+public class IncomingMessage { // TODO: Rename to ResponseMessage
     public let messageId: MessageId
     public let payload: IncomingPayload
 
-    init(_ messageId: MessageId, _ payload: IncomingPayload) {
+    public init(_ messageId: MessageId, _ payload: IncomingPayload) {
         self.messageId = messageId
         self.payload = payload
     }
 
-    public static func deserialize(_ data: [UInt8]) -> IncomingMessage? {
-        let idByteCount = (MessageId.bitWidth / UInt8.bitWidth)
+    public func serialize() -> [UInt8] {
+        var message: [UInt8] = []
+        message.append(contentsOf: withUnsafeBytes(of: messageId.bigEndian, Array.init))
+        let body: MessagePackValue;
+        switch payload {
+        case .response(let response):
+            body = MessagePackValue.map(["success": response.value])
+        case .notification(let notification):
+            body = MessagePackValue.map(["notification": notification.value])
+        case .error(let error):
+            let code = Int64(exactly: error.code.rawValue)!
+            body = MessagePackValue.map(["failure": .array([.int(code), .string(error.message)])])
+        }
+        message.append(contentsOf: pack(body))
+        return message
+    }
 
-        if data.count < idByteCount {
+    public static func deserialize(_ bytes: [UInt8]) -> IncomingMessage? {
+        guard let (id, data) = readMessageId(bytes) else {
             return nil
         }
 
-        let bigEndianValue = data.withUnsafeBufferPointer {
-            ($0.baseAddress!.withMemoryRebound(to: MessageId.self, capacity: 1) { $0 })
-        }.pointee
-
-        let id = MessageId(bigEndian: bigEndianValue)
-
-        let unpacked = (try? unpack(Data(data[idByteCount...])))?.0
+        let unpacked = (try? unpack(Data(data)))?.0
 
         if case let .map(m) = unpacked {
             if let success = m[.string("success")] {
@@ -191,6 +234,21 @@ extension IncomingMessage: CustomStringConvertible {
     }
 }
 
+fileprivate func readMessageId(_ data: [UInt8]) -> (MessageId, Data)? {
+    let idByteCount = (MessageId.bitWidth / UInt8.bitWidth)
+
+    if data.count < idByteCount {
+        return nil
+    }
+
+    let bigEndianValue = data.withUnsafeBufferPointer {
+        ($0.baseAddress!.withMemoryRebound(to: MessageId.self, capacity: 1) { $0 })
+    }.pointee
+
+    let id = MessageId(bigEndian: bigEndianValue)
+
+    return (id, Data(data[idByteCount...]))
+}
 //--------------------------------------------------------------------
 
 public enum IncomingPayload {
@@ -240,7 +298,7 @@ public class Response {
     // the actual types differ, then it is likely that there is a
     // mismatch between the front end and the backend in the FFI API.
 
-    init(_ value: MessagePackValue) {
+    public init(_ value: MessagePackValue) {
         self.value = value
     }
 

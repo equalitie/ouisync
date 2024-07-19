@@ -1,55 +1,41 @@
 import 'package:flutter/services.dart';
 import '../client.dart';
+import 'message_matcher.dart';
 
 class ChannelClient extends Client {
-    final MethodChannel _channel;
-    final _subscriptions = Subscriptions();
+  final MethodChannel _channel;
+  bool _isClosed = false;
+  final _messageMatcher = MessageMatcher();
 
-    ChannelClient(String channelName) : _channel = MethodChannel(channelName) {
-        _channel.setMethodCallHandler(_handleMethodCall);
-    }
+  ChannelClient(String channelName) : _channel = MethodChannel(channelName) {
+    _channel.setMethodCallHandler(_handleMethodCall);
+  }
 
-    Future<void> initialize() async {
-        await _channel.invokeMethod("initialize");
-    }
+  Future<void> initialize() async {
+    await _messageMatcher.sendAndAwaitResponse("", {}, (Uint8List message) async {
+      await _channel.invokeMethod("initialize", message);
+    });
+  }
 
-    @override
-    Future<T> invoke<T>(String method, [Object? args]) async {
-        return await _channel.invokeMethod("invoke", [method, args]);
-    }
+  @override
+  Future<T> invoke<T>(String method, [Object? args]) async {
+    return await _messageMatcher.sendAndAwaitResponse(method, args, (Uint8List message) async {
+      await _channel.invokeMethod("invoke", message);
+    });
+  }
 
-    @override
-    Future<void> close() async {
-        _channel.setMethodCallHandler(null);
-    }
+  @override
+  Future<void> close() async {
+    _channel.setMethodCallHandler(null);
+    _messageMatcher.close();
+  }
 
-    Future<dynamic> _handleMethodCall(MethodCall call) async {
-        if (call.method != "notify") {
-            throw PlatformException(code: "error", message: "Unsupported method: ${call.method}");
-        }
+  Future<dynamic> _handleMethodCall(MethodCall call) async {
+    final args = (call.arguments as List<Object?>).cast<int>();
+    _messageMatcher.handleResponse(Uint8List.fromList(args));
+    return null;
+  }
 
-        final args = call.arguments;
+  Subscriptions subscriptions() => _messageMatcher.subscriptions();
 
-        if (args !is List<Object>) {
-            throw PlatformException(code: "error", message: "Invalid arguments");
-        }
-
-        if (args[0] !is int) {
-            throw PlatformException(code: "error", message: "First argument must be subsciption ID");
-        }
-
-        final subscriptionId = args[0];
-
-        if (args[1] !is Object?) {
-            throw PlatformException(code: "error", message: "Second argument must be of type Object?");
-        }
-
-        final payload = args[1];
-
-        _subscriptions.handle(subscriptionId, payload);
-
-        return null;
-    }
-
-    Subscriptions subscriptions() => _subscriptions;
 }
