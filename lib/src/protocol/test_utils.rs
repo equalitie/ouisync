@@ -136,12 +136,26 @@ pub(crate) async fn receive_nodes(
     version_vector: VersionVector,
     snapshot: &Snapshot,
 ) {
+    receive_root_nodes(vault, write_keys, branch_id, version_vector, snapshot).await;
+    receive_inner_nodes(vault, snapshot).await;
+    receive_leaf_nodes(vault, snapshot).await;
+}
+
+pub(crate) async fn receive_root_nodes(
+    vault: &Vault,
+    write_keys: &Keypair,
+    branch_id: PublicKey,
+    version_vector: VersionVector,
+    snapshot: &Snapshot,
+) {
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
     vault
         .receive_root_node(proof.into(), MultiBlockPresence::Full)
         .await
         .unwrap();
+}
 
+pub(crate) async fn receive_inner_nodes(vault: &Vault, snapshot: &Snapshot) {
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             vault
@@ -150,7 +164,9 @@ pub(crate) async fn receive_nodes(
                 .unwrap();
         }
     }
+}
 
+pub(crate) async fn receive_leaf_nodes(vault: &Vault, snapshot: &Snapshot) {
     for (_, nodes) in snapshot.leaf_sets() {
         vault
             .receive_leaf_nodes(nodes.clone().into(), None)
@@ -159,16 +175,16 @@ pub(crate) async fn receive_nodes(
     }
 }
 
-pub(crate) async fn receive_blocks(repo: &Vault, snapshot: &Snapshot) {
-    let client = repo.block_tracker.client();
+pub(crate) async fn receive_blocks(vault: &Vault, snapshot: &Snapshot) {
+    let client = vault.block_tracker.client();
     let offers = client.offers();
 
     for block in snapshot.blocks().values() {
-        repo.block_tracker.require(block.id);
+        vault.block_tracker.require(block.id);
         client.register(block.id, OfferState::Approved);
         let promise = offers.try_next().unwrap().accept().unwrap();
 
-        repo.receive_block(block, Some(promise)).await.unwrap();
+        vault.receive_block(block, Some(promise)).await.unwrap();
     }
 }
 

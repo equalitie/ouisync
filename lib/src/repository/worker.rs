@@ -14,6 +14,9 @@ use futures_util::{stream, StreamExt};
 use std::{future, sync::Arc};
 use tokio::select;
 
+#[cfg(test)]
+mod tests;
+
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
 /// - remove outdated branches and snapshots
