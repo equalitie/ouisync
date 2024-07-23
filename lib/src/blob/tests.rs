@@ -675,7 +675,7 @@ async fn fork_then_remove_src_branch() {
 
     // Remove the src branch
     let root_node = tx
-        .load_root_node(src_branch.id(), RootNodeFilter::Any)
+        .load_latest_approved_root_node(src_branch.id(), RootNodeFilter::Any)
         .await
         .unwrap();
     tx.remove_branch(&root_node).await.unwrap();

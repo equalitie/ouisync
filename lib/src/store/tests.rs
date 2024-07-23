@@ -269,7 +269,7 @@ async fn fallback() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&branch_0_id, RootNodeFilter::Any)
+        .load_latest_approved_root_node(&branch_0_id, RootNodeFilter::Any)
         .await
         .unwrap();
     store.remove_outdated_snapshots(&root_node).await.unwrap();
@@ -281,13 +281,21 @@ async fn fallback() {
 
     // The previous snapshot was pruned because it can't serve as fallback for the latest one
     // but the one before it was not because it can.
-    let root_node = tx.load_prev_root_node(&root_node).await.unwrap().unwrap();
+    let root_node = tx
+        .load_prev_approved_root_node(&root_node)
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(tx.find_block_at(&root_node, &locator).await.unwrap(), id1);
     assert!(tx.block_exists(&id1).await.unwrap());
 
     // All the further snapshots were pruned as well
-    assert!(tx.load_prev_root_node(&root_node).await.unwrap().is_none());
+    assert!(tx
+        .load_prev_approved_root_node(&root_node)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[proptest]
@@ -414,7 +422,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                     .acquire_read()
                     .await
                     .unwrap()
-                    .load_root_node(&branch_id, RootNodeFilter::Any)
+                    .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
                     .await
                 {
                     Ok(root_node) => root_node,
@@ -436,7 +444,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
 
         // Verify the snapshot is still complete
         let root_hash = tx
-            .load_root_node(&branch_id, RootNodeFilter::Any)
+            .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
             .await
             .unwrap()
             .proof

@@ -70,7 +70,7 @@ impl Branch {
             .store
             .acquire_read()
             .await?
-            .load_root_node(self.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(self.id(), RootNodeFilter::Any)
             .await?
             .proof)
     }
@@ -186,7 +186,10 @@ impl Branch {
     pub(crate) async fn clone_into(&self, dst_id: PublicKey) -> Result<Self> {
         let mut tx = self.store().begin_write().await?;
 
-        match tx.load_root_node(self.id(), RootNodeFilter::Any).await {
+        match tx
+            .load_latest_approved_root_node(self.id(), RootNodeFilter::Any)
+            .await
+        {
             Ok(node) => {
                 tx.clone_root_node_into(
                     node,

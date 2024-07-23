@@ -30,17 +30,19 @@ pub(super) struct Patch {
 
 impl Patch {
     pub async fn new(tx: &mut ReadTransaction, branch_id: PublicKey) -> Result<Self, Error> {
-        let (vv, root_hash, root_summary) =
-            match tx.load_root_node(&branch_id, RootNodeFilter::Any).await {
-                Ok(node) => {
-                    let hash = node.proof.hash;
-                    (node.proof.into_version_vector(), hash, node.summary)
-                }
-                Err(Error::BranchNotFound) => {
-                    (VersionVector::new(), *EMPTY_INNER_HASH, Summary::INCOMPLETE)
-                }
-                Err(error) => return Err(error),
-            };
+        let (vv, root_hash, root_summary) = match tx
+            .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
+            .await
+        {
+            Ok(node) => {
+                let hash = node.proof.hash;
+                (node.proof.into_version_vector(), hash, node.summary)
+            }
+            Err(Error::BranchNotFound) => {
+                (VersionVector::new(), *EMPTY_INNER_HASH, Summary::INCOMPLETE)
+            }
+            Err(error) => return Err(error),
+        };
 
         Ok(Self {
             branch_id,

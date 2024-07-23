@@ -39,7 +39,7 @@ async fn receive_valid_root_node() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_nodes_by_writer_in_any_state(&remote_id)
+        .load_root_nodes_by_writer(&remote_id)
         .try_next()
         .await
         .unwrap()
@@ -66,7 +66,7 @@ async fn receive_valid_root_node() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_nodes_by_writer_in_any_state(&remote_id)
+        .load_root_nodes_by_writer(&remote_id)
         .try_next()
         .await
         .unwrap()
@@ -102,7 +102,7 @@ async fn receive_root_node_with_invalid_proof() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_nodes_by_writer_in_any_state(&remote_id)
+        .load_root_nodes_by_writer(&remote_id)
         .try_next()
         .await
         .unwrap()
@@ -133,7 +133,7 @@ async fn receive_root_node_with_empty_version_vector() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_nodes_by_writer_in_any_state(&remote_id)
+        .load_root_nodes_by_writer(&remote_id)
         .try_next()
         .await
         .unwrap()
@@ -171,7 +171,7 @@ async fn receive_duplicate_root_node() {
             .acquire_read()
             .await
             .unwrap()
-            .load_root_nodes_by_writer_in_any_state(&remote_id)
+            .load_root_nodes_by_writer(&remote_id)
             .filter(|node| future::ready(node.is_ok()))
             .count()
             .await,
@@ -208,7 +208,7 @@ async fn receive_root_node_with_existing_hash() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&local_id, RootNodeFilter::Any)
+        .load_latest_approved_root_node(&local_id, RootNodeFilter::Any)
         .await
         .unwrap();
 
@@ -229,7 +229,7 @@ async fn receive_root_node_with_existing_hash() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&local_id, RootNodeFilter::Any)
+        .load_latest_approved_root_node(&local_id, RootNodeFilter::Any)
         .await
         .unwrap()
         .summary
@@ -302,7 +302,7 @@ mod receive_and_create_root_node {
             .acquire_read()
             .await
             .unwrap()
-            .load_root_nodes_by_writer_in_any_state(&local_id)
+            .load_root_nodes_by_writer(&local_id)
             .try_next()
             .await
             .unwrap()
@@ -368,7 +368,7 @@ mod receive_and_create_root_node {
             .acquire_read()
             .await
             .unwrap()
-            .load_root_nodes_by_writer_in_any_state(&local_id)
+            .load_root_nodes_by_writer(&local_id)
             .try_next()
             .await
             .unwrap()
@@ -410,7 +410,7 @@ async fn receive_bumped_root_node() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&branch_id, RootNodeFilter::Any)
+        .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
         .await
         .unwrap();
     assert_eq!(node.proof.version_vector, vv0);
@@ -437,7 +437,7 @@ async fn receive_bumped_root_node() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&branch_id, RootNodeFilter::Any)
+        .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
         .await
         .unwrap();
     assert_eq!(node.proof.version_vector, vv1);
@@ -1129,7 +1129,7 @@ async fn receive_snapshot(
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&writer_id, RootNodeFilter::Any)
+        .load_latest_approved_root_node(&writer_id, RootNodeFilter::Any)
         .await
     {
         Ok(node) => node.proof.into_version_vector(),
@@ -1164,7 +1164,7 @@ async fn count_snapshots(vault: &Vault, writer_id: &PublicKey) -> usize {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_nodes_by_writer_in_any_state(writer_id)
+        .load_root_nodes_by_writer(writer_id)
         .try_fold(0, |sum, _node| future::ready(Ok(sum + 1)))
         .await
         .unwrap()
@@ -1176,7 +1176,7 @@ async fn prune_snapshots(vault: &Vault, writer_id: &PublicKey) {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(writer_id, RootNodeFilter::Any)
+        .load_latest_approved_root_node(writer_id, RootNodeFilter::Any)
         .await
         .unwrap();
     vault

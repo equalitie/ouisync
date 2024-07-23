@@ -124,7 +124,7 @@ pub(super) async fn create(
 }
 
 /// Returns the latest approved root node of the specified branch.
-pub(super) async fn load(
+pub(super) async fn load_latest_approved(
     conn: &mut db::Connection,
     branch_id: &PublicKey,
 ) -> Result<RootNode, Error> {
@@ -161,7 +161,7 @@ pub(super) async fn load(
 }
 
 /// Load the previous approved root node of the same writer.
-pub(super) async fn load_prev(
+pub(super) async fn load_prev_approved(
     conn: &mut db::Connection,
     node: &RootNode,
 ) -> Result<Option<RootNode>, Error> {
@@ -195,7 +195,7 @@ pub(super) async fn load_prev(
 }
 
 /// Return the latest approved root nodes of all known writers.
-pub(super) fn load_all(
+pub(super) fn load_all_latest_approved(
     conn: &mut db::Connection,
 ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
     sqlx::query(
@@ -230,7 +230,7 @@ pub(super) fn load_all(
 }
 
 /// Return the latest root nodes of all known writers in any state.
-pub(super) fn load_all_in_any_state(
+pub(super) fn load_all_latest(
     conn: &mut db::Connection,
 ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
     sqlx::query(
@@ -528,7 +528,7 @@ pub(super) async fn decide_action(
         request_children: true,
     };
 
-    let mut old_nodes = load_all_in_any_state(tx);
+    let mut old_nodes = load_all_latest(tx);
     while let Some(old_node) = old_nodes.try_next().await? {
         match new_proof
             .version_vector
@@ -640,7 +640,7 @@ pub(super) async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter
 /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
 /// most recent to the least recent.
 #[cfg(test)]
-pub(super) fn load_all_by_writer_in_any_state<'a>(
+pub(super) fn load_all_by_writer<'a>(
     conn: &'a mut db::Connection,
     writer_id: &'a PublicKey,
 ) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
@@ -701,7 +701,7 @@ mod tests {
         .unwrap();
         assert_eq!(node0.proof.hash, hash);
 
-        let nodes: Vec<_> = load_all_by_writer_in_any_state(&mut tx, &writer_id)
+        let nodes: Vec<_> = load_all_by_writer(&mut tx, &writer_id)
             .try_collect()
             .await
             .unwrap();

@@ -795,7 +795,7 @@ impl Repository {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(writer_id, RootNodeFilter::Any)
+            .load_latest_approved_root_node(writer_id, RootNodeFilter::Any)
             .await?
             .proof
             .into_version_vector())
@@ -1020,7 +1020,7 @@ impl Shared {
             .store()
             .acquire_read()
             .await?
-            .load_root_nodes()
+            .load_latest_approved_root_nodes()
             .err_into()
             .and_then(|root_node| future::ready(self.get_branch(root_node.proof.writer_id)))
             .try_collect()

@@ -112,7 +112,7 @@ impl Inner {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(&writer_id, RootNodeFilter::Published)
+            .load_latest_approved_root_node(&writer_id, RootNodeFilter::Published)
             .await;
 
         match root_node {
@@ -314,7 +314,7 @@ impl Inner {
 
         for writer_id in writer_ids {
             match tx
-                .load_root_node(&writer_id, RootNodeFilter::Published)
+                .load_latest_approved_root_node(&writer_id, RootNodeFilter::Published)
                 .await
             {
                 Ok(node) => root_nodes.push(node),
@@ -335,7 +335,7 @@ impl Inner {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(writer_id, RootNodeFilter::Published)
+            .load_latest_approved_root_node(writer_id, RootNodeFilter::Published)
             .await?)
     }
 

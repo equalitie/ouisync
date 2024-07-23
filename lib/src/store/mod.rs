@@ -212,7 +212,7 @@ impl Store {
         // Then remove those snapshots that can't serve as fallback for the current one.
         let mut new = Cow::Borrowed(root_node);
 
-        while let Some(old) = reader.load_prev_root_node(&new).await? {
+        while let Some(old) = reader.load_prev_approved_root_node(&new).await? {
             if old.proof.version_vector == new.proof.version_vector {
                 // `new` is a draft and so we can't remove `old`. Try the previous snapshot.
                 tracing::trace!(
@@ -340,7 +340,7 @@ impl Reader {
         branch_id: &PublicKey,
     ) -> Result<usize, Error> {
         let root_hash = self
-            .load_root_node(branch_id, RootNodeFilter::Any)
+            .load_latest_approved_root_node(branch_id, RootNodeFilter::Any)
             .await?
             .proof
             .hash;
@@ -348,7 +348,7 @@ impl Reader {
     }
 
     /// Load the latest approved root node of the given branch.
-    pub async fn load_root_node(
+    pub async fn load_latest_approved_root_node(
         &mut self,
         branch_id: &PublicKey,
         filter: RootNodeFilter,
@@ -356,7 +356,7 @@ impl Reader {
         let node = if let Some(node) = self.cache.get_root(branch_id) {
             node
         } else {
-            root_node::load(self.db(), branch_id).await?
+            root_node::load_latest_approved(self.db(), branch_id).await?
         };
 
         match filter {
@@ -364,7 +364,7 @@ impl Reader {
             RootNodeFilter::Published => {
                 let mut new = node;
 
-                while let Some(old) = self.load_prev_root_node(&new).await? {
+                while let Some(old) = self.load_prev_approved_root_node(&new).await? {
                     if new.proof.version_vector > old.proof.version_vector {
                         break;
                     } else {
@@ -377,27 +377,29 @@ impl Reader {
         }
     }
 
-    pub async fn load_prev_root_node(
+    pub async fn load_prev_approved_root_node(
         &mut self,
         node: &RootNode,
     ) -> Result<Option<RootNode>, Error> {
-        root_node::load_prev(self.db(), node).await
+        root_node::load_prev_approved(self.db(), node).await
     }
 
     pub fn load_writer_ids(&mut self) -> impl Stream<Item = Result<PublicKey, Error>> + '_ {
         root_node::load_writer_ids(self.db())
     }
 
-    pub fn load_root_nodes(&mut self) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
-        root_node::load_all(self.db())
+    pub fn load_latest_approved_root_nodes(
+        &mut self,
+    ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+        root_node::load_all_latest_approved(self.db())
     }
 
     #[cfg(test)]
-    pub fn load_root_nodes_by_writer_in_any_state<'a>(
+    pub fn load_root_nodes_by_writer<'a>(
         &'a mut self,
         writer_id: &'a PublicKey,
     ) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
-        root_node::load_all_by_writer_in_any_state(self.db(), writer_id)
+        root_node::load_all_by_writer(self.db(), writer_id)
     }
 
     pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
@@ -456,7 +458,9 @@ impl ReadTransaction {
         branch_id: &PublicKey,
         encoded_locator: &Hash,
     ) -> Result<BlockId, Error> {
-        let root_node = self.load_root_node(branch_id, RootNodeFilter::Any).await?;
+        let root_node = self
+            .load_latest_approved_root_node(branch_id, RootNodeFilter::Any)
+            .await?;
         self.find_block_at(&root_node, encoded_locator).await
     }
 
