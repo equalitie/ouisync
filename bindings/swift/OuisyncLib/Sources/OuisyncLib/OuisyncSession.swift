@@ -41,10 +41,9 @@ public class OuisyncSession {
     }
 
     // Can be called from a separate thread.
-    public func invoke(_ requestMsg: OutgoingMessage) async -> IncomingMessage {
-        let responsePayload: IncomingPayload
+    public func invoke(_ requestMsg: OuisyncRequestMessage) async -> OuisyncResponseMessage {
+        let responsePayload: OuisyncResponsePayload
 
-        NSLog("AAAAAA \(requestMsg.request.functionName)")
         do {
             responsePayload = .response(try await sendRequest(requestMsg.request))
         } catch let e as OuisyncError {
@@ -53,27 +52,27 @@ public class OuisyncSession {
             fatalError("Unhandled exception in OuisyncSession.invoke: \(e)")
         }
 
-        return IncomingMessage(requestMsg.messageId, responsePayload)
+        return OuisyncResponseMessage(requestMsg.messageId, responsePayload)
     }
 
     public func listRepositories() async throws -> [OuisyncRepository] {
-        let response = try await sendRequest(MessageRequest.listRepositories());
+        let response = try await sendRequest(OuisyncRequest.listRepositories());
         let handles = response.toUInt64Array()
         return handles.map({ OuisyncRepository($0, self) })
     }
 
     public func subscribeToRepositoryListChange() async throws -> NotificationStream {
-        let subscriptionId = try await sendRequest(MessageRequest.subscribeToRepositoryListChange()).toUInt64();
+        let subscriptionId = try await sendRequest(OuisyncRequest.subscribeToRepositoryListChange()).toUInt64();
         return NotificationStream(subscriptionId, notificationSubscriptions)
     }
 
     public func subscribeToRepositoryChange(_ repo: RepositoryHandle) async throws -> NotificationStream {
-        let subscriptionId = try await sendRequest(MessageRequest.subscribeToRepositoryChange(repo)).toUInt64();
+        let subscriptionId = try await sendRequest(OuisyncRequest.subscribeToRepositoryChange(repo)).toUInt64();
         return NotificationStream(subscriptionId, notificationSubscriptions)
     }
 
     // Can be called from a separate thread.
-    internal func sendRequest(_ request: MessageRequest) async throws -> Response {
+    internal func sendRequest(_ request: OuisyncRequest) async throws -> Response {
         let messageId = generateMessageId()
 
         async let onResponse = withCheckedThrowingContinuation { [weak self] continuation in
@@ -81,7 +80,7 @@ public class OuisyncSession {
 
             synchronized(session) {
                 session.pendingResponses[messageId] = continuation
-                session.sendDataToOuisyncLib(OutgoingMessage(messageId, request).serialize());
+                session.sendDataToOuisyncLib(OuisyncRequestMessage(messageId, request).serialize());
             }
         }
 
@@ -110,7 +109,7 @@ public class OuisyncSession {
     // Use this function to pass data from the backend.
     // It may be called from a separate thread.
     public func onReceiveDataFromOuisyncLib(_ data: [UInt8]) {
-        let maybe_message = IncomingMessage.deserialize(data)
+        let maybe_message = OuisyncResponseMessage.deserialize(data)
 
         guard let message = maybe_message else {
             let hex = data.map({String(format:"%02x", $0)}).joined(separator: ",")
