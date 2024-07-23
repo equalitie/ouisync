@@ -1,4 +1,4 @@
-// swift-tools-version: 5.8
+// swift-tools-version: 5.9
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -20,7 +20,9 @@ let package = Package(
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
             name: "OuisyncLib",
-            dependencies: [.product(name:"MessagePack", package: "MessagePack.swift")]),
+            dependencies: [.product(name:"MessagePack", package: "MessagePack.swift"), "OuisyncLibFFI"]
+        ),
+        .target(name: "OuisyncLibFFI", dependencies: []),
         .testTarget(
             name: "OuisyncLibTests",
             dependencies: ["OuisyncLib"]),

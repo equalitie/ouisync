@@ -65,7 +65,7 @@ class MessageMatcher {
     final message = deserialize(bytes.sublist(8));
 
     // DEBUG
-    //print('recv: id: $id, message: $message');
+    print('recv: id: $id, message: $message');
 
     if (message is! Map) {
       return;
@@ -103,6 +103,7 @@ class MessageMatcher {
   }
 
   void _handleResponseSuccess(Completer<Object?> completer, Object? payload) {
+    print(">>>>>>>>>>>>>>>>> received $payload");
     if (payload == "none") {
       completer.complete(null);
       return;

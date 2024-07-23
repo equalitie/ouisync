@@ -6,17 +6,54 @@
 
 import Foundation
 import MessagePack
+import OuisyncLibFFI
 
 public class OuisyncSession {
-    // Used to send and receive messages from the Ouisync library
-    let librarySender: OuisyncLibrarySenderProtocol
+    var sessionHandle: SessionHandle
+    let ffi: OuisyncFFI
 
     var nextMessageId: MessageId = 0
     var pendingResponses: [MessageId: CheckedContinuation<Response, any Error>] = [:]
     var notificationSubscriptions: NotificationStream.State = NotificationStream.State()
 
-    public init(_ libraryClient: OuisyncLibrarySenderProtocol) {
-        self.librarySender = libraryClient
+    fileprivate init(_ sessionHandle: SessionHandle, _ ffi: OuisyncFFI) {
+        self.sessionHandle = sessionHandle
+        self.ffi = ffi
+    }
+
+    public static func create(_ configPath: String, _ logPath: String, _ ffi: OuisyncFFI) throws -> OuisyncSession {
+        let session = OuisyncSession(0, ffi)
+
+        let callback: FFICallback = { context, dataPointer, size in
+            let session: OuisyncSession = OuisyncFFI.fromUnretainedPtr(ptr: context!)
+            let data = Array(UnsafeBufferPointer(start: dataPointer, count: Int(exactly: size)!))
+            session.onReceiveDataFromOuisyncLib(data)
+        }
+
+        let result = ffi.ffiSessionCreate(ffi.sessionKindShared, configPath, logPath, OuisyncFFI.toUnretainedPtr(obj: session), callback);
+
+        if result.errorCode != 0 {
+            throw SessionCreateError("Failed to create session, code:\(result.errorCode), message:\(result.errorMessage!)")
+        }
+
+        session.sessionHandle = result.session
+        return session
+    }
+
+    // Can be called from a separate thread.
+    public func invoke(_ requestMsg: OutgoingMessage) async -> IncomingMessage {
+        let responsePayload: IncomingPayload
+
+        NSLog("AAAAAA \(requestMsg.request.functionName)")
+        do {
+            responsePayload = .response(try await sendRequest(requestMsg.request))
+        } catch let e as OuisyncError {
+            responsePayload = .error(e)
+        } catch let e {
+            fatalError("Unhandled exception in OuisyncSession.invoke: \(e)")
+        }
+
+        return IncomingMessage(requestMsg.messageId, responsePayload)
     }
 
     public func listRepositories() async throws -> [OuisyncRepository] {
@@ -35,6 +72,7 @@ public class OuisyncSession {
         return NotificationStream(subscriptionId, notificationSubscriptions)
     }
 
+    // Can be called from a separate thread.
     internal func sendRequest(_ request: MessageRequest) async throws -> Response {
         let messageId = generateMessageId()
 
@@ -50,6 +88,7 @@ public class OuisyncSession {
         return try await onResponse
     }
 
+    // Can be called from a separate thread.
     fileprivate func generateMessageId() -> MessageId {
         synchronized(self) {
             let messageId = nextMessageId
@@ -59,7 +98,13 @@ public class OuisyncSession {
     }
 
     fileprivate func sendDataToOuisyncLib(_ data: [UInt8]) {
-        librarySender.sendDataToOuisyncLib(data);
+        //librarySender.sendDataToOuisyncLib(data);
+        let count = data.count;
+        data.withUnsafeBufferPointer({ maybePointer in
+            if let pointer = maybePointer.baseAddress {
+                ffi.ffiSessionChannelSend(sessionHandle, pointer, UInt64(count))
+            }
+        })
     }
 
     // Use this function to pass data from the backend.

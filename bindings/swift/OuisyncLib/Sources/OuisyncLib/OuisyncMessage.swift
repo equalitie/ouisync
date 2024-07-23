@@ -190,7 +190,7 @@ public class IncomingMessage { // TODO: Rename to ResponseMessage
         let body: MessagePackValue;
         switch payload {
         case .response(let response):
-            body = MessagePackValue.map(["success": response.value])
+            body = MessagePackValue.map(["success": Self.responseValue(response.value)])
         case .notification(let notification):
             body = MessagePackValue.map(["notification": notification.value])
         case .error(let error):
@@ -199,6 +199,16 @@ public class IncomingMessage { // TODO: Rename to ResponseMessage
         }
         message.append(contentsOf: pack(body))
         return message
+    }
+
+    static func responseValue(_ value: MessagePackValue) -> MessagePackValue {
+        switch value {
+        case .nil: return .string("none")
+        default:
+            // The flutter code doesn't read the key which is supposed to be a type,
+            // would still be nice to have a proper mapping.
+            return .map(["todo-type": value])
+        }
     }
 
     public static func deserialize(_ bytes: [UInt8]) -> IncomingMessage? {
