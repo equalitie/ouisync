@@ -10,7 +10,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
-use sqlx::Row;
+use sqlx::{sqlite::SqliteRow, FromRow, Row};
 use std::{cmp::Ordering, future};
 
 /// Status of receiving a root node
@@ -128,12 +128,14 @@ pub(super) async fn load_latest_approved(
     conn: &mut db::Connection,
     branch_id: &PublicKey,
 ) -> Result<RootNode, Error> {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
+             writer_id,
              versions,
              hash,
              signature,
+             state,
              block_presence
          FROM
              snapshot_root_nodes
@@ -149,14 +151,6 @@ pub(super) async fn load_latest_approved(
     .bind(NodeState::Approved)
     .fetch_optional(conn)
     .await?
-    .map(|row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(*branch_id, row.get(1), row.get(2), row.get(3)),
-        summary: Summary {
-            state: NodeState::Approved,
-            block_presence: row.get(4),
-        },
-    })
     .ok_or(Error::BranchNotFound)
 }
 
@@ -165,12 +159,14 @@ pub(super) async fn load_prev_approved(
     conn: &mut db::Connection,
     node: &RootNode,
 ) -> Result<Option<RootNode>, Error> {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
             snapshot_id,
+            writer_id,
             versions,
             hash,
             signature,
+            state,
             block_presence
          FROM snapshot_root_nodes
          WHERE writer_id = ? AND state = ? AND snapshot_id < ?
@@ -181,14 +177,6 @@ pub(super) async fn load_prev_approved(
     .bind(NodeState::Approved)
     .bind(node.snapshot_id)
     .fetch(conn)
-    .map_ok(|row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(node.proof.writer_id, row.get(1), row.get(2), row.get(3)),
-        summary: Summary {
-            state: NodeState::Approved,
-            block_presence: row.get(4),
-        },
-    })
     .err_into()
     .try_next()
     .await
@@ -198,13 +186,14 @@ pub(super) async fn load_prev_approved(
 pub(super) fn load_all_latest_approved(
     conn: &mut db::Connection,
 ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
              writer_id,
              versions,
              hash,
              signature,
+             state,
              block_presence
          FROM
              snapshot_root_nodes
@@ -218,14 +207,6 @@ pub(super) fn load_all_latest_approved(
     )
     .bind(NodeState::Approved)
     .fetch(conn)
-    .map_ok(|row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
-        summary: Summary {
-            state: NodeState::Approved,
-            block_presence: row.get(5),
-        },
-    })
     .err_into()
 }
 
@@ -233,7 +214,7 @@ pub(super) fn load_all_latest_approved(
 pub(super) fn load_all_latest(
     conn: &mut db::Connection,
 ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
              writer_id,
@@ -252,14 +233,6 @@ pub(super) fn load_all_latest(
              )",
     )
     .fetch(conn)
-    .map_ok(|row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
-        summary: Summary {
-            state: row.get(5),
-            block_presence: row.get(6),
-        },
-    })
     .err_into()
 }
 
@@ -268,11 +241,12 @@ pub(super) fn load_all_by_hash<'a>(
     conn: &'a mut db::Connection,
     hash: &'a Hash,
 ) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
              writer_id,
              versions,
+             hash,
              signature,
              state,
              block_presence
@@ -281,14 +255,6 @@ pub(super) fn load_all_by_hash<'a>(
     )
     .bind(hash)
     .fetch(conn)
-    .map_ok(move |row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(row.get(1), row.get(2), *hash, row.get(3)),
-        summary: Summary {
-            state: row.get(4),
-            block_presence: row.get(5),
-        },
-    })
     .err_into()
 }
 
@@ -597,27 +563,19 @@ pub(super) async fn decide_action(
 }
 
 pub(super) async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {
-    let mut roots = sqlx::query(
+    let mut roots = sqlx::query_as::<_, RootNode>(
         "SELECT
              snapshot_id,
+             writer_id,
              versions,
              hash,
              signature,
              state,
-             block_presence,
-             writer_id
+             block_presence
          FROM snapshot_root_nodes
          ORDER BY snapshot_id DESC",
     )
-    .fetch(conn)
-    .map_ok(move |row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(row.get(6), row.get(1), row.get(2), row.get(3)),
-        summary: Summary {
-            state: row.get(4),
-            block_presence: row.get(5),
-        },
-    });
+    .fetch(conn);
 
     while let Some(root_node) = roots.next().await {
         match root_node {
@@ -644,9 +602,10 @@ pub(super) fn load_all_by_writer<'a>(
     conn: &'a mut db::Connection,
     writer_id: &'a PublicKey,
 ) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
+             writer_id,
              versions,
              hash,
              signature,
@@ -658,15 +617,25 @@ pub(super) fn load_all_by_writer<'a>(
     )
     .bind(writer_id) // needed to satisfy the borrow checker.
     .fetch(conn)
-    .map_ok(move |row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(*writer_id, row.get(1), row.get(2), row.get(3)),
-        summary: Summary {
-            state: row.get(4),
-            block_presence: row.get(5),
-        },
-    })
     .err_into()
+}
+
+impl FromRow<'_, SqliteRow> for RootNode {
+    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(RootNode {
+            snapshot_id: row.try_get(0)?,
+            proof: Proof::new_unchecked(
+                row.try_get(1)?,
+                row.try_get(2)?,
+                row.try_get(3)?,
+                row.try_get(4)?,
+            ),
+            summary: Summary {
+                state: row.try_get(5)?,
+                block_presence: row.try_get(6)?,
+            },
+        })
+    }
 }
 
 #[cfg(test)]
