@@ -286,3 +286,26 @@ where
         self.hash
     }
 }
+
+#[cfg(test)]
+mod test_utils {
+    use super::Hash;
+    use proptest::{
+        arbitrary::{any, Arbitrary},
+        array::UniformArrayStrategy,
+        num,
+        strategy::{Map, NoShrink, Strategy},
+    };
+
+    impl Arbitrary for Hash {
+        type Parameters = ();
+        type Strategy = Map<
+            NoShrink<UniformArrayStrategy<num::u8::Any, [u8; Hash::SIZE]>>,
+            fn([u8; Hash::SIZE]) -> Self,
+        >;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            any::<[u8; Hash::SIZE]>().no_shrink().prop_map(Hash::from)
+        }
+    }
+}

@@ -60,6 +60,14 @@ impl TryFrom<&'_ [u8]> for Keypair {
     }
 }
 
+impl fmt::Debug for Keypair {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Keypair")
+            .field("public_key", &self.public_key())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
 #[repr(transparent)]
 #[serde(transparent)]
@@ -177,7 +185,7 @@ mod test_utils {
         strategy::{Map, NoShrink, Strategy},
     };
 
-    impl Arbitrary for PublicKey {
+    impl Arbitrary for Keypair {
         type Parameters = ();
         type Strategy = Map<
             NoShrink<UniformArrayStrategy<num::u8::Any, [u8; Keypair::SECRET_KEY_SIZE]>>,
@@ -187,7 +195,16 @@ mod test_utils {
         fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
             any::<[u8; Keypair::SECRET_KEY_SIZE]>()
                 .no_shrink()
-                .prop_map(|array| Keypair::from(&array).public_key())
+                .prop_map(|array| Keypair::from(&array))
+        }
+    }
+
+    impl Arbitrary for PublicKey {
+        type Parameters = ();
+        type Strategy = Map<<Keypair as Arbitrary>::Strategy, fn(Keypair) -> Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            any::<Keypair>().prop_map(|keypair| keypair.public_key())
         }
     }
 }
