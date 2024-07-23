@@ -1,4 +1,4 @@
-use super::{vault::*, RepositoryId, RepositoryMonitor};
+use super::{BlockRequestMode, RepositoryId, RepositoryMonitor, Vault};
 use crate::{
     access_control::WriteSecrets,
     block_tracker::OfferState,

@@ -8,8 +8,6 @@ mod worker;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod vault_tests;
 
 pub use self::{
     credentials::Credentials, id::RepositoryId, metadata::Metadata, params::RepositoryParams,
