@@ -22,6 +22,8 @@ public class OuisyncSession {
     }
 
     public static func create(_ configPath: String, _ logPath: String, _ ffi: OuisyncFFI) throws -> OuisyncSession {
+        // Init with an invalid sessionHandle because we need the OuisyncSession instance to
+        // create the callback, which is in turn needed to create the proper sessionHandle.
         let session = OuisyncSession(0, ffi)
 
         let callback: FFICallback = { context, dataPointer, size in

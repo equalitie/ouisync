@@ -276,7 +276,7 @@ pub(crate) enum Request {
         /// Repository token
         #[arg(short, long)]
         token: String,
-    }
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum)]
