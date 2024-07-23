@@ -394,6 +394,12 @@ impl Reader {
         root_node::load_all_latest_approved(self.db())
     }
 
+    pub fn load_latest_preferred_root_nodes(
+        &mut self,
+    ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+        root_node::load_all_latest_preferred(self.db())
+    }
+
     #[cfg(test)]
     pub fn load_root_nodes_by_writer<'a>(
         &'a mut self,

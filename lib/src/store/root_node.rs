@@ -210,6 +210,53 @@ pub(super) fn load_all_latest_approved(
     .err_into()
 }
 
+/// Return the latest root nodes of all known writers according to the following order of
+/// preferrence: approved, complete, incomplete, rejected. That is, returns the latest approved
+/// node if it exists, otherwise the latest complete, etc...
+pub(super) fn load_all_latest_preferred(
+    conn: &mut db::Connection,
+) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+    // Partition all root nodes by their writer_id. Then sort each partition according to the
+    // preferrence as described in the above doc comment. Then take the first row from each
+    // partition.
+
+    // TODO: Is this the best way to do this (simple, efficient, etc...)?
+
+    sqlx::query_as(
+        "SELECT
+             snapshot_id,
+             writer_id,
+             versions,
+             hash,
+             signature,
+             state,
+             block_presence
+         FROM (
+             SELECT
+                 *,
+                 ROW_NUMBER() OVER (
+                     PARTITION BY writer_id
+                     ORDER BY
+                         CASE state
+                             WHEN ? THEN 0
+                             WHEN ? THEN 1
+                             WHEN ? THEN 2
+                             WHEN ? THEN 3
+                         END,
+                         snapshot_id DESC
+                 ) AS position
+             FROM snapshot_root_nodes
+         )
+         WHERE position = 1",
+    )
+    .bind(NodeState::Approved)
+    .bind(NodeState::Complete)
+    .bind(NodeState::Incomplete)
+    .bind(NodeState::Rejected)
+    .fetch(conn)
+    .err_into()
+}
+
 /// Return the latest root nodes of all known writers in any state.
 pub(super) fn load_all_latest(
     conn: &mut db::Connection,

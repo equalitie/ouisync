@@ -17,9 +17,8 @@ use rand::{rngs::StdRng, SeedableRng};
 use state_monitor::StateMonitor;
 use tempfile::TempDir;
 
-#[ignore] // FIXME: prune doesn't currently remove branches with no complete snapshots
 #[tokio::test]
-async fn prune_outdated_branches_with_only_incomplete_snapshots() {
+async fn prune() {
     let mut rng = StdRng::from_entropy();
     let (_base_dir, shared) = setup(&mut rng).await;
     let secrets = shared
@@ -33,65 +32,142 @@ async fn prune_outdated_branches_with_only_incomplete_snapshots() {
 
     let writer_a = sign::Keypair::generate(&mut rng).public_key();
     let writer_b = sign::Keypair::generate(&mut rng).public_key();
+    let writer_c = sign::Keypair::generate(&mut rng).public_key();
+    let writer_d = sign::Keypair::generate(&mut rng).public_key();
 
-    // { A: 1, B: 1 }
-    let vv_a = VersionVector::first(writer_a).incremented(writer_b);
-    // { A: 0, B: 1}
-    let vv_b = VersionVector::first(writer_b);
+    tracing::debug!(?writer_a, ?writer_b, ?writer_c, ?writer_d);
 
-    let snapshot_a = Snapshot::generate(&mut rng, 2);
-    let snapshot_b = Snapshot::generate(&mut rng, 2);
+    // D is outdated to A and B and has only incomplete snapshots
+    let mut vv_d = VersionVector::first(writer_d);
+    for _ in 0..2 {
+        let snapshot = Snapshot::generate(&mut rng, 2);
 
-    // Receive complete snapshot of A
-    test_utils::receive_nodes(
-        &shared.vault,
-        &secrets.write_keys,
-        writer_a,
-        vv_a,
-        &snapshot_a,
-    )
-    .await;
+        test_utils::receive_root_nodes(
+            &shared.vault,
+            &secrets.write_keys,
+            writer_d,
+            vv_d.clone(),
+            &snapshot,
+        )
+        .await;
+        test_utils::receive_inner_nodes(&shared.vault, &snapshot).await;
+        // Do not receive leaf nodes, to keep the snapshot incomplete.
 
-    // Receive incomplete snapshot of B
-    test_utils::receive_root_nodes(
-        &shared.vault,
-        &secrets.write_keys,
-        writer_b,
-        vv_b,
-        &snapshot_b,
-    )
-    .await;
-    test_utils::receive_inner_nodes(&shared.vault, &snapshot_b).await;
-    // Do not receive leaf nodes, to keep the snapshot incomplete.
+        vv_d.increment(writer_d);
+    }
 
-    // Verify both branches are present
+    // C is outdated to A and B and has complete snapshots
+    let mut vv_c = VersionVector::first(writer_c);
+    for _ in 0..2 {
+        let snapshot = Snapshot::generate(&mut rng, 2);
+
+        test_utils::receive_nodes(
+            &shared.vault,
+            &secrets.write_keys,
+            writer_c,
+            vv_c.clone(),
+            &snapshot,
+        )
+        .await;
+
+        vv_c.increment(writer_c);
+    }
+
+    // A and B are concurrent
+    for writer_id in [writer_a, writer_b] {
+        let mut vv = vv_c.clone().merged(&vv_d).incremented(writer_id);
+
+        for _ in 0..2 {
+            let snapshot = Snapshot::generate(&mut rng, 2);
+
+            test_utils::receive_nodes(
+                &shared.vault,
+                &secrets.write_keys,
+                writer_id,
+                vv.clone(),
+                &snapshot,
+            )
+            .await;
+
+            vv.increment(writer_id);
+        }
+    }
+
+    // Verify all snapshots are present
     let mut reader = shared.vault.store().acquire_read().await.unwrap();
     assert_matches!(
-        reader.load_root_nodes_by_writer(&writer_a).try_next().await,
-        Ok(Some(_))
+        reader
+            .load_root_nodes_by_writer(&writer_a)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
     );
     assert_matches!(
-        reader.load_root_nodes_by_writer(&writer_b).try_next().await,
-        Ok(Some(_))
+        reader
+            .load_root_nodes_by_writer(&writer_b)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
+    );
+    assert_matches!(
+        reader
+            .load_root_nodes_by_writer(&writer_c)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
+    );
+    assert_matches!(
+        reader
+            .load_root_nodes_by_writer(&writer_d)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
     );
     drop(reader);
 
-    let (unlock_tx, _unlock_rx) = unlock::channel();
-
     // Prune
+    let (unlock_tx, _unlock_rx) = unlock::channel();
     prune::run(&shared, &unlock_tx, &Counter::new())
         .await
         .unwrap();
 
-    // Verify only the A branch is present
+    // Verify only the latest snapshots of A and B are present
     let mut reader = shared.vault.store().acquire_read().await.unwrap();
     assert_matches!(
-        reader.load_root_nodes_by_writer(&writer_a).try_next().await,
-        Ok(Some(_))
+        reader
+            .load_root_nodes_by_writer(&writer_a)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_])
     );
     assert_matches!(
-        reader.load_root_nodes_by_writer(&writer_b).try_next().await,
-        Ok(None)
+        reader
+            .load_root_nodes_by_writer(&writer_b)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_])
+    );
+    assert_matches!(
+        reader
+            .load_root_nodes_by_writer(&writer_c)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([])
+    );
+    assert_matches!(
+        reader
+            .load_root_nodes_by_writer(&writer_d)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([])
     );
 }
 
