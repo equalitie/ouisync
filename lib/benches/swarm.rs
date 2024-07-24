@@ -40,7 +40,6 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let file_size = options.file_size;
     let actors: Vec<_> = (0..options.num_writers)
         .map(|index| ActorId {
             access_mode: AccessMode::Write,
@@ -72,8 +71,17 @@ fn main() -> ExitCode {
         options.progress.then(ProgressReporter::new)
     };
 
-    let file_name = "file.dat";
-    let file_seed = 0;
+    let files: Vec<_> = options
+        .file_sizes
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, size)| FileParams {
+            index,
+            size,
+            seed: 0,
+        })
+        .collect();
 
     for actor in actors.iter().copied() {
         let other_actors: Vec<_> = actors
@@ -94,6 +102,8 @@ fn main() -> ExitCode {
             .filter(|(index, _)| actor.access_mode != AccessMode::Write || *index != actor.index)
             .map(|(_, rx)| rx.clone())
             .collect();
+
+        let files = files.clone();
 
         let barrier = barrier.clone();
         let progress_reporter = progress_reporter.clone();
@@ -117,10 +127,12 @@ fn main() -> ExitCode {
             .unwrap();
             let _reg = network.register(repo.handle()).await;
 
-            // Create the file by one of the writers
-            if actor.access_mode == AccessMode::Write && actor.index == 0 {
-                let mut file = repo.create_file(file_name).await.unwrap();
-                write_random_file(&mut file, file_seed, file_size).await;
+            // Create the file
+            if actor.access_mode == AccessMode::Write {
+                if let Some(file_params) = files.get(actor.index) {
+                    let mut file = repo.create_file(file_params.name()).await.unwrap();
+                    write_random_file(&mut file, file_params.seed, file_params.size).await;
+                }
             }
 
             // Connect to the other peers
@@ -139,14 +151,14 @@ fn main() -> ExitCode {
                     run_watch_rxs.await;
                 }
 
-                // Check the file content matches the original file.
-                {
+                // Check the file contents match.
+                for file_params in &files {
                     let mut file = repo
-                        .open_file(file_name)
+                        .open_file(file_params.name())
                         .await
                         .inspect_err(|error| error!(?error))
                         .unwrap();
-                    check_random_file(&mut file, file_seed, file_size).await;
+                    check_random_file(&mut file, file_params.seed, file_params.size).await;
                 }
 
                 // Wait until everyone finished
@@ -202,10 +214,17 @@ fn main() -> ExitCode {
 
 #[derive(Parser, Debug)]
 struct Options {
-    /// Size of the file to share in bytes. Can use metric (kB, MB, ...) or binary (kiB, MiB, ...)
-    /// suffixes.
-    #[arg(short = 's', long, value_parser = parse_size, default_value_t = 1024 * 1024)]
-    pub file_size: u64,
+    /// Size of the file(s) to share in bytes. Can use metric (kB, MB, ...) or binary (kiB, MiB, ...)
+    /// suffixes. Can take multiple values to create multiple files by multiple writers.
+    #[arg(
+        short = 's',
+        long = "file-size",
+        value_delimiter = ',',
+        value_name = "SIZE",
+        value_parser = parse_size,
+        default_values = ["1MiB"]
+    )]
+    pub file_sizes: Vec<u64>,
 
     /// Number of replicas with write access. Must be at least 1.
     #[arg(short = 'w', long, default_value_t = 2)]
@@ -270,6 +289,19 @@ impl fmt::Display for ActorId {
             },
             self.index
         )
+    }
+}
+
+#[derive(Copy, Clone)]
+struct FileParams {
+    index: usize,
+    size: u64,
+    seed: u64,
+}
+
+impl FileParams {
+    fn name(&self) -> String {
+        format!("file-{}.dat", self.index)
     }
 }
 
