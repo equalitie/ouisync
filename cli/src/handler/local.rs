@@ -102,7 +102,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 let name = match (name, &share_token) {
                     (Some(name), _) => name,
-                    (None, Some(token)) => token.suggested_name().into_owned(),
+                    (None, Some(token)) => token.suggested_name().to_owned(),
                     (None, None) => unreachable!(),
                 };
 

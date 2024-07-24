@@ -1,4 +1,4 @@
-use futures_util::{Stream, StreamExt, TryStreamExt};
+use futures_util::{StreamExt, TryStreamExt};
 use ouisync::{
     db,
     protocol::{NodeState, Proof, RootNode, Summary},
@@ -14,7 +14,7 @@ use std::{env, ops::DerefMut, process::ExitCode};
 async fn main() -> ExitCode {
     let arg = env::args().nth(1).unwrap_or_default();
 
-    if arg.as_str().is_empty() {
+    if arg.is_empty() {
         println!("Missing repository path");
         help();
         return ExitCode::FAILURE;
