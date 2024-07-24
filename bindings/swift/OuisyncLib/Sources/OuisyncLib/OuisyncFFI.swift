@@ -11,10 +11,10 @@ import OuisyncLibFFI
 typealias FFISessionKind = UInt8
 typealias FFIContext = UnsafeRawPointer
 typealias FFICallback = @convention(c) (FFIContext?, UnsafePointer<UInt8>, CUnsignedLongLong) -> Void;
-typealias FFISessionCreate = @convention(c) (FFISessionKind, UnsafePointer<UInt8>, UnsafePointer<UInt8>, UnsafeRawPointer?, FFICallback) -> SessionCreateResult;
-typealias FFISessionGrab = @convention(c) (UnsafeRawPointer?, FFICallback) -> SessionCreateResult;
-typealias FFISessionClose = @convention(c) (SessionHandle, FFIContext?, FFICallback) -> Void;
-typealias FFISessionChannelSend = @convention(c) (SessionHandle, UnsafeRawPointer, UInt64) -> Void;
+typealias FFISessionCreate = @convention(c) (FFISessionKind, UnsafePointer<UInt8>, UnsafePointer<UInt8>, UnsafeRawPointer?, FFICallback) -> OuisyncSessionCreateResult;
+typealias FFISessionGrab = @convention(c) (UnsafeRawPointer?, FFICallback) -> OuisyncSessionCreateResult;
+typealias FFISessionClose = @convention(c) (OuisyncClientHandle, FFIContext?, FFICallback) -> Void;
+typealias FFISessionChannelSend = @convention(c) (OuisyncClientHandle, UnsafeRawPointer, UInt64) -> Void;
 
 class SessionCreateError : Error, CustomStringConvertible {
     let message: String
@@ -39,14 +39,14 @@ public class OuisyncFFI {
     }
 
     // Blocks until Dart creates a session, then returns it.
-    func waitForSession(_ context: UnsafeRawPointer, _ callback: FFICallback) async throws -> SessionHandle {
+    func waitForSession(_ context: UnsafeRawPointer, _ callback: FFICallback) async throws -> OuisyncClientHandle {
         // TODO: Might be worth change the ffi function to call a callback when the session becomes created instead of bussy sleeping.
         var elapsed: UInt64 = 0;
         while true {
             let result = ffiSessionGrab(context, callback)
             if result.errorCode == 0 {
                 NSLog("😀 Got Ouisync session");
-                return result.session
+                return result.clientHandle
             }
             NSLog("🤨 Ouisync session not yet ready. Code: \(result.errorCode) Message:\(String(cString: result.errorMessage!))");
 
@@ -62,37 +62,6 @@ public class OuisyncFFI {
             try await Task.sleep(nanoseconds: timeout)
             elapsed += timeout;
         }
-    }
-
-    func channelSend(_ session: SessionHandle, _ data: [UInt8]) {
-        let count = data.count;
-        data.withUnsafeBufferPointer({ maybePointer in
-            if let pointer = maybePointer.baseAddress {
-                ffiSessionChannelSend(session, pointer, UInt64(count))
-            }
-        })
-    }
-
-    func closeSession(_ session: SessionHandle) async {
-        typealias C = CheckedContinuation<Void, Never>
-
-        class Context {
-            let session: SessionHandle
-            let continuation: C
-            init(_ session: SessionHandle, _ continuation: C) {
-                self.session = session
-                self.continuation = continuation
-            }
-        }
-
-        await withCheckedContinuation(function: "FFI.closeSession", { continuation in
-            let context = Self.toRetainedPtr(obj: Context(session, continuation))
-            let callback: FFICallback = { context, dataPointer, size in
-                let context: Context = OuisyncFFI.fromRetainedPtr(ptr: context!)
-                context.continuation.resume()
-            }
-            ffiSessionClose(session, context, callback)
-        })
     }
 
     // Retained pointers have their reference counter incremented by 1.

@@ -10,14 +10,14 @@
 
 #include <stdint.h>
 
-typedef uint64_t SessionHandle;
+typedef uint64_t OuisyncClientHandle;
 
-struct SessionCreateResult {
-    SessionHandle session;
+struct OuisyncSessionCreateResult {
+    OuisyncClientHandle clientHandle;
     uint16_t errorCode;
     const char* errorMessage;
 };
 
-typedef struct SessionCreateResult SessionCreateResult;
+typedef struct OuisyncSessionCreateResult OuisyncSessionCreateResult;
 
 #endif /* OuisyncFFI_h */
