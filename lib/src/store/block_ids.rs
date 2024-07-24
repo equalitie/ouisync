@@ -61,8 +61,7 @@ impl BlockIdsPage {
 
         let ids = ids?;
 
-        // TODO: use `last` when we bump to rust 1.66
-        self.lower_bound = ids.iter().next_back().copied();
+        self.lower_bound = ids.last().copied();
 
         Ok(ids)
     }
