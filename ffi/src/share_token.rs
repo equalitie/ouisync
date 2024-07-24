@@ -13,7 +13,7 @@ pub(crate) fn info_hash(token: ShareToken) -> String {
 }
 
 pub(crate) fn suggested_name(token: ShareToken) -> String {
-    token.suggested_name().into_owned()
+    token.suggested_name().to_owned()
 }
 
 /// Check if the repository is mirrored on the given server.
