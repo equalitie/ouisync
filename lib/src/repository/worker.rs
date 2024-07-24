@@ -14,6 +14,9 @@ use futures_util::{stream, StreamExt};
 use std::{future, sync::Arc};
 use tokio::select;
 
+#[cfg(test)]
+mod tests;
+
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
 /// - remove outdated branches and snapshots
@@ -348,9 +351,8 @@ mod merge {
 
 /// Remove outdated branches and snapshots.
 mod prune {
-    use crate::versioned::PreferBranch;
-
     use super::*;
+    use crate::{protocol::NodeState, versioned::PreferBranch};
     use futures_util::TryStreamExt;
 
     pub(super) async fn run(
@@ -363,7 +365,7 @@ mod prune {
             .store()
             .acquire_read()
             .await?
-            .load_root_nodes()
+            .load_latest_preferred_root_nodes()
             .try_collect()
             .await?;
 
@@ -371,6 +373,22 @@ mod prune {
 
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
             versioned::partition(all, PreferBranch(Some(&writer_id)));
+
+        // For the purpose of pruning, any approved snapshot is always considered more up-to-date
+        // than any non-approved one even if the approved's version vector is happens-before the
+        // non-approved one. This is because the non-approved ones are not visible to the users
+        // until they become approved and there is no guarantee that they ever will (e.g., due to
+        // peers disconnecting before receiving all nodes, etc...). For this reason, until there is
+        // at least one branch with approved snapshot in `uptodate`, we consider all branches as
+        // up-to-date.
+        let (uptodate, outdated) = if uptodate
+            .iter()
+            .any(|node| node.summary.state == NodeState::Approved)
+        {
+            (uptodate, outdated)
+        } else {
+            (uptodate.into_iter().chain(outdated).collect(), Vec::new())
+        };
 
         // Remove outdated branches
         for node in outdated {

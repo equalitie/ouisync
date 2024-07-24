@@ -148,7 +148,9 @@ mod v1 {
         this_writer_id: PublicKey,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        let root_nodes: Vec<_> = root_node::load_all(tx.db()).try_collect().await?;
+        let root_nodes: Vec<_> = root_node::load_all_latest_approved(tx.db())
+            .try_collect()
+            .await?;
 
         for root_node in root_nodes {
             recompute_index_hashes_at(tx, root_node, this_writer_id, write_keys).await?;
@@ -189,7 +191,8 @@ mod v1 {
                 .await?;
         }
 
-        let new_root_node = root_node::load(tx.db(), &root_node.proof.writer_id).await?;
+        let new_root_node =
+            root_node::load_latest_approved(tx.db(), &root_node.proof.writer_id).await?;
         let new_root_node = if new_root_node.proof.writer_id == this_writer_id {
             // Bump the vv of the local branch
             let hash = new_root_node.proof.hash;

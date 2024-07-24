@@ -57,7 +57,9 @@ pub(crate) struct Blob {
 impl Blob {
     /// Opens an existing blob.
     pub async fn open(tx: &mut ReadTransaction, branch: Branch, id: BlobId) -> Result<Self> {
-        let root_node = tx.load_root_node(branch.id(), RootNodeFilter::Any).await?;
+        let root_node = tx
+            .load_latest_approved_root_node(branch.id(), RootNodeFilter::Any)
+            .await?;
         Self::open_at(tx, &root_node, branch, id).await
     }
 
@@ -201,7 +203,7 @@ impl Blob {
     #[cfg(test)]
     pub async fn read_all(&mut self, tx: &mut ReadTransaction, buffer: &mut [u8]) -> Result<usize> {
         let root_node = tx
-            .load_root_node(self.branch.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(self.branch.id(), RootNodeFilter::Any)
             .await?;
         self.read_all_at(tx, &root_node, buffer).await
     }
@@ -238,7 +240,7 @@ impl Blob {
     #[cfg(test)]
     pub async fn read_to_end(&mut self, tx: &mut ReadTransaction) -> Result<Vec<u8>> {
         let root_node = tx
-            .load_root_node(self.branch.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(self.branch.id(), RootNodeFilter::Any)
             .await?;
         self.read_to_end_at(tx, &root_node).await
     }
@@ -335,7 +337,7 @@ impl Blob {
     /// Load the current block into the cache.
     pub async fn warmup(&mut self, tx: &mut ReadTransaction) -> Result<()> {
         let root_node = tx
-            .load_root_node(self.branch.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(self.branch.id(), RootNodeFilter::Any)
             .await?;
         self.warmup_at(tx, &root_node).await?;
 
@@ -441,7 +443,7 @@ impl Blob {
         } else {
             let locator = Locator::head(self.id);
             let root_node = tx
-                .load_root_node(self.branch.id(), RootNodeFilter::Any)
+                .load_latest_approved_root_node(self.branch.id(), RootNodeFilter::Any)
                 .await?;
             let (_, mut content) =
                 read_block(tx, &root_node, &locator, self.branch.keys().read()).await?;
@@ -536,7 +538,7 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
     let end = {
         let mut tx = src_branch.store().begin_read().await?;
         let root_node = tx
-            .load_root_node(src_branch.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(src_branch.id(), RootNodeFilter::Any)
             .await?;
         load_block_count_hint(&mut tx, &root_node, blob_id, src_branch.keys().read()).await?
     };

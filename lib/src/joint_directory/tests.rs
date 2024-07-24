@@ -1298,7 +1298,10 @@ async fn remove_branches(store: &Store, ids: &[PublicKey]) -> Result<()> {
     let mut tx = store.begin_write().await?;
 
     for id in ids {
-        match tx.load_root_node(id, RootNodeFilter::Any).await {
+        match tx
+            .load_latest_approved_root_node(id, RootNodeFilter::Any)
+            .await
+        {
             Ok(node) => tx.remove_branch(&node).await?,
             Err(store::Error::BranchNotFound) => (),
             Err(error) => return Err(error.into()),

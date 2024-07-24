@@ -454,7 +454,10 @@ impl Inner {
         };
 
         for branch_id in branches {
-            let root_node = match reader.load_root_node(branch_id, RootNodeFilter::Any).await {
+            let root_node = match reader
+                .load_latest_approved_root_node(branch_id, RootNodeFilter::Any)
+                .await
+            {
                 Ok(root_node) => root_node,
                 Err(error) => {
                     tracing::error!(?branch_id, ?error, "Failed to load root node");

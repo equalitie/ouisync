@@ -49,7 +49,7 @@ async fn load_candidate_latest_root_hashes(
         &mut nodes,
     )
     .await?;
-    try_collect_into(root_node::load_all(conn), &mut nodes).await?;
+    try_collect_into(root_node::load_all_latest_approved(conn), &mut nodes).await?;
 
     let nodes = versioned::keep_maximal(nodes, ());
 
@@ -136,7 +136,7 @@ mod tests {
 
         let mut r = store.acquire_read().await.unwrap();
         let root_hash = r
-            .load_root_node(&branch_id, RootNodeFilter::Any)
+            .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
             .await
             .unwrap()
             .proof
@@ -181,13 +181,13 @@ mod tests {
         }
 
         let root_hash_a = tx
-            .load_root_node(&branch_a_id, RootNodeFilter::Any)
+            .load_latest_approved_root_node(&branch_a_id, RootNodeFilter::Any)
             .await
             .unwrap()
             .proof
             .hash;
         let root_hash_b = tx
-            .load_root_node(&branch_b_id, RootNodeFilter::Any)
+            .load_latest_approved_root_node(&branch_b_id, RootNodeFilter::Any)
             .await
             .unwrap()
             .proof

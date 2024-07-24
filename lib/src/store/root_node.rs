@@ -10,7 +10,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
-use sqlx::Row;
+use sqlx::{sqlite::SqliteRow, FromRow, Row};
 use std::{cmp::Ordering, future};
 
 /// Status of receiving a root node
@@ -124,16 +124,18 @@ pub(super) async fn create(
 }
 
 /// Returns the latest approved root node of the specified branch.
-pub(super) async fn load(
+pub(super) async fn load_latest_approved(
     conn: &mut db::Connection,
     branch_id: &PublicKey,
 ) -> Result<RootNode, Error> {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
+             writer_id,
              versions,
              hash,
              signature,
+             state,
              block_presence
          FROM
              snapshot_root_nodes
@@ -149,28 +151,22 @@ pub(super) async fn load(
     .bind(NodeState::Approved)
     .fetch_optional(conn)
     .await?
-    .map(|row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(*branch_id, row.get(1), row.get(2), row.get(3)),
-        summary: Summary {
-            state: NodeState::Approved,
-            block_presence: row.get(4),
-        },
-    })
     .ok_or(Error::BranchNotFound)
 }
 
 /// Load the previous approved root node of the same writer.
-pub(super) async fn load_prev(
+pub(super) async fn load_prev_approved(
     conn: &mut db::Connection,
     node: &RootNode,
 ) -> Result<Option<RootNode>, Error> {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
             snapshot_id,
+            writer_id,
             versions,
             hash,
             signature,
+            state,
             block_presence
          FROM snapshot_root_nodes
          WHERE writer_id = ? AND state = ? AND snapshot_id < ?
@@ -181,30 +177,23 @@ pub(super) async fn load_prev(
     .bind(NodeState::Approved)
     .bind(node.snapshot_id)
     .fetch(conn)
-    .map_ok(|row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(node.proof.writer_id, row.get(1), row.get(2), row.get(3)),
-        summary: Summary {
-            state: NodeState::Approved,
-            block_presence: row.get(4),
-        },
-    })
     .err_into()
     .try_next()
     .await
 }
 
 /// Return the latest approved root nodes of all known writers.
-pub(super) fn load_all(
+pub(super) fn load_all_latest_approved(
     conn: &mut db::Connection,
 ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
              writer_id,
              versions,
              hash,
              signature,
+             state,
              block_presence
          FROM
              snapshot_root_nodes
@@ -218,22 +207,61 @@ pub(super) fn load_all(
     )
     .bind(NodeState::Approved)
     .fetch(conn)
-    .map_ok(|row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
-        summary: Summary {
-            state: NodeState::Approved,
-            block_presence: row.get(5),
-        },
-    })
+    .err_into()
+}
+
+/// Return the latest root nodes of all known writers according to the following order of
+/// preferrence: approved, complete, incomplete, rejected. That is, returns the latest approved
+/// node if it exists, otherwise the latest complete, etc...
+pub(super) fn load_all_latest_preferred(
+    conn: &mut db::Connection,
+) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+    // Partition all root nodes by their writer_id. Then sort each partition according to the
+    // preferrence as described in the above doc comment. Then take the first row from each
+    // partition.
+
+    // TODO: Is this the best way to do this (simple, efficient, etc...)?
+
+    sqlx::query_as(
+        "SELECT
+             snapshot_id,
+             writer_id,
+             versions,
+             hash,
+             signature,
+             state,
+             block_presence
+         FROM (
+             SELECT
+                 *,
+                 ROW_NUMBER() OVER (
+                     PARTITION BY writer_id
+                     ORDER BY
+                         CASE state
+                             WHEN ? THEN 0
+                             WHEN ? THEN 1
+                             WHEN ? THEN 2
+                             WHEN ? THEN 3
+                         END,
+                         snapshot_id DESC
+                 ) AS position
+             FROM snapshot_root_nodes
+         )
+         WHERE position = 1",
+    )
+    .bind(NodeState::Approved)
+    .bind(NodeState::Complete)
+    .bind(NodeState::Incomplete)
+    .bind(NodeState::Rejected)
+    .fetch(conn)
     .err_into()
 }
 
 /// Return the latest root nodes of all known writers in any state.
-pub(super) fn load_all_in_any_state(
+pub(super) fn load_all_latest(
     conn: &mut db::Connection,
 ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
              writer_id,
@@ -252,14 +280,6 @@ pub(super) fn load_all_in_any_state(
              )",
     )
     .fetch(conn)
-    .map_ok(|row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
-        summary: Summary {
-            state: row.get(5),
-            block_presence: row.get(6),
-        },
-    })
     .err_into()
 }
 
@@ -268,11 +288,12 @@ pub(super) fn load_all_by_hash<'a>(
     conn: &'a mut db::Connection,
     hash: &'a Hash,
 ) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
              writer_id,
              versions,
+             hash,
              signature,
              state,
              block_presence
@@ -281,14 +302,6 @@ pub(super) fn load_all_by_hash<'a>(
     )
     .bind(hash)
     .fetch(conn)
-    .map_ok(move |row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(row.get(1), row.get(2), *hash, row.get(3)),
-        summary: Summary {
-            state: row.get(4),
-            block_presence: row.get(5),
-        },
-    })
     .err_into()
 }
 
@@ -528,7 +541,7 @@ pub(super) async fn decide_action(
         request_children: true,
     };
 
-    let mut old_nodes = load_all_in_any_state(tx);
+    let mut old_nodes = load_all_latest(tx);
     while let Some(old_node) = old_nodes.try_next().await? {
         match new_proof
             .version_vector
@@ -597,27 +610,19 @@ pub(super) async fn decide_action(
 }
 
 pub(super) async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {
-    let mut roots = sqlx::query(
+    let mut roots = sqlx::query_as::<_, RootNode>(
         "SELECT
              snapshot_id,
+             writer_id,
              versions,
              hash,
              signature,
              state,
-             block_presence,
-             writer_id
+             block_presence
          FROM snapshot_root_nodes
          ORDER BY snapshot_id DESC",
     )
-    .fetch(conn)
-    .map_ok(move |row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(row.get(6), row.get(1), row.get(2), row.get(3)),
-        summary: Summary {
-            state: row.get(4),
-            block_presence: row.get(5),
-        },
-    });
+    .fetch(conn);
 
     while let Some(root_node) = roots.next().await {
         match root_node {
@@ -640,13 +645,14 @@ pub(super) async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter
 /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
 /// most recent to the least recent.
 #[cfg(test)]
-pub(super) fn load_all_by_writer_in_any_state<'a>(
+pub(super) fn load_all_by_writer<'a>(
     conn: &'a mut db::Connection,
     writer_id: &'a PublicKey,
 ) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
-    sqlx::query(
+    sqlx::query_as(
         "SELECT
              snapshot_id,
+             writer_id,
              versions,
              hash,
              signature,
@@ -658,15 +664,25 @@ pub(super) fn load_all_by_writer_in_any_state<'a>(
     )
     .bind(writer_id) // needed to satisfy the borrow checker.
     .fetch(conn)
-    .map_ok(move |row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(*writer_id, row.get(1), row.get(2), row.get(3)),
-        summary: Summary {
-            state: row.get(4),
-            block_presence: row.get(5),
-        },
-    })
     .err_into()
+}
+
+impl FromRow<'_, SqliteRow> for RootNode {
+    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(RootNode {
+            snapshot_id: row.try_get(0)?,
+            proof: Proof::new_unchecked(
+                row.try_get(1)?,
+                row.try_get(2)?,
+                row.try_get(3)?,
+                row.try_get(4)?,
+            ),
+            summary: Summary {
+                state: row.try_get(5)?,
+                block_presence: row.try_get(6)?,
+            },
+        })
+    }
 }
 
 #[cfg(test)]
@@ -701,7 +717,7 @@ mod tests {
         .unwrap();
         assert_eq!(node0.proof.hash, hash);
 
-        let nodes: Vec<_> = load_all_by_writer_in_any_state(&mut tx, &writer_id)
+        let nodes: Vec<_> = load_all_by_writer(&mut tx, &writer_id)
             .try_collect()
             .await
             .unwrap();
@@ -794,6 +810,114 @@ mod tests {
             .await,
             Err(Error::OutdatedRootNode)
         );
+    }
+
+    // Proptest for the `load_all_latest_preferred` function.
+    mod load_all_latest_preferred {
+        use super::*;
+        use crate::protocol::root_node::SnapshotId;
+        use proptest::{arbitrary::any, collection::vec, sample::select, strategy::Strategy};
+        use test_strategy::proptest;
+
+        #[proptest]
+        fn proptest(
+            write_keys: Keypair,
+            #[strategy(root_node_params_strategy())] input: Vec<(
+                SnapshotId,
+                PublicKey,
+                Hash,
+                NodeState,
+            )>,
+        ) {
+            crate::test_utils::run(case(write_keys, input))
+        }
+
+        async fn case(write_keys: Keypair, input: Vec<(SnapshotId, PublicKey, Hash, NodeState)>) {
+            let (_base_dir, pool) = setup().await;
+
+            let mut writer_ids: Vec<_> = input
+                .iter()
+                .map(|(_, writer_id, _, _)| *writer_id)
+                .collect();
+            writer_ids.sort();
+            writer_ids.dedup();
+
+            let mut expected: Vec<_> = writer_ids
+                .into_iter()
+                .filter_map(|this_writer_id| {
+                    input
+                        .iter()
+                        .filter(|(_, that_writer_id, _, _)| *that_writer_id == this_writer_id)
+                        .map(|(snapshot_id, _, _, state)| (*snapshot_id, *state))
+                        .max_by_key(|(snapshot_id, state)| {
+                            (
+                                match state {
+                                    NodeState::Approved => 3,
+                                    NodeState::Complete => 2,
+                                    NodeState::Incomplete => 1,
+                                    NodeState::Rejected => 0,
+                                },
+                                *snapshot_id,
+                            )
+                        })
+                        .map(|(snapshot_id, state)| (this_writer_id, snapshot_id, state))
+                })
+                .collect();
+            expected.sort_by_key(|(writer_id, _, _)| *writer_id);
+
+            let mut vv = VersionVector::default();
+            let mut tx = pool.begin_write().await.unwrap();
+
+            for (expected_snapshot_id, writer_id, hash, state) in input {
+                vv.increment(writer_id);
+
+                let (node, _) = create(
+                    &mut tx,
+                    Proof::new(writer_id, vv.clone(), hash, &write_keys),
+                    Summary {
+                        state,
+                        block_presence: MultiBlockPresence::None,
+                    },
+                    RootNodeFilter::Any,
+                )
+                .await
+                .unwrap();
+
+                assert_eq!(node.snapshot_id, expected_snapshot_id);
+            }
+
+            let mut actual: Vec<_> = load_all_latest_preferred(&mut tx)
+                .map_ok(|node| (node.proof.writer_id, node.snapshot_id, node.summary.state))
+                .try_collect()
+                .await
+                .unwrap();
+            actual.sort_by_key(|(writer_id, _, _)| *writer_id);
+
+            assert_eq!(actual, expected);
+
+            drop(tx);
+            pool.close().await.unwrap();
+        }
+
+        fn root_node_params_strategy(
+        ) -> impl Strategy<Value = Vec<(SnapshotId, PublicKey, Hash, NodeState)>> {
+            vec(any::<PublicKey>(), 1..=3)
+                .prop_flat_map(|writer_ids| {
+                    vec(
+                        (select(writer_ids), any::<Hash>(), any::<NodeState>()),
+                        0..=32,
+                    )
+                })
+                .prop_map(|params| {
+                    params
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (writer_id, hash, state))| {
+                            ((index + 1) as u32, writer_id, hash, state)
+                        })
+                        .collect()
+                })
+        }
     }
 
     async fn setup() -> (TempDir, db::Pool) {

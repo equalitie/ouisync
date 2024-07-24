@@ -1,5 +1,8 @@
 //! Repository state and operations that don't require read or write access.
 
+#[cfg(test)]
+mod tests;
+
 use super::{quota, LocalId, Metadata, RepositoryId, RepositoryMonitor};
 use crate::{
     block_tracker::{BlockPromise, BlockTracker, OfferState},

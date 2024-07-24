@@ -435,7 +435,7 @@ impl Directory {
             (Some((parent_dir, entry_name)), current_vv)
         } else {
             let current_vv = tx
-                .load_root_node(self.branch().id(), RootNodeFilter::Any)
+                .load_latest_approved_root_node(self.branch().id(), RootNodeFilter::Any)
                 .await?
                 .proof
                 .into_version_vector();
@@ -974,7 +974,9 @@ async fn load(
     blob_id: BlobId,
     fallback: DirectoryFallback,
 ) -> Result<(Blob, Content)> {
-    let mut root_node = tx.load_root_node(branch.id(), RootNodeFilter::Any).await?;
+    let mut root_node = tx
+        .load_latest_approved_root_node(branch.id(), RootNodeFilter::Any)
+        .await?;
 
     loop {
         let error = match load_at(tx, &root_node, branch.clone(), blob_id).await {
@@ -988,7 +990,7 @@ async fn load(
             DirectoryFallback::Disabled => return Err(error),
         }
 
-        if let Some(prev) = tx.load_prev_root_node(&root_node).await? {
+        if let Some(prev) = tx.load_prev_approved_root_node(&root_node).await? {
             root_node = prev;
         } else {
             return Err(error);

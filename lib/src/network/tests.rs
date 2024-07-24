@@ -532,7 +532,7 @@ async fn load_latest_root_node(vault: &Vault, writer_id: &PublicKey) -> Option<R
         .acquire_read()
         .await
         .unwrap()
-        .load_root_nodes_by_writer_in_any_state(writer_id)
+        .load_root_nodes_by_writer(writer_id)
         .try_next()
         .await
         .unwrap()

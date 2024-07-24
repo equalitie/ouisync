@@ -8,8 +8,6 @@ mod worker;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod vault_tests;
 
 pub use self::{
     credentials::Credentials, id::RepositoryId, metadata::Metadata, params::RepositoryParams,
@@ -157,30 +155,8 @@ impl Repository {
     }
 
     fn new(pool: db::Pool, credentials: Credentials, monitor: RepositoryMonitor) -> Self {
-        let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
-
-        let block_request_mode = if credentials.secrets.can_read() {
-            BlockRequestMode::Lazy
-        } else {
-            BlockRequestMode::Greedy
-        };
-
-        let vault = Vault::new(
-            *credentials.secrets.id(),
-            event_tx,
-            pool,
-            block_request_mode,
-            monitor,
-        );
-
-        let shared = Arc::new(Shared {
-            vault,
-            credentials: BlockingRwLock::new(credentials),
-            branch_shared: BranchShared::new(),
-        });
-
         Self {
-            shared,
+            shared: Arc::new(Shared::new(pool, credentials, monitor)),
             worker_handle: BlockingMutex::new(None),
             progress_reporter_handle: BlockingMutex::new(None),
         }
@@ -797,7 +773,7 @@ impl Repository {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(writer_id, RootNodeFilter::Any)
+            .load_latest_approved_root_node(writer_id, RootNodeFilter::Any)
             .await?
             .proof
             .into_version_vector())
@@ -984,6 +960,30 @@ struct Shared {
 }
 
 impl Shared {
+    fn new(pool: db::Pool, credentials: Credentials, monitor: RepositoryMonitor) -> Self {
+        let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
+
+        let block_request_mode = if credentials.secrets.can_read() {
+            BlockRequestMode::Lazy
+        } else {
+            BlockRequestMode::Greedy
+        };
+
+        let vault = Vault::new(
+            *credentials.secrets.id(),
+            event_tx,
+            pool,
+            block_request_mode,
+            monitor,
+        );
+
+        Self {
+            vault,
+            credentials: BlockingRwLock::new(credentials),
+            branch_shared: BranchShared::new(),
+        }
+    }
+
     pub fn local_branch(&self) -> Result<Branch> {
         let credentials = self.credentials.read().unwrap();
 
@@ -1022,7 +1022,7 @@ impl Shared {
             .store()
             .acquire_read()
             .await?
-            .load_root_nodes()
+            .load_latest_approved_root_nodes()
             .err_into()
             .and_then(|root_node| future::ready(self.get_branch(root_node.proof.writer_id)))
             .try_collect()
