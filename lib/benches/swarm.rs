@@ -19,7 +19,6 @@ use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{
     fmt,
     fs::OpenOptions,
-    future,
     io::{self, Write},
     path::PathBuf,
     process::ExitCode,
@@ -29,6 +28,11 @@ use std::{
 use summary::SummaryRecorder;
 use tokio::{select, sync::Barrier, time};
 
+mod future {
+    pub use futures_util::future::{join, join_all};
+    pub use std::future::pending;
+}
+
 fn main() -> ExitCode {
     let options = Options::parse();
     if options.num_writers == 0 {
@@ -36,18 +40,26 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let file_size = options.file_size;
     let actors: Vec<_> = (0..options.num_writers)
-        .map(|i| ActorId(AccessMode::Write, i))
-        .chain((0..options.num_readers).map(|i| ActorId(AccessMode::Read, i)))
+        .map(|index| ActorId {
+            access_mode: AccessMode::Write,
+            index,
+        })
+        .chain((0..options.num_readers).map(|index| ActorId {
+            access_mode: AccessMode::Read,
+            index,
+        }))
         .collect();
     let proto = options.protocol;
 
     let mut env = Env::new();
 
     // Wait until everyone is fully synced.
-    let (watch_tx, watch_rx) = sync_watch::channel();
-    let mut watch_tx = Some(watch_tx);
+    let watch_txs: Vec<_> = (0..options.num_writers)
+        .map(|_| sync_watch::Sender::new())
+        .collect();
+    let watch_rxs: Vec<_> = watch_txs.iter().map(|tx| tx.subscribe()).collect();
+    let mut watch_txs = watch_txs.into_iter();
 
     // Then wait until everyone is done. This is so that even actors that finished syncing still
     // remain online for other actors to sync from.
@@ -59,22 +71,40 @@ fn main() -> ExitCode {
         options.progress.then(ProgressReporter::new)
     };
 
-    let file_name = "file.dat";
-    let file_seed = 0;
+    let files: Vec<_> = options
+        .file_sizes
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, size)| FileParams {
+            index,
+            size,
+            seed: 0,
+        })
+        .collect();
 
-    for actor in &actors {
+    for actor in actors.iter().copied() {
         let other_actors: Vec<_> = actors
             .iter()
-            .filter(|other_actor| *other_actor != actor)
+            .filter(|other_actor| **other_actor != actor)
             .copied()
             .collect();
 
-        let access_mode = actor.0;
-
-        let watch_tx = (actor.0 == AccessMode::Write)
-            .then(|| watch_tx.take())
+        // If we are writer, grab the watch sender.
+        let watch_tx = (actor.access_mode == AccessMode::Write)
+            .then(|| watch_txs.next())
             .flatten();
-        let watch_rx = watch_rx.clone();
+        // If we are writer, grab all watch receivers except the one corresponding to us (no need
+        // to watch ourselves). Otherwise grab them all.
+        let watch_rxs: Vec<_> = watch_rxs
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| actor.access_mode != AccessMode::Write || *index != actor.index)
+            .map(|(_, rx)| rx.clone())
+            .collect();
+
+        let files = files.clone();
+
         let barrier = barrier.clone();
         let progress_reporter = progress_reporter.clone();
         let summary_recorder = summary_recorder.actor();
@@ -91,16 +121,18 @@ fn main() -> ExitCode {
             let secrets = actor::get_repo_secrets(DEFAULT_REPO);
             let repo = Repository::create(
                 &params,
-                Access::new(None, None, secrets.with_mode(access_mode)),
+                Access::new(None, None, secrets.with_mode(actor.access_mode)),
             )
             .await
             .unwrap();
             let _reg = network.register(repo.handle()).await;
 
-            // Create the file by one of the writers
-            if watch_tx.is_some() {
-                let mut file = repo.create_file(file_name).await.unwrap();
-                write_random_file(&mut file, file_seed, file_size).await;
+            // Create the file
+            if actor.access_mode == AccessMode::Write {
+                if let Some(file_params) = files.get(actor.index) {
+                    let mut file = repo.create_file(file_params.name()).await.unwrap();
+                    write_random_file(&mut file, file_params.seed, file_params.size).await;
+                }
             }
 
             // Connect to the other peers
@@ -111,21 +143,22 @@ fn main() -> ExitCode {
 
             let run_sync = async {
                 // Wait until fully synced
+                let run_watch_rxs = future::join_all(watch_rxs.into_iter().map(|rx| rx.run(&repo)));
+
                 if let Some(watch_tx) = watch_tx {
-                    drop(watch_rx);
-                    watch_tx.run(&repo).await;
+                    future::join(watch_tx.run(&repo), run_watch_rxs).await;
                 } else {
-                    watch_rx.run(&repo).await;
+                    run_watch_rxs.await;
                 }
 
-                // Check the file content matches the original file.
-                {
+                // Check the file contents match.
+                for file_params in &files {
                     let mut file = repo
-                        .open_file(file_name)
+                        .open_file(file_params.name())
                         .await
                         .inspect_err(|error| error!(?error))
                         .unwrap();
-                    check_random_file(&mut file, file_seed, file_size).await;
+                    check_random_file(&mut file, file_params.seed, file_params.size).await;
                 }
 
                 // Wait until everyone finished
@@ -153,7 +186,7 @@ fn main() -> ExitCode {
         });
     }
 
-    drop(watch_rx);
+    drop(watch_rxs);
     drop(env);
     drop(progress_reporter);
 
@@ -181,10 +214,17 @@ fn main() -> ExitCode {
 
 #[derive(Parser, Debug)]
 struct Options {
-    /// Size of the file to share in bytes. Can use metric (kB, MB, ...) or binary (kiB, MiB, ...)
-    /// suffixes.
-    #[arg(short = 's', long, value_parser = parse_size, default_value_t = 1024 * 1024)]
-    pub file_size: u64,
+    /// Size of the file(s) to share in bytes. Can use metric (kB, MB, ...) or binary (kiB, MiB, ...)
+    /// suffixes. Can take multiple values to create multiple files by multiple writers.
+    #[arg(
+        short = 's',
+        long = "file-size",
+        value_delimiter = ',',
+        value_name = "SIZE",
+        value_parser = parse_size,
+        default_values = ["1MiB"]
+    )]
+    pub file_sizes: Vec<u64>,
 
     /// Number of replicas with write access. Must be at least 1.
     #[arg(short = 'w', long, default_value_t = 2)]
@@ -232,20 +272,36 @@ struct Options {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-struct ActorId(AccessMode, usize);
+struct ActorId {
+    access_mode: AccessMode,
+    index: usize,
+}
 
 impl fmt::Display for ActorId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{}{}",
-            match self.0 {
+            match self.access_mode {
                 AccessMode::Write => "w",
                 AccessMode::Read => "r",
                 AccessMode::Blind => "b",
             },
-            self.1
+            self.index
         )
+    }
+}
+
+#[derive(Copy, Clone)]
+struct FileParams {
+    index: usize,
+    size: u64,
+    seed: u64,
+}
+
+impl FileParams {
+    fn name(&self) -> String {
+        format!("file-{}.dat", self.index)
     }
 }
 
