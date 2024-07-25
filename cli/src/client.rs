@@ -20,7 +20,7 @@ pub(crate) async fn run(
     log_color: LogColor,
     request: Request,
 ) -> Result<(), Error> {
-    let _logger = Logger::new(None, None, log_format, log_color)?;
+    let _logger = Logger::new(None, String::new(), None, log_format, log_color)?;
     let client = connect(&socket, &dirs).await?;
 
     let request = match request {
