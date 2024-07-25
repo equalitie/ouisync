@@ -4,7 +4,6 @@ import 'message_matcher.dart';
 
 class ChannelClient extends Client {
   final MethodChannel _channel;
-  bool _isClosed = false;
   final _messageMatcher = MessageMatcher();
 
   ChannelClient(String channelName) : _channel = MethodChannel(channelName) {
@@ -36,6 +35,6 @@ class ChannelClient extends Client {
     return null;
   }
 
+  @override
   Subscriptions subscriptions() => _messageMatcher.subscriptions();
-
 }

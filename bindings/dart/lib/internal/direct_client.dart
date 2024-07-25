@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:isolate';
@@ -50,7 +49,7 @@ class DirectClient extends Client {
 
     _messageMatcher.close();
 
-    await _invoke_native_async(
+    await _invokeNativeAsync(
       (port) => bindings.session_close(
         handle,
         NativeApi.postCObject,
@@ -79,7 +78,7 @@ class DirectClient extends Client {
   }
 
   Future<void> copyToRawFd(int fileHandle, int fd) {
-      return _invoke_native_async(
+      return _invokeNativeAsync(
         (port) => bindings.file_copy_to_raw_fd(
           handle,
           fileHandle,
@@ -90,6 +89,7 @@ class DirectClient extends Client {
       );
   }
 
+  @override
   Subscriptions subscriptions() => _messageMatcher.subscriptions();
 
   void _send(Uint8List data) {
@@ -107,7 +107,7 @@ class DirectClient extends Client {
 }
 
 // Helper to invoke a native async function.
-Future<void> _invoke_native_async(void Function(int) fun) async {
+Future<void> _invokeNativeAsync(void Function(int) fun) async {
   final recvPort = ReceivePort();
 
   try {

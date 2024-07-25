@@ -1,10 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
 
-import 'internal/direct_client.dart';
 export 'internal/direct_client.dart';
 
-import 'internal/channel_client.dart';
 export 'internal/channel_client.dart';
 
 abstract class Client {
@@ -51,10 +49,9 @@ class Subscription {
 
   Stream<Object?> get stream => _controller.stream;
 
-  @override
   Future<void> close() async {
     if (_controller.hasListener) {
-      await _controller.close();
+      return await _controller.close();
     }
   }
 
