@@ -37,6 +37,7 @@ class Session private constructor(
          * @param logPath     path to the log file. Ouisync always logs using the
          *                    [android log API](https://developer.android.com/reference/android/util/Log)
          *                    but if this param is not null, it logs to the specified file as well.
+         * @param logTag      tag for all log messages produced by the Ouisync library.
          * @param kind        whether to create shared or unique session. `SHARED` should be used
          *                    by default. `UNIQUE` is useful mostly for tests, to ensure test
          *                    isolation and/or to simulate multiple replicas in a single test.
@@ -45,6 +46,7 @@ class Session private constructor(
         fun create(
             configsPath: String,
             logPath: String? = null,
+            logTag: String = "ouisync",
             kind: SessionKind = SessionKind.SHARED,
         ): Session {
             val client = Client()
@@ -63,6 +65,7 @@ class Session private constructor(
                 kind.encode(),
                 configsPath,
                 logPath,
+                logTag,
                 null,
                 callback,
             )

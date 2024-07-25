@@ -43,12 +43,17 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    fn new(configs_path: &Path, log_path: Option<&Path>) -> Result<Arc<Self>, SessionError> {
+    fn new(
+        configs_path: &Path,
+        log_path: Option<&Path>,
+        log_tag: String,
+    ) -> Result<Arc<Self>, SessionError> {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
         let logger = Logger::new(
             log_path,
+            log_tag,
             Some(root_monitor.clone()),
             LogFormat::Human,
             LogColor::Auto,
@@ -150,20 +155,22 @@ pub(crate) unsafe fn create(
     kind: SessionKind,
     configs_path: *const c_char,
     log_path: *const c_char,
+    log_tag: *const c_char,
     sender: impl Sender,
 ) -> Result<Session, SessionError> {
     let configs_path = Path::new(utils::ptr_to_str(configs_path)?);
     let log_path = utils::ptr_to_maybe_str(log_path)?.map(Path::new);
+    let log_tag = utils::ptr_to_str(log_tag)?.to_owned();
 
     let shared = match kind {
-        SessionKind::Unique => Shared::new(configs_path, log_path)?,
+        SessionKind::Unique => Shared::new(configs_path, log_path, log_tag)?,
         SessionKind::Shared => {
             let mut guard = SHARED.lock().unwrap();
 
             if let Some(shared) = guard.upgrade() {
                 shared
             } else {
-                let shared = Shared::new(configs_path, log_path)?;
+                let shared = Shared::new(configs_path, log_path, log_tag)?;
                 *guard = Arc::downgrade(&shared);
                 shared
             }

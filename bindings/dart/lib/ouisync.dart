@@ -28,6 +28,11 @@ part 'local_secret.dart';
 
 const bool debugTrace = false;
 
+// Default log tag.
+// HACK: if the tag doesn't start with 'flutter' then the logs won't show up in
+// the app if built in release mode.
+const defaultLogTag = 'flutter-ouisync';
+
 /// Entry point to the ouisync bindings. A session should be opened at the start of the application
 /// and closed at the end. There can be only one session at the time.
 class Session {
@@ -46,6 +51,7 @@ class Session {
     SessionKind kind = SessionKind.shared,
     required String configPath,
     String? logPath,
+    String logTag = defaultLogTag,
   }) {
     if (debugTrace) {
       print("Session.open $configPath");
@@ -56,6 +62,7 @@ class Session {
           kind.encode(),
           pool.toNativeUtf8(configPath),
           logPath != null ? pool.toNativeUtf8(logPath) : nullptr,
+          pool.toNativeUtf8(logTag),
           NativeApi.postCObject,
           recvPort.sendPort.nativePort,
         ));

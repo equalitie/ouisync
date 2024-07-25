@@ -18,6 +18,7 @@ internal interface Bindings : Library {
         kind: Byte,
         configs_path: String,
         log_path: String?,
+        log_tag: String,
         context: Pointer?,
         callback: Callback,
     ): SessionCreateResult
