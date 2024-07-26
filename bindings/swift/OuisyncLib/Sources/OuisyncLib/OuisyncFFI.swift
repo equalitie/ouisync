@@ -31,7 +31,11 @@ public class OuisyncFFI {
     let sessionKindShared: FFISessionKind = 0;
 
     public init() {
-        handle = dlopen("libouisync_ffi.dylib", RTLD_NOW)!
+        // The .dylib is created using the OuisyncDyLibBuilder package plugin in this Swift package.
+        let libraryName = "libouisync_ffi.dylib"
+        let resourcePath = Bundle.main.resourcePath! + "/OuisyncLib_OuisyncLibFFI.bundle/Contents/Resources"
+        handle = dlopen("\(resourcePath)/\(libraryName)", RTLD_NOW)!
+
         ffiSessionGrab = unsafeBitCast(dlsym(handle, "session_grab"), to: FFISessionGrab.self)
         ffiSessionChannelSend = unsafeBitCast(dlsym(handle, "session_channel_send"), to: FFISessionChannelSend.self)
         ffiSessionClose = unsafeBitCast(dlsym(handle, "session_close"), to: FFISessionClose.self)
@@ -82,28 +86,3 @@ public class OuisyncFFI {
         return Unmanaged<T>.fromOpaque(ptr).takeRetainedValue()
     }
 }
-                                                                          
-// ---------------------------------------------------------------------------------------
-
-typealias Rx = AsyncStream<[UInt8]>
-typealias Tx = AsyncStream<[UInt8]>.Continuation
-
-class Wrap<T> {
-  let inner: T
-  init(_ inner: T) { self.inner = inner }
-}
-
-class Channel {
-  let rx: Rx
-  let tx: Tx
-
-  init(_ rx: Rx, _ tx: Tx) { self.rx = rx; self.tx = tx }
-}
-
-func makeStream() -> (Rx, Tx) {
-  var continuation: Rx.Continuation!
-  let stream = Rx() { continuation = $0 }
-  return (stream, continuation!)
-}
-
-// ---------------------------------------------------------------------------------------

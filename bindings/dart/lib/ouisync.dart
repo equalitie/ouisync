@@ -52,7 +52,12 @@ class Session {
     }
 
     final recvPort = ReceivePort();
-    final result = _withPoolSync((pool) => bindings.session_create(
+
+    if (bindings == null) {
+      bindings = Bindings.loadDefault();
+    }
+
+    final result = _withPoolSync((pool) => bindings!.session_create(
           kind.encode(),
           pool.toNativeUtf8(configPath),
           logPath != null ? pool.toNativeUtf8(logPath) : nullptr,
@@ -71,7 +76,7 @@ class Session {
       throw Error(errorCode, errorMessage);
     }
 
-    final client = DirectClient(handle, recvPort);
+    final client = DirectClient(handle, recvPort, bindings!);
 
     return Session._(client);
   }
@@ -923,7 +928,7 @@ class File {
 
 /// Print log message
 void logPrint(LogLevel level, String scope, String message) =>
-    _withPoolSync((pool) => bindings.log_print(
+    _withPoolSync((pool) => bindings!.log_print(
           level.encode(),
           pool.toNativeUtf8(scope),
           pool.toNativeUtf8(message),
@@ -992,5 +997,5 @@ extension Utf8Pointer on Pointer<Utf8> {
 
 // Free a pointer that was allocated by the native side.
 void freeString(Pointer<Utf8> ptr) {
-  bindings.free_string(ptr.cast<Char>());
+  bindings!.free_string(ptr.cast<Char>());
 }

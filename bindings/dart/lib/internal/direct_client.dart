@@ -18,8 +18,9 @@ class DirectClient extends Client {
   int _handle;
   final Stream<Uint8List> _stream;
   final MessageMatcher _messageMatcher = MessageMatcher();
+  final Bindings _bindings;
 
-  DirectClient(this._handle, ReceivePort port) : _stream = port.cast<Uint8List>(), super() {
+  DirectClient(this._handle, ReceivePort port, this._bindings) : _stream = port.cast<Uint8List>(), super() {
     unawaited(_receive());
   }
 
@@ -50,7 +51,7 @@ class DirectClient extends Client {
     _messageMatcher.close();
 
     await _invokeNativeAsync(
-      (port) => bindings.session_close(
+      (port) => _bindings.session_close(
         handle,
         NativeApi.postCObject,
         port,
@@ -68,7 +69,7 @@ class DirectClient extends Client {
 
     _messageMatcher.close();
 
-    bindings.session_close_blocking(handle);
+    _bindings.session_close_blocking(handle);
   }
 
   Future<void> _receive() async {
@@ -79,7 +80,7 @@ class DirectClient extends Client {
 
   Future<void> copyToRawFd(int fileHandle, int fd) {
       return _invokeNativeAsync(
-        (port) => bindings.file_copy_to_raw_fd(
+        (port) => _bindings.file_copy_to_raw_fd(
           handle,
           fileHandle,
           fd,
@@ -98,7 +99,7 @@ class DirectClient extends Client {
   
     try {
       buffer.asTypedList(data.length).setAll(0, data);
-      bindings.session_channel_send(_handle, buffer, data.length);
+      _bindings.session_channel_send(_handle, buffer, data.length);
     } finally {
       malloc.free(buffer);
     }

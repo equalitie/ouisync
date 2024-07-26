@@ -22,7 +22,9 @@ let package = Package(
             name: "OuisyncLib",
             dependencies: [.product(name:"MessagePack", package: "MessagePack.swift"), "OuisyncLibFFI"]
         ),
-        .target(name: "OuisyncLibFFI", dependencies: []),
+        .target(name: "OuisyncLibFFI", dependencies: ["OuisyncDyLibBuilder"]),
+        .plugin(name: "OuisyncDyLibBuilder", capability: .buildTool()),
+
         .testTarget(
             name: "OuisyncLibTests",
             dependencies: ["OuisyncLib"]),
