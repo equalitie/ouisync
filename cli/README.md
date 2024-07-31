@@ -2,7 +2,7 @@
 
 The command line version of Ouisync.
 
-## Instalation
+## Installation
 
 Ouisync can be build from source or installed as a docker container.
 
@@ -13,7 +13,7 @@ Ouisync can be build from source or installed as a docker container.
     `sudo apt install pkg-config libfuse-dev`
 
 2. Install Rust using instructions from [rust-lang.org](https://www.rust-lang.org/tools/install).
-3. Build the app:
+3. `cd path/to/ouisync' and build the app with:
    
     `cargo build --release --bin ouisync`
 
@@ -27,7 +27,7 @@ The Ouisync CLI docker image is available on [dockerhub](https://hub.docker.com/
 
 ## Usage
 
-Run `ouisync --help` to see the available commands. Use `ouisync COMMAND --help` to see detailed
+Run `./ouisync --help` to see the available commands. Use `./ouisync COMMAND --help` to see detailed
 help for the given command. This document contains brief explanation of the most common commands.
 
 NOTE: All settings are persisted across restarts.
@@ -38,7 +38,7 @@ NOTE: All settings are persisted across restarts.
 
 Run
 
-    ouisync start
+    ./ouisync start
 
 Which runs Ouisync it in the foreground. To run in the background use e.g. systemd or similar.
 
