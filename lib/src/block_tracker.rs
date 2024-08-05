@@ -22,19 +22,31 @@ impl BlockTracker {
                     missing_blocks: HashMap::default(),
                     clients: HashMap::default(),
                     next_client_id: 0,
+                    request_mode: RequestMode::Greedy,
                 }),
                 notify_tx,
             }),
         }
     }
 
-    /// Mark the block with the given id as required.
+    /// Set the mode in which blocks are requested:
+    ///
+    /// - Lazy:   block is requested when it's both offered and required
+    /// - Greedy: block is requested as soon as it's offered.
+    ///
+    /// Note: In `Greedy` mode calling `require` (or `require_batch`) is unnecessary.
+    pub fn set_request_mode(&self, mode: RequestMode) {
+        self.shared.inner.lock().unwrap().request_mode = mode;
+    }
+
+    /// Marks the block with the given id as required.
     pub fn require(&self, block_id: BlockId) {
         if self.shared.inner.lock().unwrap().require(block_id) {
             self.shared.notify()
         }
     }
 
+    /// Marks multiple blocks as required.
     pub fn require_batch(&self) -> RequireBatch<'_> {
         RequireBatch {
             shared: &self.shared,
@@ -81,6 +93,14 @@ impl BlockTracker {
 pub(crate) enum OfferState {
     Pending,
     Approved,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RequestMode {
+    // Request only required blocks
+    Lazy,
+    // Request all blocks
+    Greedy,
 }
 
 pub(crate) struct RequireBatch<'a> {
@@ -152,6 +172,8 @@ impl TrackerClient {
             .offers
             .insert(self.client_id, Offer::Available);
 
+        let mut notify = false;
+
         match &mut missing_block.state {
             State::Idle { approved, .. } => {
                 match state {
@@ -162,10 +184,23 @@ impl TrackerClient {
                 }
 
                 if *approved {
-                    self.shared.notify();
+                    notify = true;
                 }
             }
             State::Accepted(_) => (),
+        }
+
+        match inner.request_mode {
+            RequestMode::Lazy => (),
+            RequestMode::Greedy => {
+                if inner.require(block_id) {
+                    notify = true;
+                }
+            }
+        }
+
+        if notify {
+            self.shared.notify();
         }
 
         true
@@ -318,6 +353,7 @@ struct Inner {
     missing_blocks: HashMap<BlockId, MissingBlock>,
     clients: HashMap<ClientId, HashSet<BlockId>>,
     next_client_id: ClientId,
+    request_mode: RequestMode,
 }
 
 impl Inner {
@@ -513,8 +549,9 @@ mod tests {
     use tokio::{select, sync::mpsc, sync::Barrier, task, time};
 
     #[test]
-    fn simple() {
+    fn lazy() {
         let tracker = BlockTracker::new();
+        tracker.set_request_mode(RequestMode::Lazy);
 
         let client = tracker.client();
 
@@ -547,9 +584,37 @@ mod tests {
         assert!(client.offers().try_next().is_none());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn simple_async() {
+    #[test]
+    fn greedy() {
         let tracker = BlockTracker::new();
+        tracker.set_request_mode(RequestMode::Greedy); // greedy is the default, but let's be explicit here
+
+        let client = tracker.client();
+
+        // Initially no blocks are returned
+        assert!(client.offers().try_next().is_none());
+
+        // Offered blocks are immediately returned
+        let block0: Block = rand::random();
+        client.register(block0.id, OfferState::Approved);
+        assert_eq!(
+            client
+                .offers()
+                .try_next()
+                .and_then(BlockOffer::accept)
+                .as_ref()
+                .map(BlockPromise::block_id),
+            Some(&block0.id)
+        );
+
+        // ...but only once.
+        assert!(client.offers().try_next().is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent() {
+        let tracker = BlockTracker::new();
+        tracker.set_request_mode(RequestMode::Lazy);
 
         let block: Block = rand::random();
         let client = tracker.client();
@@ -588,6 +653,7 @@ mod tests {
     #[test]
     fn fallback_on_cancel_after_accept() {
         let tracker = BlockTracker::new();
+        tracker.set_request_mode(RequestMode::Lazy);
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -622,6 +688,7 @@ mod tests {
     #[test]
     fn fallback_on_client_drop_after_require_before_accept() {
         let tracker = BlockTracker::new();
+        tracker.set_request_mode(RequestMode::Lazy);
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -649,6 +716,7 @@ mod tests {
     #[test]
     fn fallback_on_client_drop_after_require_after_accept() {
         let tracker = BlockTracker::new();
+        tracker.set_request_mode(RequestMode::Lazy);
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -684,6 +752,7 @@ mod tests {
     #[test]
     fn fallback_on_client_drop_before_require() {
         let tracker = BlockTracker::new();
+        tracker.set_request_mode(RequestMode::Lazy);
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -714,8 +783,6 @@ mod tests {
         let client = tracker.client();
 
         let block: Block = rand::random();
-        tracker.require(block.id);
-
         client.register(block.id, OfferState::Pending);
         assert!(client.offers().try_next().is_none());
 
@@ -734,11 +801,11 @@ mod tests {
     #[test]
     fn multiple_offers_from_different_clients() {
         let tracker = BlockTracker::new();
+
         let client0 = tracker.client();
         let client1 = tracker.client();
 
         let block: Block = rand::random();
-        tracker.require(block.id);
 
         client0.register(block.id, OfferState::Approved);
         client1.register(block.id, OfferState::Approved);
@@ -758,14 +825,13 @@ mod tests {
     #[test]
     fn multiple_offers_from_same_client() {
         let tracker = BlockTracker::new();
+
         let client = tracker.client();
 
         let block0: Block = rand::random();
-        tracker.require(block0.id);
         client.register(block0.id, OfferState::Approved);
 
         let block1: Block = rand::random();
-        tracker.require(block1.id);
         client.register(block1.id, OfferState::Approved);
 
         let offer0 = client.offers().try_next().unwrap();
@@ -784,8 +850,6 @@ mod tests {
         let clients: Vec<_> = (0..num_clients).map(|_| tracker.client()).collect();
 
         let block: Block = rand::random();
-
-        tracker.require(block.id);
 
         for client in &clients {
             client.register(block.id, OfferState::Approved);
@@ -828,6 +892,8 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
         let tracker = BlockTracker::new();
+        tracker.set_request_mode(RequestMode::Lazy);
+
         let client = tracker.client();
 
         let block_ids: Vec<BlockId> = (&mut rng).sample_iter(Standard).take(num_blocks).collect();

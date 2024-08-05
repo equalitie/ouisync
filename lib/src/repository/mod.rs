@@ -17,11 +17,12 @@ pub(crate) use self::{
     id::LocalId,
     metadata::{data_version, quota},
     monitor::RepositoryMonitor,
-    vault::{BlockRequestMode, Vault},
+    vault::Vault,
 };
 
 use crate::{
     access_control::{Access, AccessChange, AccessKeys, AccessMode, AccessSecrets, LocalSecret},
+    block_tracker::RequestMode,
     branch::{Branch, BranchShared},
     crypto::{sign::PublicKey, PasswordSalt},
     db::{self, DatabaseId},
@@ -944,6 +945,11 @@ impl Repository {
             "Repository access mode changed"
         );
 
+        self.shared
+            .vault
+            .block_tracker
+            .set_request_mode(request_mode(&credentials.secrets));
+
         *self.shared.credentials.write().unwrap() = credentials;
         *self.worker_handle.lock().unwrap() = Some(spawn_worker(self.shared.clone()));
     }
@@ -962,20 +968,11 @@ struct Shared {
 impl Shared {
     fn new(pool: db::Pool, credentials: Credentials, monitor: RepositoryMonitor) -> Self {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
+        let vault = Vault::new(*credentials.secrets.id(), event_tx, pool, monitor);
 
-        let block_request_mode = if credentials.secrets.can_read() {
-            BlockRequestMode::Lazy
-        } else {
-            BlockRequestMode::Greedy
-        };
-
-        let vault = Vault::new(
-            *credentials.secrets.id(),
-            event_tx,
-            pool,
-            block_request_mode,
-            monitor,
-        );
+        vault
+            .block_tracker
+            .set_request_mode(request_mode(&credentials.secrets));
 
         Self {
             vault,
@@ -1064,5 +1061,13 @@ async fn report_sync_progress(vault: Vault) {
                 prev_progress.percent()
             );
         }
+    }
+}
+
+fn request_mode(secrets: &AccessSecrets) -> RequestMode {
+    if secrets.can_read() {
+        RequestMode::Lazy
+    } else {
+        RequestMode::Greedy
     }
 }

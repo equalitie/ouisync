@@ -11,7 +11,7 @@ use crate::{
     protocol::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, RootNodeFilter, UntrustedProof,
     },
-    repository::{BlockRequestMode, Vault},
+    repository::Vault,
     store,
 };
 use std::{future, sync::Arc, time::Instant};
@@ -309,19 +309,8 @@ impl Inner {
                 OfferState::Pending
             };
 
-        match self.vault.block_request_mode {
-            BlockRequestMode::Lazy => {
-                for node in status.request_blocks {
-                    self.block_tracker.register(node.block_id, offer_state);
-                }
-            }
-            BlockRequestMode::Greedy => {
-                for node in status.request_blocks {
-                    if self.block_tracker.register(node.block_id, offer_state) {
-                        self.vault.block_tracker.require(node.block_id);
-                    }
-                }
-            }
+        for node in status.request_blocks {
+            self.block_tracker.register(node.block_id, offer_state);
         }
 
         if quota.is_some() {
@@ -348,16 +337,7 @@ impl Inner {
 
         tracing::trace!(?offer_state, "Received block offer");
 
-        if !self.block_tracker.register(block_id, offer_state) {
-            return Ok(());
-        }
-
-        match self.vault.block_request_mode {
-            BlockRequestMode::Lazy => (),
-            BlockRequestMode::Greedy => {
-                self.vault.block_tracker.require(block_id);
-            }
-        }
+        self.block_tracker.register(block_id, offer_state);
 
         Ok(())
     }

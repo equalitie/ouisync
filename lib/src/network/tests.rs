@@ -13,7 +13,7 @@ use crate::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
         Block, BlockId, Bump, RootNode, SingleBlockPresence,
     },
-    repository::{BlockRequestMode, RepositoryId, RepositoryMonitor, Vault},
+    repository::{RepositoryId, RepositoryMonitor, Vault},
     store::Changeset,
     test_utils,
     version_vector::VersionVector,
@@ -404,7 +404,6 @@ async fn create_repository<R: Rng + CryptoRng>(
         repository_id,
         event_tx,
         db,
-        BlockRequestMode::Greedy,
         RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
     );
 

@@ -1,7 +1,7 @@
-use super::{BlockRequestMode, RepositoryId, RepositoryMonitor, Vault};
+use super::{RepositoryId, RepositoryMonitor, Vault};
 use crate::{
     access_control::WriteSecrets,
-    block_tracker::OfferState,
+    block_tracker::{OfferState, RequestMode},
     collections::HashSet,
     crypto::{
         sign::{Keypair, PublicKey},
@@ -1111,9 +1111,10 @@ async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Vault, WriteSecrets) {
         repository_id,
         EventSender::new(1),
         pool,
-        BlockRequestMode::Lazy,
         RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
     );
+
+    vault.block_tracker.set_request_mode(RequestMode::Lazy);
 
     (base_dir, vault, secrets)
 }

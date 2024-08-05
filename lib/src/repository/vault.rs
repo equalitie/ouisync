@@ -32,7 +32,6 @@ pub(crate) struct Vault {
     store: Store,
     pub event_tx: EventSender,
     pub block_tracker: BlockTracker,
-    pub block_request_mode: BlockRequestMode,
     pub local_id: LocalId,
     pub monitor: Arc<RepositoryMonitor>,
 }
@@ -42,7 +41,6 @@ impl Vault {
         repository_id: RepositoryId,
         event_tx: EventSender,
         pool: db::Pool,
-        block_request_mode: BlockRequestMode,
         monitor: RepositoryMonitor,
     ) -> Self {
         let store = Store::new(pool);
@@ -52,7 +50,6 @@ impl Vault {
             store,
             event_tx,
             block_tracker: BlockTracker::new(),
-            block_request_mode,
             local_id: LocalId::new(),
             monitor: Arc::new(monitor),
         }
@@ -261,12 +258,4 @@ impl Vault {
 
         Ok(())
     }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum BlockRequestMode {
-    // Request only required blocks
-    Lazy,
-    // Request all blocks
-    Greedy,
 }
