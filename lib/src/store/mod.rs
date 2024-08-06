@@ -31,19 +31,20 @@ use self::{
     cache::{Cache, CacheTransaction},
 };
 use crate::{
-    block_tracker::BlockTracker as BlockDownloadTracker,
+    block_tracker::{BlockTracker as BlockDownloadTracker, OfferState},
+    collections::HashSet,
     crypto::{
         sign::{Keypair, PublicKey},
         CacheHash, Hash, Hashable,
     },
     db,
     debug::DebugPrinter,
+    future::try_collect_into,
     progress::Progress,
     protocol::{
         get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes,
         MultiBlockPresence, NodeState, Proof, RootNode, RootNodeFilter, Summary, INNER_LAYER_COUNT,
     },
-    storage_size::StorageSize,
     sync::broadcast_hash_set,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -636,27 +637,50 @@ impl WriteTransaction {
     pub async fn receive_leaf_nodes(
         &mut self,
         nodes: CacheHash<LeafNodes>,
-        quota: Option<StorageSize>,
     ) -> Result<LeafNodeReceiveStatus, Error> {
         let (db, cache) = self.db_and_cache();
         let parent_hash = nodes.hash();
+        let mut approved_missing_blocks = HashSet::default();
 
         if !index::parent_exists(db, &parent_hash).await? {
-            return Ok(LeafNodeReceiveStatus::default());
+            return Ok(LeafNodeReceiveStatus {
+                new_approved: Vec::new(),
+                block_offers: Vec::new(),
+                block_offer_state: OfferState::Pending,
+                approved_missing_blocks,
+            });
         }
 
-        let request_blocks = leaf_node::filter_nodes_with_new_blocks(db, &nodes).await?;
+        let block_offers = leaf_node::block_offers(db, &nodes).await?;
 
         leaf_node::save_all(db, &nodes.into_inner().into_missing(), &parent_hash).await?;
 
         // Receiving leaf nodes can make previosuly incomplete snapshots complete. If that happens,
         // we need to update the summaries and if quota is set, approve/reject the snapshot(s).
-        let status = index::finalize(db, cache, parent_hash, quota).await?;
+        let status = index::finalize(db, cache, parent_hash).await?;
+
+        let block_offer_state =
+            if !status.has_quota || !status.new_approved.is_empty() || status.old_approved {
+                OfferState::Approved
+            } else {
+                OfferState::Pending
+            };
+
+        if status.has_quota {
+            for branch_id in &status.new_approved {
+                try_collect_into(
+                    self.missing_block_ids_in_branch(branch_id),
+                    &mut approved_missing_blocks,
+                )
+                .await?;
+            }
+        }
 
         Ok(LeafNodeReceiveStatus {
-            old_approved: status.old_approved,
             new_approved: status.new_approved,
-            request_blocks,
+            block_offers,
+            block_offer_state,
+            approved_missing_blocks,
         })
     }
 

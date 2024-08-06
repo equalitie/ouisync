@@ -5,7 +5,7 @@ use super::{
     pending::{PendingRequest, PendingRequests, PendingResponse, ProcessedResponse},
 };
 use crate::{
-    block_tracker::{BlockPromise, OfferState, TrackerClient},
+    block_tracker::{BlockPromise, TrackerClient},
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
     protocol::{
@@ -263,35 +263,24 @@ impl Inner {
         debug_payload: DebugResponse,
     ) -> Result<()> {
         let total = nodes.len();
-        let quota = self.vault.quota().await?.map(Into::into);
-        let status = self.vault.receive_leaf_nodes(nodes, quota).await?;
+        let status = self.vault.receive_leaf_nodes(nodes).await?;
 
         tracing::trace!(
             "Received {}/{} leaf nodes: {:?}",
-            status.request_blocks.len(),
+            status.block_offers.len(),
             total,
-            status
-                .request_blocks
-                .iter()
-                .map(|node| &node.block_id)
-                .collect::<Vec<_>>(),
+            status.block_offers,
         );
 
-        let offer_state =
-            if quota.is_none() || !status.new_approved.is_empty() || status.old_approved {
-                OfferState::Approved
-            } else {
-                OfferState::Pending
-            };
-
-        for node in status.request_blocks {
-            self.block_tracker.register(node.block_id, offer_state);
+        // Register block offers referenced from the received nodes.
+        for block_id in status.block_offers {
+            self.block_tracker
+                .register(block_id, status.block_offer_state);
         }
 
-        if quota.is_some() {
-            for branch_id in &status.new_approved {
-                self.vault.approve_offers(branch_id).await?;
-            }
+        // Approve pending block offers referenced from the recently approved snapshots.
+        for block_id in status.approved_missing_blocks {
+            self.vault.block_tracker.approve(block_id);
         }
 
         self.refresh_branches(status.new_approved.iter().copied());

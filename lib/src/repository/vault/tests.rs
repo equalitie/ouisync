@@ -485,7 +485,7 @@ async fn receive_valid_child_nodes() {
 
     for (hash, leaf_nodes) in snapshot.leaf_sets() {
         vault
-            .receive_leaf_nodes(leaf_nodes.clone().into(), None)
+            .receive_leaf_nodes(leaf_nodes.clone().into())
             .await
             .unwrap();
 
@@ -529,12 +529,11 @@ async fn receive_child_nodes_with_missing_root_parent() {
 
     let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();
     let status = vault
-        .receive_leaf_nodes(leaf_nodes.clone().into(), None)
+        .receive_leaf_nodes(leaf_nodes.clone().into())
         .await
         .unwrap();
-    assert!(!status.old_approved);
     assert!(status.new_approved.is_empty());
-    assert!(status.request_blocks.is_empty());
+    assert!(status.block_offers.is_empty());
 
     // The orphaned leaf nodes were not written to the db.
     let leaf_nodes = vault
@@ -933,7 +932,7 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
 
     for (_, nodes) in snapshot.leaf_sets().take(1) {
         vault
-            .receive_leaf_nodes(nodes.clone().into(), None)
+            .receive_leaf_nodes(nodes.clone().into())
             .await
             .unwrap();
     }

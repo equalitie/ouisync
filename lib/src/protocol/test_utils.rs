@@ -169,7 +169,7 @@ pub(crate) async fn receive_inner_nodes(vault: &Vault, snapshot: &Snapshot) {
 pub(crate) async fn receive_leaf_nodes(vault: &Vault, snapshot: &Snapshot) {
     for (_, nodes) in snapshot.leaf_sets() {
         vault
-            .receive_leaf_nodes(nodes.clone().into(), None)
+            .receive_leaf_nodes(nodes.clone().into())
             .await
             .unwrap();
     }

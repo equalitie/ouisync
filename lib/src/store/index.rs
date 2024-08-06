@@ -13,7 +13,7 @@ use crate::{
     db,
     future::try_collect_into,
     protocol::NodeState,
-    storage_size::StorageSize,
+    repository,
 };
 use sqlx::Row;
 
@@ -24,6 +24,8 @@ pub(super) struct ReceiveStatus {
     pub old_approved: bool,
     /// List of branches whose snapshots have been approved.
     pub new_approved: Vec<PublicKey>,
+    /// Is storage quota enabled?
+    pub has_quota: bool,
 }
 
 /// Does a parent node (root or inner) with the given hash exist?
@@ -82,7 +84,6 @@ pub(super) async fn finalize(
     write_tx: &mut db::WriteTransaction,
     cache_tx: &mut CacheTransaction,
     hash: Hash,
-    quota: Option<StorageSize>,
 ) -> Result<ReceiveStatus, Error> {
     // TODO: Don't hold write transaction through this whole function. Use it only for
     // `update_summaries` then commit it, then do the quota check with a read-only transaction
@@ -91,6 +92,7 @@ pub(super) async fn finalize(
     // concurrent checks to succeed where they would otherwise fail if ran sequentially.
 
     let states = update_summaries(write_tx, cache_tx, vec![hash]).await?;
+    let quota = repository::quota::get(write_tx).await?;
 
     let mut old_approved = false;
     let mut new_approved = Vec::new();
@@ -139,6 +141,7 @@ pub(super) async fn finalize(
     Ok(ReceiveStatus {
         old_approved,
         new_approved,
+        has_quota: quota.is_some(),
     })
 }
 

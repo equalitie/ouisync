@@ -682,9 +682,10 @@ async fn get_read_key(
 // -------------------------------------------------------------------
 pub(crate) mod quota {
     use super::*;
+    use crate::storage_size::StorageSize;
 
-    pub(crate) async fn get(conn: &mut db::Connection) -> Result<Option<u64>, StoreError> {
-        get_public(conn, QUOTA).await
+    pub(crate) async fn get(conn: &mut db::Connection) -> Result<Option<StorageSize>, StoreError> {
+        Ok(get_public(conn, QUOTA).await?.map(StorageSize::from_bytes))
     }
 
     pub(crate) async fn set(tx: &mut db::WriteTransaction, value: u64) -> Result<(), StoreError> {

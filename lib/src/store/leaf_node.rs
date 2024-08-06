@@ -1,5 +1,7 @@
 use super::error::Error;
 use crate::{
+    block_tracker::OfferState,
+    collections::HashSet,
     crypto::{sign::PublicKey, Hash},
     db,
     protocol::{BlockId, LeafNode, LeafNodes, SingleBlockPresence},
@@ -10,14 +12,15 @@ use sqlx::Row;
 #[cfg(test)]
 use {super::inner_node, crate::protocol::INNER_LAYER_COUNT, async_recursion::async_recursion};
 
-#[derive(Default)]
 pub(crate) struct ReceiveStatus {
-    /// Whether any of the snapshots were already approved.
-    pub old_approved: bool,
     /// List of branches whose snapshots have been approved.
     pub new_approved: Vec<PublicKey>,
-    /// Which of the received nodes should we request the blocks of.
-    pub request_blocks: Vec<LeafNode>,
+    /// Blocks offerred through the received nodes.
+    pub block_offers: Vec<BlockId>,
+    /// State of the above block offers.
+    pub block_offer_state: OfferState,
+    /// All missing blocks referenced from the recently approved snapshots.
+    pub approved_missing_blocks: HashSet<BlockId>,
 }
 
 pub(super) async fn load_children(
@@ -223,16 +226,16 @@ pub(super) async fn set_expired_if_present(
     Ok(false)
 }
 
-// Filter nodes that the remote replica has a block for but the local one is missing it.
-pub(super) async fn filter_nodes_with_new_blocks(
+// Block ids present in the remote replica (according to the `remote_nodes`) that are missing locally.
+pub(super) async fn block_offers(
     conn: &mut db::Connection,
     remote_nodes: &LeafNodes,
-) -> Result<Vec<LeafNode>, Error> {
+) -> Result<Vec<BlockId>, Error> {
     let mut output = Vec::new();
 
     for remote_node in remote_nodes.non_missing() {
         if !is_present_or_expired(conn, &remote_node.block_id).await? {
-            output.push(*remote_node);
+            output.push(remote_node.block_id);
         }
     }
 

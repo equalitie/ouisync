@@ -6,7 +6,7 @@ mod tests;
 use super::{quota, LocalId, Metadata, RepositoryId, RepositoryMonitor};
 use crate::{
     block_tracker::{BlockPromise, BlockTracker, OfferState},
-    crypto::{sign::PublicKey, CacheHash},
+    crypto::CacheHash,
     db,
     debug::DebugPrinter,
     error::Result,
@@ -18,7 +18,6 @@ use crate::{
     storage_size::StorageSize,
     store::{self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, RootNodeReceiveStatus, Store},
 };
-use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{sync::Arc, time::Duration};
 use tracing::Instrument;
@@ -107,10 +106,9 @@ impl Vault {
     pub async fn receive_leaf_nodes(
         &self,
         nodes: CacheHash<LeafNodes>,
-        quota: Option<StorageSize>,
     ) -> Result<LeafNodeReceiveStatus> {
         let mut tx = self.store().begin_write().await?;
-        let status = tx.receive_leaf_nodes(nodes, quota).await?;
+        let status = tx.receive_leaf_nodes(nodes).await?;
 
         tx.commit_and_then({
             let new_approved = status.new_approved.clone();
@@ -214,7 +212,7 @@ impl Vault {
 
     pub async fn quota(&self) -> Result<Option<StorageSize>> {
         let mut conn = self.store().db().acquire().await?;
-        Ok(quota::get(&mut conn).await?.map(StorageSize::from_bytes))
+        Ok(quota::get(&mut conn).await?)
     }
 
     pub async fn set_block_expiration(&self, duration: Option<Duration>) -> Result<()> {
@@ -227,17 +225,6 @@ impl Vault {
 
     pub async fn block_expiration(&self) -> Option<Duration> {
         self.store.block_expiration().await
-    }
-
-    pub async fn approve_offers(&self, branch_id: &PublicKey) -> Result<()> {
-        let mut tx = self.store().begin_read().await?;
-        let mut block_ids = tx.missing_block_ids_in_branch(branch_id);
-
-        while let Some(block_id) = block_ids.try_next().await? {
-            self.block_tracker.approve(block_id);
-        }
-
-        Ok(())
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
