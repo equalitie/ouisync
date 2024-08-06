@@ -467,7 +467,7 @@ async fn receive_valid_child_nodes() {
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
             vault
-                .receive_inner_nodes(inner_nodes.clone().into(), None)
+                .receive_inner_nodes(inner_nodes.clone().into())
                 .await
                 .unwrap();
 
@@ -510,10 +510,9 @@ async fn receive_child_nodes_with_missing_root_parent() {
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
         let status = vault
-            .receive_inner_nodes(inner_nodes.clone().into(), None)
+            .receive_inner_nodes(inner_nodes.clone().into())
             .await
             .unwrap();
-        assert!(status.new_approved.is_empty());
         assert!(status.request_children.is_empty());
 
         // The orphaned inner nodes were not written to the db.
@@ -926,7 +925,7 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             vault
-                .receive_inner_nodes(nodes.clone().into(), None)
+                .receive_inner_nodes(nodes.clone().into())
                 .await
                 .unwrap();
         }

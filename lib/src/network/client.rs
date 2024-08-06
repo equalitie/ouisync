@@ -230,9 +230,7 @@ impl Inner {
         debug_payload: DebugResponse,
     ) -> Result<()> {
         let total = nodes.len();
-
-        let quota = self.vault.quota().await?.map(Into::into);
-        let status = self.vault.receive_inner_nodes(nodes, quota).await?;
+        let status = self.vault.receive_inner_nodes(nodes).await?;
 
         let debug = debug_payload.follow_up();
 
@@ -254,15 +252,6 @@ impl Inner {
                 debug.clone(),
             ));
         }
-
-        if quota.is_some() {
-            for branch_id in &status.new_approved {
-                self.vault.approve_offers(branch_id).await?;
-            }
-        }
-
-        self.refresh_branches(status.new_approved.iter().copied());
-        self.log_approved(&status.new_approved).await;
 
         Ok(())
     }

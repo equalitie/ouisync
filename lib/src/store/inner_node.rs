@@ -1,6 +1,6 @@
 use super::{error::Error, leaf_node};
 use crate::{
-    crypto::{sign::PublicKey, Hash},
+    crypto::Hash,
     db,
     protocol::{InnerNode, InnerNodes, LeafNodes, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
 };
@@ -10,8 +10,6 @@ use std::convert::TryInto;
 
 #[derive(Default)]
 pub(crate) struct ReceiveStatus {
-    /// List of branches whose snapshots have been approved.
-    pub new_approved: Vec<PublicKey>,
     /// Which of the received nodes should we request the children of.
     pub request_children: Vec<InnerNode>,
 }

@@ -159,7 +159,7 @@ pub(crate) async fn receive_inner_nodes(vault: &Vault, snapshot: &Snapshot) {
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             vault
-                .receive_inner_nodes(nodes.clone().into(), None)
+                .receive_inner_nodes(nodes.clone().into())
                 .await
                 .unwrap();
         }

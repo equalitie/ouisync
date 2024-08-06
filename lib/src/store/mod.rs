@@ -600,14 +600,8 @@ impl WriteTransaction {
             root_node::create(db, proof, Summary::INCOMPLETE, RootNodeFilter::Published).await?;
         }
 
-        // NOTE: no need to `finalize` the index here as receiving a root node never results
-        // in a snapshot becoming approved. This is because one of two possibilities exists:
-        //
-        // 1. We don't already have all the descendants of the root node and so the snapshot is
-        // incomplete and so can't be approved yet.
-        // 2. We already have all the descendants which means we already have a root node with the
-        // same hash. In this case we don't even write the incoming node into the store and so
-        // there is nothing to approve.
+        // No need to try to approve the snapshot here as receiving a root node can never make a
+        // previously incomplete snapshot complete (only receiving leaf nodes can do that).
 
         Ok(status)
     }
@@ -616,9 +610,8 @@ impl WriteTransaction {
     pub async fn receive_inner_nodes(
         &mut self,
         nodes: CacheHash<InnerNodes>,
-        quota: Option<StorageSize>,
     ) -> Result<InnerNodeReceiveStatus, Error> {
-        let (db, cache) = self.db_and_cache();
+        let db = self.db();
         let parent_hash = nodes.hash();
 
         if !index::parent_exists(db, &parent_hash).await? {
@@ -631,12 +624,10 @@ impl WriteTransaction {
         inner_node::inherit_summaries(db, &mut nodes).await?;
         inner_node::save_all(db, &nodes, &parent_hash).await?;
 
-        let status = index::finalize(db, cache, parent_hash, quota).await?;
+        // No need to try to approve the snapshot here as receiving inner nodes can never make a
+        // previously incomplete snapshot complete (only receiving leaf nodes can do that).
 
-        Ok(InnerNodeReceiveStatus {
-            new_approved: status.new_approved,
-            request_children,
-        })
+        Ok(InnerNodeReceiveStatus { request_children })
     }
 
     /// Receive leaf nodes from other replica and store them into the db.
@@ -658,6 +649,8 @@ impl WriteTransaction {
 
         leaf_node::save_all(db, &nodes.into_inner().into_missing(), &parent_hash).await?;
 
+        // Receiving leaf nodes can make previosuly incomplete snapshots complete. If that happens,
+        // we need to update the summaries and if quota is set, approve/reject the snapshot(s).
         let status = index::finalize(db, cache, parent_hash, quota).await?;
 
         Ok(LeafNodeReceiveStatus {

@@ -16,10 +16,7 @@ use crate::{
         UntrustedProof,
     },
     storage_size::StorageSize,
-    store::{
-        self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, RootNodeReceiveStatus, Store,
-        WriteTransaction,
-    },
+    store::{self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, RootNodeReceiveStatus, Store},
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
@@ -85,7 +82,7 @@ impl Vault {
 
         let mut tx = self.store().begin_write().await?;
         let status = tx.receive_root_node(proof, block_presence).await?;
-        self.finalize_receive(tx, &[]).await?;
+        tx.commit().await?;
 
         Ok(status)
     }
@@ -96,11 +93,10 @@ impl Vault {
     pub async fn receive_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodes>,
-        quota: Option<StorageSize>,
     ) -> Result<InnerNodeReceiveStatus> {
         let mut tx = self.store().begin_write().await?;
-        let status = tx.receive_inner_nodes(nodes, quota).await?;
-        self.finalize_receive(tx, &status.new_approved).await?;
+        let status = tx.receive_inner_nodes(nodes).await?;
+        tx.commit().await?;
 
         Ok(status)
     }
@@ -115,7 +111,18 @@ impl Vault {
     ) -> Result<LeafNodeReceiveStatus> {
         let mut tx = self.store().begin_write().await?;
         let status = tx.receive_leaf_nodes(nodes, quota).await?;
-        self.finalize_receive(tx, &status.new_approved).await?;
+
+        tx.commit_and_then({
+            let new_approved = status.new_approved.clone();
+            let event_tx = self.event_tx.clone();
+
+            move || {
+                for branch_id in new_approved {
+                    event_tx.send(Payload::BranchChanged(branch_id));
+                }
+            }
+        })
+        .await?;
 
         Ok(status)
     }
@@ -235,27 +242,5 @@ impl Vault {
 
     pub async fn debug_print(&self, print: DebugPrinter) {
         self.store().debug_print_root_node(print).await
-    }
-
-    // Finalizes receiving nodes from a remote replica, commits the transaction and notifies the
-    // affected branches.
-    async fn finalize_receive(
-        &self,
-        tx: WriteTransaction,
-        new_approved: &[PublicKey],
-    ) -> Result<()> {
-        tx.commit_and_then({
-            let new_approved = new_approved.to_vec();
-            let event_tx = self.event_tx.clone();
-
-            move || {
-                for branch_id in new_approved {
-                    event_tx.send(Payload::BranchChanged(branch_id));
-                }
-            }
-        })
-        .await?;
-
-        Ok(())
     }
 }
