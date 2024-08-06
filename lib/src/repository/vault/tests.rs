@@ -16,7 +16,7 @@ use crate::{
         Block, BlockContent, BlockId, Locator, MultiBlockPresence, NodeState, Proof,
         RootNodeFilter, SingleBlockPresence, EMPTY_INNER_HASH,
     },
-    store::{self, Changeset, ReadTransaction},
+    store::{self, Changeset, ReadTransaction, RootNodeReceiveStatus},
     test_utils,
     version_vector::VersionVector,
 };
@@ -93,8 +93,7 @@ async fn receive_root_node_with_invalid_proof() {
         )
         .await
         .unwrap();
-    assert!(status.new_approved.is_empty());
-    assert!(!status.request_children);
+    assert_matches!(status, RootNodeReceiveStatus::Outdated);
 
     // The invalid root was not written to the db.
     assert!(vault

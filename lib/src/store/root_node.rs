@@ -11,25 +11,44 @@ use crate::{
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::{sqlite::SqliteRow, FromRow, Row};
-use std::{cmp::Ordering, future};
+use std::{cmp::Ordering, fmt, future};
 
 /// Status of receiving a root node
-#[derive(Default)]
-pub(crate) struct ReceiveStatus {
-    /// List of branches whose snapshots became approved.
-    pub new_approved: Vec<PublicKey>,
-    /// Did the received node create new snapshot?
-    pub new_snapshot: bool,
-    /// Should we request the children of the incoming node?
-    pub request_children: bool,
+#[derive(Debug)]
+pub(crate) enum ReceiveStatus {
+    /// The node represents a new snapshot - write it into the store and requests its children.
+    NewSnapshot,
+    /// We already have the node but its block presence indicated the peer potentially has some
+    /// blocks we don't have. Don't write it into the store but do request its children.
+    NewBlocks,
+    /// The node is outdated - discard it.
+    Outdated,
 }
 
-/// Decide what to do with an incoming root node.
-pub(super) struct ReceiveAction {
-    /// Should we insert the incoming node to the db?
-    pub insert: bool,
-    /// Should we request the children of the incoming node?
-    pub request_children: bool,
+impl ReceiveStatus {
+    pub fn request_children(&self) -> bool {
+        match self {
+            Self::NewSnapshot | Self::NewBlocks => true,
+            Self::Outdated => false,
+        }
+    }
+
+    pub fn write(&self) -> bool {
+        match self {
+            Self::NewSnapshot => true,
+            Self::NewBlocks | Self::Outdated => false,
+        }
+    }
+}
+
+impl fmt::Display for ReceiveStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::NewSnapshot => write!(f, "new snapshot"),
+            Self::NewBlocks => write!(f, "new blocks"),
+            Self::Outdated => write!(f, "outdated"),
+        }
+    }
 }
 
 /// Creates a root node with the specified proof and summary.
@@ -535,11 +554,8 @@ pub(super) async fn decide_action(
     tx: &mut db::WriteTransaction,
     new_proof: &Proof,
     new_block_presence: &MultiBlockPresence,
-) -> Result<ReceiveAction, Error> {
-    let mut action = ReceiveAction {
-        insert: true,
-        request_children: true,
-    };
+) -> Result<ReceiveStatus, Error> {
+    let mut status = ReceiveStatus::NewSnapshot;
 
     let mut old_nodes = load_all_latest(tx);
     while let Some(old_node) = old_nodes.try_next().await? {
@@ -550,8 +566,7 @@ pub(super) async fn decide_action(
             Some(Ordering::Less) => {
                 // The incoming node is outdated compared to at least one existing node - discard
                 // it.
-                action.insert = false;
-                action.request_children = false;
+                status = ReceiveStatus::Outdated;
             }
             Some(Ordering::Equal) => {
                 if new_proof.hash == old_node.proof.hash {
@@ -560,16 +575,14 @@ pub(super) async fn decide_action(
                     // possibly in a different branch). There is no point inserting it but if the
                     // incoming summary is potentially more up-to-date than the exising one, we
                     // still want to request the children. Otherwise we discard it.
-                    action.insert = false;
-
-                    // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
-                    // with `new_summary.is_outdated(&old_node.summary)`.
-                    if !old_node
+                    if old_node
                         .summary
                         .block_presence
                         .is_outdated(new_block_presence)
                     {
-                        action.request_children = false;
+                        status = ReceiveStatus::NewBlocks;
+                    } else {
+                        status = ReceiveStatus::Outdated;
                     }
                 } else {
                     tracing::warn!(
@@ -581,8 +594,7 @@ pub(super) async fn decide_action(
                         "Received root node invalid - broken invariant: same vv but different hash"
                     );
 
-                    action.insert = false;
-                    action.request_children = false;
+                    status = ReceiveStatus::Outdated;
                 }
             }
             Some(Ordering::Greater) => (),
@@ -595,18 +607,17 @@ pub(super) async fn decide_action(
                         "Received root node invalid - broken invariant: concurrency within branch is not allowed"
                     );
 
-                    action.insert = false;
-                    action.request_children = false;
+                    status = ReceiveStatus::Outdated;
                 }
             }
         }
 
-        if !action.insert && !action.request_children {
+        if matches!(status, ReceiveStatus::Outdated) {
             break;
         }
     }
 
-    Ok(action)
+    Ok(status)
 }
 
 pub(super) async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {

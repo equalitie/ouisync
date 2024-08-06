@@ -584,8 +584,7 @@ impl WriteTransaction {
         proof: Proof,
         block_presence: MultiBlockPresence,
     ) -> Result<RootNodeReceiveStatus, Error> {
-        let (db, cache) = self.db_and_cache();
-        let hash = proof.hash;
+        let db = self.db();
 
         // Make sure the loading of the existing nodes and the potential creation of the new node
         // happens atomically. Otherwise we could conclude the incoming node is up-to-date but
@@ -595,28 +594,22 @@ impl WriteTransaction {
         // be happens-after any node inserted earlier in the same branch.
 
         // Determine further actions by comparing the incoming node against the existing nodes:
-        let action = root_node::decide_action(db, &proof, &block_presence).await?;
+        let status = root_node::decide_action(db, &proof, &block_presence).await?;
 
-        if action.insert {
+        if status.write() {
             root_node::create(db, proof, Summary::INCOMPLETE, RootNodeFilter::Published).await?;
-
-            // Ignoring quota here because if the snapshot became complete by receiving this root
-            // node it means that we already have all the other nodes and so the quota validation
-            // already took place.
-            let status = index::finalize(db, cache, hash, None).await?;
-
-            Ok(RootNodeReceiveStatus {
-                new_approved: status.new_approved,
-                new_snapshot: true,
-                request_children: action.request_children,
-            })
-        } else {
-            Ok(RootNodeReceiveStatus {
-                new_approved: Vec::new(),
-                new_snapshot: false,
-                request_children: action.request_children,
-            })
         }
+
+        // NOTE: no need to `finalize` the index here as receiving a root node never results
+        // in a snapshot becoming approved. This is because one of two possibilities exists:
+        //
+        // 1. We don't already have all the descendants of the root node and so the snapshot is
+        // incomplete and so can't be approved yet.
+        // 2. We already have all the descendants which means we already have a root node with the
+        // same hash. In this case we don't even write the incoming node into the store and so
+        // there is nothing to approve.
+
+        Ok(status)
     }
 
     /// Write inner nodes received from a remote replica.

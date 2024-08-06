@@ -74,18 +74,18 @@ impl Vault {
             Ok(proof) => proof,
             Err(ProofError(proof)) => {
                 tracing::trace!(branch_id = ?proof.writer_id, hash = ?proof.hash, "Invalid proof");
-                return Ok(RootNodeReceiveStatus::default());
+                return Ok(RootNodeReceiveStatus::Outdated);
             }
         };
 
         // Ignore branches with empty version vectors because they have no content yet.
         if proof.version_vector.is_empty() {
-            return Ok(RootNodeReceiveStatus::default());
+            return Ok(RootNodeReceiveStatus::Outdated);
         }
 
         let mut tx = self.store().begin_write().await?;
         let status = tx.receive_root_node(proof, block_presence).await?;
-        self.finalize_receive(tx, &status.new_approved).await?;
+        self.finalize_receive(tx, &[]).await?;
 
         Ok(status)
     }

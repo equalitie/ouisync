@@ -210,23 +210,15 @@ impl Inner {
         let hash = proof.hash;
         let status = self.vault.receive_root_node(proof, block_presence).await?;
 
-        if status.request_children {
+        tracing::debug!("Received root node - {status}");
+
+        if status.request_children() {
             self.enqueue_request(PendingRequest::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(block_presence),
                 debug_payload.follow_up(),
             ));
         }
-
-        if status.new_snapshot {
-            tracing::debug!("Received root node - new snapshot");
-        } else if status.request_children {
-            tracing::debug!("Received root node - new blocks");
-        } else {
-            tracing::trace!("Received root node - outdated");
-        }
-
-        self.log_approved(&status.new_approved).await;
 
         Ok(())
     }
