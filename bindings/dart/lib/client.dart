@@ -167,13 +167,20 @@ class Client {
   }
 
   void _handleNotification(StreamSink<Object?> sink, Object? payload) {
-    if (payload is String) {
-      sink.add(null);
-    } else if (payload is Map && payload.length == 1) {
-      sink.add(payload.entries.single.value);
-    } else {
-      final error = Exception('invalid notification');
-      sink.addError(error);
+    try {
+      if (payload is String) {
+        sink.add(null);
+      } else if (payload is Map && payload.length == 1) {
+        sink.add(payload.entries.single.value);
+      } else {
+        final error = Exception('invalid notification');
+        sink.addError(error);
+      }
+    } catch (error) {
+      // We can get here if the `_controller` has been `close`d but the
+      // `_controller.onCancel` has not yet been executed (that's where the
+      // `Subscription` is removed from `_subscriptions`). We just ignore that
+      // error.
     }
   }
 }
