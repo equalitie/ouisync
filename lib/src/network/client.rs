@@ -159,13 +159,7 @@ impl Inner {
             self.vault.monitor.responses_received.increment(1);
 
             let response = self.pending_requests.remove(response);
-
-            let start = Instant::now();
             self.handle_response(response).await?;
-            self.vault
-                .monitor
-                .response_handle_time
-                .record(start.elapsed());
         }
 
         Ok(())

@@ -44,8 +44,6 @@ pub(crate) struct RepositoryMonitor {
     pub responses_sent: Counter,
     // Total number of responses received.
     pub responses_received: Counter,
-    // Time to handle a response.
-    pub response_handle_time: Histogram,
 
     pub scan_job: JobMonitor,
     pub merge_job: JobMonitor,
@@ -80,8 +78,6 @@ impl RepositoryMonitor {
 
         let responses_sent = create_counter(recorder, "responses sent", Unit::Count);
         let responses_received = create_counter(recorder, "responses received", Unit::Count);
-        let response_handle_time =
-            create_histogram(recorder, "response handle time", Unit::Seconds);
 
         let scan_job = JobMonitor::new(&node, recorder, "scan");
         let merge_job = JobMonitor::new(&node, recorder, "merge");
@@ -103,7 +99,6 @@ impl RepositoryMonitor {
 
             responses_sent,
             responses_received,
-            response_handle_time,
 
             scan_job,
             merge_job,
