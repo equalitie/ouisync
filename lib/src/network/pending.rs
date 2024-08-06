@@ -11,9 +11,10 @@ use crate::{
     sync::delay_map::DelayMap,
 };
 use deadlock::BlockingMutex;
+use scoped_task::ScopedJoinHandle;
 use std::{future, sync::Arc, task::ready};
 use std::{task::Poll, time::Instant};
-use tokio::{sync::OwnedSemaphorePermit, task};
+use tokio::sync::OwnedSemaphorePermit;
 
 pub(crate) enum PendingRequest {
     RootNode(PublicKey, PendingDebugRequest),
@@ -95,6 +96,11 @@ pub(crate) enum Key {
 pub(super) struct PendingRequests {
     monitor: Arc<RepositoryMonitor>,
     map: Arc<BlockingMutex<DelayMap<Key, RequestData>>>,
+    // This is to ensure the `run_expiration_tracker` task is destroyed with PendingRequests (as
+    // opposed to the task being destroyed "sometime after"). This is important because the task
+    // holds an Arc to the RepositoryMonitor which must be destroyed prior to reimporting its
+    // corresponding repository if the user decides to do so.
+    tracker_task: BlockingMutex<Option<ScopedJoinHandle<()>>>,
 }
 
 impl PendingRequests {
@@ -102,6 +108,7 @@ impl PendingRequests {
         Self {
             monitor,
             map: Arc::new(BlockingMutex::new(DelayMap::default())),
+            tracker_task: BlockingMutex::new(None),
         }
     }
 
@@ -151,10 +158,10 @@ impl PendingRequests {
         // The expiration tracker task is started each time an item is inserted into previously
         // empty map and stopped when the map becomes empty again.
         if map.len() == 1 {
-            task::spawn(run_expiration_tracker(
+            *self.tracker_task.lock().unwrap() = Some(scoped_task::spawn(run_expiration_tracker(
                 self.monitor.clone(),
                 self.map.clone(),
-            ));
+            )));
         }
 
         request_added(&self.monitor, &key);
@@ -228,6 +235,9 @@ async fn run_expiration_tracker(
     monitor: Arc<RepositoryMonitor>,
     request_map: Arc<BlockingMutex<DelayMap<Key, RequestData>>>,
 ) {
+    // NOTE: The `expired` fn does not always complete when the last item is removed from the
+    // DelayMap. There is an issue in the DelayQueue used by DelayMap, reported here:
+    // https://github.com/tokio-rs/tokio/issues/6751
     while let Some((key, _)) = expired(&request_map).await {
         monitor.request_timeouts.increment(1);
         request_removed(&monitor, &key);
