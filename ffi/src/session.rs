@@ -267,9 +267,7 @@ pub(crate) fn close_blocking(session: Session) {
 
 /// Subscribe to changes in repository list
 pub(crate) fn subscribe(state: &State, notification_tx: &NotificationSender) -> TaskHandle {
-    let mut on_repository_list_changed =
-        state.repositories.on_repository_list_changed_tx.subscribe();
-
+    let mut on_repository_list_changed = state.repositories.subscribe();
     let notification_tx = notification_tx.clone();
 
     state.spawn_task(|id| async move {

@@ -11,7 +11,6 @@ pub mod crypto;
 pub mod db;
 pub mod path;
 pub mod protocol;
-pub mod sync;
 
 mod access_control;
 mod blob;
@@ -34,6 +33,7 @@ mod network;
 mod progress;
 mod repository;
 mod store;
+mod sync;
 #[cfg(test)]
 mod test_utils;
 mod time;

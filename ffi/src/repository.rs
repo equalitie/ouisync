@@ -6,8 +6,8 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
-    self, crypto::Hashable, path, sync::uninitialized_watch, AccessMode, Credentials, Event,
-    LocalSecret, Payload, Progress, Registration, Repository, SetLocalSecret, ShareToken,
+    self, crypto::Hashable, path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress,
+    Registration, Repository, SetLocalSecret, ShareToken,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,7 +18,7 @@ use std::{
     sync::{Arc, RwLock as BlockingRwLock},
 };
 use thiserror::Error;
-use tokio::sync::{broadcast::error::RecvError, Notify, RwLock as AsyncRwLock};
+use tokio::sync::{broadcast::error::RecvError, watch, RwLock as AsyncRwLock};
 
 pub(crate) struct RepositoryHolder {
     pub store_path: PathBuf,
@@ -579,56 +579,48 @@ pub(crate) struct MetadataEdit {
 /// Registry of opened repositories.
 pub(crate) struct Repositories {
     inner: BlockingRwLock<Inner>,
-    pub on_repository_list_changed_tx: uninitialized_watch::Sender<()>,
+    change_tx: watch::Sender<()>,
 }
 
 impl Repositories {
     pub fn new() -> Self {
-        let (on_repository_list_changed_tx, _) = uninitialized_watch::channel();
-
         Self {
             inner: BlockingRwLock::new(Inner {
                 registry: Registry::new(),
                 index: HashMap::new(),
             }),
-            on_repository_list_changed_tx,
+            change_tx: watch::Sender::new(()),
         }
     }
 
     /// Gets or inserts a repository.
     pub async fn entry(&self, store_path: PathBuf) -> RepositoryEntry {
+        let mut change_rx = self.change_tx.subscribe();
+        change_rx.mark_unchanged(); // skip the initial notification.
+
         loop {
-            let notify = {
-                let mut inner = self.inner.write().unwrap();
+            match self.inner.write().unwrap().index.entry(store_path.clone()) {
+                Entry::Occupied(entry) => match entry.get() {
+                    // The repo doesn't exists yet but someone is already inserting it. Wait for a
+                    // change notification and try again.
+                    IndexEntry::Reserved => (),
+                    // The repo already exists.
+                    IndexEntry::Existing(handle) => return RepositoryEntry::Occupied(*handle),
+                },
+                Entry::Vacant(entry) => {
+                    entry.insert(IndexEntry::Reserved);
 
-                match inner.index.entry(store_path.clone()) {
-                    Entry::Occupied(entry) => match entry.get() {
-                        IndexEntry::Reserved(notify) => {
-                            // The repo doesn't exists yet but someone is already inserting it.
-                            notify.clone()
-                        }
-                        IndexEntry::Existing(handle) => {
-                            // The repo already exists.
-                            return RepositoryEntry::Occupied(*handle);
-                        }
-                    },
-                    Entry::Vacant(entry) => {
-                        entry.insert(IndexEntry::Reserved(Arc::new(Notify::new())));
-
-                        // The repo doesn't exist yet and we are the first one to insert it.
-                        return RepositoryEntry::Vacant(RepositoryVacantEntry {
-                            inner: &self.inner,
-                            store_path,
-                            inserted: false,
-                            on_repository_list_changed_tx: self
-                                .on_repository_list_changed_tx
-                                .clone(),
-                        });
-                    }
+                    // The repo doesn't exist yet and we are the first one to insert it.
+                    return RepositoryEntry::Vacant(RepositoryVacantEntry {
+                        inner: &self.inner,
+                        store_path,
+                        inserted: false,
+                        change_tx: self.change_tx.clone(),
+                    });
                 }
-            };
+            }
 
-            notify.notified().await;
+            change_rx.changed().await.ok();
         }
     }
 
@@ -640,14 +632,14 @@ impl Repositories {
         let holder = inner.registry.remove(handle)?;
         inner.index.remove(&holder.store_path);
 
-        self.on_repository_list_changed_tx.send(()).unwrap_or(());
+        self.change_tx.send(()).ok();
 
         Some(holder)
     }
 
     pub fn remove_all(&self) -> Vec<Arc<RepositoryHolder>> {
         let removed = self.inner.write().unwrap().registry.remove_all();
-        self.on_repository_list_changed_tx.send(()).unwrap_or(());
+        self.change_tx.send(()).ok();
         removed
     }
 
@@ -664,6 +656,11 @@ impl Repositories {
             .map(|(a, b)| (*a, b.clone()))
             .collect()
     }
+
+    /// Subscribe to change notifications.
+    pub fn subscribe(&self) -> watch::Receiver<()> {
+        self.change_tx.subscribe()
+    }
 }
 
 pub(crate) enum RepositoryEntry<'a> {
@@ -675,7 +672,7 @@ pub(crate) struct RepositoryVacantEntry<'a> {
     inner: &'a BlockingRwLock<Inner>,
     store_path: PathBuf,
     inserted: bool,
-    on_repository_list_changed_tx: uninitialized_watch::Sender<()>,
+    change_tx: watch::Sender<()>,
 }
 
 impl RepositoryVacantEntry<'_> {
@@ -688,14 +685,12 @@ impl RepositoryVacantEntry<'_> {
             unreachable!()
         };
 
-        let IndexEntry::Reserved(notify) = mem::replace(entry, IndexEntry::Existing(handle)) else {
+        let IndexEntry::Reserved = mem::replace(entry, IndexEntry::Existing(handle)) else {
             unreachable!()
         };
 
         self.inserted = true;
-
-        notify.notify_waiters();
-        self.on_repository_list_changed_tx.send(()).unwrap_or(());
+        self.change_tx.send(()).unwrap_or(());
 
         handle
     }
@@ -707,13 +702,8 @@ impl Drop for RepositoryVacantEntry<'_> {
             return;
         }
 
-        let mut inner = self.inner.write().unwrap();
-
-        let Some(IndexEntry::Reserved(notify)) = inner.index.remove(&self.store_path) else {
-            unreachable!()
-        };
-
-        notify.notify_waiters();
+        self.inner.write().unwrap().index.remove(&self.store_path);
+        self.change_tx.send(()).ok();
     }
 }
 
@@ -725,6 +715,6 @@ struct Inner {
 }
 
 enum IndexEntry {
-    Reserved(Arc<Notify>),
+    Reserved,
     Existing(RepositoryHandle),
 }
