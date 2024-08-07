@@ -6,12 +6,8 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
-    crypto::Hashable,
-    network::{self, Registration},
-    path,
-    sync::uninitialized_watch,
-    AccessMode, Credentials, Event, LocalSecret, Payload, Progress, Repository, SetLocalSecret,
-    ShareToken,
+    self, crypto::Hashable, path, sync::uninitialized_watch, AccessMode, Credentials, Event,
+    LocalSecret, Payload, Progress, Registration, Repository, SetLocalSecret, ShareToken,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -241,7 +237,7 @@ pub(crate) async fn set_access_mode(
 /// User is responsible for deallocating the returned string.
 pub(crate) fn info_hash(state: &State, handle: RepositoryHandle) -> Result<String, Error> {
     let holder = state.repositories.get(handle)?;
-    let info_hash = network::repository_info_hash(holder.repository.secrets().id());
+    let info_hash = ouisync_lib::repository_info_hash(holder.repository.secrets().id());
 
     Ok(hex::encode(info_hash))
 }

@@ -8,10 +8,8 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
 use ouisync_lib::{
-    crypto::PasswordSalt,
-    network::{NatBehavior, TrafficStats},
-    AccessChange, AccessMode, LocalSecret, PeerAddr, PeerInfo, Progress, SetLocalSecret,
-    ShareToken,
+    crypto::PasswordSalt, AccessChange, AccessMode, LocalSecret, NatBehavior, PeerAddr, PeerInfo,
+    Progress, SetLocalSecret, ShareToken, TrafficStats,
 };
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
@@ -606,8 +604,7 @@ mod tests {
 
     use super::*;
     use ouisync_lib::{
-        network::{PeerSource, PeerState},
-        AccessSecrets, Credentials, PeerInfo, SecretRuntimeId,
+        AccessSecrets, Credentials, PeerInfo, PeerSource, PeerState, SecretRuntimeId,
     };
 
     #[test]

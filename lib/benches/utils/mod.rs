@@ -1,7 +1,7 @@
 use camino::Utf8Path;
 use ouisync::{
-    network::{Network, Registration},
-    Access, Event, Payload, PeerAddr, Repository, RepositoryParams, WriteSecrets,
+    Access, Event, Network, Payload, PeerAddr, Registration, Repository, RepositoryParams,
+    WriteSecrets,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use state_monitor::StateMonitor;

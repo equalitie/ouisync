@@ -11,10 +11,7 @@ mod summary;
 use clap::Parser;
 use common::{actor, progress::ProgressReporter, sync_watch, Env, Proto, DEFAULT_REPO};
 use metrics::{Counter, Gauge, Recorder};
-use ouisync::{
-    network::{Network, TrafficStats},
-    Access, AccessMode, File, Repository,
-};
+use ouisync::{Access, AccessMode, File, Network, Repository, TrafficStats};
 use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{
     fmt,

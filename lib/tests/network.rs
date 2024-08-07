@@ -7,7 +7,7 @@
 mod common;
 
 use self::common::{actor, Env, Proto, DEFAULT_REPO, TEST_TIMEOUT};
-use ouisync::network::{Network, PeerState};
+use ouisync::{Network, PeerState};
 use std::sync::Arc;
 use tokio::{sync::Barrier, time};
 

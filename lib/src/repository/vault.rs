@@ -13,9 +13,8 @@ use crate::{
     event::{EventSender, Payload},
     protocol::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, ProofError,
-        UntrustedProof,
+        StorageSize, UntrustedProof,
     },
-    storage_size::StorageSize,
     store::{self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, RootNodeReceiveStatus, Store},
 };
 use sqlx::Row;

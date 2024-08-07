@@ -1,5 +1,5 @@
 use hdrhistogram::{sync::Recorder, Histogram, SyncHistogram};
-use ouisync::network::{Network, TrafficStats};
+use ouisync::{Network, TrafficStats};
 use serde::{ser::SerializeMap, Serialize};
 use std::{
     mem,

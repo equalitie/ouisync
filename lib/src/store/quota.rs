@@ -1,5 +1,5 @@
 use super::{error::Error as StoreError, root_node};
-use crate::{crypto::Hash, db, future::try_collect_into, storage_size::StorageSize, versioned};
+use crate::{crypto::Hash, db, future::try_collect_into, protocol::StorageSize, versioned};
 use sqlx::{QueryBuilder, Row};
 use thiserror::Error;
 

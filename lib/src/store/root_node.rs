@@ -826,7 +826,7 @@ mod tests {
     // Proptest for the `load_all_latest_preferred` function.
     mod load_all_latest_preferred {
         use super::*;
-        use crate::protocol::root_node::SnapshotId;
+        use crate::protocol::SnapshotId;
         use proptest::{arbitrary::any, collection::vec, sample::select, strategy::Strategy};
         use test_strategy::proptest;
 

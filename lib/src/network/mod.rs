@@ -1,6 +1,3 @@
-pub mod dht_discovery;
-pub mod peer_addr;
-
 mod barrier;
 mod client;
 mod connection;
@@ -8,6 +5,7 @@ mod connection_monitor;
 mod constants;
 mod crypto;
 mod debug_payload;
+mod dht_discovery;
 mod gateway;
 mod ip;
 mod local_discovery;
@@ -15,7 +13,8 @@ mod message;
 mod message_broker;
 mod message_dispatcher;
 mod message_io;
-mod peer_exchange; // TODO: replace with v2
+mod peer_addr;
+mod peer_exchange;
 mod peer_info;
 mod peer_source;
 mod peer_state;
@@ -34,24 +33,25 @@ mod upnp;
 
 pub use self::{
     connection::PeerInfoCollector,
+    dht_discovery::{DhtContactsStoreTrait, DHT_ROUTERS},
+    peer_addr::PeerAddr,
     peer_info::PeerInfo,
     peer_source::PeerSource,
     peer_state::PeerState,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     traffic_tracker::TrafficStats,
 };
-use futures_util::future;
 pub use net::stun::NatBehavior;
 
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     connection_monitor::ConnectionMonitor,
     constants::MAX_UNCHOKED_COUNT,
-    dht_discovery::{DhtContactsStoreTrait, DhtDiscovery},
+    dht_discovery::DhtDiscovery,
     gateway::{Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    peer_addr::{PeerAddr, PeerPort},
+    peer_addr::PeerPort,
     peer_exchange::{PexDiscovery, PexRepository},
     protocol::{Version, MAGIC, VERSION},
     seen_peers::{SeenPeer, SeenPeers},
@@ -66,6 +66,7 @@ use crate::{
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use deadlock::BlockingMutex;
+use futures_util::future;
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;
@@ -1085,7 +1086,7 @@ impl Connectivity {
 }
 
 pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
-    // Calculate the info hash by hashing the id with SHA3-256 and taking the first 20 bytes.
+    // Calculate the info hash by hashing the id with BLAKE3 and taking the first 20 bytes.
     // (bittorrent uses SHA-1 but that is less secure).
     // `unwrap` is OK because the byte slice has the correct length.
     InfoHash::try_from(&id.salted_hash(b"ouisync repository info-hash").as_ref()[..INFO_HASH_LEN])

@@ -17,10 +17,8 @@ use metrics::{Label, NoopRecorder, Recorder};
 use metrics_ext::{WatchRecorder, WatchRecorderSubscriber};
 use once_cell::sync::Lazy;
 use ouisync::{
-    crypto::sign::PublicKey,
-    network::{Network, Registration},
-    Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
-    Result, StoreError,
+    crypto::sign::PublicKey, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File,
+    Network, Payload, PeerAddr, Registration, Repository, Result, StoreError,
 };
 use ouisync_tracing_fmt::Formatter;
 use rand::Rng;

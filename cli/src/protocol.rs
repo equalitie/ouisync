@@ -1,9 +1,6 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{builder::BoolishValueParser, Subcommand, ValueEnum};
-use ouisync_lib::{
-    network::{PeerSource, PeerState},
-    AccessMode, PeerAddr, PeerInfo, StorageSize,
-};
+use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, PeerSource, PeerState, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt, iter,
@@ -276,7 +273,7 @@ pub(crate) enum Request {
         /// Repository token
         #[arg(short, long)]
         token: String,
-    }
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum)]
@@ -566,10 +563,7 @@ fn format_time(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ouisync_lib::{
-        network::{PeerSource, PeerState, TrafficStats},
-        SecretRuntimeId,
-    };
+    use ouisync_lib::{PeerSource, PeerState, SecretRuntimeId, TrafficStats};
     use rand::{rngs::StdRng, SeedableRng};
     use std::net::Ipv4Addr;
 
