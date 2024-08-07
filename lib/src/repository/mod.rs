@@ -30,7 +30,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
-    protocol::{LocalId, RootNodeFilter, StorageSize, BLOCK_SIZE},
+    protocol::{RootNodeFilter, StorageSize, BLOCK_SIZE},
     store,
     sync::stream::Throttle,
     version_vector::VersionVector,

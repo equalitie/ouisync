@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests;
 
-use super::{quota, LocalId, Metadata, RepositoryMonitor};
+use super::{quota, Metadata, RepositoryMonitor};
 use crate::{
     block_tracker::{BlockPromise, BlockTracker, OfferState},
     crypto::CacheHash,
@@ -27,7 +27,6 @@ pub(crate) struct Vault {
     store: Store,
     pub event_tx: EventSender,
     pub block_tracker: BlockTracker,
-    pub local_id: LocalId,
     pub monitor: Arc<RepositoryMonitor>,
 }
 
@@ -45,7 +44,6 @@ impl Vault {
             store,
             event_tx,
             block_tracker: BlockTracker::new(),
-            local_id: LocalId::new(),
             monitor: Arc::new(monitor),
         }
     }

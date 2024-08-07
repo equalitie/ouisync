@@ -420,7 +420,7 @@ impl Drop for Registration {
         if let Some(holder) = state.registry.try_remove(self.key) {
             if let Some(brokers) = &mut state.message_brokers {
                 for broker in brokers.values_mut() {
-                    broker.destroy_link(holder.vault.local_id);
+                    broker.destroy_link(holder.vault.repository_id());
                 }
             }
         }

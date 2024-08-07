@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
-    protocol::LocalId,
+    protocol::RepositoryId,
     repository::Vault,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -41,7 +41,7 @@ pub(super) struct MessageBroker {
     this_runtime_id: PublicRuntimeId,
     that_runtime_id: PublicRuntimeId,
     dispatcher: MessageDispatcher,
-    links: HashMap<LocalId, oneshot::Sender<()>>,
+    links: HashMap<RepositoryId, oneshot::Sender<()>>,
     request_limiter: Arc<Semaphore>,
     pex_peer: PexPeer,
     monitor: StateMonitor,
@@ -103,7 +103,7 @@ impl MessageBroker {
 
         let (abort_tx, abort_rx) = oneshot::channel();
 
-        match self.links.entry(vault.local_id) {
+        match self.links.entry(*vault.repository_id()) {
             Entry::Occupied(mut entry) => {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
@@ -160,8 +160,8 @@ impl MessageBroker {
 
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
-    pub fn destroy_link(&mut self, id: LocalId) {
-        self.links.remove(&id);
+    pub fn destroy_link(&mut self, id: &RepositoryId) {
+        self.links.remove(id);
     }
 
     pub async fn shutdown(self) {

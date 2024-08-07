@@ -31,7 +31,6 @@ pub(crate) use self::{
     leaf_node::{LeafNode, LeafNodes, EMPTY_LEAF_HASH},
     locator::Locator,
     proof::ProofError,
-    repository::LocalId,
     root_node::{RootNodeFilter, RootNodeKind},
 };
 
