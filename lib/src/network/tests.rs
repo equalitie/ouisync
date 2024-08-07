@@ -10,11 +10,10 @@ use crate::{
     db,
     event::{Event, EventSender, Payload},
     protocol::{
-        test_utils::{receive_blocks, receive_nodes, Snapshot},
-        Block, BlockId, Bump, RepositoryId, RootNode, SingleBlockPresence,
+        test_utils::Snapshot, Block, BlockId, Bump, RepositoryId, RootNode, SingleBlockPresence,
     },
     repository::{RepositoryMonitor, Vault},
-    store::Changeset,
+    store::{Changeset, SnapshotWriter},
     test_utils,
     version_vector::VersionVector,
 };
@@ -74,7 +73,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_vault, &snapshot).await;
+    save_blocks(&a_vault, &snapshot).await;
 
     assert!(load_latest_root_node(&b_vault, &a_id).await.is_none());
 
@@ -141,10 +140,12 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 
     let a_block_tracker = a_vault.block_tracker.client();
 
-    // Keep adding the blocks to replica A and verify they get received by replica B as well.
+    // Receive the blocks by replica A and verify they get received by replica B as well.
     let drive = async {
+        // Simulate receiving the blocks from yet another replica
+        let mut writer = a_vault.store().begin_client_write().await.unwrap();
+
         for (id, block) in snapshot.blocks() {
-            // Write the block by replica A.
             a_vault.block_tracker.require(*id);
             a_block_tracker.register(*id, OfferState::Approved);
             let promise = a_block_tracker
@@ -154,8 +155,15 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
                 .accept()
                 .unwrap();
 
-            a_vault.receive_block(block, Some(promise)).await.unwrap();
-            tracing::info!(?id, "write block");
+            writer.save_block(block, Some(promise)).await.unwrap();
+
+            tracing::info!(?id, "save block");
+        }
+
+        let status = writer.commit().await.unwrap();
+
+        for block_id in status.new_blocks {
+            a_vault.event_tx.send(Payload::BlockReceived(block_id));
         }
 
         // Then wait until replica B receives and writes it too.
@@ -188,7 +196,7 @@ async fn failed_block_only_peer() {
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_vault, &snapshot).await;
+    save_blocks(&a_vault, &snapshot).await;
 
     let mut server = create_server(a_vault.clone(), a_choker.clone());
     let mut client = create_client(b_vault.clone());
@@ -228,7 +236,7 @@ async fn failed_block_same_peer() {
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_vault, &snapshot).await;
+    save_blocks(&a_vault, &snapshot).await;
 
     // [A]-(server_ac)---+
     //                   |
@@ -292,21 +300,21 @@ async fn failed_block_other_peer() {
         let mut rng = StdRng::seed_from_u64(0);
 
         let write_keys = Keypair::generate(&mut rng);
-        let (_a_base_dir, a_state, a_choker, a_id) = create_repository(&mut rng, &write_keys).await;
-        let (_b_base_dir, b_state, b_choker, b_id) = create_repository(&mut rng, &write_keys).await;
-        let (_c_base_dir, c_state, _, _) = create_repository(&mut rng, &write_keys).await;
+        let (_a_base_dir, a_vault, a_choker, a_id) = create_repository(&mut rng, &write_keys).await;
+        let (_b_base_dir, b_vault, b_choker, b_id) = create_repository(&mut rng, &write_keys).await;
+        let (_c_base_dir, c_vault, _, _) = create_repository(&mut rng, &write_keys).await;
 
         // Create the snapshot by A
         let snapshot = Snapshot::generate(&mut rng, 1);
-        save_snapshot(&a_state, a_id, &write_keys, &snapshot).await;
-        receive_blocks(&a_state, &snapshot).await;
+        save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
+        save_blocks(&a_vault, &snapshot).await;
 
         // Sync B with A
-        let mut server_ab = create_server(a_state.clone(), a_choker.clone());
-        let mut client_ba = create_client(b_state.clone());
+        let mut server_ab = create_server(a_vault.clone(), a_choker.clone());
+        let mut client_ba = create_client(b_vault.clone());
         simulate_connection_until(&mut server_ab, &mut client_ba, async {
             for id in snapshot.blocks().keys() {
-                wait_until_block_exists(&b_state, id).await;
+                wait_until_block_exists(&b_vault, id).await;
             }
         })
         .await;
@@ -327,13 +335,13 @@ async fn failed_block_other_peer() {
         let span_bc = tracing::info_span!("BC");
 
         let enter = span_ac.enter();
-        let mut server_ac = create_server(a_state.clone(), a_choker);
-        let mut client_ca = create_client(c_state.clone());
+        let mut server_ac = create_server(a_vault.clone(), a_choker);
+        let mut client_ca = create_client(c_vault.clone());
         drop(enter);
 
         let enter = span_bc.enter();
-        let mut server_bc = create_server(b_state.clone(), b_choker);
-        let mut client_cb = create_client(c_state.clone());
+        let mut server_bc = create_server(b_vault.clone(), b_choker);
+        let mut client_cb = create_client(c_vault.clone());
         drop(enter);
 
         // Run the two connections in parallel until C syncs its index with both A and B.
@@ -345,8 +353,8 @@ async fn failed_block_other_peer() {
         let conn_ac = conn_ac.instrument(span_ac.clone());
 
         run_until(future::join(conn_ac, &mut conn_bc), async {
-            wait_until_snapshots_in_sync(&a_state, a_id, &c_state).await;
-            wait_until_snapshots_in_sync(&b_state, b_id, &c_state).await;
+            wait_until_snapshots_in_sync(&a_vault, a_id, &c_vault).await;
+            wait_until_snapshots_in_sync(&b_vault, b_id, &c_vault).await;
         })
         .await;
 
@@ -359,7 +367,7 @@ async fn failed_block_other_peer() {
         // It might sometimes happen that the block were already received in the previous step
         // In that case the situation this test is trying to exercise does not occur and we need
         // to try again.
-        let mut reader = c_state.store().acquire_read().await.unwrap();
+        let mut reader = c_vault.store().acquire_read().await.unwrap();
         for id in snapshot.blocks().keys() {
             if reader.block_exists(id).await.unwrap() {
                 tracing::warn!("test preconditions not met, trying again");
@@ -367,9 +375,9 @@ async fn failed_block_other_peer() {
                 drop(reader);
                 drop(conn_bc);
 
-                a_state.store().close().await.unwrap();
-                b_state.store().close().await.unwrap();
-                c_state.store().close().await.unwrap();
+                a_vault.store().close().await.unwrap();
+                b_vault.store().close().await.unwrap();
+                c_vault.store().close().await.unwrap();
 
                 continue 'main;
             }
@@ -382,7 +390,7 @@ async fn failed_block_other_peer() {
         // the only remaining peer at this point.
         run_until(conn_bc, async {
             for id in snapshot.blocks().keys() {
-                wait_until_block_exists(&c_state, id).await;
+                wait_until_block_exists(&c_vault, id).await;
             }
         })
         .await;
@@ -431,7 +439,29 @@ async fn save_snapshot(
     let mut version_vector = VersionVector::new();
     version_vector.insert(writer_id, 2); // to force overwrite the initial root node
 
-    receive_nodes(vault, write_keys, writer_id, version_vector, snapshot).await;
+    let status = SnapshotWriter::begin(vault.store(), snapshot)
+        .await
+        .save_nodes(write_keys, writer_id, version_vector)
+        .await
+        .commit()
+        .await;
+
+    for branch_id in status.approved_branches {
+        vault.event_tx.send(Payload::BranchChanged(branch_id));
+    }
+}
+
+async fn save_blocks(vault: &Vault, snapshot: &Snapshot) {
+    let status = SnapshotWriter::begin(vault.store(), snapshot)
+        .await
+        .save_blocks()
+        .await
+        .commit()
+        .await;
+
+    for block_id in status.new_blocks {
+        vault.event_tx.send(Payload::BlockReceived(block_id));
+    }
 }
 
 async fn wait_until_snapshots_in_sync(

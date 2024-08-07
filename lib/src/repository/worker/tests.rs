@@ -4,11 +4,8 @@ use super::{
     utils::Counter,
 };
 use crate::{
-    access_control::AccessSecrets,
-    crypto::sign,
-    db,
-    protocol::test_utils::{self, Snapshot},
-    version_vector::VersionVector,
+    access_control::AccessSecrets, crypto::sign, db, protocol::test_utils::Snapshot,
+    store::SnapshotWriter, version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
@@ -42,16 +39,15 @@ async fn prune() {
     for _ in 0..2 {
         let snapshot = Snapshot::generate(&mut rng, 2);
 
-        test_utils::receive_root_nodes(
-            &shared.vault,
-            &secrets.write_keys,
-            writer_d,
-            vv_d.clone(),
-            &snapshot,
-        )
-        .await;
-        test_utils::receive_inner_nodes(&shared.vault, &snapshot).await;
-        // Do not receive leaf nodes, to keep the snapshot incomplete.
+        SnapshotWriter::begin(shared.vault.store(), &snapshot)
+            .await
+            .save_root_nodes(&secrets.write_keys, writer_d, vv_d.clone())
+            .await
+            .save_inner_nodes()
+            .await
+            // Do not save leaf nodes, to keep the snapshot incomplete.
+            .commit()
+            .await;
 
         vv_d.increment(writer_d);
     }
@@ -61,14 +57,12 @@ async fn prune() {
     for _ in 0..2 {
         let snapshot = Snapshot::generate(&mut rng, 2);
 
-        test_utils::receive_nodes(
-            &shared.vault,
-            &secrets.write_keys,
-            writer_c,
-            vv_c.clone(),
-            &snapshot,
-        )
-        .await;
+        SnapshotWriter::begin(shared.vault.store(), &snapshot)
+            .await
+            .save_nodes(&secrets.write_keys, writer_c, vv_c.clone())
+            .await
+            .commit()
+            .await;
 
         vv_c.increment(writer_c);
     }
@@ -80,14 +74,12 @@ async fn prune() {
         for _ in 0..2 {
             let snapshot = Snapshot::generate(&mut rng, 2);
 
-            test_utils::receive_nodes(
-                &shared.vault,
-                &secrets.write_keys,
-                writer_id,
-                vv.clone(),
-                &snapshot,
-            )
-            .await;
+            SnapshotWriter::begin(shared.vault.store(), &snapshot)
+                .await
+                .save_nodes(&secrets.write_keys, writer_id, vv.clone())
+                .await
+                .commit()
+                .await;
 
             vv.increment(writer_id);
         }

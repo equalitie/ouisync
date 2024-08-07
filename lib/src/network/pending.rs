@@ -153,8 +153,6 @@ impl PendingRequests {
             REQUEST_TIMEOUT,
         );
 
-        tracing::trace!(pending_requests = map.len());
-
         // The expiration tracker task is started each time an item is inserted into previously
         // empty map and stopped when the map becomes empty again.
         if map.len() == 1 {
@@ -176,8 +174,6 @@ impl PendingRequests {
         let mut map = self.map.lock().unwrap();
 
         if let Some(request_data) = map.remove(&key) {
-            tracing::trace!(pending_requests = map.len());
-
             request_removed(&self.monitor, &key);
 
             self.monitor

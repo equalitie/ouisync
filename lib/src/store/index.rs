@@ -1,32 +1,8 @@
 //! Operations on the whole index (or its subset) as opposed to individual nodes.
 
-use super::{
-    cache::CacheTransaction,
-    error::Error,
-    inner_node,
-    quota::{self, QuotaError},
-    root_node,
-};
-use crate::{
-    collections::HashMap,
-    crypto::{sign::PublicKey, Hash},
-    db,
-    future::try_collect_into,
-    protocol::NodeState,
-    repository,
-};
+use super::{cache::CacheTransaction, error::Error, inner_node, root_node};
+use crate::{collections::HashMap, crypto::Hash, db, protocol::NodeState};
 use sqlx::Row;
-
-/// Status of receiving nodes from remote replica.
-#[derive(Debug)]
-pub(super) struct ReceiveStatus {
-    /// Whether any of the snapshots were already approved.
-    pub old_approved: bool,
-    /// List of branches whose snapshots have been approved.
-    pub new_approved: Vec<PublicKey>,
-    /// Is storage quota enabled?
-    pub has_quota: bool,
-}
 
 /// Does a parent node (root or inner) with the given hash exist?
 pub(super) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Result<bool, Error> {
@@ -69,86 +45,18 @@ pub(super) async fn update_summaries(
             let summary = summary.with_state(state);
 
             cache_tx.update_root_summary(hash, summary);
-
-            states
-                .entry(hash)
-                .or_insert(summary.state)
-                .update(summary.state);
+            states.insert(hash, summary.state);
         }
     }
 
     Ok(states)
 }
 
-pub(super) async fn finalize(
-    write_tx: &mut db::WriteTransaction,
-    cache_tx: &mut CacheTransaction,
-    hash: Hash,
-) -> Result<ReceiveStatus, Error> {
-    // TODO: Don't hold write transaction through this whole function. Use it only for
-    // `update_summaries` then commit it, then do the quota check with a read-only transaction
-    // and then grab another write transaction to do the `approve` / `reject`.
-    // CAVEAT: the quota check would need some kind of unique lock to prevent multiple
-    // concurrent checks to succeed where they would otherwise fail if ran sequentially.
-
-    let states = update_summaries(write_tx, cache_tx, vec![hash]).await?;
-    let quota = repository::quota::get(write_tx).await?;
-
-    let mut old_approved = false;
-    let mut new_approved = Vec::new();
-
-    for (hash, state) in states {
-        match state {
-            NodeState::Complete => (),
-            NodeState::Approved => {
-                old_approved = true;
-                continue;
-            }
-            NodeState::Incomplete | NodeState::Rejected => continue,
-        }
-
-        let approve = if let Some(quota) = quota {
-            match quota::check(write_tx, &hash, quota).await {
-                Ok(()) => true,
-                Err(QuotaError::Exceeded(size)) => {
-                    tracing::warn!(?hash, quota = %quota, size = %size, "snapshot rejected - quota exceeded");
-                    false
-                }
-                Err(QuotaError::Outdated) => {
-                    tracing::debug!(?hash, "snapshot outdated");
-                    false
-                }
-                Err(QuotaError::Store(error)) => return Err(error),
-            }
-        } else {
-            true
-        };
-
-        if approve {
-            // TODO: put node to cache?
-
-            root_node::approve(write_tx, &hash).await?;
-            try_collect_into(
-                root_node::load_writer_ids_by_hash(write_tx, &hash),
-                &mut new_approved,
-            )
-            .await?;
-        } else {
-            root_node::reject(write_tx, &hash).await?;
-        }
-    }
-
-    Ok(ReceiveStatus {
-        old_approved,
-        new_approved,
-        has_quota: quota.is_some(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::{block, cache::Cache, inner_node, leaf_node, root_node};
+    use super::super::{cache::Cache, inner_node, leaf_node, root_node};
     use super::*;
+    use crate::store::block;
     use crate::{
         crypto::{
             sign::{Keypair, PublicKey},
@@ -162,6 +70,7 @@ mod tests {
         version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
+    use futures_util::TryStreamExt;
     use rand::{rngs::StdRng, SeedableRng};
     use std::iter;
     use std::sync::Arc;
@@ -548,9 +457,15 @@ mod tests {
         let mut received_blocks = 0;
 
         for block in snapshot.blocks().values() {
-            block::receive(&mut write_tx, &mut cache_tx, block)
+            block::write(&mut write_tx, block).await.unwrap();
+            let parent_hashes = leaf_node::set_present(&mut write_tx, &block.id)
+                .try_collect()
                 .await
                 .unwrap();
+            update_summaries(&mut write_tx, &mut cache_tx, parent_hashes)
+                .await
+                .unwrap();
+
             received_blocks += 1;
 
             reload_root_node(&mut write_tx, &mut root_node)

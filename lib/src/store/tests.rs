@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     crypto::{cipher::SecretKey, sign::Keypair},
-    protocol::{Bump, Locator, SingleBlockPresence, EMPTY_INNER_HASH},
+    protocol::{Block, Bump, Locator, SingleBlockPresence, EMPTY_INNER_HASH},
     test_utils,
 };
 use proptest::{arbitrary::any, collection::vec};

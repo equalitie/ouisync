@@ -397,19 +397,17 @@ async fn set_as_missing_if_expired(
     let mut branches: HashSet<PublicKey> = HashSet::default();
 
     for block_id in &block_ids {
-        let changed = leaf_node::set_missing_if_expired(&mut tx, block_id).await?;
+        let parent_hashes: Vec<_> = leaf_node::set_missing_if_expired(&mut tx, block_id)
+            .try_collect()
+            .await?;
 
-        if !changed {
+        if parent_hashes.is_empty() {
             continue;
         }
 
         block_download_tracker.require(*block_id);
 
-        let nodes: Vec<_> = leaf_node::load_parent_hashes(&mut tx, block_id)
-            .try_collect()
-            .await?;
-
-        for (hash, _state) in index::update_summaries(&mut tx, &mut cache, nodes).await? {
+        for (hash, _state) in index::update_summaries(&mut tx, &mut cache, parent_hashes).await? {
             try_collect_into(
                 root_node::load_writer_ids_by_hash(&mut tx, &hash),
                 &mut branches,
@@ -433,6 +431,7 @@ mod test {
     use super::super::*;
     use super::*;
     use crate::crypto::sign::Keypair;
+    use crate::protocol::Block;
     use futures_util::future;
     use rand::distributions::Standard;
     use rand::seq::SliceRandom;
@@ -587,16 +586,18 @@ mod test {
                 let store = store.clone();
 
                 task::spawn(async move {
-                    let mut tx = store.begin_write().await.unwrap();
                     match op {
                         Op::Receive(block) => {
-                            tx.receive_block(&block).await.unwrap();
+                            let mut writer = store.begin_client_write().await.unwrap();
+                            writer.save_block(&block, None).await.unwrap();
+                            writer.commit().await.unwrap();
                         }
                         Op::Remove(id) => {
+                            let mut tx = store.begin_write().await.unwrap();
                             tx.remove_block(&id).await.unwrap();
+                            tx.commit().await.unwrap();
                         }
                     }
-                    tx.commit().await.unwrap();
                 })
             })
             .collect();

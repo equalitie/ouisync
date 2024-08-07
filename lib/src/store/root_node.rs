@@ -14,8 +14,8 @@ use sqlx::{sqlite::SqliteRow, FromRow, Row};
 use std::{cmp::Ordering, fmt, future};
 
 /// Status of receiving a root node
-#[derive(Debug)]
-pub(crate) enum ReceiveStatus {
+#[derive(PartialEq, Eq, Debug)]
+pub(crate) enum RootNodeStatus {
     /// The node represents a new snapshot - write it into the store and requests its children.
     NewSnapshot,
     /// We already have the node but its block presence indicated the peer potentially has some
@@ -25,7 +25,7 @@ pub(crate) enum ReceiveStatus {
     Outdated,
 }
 
-impl ReceiveStatus {
+impl RootNodeStatus {
     pub fn request_children(&self) -> bool {
         match self {
             Self::NewSnapshot | Self::NewBlocks => true,
@@ -41,7 +41,7 @@ impl ReceiveStatus {
     }
 }
 
-impl fmt::Display for ReceiveStatus {
+impl fmt::Display for RootNodeStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::NewSnapshot => write!(f, "new snapshot"),
@@ -550,14 +550,14 @@ pub(super) fn load_writer_ids_by_hash<'a>(
         .err_into()
 }
 
-pub(super) async fn decide_action(
-    tx: &mut db::WriteTransaction,
+pub(super) async fn status(
+    conn: &mut db::Connection,
     new_proof: &Proof,
     new_block_presence: &MultiBlockPresence,
-) -> Result<ReceiveStatus, Error> {
-    let mut status = ReceiveStatus::NewSnapshot;
+) -> Result<RootNodeStatus, Error> {
+    let mut status = RootNodeStatus::NewSnapshot;
 
-    let mut old_nodes = load_all_latest(tx);
+    let mut old_nodes = load_all_latest(conn);
     while let Some(old_node) = old_nodes.try_next().await? {
         match new_proof
             .version_vector
@@ -566,7 +566,7 @@ pub(super) async fn decide_action(
             Some(Ordering::Less) => {
                 // The incoming node is outdated compared to at least one existing node - discard
                 // it.
-                status = ReceiveStatus::Outdated;
+                status = RootNodeStatus::Outdated;
             }
             Some(Ordering::Equal) => {
                 if new_proof.hash == old_node.proof.hash {
@@ -580,9 +580,9 @@ pub(super) async fn decide_action(
                         .block_presence
                         .is_outdated(new_block_presence)
                     {
-                        status = ReceiveStatus::NewBlocks;
+                        status = RootNodeStatus::NewBlocks;
                     } else {
-                        status = ReceiveStatus::Outdated;
+                        status = RootNodeStatus::Outdated;
                     }
                 } else {
                     tracing::warn!(
@@ -594,7 +594,7 @@ pub(super) async fn decide_action(
                         "Received root node invalid - broken invariant: same vv but different hash"
                     );
 
-                    status = ReceiveStatus::Outdated;
+                    status = RootNodeStatus::Outdated;
                 }
             }
             Some(Ordering::Greater) => (),
@@ -607,12 +607,12 @@ pub(super) async fn decide_action(
                         "Received root node invalid - broken invariant: concurrency within branch is not allowed"
                     );
 
-                    status = ReceiveStatus::Outdated;
+                    status = RootNodeStatus::Outdated;
                 }
             }
         }
 
-        if matches!(status, ReceiveStatus::Outdated) {
+        if matches!(status, RootNodeStatus::Outdated) {
             break;
         }
     }

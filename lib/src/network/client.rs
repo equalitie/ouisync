@@ -2,17 +2,19 @@ use super::{
     constants::MAX_PENDING_REQUESTS_PER_CLIENT,
     debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Content, Request, Response, ResponseDisambiguator},
-    pending::{PendingRequest, PendingRequests, PendingResponse, ProcessedResponse},
+    pending::{PendingRequest, PendingRequests, ProcessedResponse},
 };
 use crate::{
     block_tracker::{BlockPromise, TrackerClient},
     crypto::{sign::PublicKey, CacheHash, Hashable},
-    error::{Error, Result},
+    error::Result,
+    event::Payload,
     protocol::{
-        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, RootNodeFilter, UntrustedProof,
+        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, ProofError, RootNodeFilter,
+        UntrustedProof,
     },
     repository::Vault,
-    store,
+    store::ClientWriter,
 };
 use std::{future, sync::Arc, time::Instant};
 use tokio::{
@@ -20,6 +22,9 @@ use tokio::{
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
 use tracing::{instrument, Level};
+
+// Max number of responses to process in a singe batch.
+const MAX_RESPONSE_BATCH_SIZE: usize = 1024;
 
 pub(super) struct Client {
     inner: Inner,
@@ -155,39 +160,61 @@ impl Inner {
     }
 
     async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
-        while let Some(response) = rx.recv().await {
-            self.vault.monitor.responses_received.increment(1);
+        let mut batch = Vec::new();
 
-            let response = self.pending_requests.remove(response);
-            self.handle_response(response).await?;
+        loop {
+            if rx.recv_many(&mut batch, MAX_RESPONSE_BATCH_SIZE).await == 0 {
+                break;
+            }
+
+            self.handle_response_batch(&mut batch).await?;
         }
 
         Ok(())
     }
 
-    async fn handle_response(&self, response: PendingResponse) -> Result<()> {
-        match response.response {
-            ProcessedResponse::RootNode(proof, block_presence, debug) => {
-                self.handle_root_node(proof, block_presence, debug).await
+    async fn handle_response_batch(&self, batch: &mut Vec<Response>) -> Result<()> {
+        self.vault
+            .monitor
+            .responses_received
+            .increment(batch.len() as u64);
+
+        let mut writer = self.vault.store().begin_client_write().await?;
+
+        for response in batch.drain(..) {
+            let response = self.pending_requests.remove(response);
+
+            match response.response {
+                ProcessedResponse::RootNode(proof, block_presence, debug) => {
+                    self.handle_root_node(&mut writer, proof, block_presence, debug)
+                        .await?;
+                }
+                ProcessedResponse::InnerNodes(nodes, _, debug) => {
+                    self.handle_inner_nodes(&mut writer, nodes, debug).await?;
+                }
+                ProcessedResponse::LeafNodes(nodes, _, debug) => {
+                    self.handle_leaf_nodes(&mut writer, nodes, debug).await?;
+                }
+                ProcessedResponse::BlockOffer(block_id, debug) => {
+                    self.handle_block_offer(&mut writer, block_id, debug)
+                        .await?;
+                }
+                ProcessedResponse::Block(block, debug) => {
+                    self.handle_block(&mut writer, block, response.block_promise, debug)
+                        .await?;
+                }
+                ProcessedResponse::BlockError(block_id, debug) => {
+                    self.handle_block_not_found(block_id, debug);
+                }
+                ProcessedResponse::RootNodeError(..) | ProcessedResponse::ChildNodesError(..) => {
+                    continue
+                }
             }
-            ProcessedResponse::InnerNodes(nodes, _, debug) => {
-                self.handle_inner_nodes(nodes, debug).await
-            }
-            ProcessedResponse::LeafNodes(nodes, _, debug) => {
-                self.handle_leaf_nodes(nodes, debug).await
-            }
-            ProcessedResponse::BlockOffer(block_id, debug) => {
-                self.handle_block_offer(block_id, debug).await
-            }
-            ProcessedResponse::Block(block, debug) => {
-                self.handle_block(block, response.block_promise, debug)
-                    .await
-            }
-            ProcessedResponse::BlockError(block_id, debug) => {
-                self.handle_block_not_found(block_id, debug).await
-            }
-            ProcessedResponse::RootNodeError(..) | ProcessedResponse::ChildNodesError(..) => Ok(()),
         }
+
+        self.commit_responses(writer).await?;
+
+        Ok(())
     }
 
     #[instrument(
@@ -203,12 +230,26 @@ impl Inner {
     )]
     async fn handle_root_node(
         &self,
+        writer: &mut ClientWriter,
         proof: UntrustedProof,
         block_presence: MultiBlockPresence,
         debug_payload: DebugResponse,
     ) -> Result<()> {
+        let proof = match proof.verify(self.vault.repository_id()) {
+            Ok(proof) => proof,
+            Err(ProofError(_)) => {
+                tracing::trace!("Invalid proof");
+                return Ok(());
+            }
+        };
+
+        // Ignore branches with empty version vectors because they have no content yet.
+        if proof.version_vector.is_empty() {
+            return Ok(());
+        }
+
         let hash = proof.hash;
-        let status = self.vault.receive_root_node(proof, block_presence).await?;
+        let status = writer.save_root_node(proof, &block_presence).await?;
 
         tracing::debug!("Received root node - {status}");
 
@@ -226,30 +267,24 @@ impl Inner {
     #[instrument(skip_all, fields(hash = ?nodes.hash(), ?debug_payload), err(Debug))]
     async fn handle_inner_nodes(
         &self,
+        writer: &mut ClientWriter,
         nodes: CacheHash<InnerNodes>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
         let total = nodes.len();
-        let status = self.vault.receive_inner_nodes(nodes).await?;
-
-        let debug = debug_payload.follow_up();
+        let status = writer.save_inner_nodes(nodes).await?;
 
         tracing::trace!(
-            "Received {}/{} inner nodes: {:?}",
-            status.request_children.len(),
-            total,
-            status
-                .request_children
-                .iter()
-                .map(|node| &node.hash)
-                .collect::<Vec<_>>()
+            "Received {}/{} inner nodes",
+            status.new_children.len(),
+            total
         );
 
-        for node in status.request_children {
+        for node in status.new_children {
             self.enqueue_request(PendingRequest::ChildNodes(
                 node.hash,
                 ResponseDisambiguator::new(node.summary.block_presence),
-                debug.clone(),
+                debug_payload.clone().follow_up(),
             ));
         }
 
@@ -259,32 +294,22 @@ impl Inner {
     #[instrument(skip_all, fields(hash = ?nodes.hash(), ?debug_payload), err(Debug))]
     async fn handle_leaf_nodes(
         &self,
+        writer: &mut ClientWriter,
         nodes: CacheHash<LeafNodes>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
         let total = nodes.len();
-        let status = self.vault.receive_leaf_nodes(nodes).await?;
+        let status = writer.save_leaf_nodes(nodes).await?;
 
         tracing::trace!(
-            "Received {}/{} leaf nodes: {:?}",
-            status.block_offers.len(),
+            "Received {}/{} leaf nodes",
+            status.new_block_offers.len(),
             total,
-            status.block_offers,
         );
 
-        // Register block offers referenced from the received nodes.
-        for block_id in status.block_offers {
-            self.block_tracker
-                .register(block_id, status.block_offer_state);
+        for (block_id, state) in status.new_block_offers {
+            self.block_tracker.register(block_id, state);
         }
-
-        // Approve pending block offers referenced from the recently approved snapshots.
-        for block_id in status.approved_missing_blocks {
-            self.vault.block_tracker.approve(block_id);
-        }
-
-        self.refresh_branches(status.new_approved.iter().copied());
-        self.log_approved(&status.new_approved).await;
 
         Ok(())
     }
@@ -292,10 +317,11 @@ impl Inner {
     #[instrument(skip_all, fields(id = ?block_id, ?debug_payload), err(Debug))]
     async fn handle_block_offer(
         &self,
+        writer: &mut ClientWriter,
         block_id: BlockId,
         debug_payload: DebugResponse,
     ) -> Result<()> {
-        let Some(offer_state) = self.vault.offer_state(&block_id).await? else {
+        let Some(offer_state) = writer.load_block_offer_state(&block_id).await? else {
             return Ok(());
         };
 
@@ -309,27 +335,49 @@ impl Inner {
     #[instrument(skip_all, fields(id = ?block.id, ?debug_payload), err(Debug))]
     async fn handle_block(
         &self,
+        writer: &mut ClientWriter,
         block: Block,
         block_promise: Option<BlockPromise>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
+        writer.save_block(&block, block_promise).await?;
+
         tracing::trace!("Received block");
 
-        match self.vault.receive_block(&block, block_promise).await {
-            // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
-            // needed.
-            Ok(()) | Err(Error::Store(store::Error::BlockNotReferenced)) => Ok(()),
-            Err(error) => Err(error),
-        }
+        Ok(())
     }
 
-    #[instrument(skip_all, fields(block_id, debug_payload = ?_debug_payload), err(Debug))]
-    async fn handle_block_not_found(
-        &self,
-        block_id: BlockId,
-        _debug_payload: DebugResponse,
-    ) -> Result<()> {
-        tracing::trace!("Received block not found {:?}", block_id);
+    #[instrument(skip_all, fields(block_id = ?_block_id, ?debug_payload))]
+    fn handle_block_not_found(&self, _block_id: BlockId, debug_payload: DebugResponse) {
+        tracing::trace!("Received block not found");
+    }
+
+    async fn commit_responses(&self, writer: ClientWriter) -> Result<()> {
+        let event_tx = self.vault.event_tx.clone();
+        let status = writer
+            .commit_and_then(move |status| {
+                // Notify about newly written blocks.
+                for block_id in &status.new_blocks {
+                    event_tx.send(Payload::BlockReceived(*block_id));
+                }
+
+                // Notify about newly approved snapshots
+                for branch_id in &status.approved_branches {
+                    event_tx.send(Payload::BranchChanged(*branch_id));
+                }
+
+                status
+            })
+            .await?;
+
+        // Approve pending block offers referenced from the newly approved snapshots.
+        for block_id in status.approved_missing_blocks {
+            self.vault.block_tracker.approve(block_id);
+        }
+
+        self.refresh_branches(status.approved_branches.iter().copied());
+        self.log_approved(&status.approved_branches).await;
+
         Ok(())
     }
 
@@ -423,4 +471,131 @@ impl Inner {
 struct SendPermits {
     peer: OwnedSemaphorePermit,
     link: OwnedSemaphorePermit,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        access_control::WriteSecrets,
+        block_tracker::RequestMode,
+        crypto::sign::Keypair,
+        db,
+        event::EventSender,
+        protocol::{Proof, RepositoryId, EMPTY_INNER_HASH},
+        repository::RepositoryMonitor,
+        version_vector::VersionVector,
+    };
+    use futures_util::TryStreamExt;
+    use metrics::NoopRecorder;
+    use state_monitor::StateMonitor;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn receive_root_node_with_invalid_proof() {
+        let (_base_dir, inner, _, _) = setup().await;
+        let remote_id = PublicKey::random();
+
+        // Receive invalid root node from the remote replica.
+        let invalid_write_keys = Keypair::random();
+        inner
+            .handle_response_batch(&mut vec![Response::RootNode(
+                Proof::new(
+                    remote_id,
+                    VersionVector::first(remote_id),
+                    *EMPTY_INNER_HASH,
+                    &invalid_write_keys,
+                )
+                .into(),
+                MultiBlockPresence::None,
+                DebugResponse::unsolicited(),
+            )])
+            .await
+            .unwrap();
+
+        // The invalid root was not written to the db.
+        assert!(inner
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&remote_id)
+            .try_next()
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn receive_root_node_with_empty_version_vector() {
+        let (_base_dir, inner, _, secrets) = setup().await;
+        let remote_id = PublicKey::random();
+
+        inner
+            .handle_response_batch(&mut vec![Response::RootNode(
+                Proof::new(
+                    remote_id,
+                    VersionVector::new(),
+                    *EMPTY_INNER_HASH,
+                    &secrets.write_keys,
+                )
+                .into(),
+                MultiBlockPresence::None,
+                DebugResponse::unsolicited(),
+            )])
+            .await
+            .unwrap();
+
+        assert!(inner
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&remote_id)
+            .try_next()
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    async fn setup() -> (
+        TempDir,
+        Inner,
+        mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
+        WriteSecrets,
+    ) {
+        let (base_dir, pool) = db::create_temp().await.unwrap();
+
+        let secrets = WriteSecrets::random();
+        let repository_id = RepositoryId::from(secrets.write_keys.public_key());
+
+        let vault = Vault::new(
+            repository_id,
+            EventSender::new(1),
+            pool,
+            RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
+        );
+
+        vault.block_tracker.set_request_mode(RequestMode::Lazy);
+
+        let pending_requests = PendingRequests::new(vault.monitor.clone());
+        let block_tracker = vault.block_tracker.client();
+
+        let (content_tx, _content_rx) = mpsc::channel(1);
+        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
+
+        let inner = Inner {
+            vault,
+            pending_requests,
+            peer_request_limiter: Arc::new(Semaphore::new(16)),
+            link_request_limiter: Arc::new(Semaphore::new(16)),
+            block_tracker,
+            content_tx,
+            send_queue_tx,
+        };
+
+        (base_dir, inner, send_queue_rx, secrets)
+    }
 }

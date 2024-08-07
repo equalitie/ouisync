@@ -1,31 +1,9 @@
-use super::{cache::CacheTransaction, error::Error, index, leaf_node};
+use super::error::Error;
 use crate::{
     db,
     protocol::{Block, BlockContent, BlockId, BlockNonce, BLOCK_SIZE},
 };
-use futures_util::TryStreamExt;
 use sqlx::Row;
-
-/// Write a block received from a remote replica.
-pub(super) async fn receive(
-    write_tx: &mut db::WriteTransaction,
-    cache_tx: &mut CacheTransaction,
-    block: &Block,
-) -> Result<(), Error> {
-    if !leaf_node::set_present(write_tx, &block.id).await? {
-        return Ok(());
-    }
-
-    let nodes: Vec<_> = leaf_node::load_parent_hashes(write_tx, &block.id)
-        .try_collect()
-        .await?;
-
-    index::update_summaries(write_tx, cache_tx, nodes).await?;
-
-    write(write_tx, block).await?;
-
-    Ok(())
-}
 
 /// Reads a block from the store into a buffer.
 ///
