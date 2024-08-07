@@ -60,7 +60,8 @@ use self::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    repository::{RepositoryHandle, RepositoryId, Vault},
+    protocol::RepositoryId,
+    repository::{RepositoryHandle, Vault},
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};

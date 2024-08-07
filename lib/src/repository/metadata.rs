@@ -8,7 +8,7 @@ use crate::{
     },
     db::{self, DatabaseId},
     device_id::DeviceId,
-    repository::RepositoryId,
+    protocol::RepositoryId,
     store::Error as StoreError,
 };
 use rand::{rngs::OsRng, Rng};

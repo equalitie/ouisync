@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests;
 
-use super::{quota, LocalId, Metadata, RepositoryId, RepositoryMonitor};
+use super::{quota, LocalId, Metadata, RepositoryMonitor};
 use crate::{
     block_tracker::{BlockPromise, BlockTracker, OfferState},
     crypto::CacheHash,
@@ -13,7 +13,7 @@ use crate::{
     event::{EventSender, Payload},
     protocol::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, ProofError,
-        StorageSize, UntrustedProof,
+        RepositoryId, StorageSize, UntrustedProof,
     },
     store::{self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, RootNodeReceiveStatus, Store},
 };

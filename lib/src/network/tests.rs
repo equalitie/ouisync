@@ -11,9 +11,9 @@ use crate::{
     event::{Event, EventSender, Payload},
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
-        Block, BlockId, Bump, RootNode, SingleBlockPresence,
+        Block, BlockId, Bump, RepositoryId, RootNode, SingleBlockPresence,
     },
-    repository::{RepositoryId, RepositoryMonitor, Vault},
+    repository::{RepositoryMonitor, Vault},
     store::Changeset,
     test_utils,
     version_vector::VersionVector,

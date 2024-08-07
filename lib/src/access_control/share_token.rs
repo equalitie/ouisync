@@ -1,5 +1,5 @@
 use super::{AccessMode, AccessSecrets, DecodeError};
-use crate::repository::RepositoryId;
+use crate::protocol::RepositoryId;
 use bincode::Options;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{

@@ -14,7 +14,8 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
-    repository::{LocalId, Vault},
+    protocol::LocalId,
+    repository::Vault,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use state_monitor::StateMonitor;

@@ -7,10 +7,9 @@ use super::{
 use crate::{
     crypto::{sign::PublicKey, Hash, Hashable},
     protocol::{
-        BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, MultiBlockPresence,
+        BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, MultiBlockPresence, RepositoryId,
         UntrustedProof,
     },
-    repository::RepositoryId,
 };
 use serde::{Deserialize, Serialize};
 use std::{fmt, io::Write};

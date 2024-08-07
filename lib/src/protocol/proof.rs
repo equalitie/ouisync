@@ -1,9 +1,9 @@
+use super::repository::RepositoryId;
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey, Signature},
         Hash, Hashable,
     },
-    repository::RepositoryId,
     version_vector::VersionVector,
 };
 use serde::{Deserialize, Serialize};

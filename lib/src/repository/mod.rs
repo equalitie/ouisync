@@ -1,5 +1,4 @@
 mod credentials;
-mod id;
 mod metadata;
 mod monitor;
 mod params;
@@ -9,12 +8,9 @@ mod worker;
 #[cfg(test)]
 mod tests;
 
-pub use self::{
-    credentials::Credentials, id::RepositoryId, metadata::Metadata, params::RepositoryParams,
-};
+pub use self::{credentials::Credentials, metadata::Metadata, params::RepositoryParams};
 
 pub(crate) use self::{
-    id::LocalId,
     metadata::{data_version, quota},
     monitor::RepositoryMonitor,
     vault::Vault,
@@ -34,7 +30,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
-    protocol::{RootNodeFilter, StorageSize, BLOCK_SIZE},
+    protocol::{LocalId, RootNodeFilter, StorageSize, BLOCK_SIZE},
     store,
     sync::stream::Throttle,
     version_vector::VersionVector,

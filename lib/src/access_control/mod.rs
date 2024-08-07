@@ -11,7 +11,7 @@ pub use self::{
 use crate::{
     crypto::{cipher, sign},
     error::Error,
-    repository::RepositoryId,
+    protocol::RepositoryId,
     Result,
 };
 use rand::{rngs::OsRng, CryptoRng, Rng};

@@ -63,10 +63,10 @@ pub use self::{
         TrafficStats, DHT_ROUTERS,
     },
     progress::Progress,
-    protocol::{StorageSize, BLOCK_SIZE},
+    protocol::{RepositoryId, StorageSize, BLOCK_SIZE},
     repository::{
         delete as delete_repository, Credentials, Metadata, Repository, RepositoryHandle,
-        RepositoryId, RepositoryParams,
+        RepositoryParams,
     },
     store::{Error as StoreError, DATA_VERSION},
     version_vector::VersionVector,

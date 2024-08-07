@@ -12,7 +12,7 @@ use super::{
     runtime_id::PublicRuntimeId,
     traffic_tracker::TrafficTracker,
 };
-use crate::repository::RepositoryId;
+use crate::protocol::RepositoryId;
 use noise_protocol::Cipher as _;
 use noise_rust_crypto::{Blake2s, ChaCha20Poly1305, X25519};
 use std::mem;

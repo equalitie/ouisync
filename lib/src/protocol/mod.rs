@@ -7,6 +7,7 @@ mod inner_node;
 mod leaf_node;
 mod locator;
 mod proof;
+mod repository;
 mod root_node;
 mod storage_size;
 mod summary;
@@ -17,6 +18,7 @@ pub(crate) mod test_utils;
 pub use self::block::BLOCK_SIZE;
 pub use self::{
     proof::{Proof, UntrustedProof},
+    repository::RepositoryId,
     root_node::RootNode,
     storage_size::StorageSize,
     summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
@@ -29,6 +31,7 @@ pub(crate) use self::{
     leaf_node::{LeafNode, LeafNodes, EMPTY_LEAF_HASH},
     locator::Locator,
     proof::ProofError,
+    repository::LocalId,
     root_node::{RootNodeFilter, RootNodeKind},
 };
 
