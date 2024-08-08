@@ -257,9 +257,7 @@ browser. That page contains (among other things) links to download Ouisync for v
 
 Note that the `{SECRETS}` part is separated from the rest of the URL with the `#` character which
 means it's an "anchor" and as such is not sent to the `ouisync.net` server and thus opening it in a
-browser doesn't compromise the secrets. Unfortunately URL anchors are still inserted into browser's
-history where an adversary may find them. Addressing this concern is further elaborated in the
-[Future work](#future-work) section.
+browser doesn't compromise the secrets. 
 
 The `{SECRETS}` part is the access secrets, Base64-encoded (blind token contains only the repository
 ID, read token contains both the repository id and the read key and write token contains only the
@@ -506,8 +504,6 @@ Ouisync uses the following cryptographic primitives:
 
 ⚠️ **TODO** ⚠️: Elaborate on bullet points
 
-* Ouisync tokens are stored by the browser history - allow for creation of non-URL type tokens and
-  add javascript to https://ouisync.net/r to remove anchors from the history.
 * List approaches how Ouisync can improve anonymity and confidentiality (Tor, multi-hop
   syncing,...) and their pros and cons.
 
