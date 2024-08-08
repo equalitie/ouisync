@@ -899,4 +899,22 @@ mod tests {
             assert_eq!(BlockId::new(&content, &nonce), *id);
         }
     }
+
+    #[tokio::test]
+    async fn save_orphaned_block() {
+        let (_base_dir, pool) = db::create_temp().await.unwrap();
+        let store = Store::new(pool);
+        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+
+        let mut writer = store.begin_client_write().await.unwrap();
+        for block in snapshot.blocks().values() {
+            writer.save_block(block, None).await.unwrap();
+        }
+        writer.commit().await.unwrap();
+
+        let mut reader = store.acquire_read().await.unwrap();
+        for id in snapshot.blocks().keys() {
+            assert!(!reader.block_exists(id).await.unwrap());
+        }
+    }
 }
