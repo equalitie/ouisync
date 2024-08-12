@@ -50,15 +50,19 @@ impl Receiver {
     /// Waits until `repo` fully syncs with the one passed to the corresponding `Sender::run`.
     pub async fn run(mut self, repo: &Repository) {
         let mut rx = repo.subscribe();
-        let branch = repo.local_branch().unwrap();
+        let writer = repo.secrets().can_write();
 
         loop {
             let progress = repo.sync_progress().await.unwrap();
             // debug!(progress = %progress.percent());
 
             if progress.total > 0 && progress.value == progress.total {
-                // FIXME: This doesn't work for read/blind replicas
-                let this_vv = branch.version_vector().await.unwrap();
+                let this_vv = if writer {
+                    repo.local_branch().unwrap().version_vector().await.unwrap()
+                } else {
+                    repo.get_merged_version_vector().await.unwrap()
+                };
+
                 let that_vv = self.0.borrow();
 
                 debug!(?this_vv, that_vv = ?*that_vv);

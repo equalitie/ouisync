@@ -761,7 +761,7 @@ impl Repository {
         self.shared.load_branches().await
     }
 
-    /// Returns version vector of the given branch. Work in all access moded.
+    /// Returns version vector of the given branch. Works in all access moded.
     pub async fn get_branch_version_vector(&self, writer_id: &PublicKey) -> Result<VersionVector> {
         Ok(self
             .shared
@@ -773,6 +773,22 @@ impl Repository {
             .await?
             .proof
             .into_version_vector())
+    }
+
+    /// Returns the version vector calculated by merging the version vectors of all branches.
+    pub async fn get_merged_version_vector(&self) -> Result<VersionVector> {
+        Ok(self
+            .shared
+            .vault
+            .store()
+            .acquire_read()
+            .await?
+            .load_latest_approved_root_nodes()
+            .try_fold(VersionVector::default(), |mut merged, node| {
+                merged.merge(&node.proof.version_vector);
+                future::ready(Ok(merged))
+            })
+            .await?)
     }
 
     /// Subscribe to event notifications.

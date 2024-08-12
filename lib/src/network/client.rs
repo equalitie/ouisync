@@ -142,9 +142,6 @@ impl Inner {
     }
 
     async fn handle_response_batch(&self, batch: &mut Vec<PendingResponse>) -> Result<()> {
-        // // DEBUG
-        // tracing::info!("response batch size: {}", batch.len());
-
         self.vault
             .monitor
             .responses_received
