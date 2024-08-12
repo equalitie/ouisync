@@ -14,7 +14,6 @@ use deadlock::BlockingMutex;
 use scoped_task::ScopedJoinHandle;
 use std::{future, sync::Arc, task::ready};
 use std::{task::Poll, time::Instant};
-use tokio::sync::OwnedSemaphorePermit;
 
 pub(crate) enum PendingRequest {
     RootNode(PublicKey, PendingDebugRequest),
@@ -24,9 +23,8 @@ pub(crate) enum PendingRequest {
 
 pub(super) struct PendingResponse {
     pub response: ProcessedResponse,
-    // These will be `None` if the request timeouted but we still received the response
+    // This will be `None` if the request timeouted but we still received the response
     // afterwards.
-    pub _client_permit: Option<ClientPermit>,
     pub block_promise: Option<BlockPromise>,
 }
 
@@ -112,12 +110,7 @@ impl PendingRequests {
         }
     }
 
-    pub fn insert(
-        &self,
-        pending_request: PendingRequest,
-        link_permit: OwnedSemaphorePermit,
-        peer_permit: OwnedSemaphorePermit,
-    ) -> Option<Request> {
+    pub fn insert(&self, pending_request: PendingRequest) -> Option<Request> {
         let (key, block_promise, request) = match pending_request {
             PendingRequest::RootNode(public_key, debug) => (
                 Key::RootNode(public_key),
@@ -147,8 +140,6 @@ impl PendingRequests {
             RequestData {
                 timestamp: Instant::now(),
                 block_promise,
-                link_permit,
-                _peer_permit: peer_permit,
             },
             REQUEST_TIMEOUT,
         );
@@ -180,23 +171,15 @@ impl PendingRequests {
                 .request_latency
                 .record(request_data.timestamp.elapsed());
 
-            // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
-            // only `drop` it once the request is processed.
-            let client_permit = Some(ClientPermit {
-                _link_permit: request_data.link_permit,
-                monitor: self.monitor.clone(),
-            });
             let block_promise = request_data.block_promise;
 
             PendingResponse {
                 response,
-                _client_permit: client_permit,
                 block_promise,
             }
         } else {
             PendingResponse {
                 response,
-                _client_permit: None,
                 block_promise: None,
             }
         }
@@ -204,8 +187,6 @@ impl PendingRequests {
 }
 
 fn request_added(monitor: &RepositoryMonitor, key: &Key) {
-    monitor.requests_pending.increment(1.0);
-
     match key {
         Key::RootNode(_) | Key::ChildNodes { .. } => {
             monitor.index_requests_sent.increment(1);
@@ -257,17 +238,4 @@ impl Drop for PendingRequests {
 struct RequestData {
     timestamp: Instant,
     block_promise: Option<BlockPromise>,
-    link_permit: OwnedSemaphorePermit,
-    _peer_permit: OwnedSemaphorePermit,
-}
-
-pub(super) struct ClientPermit {
-    _link_permit: OwnedSemaphorePermit,
-    monitor: Arc<RepositoryMonitor>,
-}
-
-impl Drop for ClientPermit {
-    fn drop(&mut self) {
-        self.monitor.requests_pending.decrement(1.0);
-    }
 }

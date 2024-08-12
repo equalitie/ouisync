@@ -440,13 +440,13 @@ impl<'a, T> core::ops::Deref for MutexGuardWrap<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        &*self.guard
+        &self.guard
     }
 }
 
 impl<'a, T> core::ops::DerefMut for MutexGuardWrap<'a, T> {
     fn deref_mut(&mut self) -> &mut T {
-        &mut *self.guard
+        &mut self.guard
     }
 }
 

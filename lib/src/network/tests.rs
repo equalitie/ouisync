@@ -1,6 +1,6 @@
 use super::{
     client::Client,
-    constants::{MAX_IN_FLIGHT_REQUESTS_PER_PEER, MAX_UNCHOKED_COUNT},
+    constants::MAX_UNCHOKED_COUNT,
     message::{Content, Request, Response},
     server::Server,
 };
@@ -632,12 +632,7 @@ fn create_server(repo: Vault, response_limiter: Arc<Semaphore>) -> ServerData {
 fn create_client(repo: Vault) -> ClientData {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let client = Client::new(
-        repo,
-        send_tx,
-        recv_rx,
-        Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS_PER_PEER)),
-    );
+    let client = Client::new(repo, send_tx, recv_rx);
 
     (client, send_rx, recv_tx)
 }

@@ -1,8 +1,8 @@
 use super::{
-    constants::{MAX_PENDING_REQUESTS_PER_CLIENT, MAX_RESPONSE_BATCH_SIZE},
+    constants::MAX_RESPONSE_BATCH_SIZE,
     debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Content, Request, Response, ResponseDisambiguator},
-    pending::{PendingRequest, PendingRequests, ProcessedResponse},
+    pending::{PendingRequest, PendingRequests, PendingResponse, ProcessedResponse},
 };
 use crate::{
     block_tracker::{BlockPromise, TrackerClient},
@@ -16,11 +16,8 @@ use crate::{
     repository::Vault,
     store::ClientWriter,
 };
-use std::{future, sync::Arc, time::Instant};
-use tokio::{
-    select,
-    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
-};
+use std::{future, time::Instant};
+use tokio::{select, sync::mpsc};
 use tracing::{instrument, Level};
 
 pub(super) struct Client {
@@ -34,7 +31,6 @@ impl Client {
         vault: Vault,
         content_tx: mpsc::Sender<Content>,
         response_rx: mpsc::Receiver<Response>,
-        peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pending_requests = PendingRequests::new(vault.monitor.clone());
         let block_tracker = vault.block_tracker.client();
@@ -46,8 +42,6 @@ impl Client {
         let inner = Inner {
             vault,
             pending_requests,
-            peer_request_limiter,
-            link_request_limiter: Arc::new(Semaphore::new(MAX_PENDING_REQUESTS_PER_CLIENT)),
             block_tracker,
             content_tx,
             send_queue_tx,
@@ -76,8 +70,6 @@ impl Client {
 struct Inner {
     vault: Vault,
     pending_requests: PendingRequests,
-    peer_request_limiter: Arc<Semaphore>,
-    link_request_limiter: Arc<Semaphore>,
     block_tracker: TrackerClient,
     content_tx: mpsc::Sender<Content>,
     send_queue_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
@@ -110,17 +102,12 @@ impl Inner {
                 break;
             };
 
-            let permits = self.acquire_send_permits().await;
-
             self.vault
                 .monitor
                 .request_queue_time
                 .record(timestamp.elapsed());
 
-            if let Some(request) = self
-                .pending_requests
-                .insert(request, permits.link, permits.peer)
-            {
+            if let Some(request) = self.pending_requests.insert(request) {
                 self.send_request(request).await;
             }
         }
@@ -133,46 +120,30 @@ impl Inner {
             .unwrap_or(());
     }
 
-    async fn acquire_send_permits(&self) -> SendPermits {
-        // Unwraps OK because we never `close()` the semaphores.
-        //
-        // NOTE that the order here is important, we don't want to block the other clients
-        // on this peer if we have too many responses queued up (which is what the
-        // `link_permit` is responsible for limiting)..
-        let link = self
-            .link_request_limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .unwrap();
-
-        let peer = self
-            .peer_request_limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .unwrap();
-
-        SendPermits { link, peer }
-    }
-
     async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
-        let mut batch = Vec::new();
+        let mut received = Vec::with_capacity(MAX_RESPONSE_BATCH_SIZE);
+        let mut prepared = Vec::with_capacity(MAX_RESPONSE_BATCH_SIZE);
 
         loop {
-            if rx.recv_many(&mut batch, MAX_RESPONSE_BATCH_SIZE).await == 0 {
+            if rx.recv_many(&mut received, MAX_RESPONSE_BATCH_SIZE).await == 0 {
                 break;
             }
 
-            self.handle_response_batch(&mut batch).await?;
+            prepared.extend(
+                received
+                    .drain(..)
+                    .map(|response| self.pending_requests.remove(response)),
+            );
+
+            self.handle_response_batch(&mut prepared).await?;
         }
 
         Ok(())
     }
 
-    async fn handle_response_batch(&self, batch: &mut Vec<Response>) -> Result<()> {
-        // DEBUG
-        tracing::info!("response batch size: {}", batch.len());
+    async fn handle_response_batch(&self, batch: &mut Vec<PendingResponse>) -> Result<()> {
+        // // DEBUG
+        // tracing::info!("response batch size: {}", batch.len());
 
         self.vault
             .monitor
@@ -182,8 +153,6 @@ impl Inner {
         let mut writer = self.vault.store().begin_client_write().await?;
 
         for response in batch.drain(..) {
-            let response = self.pending_requests.remove(response);
-
             match response.response {
                 ProcessedResponse::RootNode(proof, block_presence, debug) => {
                     self.handle_root_node(&mut writer, proof, block_presence, debug)
@@ -468,11 +437,6 @@ impl Inner {
     }
 }
 
-struct SendPermits {
-    peer: OwnedSemaphorePermit,
-    link: OwnedSemaphorePermit,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,17 +463,21 @@ mod tests {
         // Receive invalid root node from the remote replica.
         let invalid_write_keys = Keypair::random();
         inner
-            .handle_response_batch(&mut vec![Response::RootNode(
-                Proof::new(
-                    remote_id,
-                    VersionVector::first(remote_id),
-                    *EMPTY_INNER_HASH,
-                    &invalid_write_keys,
+            .handle_response_batch(&mut vec![PendingResponse {
+                response: Response::RootNode(
+                    Proof::new(
+                        remote_id,
+                        VersionVector::first(remote_id),
+                        *EMPTY_INNER_HASH,
+                        &invalid_write_keys,
+                    )
+                    .into(),
+                    MultiBlockPresence::None,
+                    DebugResponse::unsolicited(),
                 )
                 .into(),
-                MultiBlockPresence::None,
-                DebugResponse::unsolicited(),
-            )])
+                block_promise: None,
+            }])
             .await
             .unwrap();
 
@@ -533,17 +501,21 @@ mod tests {
         let remote_id = PublicKey::random();
 
         inner
-            .handle_response_batch(&mut vec![Response::RootNode(
-                Proof::new(
-                    remote_id,
-                    VersionVector::new(),
-                    *EMPTY_INNER_HASH,
-                    &secrets.write_keys,
+            .handle_response_batch(&mut vec![PendingResponse {
+                response: Response::RootNode(
+                    Proof::new(
+                        remote_id,
+                        VersionVector::new(),
+                        *EMPTY_INNER_HASH,
+                        &secrets.write_keys,
+                    )
+                    .into(),
+                    MultiBlockPresence::None,
+                    DebugResponse::unsolicited(),
                 )
                 .into(),
-                MultiBlockPresence::None,
-                DebugResponse::unsolicited(),
-            )])
+                block_promise: None,
+            }])
             .await
             .unwrap();
 
@@ -589,8 +561,6 @@ mod tests {
         let inner = Inner {
             vault,
             pending_requests,
-            peer_request_limiter: Arc::new(Semaphore::new(16)),
-            link_request_limiter: Arc::new(Semaphore::new(16)),
             block_tracker,
             content_tx,
             send_queue_tx,
