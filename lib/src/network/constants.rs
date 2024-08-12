@@ -25,3 +25,6 @@ pub(super) const MAX_UNCHOKED_DURATION: Duration = Duration::from_secs(30);
 /// If we don't receive any message from the peer for this long we consider the peer
 /// as "uninterested". Uninterested peers can be choked even before their unchoke period ends.
 pub(super) const INTEREST_TIMEOUT: Duration = Duration::from_secs(3);
+
+// Max number of responses to process in a singe batch.
+pub(super) const MAX_RESPONSE_BATCH_SIZE: usize = 1024;

@@ -1,5 +1,5 @@
 use super::{
-    constants::MAX_PENDING_REQUESTS_PER_CLIENT,
+    constants::{MAX_PENDING_REQUESTS_PER_CLIENT, MAX_RESPONSE_BATCH_SIZE},
     debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Content, Request, Response, ResponseDisambiguator},
     pending::{PendingRequest, PendingRequests, ProcessedResponse},
@@ -22,9 +22,6 @@ use tokio::{
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
 use tracing::{instrument, Level};
-
-// Max number of responses to process in a singe batch.
-const MAX_RESPONSE_BATCH_SIZE: usize = 1024;
 
 pub(super) struct Client {
     inner: Inner,
@@ -174,6 +171,9 @@ impl Inner {
     }
 
     async fn handle_response_batch(&self, batch: &mut Vec<Response>) -> Result<()> {
+        // DEBUG
+        tracing::info!("response batch size: {}", batch.len());
+
         self.vault
             .monitor
             .responses_received
