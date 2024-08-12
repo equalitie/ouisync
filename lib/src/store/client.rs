@@ -125,15 +125,18 @@ impl ClientWriter {
         let mut new_block_offers = Vec::new();
 
         for node in &nodes {
-            // If the block referenced by the node is missing or expired locally but present
-            // remotely, create an offer for it.
+            // Create the block offer only if the block is `Missing` locally and `Present` or
+            // `Expired` remotely.
+            //
+            // If the block is `Expired` locally we *don't* want to register the offer yet. We only
+            // register if after the block's been switched to `Missing` (by either requiring it
+            // locally or by someone else requesting it from us). On the other hand, if the block
+            // is `Expired` remotely we *do* want to create the offer because that causes the
+            // remote peer to switch the block to `Missing` and request it from other peers.
             match node.block_presence {
-                SingleBlockPresence::Present => {
-                    // Present remotely
+                SingleBlockPresence::Present | SingleBlockPresence::Expired => {
                     match leaf_node::load_block_presence(&mut self.db, &node.block_id).await? {
-                        Some(SingleBlockPresence::Missing)
-                        | Some(SingleBlockPresence::Expired)
-                        | None => {
+                        Some(SingleBlockPresence::Missing) | None => {
                             // Missing, expired or not yet stored locally
                             let offer_state = if self.quota.is_some() {
                                 // OPTIMIZE: the state is the same for all the nodes in `nodes`, so
@@ -148,10 +151,10 @@ impl ClientWriter {
                                 new_block_offers.push((node.block_id, offer_state));
                             }
                         }
-                        Some(SingleBlockPresence::Present) => (),
+                        Some(SingleBlockPresence::Present | SingleBlockPresence::Expired) => (),
                     }
                 }
-                SingleBlockPresence::Missing | SingleBlockPresence::Expired => (),
+                SingleBlockPresence::Missing => (),
             };
         }
 

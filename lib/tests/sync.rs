@@ -7,6 +7,7 @@ use self::common::{
     actor, dump, sync_watch, traffic_monitor::TrafficMonitor, Env, Proto, DEFAULT_REPO,
 };
 use assert_matches::assert_matches;
+use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use metrics_ext::WatchRecorder;
 use ouisync::{
     Access, AccessMode, EntryType, Error, Repository, StorageSize, StoreError, VersionVector,
@@ -972,12 +973,32 @@ fn redownload_expired_blocks() {
 
     let test_content = Arc::new(common::random_bytes(2 * 1024 * 1024));
 
-    async fn wait_for_block_count(repo: &Repository, block_count: u64) {
-        common::eventually(repo, || {
-            async { repo.count_blocks().await.unwrap() == block_count }
-                .instrument(tracing::Span::current())
-        })
-        .await;
+    // Wait until the number of blocks is the `expected`.
+    //
+    // NOTE: This use sleep instead of waiting for notification events, because no notification
+    // events are emitted on block expiration.
+    async fn wait_for_block_count(repo: &Repository, expected: u64) {
+        let mut backoff = ExponentialBackoffBuilder::new()
+            .with_initial_interval(Duration::from_millis(10))
+            .with_max_interval(Duration::from_millis(500))
+            .with_randomization_factor(0.0)
+            .with_multiplier(2.0)
+            .with_max_elapsed_time(Some(Duration::from_secs(60)))
+            .build();
+
+        loop {
+            let actual = repo.count_blocks().await.unwrap();
+
+            if actual == expected {
+                return;
+            }
+
+            if let Some(duration) = backoff.next_backoff() {
+                sleep(duration).await;
+            } else {
+                panic!("timeout waiting for block count (expected: {expected}, actual: {actual})");
+            }
+        }
     }
 
     env.actor("origin", {
@@ -1020,9 +1041,8 @@ fn redownload_expired_blocks() {
             .await
             .unwrap();
 
-        // Wait for the blocks to expire. TODO: We could also wait for the block count to drop to
-        // zero, but currently the expiration tracker does not trigger a repo change.
-        sleep(3 * expiration_duration).await;
+        sleep(expiration_duration).await;
+        wait_for_block_count(&repo, 0).await;
 
         cache_had_it_tx
             .send((block_count, normal_sync_duration))
