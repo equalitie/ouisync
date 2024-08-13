@@ -216,7 +216,11 @@ impl ClientWriter {
         F: FnOnce(CommitStatus) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let approved_branches = self.approve_snapshots().await?;
+        let FinalizeStatus {
+            approved_branches,
+            rejected_branches,
+        } = self.finalize_snapshots().await?;
+
         let approved_missing_blocks = self
             .load_approved_missing_blocks(&approved_branches)
             .await?;
@@ -236,6 +240,7 @@ impl ClientWriter {
 
         let status = CommitStatus {
             approved_branches,
+            rejected_branches,
             approved_missing_blocks,
             new_blocks,
         };
@@ -271,7 +276,7 @@ impl ClientWriter {
         }
     }
 
-    async fn approve_snapshots(&mut self) -> Result<Vec<PublicKey>, Error> {
+    async fn finalize_snapshots(&mut self) -> Result<FinalizeStatus, Error> {
         self.summary_updates.sort();
         self.summary_updates.dedup();
 
@@ -282,7 +287,8 @@ impl ClientWriter {
         )
         .await?;
 
-        let mut output = Vec::new();
+        let mut approved_branches = Vec::new();
+        let mut rejected_branches = Vec::new();
 
         for (hash, state) in states {
             match state {
@@ -310,18 +316,30 @@ impl ClientWriter {
             if approve {
                 // TODO: put node to cache?
 
-                root_node::approve(&mut self.db, &hash).await?;
                 try_collect_into(
-                    root_node::load_writer_ids_by_hash(&mut self.db, &hash),
-                    &mut output,
+                    root_node::approve(&mut self.db, &hash),
+                    &mut approved_branches,
                 )
                 .await?;
             } else {
-                root_node::reject(&mut self.db, &hash).await?;
+                try_collect_into(
+                    root_node::reject(&mut self.db, &hash),
+                    &mut rejected_branches,
+                )
+                .await?;
             }
         }
 
-        Ok(output)
+        approved_branches.sort();
+        approved_branches.dedup();
+
+        rejected_branches.sort();
+        rejected_branches.dedup();
+
+        Ok(FinalizeStatus {
+            approved_branches,
+            rejected_branches,
+        })
     }
 
     async fn load_approved_missing_blocks(
@@ -359,10 +377,17 @@ pub(crate) struct LeafNodesStatus {
 pub(crate) struct CommitStatus {
     /// Branches that became approved during this commit.
     pub approved_branches: Vec<PublicKey>,
+    /// Branches that became rejected due to failed quota check during this commit
+    pub rejected_branches: Vec<PublicKey>,
     /// Missing blocks referenced from the newly approved branches.
     pub approved_missing_blocks: HashSet<BlockId>,
     /// Newly written blocks.
     pub new_blocks: Vec<BlockId>,
+}
+
+struct FinalizeStatus {
+    approved_branches: Vec<PublicKey>,
+    rejected_branches: Vec<PublicKey>,
 }
 
 #[cfg(test)]

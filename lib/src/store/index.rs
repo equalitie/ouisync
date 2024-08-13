@@ -72,8 +72,8 @@ mod tests {
     use assert_matches::assert_matches;
     use futures_util::TryStreamExt;
     use rand::{rngs::StdRng, SeedableRng};
-    use std::iter;
     use std::sync::Arc;
+    use std::{future, iter};
     use tempfile::TempDir;
     use test_strategy::proptest;
 
@@ -380,7 +380,10 @@ mod tests {
             {
                 match state {
                     NodeState::Complete => {
-                        root_node::approve(write_tx, &hash).await.unwrap();
+                        root_node::approve(write_tx, &hash)
+                            .try_for_each(|_| future::ready(Ok(())))
+                            .await
+                            .unwrap();
                     }
                     NodeState::Incomplete | NodeState::Approved => (),
                     NodeState::Rejected => unreachable!(),

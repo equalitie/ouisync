@@ -506,26 +506,34 @@ pub(super) async fn check_fallback(
 }
 
 /// Approve the nodes with the specified hash.
-pub(super) async fn approve(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-    set_state(tx, hash, NodeState::Approved).await
+pub(super) fn approve<'a>(
+    tx: &'a mut db::WriteTransaction,
+    hash: &'a Hash,
+) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
+    set_state(tx, hash, NodeState::Approved)
 }
 
 /// Reject the nodes with the specified hash.
-pub(super) async fn reject(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-    set_state(tx, hash, NodeState::Rejected).await
+pub(super) fn reject<'a>(
+    tx: &'a mut db::WriteTransaction,
+    hash: &'a Hash,
+) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
+    set_state(tx, hash, NodeState::Rejected)
 }
 
-async fn set_state(
-    tx: &mut db::WriteTransaction,
-    hash: &Hash,
+/// Set the state of the nodes with the specified hash and returns the writer ids of the updated
+/// nodes.
+fn set_state<'a>(
+    tx: &'a mut db::WriteTransaction,
+    hash: &'a Hash,
     state: NodeState,
-) -> Result<(), Error> {
-    sqlx::query("UPDATE snapshot_root_nodes SET state = ? WHERE hash = ?")
+) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
+    sqlx::query("UPDATE snapshot_root_nodes SET state = ? WHERE hash = ? RETURNING writer_id")
         .bind(state)
         .bind(hash)
-        .execute(tx)
-        .await?;
-    Ok(())
+        .fetch(tx)
+        .map_ok(|row| row.get(0))
+        .err_into()
 }
 
 /// Returns all writer ids.
