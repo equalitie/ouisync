@@ -1,5 +1,5 @@
 use super::{error::Error as StoreError, root_node};
-use crate::{crypto::Hash, db, future::try_collect_into, protocol::StorageSize, versioned};
+use crate::{crypto::Hash, db, future::TryStreamExt as _, protocol::StorageSize, versioned};
 use sqlx::{QueryBuilder, Row};
 use thiserror::Error;
 
@@ -44,12 +44,12 @@ async fn load_candidate_latest_root_hashes(
 ) -> Result<Vec<Hash>, StoreError> {
     let mut nodes = Vec::new();
 
-    try_collect_into(
-        root_node::load_all_by_hash(conn, candidate_root_hash),
-        &mut nodes,
-    )
-    .await?;
-    try_collect_into(root_node::load_all_latest_approved(conn), &mut nodes).await?;
+    root_node::load_all_by_hash(conn, candidate_root_hash)
+        .try_collect_into(&mut nodes)
+        .await?;
+    root_node::load_all_latest_approved(conn)
+        .try_collect_into(&mut nodes)
+        .await?;
 
     let nodes = versioned::keep_maximal(nodes, ());
 

@@ -9,7 +9,7 @@ use crate::{
     collections::{hash_map, HashMap, HashSet},
     crypto::sign::PublicKey,
     db,
-    future::try_collect_into,
+    future::TryStreamExt as _,
     protocol::{BlockId, SingleBlockPresence},
     sync::{broadcast_hash_set, uninitialized_watch},
 };
@@ -408,11 +408,9 @@ async fn set_as_missing_if_expired(
         block_download_tracker.require(*block_id);
 
         for (hash, _state) in index::update_summaries(&mut tx, &mut cache, parent_hashes).await? {
-            try_collect_into(
-                root_node::load_writer_ids_by_hash(&mut tx, &hash),
-                &mut branches,
-            )
-            .await?;
+            root_node::load_writer_ids_by_hash(&mut tx, &hash)
+                .try_collect_into(&mut branches)
+                .await?;
         }
     }
 

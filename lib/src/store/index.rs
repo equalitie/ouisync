@@ -56,6 +56,7 @@ pub(super) async fn update_summaries(
 mod tests {
     use super::super::{cache::Cache, inner_node, leaf_node, root_node};
     use super::*;
+    use crate::future::TryStreamExt as _;
     use crate::store::block;
     use crate::{
         crypto::{
@@ -72,8 +73,8 @@ mod tests {
     use assert_matches::assert_matches;
     use futures_util::TryStreamExt;
     use rand::{rngs::StdRng, SeedableRng};
+    use std::iter;
     use std::sync::Arc;
-    use std::{future, iter};
     use tempfile::TempDir;
     use test_strategy::proptest;
 
@@ -381,7 +382,7 @@ mod tests {
                 match state {
                     NodeState::Complete => {
                         root_node::approve(write_tx, &hash)
-                            .try_for_each(|_| future::ready(Ok(())))
+                            .try_consume()
                             .await
                             .unwrap();
                     }

@@ -13,7 +13,7 @@ use crate::{
     collections::HashSet,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
-    future::try_collect_into,
+    future::TryStreamExt as _,
     protocol::{
         Block, BlockId, InnerNode, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, Proof,
         RootNodeFilter, SingleBlockPresence, Summary, EMPTY_INNER_HASH,
@@ -172,11 +172,9 @@ impl ClientWriter {
     ) -> Result<(), Error> {
         let old_len = self.summary_updates.len();
 
-        try_collect_into(
-            leaf_node::set_present(&mut self.db, &block.id),
-            &mut self.summary_updates,
-        )
-        .await?;
+        leaf_node::set_present(&mut self.db, &block.id)
+            .try_collect_into(&mut self.summary_updates)
+            .await?;
 
         if self.summary_updates.len() > old_len {
             block::write(&mut self.db, block).await?;
@@ -316,17 +314,13 @@ impl ClientWriter {
             if approve {
                 // TODO: put node to cache?
 
-                try_collect_into(
-                    root_node::approve(&mut self.db, &hash),
-                    &mut approved_branches,
-                )
-                .await?;
+                root_node::approve(&mut self.db, &hash)
+                    .try_collect_into(&mut approved_branches)
+                    .await?;
             } else {
-                try_collect_into(
-                    root_node::reject(&mut self.db, &hash),
-                    &mut rejected_branches,
-                )
-                .await?;
+                root_node::reject(&mut self.db, &hash)
+                    .try_collect_into(&mut rejected_branches)
+                    .await?;
             }
         }
 
@@ -350,11 +344,9 @@ impl ClientWriter {
 
         if self.quota.is_some() {
             for branch_id in branches {
-                try_collect_into(
-                    block_ids::missing_block_ids_in_branch(&mut self.db, branch_id),
-                    &mut output,
-                )
-                .await?;
+                block_ids::missing_block_ids_in_branch(&mut self.db, branch_id)
+                    .try_collect_into(&mut output)
+                    .await?;
             }
         }
 
