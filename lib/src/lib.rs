@@ -1,8 +1,5 @@
 // From experience, this lint is almost never useful. Disabling it globally.
 #![allow(clippy::large_enum_variant)]
-// This affects lots of parts of the code but it's just aesthetic so silencing it for now.
-// We should consider enabling it again at some point.
-#![allow(clippy::uninlined_format_args)]
 
 #[macro_use]
 mod macros;
