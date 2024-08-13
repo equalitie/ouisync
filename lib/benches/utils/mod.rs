@@ -1,16 +1,17 @@
+#[path = "../../tests/common/mod.rs"]
+#[macro_use]
+mod common;
+
 use camino::Utf8Path;
+use common::sync_watch;
+use futures_util::future;
 use ouisync::{
-    Access, Event, Network, Payload, PeerAddr, Registration, Repository, RepositoryParams,
-    WriteSecrets,
+    Access, Network, PeerAddr, Registration, Repository, RepositoryParams, WriteSecrets,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use state_monitor::StateMonitor;
 use std::{net::Ipv4Addr, ops::Deref, path::Path, time::Duration};
-use tokio::{
-    runtime::Handle,
-    sync::broadcast::{self, error::RecvError},
-    time,
-};
+use tokio::runtime::Handle;
 
 #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -155,45 +156,9 @@ impl Actor {
     }
 }
 
+/// Waits until `repo_a` gets synced with `repo_b`.
 #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn wait_for_sync(repo_a: &Repository, repo_b: &Repository) {
-    let mut rx = repo_a.subscribe();
-
-    loop {
-        let vv_a = repo_a
-            .local_branch()
-            .unwrap()
-            .version_vector()
-            .await
-            .unwrap();
-        let vv_b = repo_b
-            .local_branch()
-            .unwrap()
-            .version_vector()
-            .await
-            .unwrap();
-
-        let progress_a = repo_a.sync_progress().await.unwrap();
-
-        if progress_a.value == progress_a.total && vv_a >= vv_b {
-            break;
-        }
-
-        wait_for_event(&mut rx).await;
-    }
-}
-
-async fn wait_for_event(rx: &mut broadcast::Receiver<Event>) {
-    loop {
-        match time::timeout(EVENT_TIMEOUT, rx.recv()).await {
-            Ok(Ok(Event {
-                payload: Payload::SnapshotApproved(_) | Payload::BlockReceived { .. },
-                ..
-            }))
-            | Ok(Err(RecvError::Lagged(_))) => return,
-            Ok(Ok(Event { .. })) => continue,
-            Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
-            Err(_) => panic!("timeout waiting for notification"),
-        }
-    }
+    let (tx, rx) = sync_watch::channel();
+    future::join(tx.run(repo_b), rx.run(repo_a)).await;
 }
