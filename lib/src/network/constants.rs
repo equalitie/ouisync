@@ -14,4 +14,4 @@ pub(super) const MAX_UNCHOKED_DURATION: Duration = Duration::from_secs(30);
 pub(super) const INTEREST_TIMEOUT: Duration = Duration::from_secs(3);
 
 // Max number of responses to process in a singe batch (that is, in a single db write transaction).
-pub(super) const MAX_RESPONSE_BATCH_SIZE: usize = 1024;
+pub(super) const MAX_RESPONSE_BATCH_SIZE: usize = 4096;
