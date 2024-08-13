@@ -22,6 +22,13 @@ impl InnerNode {
     pub fn is_empty(&self) -> bool {
         self.hash == *EMPTY_INNER_HASH || self.hash == *EMPTY_LEAF_HASH
     }
+
+    pub fn into_incomplete(self) -> Self {
+        Self {
+            summary: Summary::INCOMPLETE,
+            ..self
+        }
+    }
 }
 
 impl Hashable for InnerNode {

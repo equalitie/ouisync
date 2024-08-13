@@ -1,5 +1,5 @@
 use crate::config::{ConfigKey, ConfigStore};
-use ouisync_lib::network::{peer_addr::PeerAddr, Network};
+use ouisync_lib::{Network, PeerAddr};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 

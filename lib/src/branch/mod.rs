@@ -236,7 +236,8 @@ pub(crate) struct BranchEventSender {
 
 impl BranchEventSender {
     pub fn send(&self) {
-        self.event_tx.send(Payload::BranchChanged(self.branch_id));
+        self.event_tx
+            .send(Payload::SnapshotApproved(self.branch_id));
     }
 }
 

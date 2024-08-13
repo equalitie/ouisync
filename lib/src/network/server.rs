@@ -229,13 +229,13 @@ impl Inner {
         loop {
             match event_rx.recv().await {
                 Ok(Event { payload, .. }) => match payload {
-                    Payload::BranchChanged(branch_id) => {
+                    Payload::SnapshotApproved(branch_id) => {
                         self.handle_branch_changed_event(branch_id).await?
                     }
                     Payload::BlockReceived(block_id) => {
                         self.handle_block_received_event(block_id).await?;
                     }
-                    Payload::MaintenanceCompleted => continue,
+                    Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted => continue,
                 },
                 Err(RecvError::Lagged(_)) => self.handle_unknown_event().await?,
                 Err(RecvError::Closed) => return Ok(()),

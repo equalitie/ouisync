@@ -1,9 +1,6 @@
 use btdht::{InfoHash, MainlineDht};
 use futures_util::StreamExt;
-use ouisync_lib::{
-    network::{self, dht_discovery::DHT_ROUTERS},
-    ShareToken,
-};
+use ouisync_lib::{self, ShareToken, DHT_ROUTERS};
 use std::{
     collections::HashSet,
     io,
@@ -47,7 +44,7 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     let info_hash = if let Some(token) = &options.token {
-        Some(network::repository_info_hash(token.id()))
+        Some(ouisync_lib::repository_info_hash(token.id()))
     } else {
         options
             .swarm_name

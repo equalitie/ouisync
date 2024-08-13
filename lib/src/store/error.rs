@@ -16,6 +16,4 @@ pub enum Error {
     LocatorNotFound,
     #[error("block not found")]
     BlockNotFound,
-    #[error("block is not referenced from the index")]
-    BlockNotReferenced,
 }

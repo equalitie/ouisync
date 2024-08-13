@@ -6,7 +6,6 @@ mod macros;
 pub(crate) mod dump;
 pub(crate) mod progress;
 pub(crate) mod sync_watch;
-pub(crate) mod traffic_monitor;
 mod wait_map;
 
 pub(crate) use self::env::*;
@@ -14,13 +13,10 @@ pub(crate) use self::env::*;
 use self::wait_map::WaitMap;
 use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
-use metrics_ext::{WatchRecorder, WatchRecorderSubscriber};
 use once_cell::sync::Lazy;
 use ouisync::{
-    crypto::sign::PublicKey,
-    network::{Network, Registration},
-    Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
-    Result, StoreError,
+    crypto::sign::PublicKey, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File,
+    Network, Payload, PeerAddr, Registration, Repository, Result, StoreError,
 };
 use ouisync_tracing_fmt::Formatter;
 use rand::Rng;
@@ -347,14 +343,12 @@ struct Actor {
     base_dir: PathBuf,
     device_id: DeviceId,
     monitor: StateMonitor,
-    recorder: WatchRecorder,
 }
 
 impl Actor {
     fn new(name: String, context: Arc<Context>) -> Self {
         let base_dir = context.base_dir.path().join(&name);
         let monitor = context.monitor.make_child(&name);
-        let recorder = WatchRecorder::new();
 
         Actor {
             name,
@@ -362,7 +356,6 @@ impl Actor {
             base_dir,
             device_id: rand::random(),
             monitor,
-            recorder,
         }
     }
 
@@ -464,40 +457,32 @@ where
                 break;
             }
 
-            wait(&mut rx).await
+            wait(&mut rx).await;
         }
     })
     .await
     .unwrap()
 }
 
-pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
-    loop {
-        match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
-            Ok(event) => {
-                debug!(?event);
+/// Waits for an event to be received and returns it. Returns `None` if the received lagged.
+pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) -> Option<Payload> {
+    match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
+        Ok(event) => {
+            debug!(?event);
 
-                match event {
-                    Ok(Event {
-                        payload:
-                            Payload::BranchChanged(_)
-                            | Payload::BlockReceived { .. }
-                            | Payload::MaintenanceCompleted,
-                        ..
-                    })
-                    | Err(RecvError::Lagged(_)) => return,
-                    Ok(Event { .. }) => continue,
-                    Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
-                }
+            match event {
+                Ok(event) => Some(event.payload),
+                Err(RecvError::Lagged(_)) => None,
+                Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
             }
-            Err(_) => {
-                const MESSAGE: &str = "timeout waiting for notification";
+        }
+        Err(_) => {
+            const MESSAGE: &str = "timeout waiting for notification";
 
-                // NOTE: in release mode backtrace is useless so this trace helps us to locate the
-                // source of the panic:
-                error!("{}", MESSAGE);
-                panic!("{}", MESSAGE);
-            }
+            // NOTE: in release mode backtrace is useless so this trace helps us to locate the
+            // source of the panic:
+            error!("{}", MESSAGE);
+            panic!("{}", MESSAGE);
         }
     }
 }
@@ -738,20 +723,20 @@ where
         .unwrap_or(());
 }
 
-#[cfg(feature = "prometheus")]
+#[cfg(all(feature = "prometheus", not(feature = "influxdb")))]
 fn init_recorder(runtime: &Handle) -> metrics_ext::Shared {
     use metrics_ext::Shared;
     Shared::new(init_prometheus_recorder(runtime))
 }
 
-#[cfg(feature = "influxdb")]
+#[cfg(all(feature = "influxdb", not(feature = "prometheus")))]
 fn init_recorder(runtime: &Handle) -> metrics_ext::Shared {
     use metrics_ext::Shared;
     Shared::new(init_influxdb_recorder(runtime))
 }
 
 #[cfg(all(feature = "prometheus", feature = "influxdb"))]
-fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
+fn init_recorder(runtime: &Handle) -> metrics_ext::Shared {
     use metrics_ext::{Pair, Shared};
 
     Shared::new(Pair(

@@ -11,10 +11,7 @@ mod summary;
 use clap::Parser;
 use common::{actor, progress::ProgressReporter, sync_watch, Env, Proto, DEFAULT_REPO};
 use metrics::{Counter, Gauge, Recorder};
-use ouisync::{
-    network::{Network, TrafficStats},
-    Access, AccessMode, File, Repository,
-};
+use ouisync::{Access, AccessMode, File, Network, Repository, TrafficStats};
 use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{
     fmt,
@@ -47,6 +44,10 @@ fn main() -> ExitCode {
         })
         .chain((0..options.num_readers).map(|index| ActorId {
             access_mode: AccessMode::Read,
+            index,
+        }))
+        .chain((0..options.num_blinds).map(|index| ActorId {
+            access_mode: AccessMode::Blind,
             index,
         }))
         .collect();
@@ -151,16 +152,6 @@ fn main() -> ExitCode {
                     run_watch_rxs.await;
                 }
 
-                // Check the file contents match.
-                for file_params in &files {
-                    let mut file = repo
-                        .open_file(file_params.name())
-                        .await
-                        .inspect_err(|error| error!(?error))
-                        .unwrap();
-                    check_random_file(&mut file, file_params.seed, file_params.size).await;
-                }
-
                 // Wait until everyone finished
                 barrier.wait().await;
             };
@@ -233,6 +224,10 @@ struct Options {
     /// Number of replicas with read access.
     #[arg(short = 'r', long, default_value_t = 0)]
     pub num_readers: usize,
+
+    /// Number of replicas with blind access.
+    #[arg(short = 'b', long, default_value_t = 0)]
+    pub num_blinds: usize,
 
     /// Network protocol to use (QUIC or TCP).
     #[arg(short, long, value_parser, default_value_t = Proto::Quic)]
@@ -318,30 +313,6 @@ async fn write_random_file(file: &mut File, seed: u64, size: u64) {
     }
 
     file.flush().await.unwrap();
-}
-
-async fn check_random_file(file: &mut File, seed: u64, size: u64) {
-    let mut expected = Vec::new();
-    let mut actual = Vec::new();
-    let mut gen = RandomChunks::new(seed, size);
-    let mut offset = 0;
-
-    while gen.next(&mut expected) {
-        actual.clear();
-        actual.resize(expected.len(), 0);
-
-        file.read_all(&mut actual).await.unwrap();
-
-        similar_asserts::assert_eq!(
-            actual,
-            expected,
-            "actor: {}, offset: {}",
-            actor::name(),
-            offset
-        );
-
-        offset += expected.len();
-    }
 }
 
 const CHUNK_SIZE: usize = 4096;

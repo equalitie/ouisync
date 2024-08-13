@@ -3,6 +3,7 @@ mod block_expiration_tracker;
 mod block_ids;
 mod cache;
 mod changeset;
+mod client;
 mod error;
 mod index;
 mod inner_node;
@@ -14,17 +15,17 @@ mod quota;
 mod root_node;
 
 #[cfg(test)]
+mod test_utils;
+#[cfg(test)]
 mod tests;
 
 pub use error::Error;
 pub use migrations::DATA_VERSION;
 
-pub(crate) use {
-    block_ids::BlockIdsPage, changeset::Changeset,
-    inner_node::ReceiveStatus as InnerNodeReceiveStatus,
-    leaf_node::ReceiveStatus as LeafNodeReceiveStatus,
-    root_node::ReceiveStatus as RootNodeReceiveStatus,
-};
+pub(crate) use {block_ids::BlockIdsPage, changeset::Changeset, client::ClientWriter};
+
+#[cfg(test)]
+pub(crate) use test_utils::SnapshotWriter;
 
 use self::{
     block_expiration_tracker::BlockExpirationTracker,
@@ -34,16 +35,15 @@ use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
     crypto::{
         sign::{Keypair, PublicKey},
-        CacheHash, Hash, Hashable,
+        Hash,
     },
     db,
     debug::DebugPrinter,
     progress::Progress,
     protocol::{
-        get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes,
-        MultiBlockPresence, NodeState, Proof, RootNode, RootNodeFilter, Summary, INNER_LAYER_COUNT,
+        get_bucket, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, RootNode,
+        RootNodeFilter, INNER_LAYER_COUNT,
     },
-    storage_size::StorageSize,
     sync::broadcast_hash_set,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -176,6 +176,15 @@ impl Store {
             },
             untrack_blocks: None,
         })
+    }
+
+    pub async fn begin_client_write(&self) -> Result<ClientWriter, Error> {
+        ClientWriter::begin(
+            self.db().begin_write().await?,
+            self.cache.begin(),
+            self.block_expiration_tracker.read().await.clone(),
+        )
+        .await
     }
 
     pub async fn count_blocks(&self) -> Result<u64, Error> {
@@ -315,15 +324,6 @@ impl Reader {
         block::exists(self.db(), id).await
     }
 
-    /// Checks whether the block is missing - that is, it's referenced from some snapshot but
-    /// doesn't exist in the store.
-    ///
-    /// NOTE: This is not the same as `!block_exists` because that only checks the block existence
-    /// but not whether it's referenced.
-    pub async fn is_block_missing(&mut self, id: &BlockId) -> Result<bool, Error> {
-        leaf_node::is_missing(self.db(), id).await
-    }
-
     /// Returns the total number of blocks in the store.
     pub async fn count_blocks(&mut self) -> Result<u64, Error> {
         block::count(self.db()).await
@@ -428,22 +428,6 @@ impl Reader {
     ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
         leaf_node::load_locators(self.db(), block_id)
     }
-
-    /// Load the `NodeState` of the root node(s) that reference the given missing block.
-    pub async fn load_root_node_state_of_missing(
-        &mut self,
-        block_id: &BlockId,
-    ) -> Result<NodeState, Error> {
-        root_node::load_node_state_of_missing(self.db(), block_id).await
-    }
-
-    pub(super) fn missing_block_ids_in_branch<'a>(
-        &'a mut self,
-        branch_id: &'a PublicKey,
-    ) -> impl Stream<Item = Result<BlockId, Error>> + 'a {
-        block_ids::missing_block_ids_in_branch(self.db(), branch_id)
-    }
-
     // Access the underlying database connection.
     // TODO: Make this private, but first we need to move the `metadata` module to `store`.
     pub(crate) fn db(&mut self) -> &mut db::Connection {
@@ -540,10 +524,7 @@ impl WriteTransaction {
         let (db, cache) = self.db_and_cache();
 
         block::remove(db, id).await?;
-        leaf_node::set_missing(db, id).await?;
-
-        let parent_hashes: Vec<_> = leaf_node::load_parent_hashes(db, id).try_collect().await?;
-
+        let parent_hashes = leaf_node::set_missing(db, id).try_collect().await?;
         index::update_summaries(db, cache, parent_hashes).await?;
 
         let WriteTransaction {
@@ -578,116 +559,6 @@ impl WriteTransaction {
         Ok(())
     }
 
-    /// Write a root node received from a remote replica.
-    pub async fn receive_root_node(
-        &mut self,
-        proof: Proof,
-        block_presence: MultiBlockPresence,
-    ) -> Result<RootNodeReceiveStatus, Error> {
-        let (db, cache) = self.db_and_cache();
-        let hash = proof.hash;
-
-        // Make sure the loading of the existing nodes and the potential creation of the new node
-        // happens atomically. Otherwise we could conclude the incoming node is up-to-date but
-        // just before we start inserting it another snapshot might get created locally and the
-        // incoming node might become outdated. But because we already concluded it's up-to-date,
-        // we end up inserting it anyway which breaks the invariant that a node inserted later must
-        // be happens-after any node inserted earlier in the same branch.
-
-        // Determine further actions by comparing the incoming node against the existing nodes:
-        let action = root_node::decide_action(db, &proof, &block_presence).await?;
-
-        if action.insert {
-            root_node::create(db, proof, Summary::INCOMPLETE, RootNodeFilter::Published).await?;
-
-            // Ignoring quota here because if the snapshot became complete by receiving this root
-            // node it means that we already have all the other nodes and so the quota validation
-            // already took place.
-            let status = index::finalize(db, cache, hash, None).await?;
-
-            Ok(RootNodeReceiveStatus {
-                new_approved: status.new_approved,
-                new_snapshot: true,
-                request_children: action.request_children,
-            })
-        } else {
-            Ok(RootNodeReceiveStatus {
-                new_approved: Vec::new(),
-                new_snapshot: false,
-                request_children: action.request_children,
-            })
-        }
-    }
-
-    /// Write inner nodes received from a remote replica.
-    pub async fn receive_inner_nodes(
-        &mut self,
-        nodes: CacheHash<InnerNodes>,
-        quota: Option<StorageSize>,
-    ) -> Result<InnerNodeReceiveStatus, Error> {
-        let (db, cache) = self.db_and_cache();
-        let parent_hash = nodes.hash();
-
-        if !index::parent_exists(db, &parent_hash).await? {
-            return Ok(InnerNodeReceiveStatus::default());
-        }
-
-        let request_children = inner_node::filter_nodes_with_new_blocks(db, &nodes).await?;
-
-        let mut nodes = nodes.into_inner().into_incomplete();
-        inner_node::inherit_summaries(db, &mut nodes).await?;
-        inner_node::save_all(db, &nodes, &parent_hash).await?;
-
-        let status = index::finalize(db, cache, parent_hash, quota).await?;
-
-        Ok(InnerNodeReceiveStatus {
-            new_approved: status.new_approved,
-            request_children,
-        })
-    }
-
-    /// Receive leaf nodes from other replica and store them into the db.
-    /// Returns the ids of the blocks that the remote replica has but the local one has not.
-    /// Also returns the receive status.
-    pub async fn receive_leaf_nodes(
-        &mut self,
-        nodes: CacheHash<LeafNodes>,
-        quota: Option<StorageSize>,
-    ) -> Result<LeafNodeReceiveStatus, Error> {
-        let (db, cache) = self.db_and_cache();
-        let parent_hash = nodes.hash();
-
-        if !index::parent_exists(db, &parent_hash).await? {
-            return Ok(LeafNodeReceiveStatus::default());
-        }
-
-        let request_blocks = leaf_node::filter_nodes_with_new_blocks(db, &nodes).await?;
-
-        leaf_node::save_all(db, &nodes.into_inner().into_missing(), &parent_hash).await?;
-
-        let status = index::finalize(db, cache, parent_hash, quota).await?;
-
-        Ok(LeafNodeReceiveStatus {
-            old_approved: status.old_approved,
-            new_approved: status.new_approved,
-            request_blocks,
-        })
-    }
-
-    /// Write a block received from a remote replica and marks it as present in the index.
-    /// The block must already be referenced by the index, otherwise an `BlockNotReferenced` error
-    /// is returned.
-    pub async fn receive_block(&mut self, block: &Block) -> Result<(), Error> {
-        let (db, cache) = self.db_and_cache();
-        let result = block::receive(db, cache, block).await;
-
-        if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_update(&block.id, false);
-        }
-
-        result
-    }
-
     #[cfg(test)]
     pub async fn clone_root_node_into(
         &mut self,
@@ -695,6 +566,8 @@ impl WriteTransaction {
         dst_writer_id: PublicKey,
         write_keys: &crate::crypto::sign::Keypair,
     ) -> Result<RootNode, Error> {
+        use crate::protocol::Proof;
+
         let hash = src.proof.hash;
         let vv = src.proof.into_version_vector();
         let proof = Proof::new(dst_writer_id, vv, hash, write_keys);

@@ -30,9 +30,6 @@ pub(crate) struct RepositoryMonitor {
     pub block_requests_inflight: Gauge,
     // Total number of received requests
     pub requests_received: Counter,
-    // Current number of send requests (index + block) for which responses haven't been handled yet
-    // (they might be in-flight or queued).
-    pub requests_pending: Gauge,
     // Time from sending a request to receiving its response.
     pub request_latency: Histogram,
     // Total number of timeouted requests.
@@ -44,8 +41,9 @@ pub(crate) struct RepositoryMonitor {
     pub responses_sent: Counter,
     // Total number of responses received.
     pub responses_received: Counter,
-    // Time to handle a response.
-    pub response_handle_time: Histogram,
+
+    // Total number of responses currently being processed.
+    pub responses_in_processing: Gauge,
 
     pub scan_job: JobMonitor,
     pub merge_job: JobMonitor,
@@ -73,15 +71,12 @@ impl RepositoryMonitor {
             create_gauge(recorder, "block requests inflight", Unit::Count);
 
         let requests_received = create_counter(recorder, "requests received", Unit::Count);
-        let requests_pending = create_gauge(recorder, "requests pending", Unit::Count);
         let request_latency = create_histogram(recorder, "request latency", Unit::Seconds);
         let request_timeouts = create_counter(recorder, "request timeouts", Unit::Count);
         let request_queue_time = create_histogram(recorder, "request queue time", Unit::Seconds);
 
         let responses_sent = create_counter(recorder, "responses sent", Unit::Count);
         let responses_received = create_counter(recorder, "responses received", Unit::Count);
-        let response_handle_time =
-            create_histogram(recorder, "response handle time", Unit::Seconds);
 
         let scan_job = JobMonitor::new(&node, recorder, "scan");
         let merge_job = JobMonitor::new(&node, recorder, "merge");
@@ -96,14 +91,14 @@ impl RepositoryMonitor {
             block_requests_sent,
             block_requests_inflight,
             requests_received,
-            requests_pending,
             request_latency,
             request_timeouts,
             request_queue_time,
 
             responses_sent,
             responses_received,
-            response_handle_time,
+
+            responses_in_processing: create_gauge(recorder, "responses in processing", Unit::Count),
 
             scan_job,
             merge_job,

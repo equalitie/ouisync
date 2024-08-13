@@ -2,7 +2,6 @@ use super::{
     barrier::{Barrier, BarrierError},
     client::Client,
     connection::ConnectionPermit,
-    constants::MAX_IN_FLIGHT_REQUESTS_PER_PEER,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannelId, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
@@ -14,7 +13,9 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
-    repository::{LocalId, Vault},
+    network::constants::MAX_RESPONSE_BATCH_SIZE,
+    protocol::RepositoryId,
+    repository::Vault,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use state_monitor::StateMonitor;
@@ -40,8 +41,7 @@ pub(super) struct MessageBroker {
     this_runtime_id: PublicRuntimeId,
     that_runtime_id: PublicRuntimeId,
     dispatcher: MessageDispatcher,
-    links: HashMap<LocalId, oneshot::Sender<()>>,
-    request_limiter: Arc<Semaphore>,
+    links: HashMap<RepositoryId, oneshot::Sender<()>>,
     pex_peer: PexPeer,
     monitor: StateMonitor,
     tracker: TrafficTracker,
@@ -63,7 +63,6 @@ impl MessageBroker {
             that_runtime_id,
             dispatcher: MessageDispatcher::new(),
             links: HashMap::default(),
-            request_limiter: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS_PER_PEER)),
             pex_peer,
             monitor,
             tracker,
@@ -102,7 +101,7 @@ impl MessageBroker {
 
         let (abort_tx, abort_rx) = oneshot::channel();
 
-        match self.links.entry(vault.local_id) {
+        match self.links.entry(*vault.repository_id()) {
             Entry::Occupied(mut entry) => {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
@@ -136,7 +135,6 @@ impl MessageBroker {
             stream: self.dispatcher.open_recv(channel_id),
             sink: self.dispatcher.open_send(channel_id),
             vault,
-            request_limiter: self.request_limiter.clone(),
             response_limiter,
             pex_tx,
             pex_rx,
@@ -159,8 +157,8 @@ impl MessageBroker {
 
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
-    pub fn destroy_link(&mut self, id: LocalId) {
-        self.links.remove(&id);
+    pub fn destroy_link(&mut self, id: &RepositoryId) {
+        self.links.remove(id);
     }
 
     pub async fn shutdown(self) {
@@ -194,7 +192,6 @@ struct Link {
     stream: ContentStream,
     sink: ContentSink,
     vault: Vault,
-    request_limiter: Arc<Semaphore>,
     response_limiter: Arc<Semaphore>,
     pex_tx: PexSender,
     pex_rx: PexReceiver,
@@ -265,7 +262,6 @@ impl Link {
                 crypto_stream,
                 crypto_sink,
                 &self.vault,
-                self.request_limiter.clone(),
                 self.response_limiter.clone(),
                 &mut self.pex_tx,
                 &mut self.pex_rx,
@@ -303,20 +299,19 @@ async fn run_link(
     stream: DecryptingStream<'_>,
     sink: EncryptingSink<'_>,
     repo: &Vault,
-    request_limiter: Arc<Semaphore>,
     response_limiter: Arc<Semaphore>,
     pex_tx: &mut PexSender,
     pex_rx: &mut PexReceiver,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
-    let (response_tx, response_rx) = mpsc::channel(1);
+    let (response_tx, response_rx) = mpsc::channel(MAX_RESPONSE_BATCH_SIZE);
     let (content_tx, content_rx) = mpsc::channel(1);
 
     tracing::info!("Link opened");
 
     // Run everything in parallel:
     let flow = select! {
-        flow = run_client(repo.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
+        flow = run_client(repo.clone(), content_tx.clone(), response_rx) => flow,
         flow = run_server(repo.clone(), content_tx.clone(), request_rx, response_limiter) => flow,
         flow = recv_messages(stream, request_tx, response_tx, pex_rx) => flow,
         flow = send_messages(content_rx, sink) => flow,
@@ -407,9 +402,8 @@ async fn run_client(
     repo: Vault,
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
-    request_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
-    let mut client = Client::new(repo, content_tx, response_rx, request_limiter);
+    let mut client = Client::new(repo, content_tx, response_rx);
     let result = client.run().await;
 
     tracing::debug!("Client stopped running with result {:?}", result);

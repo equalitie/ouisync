@@ -1,18 +1,13 @@
 // From experience, this lint is almost never useful. Disabling it globally.
 #![allow(clippy::large_enum_variant)]
-// This affects lots of parts of the code but it's just aesthetic so silencing it for now.
-// We should consider enabling it again at some point.
-#![allow(clippy::uninlined_format_args)]
 
 #[macro_use]
 mod macros;
 
 pub mod crypto;
 pub mod db;
-pub mod network;
 pub mod path;
 pub mod protocol;
-pub mod sync;
 
 mod access_control;
 mod blob;
@@ -31,10 +26,11 @@ mod future;
 mod iterator;
 mod joint_directory;
 mod joint_entry;
+mod network;
 mod progress;
 mod repository;
-mod storage_size;
 mod store;
+mod sync;
 #[cfg(test)]
 mod test_utils;
 mod time;
@@ -58,14 +54,17 @@ pub use self::{
     file::File,
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
-    network::{peer_addr::PeerAddr, PeerInfo, PeerInfoCollector, PublicRuntimeId, SecretRuntimeId},
+    network::{
+        repository_info_hash, DhtContactsStoreTrait, NatBehavior, Network, PeerAddr, PeerInfo,
+        PeerInfoCollector, PeerSource, PeerState, PublicRuntimeId, Registration, SecretRuntimeId,
+        TrafficStats, DHT_ROUTERS,
+    },
     progress::Progress,
-    protocol::BLOCK_SIZE,
+    protocol::{RepositoryId, StorageSize, BLOCK_SIZE},
     repository::{
         delete as delete_repository, Credentials, Metadata, Repository, RepositoryHandle,
-        RepositoryId, RepositoryParams,
+        RepositoryParams,
     },
-    storage_size::StorageSize,
     store::{Error as StoreError, DATA_VERSION},
     version_vector::VersionVector,
 };

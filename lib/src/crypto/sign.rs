@@ -9,12 +9,7 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Sqlite,
 };
-use std::{
-    cmp::Ordering,
-    fmt,
-    hash::{Hash as StdHash, Hasher},
-    str::FromStr,
-};
+use std::{cmp::Ordering, fmt, str::FromStr};
 use thiserror::Error;
 
 #[derive(Serialize, Deserialize)]
@@ -68,7 +63,7 @@ impl fmt::Debug for Keypair {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Deserialize, Serialize)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct PublicKey(ext::VerifyingKey);
@@ -110,14 +105,6 @@ impl Ord for PublicKey {
 impl fmt::LowerHex for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         format::hex(f, self.0.as_bytes())
-    }
-}
-
-// https://github.com/dalek-cryptography/ed25519-dalek/issues/183
-#[allow(clippy::derived_hash_with_manual_eq)]
-impl StdHash for PublicKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        StdHash::hash(self.0.as_bytes(), state);
     }
 }
 

@@ -3,13 +3,9 @@ use crate::crypto::{
     Digest, Hash, Hashable,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    fmt,
-    str::FromStr,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use std::str::FromStr;
 
-#[derive(PartialEq, Eq, Clone, Debug, Copy, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct RepositoryId(PublicKey);
@@ -72,26 +68,6 @@ impl From<PublicKey> for RepositoryId {
 impl Hashable for RepositoryId {
     fn update_hash<S: Digest>(&self, state: &mut S) {
         self.0.update_hash(state)
-    }
-}
-
-/// Simple numeric id that is unique only locally. Useful mostly for debugging.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub struct LocalId(u32);
-
-impl LocalId {
-    // `Default` would be misleading here, because each invocation of `default` would create
-    // a different value.
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl fmt::Display for LocalId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
     }
 }
 

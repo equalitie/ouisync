@@ -1,20 +1,12 @@
 use super::{error::Error, leaf_node};
 use crate::{
-    crypto::{sign::PublicKey, Hash},
+    crypto::Hash,
     db,
     protocol::{InnerNode, InnerNodes, LeafNodes, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
 };
 use futures_util::{future, TryStreamExt};
 use sqlx::Row;
 use std::convert::TryInto;
-
-#[derive(Default)]
-pub(crate) struct ReceiveStatus {
-    /// List of branches whose snapshots have been approved.
-    pub new_approved: Vec<PublicKey>,
-    /// Which of the received nodes should we request the children of.
-    pub request_children: Vec<InnerNode>,
-}
 
 /// Load all inner nodes with the specified parent hash.
 pub(super) async fn load_children(
@@ -206,7 +198,10 @@ pub(super) async fn inherit_summaries(
 /// Ideally, we should change the db schema to be normalized, which in this case would mean
 /// to have only one record per node and to represent the parent-child relation using a
 /// separate db table (many-to-many relation).
-async fn inherit_summary(conn: &mut db::Connection, node: &mut InnerNode) -> Result<(), Error> {
+pub(super) async fn inherit_summary(
+    conn: &mut db::Connection,
+    node: &mut InnerNode,
+) -> Result<(), Error> {
     if node.summary != Summary::INCOMPLETE {
         return Ok(());
     }
@@ -229,32 +224,6 @@ async fn inherit_summary(conn: &mut db::Connection, node: &mut InnerNode) -> Res
     }
 
     Ok(())
-}
-
-/// Filter nodes that the remote replica has some blocks in that the local one is missing.
-pub(super) async fn filter_nodes_with_new_blocks(
-    tx: &mut db::WriteTransaction,
-    remote_nodes: &InnerNodes,
-) -> Result<Vec<InnerNode>, Error> {
-    let mut output = Vec::with_capacity(remote_nodes.len());
-
-    for (_, remote_node) in remote_nodes {
-        let local_node = load(tx, &remote_node.hash).await?;
-        let insert = if let Some(local_node) = local_node {
-            local_node.summary.is_outdated(&remote_node.summary)
-        } else {
-            // node not present locally - we implicitly treat this as if the local replica
-            // had zero blocks under this node unless the remote node is empty, in that
-            // case we ignore it.
-            !remote_node.is_empty()
-        };
-
-        if insert {
-            output.push(*remote_node);
-        }
-    }
-
-    Ok(output)
 }
 
 #[cfg(test)]

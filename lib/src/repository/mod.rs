@@ -1,5 +1,4 @@
 mod credentials;
-mod id;
 mod metadata;
 mod monitor;
 mod params;
@@ -9,19 +8,17 @@ mod worker;
 #[cfg(test)]
 mod tests;
 
-pub use self::{
-    credentials::Credentials, id::RepositoryId, metadata::Metadata, params::RepositoryParams,
-};
+pub use self::{credentials::Credentials, metadata::Metadata, params::RepositoryParams};
 
 pub(crate) use self::{
-    id::LocalId,
     metadata::{data_version, quota},
     monitor::RepositoryMonitor,
-    vault::{BlockRequestMode, Vault},
+    vault::Vault,
 };
 
 use crate::{
     access_control::{Access, AccessChange, AccessKeys, AccessMode, AccessSecrets, LocalSecret},
+    block_tracker::RequestMode,
     branch::{Branch, BranchShared},
     crypto::{sign::PublicKey, PasswordSalt},
     db::{self, DatabaseId},
@@ -33,8 +30,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
-    protocol::{RootNodeFilter, BLOCK_SIZE},
-    storage_size::StorageSize,
+    protocol::{RootNodeFilter, StorageSize, BLOCK_SIZE},
     store,
     sync::stream::Throttle,
     version_vector::VersionVector,
@@ -765,7 +761,7 @@ impl Repository {
         self.shared.load_branches().await
     }
 
-    /// Returns version vector of the given branch. Work in all access moded.
+    /// Returns version vector of the given branch. Works in all access moded.
     pub async fn get_branch_version_vector(&self, writer_id: &PublicKey) -> Result<VersionVector> {
         Ok(self
             .shared
@@ -777,6 +773,22 @@ impl Repository {
             .await?
             .proof
             .into_version_vector())
+    }
+
+    /// Returns the version vector calculated by merging the version vectors of all branches.
+    pub async fn get_merged_version_vector(&self) -> Result<VersionVector> {
+        Ok(self
+            .shared
+            .vault
+            .store()
+            .acquire_read()
+            .await?
+            .load_latest_approved_root_nodes()
+            .try_fold(VersionVector::default(), |mut merged, node| {
+                merged.merge(&node.proof.version_vector);
+                future::ready(Ok(merged))
+            })
+            .await?)
     }
 
     /// Subscribe to event notifications.
@@ -944,6 +956,11 @@ impl Repository {
             "Repository access mode changed"
         );
 
+        self.shared
+            .vault
+            .block_tracker
+            .set_request_mode(request_mode(&credentials.secrets));
+
         *self.shared.credentials.write().unwrap() = credentials;
         *self.worker_handle.lock().unwrap() = Some(spawn_worker(self.shared.clone()));
     }
@@ -962,20 +979,11 @@ struct Shared {
 impl Shared {
     fn new(pool: db::Pool, credentials: Credentials, monitor: RepositoryMonitor) -> Self {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
+        let vault = Vault::new(*credentials.secrets.id(), event_tx, pool, monitor);
 
-        let block_request_mode = if credentials.secrets.can_read() {
-            BlockRequestMode::Lazy
-        } else {
-            BlockRequestMode::Greedy
-        };
-
-        let vault = Vault::new(
-            *credentials.secrets.id(),
-            event_tx,
-            pool,
-            block_request_mode,
-            monitor,
-        );
+        vault
+            .block_tracker
+            .set_request_mode(request_mode(&credentials.secrets));
 
         Self {
             vault,
@@ -1064,5 +1072,13 @@ async fn report_sync_progress(vault: Vault) {
                 prev_progress.percent()
             );
         }
+    }
+}
+
+fn request_mode(secrets: &AccessSecrets) -> RequestMode {
+    if secrets.can_read() {
+        RequestMode::Lazy
+    } else {
+        RequestMode::Greedy
     }
 }

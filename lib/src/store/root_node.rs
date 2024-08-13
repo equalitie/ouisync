@@ -11,25 +11,44 @@ use crate::{
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::{sqlite::SqliteRow, FromRow, Row};
-use std::{cmp::Ordering, future};
+use std::{cmp::Ordering, fmt, future};
 
 /// Status of receiving a root node
-#[derive(Default)]
-pub(crate) struct ReceiveStatus {
-    /// List of branches whose snapshots became approved.
-    pub new_approved: Vec<PublicKey>,
-    /// Did the received node create new snapshot?
-    pub new_snapshot: bool,
-    /// Should we request the children of the incoming node?
-    pub request_children: bool,
+#[derive(PartialEq, Eq, Debug)]
+pub(crate) enum RootNodeStatus {
+    /// The node represents a new snapshot - write it into the store and requests its children.
+    NewSnapshot,
+    /// We already have the node but its block presence indicated the peer potentially has some
+    /// blocks we don't have. Don't write it into the store but do request its children.
+    NewBlocks,
+    /// The node is outdated - discard it.
+    Outdated,
 }
 
-/// Decide what to do with an incoming root node.
-pub(super) struct ReceiveAction {
-    /// Should we insert the incoming node to the db?
-    pub insert: bool,
-    /// Should we request the children of the incoming node?
-    pub request_children: bool,
+impl RootNodeStatus {
+    pub fn request_children(&self) -> bool {
+        match self {
+            Self::NewSnapshot | Self::NewBlocks => true,
+            Self::Outdated => false,
+        }
+    }
+
+    pub fn write(&self) -> bool {
+        match self {
+            Self::NewSnapshot => true,
+            Self::NewBlocks | Self::Outdated => false,
+        }
+    }
+}
+
+impl fmt::Display for RootNodeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::NewSnapshot => write!(f, "new snapshot"),
+            Self::NewBlocks => write!(f, "new blocks"),
+            Self::Outdated => write!(f, "outdated"),
+        }
+    }
 }
 
 /// Creates a root node with the specified proof and summary.
@@ -487,26 +506,34 @@ pub(super) async fn check_fallback(
 }
 
 /// Approve the nodes with the specified hash.
-pub(super) async fn approve(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-    set_state(tx, hash, NodeState::Approved).await
+pub(super) fn approve<'a>(
+    tx: &'a mut db::WriteTransaction,
+    hash: &'a Hash,
+) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
+    set_state(tx, hash, NodeState::Approved)
 }
 
 /// Reject the nodes with the specified hash.
-pub(super) async fn reject(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-    set_state(tx, hash, NodeState::Rejected).await
+pub(super) fn reject<'a>(
+    tx: &'a mut db::WriteTransaction,
+    hash: &'a Hash,
+) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
+    set_state(tx, hash, NodeState::Rejected)
 }
 
-async fn set_state(
-    tx: &mut db::WriteTransaction,
-    hash: &Hash,
+/// Set the state of the nodes with the specified hash and returns the writer ids of the updated
+/// nodes.
+fn set_state<'a>(
+    tx: &'a mut db::WriteTransaction,
+    hash: &'a Hash,
     state: NodeState,
-) -> Result<(), Error> {
-    sqlx::query("UPDATE snapshot_root_nodes SET state = ? WHERE hash = ?")
+) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
+    sqlx::query("UPDATE snapshot_root_nodes SET state = ? WHERE hash = ? RETURNING writer_id")
         .bind(state)
         .bind(hash)
-        .execute(tx)
-        .await?;
-    Ok(())
+        .fetch(tx)
+        .map_ok(|row| row.get(0))
+        .err_into()
 }
 
 /// Returns all writer ids.
@@ -531,17 +558,14 @@ pub(super) fn load_writer_ids_by_hash<'a>(
         .err_into()
 }
 
-pub(super) async fn decide_action(
-    tx: &mut db::WriteTransaction,
+pub(super) async fn status(
+    conn: &mut db::Connection,
     new_proof: &Proof,
     new_block_presence: &MultiBlockPresence,
-) -> Result<ReceiveAction, Error> {
-    let mut action = ReceiveAction {
-        insert: true,
-        request_children: true,
-    };
+) -> Result<RootNodeStatus, Error> {
+    let mut status = RootNodeStatus::NewSnapshot;
 
-    let mut old_nodes = load_all_latest(tx);
+    let mut old_nodes = load_all_latest(conn);
     while let Some(old_node) = old_nodes.try_next().await? {
         match new_proof
             .version_vector
@@ -550,8 +574,7 @@ pub(super) async fn decide_action(
             Some(Ordering::Less) => {
                 // The incoming node is outdated compared to at least one existing node - discard
                 // it.
-                action.insert = false;
-                action.request_children = false;
+                status = RootNodeStatus::Outdated;
             }
             Some(Ordering::Equal) => {
                 if new_proof.hash == old_node.proof.hash {
@@ -560,16 +583,14 @@ pub(super) async fn decide_action(
                     // possibly in a different branch). There is no point inserting it but if the
                     // incoming summary is potentially more up-to-date than the exising one, we
                     // still want to request the children. Otherwise we discard it.
-                    action.insert = false;
-
-                    // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
-                    // with `new_summary.is_outdated(&old_node.summary)`.
-                    if !old_node
+                    if old_node
                         .summary
                         .block_presence
                         .is_outdated(new_block_presence)
                     {
-                        action.request_children = false;
+                        status = RootNodeStatus::NewBlocks;
+                    } else {
+                        status = RootNodeStatus::Outdated;
                     }
                 } else {
                     tracing::warn!(
@@ -581,8 +602,7 @@ pub(super) async fn decide_action(
                         "Received root node invalid - broken invariant: same vv but different hash"
                     );
 
-                    action.insert = false;
-                    action.request_children = false;
+                    status = RootNodeStatus::Outdated;
                 }
             }
             Some(Ordering::Greater) => (),
@@ -595,18 +615,17 @@ pub(super) async fn decide_action(
                         "Received root node invalid - broken invariant: concurrency within branch is not allowed"
                     );
 
-                    action.insert = false;
-                    action.request_children = false;
+                    status = RootNodeStatus::Outdated;
                 }
             }
         }
 
-        if !action.insert && !action.request_children {
+        if matches!(status, RootNodeStatus::Outdated) {
             break;
         }
     }
 
-    Ok(action)
+    Ok(status)
 }
 
 pub(super) async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {
@@ -815,7 +834,7 @@ mod tests {
     // Proptest for the `load_all_latest_preferred` function.
     mod load_all_latest_preferred {
         use super::*;
-        use crate::protocol::root_node::SnapshotId;
+        use crate::protocol::SnapshotId;
         use proptest::{arbitrary::any, collection::vec, sample::select, strategy::Strategy};
         use test_strategy::proptest;
 
