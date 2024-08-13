@@ -10,8 +10,10 @@ use tokio::sync::broadcast;
 #[derive(Copy, Clone, Debug)]
 #[non_exhaustive]
 pub enum Payload {
-    /// A new snapshot was created in the specified branch.
-    BranchChanged(PublicKey),
+    /// A new snapshot was approved in the specified branch.
+    SnapshotApproved(PublicKey),
+    /// A new snapshot was rejected in the specified branch.
+    SnapshotRejected(PublicKey),
     /// A block with the specified id was received from a remote replica.
     BlockReceived(BlockId),
     /// The `maintain` worker job successfully completed. It won't perform any more work until

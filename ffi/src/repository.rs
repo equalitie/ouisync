@@ -358,7 +358,7 @@ pub(crate) fn subscribe(
         loop {
             match notification_rx.recv().await {
                 Ok(Event {
-                    payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                    payload: Payload::SnapshotApproved(_) | Payload::BlockReceived { .. },
                     ..
                 }) => (),
                 Ok(Event { .. }) => continue,

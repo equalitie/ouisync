@@ -329,7 +329,12 @@ impl Inner {
 
                 // Notify about newly approved snapshots
                 for branch_id in &status.approved_branches {
-                    event_tx.send(Payload::BranchChanged(*branch_id));
+                    event_tx.send(Payload::SnapshotApproved(*branch_id));
+                }
+
+                // Notify about newly rejected snapshots
+                for branch_id in &status.rejected_branches {
+                    event_tx.send(Payload::SnapshotRejected(*branch_id));
                 }
 
                 status

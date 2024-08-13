@@ -447,7 +447,7 @@ async fn save_snapshot(
         .await;
 
     for branch_id in status.approved_branches {
-        vault.event_tx.send(Payload::BranchChanged(branch_id));
+        vault.event_tx.send(Payload::SnapshotApproved(branch_id));
     }
 }
 
@@ -552,7 +552,7 @@ async fn create_changeset(
 
     tx.commit().await.unwrap();
 
-    vault.event_tx.send(Payload::BranchChanged(*writer_id));
+    vault.event_tx.send(Payload::SnapshotApproved(*writer_id));
 }
 
 async fn load_latest_root_node(vault: &Vault, writer_id: &PublicKey) -> Option<RootNode> {

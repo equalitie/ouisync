@@ -187,7 +187,7 @@ async fn wait_for_event(rx: &mut broadcast::Receiver<Event>) {
     loop {
         match time::timeout(EVENT_TIMEOUT, rx.recv()).await {
             Ok(Ok(Event {
-                payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                payload: Payload::SnapshotApproved(_) | Payload::BlockReceived { .. },
                 ..
             }))
             | Ok(Err(RecvError::Lagged(_))) => return,

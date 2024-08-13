@@ -462,40 +462,32 @@ where
                 break;
             }
 
-            wait(&mut rx).await
+            wait(&mut rx).await;
         }
     })
     .await
     .unwrap()
 }
 
-pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
-    loop {
-        match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
-            Ok(event) => {
-                debug!(?event);
+/// Waits for an event to be received and returns it. Returns `None` if the received lagged.
+pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) -> Option<Payload> {
+    match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
+        Ok(event) => {
+            debug!(?event);
 
-                match event {
-                    Ok(Event {
-                        payload:
-                            Payload::BranchChanged(_)
-                            | Payload::BlockReceived { .. }
-                            | Payload::MaintenanceCompleted,
-                        ..
-                    })
-                    | Err(RecvError::Lagged(_)) => return,
-                    Ok(Event { .. }) => continue,
-                    Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
-                }
+            match event {
+                Ok(event) => Some(event.payload),
+                Err(RecvError::Lagged(_)) => None,
+                Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
             }
-            Err(_) => {
-                const MESSAGE: &str = "timeout waiting for notification";
+        }
+        Err(_) => {
+            const MESSAGE: &str = "timeout waiting for notification";
 
-                // NOTE: in release mode backtrace is useless so this trace helps us to locate the
-                // source of the panic:
-                error!("{}", MESSAGE);
-                panic!("{}", MESSAGE);
-            }
+            // NOTE: in release mode backtrace is useless so this trace helps us to locate the
+            // source of the panic:
+            error!("{}", MESSAGE);
+            panic!("{}", MESSAGE);
         }
     }
 }

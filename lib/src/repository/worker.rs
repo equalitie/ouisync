@@ -46,7 +46,7 @@ pub(super) async fn run(shared: Arc<Shared>) {
                 future::ready(match event {
                     Ok(Event { scope, .. }) if scope == event_scope => None,
                     Ok(Event {
-                        payload: Payload::BranchChanged(_),
+                        payload: Payload::SnapshotApproved(_),
                         ..
                     }) => Some(Command::Interrupt),
                     Ok(Event {
@@ -55,7 +55,7 @@ pub(super) async fn run(shared: Arc<Shared>) {
                     })
                     | Err(Lagged) => Some(Command::Wait),
                     Ok(Event {
-                        payload: Payload::MaintenanceCompleted,
+                        payload: Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted,
                         ..
                     }) => None,
                 })
@@ -92,16 +92,16 @@ pub(super) async fn run(shared: Arc<Shared>) {
             event::into_stream(shared.vault.event_tx.subscribe()).filter_map(move |event| {
                 future::ready(match event {
                     Ok(Event {
-                        payload: Payload::BranchChanged(_),
+                        payload: Payload::SnapshotApproved(_),
                         scope,
                     }) if scope != event_scope => Some(Command::Interrupt),
                     Ok(Event {
-                        payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                        payload: Payload::SnapshotApproved(_) | Payload::BlockReceived { .. },
                         ..
                     })
                     | Err(Lagged) => Some(Command::Wait),
                     Ok(Event {
-                        payload: Payload::MaintenanceCompleted,
+                        payload: Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted,
                         ..
                     }) => None,
                 })
