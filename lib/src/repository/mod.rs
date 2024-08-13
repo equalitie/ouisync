@@ -984,7 +984,6 @@ impl Shared {
         vault
             .block_tracker
             .set_request_mode(request_mode(&credentials.secrets));
-        // .set_request_mode(RequestMode::Greedy);
 
         Self {
             vault,

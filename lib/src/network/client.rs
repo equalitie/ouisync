@@ -142,12 +142,19 @@ impl Inner {
     }
 
     async fn handle_response_batch(&self, batch: &mut Vec<PendingResponse>) -> Result<()> {
+        let count = batch.len();
+
         self.vault
             .monitor
             .responses_received
-            .increment(batch.len() as u64);
+            .increment(count as u64);
 
         let mut writer = self.vault.store().begin_client_write().await?;
+
+        self.vault
+            .monitor
+            .responses_in_processing
+            .increment(count as f64);
 
         for response in batch.drain(..) {
             match response.response {
@@ -179,6 +186,11 @@ impl Inner {
         }
 
         self.commit_responses(writer).await?;
+
+        self.vault
+            .monitor
+            .responses_in_processing
+            .decrement(count as f64);
 
         Ok(())
     }
