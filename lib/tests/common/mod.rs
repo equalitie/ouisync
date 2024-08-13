@@ -6,7 +6,6 @@ mod macros;
 pub(crate) mod dump;
 pub(crate) mod progress;
 pub(crate) mod sync_watch;
-pub(crate) mod traffic_monitor;
 mod wait_map;
 
 pub(crate) use self::env::*;
@@ -14,7 +13,6 @@ pub(crate) use self::env::*;
 use self::wait_map::WaitMap;
 use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
-use metrics_ext::{WatchRecorder, WatchRecorderSubscriber};
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File,
@@ -345,14 +343,12 @@ struct Actor {
     base_dir: PathBuf,
     device_id: DeviceId,
     monitor: StateMonitor,
-    recorder: WatchRecorder,
 }
 
 impl Actor {
     fn new(name: String, context: Arc<Context>) -> Self {
         let base_dir = context.base_dir.path().join(&name);
         let monitor = context.monitor.make_child(&name);
-        let recorder = WatchRecorder::new();
 
         Actor {
             name,
@@ -360,7 +356,6 @@ impl Actor {
             base_dir,
             device_id: rand::random(),
             monitor,
-            recorder,
         }
     }
 
@@ -728,20 +723,20 @@ where
         .unwrap_or(());
 }
 
-#[cfg(feature = "prometheus")]
+#[cfg(all(feature = "prometheus", not(feature = "influxdb")))]
 fn init_recorder(runtime: &Handle) -> metrics_ext::Shared {
     use metrics_ext::Shared;
     Shared::new(init_prometheus_recorder(runtime))
 }
 
-#[cfg(feature = "influxdb")]
+#[cfg(all(feature = "influxdb", not(feature = "prometheus")))]
 fn init_recorder(runtime: &Handle) -> metrics_ext::Shared {
     use metrics_ext::Shared;
     Shared::new(init_influxdb_recorder(runtime))
 }
 
 #[cfg(all(feature = "prometheus", feature = "influxdb"))]
-fn init_recorder(runtime: &Handle, watch_recorder: WatchRecorder) -> metrics_ext::Shared {
+fn init_recorder(runtime: &Handle) -> metrics_ext::Shared {
     use metrics_ext::{Pair, Shared};
 
     Shared::new(Pair(
