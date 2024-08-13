@@ -114,13 +114,18 @@ impl RequireBatch<'_> {
             self.notify = true;
         }
     }
+
+    pub fn commit(&mut self) {
+        if self.notify {
+            self.shared.notify();
+            self.notify = false;
+        }
+    }
 }
 
 impl Drop for RequireBatch<'_> {
     fn drop(&mut self) {
-        if self.notify {
-            self.shared.notify();
-        }
+        self.commit()
     }
 }
 

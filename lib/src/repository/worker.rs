@@ -17,6 +17,9 @@ use tokio::select;
 #[cfg(test)]
 mod tests;
 
+/// Notify the block tracker after marking this many blocks as required.
+const BLOCK_REQUIRE_BATCH_SIZE: u32 = 1024;
+
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
 /// - remove outdated branches and snapshots
@@ -303,6 +306,12 @@ mod scan {
                     file_progress_cache_reset = true;
                     branch.file_progress_cache().reset(&blob_id, block_number);
                 }
+            }
+
+            // Notify the block tracker after processing each batch of blocks (also notify on the
+            // first blocks so that it's requested first).
+            if block_number % BLOCK_REQUIRE_BATCH_SIZE == 0 {
+                require_batch.commit();
             }
 
             block_number = block_number.saturating_add(1);
