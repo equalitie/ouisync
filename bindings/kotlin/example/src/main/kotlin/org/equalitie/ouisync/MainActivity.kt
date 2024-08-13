@@ -50,9 +50,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import org.equalitie.ouisync.Repository
-import org.equalitie.ouisync.Session
-import org.equalitie.ouisync.ShareToken
+import org.equalitie.ouisync.lib.Repository
+import org.equalitie.ouisync.lib.Session
+import org.equalitie.ouisync.lib.ShareToken
 import java.io.File
 
 private const val TAG = "ouisync.example"
