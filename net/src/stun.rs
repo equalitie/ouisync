@@ -191,6 +191,10 @@ impl<T: DatagramSocket> StunClient<T> {
 
         let result = time::timeout(TIMEOUT, async move {
             loop {
+                // Need to obtain the `notified` future before removing the response but await it
+                // after. This is so we don't miss any notifications.
+                let notified = self.responses_notify.notified();
+
                 if let Some(response) = self.remove_response(transaction_id) {
                     return Ok(response);
                 }
@@ -205,7 +209,7 @@ impl<T: DatagramSocket> StunClient<T> {
                             self.insert_response(response);
                         }
                     },
-                    _ = self.responses_notify.notified() => (),
+                    _ = notified => (),
                 }
             }
         })
