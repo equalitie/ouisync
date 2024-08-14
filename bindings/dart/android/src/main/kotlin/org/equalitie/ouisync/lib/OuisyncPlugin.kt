@@ -1,4 +1,4 @@
-package org.equalitie.ouisync
+package org.equalitie.ouisync.lib
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
@@ -29,7 +29,7 @@ class OuisyncPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
 
   companion object {
     private val TAG = OuisyncPlugin::class.java.simpleName
-    private const val CHANNEL_NAME = "org.equalitie.ouisync"
+    private const val CHANNEL_NAME = "org.equalitie.ouisync.lib"
 
     private var channels = HashSet<MethodChannel>()
 

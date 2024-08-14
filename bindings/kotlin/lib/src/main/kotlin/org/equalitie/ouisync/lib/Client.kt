@@ -1,4 +1,4 @@
-package org.equalitie.ouisync
+package org.equalitie.ouisync.lib
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel

@@ -1,4 +1,4 @@
-package org.equalitie.ouisync
+package org.equalitie.ouisync.lib
 
 import com.sun.jna.Library
 import com.sun.jna.Native

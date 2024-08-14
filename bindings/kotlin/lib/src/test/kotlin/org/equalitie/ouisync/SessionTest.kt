@@ -1,4 +1,4 @@
-package org.equalitie.ouisync
+package org.equalitie.ouisync.lib
 
 import kotlinx.coroutines.test.runTest
 import org.junit.After

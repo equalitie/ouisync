@@ -1,4 +1,4 @@
-group 'org.equalitie.ouisync'
+group 'org.equalitie.ouisync.lib'
 version '1.0-SNAPSHOT'
 
 buildscript {
