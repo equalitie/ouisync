@@ -61,6 +61,38 @@ impl PexDiscovery {
         }
     }
 
+    /// Sets whether sending contacts to other peers is enabled.
+    pub fn set_send_enabled(&self, enabled: bool) {
+        self.state.send_if_modified(|state| {
+            if state.send_enabled != enabled {
+                state.send_enabled = enabled;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub fn is_send_enabled(&self) -> bool {
+        self.state.borrow().send_enabled
+    }
+
+    /// Sets whether receiving contacts from other peers is enabled.
+    pub fn set_recv_enabled(&self, enabled: bool) {
+        self.state.send_if_modified(|state| {
+            if state.recv_enabled != enabled {
+                state.recv_enabled = enabled;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub fn is_recv_enabled(&self) -> bool {
+        self.state.borrow().recv_enabled
+    }
+
     pub fn new_peer(&self) -> PexPeer {
         let peer_id = self
             .state
@@ -209,7 +241,7 @@ impl PexSender {
                 Err(CollectError::Disabled) => {
                     self.state
                         .subscribe()
-                        .wait_for(|state| state.repos[self.repo_id].enabled)
+                        .wait_for(|state| state.is_send_enabled_for(self.repo_id))
                         .await
                         .ok();
                     continue;
@@ -261,7 +293,7 @@ impl<'a> PexCollector<'a> {
             .get(self.0.peer_id)
             .ok_or(CollectError::Closed)?;
 
-        if !repo.enabled {
+        if !state.send_enabled || !repo.enabled {
             return Err(CollectError::Disabled);
         }
 
@@ -299,7 +331,7 @@ impl<'a> Drop for PexCollector<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Eq, PartialEq, Debug)]
 pub(crate) enum CollectError {
     /// All the connections to the peer have been closed or the repository has been unlinked.
     ///
@@ -333,22 +365,48 @@ impl PexReceiver {
     }
 
     fn is_enabled(&self) -> bool {
-        self.state
-            .borrow()
-            .repos
-            .get(self.repo_id)
-            .map(|repo| repo.enabled)
-            .unwrap_or(false)
+        self.state.borrow().is_recv_enabled_for(self.repo_id)
     }
 }
 
 type RepoId = usize;
 type PeerId = usize;
 
-#[derive(Default)]
 struct State {
     repos: Slab<RepoState>,
     peers: Slab<PeerState>,
+    // Whether peer contacts are sent to other peers.
+    send_enabled: bool,
+    // Whether peer contacts are received from peers.
+    recv_enabled: bool,
+}
+
+impl State {
+    fn is_send_enabled_for(&self, repo_id: RepoId) -> bool {
+        self.send_enabled && self.is_repo_enabled(repo_id)
+    }
+
+    fn is_recv_enabled_for(&self, repo_id: RepoId) -> bool {
+        self.recv_enabled && self.is_repo_enabled(repo_id)
+    }
+
+    fn is_repo_enabled(&self, repo_id: RepoId) -> bool {
+        self.repos
+            .get(repo_id)
+            .map(|repo| repo.enabled)
+            .unwrap_or(false)
+    }
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            repos: Slab::default(),
+            peers: Slab::default(),
+            send_enabled: true,
+            recv_enabled: true,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -385,11 +443,14 @@ impl<T> WatchSenderExt<T> for watch::Sender<T> {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc::error::TryRecvError;
+
     use crate::sync::DropAwaitable;
 
     use super::*;
     use std::{
         hash::Hash,
+        iter,
         net::Ipv4Addr,
         sync::atomic::{AtomicU8, Ordering},
     };
@@ -405,24 +466,13 @@ mod tests {
         let repo_1 = discovery.new_repository();
         repo_1.set_enabled(true);
 
-        let peer_a = discovery.new_peer();
-        let addr_a = make_peer_addr();
-        let close_a = DropAwaitable::new();
-        peer_a.handle_connection(addr_a, PeerSource::Dht, close_a.subscribe());
-
-        let peer_b = discovery.new_peer();
-        let addr_b = make_peer_addr();
-        let close_b = DropAwaitable::new();
-        peer_b.handle_connection(addr_b, PeerSource::Dht, close_b.subscribe());
-
-        let peer_c = discovery.new_peer();
-        let addr_c = make_peer_addr();
-        let close_c = DropAwaitable::new();
-        peer_c.handle_connection(addr_c, PeerSource::Dht, close_c.subscribe());
+        let (peer_a, addr_a, _close_a) = make_peer(&discovery);
+        let (peer_b, addr_b, _close_b) = make_peer(&discovery);
+        let (peer_c, _addr_c, _close_c) = make_peer(&discovery);
 
         let (a0, _) = peer_a.new_link(&repo_0);
         let (b0, _) = peer_b.new_link(&repo_0);
-        let (c1, _) = peer_b.new_link(&repo_1);
+        let (c1, _) = peer_c.new_link(&repo_1);
 
         let a0_collector = a0.enable().unwrap();
         let b0_collector = b0.enable().unwrap();
@@ -431,6 +481,89 @@ mod tests {
         assert_eq!(a0_collector.collect().unwrap(), into_set([addr_b]));
         assert_eq!(b0_collector.collect().unwrap(), into_set([addr_a]));
         assert_eq!(c1_collector.collect().unwrap(), into_set([]));
+    }
+
+    #[tokio::test]
+    async fn config() {
+        let (discover_tx, mut discover_rx) = mpsc::channel(1);
+        let discovery = PexDiscovery::new(discover_tx);
+        let repo = discovery.new_repository();
+
+        let (peer_a, _addr_a, _close_a) = make_peer(&discovery);
+        let (peer_b, addr_b, _close_b) = make_peer(&discovery);
+        let addr_c = make_peer_addr();
+
+        let (tx_a, rx_a) = peer_a.new_link(&repo);
+        let (tx_b, _rx_b) = peer_b.new_link(&repo);
+
+        for (send_enabled, recv_enabled, repo_enabled, expected_send, expected_recv) in [
+            (
+                false,
+                false,
+                false,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (
+                false,
+                false,
+                true,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (
+                false,
+                true,
+                false,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (false, true, true, Err(CollectError::Disabled), Ok(addr_c)),
+            (
+                true,
+                false,
+                false,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (true, false, true, Ok(addr_b), Err(TryRecvError::Empty)),
+            (
+                true,
+                true,
+                false,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (true, true, true, Ok(addr_b), Ok(addr_c)),
+        ] {
+            discovery.set_send_enabled(send_enabled);
+            discovery.set_recv_enabled(recv_enabled);
+            repo.set_enabled(repo_enabled);
+
+            let collector_a = tx_a.enable().unwrap();
+            let _collector_b = tx_b.enable().unwrap();
+
+            assert_eq!(
+                collector_a.collect(),
+                expected_send.map(iter::once).map(into_set),
+                "send_enabled: {:?}, recv_enabled: {:?}, repo_enabled: {:?}",
+                discovery.is_send_enabled(),
+                discovery.is_recv_enabled(),
+                repo.is_enabled(),
+            );
+
+            rx_a.handle_message(PexPayload(into_set([addr_c]))).await;
+            assert_eq!(
+                discover_rx
+                    .try_recv()
+                    .map(|seen_peer| *seen_peer.initial_addr()),
+                expected_recv,
+                "send_enabled: {:?}, recv_enabled: {:?}, repo_enabled: {:?}",
+                discovery.is_send_enabled(),
+                discovery.is_recv_enabled(),
+                repo.is_enabled(),
+            );
+        }
     }
 
     fn make_peer_addr() -> PeerAddr {
@@ -444,7 +577,20 @@ mod tests {
         )
     }
 
-    fn into_set<T: Eq + Hash, const N: usize>(items: [T; N]) -> HashSet<T> {
+    fn make_peer(discovery: &PexDiscovery) -> (PexPeer, PeerAddr, DropAwaitable) {
+        let peer = discovery.new_peer();
+        let addr = make_peer_addr();
+        let close = DropAwaitable::new();
+        peer.handle_connection(addr, PeerSource::Dht, close.subscribe());
+
+        (peer, addr, close)
+    }
+
+    fn into_set<T>(items: T) -> HashSet<T::Item>
+    where
+        T: IntoIterator,
+        T::Item: Eq + Hash,
+    {
         items.into_iter().collect()
     }
 }

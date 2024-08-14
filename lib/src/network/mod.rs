@@ -235,6 +235,29 @@ impl Network {
             .is_enabled()
     }
 
+    /// Sets whether sending contacts to other peer over peer exchange is enabled.
+    ///
+    /// Note: PEX sending for a given repo is enabled only if it's enabled globally using this
+    /// function and also for the repo using [Registration::set_pex_enabled].
+    pub fn set_pex_send_enabled(&self, enabled: bool) {
+        self.inner.pex_discovery.set_send_enabled(enabled)
+    }
+
+    pub fn is_pex_send_enabled(&self) -> bool {
+        self.inner.pex_discovery.is_send_enabled()
+    }
+
+    /// Sets whether receiving contacts over peer exchange is enabled.
+    ///
+    /// Note: PEX receiving for a given repo is enabled only if it's enabled globally using this
+    /// function and also for the repo using [Registration::set_pex_enabled].
+    pub fn set_pex_recv_enabled(&self, enabled: bool) {
+        self.inner.pex_discovery.set_recv_enabled(enabled)
+    }
+
+    pub fn is_pex_recv_enabled(&self) -> bool {
+        self.inner.pex_discovery.is_recv_enabled()
+    }
     /// Find out external address using the STUN protocol.
     /// Currently QUIC only.
     pub async fn external_addr_v4(&self) -> Option<SocketAddrV4> {
@@ -400,6 +423,11 @@ impl Registration {
         state.registry[self.key].dht.is_some()
     }
 
+    /// Enables/disables peer exchange for this repo.
+    ///
+    /// Note: sending/receiving over PEX for this repo is enabled only if it's enabled using this
+    /// function and also globally using [Network::set_pex_send_enabled] and/or
+    /// [Network::set_pex_recv_enabled].
     pub async fn set_pex_enabled(&self, enabled: bool) {
         set_metadata_bool(&self.inner, self.key, PEX_ENABLED, enabled).await;
 
