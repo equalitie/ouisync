@@ -1,5 +1,8 @@
 use chrono::{DateTime, SecondsFormat, Utc};
-use clap::{builder::BoolishValueParser, Subcommand, ValueEnum};
+use clap::{
+    builder::{ArgPredicate, BoolishValueParser},
+    Subcommand, ValueEnum,
+};
 use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, PeerSource, PeerState, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -210,13 +213,39 @@ pub(crate) enum Request {
         #[arg(value_parser = BoolishValueParser::new())]
         enabled: Option<bool>,
     },
-    /// Enable or disable Peer Exchange (PEX)
+    /// Configure Peer Exchange (PEX)
     Pex {
+        /// Name of the repository to enable/disable PEX for.
         #[arg(short = 'n', long)]
-        name: String,
+        name: Option<String>,
 
-        /// Whether to enable or disable. If omitted, prints the current state.
-        #[arg(value_parser = BoolishValueParser::new())]
+        /// Globally enable/disable sending contacts over PEX. If all of name, send, recv are
+        /// omitted, prints the current state.
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["name", "enabled"],
+            value_parser = BoolishValueParser::new(),
+            value_name = "ENABLED"
+        )]
+        send: Option<bool>,
+
+        /// Globally enable/disable receiving contacts over PEX. If all of name, send, recv are
+        /// omitted, prints the current state.
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["name", "enabled"],
+            value_parser = BoolishValueParser::new(),
+            value_name = "ENABLED"
+        )]
+        recv: Option<bool>,
+
+        /// Enable/disable PEX for the specified repository. If omitted, prints the current state.
+        #[arg(
+            requires_if(ArgPredicate::IsPresent, "name"),
+            value_parser = BoolishValueParser::new(),
+        )]
         enabled: Option<bool>,
     },
     /// Get or set storage quota
@@ -313,6 +342,12 @@ impl From<bool> for Response {
 impl From<String> for Response {
     fn from(value: String) -> Self {
         Self::String(value)
+    }
+}
+
+impl<'a> From<&'a str> for Response {
+    fn from(value: &'a str) -> Self {
+        Self::String(value.to_owned())
     }
 }
 

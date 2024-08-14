@@ -1,7 +1,7 @@
 use super::PeerAddr;
 use crate::collections::{HashMap, HashSet};
 use deadlock::BlockingRwLock;
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 /// When a peer is found using some discovery mechanisms (local discovery, DHT, PEX, ...), the
 /// networking code will try to connect to it. However, if connecting to the peer fails we would
@@ -186,6 +186,22 @@ impl Clone for SeenPeer {
             addr: self.addr,
             seen_peers: self.seen_peers.clone(),
         }
+    }
+}
+
+impl PartialEq for SeenPeer {
+    fn eq(&self, other: &Self) -> bool {
+        self.addr == other.addr && Arc::ptr_eq(&self.seen_peers, &other.seen_peers)
+    }
+}
+
+impl Eq for SeenPeer {}
+
+impl fmt::Debug for SeenPeer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SeenPeer")
+            .field("addr", &self.addr)
+            .finish_non_exhaustive()
     }
 }
 

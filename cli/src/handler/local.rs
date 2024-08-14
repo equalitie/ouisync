@@ -382,14 +382,48 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     Ok(holder.registration.is_dht_enabled().into())
                 }
             }
-            Request::Pex { name, enabled } => {
-                let holder = self.state.repositories.find(&name)?;
+            Request::Pex {
+                name,
+                enabled,
+                send,
+                recv,
+            } => {
+                if let Some(name) = name {
+                    let holder = self.state.repositories.find(&name)?;
 
-                if let Some(enabled) = enabled {
-                    holder.registration.set_pex_enabled(enabled).await;
+                    if let Some(enabled) = enabled {
+                        holder.registration.set_pex_enabled(enabled).await;
+                        Ok(().into())
+                    } else {
+                        Ok(holder.registration.is_pex_enabled().into())
+                    }
+                } else if send.is_some() || recv.is_some() {
+                    if let Some(send) = send {
+                        ouisync_bridge::network::set_pex_send_enabled(
+                            &self.state.network,
+                            &self.state.config,
+                            send,
+                        )
+                        .await;
+                    }
+
+                    if let Some(recv) = recv {
+                        ouisync_bridge::network::set_pex_recv_enabled(
+                            &self.state.network,
+                            &self.state.config,
+                            recv,
+                        )
+                        .await;
+                    }
+
                     Ok(().into())
                 } else {
-                    Ok(holder.registration.is_pex_enabled().into())
+                    Ok(format!(
+                        "send: {} recv: {}",
+                        self.state.network.is_pex_send_enabled(),
+                        self.state.network.is_pex_recv_enabled(),
+                    )
+                    .into())
                 }
             }
             Request::Quota {

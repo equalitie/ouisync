@@ -171,6 +171,26 @@ where
     }
 }
 
+impl<T> ConfigEntry<T>
+where
+    T: Serialize + DeserializeOwned + fmt::Debug + Default,
+{
+    pub async fn modify<F>(&self, f: F) -> Result<(), ConfigError>
+    where
+        F: FnOnce(&mut T),
+    {
+        let mut value = match self.get().await {
+            Ok(value) => value,
+            Err(ConfigError::NotFound) => T::default(),
+            Err(error) => return Err(error),
+        };
+
+        f(&mut value);
+
+        self.set(&value).await
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum ConfigError {
     #[error("config entry not found")]
