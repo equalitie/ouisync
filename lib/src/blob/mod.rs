@@ -573,20 +573,15 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
 
         let encoded_locator = locator.encode(read_key);
 
-        let block_id = match tx.find_block(src_branch.id(), &encoded_locator).await {
-            Ok(id) => id,
-            Err(store::Error::LocatorNotFound) => {
-                // end of the blob
-                break;
-            }
-            Err(error) => return Err(error.into()),
-        };
-
-        let block_presence = if tx.block_exists(&block_id).await? {
-            SingleBlockPresence::Present
-        } else {
-            SingleBlockPresence::Missing
-        };
+        let (block_id, block_presence) =
+            match tx.find_block(src_branch.id(), &encoded_locator).await {
+                Ok(id) => id,
+                Err(store::Error::LocatorNotFound) => {
+                    // end of the blob
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            };
 
         changeset.link_block(encoded_locator, block_id, block_presence);
 
@@ -650,7 +645,7 @@ async fn read_block(
     locator: &Locator,
     read_key: &cipher::SecretKey,
 ) -> Result<(BlockId, BlockContent)> {
-    let id = tx
+    let (id, _) = tx
         .find_block_at(root_node, &locator.encode(read_key))
         .await?;
 

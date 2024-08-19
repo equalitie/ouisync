@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     crypto::{cipher::SecretKey, sign::Keypair},
-    protocol::{Block, Bump, Locator, SingleBlockPresence, EMPTY_INNER_HASH},
+    protocol::{Block, Bump, Locator, SingleBlockPresence, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     test_utils,
 };
 use proptest::{arbitrary::any, collection::vec};
@@ -36,7 +36,7 @@ async fn link_and_find_block() {
 
     let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
 
-    assert_eq!(r, block_id);
+    assert_eq!(r, (block_id, SingleBlockPresence::Present));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -65,7 +65,7 @@ async fn rewrite_locator() {
             .unwrap();
 
         let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
-        assert_eq!(r, b2);
+        assert_eq!(r, (b2, SingleBlockPresence::Present));
 
         assert_eq!(
             INNER_LAYER_COUNT + 1,
@@ -97,7 +97,7 @@ async fn remove_locator() {
         .unwrap();
 
     let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
-    assert_eq!(r, b);
+    assert_eq!(r, (b, SingleBlockPresence::Present));
 
     assert_eq!(
         INNER_LAYER_COUNT + 1,
@@ -276,7 +276,10 @@ async fn fallback() {
 
     let mut tx = store.begin_read().await.unwrap();
 
-    assert_eq!(tx.find_block(&branch_0_id, &locator).await.unwrap(), id3);
+    assert_eq!(
+        tx.find_block(&branch_0_id, &locator).await.unwrap(),
+        (id3, SingleBlockPresence::Missing)
+    );
     assert!(!tx.block_exists(&id3).await.unwrap());
 
     // The previous snapshot was pruned because it can't serve as fallback for the latest one
@@ -287,7 +290,10 @@ async fn fallback() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(tx.find_block_at(&root_node, &locator).await.unwrap(), id1);
+    assert_eq!(
+        tx.find_block_at(&root_node, &locator).await.unwrap(),
+        (id1, SingleBlockPresence::Present)
+    );
     assert!(tx.block_exists(&id1).await.unwrap());
 
     // All the further snapshots were pruned as well
@@ -438,7 +444,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
         let mut tx = store.begin_read().await.unwrap();
 
         for (locator, expected_block_id) in &expected {
-            let actual_block_id = tx.find_block(&branch_id, locator).await.unwrap();
+            let (actual_block_id, _) = tx.find_block(&branch_id, locator).await.unwrap();
             assert_eq!(actual_block_id, *expected_block_id);
         }
 

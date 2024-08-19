@@ -84,7 +84,7 @@ impl Snapshot {
     }
 
     pub fn leaf_nodes(&self) -> impl Iterator<Item = &LeafNode> {
-        self.leaf_sets().flat_map(|(_, nodes)| nodes)
+        self.leaves.iter().flat_map(|(_, nodes)| nodes)
     }
 
     pub fn locators_and_blocks(&self) -> impl Iterator<Item = (&Hash, &Block)> {

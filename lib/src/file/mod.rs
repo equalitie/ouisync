@@ -7,7 +7,7 @@ use crate::{
     branch::Branch,
     directory::{Directory, ParentContext},
     error::{Error, Result},
-    protocol::{Bump, Locator, BLOCK_SIZE},
+    protocol::{Bump, Locator, SingleBlockPresence, BLOCK_SIZE},
     store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
@@ -92,12 +92,14 @@ impl File {
 
             for index in *entry..block_count {
                 let encoded_locator = locator.nth(index).encode(branch.keys().read());
-                let block_id = tx.find_block(branch.id(), &encoded_locator).await?;
+                let (_, block_presence) = tx.find_block(branch.id(), &encoded_locator).await?;
 
-                if tx.block_exists(&block_id).await? {
-                    count = count.saturating_add(1);
-                } else {
-                    break;
+                match block_presence {
+                    SingleBlockPresence::Present => {
+                        count = count.saturating_add(1);
+                    }
+                    // TODO: check all blocks, don't stop on the first missing
+                    SingleBlockPresence::Missing | SingleBlockPresence::Expired => break,
                 }
             }
 

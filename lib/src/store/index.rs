@@ -463,6 +463,7 @@ mod tests {
         for block in snapshot.blocks().values() {
             block::write(&mut write_tx, block).await.unwrap();
             let parent_hashes = leaf_node::set_present(&mut write_tx, &block.id)
+                .map_ok(|info| info.parent)
                 .try_collect()
                 .await
                 .unwrap();

@@ -1,6 +1,9 @@
+use futures_util::TryStreamExt as _;
+
 use super::{
     block,
     block_expiration_tracker::BlockExpirationTracker,
+    block_id_cache::BlockIdCache,
     block_ids,
     cache::CacheTransaction,
     index, inner_node, leaf_node,
@@ -30,12 +33,15 @@ pub(crate) struct ClientWriter {
     quota: Option<StorageSize>,
     summary_updates: Vec<Hash>,
     block_promises: Vec<BlockPromise>,
+    block_id_cache: BlockIdCache,
+    block_id_cache_updates: Vec<(Hash, BlockId)>,
 }
 
 impl ClientWriter {
     pub(super) async fn begin(
         mut db: db::WriteTransaction,
         cache: CacheTransaction,
+        block_id_cache: BlockIdCache,
         block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     ) -> Result<Self, Error> {
         let quota = repository::quota::get(&mut db).await?;
@@ -47,6 +53,8 @@ impl ClientWriter {
             quota,
             summary_updates: Vec::new(),
             block_promises: Vec::new(),
+            block_id_cache,
+            block_id_cache_updates: Vec::new(),
         })
     }
 
@@ -170,13 +178,21 @@ impl ClientWriter {
         block: &Block,
         block_promise: Option<BlockPromise>,
     ) -> Result<(), Error> {
-        let old_len = self.summary_updates.len();
+        let updated = {
+            let mut updated = false;
+            let mut updates = leaf_node::set_present(&mut self.db, &block.id);
 
-        leaf_node::set_present(&mut self.db, &block.id)
-            .try_collect_into(&mut self.summary_updates)
-            .await?;
+            while let Some(update) = updates.try_next().await? {
+                self.summary_updates.push(update.parent);
+                self.block_id_cache_updates
+                    .push((update.encoded_locator, block.id));
+                updated = true;
+            }
 
-        if self.summary_updates.len() > old_len {
+            updated
+        };
+
+        if updated {
             block::write(&mut self.db, block).await?;
 
             if let Some(tracker) = &self.block_expiration_tracker {
@@ -215,6 +231,8 @@ impl ClientWriter {
             db,
             cache,
             block_promises,
+            block_id_cache,
+            block_id_cache_updates,
             ..
         } = self;
 
@@ -228,6 +246,7 @@ impl ClientWriter {
         let output = db
             .commit_and_then(move || {
                 cache.commit();
+                block_id_cache.set_present(&block_id_cache_updates);
 
                 for promise in block_promises {
                     promise.complete();

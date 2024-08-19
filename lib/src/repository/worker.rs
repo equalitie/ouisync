@@ -176,6 +176,8 @@ async fn scan(shared: &Shared, prune_counter: &Counter) {
 
 /// Find missing blocks and mark them as required.
 mod scan {
+    use crate::protocol::SingleBlockPresence;
+
     use super::*;
     use tracing::instrument;
 
@@ -288,23 +290,21 @@ mod scan {
         let mut file_progress_cache_reset = false;
         let mut require_batch = shared.vault.block_tracker.require_batch();
 
-        while let Some(block_id) = blob_block_ids.try_next().await.map_err(|error| {
-            tracing::trace!(block_number, ?error, "try_next failed");
-            error
-        })? {
-            if !shared
-                .vault
-                .store()
-                .acquire_read()
-                .await?
-                .block_exists(&block_id)
-                .await?
-            {
-                require_batch.add(block_id);
+        while let Some((block_id, block_presence)) =
+            blob_block_ids.try_next().await.map_err(|error| {
+                tracing::trace!(block_number, ?error, "try_next failed");
+                error
+            })?
+        {
+            match block_presence {
+                SingleBlockPresence::Present => (),
+                SingleBlockPresence::Missing | SingleBlockPresence::Expired => {
+                    require_batch.add(block_id);
 
-                if !file_progress_cache_reset {
-                    file_progress_cache_reset = true;
-                    branch.file_progress_cache().reset(&blob_id, block_number);
+                    if !file_progress_cache_reset {
+                        file_progress_cache_reset = true;
+                        branch.file_progress_cache().reset(&blob_id, block_number);
+                    }
                 }
             }
 
@@ -601,7 +601,7 @@ mod trash {
     ) -> Result<()> {
         let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
-        while let Some(block_id) = blob_block_ids.try_next().await? {
+        while let Some((block_id, _)) = blob_block_ids.try_next().await? {
             unreachable_block_ids.remove(&block_id);
         }
 
@@ -638,7 +638,7 @@ mod trash {
 
                 unlock_tx.send(notify).await;
 
-                while let Some(block_id) = blob_block_ids.try_next().await? {
+                while let Some((block_id, _)) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);
                 }
             }

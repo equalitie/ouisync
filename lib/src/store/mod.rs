@@ -1,5 +1,6 @@
 mod block;
 mod block_expiration_tracker;
+mod block_id_cache;
 mod block_ids;
 mod cache;
 mod changeset;
@@ -33,6 +34,7 @@ pub(crate) use test_utils::SnapshotWriter;
 
 use self::{
     block_expiration_tracker::BlockExpirationTracker,
+    block_id_cache::{BlockIdCache, LookupError},
     cache::{Cache, CacheTransaction},
 };
 use crate::{
@@ -45,8 +47,8 @@ use crate::{
     debug::DebugPrinter,
     progress::Progress,
     protocol::{
-        get_bucket, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, RootNode,
-        RootNodeFilter, INNER_LAYER_COUNT,
+        BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, RootNode, RootNodeFilter,
+        SingleBlockPresence,
     },
     sync::broadcast_hash_set,
 };
@@ -67,6 +69,7 @@ use tokio::sync::RwLock;
 pub(crate) struct Store {
     db: db::Pool,
     cache: Arc<Cache>,
+    block_id_cache: BlockIdCache,
     pub client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
     block_expiration_tracker: Arc<RwLock<Option<Arc<BlockExpirationTracker>>>>,
 }
@@ -78,6 +81,7 @@ impl Store {
         Self {
             db,
             cache: Arc::new(Cache::new()),
+            block_id_cache: BlockIdCache::new(),
             client_reload_index_tx,
             block_expiration_tracker: Arc::new(RwLock::new(None)),
         }
@@ -154,6 +158,7 @@ impl Store {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
             cache: self.cache.begin(),
+            block_id_cache: self.block_id_cache.clone(),
             block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
         })
     }
@@ -168,6 +173,7 @@ impl Store {
                 inner: Reader {
                     inner: Handle::ReadTransaction(tx.await?),
                     cache: self.cache.begin(),
+                    block_id_cache: self.block_id_cache.clone(),
                     block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
                 },
             })
@@ -185,6 +191,7 @@ impl Store {
                     inner: Reader {
                         inner: Handle::WriteTransaction(tx.await?),
                         cache: self.cache.begin(),
+                        block_id_cache: self.block_id_cache.clone(),
                         block_expiration_tracker: self
                             .block_expiration_tracker
                             .read()
@@ -212,6 +219,7 @@ impl Store {
             ClientWriter::begin(
                 tx.await?,
                 self.cache.begin(),
+                self.block_id_cache.clone(),
                 self.block_expiration_tracker.read().await.clone(),
             )
             .await
@@ -326,6 +334,7 @@ impl Store {
 pub(crate) struct Reader {
     inner: Handle,
     cache: CacheTransaction,
+    block_id_cache: BlockIdCache,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
 }
 
@@ -351,6 +360,7 @@ impl Reader {
     }
 
     /// Checks whether the block exists in the store.
+    #[cfg(test)]
     pub async fn block_exists(&mut self, id: &BlockId) -> Result<bool, Error> {
         block::exists(self.db(), id).await
     }
@@ -439,10 +449,6 @@ impl Reader {
         root_node::load_all_by_writer(self.db(), writer_id)
     }
 
-    pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
-        root_node::exists(self.db(), node).await
-    }
-
     // TODO: use cache and remove `ReadTransaction::load_inner_nodes_with_cache`
     pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodes, Error> {
         inner_node::load_children(self.db(), parent_hash).await
@@ -478,7 +484,7 @@ impl ReadTransaction {
         &mut self,
         branch_id: &PublicKey,
         encoded_locator: &Hash,
-    ) -> Result<BlockId, Error> {
+    ) -> Result<(BlockId, SingleBlockPresence), Error> {
         let root_node = self
             .load_latest_approved_root_node(branch_id, RootNodeFilter::Any)
             .await?;
@@ -489,25 +495,26 @@ impl ReadTransaction {
         &mut self,
         root_node: &RootNode,
         encoded_locator: &Hash,
-    ) -> Result<BlockId, Error> {
-        // TODO: On cache miss load only the one node we actually need per layer.
+    ) -> Result<(BlockId, SingleBlockPresence), Error> {
+        loop {
+            match self
+                .inner
+                .block_id_cache
+                .lookup(&root_node.proof.hash, encoded_locator)
+            {
+                Ok(block_info) => return Ok(block_info),
+                Err(LookupError::NotFound) => return Err(Error::LocatorNotFound),
+                Err(LookupError::CacheMiss) => (),
+            }
 
-        let mut parent_hash = root_node.proof.hash;
+            let Reader {
+                inner,
+                block_id_cache,
+                ..
+            } = &mut self.inner;
 
-        for layer in 0..INNER_LAYER_COUNT {
-            parent_hash = self
-                .load_inner_nodes_with_cache(&parent_hash)
-                .await?
-                .get(get_bucket(encoded_locator, layer))
-                .ok_or(Error::LocatorNotFound)?
-                .hash;
+            block_id_cache.load(inner, &root_node.proof.hash).await?;
         }
-
-        self.load_leaf_nodes_with_cache(&parent_hash)
-            .await?
-            .get(encoded_locator)
-            .map(|node| node.block_id)
-            .ok_or(Error::LocatorNotFound)
     }
 
     async fn load_inner_nodes_with_cache(

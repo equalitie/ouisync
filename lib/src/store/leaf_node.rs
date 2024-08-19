@@ -5,10 +5,25 @@ use crate::{
     protocol::{BlockId, LeafNode, LeafNodes, SingleBlockPresence},
 };
 use futures_util::{Stream, TryStreamExt};
-use sqlx::Row;
+use sqlx::{sqlite::SqliteRow, FromRow, Row};
 
 #[cfg(test)]
 use {super::inner_node, crate::protocol::INNER_LAYER_COUNT, async_recursion::async_recursion};
+
+#[derive(Eq, PartialEq, Debug)]
+pub(super) struct LeafNodeUpdate {
+    pub parent: Hash,
+    pub encoded_locator: Hash,
+}
+
+impl FromRow<'_, SqliteRow> for LeafNodeUpdate {
+    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            parent: row.try_get(0)?,
+            encoded_locator: row.try_get(1)?,
+        })
+    }
+}
 
 pub(super) async fn load_children(
     conn: &mut db::Connection,
@@ -98,24 +113,23 @@ pub(super) async fn save_all(
 }
 
 /// Marks all leaf nodes that point to the specified block as present (not missing). Returns
-/// the parent hashes of the updated nodes.
+/// the locators and parent hashes of the updated nodes.
 pub(super) fn set_present<'a>(
     tx: &'a mut db::WriteTransaction,
     block_id: &'a BlockId,
-) -> impl Stream<Item = Result<Hash, Error>> + 'a {
+) -> impl Stream<Item = Result<LeafNodeUpdate, Error>> + 'a {
     // Update only those nodes that have block_presence set to `Missing`.
-    sqlx::query(
+    sqlx::query_as(
         "UPDATE snapshot_leaf_nodes
          SET block_presence = ?
          WHERE block_id = ? AND (block_presence = ? OR block_presence = ?)
-         RETURNING parent",
+         RETURNING parent, locator",
     )
     .bind(SingleBlockPresence::Present)
     .bind(block_id)
     .bind(SingleBlockPresence::Expired)
     .bind(SingleBlockPresence::Missing)
     .fetch(tx)
-    .map_ok(|row| row.get(0))
     .err_into()
 }
 
@@ -335,7 +349,10 @@ mod tests {
                 .try_collect::<Vec<_>>()
                 .await
                 .unwrap(),
-            [parent],
+            [LeafNodeUpdate {
+                parent,
+                encoded_locator
+            }],
         );
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();

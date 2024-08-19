@@ -141,12 +141,14 @@ impl Branch {
     }
 
     pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
-        Ok(self
+        let (block_id, _) = self
             .store
             .begin_read()
             .await?
             .find_block(self.id(), &Locator::ROOT.encode(self.keys().read()))
-            .await?)
+            .await?;
+
+        Ok(block_id)
     }
 
     pub(crate) fn locker(&self) -> BranchLocker {
