@@ -198,8 +198,6 @@ fn request_added(monitor: &RepositoryMonitor, key: &Key) {
             monitor.index_requests_inflight.increment(1.0);
         }
         Key::Block(block_id) => {
-            tracing::warn!(?block_id, "block request added");
-
             monitor.block_requests_sent.increment(1);
             monitor.block_requests_inflight.increment(1.0);
         }
@@ -211,8 +209,6 @@ fn request_removed(monitor: &RepositoryMonitor, key: &Key) {
     match key {
         Key::RootNode(_) | Key::ChildNodes { .. } => monitor.index_requests_inflight.decrement(1.0),
         Key::Block(block_id) => {
-            tracing::warn!(?block_id, "block request removed");
-
             monitor.block_requests_inflight.decrement(1.0);
         }
         Key::BlockOffer(_) => (),
