@@ -384,6 +384,8 @@ impl Reader {
         branch_id: &PublicKey,
         filter: RootNodeFilter,
     ) -> Result<RootNode, Error> {
+        // TODO: use only one query that returns stream of approved nodes ordered from the latest to the oldest.
+
         let node = root_node::load_latest_approved(self.db(), branch_id).await?;
 
         match filter {

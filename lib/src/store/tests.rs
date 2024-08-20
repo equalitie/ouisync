@@ -362,13 +362,6 @@ fn prune(
     test_utils::run(prune_case(ops, rng_seed))
 }
 
-#[tokio::test]
-async fn prune_debug() {
-    test_utils::init_log();
-
-    prune_case(vec![PruneTestOp::Bump, PruneTestOp::Insert], 0).await;
-}
-
 #[derive(Arbitrary, Debug)]
 enum PruneTestOp {
     Insert,

@@ -38,9 +38,14 @@ impl Patch {
                 let hash = node.proof.hash;
                 (node.proof.into_version_vector(), hash, node.summary)
             }
-            Err(Error::BranchNotFound) => {
-                (VersionVector::new(), *EMPTY_INNER_HASH, Summary::INCOMPLETE)
-            }
+            Err(Error::BranchNotFound) => (
+                VersionVector::new(),
+                *EMPTY_INNER_HASH,
+                Summary {
+                    state: NodeState::Approved,
+                    block_presence: crate::protocol::MultiBlockPresence::Full,
+                },
+            ),
             Err(error) => return Err(error),
         };
 
