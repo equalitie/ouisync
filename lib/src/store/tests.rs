@@ -362,6 +362,13 @@ fn prune(
     test_utils::run(prune_case(ops, rng_seed))
 }
 
+#[tokio::test]
+async fn prune_debug() {
+    test_utils::init_log();
+
+    prune_case(vec![PruneTestOp::Bump, PruneTestOp::Insert], 0).await;
+}
+
 #[derive(Arbitrary, Debug)]
 enum PruneTestOp {
     Insert,
@@ -377,6 +384,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
     let write_keys = Keypair::generate(&mut rng);
 
     let mut expected = BTreeMap::new();
+    let mut approved = false;
 
     for op in ops {
         // Apply op
@@ -395,6 +403,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 tx.commit().await.unwrap();
 
                 expected.insert(locator, block_id);
+                approved = true;
             }
             PruneTestOp::Remove => {
                 let Some(locator) = expected.keys().choose(&mut rng).copied() else {
@@ -411,6 +420,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 tx.commit().await.unwrap();
 
                 expected.remove(&locator);
+                approved = true;
             }
             PruneTestOp::Bump => {
                 let mut tx = store.begin_write().await.unwrap();
@@ -449,13 +459,15 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
         }
 
         // Verify the snapshot is still complete
-        let root_hash = tx
-            .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
-            .await
-            .unwrap()
-            .proof
-            .hash;
-        check_complete(&mut tx, &root_hash).await;
+        if approved {
+            let root_hash = tx
+                .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
+                .await
+                .unwrap()
+                .proof
+                .hash;
+            check_complete(&mut tx, &root_hash).await;
+        }
     }
 }
 

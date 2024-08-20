@@ -113,9 +113,7 @@ impl Patch {
             let bucket = get_bucket(encoded_locator, layer);
             let nodes = match self.inners.entry(key) {
                 Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => {
-                    entry.insert(tx.load_inner_nodes_with_cache(&parent_hash).await?)
-                }
+                Entry::Vacant(entry) => entry.insert(tx.load_inner_nodes(&parent_hash).await?),
             };
 
             parent_hash = nodes
@@ -128,9 +126,7 @@ impl Patch {
 
         let nodes = match self.leaves.entry(key) {
             Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                entry.insert(tx.load_leaf_nodes_with_cache(&parent_hash).await?)
-            }
+            Entry::Vacant(entry) => entry.insert(tx.load_leaf_nodes(&parent_hash).await?),
         };
 
         Ok(nodes)
@@ -195,12 +191,9 @@ impl Patch {
                     for (bucket, node) in &nodes {
                         stack.push((node.hash, key.child(bucket)));
                     }
-
-                    tx.inner.inner.cache.put_inners(parent_hash, nodes);
                 }
             } else if let Some(nodes) = self.leaves.remove(&key) {
                 leaf_node::save_all(tx.db(), &nodes, &parent_hash).await?;
-                tx.inner.inner.cache.put_leaves(parent_hash, nodes);
             }
         }
 
@@ -237,8 +230,6 @@ impl Patch {
             block_presence = ?root_node.summary.block_presence,
             "Local snapshot created"
         );
-
-        tx.inner.inner.cache.put_root(root_node);
 
         Ok(())
     }

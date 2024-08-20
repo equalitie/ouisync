@@ -2,7 +2,6 @@ mod block;
 mod block_expiration_tracker;
 mod block_id_cache;
 mod block_ids;
-mod cache;
 mod changeset;
 mod client;
 mod error;
@@ -35,7 +34,6 @@ pub(crate) use test_utils::SnapshotWriter;
 use self::{
     block_expiration_tracker::BlockExpirationTracker,
     block_id_cache::{BlockIdCache, LookupError},
-    cache::{Cache, CacheTransaction},
 };
 use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
@@ -68,7 +66,6 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 pub(crate) struct Store {
     db: db::Pool,
-    cache: Arc<Cache>,
     block_id_cache: BlockIdCache,
     pub client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
     block_expiration_tracker: Arc<RwLock<Option<Arc<BlockExpirationTracker>>>>,
@@ -80,7 +77,6 @@ impl Store {
 
         Self {
             db,
-            cache: Arc::new(Cache::new()),
             block_id_cache: BlockIdCache::new(),
             client_reload_index_tx,
             block_expiration_tracker: Arc::new(RwLock::new(None)),
@@ -126,7 +122,6 @@ impl Store {
             expiration_time,
             block_download_tracker,
             self.client_reload_index_tx.clone(),
-            self.cache.clone(),
         )
         .await?;
 
@@ -157,7 +152,6 @@ impl Store {
     pub async fn acquire_read(&self) -> Result<Reader, Error> {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
-            cache: self.cache.begin(),
             block_id_cache: self.block_id_cache.clone(),
             block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
         })
@@ -172,7 +166,6 @@ impl Store {
             Ok(ReadTransaction {
                 inner: Reader {
                     inner: Handle::ReadTransaction(tx.await?),
-                    cache: self.cache.begin(),
                     block_id_cache: self.block_id_cache.clone(),
                     block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
                 },
@@ -190,7 +183,6 @@ impl Store {
                 inner: ReadTransaction {
                     inner: Reader {
                         inner: Handle::WriteTransaction(tx.await?),
-                        cache: self.cache.begin(),
                         block_id_cache: self.block_id_cache.clone(),
                         block_expiration_tracker: self
                             .block_expiration_tracker
@@ -218,7 +210,6 @@ impl Store {
         async move {
             ClientWriter::begin(
                 tx.await?,
-                self.cache.begin(),
                 self.block_id_cache.clone(),
                 self.block_expiration_tracker.read().await.clone(),
             )
@@ -333,7 +324,6 @@ impl Store {
 /// Read-only operations. This is an up-to-date view of the data.
 pub(crate) struct Reader {
     inner: Handle,
-    cache: CacheTransaction,
     block_id_cache: BlockIdCache,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
 }
@@ -394,11 +384,7 @@ impl Reader {
         branch_id: &PublicKey,
         filter: RootNodeFilter,
     ) -> Result<RootNode, Error> {
-        let node = if let Some(node) = self.cache.get_root(branch_id) {
-            node
-        } else {
-            root_node::load_latest_approved(self.db(), branch_id).await?
-        };
+        let node = root_node::load_latest_approved(self.db(), branch_id).await?;
 
         match filter {
             RootNodeFilter::Any => Ok(node),
@@ -516,25 +502,6 @@ impl ReadTransaction {
             block_id_cache.load(inner, &root_node.proof.hash).await?;
         }
     }
-
-    async fn load_inner_nodes_with_cache(
-        &mut self,
-        parent_hash: &Hash,
-    ) -> Result<InnerNodes, Error> {
-        if let Some(nodes) = self.cache.get_inners(parent_hash) {
-            return Ok(nodes);
-        }
-
-        self.load_inner_nodes(parent_hash).await
-    }
-
-    async fn load_leaf_nodes_with_cache(&mut self, parent_hash: &Hash) -> Result<LeafNodes, Error> {
-        if let Some(nodes) = self.cache.get_leaves(parent_hash) {
-            return Ok(nodes);
-        }
-
-        self.load_leaf_nodes(parent_hash).await
-    }
 }
 
 impl Deref for ReadTransaction {
@@ -559,11 +526,11 @@ pub(crate) struct WriteTransaction {
 impl WriteTransaction {
     /// Removes the specified block from the store and marks it as missing in the index.
     pub async fn remove_block(&mut self, id: &BlockId) -> Result<(), Error> {
-        let (db, cache) = self.db_and_cache();
+        let db = self.db();
 
         block::remove(db, id).await?;
         let parent_hashes = leaf_node::set_missing(db, id).try_collect().await?;
-        index::update_summaries(db, cache, parent_hashes).await?;
+        index::update_summaries(db, parent_hashes).await?;
 
         let WriteTransaction {
             inner:
@@ -589,11 +556,6 @@ impl WriteTransaction {
         root_node::remove_older(self.db(), root_node).await?;
         root_node::remove(self.db(), root_node).await?;
 
-        self.inner
-            .inner
-            .cache
-            .remove_root(&root_node.proof.writer_id);
-
         Ok(())
     }
 
@@ -618,35 +580,16 @@ impl WriteTransaction {
 
     pub async fn commit(self) -> Result<(), Error> {
         let inner = self.inner.inner.inner.into_write();
-        let cache = self.inner.inner.cache;
 
-        match (cache.is_dirty(), self.untrack_blocks) {
-            (true, Some(untrack)) => {
-                inner
-                    .commit_and_then(move || {
-                        cache.commit();
-                        untrack.commit();
-                    })
-                    .await?
-            }
-            (false, Some(untrack)) => {
-                inner
-                    .commit_and_then(move || {
-                        untrack.commit();
-                    })
-                    .await?
-            }
-            (true, None) => {
-                inner
-                    .commit_and_then(move || {
-                        cache.commit();
-                    })
-                    .await?
-            }
-            (false, None) => {
-                inner.commit().await?;
-            }
-        };
+        if let Some(untrack) = self.untrack_blocks {
+            inner
+                .commit_and_then(move || {
+                    untrack.commit();
+                })
+                .await?
+        } else {
+            inner.commit().await?;
+        }
 
         Ok(())
     }
@@ -661,50 +604,22 @@ impl WriteTransaction {
         R: Send + 'static,
     {
         let inner = self.inner.inner.inner.into_write();
-        let cache = self.inner.inner.cache;
 
-        Ok(match (cache.is_dirty(), self.untrack_blocks) {
-            (true, Some(untrack)) => {
-                inner
-                    .commit_and_then(move || {
-                        cache.commit();
-                        untrack.commit();
-                        f()
-                    })
-                    .await?
-            }
-            (false, Some(untrack)) => {
-                inner
-                    .commit_and_then(move || {
-                        untrack.commit();
-                        f()
-                    })
-                    .await?
-            }
-            (true, None) => {
-                inner
-                    .commit_and_then(move || {
-                        cache.commit();
-                        f()
-                    })
-                    .await?
-            }
-            (false, None) => inner.commit_and_then(f).await?,
-        })
-
-        //Ok(inner.commit_and_then(then).await?)
+        if let Some(untrack) = self.untrack_blocks {
+            Ok(inner
+                .commit_and_then(move || {
+                    untrack.commit();
+                    f()
+                })
+                .await?)
+        } else {
+            Ok(inner.commit_and_then(f).await?)
+        }
     }
 
     // Access the underlying database transaction.
     fn db(&mut self) -> &mut db::WriteTransaction {
         self.inner.inner.inner.as_write()
-    }
-
-    fn db_and_cache(&mut self) -> (&mut db::WriteTransaction, &mut CacheTransaction) {
-        (
-            self.inner.inner.inner.as_write(),
-            &mut self.inner.inner.cache,
-        )
     }
 }
 

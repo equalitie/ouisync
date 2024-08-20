@@ -4,9 +4,7 @@ use super::{
     block,
     block_expiration_tracker::BlockExpirationTracker,
     block_id_cache::BlockIdCache,
-    block_ids,
-    cache::CacheTransaction,
-    index, inner_node, leaf_node,
+    block_ids, index, inner_node, leaf_node,
     quota::{self, QuotaError},
     root_node::{self, RootNodeStatus},
     Error,
@@ -28,7 +26,6 @@ use std::{mem, sync::Arc};
 /// Store operations for the client side of the sync protocol.
 pub(crate) struct ClientWriter {
     db: db::WriteTransaction,
-    cache: CacheTransaction,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     quota: Option<StorageSize>,
     summary_updates: Vec<Hash>,
@@ -40,7 +37,6 @@ pub(crate) struct ClientWriter {
 impl ClientWriter {
     pub(super) async fn begin(
         mut db: db::WriteTransaction,
-        cache: CacheTransaction,
         block_id_cache: BlockIdCache,
         block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     ) -> Result<Self, Error> {
@@ -48,7 +44,6 @@ impl ClientWriter {
 
         Ok(Self {
             db,
-            cache,
             block_expiration_tracker,
             quota,
             summary_updates: Vec::new(),
@@ -229,7 +224,6 @@ impl ClientWriter {
 
         let Self {
             db,
-            cache,
             block_promises,
             block_id_cache,
             block_id_cache_updates,
@@ -245,7 +239,6 @@ impl ClientWriter {
 
         let output = db
             .commit_and_then(move || {
-                cache.commit();
                 block_id_cache.set_present(&block_id_cache_updates);
 
                 for promise in block_promises {
@@ -268,12 +261,8 @@ impl ClientWriter {
         self.summary_updates.sort();
         self.summary_updates.dedup();
 
-        let states = index::update_summaries(
-            &mut self.db,
-            &mut self.cache,
-            mem::take(&mut self.summary_updates),
-        )
-        .await?;
+        let states =
+            index::update_summaries(&mut self.db, mem::take(&mut self.summary_updates)).await?;
 
         let mut approved_branches = Vec::new();
         let mut rejected_branches = Vec::new();

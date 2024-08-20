@@ -4,7 +4,7 @@ use crate::{
     db,
     protocol::{InnerNode, InnerNodes, LeafNodes, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
 };
-use futures_util::{future, TryStreamExt};
+use futures_util::{future, Stream, TryStreamExt};
 use sqlx::Row;
 use std::convert::TryInto;
 
@@ -159,25 +159,23 @@ pub(super) async fn compute_summary(
 }
 
 /// Updates summaries of all nodes with the specified hash at the specified inner layer.
-pub(super) async fn update_summaries(
-    tx: &mut db::WriteTransaction,
-    hash: &Hash,
-    summary: Summary,
-) -> Result<Vec<(Hash, u8)>, Error> {
+pub(super) fn update_summaries<'a>(
+    tx: &'a mut db::WriteTransaction,
+    hash: &'a Hash,
+    summary: &'a Summary,
+) -> impl Stream<Item = Result<Hash, Error>> + 'a {
     sqlx::query(
         "UPDATE snapshot_inner_nodes
          SET state = ?, block_presence = ?
          WHERE hash = ?
-         RETURNING parent, bucket",
+         RETURNING parent",
     )
     .bind(summary.state)
     .bind(&summary.block_presence)
     .bind(hash)
     .fetch(tx)
-    .map_ok(|row| (row.get(0), row.get(1)))
+    .map_ok(|row| row.get(0))
     .err_into()
-    .try_collect()
-    .await
 }
 
 pub(super) async fn inherit_summaries(

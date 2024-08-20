@@ -10,12 +10,15 @@ use sqlx::Row;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
+// TODO: invalidation!
+
 #[derive(Eq, PartialEq, Debug)]
 pub(super) enum LookupError {
     NotFound,
     CacheMiss,
 }
 
+/// Cache for fast block id lookups.
 #[derive(Clone, Default)]
 pub(super) struct BlockIdCache {
     snapshots: Arc<Mutex<HashMap<Hash, Snapshot>>>,
@@ -32,6 +35,10 @@ impl BlockIdCache {
         Self::default()
     }
 
+    /// Looks up a block id (and its block presence) in the given snapshot by the given locator.
+    ///
+    /// If this returns `LookupError::CacheMiss` then the cache for the given snapshot hasn't been
+    /// populated yet. To populate it, call `load` with the same root hash, then try again.
     pub fn lookup(
         &self,
         root_hash: &Hash,
@@ -46,6 +53,9 @@ impl BlockIdCache {
         }
     }
 
+    /// Populate the cache with the data from the given snapshot.
+    ///
+    /// Note: This method is idempotent, even when called concurrently.
     pub async fn load(&self, conn: &mut db::Connection, root_hash: &Hash) -> Result<(), Error> {
         loop {
             let notified = self.notify.notified();
@@ -91,6 +101,11 @@ impl BlockIdCache {
         Ok(())
     }
 
+    /// Marks previously missing blocks as present.
+    ///
+    /// Note: each entry is a pair of encoded locator and block id. The locator is there to make
+    /// this operation constant time (per entry and snapshot). Without it it would have to perform
+    /// linear search for each entry.
     pub fn set_present(&self, entries: &[(Hash, BlockId)]) {
         let mut snapshots = self.snapshots.lock().unwrap();
 
