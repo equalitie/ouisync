@@ -14,8 +14,6 @@ use std::{
 };
 use tokio::sync::Notify;
 
-// TODO: invalidation!
-
 #[derive(Eq, PartialEq, Debug)]
 pub(super) enum LookupError {
     NotFound,

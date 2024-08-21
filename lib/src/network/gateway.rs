@@ -314,14 +314,14 @@ impl Stacks {
             async move {
                 use rand::Rng;
 
-                tracing::debug!("Hole punching started");
+                tracing::trace!("Hole punching started");
 
                 // Using RAII to log the message even when the task is aborted.
                 struct Guard(Span);
 
                 impl Drop for Guard {
                     fn drop(&mut self) {
-                        tracing::debug!(parent: &self.0, "Hole punching stopped");
+                        tracing::trace!(parent: &self.0, "Hole punching stopped");
                     }
                 }
 

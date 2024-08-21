@@ -6,7 +6,7 @@ use crate::{
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef},
     error::{Error, Result},
     event::{EventScope, EventSender, Payload},
-    file::{File, FileProgressCache},
+    file::File,
     path,
     protocol::{BlockId, Locator, Proof, RootNodeFilter},
     store::{self, Store},
@@ -155,10 +155,6 @@ impl Branch {
         self.shared.locker.branch(*self.id())
     }
 
-    pub(crate) fn file_progress_cache(&self) -> &FileProgressCache {
-        &self.shared.file_progress_cache
-    }
-
     pub(crate) fn notify(&self) -> BranchEventSender {
         BranchEventSender {
             event_tx: self.event_tx.clone(),
@@ -217,14 +213,12 @@ impl Branch {
 #[derive(Clone)]
 pub(crate) struct BranchShared {
     pub locker: Locker,
-    pub file_progress_cache: FileProgressCache,
 }
 
 impl BranchShared {
     pub fn new() -> Self {
         Self {
             locker: Locker::new(),
-            file_progress_cache: FileProgressCache::new(),
         }
     }
 }

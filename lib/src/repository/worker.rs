@@ -287,7 +287,6 @@ mod scan {
                     error
                 })?;
         let mut block_number = 0;
-        let mut file_progress_cache_reset = false;
         let mut require_batch = shared.vault.block_tracker.require_batch();
 
         while let Some((block_id, block_presence)) =
@@ -300,11 +299,6 @@ mod scan {
                 SingleBlockPresence::Present => (),
                 SingleBlockPresence::Missing | SingleBlockPresence::Expired => {
                     require_batch.add(block_id);
-
-                    if !file_progress_cache_reset {
-                        file_progress_cache_reset = true;
-                        branch.file_progress_cache().reset(&blob_id, block_number);
-                    }
                 }
             }
 

@@ -811,7 +811,7 @@ impl Inner {
 
             permit.mark_as_connecting();
             monitor.mark_as_connecting(permit.id());
-            tracing::debug!(parent: monitor.span(), "Connecting");
+            tracing::trace!(parent: monitor.span(), "Connecting");
 
             let socket = match self
                 .gateway
@@ -836,7 +836,7 @@ impl Inner {
         permit: ConnectionPermit,
         monitor: &ConnectionMonitor,
     ) -> bool {
-        tracing::debug!(parent: monitor.span(), "Handshaking");
+        tracing::trace!(parent: monitor.span(), "Handshaking");
 
         permit.mark_as_handshaking();
         monitor.mark_as_handshaking();
