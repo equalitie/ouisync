@@ -6,7 +6,7 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
-    self, crypto::Hashable, path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress,
+    self, crypto::Hashable, path, AccessMode, Credentials, Event, LocalSecret, Progress,
     Registration, Repository, SetLocalSecret, ShareToken,
 };
 use serde::{Deserialize, Serialize};
@@ -357,12 +357,7 @@ pub(crate) fn subscribe(
     let handle = state.spawn_task(|id| async move {
         loop {
             match notification_rx.recv().await {
-                Ok(Event {
-                    payload: Payload::SnapshotApproved(_) | Payload::BlockReceived { .. },
-                    ..
-                }) => (),
-                Ok(Event { .. }) => continue,
-                Err(RecvError::Lagged(_)) => (),
+                Ok(Event { .. }) | Err(RecvError::Lagged(_)) => (),
                 Err(RecvError::Closed) => break,
             }
 
