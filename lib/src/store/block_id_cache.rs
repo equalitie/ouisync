@@ -3,11 +3,15 @@ use crate::{
     collections::{hash_map::Entry, HashMap},
     crypto::Hash,
     db,
-    protocol::{BlockId, SingleBlockPresence},
+    protocol::{BlockId, RootNode, SingleBlockPresence},
+    version_vector::VersionVector,
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
-use std::sync::{Arc, Mutex};
+use std::{
+    cmp::Ordering,
+    sync::{Arc, Mutex},
+};
 use tokio::sync::Notify;
 
 // TODO: invalidation!
@@ -27,7 +31,10 @@ pub(super) struct BlockIdCache {
 
 enum Snapshot {
     Loading,
-    Loaded(HashMap<Hash, (BlockId, SingleBlockPresence)>),
+    Loaded {
+        blocks: HashMap<Hash, (BlockId, SingleBlockPresence)>,
+        version_vector: VersionVector,
+    },
 }
 
 impl BlockIdCache {
@@ -45,7 +52,7 @@ impl BlockIdCache {
         encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence), LookupError> {
         match self.snapshots.lock().unwrap().get(root_hash) {
-            Some(Snapshot::Loaded(snapshot)) => match snapshot.get(encoded_locator) {
+            Some(Snapshot::Loaded { blocks, .. }) => match blocks.get(encoded_locator) {
                 Some((block_id, block_presence)) => Ok((*block_id, *block_presence)),
                 None => Err(LookupError::NotFound),
             },
@@ -56,14 +63,14 @@ impl BlockIdCache {
     /// Populate the cache with the data from the given snapshot.
     ///
     /// Note: This method is idempotent, even when called concurrently.
-    pub async fn load(&self, conn: &mut db::Connection, root_hash: &Hash) -> Result<(), Error> {
+    pub async fn load(&self, conn: &mut db::Connection, root_node: &RootNode) -> Result<(), Error> {
         loop {
             let notified = self.notify.notified();
 
-            match self.snapshots.lock().unwrap().entry(*root_hash) {
+            match self.snapshots.lock().unwrap().entry(root_node.proof.hash) {
                 Entry::Occupied(entry) => match entry.get() {
                     Snapshot::Loading => (),
-                    Snapshot::Loaded(_) => return Ok(()),
+                    Snapshot::Loaded { .. } => return Ok(()),
                 },
                 Entry::Vacant(entry) => {
                     entry.insert(Snapshot::Loading);
@@ -74,7 +81,7 @@ impl BlockIdCache {
             notified.await;
         }
 
-        let guard = LoadGuard::new(self, root_hash);
+        let guard = LoadGuard::new(self, root_node);
 
         let block_ids = sqlx::query(
             "WITH RECURSIVE
@@ -90,7 +97,7 @@ impl BlockIdCache {
                  WHERE parent IN inner_nodes
              ",
         )
-        .bind(root_hash)
+        .bind(&root_node.proof.hash)
         .fetch(conn)
         .map_ok(|row| (row.get(0), (row.get(1), row.get(2))))
         .try_collect()
@@ -110,12 +117,12 @@ impl BlockIdCache {
         let mut snapshots = self.snapshots.lock().unwrap();
 
         for snapshot in snapshots.values_mut() {
-            let Snapshot::Loaded(snapshot) = snapshot else {
+            let Snapshot::Loaded { blocks, .. } = snapshot else {
                 continue;
             };
 
             for (encoded_locator, block_id) in entries {
-                if let Some(block_presence) = snapshot
+                if let Some(block_presence) = blocks
                     .get_mut(encoded_locator)
                     .filter(|(cached_block_id, _)| cached_block_id == block_id)
                     .map(|(_, block_presence)| block_presence)
@@ -130,21 +137,21 @@ impl BlockIdCache {
 /// Cancel safety for `BlockIdCache::load`.
 struct LoadGuard<'a> {
     cache: &'a BlockIdCache,
-    root_hash: &'a Hash,
-    snapshot: Option<HashMap<Hash, (BlockId, SingleBlockPresence)>>,
+    root_node: &'a RootNode,
+    blocks: Option<HashMap<Hash, (BlockId, SingleBlockPresence)>>,
 }
 
 impl<'a> LoadGuard<'a> {
-    fn new(cache: &'a BlockIdCache, root_hash: &'a Hash) -> Self {
+    fn new(cache: &'a BlockIdCache, root_node: &'a RootNode) -> Self {
         Self {
             cache,
-            root_hash,
-            snapshot: None,
+            root_node,
+            blocks: None,
         }
     }
 
-    fn complete(mut self, snapshot: HashMap<Hash, (BlockId, SingleBlockPresence)>) {
-        self.snapshot = Some(snapshot);
+    fn complete(mut self, blocks: HashMap<Hash, (BlockId, SingleBlockPresence)>) {
+        self.blocks = Some(blocks);
     }
 }
 
@@ -158,10 +165,28 @@ impl Drop for LoadGuard<'_> {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
 
-        if let Some(snapshot) = self.snapshot.take() {
-            snapshots.insert(*self.root_hash, Snapshot::Loaded(snapshot));
+        if let Some(blocks) = self.blocks.take() {
+            // Remove outdated snapshots
+            snapshots.retain(|_, snapshot| {
+                let Snapshot::Loaded { version_vector, .. } = snapshot else {
+                    return true;
+                };
+
+                match (*version_vector).partial_cmp(&self.root_node.proof.version_vector) {
+                    Some(Ordering::Greater) | None => true,
+                    Some(Ordering::Less | Ordering::Equal) => false,
+                }
+            });
+
+            snapshots.insert(
+                self.root_node.proof.hash,
+                Snapshot::Loaded {
+                    blocks,
+                    version_vector: self.root_node.proof.version_vector.clone(),
+                },
+            );
         } else {
-            snapshots.remove(self.root_hash);
+            snapshots.remove(&self.root_node.proof.hash);
         }
 
         drop(snapshots);
@@ -180,7 +205,7 @@ mod tests {
     };
     use crate::{
         crypto::sign::{Keypair, PublicKey},
-        protocol::test_utils::Snapshot,
+        protocol::{test_utils::Snapshot, RootNodeFilter},
         version_vector::VersionVector,
     };
     use rand::Rng;
@@ -218,6 +243,14 @@ mod tests {
 
         writer.commit().await;
 
+        let root_node = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_latest_approved_root_node(&writer_id, RootNodeFilter::Published)
+            .await
+            .unwrap();
+
         let cache = BlockIdCache::new();
 
         // Initially all lookups are cache misses.
@@ -230,10 +263,7 @@ mod tests {
 
         // Load the snapshot data into the cache.
         cache
-            .load(
-                &mut store.db().begin_read().await.unwrap(),
-                snapshot.root_hash(),
-            )
+            .load(&mut store.db().begin_read().await.unwrap(), &root_node)
             .await
             .unwrap();
 
@@ -269,6 +299,118 @@ mod tests {
             assert_eq!(
                 cache.lookup(snapshot.root_hash(), &leaf_node.locator),
                 Ok((leaf_node.block_id, SingleBlockPresence::Present))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn invalidation() {
+        let mut rng = rand::thread_rng();
+        let (_temp_dir, pool) = db::create_temp().await.unwrap();
+        let store = Store::new(pool);
+
+        let write_keys = Keypair::generate(&mut rng);
+        let writer_id_a = PublicKey::generate(&mut rng);
+        let writer_id_b = PublicKey::generate(&mut rng);
+
+        let vv_a1 = VersionVector::first(writer_id_a);
+        let vv_b1 = VersionVector::first(writer_id_b);
+
+        // Create two concurrent snapshots
+        let snapshot_a1 = Snapshot::generate(&mut rng, 1);
+
+        SnapshotWriter::begin(&store, &snapshot_a1)
+            .await
+            .save_nodes(&write_keys, writer_id_a, vv_a1.clone())
+            .await
+            .commit()
+            .await;
+
+        let root_node_a1 = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_latest_approved_root_node(&writer_id_a, RootNodeFilter::Published)
+            .await
+            .unwrap();
+
+        let snapshot_b1 = Snapshot::generate(&mut rng, 1);
+
+        SnapshotWriter::begin(&store, &snapshot_b1)
+            .await
+            .save_nodes(&write_keys, writer_id_b, vv_b1)
+            .await
+            .commit()
+            .await;
+
+        let root_node_b1 = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_latest_approved_root_node(&writer_id_b, RootNodeFilter::Published)
+            .await
+            .unwrap();
+
+        let cache = BlockIdCache::new();
+
+        // Populate the cache with both of them
+        let mut tx = store.db().begin_read().await.unwrap();
+        cache.load(&mut tx, &root_node_a1).await.unwrap();
+        cache.load(&mut tx, &root_node_b1).await.unwrap();
+        drop(tx);
+
+        // Verify all the block ids are cached
+        for (snapshot, root_node) in [(&snapshot_a1, &root_node_a1), (&snapshot_b1, &root_node_b1)]
+        {
+            for leaf_node in snapshot.leaf_nodes() {
+                assert_eq!(
+                    cache.lookup(&root_node.proof.hash, &leaf_node.locator),
+                    Ok((leaf_node.block_id, SingleBlockPresence::Missing))
+                );
+            }
+        }
+
+        // Create a new snapshot that's happens-after one of the snapshots but concurrent to the
+        // other.
+        let vv_a2 = vv_a1.incremented(writer_id_a);
+        let snapshot_a2 = Snapshot::generate(&mut rng, 1);
+
+        SnapshotWriter::begin(&store, &snapshot_a2)
+            .await
+            .save_nodes(&write_keys, writer_id_a, vv_a2)
+            .await
+            .commit()
+            .await;
+
+        let root_node_a2 = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_latest_approved_root_node(&writer_id_a, RootNodeFilter::Published)
+            .await
+            .unwrap();
+
+        // Populate the cache with the new snapshot
+        let mut tx = store.db().begin_read().await.unwrap();
+        cache.load(&mut tx, &root_node_a2).await.unwrap();
+        drop(tx);
+
+        // Verify the block ids references from the new and the concurrent snapshots are still cached.
+        for (snapshot, root_node) in [(&snapshot_a2, &root_node_a2), (&snapshot_b1, &root_node_b1)]
+        {
+            for leaf_node in snapshot.leaf_nodes() {
+                assert_eq!(
+                    cache.lookup(&root_node.proof.hash, &leaf_node.locator),
+                    Ok((leaf_node.block_id, SingleBlockPresence::Missing))
+                );
+            }
+        }
+
+        // But the ones referenced from the old snapshot have been evicted.
+        for leaf_node in snapshot_a1.leaf_nodes() {
+            assert_eq!(
+                cache.lookup(&root_node_a1.proof.hash, &leaf_node.locator),
+                Err(LookupError::CacheMiss),
             );
         }
     }

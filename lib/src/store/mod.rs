@@ -501,7 +501,7 @@ impl ReadTransaction {
                 ..
             } = &mut self.inner;
 
-            block_id_cache.load(inner, &root_node.proof.hash).await?;
+            block_id_cache.load(inner, root_node).await?;
         }
     }
 }
