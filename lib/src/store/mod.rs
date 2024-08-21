@@ -49,6 +49,7 @@ use crate::{
 use futures_util::{Stream, TryStreamExt};
 use std::{
     borrow::Cow,
+    future::Future,
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
@@ -154,37 +155,56 @@ impl Store {
     }
 
     /// Begins a `ReadTransaction`
-    pub async fn begin_read(&self) -> Result<ReadTransaction, Error> {
-        Ok(ReadTransaction {
-            inner: Reader {
-                inner: Handle::ReadTransaction(self.db.begin_read().await?),
-                cache: self.cache.begin(),
-                block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
-            },
-        })
-    }
+    #[track_caller]
+    pub fn begin_read(&self) -> impl Future<Output = Result<ReadTransaction, Error>> + '_ {
+        let tx = self.db.begin_read();
 
-    /// Begins a `WriteTransaction`
-    pub async fn begin_write(&self) -> Result<WriteTransaction, Error> {
-        Ok(WriteTransaction {
-            inner: ReadTransaction {
+        async move {
+            Ok(ReadTransaction {
                 inner: Reader {
-                    inner: Handle::WriteTransaction(self.db.begin_write().await?),
+                    inner: Handle::ReadTransaction(tx.await?),
                     cache: self.cache.begin(),
                     block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
                 },
-            },
-            untrack_blocks: None,
-        })
+            })
+        }
     }
 
-    pub async fn begin_client_write(&self) -> Result<ClientWriter, Error> {
-        ClientWriter::begin(
-            self.db().begin_write().await?,
-            self.cache.begin(),
-            self.block_expiration_tracker.read().await.clone(),
-        )
-        .await
+    /// Begins a `WriteTransaction`
+    #[track_caller]
+    pub fn begin_write(&self) -> impl Future<Output = Result<WriteTransaction, Error>> + '_ {
+        let tx = self.db.begin_write();
+
+        async move {
+            Ok(WriteTransaction {
+                inner: ReadTransaction {
+                    inner: Reader {
+                        inner: Handle::WriteTransaction(tx.await?),
+                        cache: self.cache.begin(),
+                        block_expiration_tracker: self
+                            .block_expiration_tracker
+                            .read()
+                            .await
+                            .clone(),
+                    },
+                },
+                untrack_blocks: None,
+            })
+        }
+    }
+
+    #[track_caller]
+    pub fn begin_client_write(&self) -> impl Future<Output = Result<ClientWriter, Error>> + '_ {
+        let tx = self.db().begin_write();
+
+        async move {
+            ClientWriter::begin(
+                tx.await?,
+                self.cache.begin(),
+                self.block_expiration_tracker.read().await.clone(),
+            )
+            .await
+        }
     }
 
     pub async fn count_blocks(&self) -> Result<u64, Error> {
