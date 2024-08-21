@@ -180,7 +180,7 @@ impl Inner {
                     self.handle_block_not_found(block_id, debug);
                 }
                 ProcessedResponse::RootNodeError(..) | ProcessedResponse::ChildNodesError(..) => {
-                    continue
+                    continue;
                 }
             }
         }

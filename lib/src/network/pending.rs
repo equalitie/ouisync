@@ -197,7 +197,7 @@ fn request_added(monitor: &RepositoryMonitor, key: &Key) {
             monitor.index_requests_sent.increment(1);
             monitor.index_requests_inflight.increment(1.0);
         }
-        Key::Block(block_id) => {
+        Key::Block(_) => {
             monitor.block_requests_sent.increment(1);
             monitor.block_requests_inflight.increment(1.0);
         }
@@ -208,9 +208,7 @@ fn request_added(monitor: &RepositoryMonitor, key: &Key) {
 fn request_removed(monitor: &RepositoryMonitor, key: &Key) {
     match key {
         Key::RootNode(_) | Key::ChildNodes { .. } => monitor.index_requests_inflight.decrement(1.0),
-        Key::Block(block_id) => {
-            monitor.block_requests_inflight.decrement(1.0);
-        }
+        Key::Block(_) => monitor.block_requests_inflight.decrement(1.0),
         Key::BlockOffer(_) => (),
     }
 }
