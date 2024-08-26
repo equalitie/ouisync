@@ -1,7 +1,7 @@
 use super::{
     constants::RESPONSE_BATCH_SIZE,
     debug_payload::{DebugResponse, PendingDebugRequest},
-    message::{Content, Request, Response, ResponseDisambiguator},
+    message::{Content, Response, ResponseDisambiguator},
     pending::{
         EphemeralResponse, PendingRequest, PendingRequests, PersistableResponse, PreparedResponse,
     },
@@ -18,7 +18,7 @@ use crate::{
     repository::Vault,
     store::{ClientReader, ClientWriter},
 };
-use std::{iter, time::Instant};
+use std::iter;
 use tokio::{select, sync::mpsc};
 use tracing::{instrument, Level};
 
@@ -30,47 +30,33 @@ mod future {
 pub(super) struct Client {
     inner: Inner,
     response_rx: mpsc::Receiver<Response>,
-    send_queue_rx: mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
 }
 
 impl Client {
     pub fn new(
         vault: Vault,
-        content_tx: mpsc::Sender<Content>,
+        content_tx: mpsc::UnboundedSender<Content>,
         response_rx: mpsc::Receiver<Response>,
     ) -> Self {
         let pending_requests = PendingRequests::new(vault.monitor.clone());
         let block_tracker = vault.block_tracker.client();
-
-        // We run the sender in a separate task so we can keep sending requests while we're
-        // processing responses (which sometimes takes a while).
-        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
 
         let inner = Inner {
             vault,
             pending_requests,
             block_tracker,
             content_tx,
-            send_queue_tx,
         };
 
-        Self {
-            inner,
-            response_rx,
-            send_queue_rx,
-        }
+        Self { inner, response_rx }
     }
 }
 
 impl Client {
     pub async fn run(&mut self) -> Result<()> {
-        let Self {
-            inner,
-            response_rx,
-            send_queue_rx,
-        } = self;
+        let Self { inner, response_rx } = self;
 
-        inner.run(response_rx, send_queue_rx).await
+        inner.run(response_rx).await
     }
 }
 
@@ -78,53 +64,24 @@ struct Inner {
     vault: Vault,
     pending_requests: PendingRequests,
     block_tracker: TrackerClient,
-    content_tx: mpsc::Sender<Content>,
-    send_queue_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
+    content_tx: mpsc::UnboundedSender<Content>,
 }
 
 impl Inner {
-    async fn run(
-        &mut self,
-        response_rx: &mut mpsc::Receiver<Response>,
-        send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-    ) -> Result<()> {
+    async fn run(&mut self, response_rx: &mut mpsc::Receiver<Response>) -> Result<()> {
         select! {
             result = self.handle_responses(response_rx) => result,
-            _ = self.send_requests(send_queue_rx) => Ok(()),
             _ = self.handle_available_block_offers() => Ok(()),
             _ = self.handle_reload_index() => Ok(()),
         }
     }
 
-    fn enqueue_request(&self, request: PendingRequest) {
-        self.send_queue_tx.send((request, Instant::now())).ok();
-    }
-
-    async fn send_requests(
-        &self,
-        send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-    ) {
-        loop {
-            let Some((request, timestamp)) = send_queue_rx.recv().await else {
-                break;
-            };
-
-            self.vault
-                .monitor
-                .request_queue_time
-                .record(timestamp.elapsed());
-
-            if let Some(request) = self.pending_requests.insert(request) {
-                self.send_request(request).await;
-            }
+    fn send_request(&self, request: PendingRequest) {
+        if let Some(request) = self.pending_requests.insert(request) {
+            self.content_tx
+                .send(Content::Request(request))
+                .unwrap_or(());
         }
-    }
-
-    async fn send_request(&self, request: Request) {
-        self.content_tx
-            .send(Content::Request(request))
-            .await
-            .unwrap_or(());
     }
 
     async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
@@ -269,7 +226,7 @@ impl Inner {
         tracing::debug!("Received root node - {status}");
 
         if status.request_children() {
-            self.enqueue_request(PendingRequest::ChildNodes(
+            self.send_request(PendingRequest::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(block_presence),
                 debug_payload.follow_up(),
@@ -296,7 +253,7 @@ impl Inner {
         );
 
         for node in status.new_children {
-            self.enqueue_request(PendingRequest::ChildNodes(
+            self.send_request(PendingRequest::ChildNodes(
                 node.hash,
                 ResponseDisambiguator::new(node.summary.block_presence),
                 debug_payload.clone().follow_up(),
@@ -402,7 +359,7 @@ impl Inner {
         loop {
             let block_offer = block_offers.next().await;
             let debug = PendingDebugRequest::start();
-            self.enqueue_request(PendingRequest::Block(block_offer, debug));
+            self.send_request(PendingRequest::Block(block_offer, debug));
         }
     }
 
@@ -435,7 +392,7 @@ impl Inner {
     // requested as soon as possible.
     fn refresh_branches(&self, branches: impl IntoIterator<Item = PublicKey>) {
         for branch_id in branches {
-            self.enqueue_request(PendingRequest::RootNode(
+            self.send_request(PendingRequest::RootNode(
                 branch_id,
                 PendingDebugRequest::start(),
             ));
@@ -512,7 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn receive_root_node_with_invalid_proof() {
-        let (_base_dir, inner, _, _) = setup().await;
+        let (_base_dir, inner, _) = setup().await;
         let remote_id = PublicKey::random();
 
         // Receive invalid root node from the remote replica.
@@ -548,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn receive_root_node_with_empty_version_vector() {
-        let (_base_dir, inner, _, secrets) = setup().await;
+        let (_base_dir, inner, secrets) = setup().await;
         let remote_id = PublicKey::random();
 
         inner
@@ -579,12 +536,7 @@ mod tests {
             .is_none());
     }
 
-    async fn setup() -> (
-        TempDir,
-        Inner,
-        mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-        WriteSecrets,
-    ) {
+    async fn setup() -> (TempDir, Inner, WriteSecrets) {
         let (base_dir, pool) = db::create_temp().await.unwrap();
 
         let secrets = WriteSecrets::random();
@@ -602,17 +554,15 @@ mod tests {
         let pending_requests = PendingRequests::new(vault.monitor.clone());
         let block_tracker = vault.block_tracker.client();
 
-        let (content_tx, _content_rx) = mpsc::channel(1);
-        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
+        let (content_tx, _content_rx) = mpsc::unbounded_channel();
 
         let inner = Inner {
             vault,
             pending_requests,
             block_tracker,
             content_tx,
-            send_queue_tx,
         };
 
-        (base_dir, inner, send_queue_rx, secrets)
+        (base_dir, inner, secrets)
     }
 }

@@ -32,7 +32,7 @@ pub(crate) struct Server {
 impl Server {
     pub fn new(
         vault: Vault,
-        content_tx: mpsc::Sender<Content>,
+        content_tx: mpsc::UnboundedSender<Content>,
         request_rx: mpsc::Receiver<Request>,
         response_limiter: Arc<Semaphore>,
     ) -> Self {
@@ -64,7 +64,7 @@ impl Server {
 struct Inner {
     vault: Vault,
     response_tx: mpsc::Sender<Response>,
-    content_tx: mpsc::Sender<Content>,
+    content_tx: mpsc::UnboundedSender<Content>,
     response_limiter: Arc<Semaphore>,
 }
 
@@ -351,7 +351,7 @@ impl Inner {
 
             loop {
                 select! {
-                    Some(response) = response_rx.recv() => self.send_response(response).await,
+                    Some(response) = response_rx.recv() => self.send_response(response),
                     _ = time::sleep_until(permit_expiry) => break,
                     _ = time::sleep(INTEREST_TIMEOUT) => break,
                     else => return,
@@ -360,13 +360,8 @@ impl Inner {
         }
     }
 
-    async fn send_response(&self, response: Response) {
-        if self
-            .content_tx
-            .send(Content::Response(response))
-            .await
-            .is_ok()
-        {
+    fn send_response(&self, response: Response) {
+        if self.content_tx.send(Content::Response(response)).is_ok() {
             self.vault.monitor.responses_sent.increment(1);
         }
     }

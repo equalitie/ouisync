@@ -229,7 +229,7 @@ pub(crate) struct PexSender {
 impl PexSender {
     /// While this method is running, it periodically sends contacts of other peers that share the
     /// same repo to this peer and makes the contacts of this peer aailable to them.
-    pub async fn run(&mut self, content_tx: mpsc::Sender<Content>) {
+    pub async fn run(&mut self, content_tx: mpsc::UnboundedSender<Content>) {
         let Some(collector) = self.enable() else {
             // Another collector for this link already exists.
             return;
@@ -250,7 +250,7 @@ impl PexSender {
             };
 
             if !addrs.is_empty() {
-                content_tx.send(Content::Pex(PexPayload(addrs))).await.ok();
+                content_tx.send(Content::Pex(PexPayload(addrs))).ok();
             }
 
             let interval = rand::thread_rng().gen_range(SEND_INTERVAL_RANGE);

@@ -303,9 +303,12 @@ async fn run_link(
     pex_tx: &mut PexSender,
     pex_rx: &mut PexReceiver,
 ) -> ControlFlow {
+    // Incoming message channels are bounded to prevent malicious peers from sending us too many
+    // messages and exhausting our memory.
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(RESPONSE_BUFFER_SIZE);
-    let (content_tx, content_rx) = mpsc::channel(1);
+    // Outgoing message channel is unbounded because we fully control how much stuff goes into it.
+    let (content_tx, content_rx) = mpsc::unbounded_channel();
 
     tracing::info!("Link opened");
 
@@ -369,7 +372,7 @@ async fn recv_messages(
 
 // Handle outgoing messages
 async fn send_messages(
-    mut content_rx: mpsc::Receiver<Content>,
+    mut content_rx: mpsc::UnboundedReceiver<Content>,
     mut sink: EncryptingSink<'_>,
 ) -> ControlFlow {
     loop {
@@ -400,7 +403,7 @@ async fn send_messages(
 // Create and run client. Returns only on error.
 async fn run_client(
     repo: Vault,
-    content_tx: mpsc::Sender<Content>,
+    content_tx: mpsc::UnboundedSender<Content>,
     response_rx: mpsc::Receiver<Response>,
 ) -> ControlFlow {
     let mut client = Client::new(repo, content_tx, response_rx);
@@ -417,7 +420,7 @@ async fn run_client(
 // Create and run server. Returns only on error.
 async fn run_server(
     repo: Vault,
-    content_tx: mpsc::Sender<Content>,
+    content_tx: mpsc::UnboundedSender<Content>,
     request_rx: mpsc::Receiver<Request>,
     response_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
