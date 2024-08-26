@@ -477,6 +477,7 @@ mod trash {
 
         loop {
             let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;
+
             if unreachable_block_ids.is_empty() {
                 break;
             }
@@ -655,7 +656,7 @@ mod trash {
         // case they become needed again) in their corresponding leaf nodes and then update the
         // summaries of the corresponding ancestor nodes. This is a complex and potentially
         // expensive operation which is why we do it a few blocks at a time.
-        const BATCH_SIZE: usize = 32;
+        const BATCH_SIZE: usize = 2048;
 
         let mut unreachable_block_ids = unreachable_block_ids.into_iter();
         let mut batch = Vec::with_capacity(BATCH_SIZE);
