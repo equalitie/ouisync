@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
-    network::constants::RESPONSE_BUFFER_SIZE,
+    network::constants::{REQUEST_BUFFER_SIZE, RESPONSE_BUFFER_SIZE},
     protocol::RepositoryId,
     repository::Vault,
 };
@@ -305,7 +305,7 @@ async fn run_link(
 ) -> ControlFlow {
     // Incoming message channels are bounded to prevent malicious peers from sending us too many
     // messages and exhausting our memory.
-    let (request_tx, request_rx) = mpsc::channel(1);
+    let (request_tx, request_rx) = mpsc::channel(REQUEST_BUFFER_SIZE);
     let (response_tx, response_rx) = mpsc::channel(RESPONSE_BUFFER_SIZE);
     // Outgoing message channel is unbounded because we fully control how much stuff goes into it.
     let (content_tx, content_rx) = mpsc::unbounded_channel();
