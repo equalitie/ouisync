@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
-    network::constants::MAX_RESPONSE_BATCH_SIZE,
+    network::constants::RESPONSE_BUFFER_SIZE,
     protocol::RepositoryId,
     repository::Vault,
 };
@@ -304,7 +304,7 @@ async fn run_link(
     pex_rx: &mut PexReceiver,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
-    let (response_tx, response_rx) = mpsc::channel(MAX_RESPONSE_BATCH_SIZE);
+    let (response_tx, response_rx) = mpsc::channel(RESPONSE_BUFFER_SIZE);
     let (content_tx, content_rx) = mpsc::channel(1);
 
     tracing::info!("Link opened");

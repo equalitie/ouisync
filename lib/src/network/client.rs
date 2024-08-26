@@ -1,5 +1,5 @@
 use super::{
-    constants::MAX_RESPONSE_BATCH_SIZE,
+    constants::RESPONSE_BATCH_SIZE,
     debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Content, Request, Response, ResponseDisambiguator},
     pending::{
@@ -18,7 +18,7 @@ use crate::{
     repository::Vault,
     store::{ClientReader, ClientWriter},
 };
-use std::time::Instant;
+use std::{iter, time::Instant};
 use tokio::{select, sync::mpsc};
 use tracing::{instrument, Level};
 
@@ -128,21 +128,13 @@ impl Inner {
     }
 
     async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
-        let mut received = Vec::with_capacity(MAX_RESPONSE_BATCH_SIZE);
-        let mut ephemeral = Vec::with_capacity(MAX_RESPONSE_BATCH_SIZE);
-        let mut persistable = Vec::with_capacity(MAX_RESPONSE_BATCH_SIZE);
+        let mut ephemeral = Vec::with_capacity(RESPONSE_BATCH_SIZE);
+        let mut persistable = Vec::with_capacity(RESPONSE_BATCH_SIZE);
 
         loop {
-            if rx.recv_many(&mut received, MAX_RESPONSE_BATCH_SIZE).await == 0 {
-                break;
-            }
+            for response in recv_iter(rx).await {
+                self.vault.monitor.responses_received.increment(1);
 
-            self.vault
-                .monitor
-                .responses_received
-                .increment(received.len() as u64);
-
-            for response in received.drain(..) {
                 let response = self.pending_requests.remove(response);
 
                 match response {
@@ -169,6 +161,14 @@ impl Inner {
                     | PreparedResponse::ChildNodesError(..)
                     | PreparedResponse::BlockError(..) => (),
                 }
+
+                if ephemeral.len() >= RESPONSE_BATCH_SIZE {
+                    break;
+                }
+
+                if persistable.len() >= RESPONSE_BATCH_SIZE {
+                    break;
+                }
             }
 
             future::try_join(
@@ -177,8 +177,6 @@ impl Inner {
             )
             .await?;
         }
-
-        Ok(())
     }
 
     async fn handle_persistable_responses(
@@ -483,6 +481,15 @@ impl Inner {
             );
         }
     }
+}
+
+/// Waits for at least one item to become available (or the chanel getting closed) and then yields
+/// all the buffered items from the channel.
+async fn recv_iter<T>(rx: &mut mpsc::Receiver<T>) -> impl Iterator<Item = T> + '_ {
+    rx.recv()
+        .await
+        .into_iter()
+        .chain(iter::from_fn(|| rx.try_recv().ok()))
 }
 
 #[cfg(test)]
