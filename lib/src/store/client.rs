@@ -141,7 +141,7 @@ impl ClientWriter {
                             let offer_state = if self.quota.is_some() {
                                 // OPTIMIZE: the state is the same for all the nodes in `nodes`, so
                                 // it only needs to be loaded once.
-                                self.load_block_offer_state_assuming_quota(&node.block_id)
+                                load_block_offer_state_assuming_quota(&mut self.db, &node.block_id)
                                     .await?
                             } else {
                                 Some(OfferState::Approved)
@@ -187,24 +187,6 @@ impl ClientWriter {
         self.block_promises.extend(block_promise);
 
         Ok(())
-    }
-
-    /// Returns the state (`Pending` or `Approved`) that the offer for the given block should be
-    /// registered with. If the block isn't referenced or isn't missing, returns `None`.
-    pub async fn load_block_offer_state(
-        &mut self,
-        block_id: &BlockId,
-    ) -> Result<Option<OfferState>, Error> {
-        if self.quota.is_some() {
-            self.load_block_offer_state_assuming_quota(block_id).await
-        } else {
-            match leaf_node::load_block_presence(&mut self.db, block_id).await? {
-                Some(SingleBlockPresence::Missing) | Some(SingleBlockPresence::Expired) => {
-                    Ok(Some(OfferState::Approved))
-                }
-                Some(SingleBlockPresence::Present) | None => Ok(None),
-            }
-        }
     }
 
     /// Commit all pending writes and execute the given callback if and only if the commit completes
@@ -261,17 +243,6 @@ impl ClientWriter {
     #[cfg(test)]
     pub async fn commit(self) -> Result<CommitStatus, Error> {
         self.commit_and_then(|status| status).await
-    }
-
-    async fn load_block_offer_state_assuming_quota(
-        &mut self,
-        block_id: &BlockId,
-    ) -> Result<Option<OfferState>, Error> {
-        match root_node::load_node_state_of_missing(&mut self.db, block_id).await? {
-            NodeState::Incomplete | NodeState::Complete => Ok(Some(OfferState::Pending)),
-            NodeState::Approved => Ok(Some(OfferState::Approved)),
-            NodeState::Rejected => Ok(None),
-        }
     }
 
     async fn finalize_snapshots(&mut self) -> Result<FinalizeStatus, Error> {
@@ -354,6 +325,37 @@ impl ClientWriter {
     }
 }
 
+pub(crate) struct ClientReader {
+    db: db::ReadTransaction,
+    quota: Option<StorageSize>,
+}
+
+impl ClientReader {
+    pub(super) async fn begin(mut db: db::ReadTransaction) -> Result<Self, Error> {
+        let quota = repository::quota::get(&mut db).await?;
+
+        Ok(Self { db, quota })
+    }
+
+    /// Returns the state (`Pending` or `Approved`) that the offer for the given block should be
+    /// registered with. If the block isn't referenced or isn't missing, returns `None`.
+    pub async fn load_block_offer_state(
+        &mut self,
+        block_id: &BlockId,
+    ) -> Result<Option<OfferState>, Error> {
+        if self.quota.is_some() {
+            load_block_offer_state_assuming_quota(&mut self.db, block_id).await
+        } else {
+            match leaf_node::load_block_presence(&mut self.db, block_id).await? {
+                Some(SingleBlockPresence::Missing) | Some(SingleBlockPresence::Expired) => {
+                    Ok(Some(OfferState::Approved))
+                }
+                Some(SingleBlockPresence::Present) | None => Ok(None),
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct InnerNodesStatus {
     /// Which of the received nodes should we request the children of.
@@ -380,6 +382,17 @@ pub(crate) struct CommitStatus {
 struct FinalizeStatus {
     approved_branches: Vec<PublicKey>,
     rejected_branches: Vec<PublicKey>,
+}
+
+async fn load_block_offer_state_assuming_quota(
+    conn: &mut db::Connection,
+    block_id: &BlockId,
+) -> Result<Option<OfferState>, Error> {
+    match root_node::load_node_state_of_missing(conn, block_id).await? {
+        NodeState::Incomplete | NodeState::Complete => Ok(Some(OfferState::Pending)),
+        NodeState::Approved => Ok(Some(OfferState::Approved)),
+        NodeState::Rejected => Ok(None),
+    }
 }
 
 #[cfg(test)]

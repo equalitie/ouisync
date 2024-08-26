@@ -22,6 +22,7 @@ pub(crate) enum PendingRequest {
     Block(BlockOffer, PendingDebugRequest),
 }
 
+/// Response that's been prepared for processing.
 pub(super) enum PreparedResponse {
     RootNode(UntrustedProof, MultiBlockPresence, DebugResponse),
     InnerNodes(CacheHash<InnerNodes>, ResponseDisambiguator, DebugResponse),
@@ -92,6 +93,19 @@ impl From<Response> for PreparedResponse {
             Response::BlockError(block_id, debug) => Self::BlockError(block_id, debug),
         }
     }
+}
+
+/// Response whose processing requires only read access to the store or no access at all.
+pub(super) enum EphemeralResponse {
+    BlockOffer(BlockId, DebugResponse),
+}
+
+/// Response whose processing requires write access to the store.
+pub(super) enum PersistableResponse {
+    RootNode(UntrustedProof, MultiBlockPresence, DebugResponse),
+    InnerNodes(CacheHash<InnerNodes>, DebugResponse),
+    LeafNodes(CacheHash<LeafNodes>, DebugResponse),
+    Block(Block, Option<BlockPromise>, DebugResponse),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]

@@ -42,9 +42,6 @@ pub(crate) struct RepositoryMonitor {
     // Total number of responses received.
     pub responses_received: Counter,
 
-    // Total number of responses currently being processed.
-    pub responses_in_processing: Gauge,
-
     pub scan_job: JobMonitor,
     pub merge_job: JobMonitor,
     pub prune_job: JobMonitor,
@@ -97,8 +94,6 @@ impl RepositoryMonitor {
 
             responses_sent,
             responses_received,
-
-            responses_in_processing: create_gauge(recorder, "responses in processing", Unit::Count),
 
             scan_job,
             merge_job,

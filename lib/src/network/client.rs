@@ -2,7 +2,9 @@ use super::{
     constants::MAX_RESPONSE_BATCH_SIZE,
     debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Content, Request, Response, ResponseDisambiguator},
-    pending::{PendingRequest, PendingRequests, PreparedResponse},
+    pending::{
+        EphemeralResponse, PendingRequest, PendingRequests, PersistableResponse, PreparedResponse,
+    },
 };
 use crate::{
     block_tracker::{BlockPromise, TrackerClient},
@@ -14,11 +16,16 @@ use crate::{
         UntrustedProof,
     },
     repository::Vault,
-    store::ClientWriter,
+    store::{ClientReader, ClientWriter},
 };
-use std::{future, time::Instant};
+use std::time::Instant;
 use tokio::{select, sync::mpsc};
 use tracing::{instrument, Level};
+
+mod future {
+    pub(super) use futures_util::future::try_join;
+    pub(super) use std::future::pending;
+}
 
 pub(super) struct Client {
     inner: Inner,
@@ -122,75 +129,107 @@ impl Inner {
 
     async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
         let mut received = Vec::with_capacity(MAX_RESPONSE_BATCH_SIZE);
-        let mut prepared = Vec::with_capacity(MAX_RESPONSE_BATCH_SIZE);
+        let mut ephemeral = Vec::with_capacity(MAX_RESPONSE_BATCH_SIZE);
+        let mut persistable = Vec::with_capacity(MAX_RESPONSE_BATCH_SIZE);
 
         loop {
             if rx.recv_many(&mut received, MAX_RESPONSE_BATCH_SIZE).await == 0 {
                 break;
             }
 
-            prepared.extend(
-                received
-                    .drain(..)
-                    .map(|response| self.pending_requests.remove(response)),
-            );
+            self.vault
+                .monitor
+                .responses_received
+                .increment(received.len() as u64);
 
-            self.handle_response_batch(&mut prepared).await?;
+            for response in received.drain(..) {
+                let response = self.pending_requests.remove(response);
+
+                match response {
+                    PreparedResponse::RootNode(proof, block_presence, debug) => {
+                        persistable.push(PersistableResponse::RootNode(
+                            proof,
+                            block_presence,
+                            debug,
+                        ));
+                    }
+                    PreparedResponse::InnerNodes(nodes, _, debug) => {
+                        persistable.push(PersistableResponse::InnerNodes(nodes, debug));
+                    }
+                    PreparedResponse::LeafNodes(nodes, _, debug) => {
+                        persistable.push(PersistableResponse::LeafNodes(nodes, debug));
+                    }
+                    PreparedResponse::Block(block, block_promise, debug) => {
+                        persistable.push(PersistableResponse::Block(block, block_promise, debug));
+                    }
+                    PreparedResponse::BlockOffer(block_id, debug) => {
+                        ephemeral.push(EphemeralResponse::BlockOffer(block_id, debug));
+                    }
+                    PreparedResponse::RootNodeError(..)
+                    | PreparedResponse::ChildNodesError(..)
+                    | PreparedResponse::BlockError(..) => (),
+                }
+            }
+
+            future::try_join(
+                self.handle_ephemeral_responses(&mut ephemeral),
+                self.handle_persistable_responses(&mut persistable),
+            )
+            .await?;
         }
 
         Ok(())
     }
 
-    async fn handle_response_batch(&self, batch: &mut Vec<PreparedResponse>) -> Result<()> {
-        let count = batch.len();
-
-        self.vault
-            .monitor
-            .responses_received
-            .increment(count as u64);
+    async fn handle_persistable_responses(
+        &self,
+        batch: &mut Vec<PersistableResponse>,
+    ) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
 
         let mut writer = self.vault.store().begin_client_write().await?;
 
-        self.vault
-            .monitor
-            .responses_in_processing
-            .increment(count as f64);
-
         for response in batch.drain(..) {
             match response {
-                PreparedResponse::RootNode(proof, block_presence, debug) => {
+                PersistableResponse::RootNode(proof, block_presence, debug) => {
                     self.handle_root_node(&mut writer, proof, block_presence, debug)
                         .await?;
                 }
-                PreparedResponse::InnerNodes(nodes, _, debug) => {
+                PersistableResponse::InnerNodes(nodes, debug) => {
                     self.handle_inner_nodes(&mut writer, nodes, debug).await?;
                 }
-                PreparedResponse::LeafNodes(nodes, _, debug) => {
+                PersistableResponse::LeafNodes(nodes, debug) => {
                     self.handle_leaf_nodes(&mut writer, nodes, debug).await?;
                 }
-                PreparedResponse::BlockOffer(block_id, debug) => {
-                    self.handle_block_offer(&mut writer, block_id, debug)
-                        .await?;
-                }
-                PreparedResponse::Block(block, block_promise, debug) => {
+                PersistableResponse::Block(block, block_promise, debug) => {
                     self.handle_block(&mut writer, block, block_promise, debug)
                         .await?;
-                }
-                PreparedResponse::BlockError(block_id, debug) => {
-                    self.handle_block_not_found(block_id, debug);
-                }
-                PreparedResponse::RootNodeError(..) | PreparedResponse::ChildNodesError(..) => {
-                    continue;
                 }
             }
         }
 
         self.commit_responses(writer).await?;
 
-        self.vault
-            .monitor
-            .responses_in_processing
-            .decrement(count as f64);
+        Ok(())
+    }
+
+    async fn handle_ephemeral_responses(&self, batch: &mut Vec<EphemeralResponse>) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        let mut reader = self.vault.store().begin_client_read().await?;
+
+        for response in batch.drain(..) {
+            match response {
+                EphemeralResponse::BlockOffer(block_id, debug) => {
+                    self.handle_block_offer(&mut reader, block_id, debug)
+                        .await?;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -295,11 +334,11 @@ impl Inner {
     #[instrument(skip_all, fields(id = ?block_id, ?debug_payload), err(Debug))]
     async fn handle_block_offer(
         &self,
-        writer: &mut ClientWriter,
+        reader: &mut ClientReader,
         block_id: BlockId,
         debug_payload: DebugResponse,
     ) -> Result<()> {
-        let Some(offer_state) = writer.load_block_offer_state(&block_id).await? else {
+        let Some(offer_state) = reader.load_block_offer_state(&block_id).await? else {
             return Ok(());
         };
 
@@ -323,11 +362,6 @@ impl Inner {
         tracing::trace!("Received block");
 
         Ok(())
-    }
-
-    #[instrument(skip_all, fields(block_id = ?_block_id, ?debug_payload))]
-    fn handle_block_not_found(&self, _block_id: BlockId, debug_payload: DebugResponse) {
-        tracing::trace!("Received block not found");
     }
 
     async fn commit_responses(&self, writer: ClientWriter) -> Result<()> {
@@ -477,7 +511,7 @@ mod tests {
         // Receive invalid root node from the remote replica.
         let invalid_write_keys = Keypair::random();
         inner
-            .handle_response_batch(&mut vec![PreparedResponse::RootNode(
+            .handle_persistable_responses(&mut vec![PersistableResponse::RootNode(
                 Proof::new(
                     remote_id,
                     VersionVector::first(remote_id),
@@ -511,7 +545,7 @@ mod tests {
         let remote_id = PublicKey::random();
 
         inner
-            .handle_response_batch(&mut vec![PreparedResponse::RootNode(
+            .handle_persistable_responses(&mut vec![PersistableResponse::RootNode(
                 Proof::new(
                     remote_id,
                     VersionVector::new(),

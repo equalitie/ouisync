@@ -22,7 +22,11 @@ mod tests;
 pub use error::Error;
 pub use migrations::DATA_VERSION;
 
-pub(crate) use {block_ids::BlockIdsPage, changeset::Changeset, client::ClientWriter};
+pub(crate) use {
+    block_ids::BlockIdsPage,
+    changeset::Changeset,
+    client::{ClientReader, ClientWriter},
+};
 
 #[cfg(test)]
 pub(crate) use test_utils::SnapshotWriter;
@@ -191,6 +195,13 @@ impl Store {
                 untrack_blocks: None,
             })
         }
+    }
+
+    #[track_caller]
+    pub fn begin_client_read(&self) -> impl Future<Output = Result<ClientReader, Error>> + '_ {
+        let tx = self.db().begin_read();
+
+        async move { ClientReader::begin(tx.await?).await }
     }
 
     #[track_caller]
