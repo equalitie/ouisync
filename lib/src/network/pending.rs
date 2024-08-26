@@ -22,25 +22,20 @@ pub(crate) enum PendingRequest {
     Block(BlockOffer, PendingDebugRequest),
 }
 
-pub(super) struct PendingResponse {
-    pub response: ProcessedResponse,
-    // This will be `None` if the request timeouted but we still received the response
-    // afterwards.
-    pub block_promise: Option<BlockPromise>,
-}
-
-pub(super) enum ProcessedResponse {
+pub(super) enum PreparedResponse {
     RootNode(UntrustedProof, MultiBlockPresence, DebugResponse),
     InnerNodes(CacheHash<InnerNodes>, ResponseDisambiguator, DebugResponse),
     LeafNodes(CacheHash<LeafNodes>, ResponseDisambiguator, DebugResponse),
     BlockOffer(BlockId, DebugResponse),
-    Block(Block, DebugResponse),
+    // The `BlockPromise` is `None` if the request timeouted but we still received the response
+    // afterwards.
+    Block(Block, Option<BlockPromise>, DebugResponse),
     RootNodeError(PublicKey, DebugResponse),
     ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
     BlockError(BlockId, DebugResponse),
 }
 
-impl ProcessedResponse {
+impl PreparedResponse {
     fn to_key(&self) -> Key {
         match self {
             Self::RootNode(proof, ..) => Key::RootNode(proof.writer_id),
@@ -51,15 +46,30 @@ impl ProcessedResponse {
                 Key::ChildNodes(nodes.hash(), *disambiguator)
             }
             Self::BlockOffer(block_id, _) => Key::BlockOffer(*block_id),
-            Self::Block(block, _) => Key::Block(block.id),
+            Self::Block(block, _, _) => Key::Block(block.id),
             Self::RootNodeError(writer_id, _) => Key::RootNode(*writer_id),
             Self::ChildNodesError(hash, disambiguator, _) => Key::ChildNodes(*hash, *disambiguator),
             Self::BlockError(block_id, _) => Key::Block(*block_id),
         }
     }
+
+    fn set_block_promise(&mut self, new_block_promise: BlockPromise) {
+        match self {
+            Self::Block(_, block_promise, _) => {
+                *block_promise = Some(new_block_promise);
+            }
+            Self::RootNode(..)
+            | Self::InnerNodes(..)
+            | Self::LeafNodes(..)
+            | Self::BlockOffer(..)
+            | Self::BlockError(..)
+            | Self::RootNodeError(..)
+            | Self::ChildNodesError(..) => (),
+        }
+    }
 }
 
-impl From<Response> for ProcessedResponse {
+impl From<Response> for PreparedResponse {
     fn from(response: Response) -> Self {
         match response {
             Response::RootNode(proof, block_presence, debug) => {
@@ -73,7 +83,7 @@ impl From<Response> for ProcessedResponse {
             }
             Response::BlockOffer(block_id, debug) => Self::BlockOffer(block_id, debug),
             Response::Block(content, nonce, debug) => {
-                Self::Block(Block::new(content, nonce), debug)
+                Self::Block(Block::new(content, nonce), None, debug)
             }
             Response::RootNodeError(writer_id, debug) => Self::RootNodeError(writer_id, debug),
             Response::ChildNodesError(hash, disambiguator, debug) => {
@@ -163,8 +173,8 @@ impl PendingRequests {
         Some(request)
     }
 
-    pub fn remove(&self, response: Response) -> PendingResponse {
-        let response = ProcessedResponse::from(response);
+    pub fn remove(&self, response: Response) -> PreparedResponse {
+        let mut response = PreparedResponse::from(response);
         let key = response.to_key();
 
         let mut map = self.map.lock().unwrap();
@@ -176,18 +186,12 @@ impl PendingRequests {
                 .request_latency
                 .record(request_data.timestamp.elapsed());
 
-            let block_promise = request_data.block_promise;
-
-            PendingResponse {
-                response,
-                block_promise,
-            }
-        } else {
-            PendingResponse {
-                response,
-                block_promise: None,
+            if let Some(block_promise) = request_data.block_promise {
+                response.set_block_promise(block_promise);
             }
         }
+
+        response
     }
 }
 

@@ -2,7 +2,7 @@ use super::{
     constants::MAX_RESPONSE_BATCH_SIZE,
     debug_payload::{DebugResponse, PendingDebugRequest},
     message::{Content, Request, Response, ResponseDisambiguator},
-    pending::{PendingRequest, PendingRequests, PendingResponse, ProcessedResponse},
+    pending::{PendingRequest, PendingRequests, PreparedResponse},
 };
 use crate::{
     block_tracker::{BlockPromise, TrackerClient},
@@ -141,7 +141,7 @@ impl Inner {
         Ok(())
     }
 
-    async fn handle_response_batch(&self, batch: &mut Vec<PendingResponse>) -> Result<()> {
+    async fn handle_response_batch(&self, batch: &mut Vec<PreparedResponse>) -> Result<()> {
         let count = batch.len();
 
         self.vault
@@ -157,29 +157,29 @@ impl Inner {
             .increment(count as f64);
 
         for response in batch.drain(..) {
-            match response.response {
-                ProcessedResponse::RootNode(proof, block_presence, debug) => {
+            match response {
+                PreparedResponse::RootNode(proof, block_presence, debug) => {
                     self.handle_root_node(&mut writer, proof, block_presence, debug)
                         .await?;
                 }
-                ProcessedResponse::InnerNodes(nodes, _, debug) => {
+                PreparedResponse::InnerNodes(nodes, _, debug) => {
                     self.handle_inner_nodes(&mut writer, nodes, debug).await?;
                 }
-                ProcessedResponse::LeafNodes(nodes, _, debug) => {
+                PreparedResponse::LeafNodes(nodes, _, debug) => {
                     self.handle_leaf_nodes(&mut writer, nodes, debug).await?;
                 }
-                ProcessedResponse::BlockOffer(block_id, debug) => {
+                PreparedResponse::BlockOffer(block_id, debug) => {
                     self.handle_block_offer(&mut writer, block_id, debug)
                         .await?;
                 }
-                ProcessedResponse::Block(block, debug) => {
-                    self.handle_block(&mut writer, block, response.block_promise, debug)
+                PreparedResponse::Block(block, block_promise, debug) => {
+                    self.handle_block(&mut writer, block, block_promise, debug)
                         .await?;
                 }
-                ProcessedResponse::BlockError(block_id, debug) => {
+                PreparedResponse::BlockError(block_id, debug) => {
                     self.handle_block_not_found(block_id, debug);
                 }
-                ProcessedResponse::RootNodeError(..) | ProcessedResponse::ChildNodesError(..) => {
+                PreparedResponse::RootNodeError(..) | PreparedResponse::ChildNodesError(..) => {
                     continue;
                 }
             }
@@ -477,21 +477,17 @@ mod tests {
         // Receive invalid root node from the remote replica.
         let invalid_write_keys = Keypair::random();
         inner
-            .handle_response_batch(&mut vec![PendingResponse {
-                response: Response::RootNode(
-                    Proof::new(
-                        remote_id,
-                        VersionVector::first(remote_id),
-                        *EMPTY_INNER_HASH,
-                        &invalid_write_keys,
-                    )
-                    .into(),
-                    MultiBlockPresence::None,
-                    DebugResponse::unsolicited(),
+            .handle_response_batch(&mut vec![PreparedResponse::RootNode(
+                Proof::new(
+                    remote_id,
+                    VersionVector::first(remote_id),
+                    *EMPTY_INNER_HASH,
+                    &invalid_write_keys,
                 )
                 .into(),
-                block_promise: None,
-            }])
+                MultiBlockPresence::None,
+                DebugResponse::unsolicited(),
+            )])
             .await
             .unwrap();
 
@@ -515,21 +511,17 @@ mod tests {
         let remote_id = PublicKey::random();
 
         inner
-            .handle_response_batch(&mut vec![PendingResponse {
-                response: Response::RootNode(
-                    Proof::new(
-                        remote_id,
-                        VersionVector::new(),
-                        *EMPTY_INNER_HASH,
-                        &secrets.write_keys,
-                    )
-                    .into(),
-                    MultiBlockPresence::None,
-                    DebugResponse::unsolicited(),
+            .handle_response_batch(&mut vec![PreparedResponse::RootNode(
+                Proof::new(
+                    remote_id,
+                    VersionVector::new(),
+                    *EMPTY_INNER_HASH,
+                    &secrets.write_keys,
                 )
                 .into(),
-                block_promise: None,
-            }])
+                MultiBlockPresence::None,
+                DebugResponse::unsolicited(),
+            )])
             .await
             .unwrap();
 
