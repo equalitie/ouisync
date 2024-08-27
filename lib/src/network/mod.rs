@@ -44,7 +44,7 @@ pub use self::{
 pub use net::stun::NatBehavior;
 
 use self::{
-    connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
+    connection::{ConnectionPermit, ConnectionSet, ReserveResult},
     connection_monitor::ConnectionMonitor,
     constants::MAX_UNCHOKED_COUNT,
     dht_discovery::DhtDiscovery,
@@ -155,7 +155,7 @@ impl Network {
             dht_discovery_tx,
             pex_discovery,
             stun_clients: StunClients::new(),
-            connection_deduplicator: ConnectionDeduplicator::new(),
+            connections: ConnectionSet::new(),
             on_protocol_mismatch_tx,
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
@@ -294,11 +294,11 @@ impl Network {
     }
 
     pub fn peer_info_collector(&self) -> PeerInfoCollector {
-        self.inner.connection_deduplicator.peer_info_collector()
+        self.inner.connections.peer_info_collector()
     }
 
     pub fn peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
-        self.inner.connection_deduplicator.get_peer_info(addr)
+        self.inner.connections.get_peer_info(addr)
     }
 
     pub fn current_protocol_version(&self) -> u32 {
@@ -316,7 +316,7 @@ impl Network {
 
     /// Subscribe change in connected peers events.
     pub fn on_peer_set_change(&self) -> ConnectionSetSubscription {
-        self.inner.connection_deduplicator.subscribe()
+        self.inner.connections.subscribe()
     }
 
     /// Register a local repository into the network. This links the repository with all matching
@@ -483,7 +483,7 @@ struct Inner {
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery: PexDiscovery,
     stun_clients: StunClients,
-    connection_deduplicator: ConnectionDeduplicator,
+    connections: ConnectionSet,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
@@ -692,10 +692,7 @@ impl Inner {
         mut rx: mpsc::Receiver<(raw::Stream, PeerAddr)>,
     ) {
         while let Some((stream, addr)) = rx.recv().await {
-            match self
-                .connection_deduplicator
-                .reserve(addr, PeerSource::Listener)
-            {
+            match self.connections.reserve(addr, PeerSource::Listener) {
                 ReserveResult::Permit(permit) => {
                     if self.is_shutdown() {
                         break;
@@ -761,7 +758,7 @@ impl Inner {
 
             next_sleep = backoff.next_backoff();
 
-            let permit = match self.connection_deduplicator.reserve(addr, source) {
+            let permit = match self.connections.reserve(addr, source) {
                 ReserveResult::Permit(permit) => permit,
                 ReserveResult::Occupied(on_release, their_source, connection_id) => {
                     if source == their_source {

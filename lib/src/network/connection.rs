@@ -14,12 +14,12 @@ use std::{
 };
 use tokio::sync::watch;
 
-/// Prevents establishing duplicate connections.
-pub(super) struct ConnectionDeduplicator {
-    connections: watch::Sender<HashMap<ConnectionKey, Peer>>,
+/// Container for known connections.
+pub(super) struct ConnectionSet {
+    connections: watch::Sender<HashMap<Key, Data>>,
 }
 
-impl ConnectionDeduplicator {
+impl ConnectionSet {
     pub fn new() -> Self {
         Self {
             connections: watch::Sender::new(HashMap::default()),
@@ -31,7 +31,7 @@ impl ConnectionDeduplicator {
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
     /// Also returns a notification object that can be used to wait until the permit gets released.
     pub fn reserve(&self, addr: PeerAddr, source: PeerSource) -> ReserveResult {
-        let key = ConnectionKey {
+        let key = Key {
             addr,
             dir: ConnectionDirection::from_source(source),
         };
@@ -41,7 +41,7 @@ impl ConnectionDeduplicator {
                 Entry::Vacant(entry) => {
                     let id = ConnectionId::next();
 
-                    entry.insert(Peer {
+                    entry.insert(Data {
                         id,
                         state: PeerState::Known,
                         source,
@@ -81,12 +81,12 @@ impl ConnectionDeduplicator {
         let connections = self.connections.borrow();
 
         connections
-            .get(&ConnectionKey {
+            .get(&Key {
                 addr,
                 dir: ConnectionDirection::Incoming,
             })
             .or_else(|| {
-                connections.get(&ConnectionKey {
+                connections.get(&Key {
                     addr,
                     dir: ConnectionDirection::Outgoing,
                 })
@@ -131,7 +131,7 @@ pub(super) enum ReserveResult {
 }
 
 #[derive(Clone)]
-pub struct ConnectionSetSubscription(watch::Receiver<HashMap<ConnectionKey, Peer>>);
+pub struct ConnectionSetSubscription(watch::Receiver<HashMap<Key, Data>>);
 
 impl ConnectionSetSubscription {
     pub async fn changed(&mut self) -> Result<(), watch::error::RecvError> {
@@ -141,7 +141,7 @@ impl ConnectionSetSubscription {
 }
 
 #[derive(Clone)]
-pub struct PeerInfoCollector(watch::Sender<HashMap<ConnectionKey, Peer>>);
+pub struct PeerInfoCollector(watch::Sender<HashMap<Key, Data>>);
 
 impl PeerInfoCollector {
     pub fn collect(&self) -> Vec<PeerInfo> {
@@ -179,8 +179,8 @@ impl ConnectionDirection {
 /// Connection permit that prevents another connection to the same peer (socket address) to be
 /// established as long as it remains in scope.
 pub(super) struct ConnectionPermit {
-    connections: watch::Sender<HashMap<ConnectionKey, Peer>>,
-    key: ConnectionKey,
+    connections: watch::Sender<HashMap<Key, Data>>,
+    key: Key,
     id: ConnectionId,
 }
 
@@ -234,7 +234,7 @@ impl ConnectionPermit {
     pub fn released(&self) -> AwaitDrop {
         // We can't use unwrap here because this method is used in `ConnectionPermitHalf` which can
         // outlive the entry if the other half gets dropped.
-        self.with_peer(|peer| peer.on_release.subscribe())
+        self.with(|data| data.on_release.subscribe())
             .unwrap_or_else(|| DropAwaitable::new().subscribe())
     }
 
@@ -248,7 +248,7 @@ impl ConnectionPermit {
 
     pub fn source(&self) -> PeerSource {
         // unwrap is ok because if `self` exists then the entry should exists as well.
-        self.with_peer(|peer| peer.source).unwrap()
+        self.with(|data| data.source).unwrap()
     }
 
     /// Dummy connection permit for tests.
@@ -256,12 +256,12 @@ impl ConnectionPermit {
     pub fn dummy() -> Self {
         use std::net::Ipv4Addr;
 
-        let key = ConnectionKey {
+        let key = Key {
             addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
             dir: ConnectionDirection::Incoming,
         };
         let id = ConnectionId::next();
-        let peer = Peer {
+        let data = Data {
             id,
             state: PeerState::Known,
             source: PeerSource::UserProvided,
@@ -270,15 +270,15 @@ impl ConnectionPermit {
         };
 
         Self {
-            connections: watch::Sender::new([(key, peer)].into()),
+            connections: watch::Sender::new([(key, data)].into()),
             key,
             id,
         }
     }
 
-    fn with_peer<F, R>(&self, f: F) -> Option<R>
+    fn with<F, R>(&self, f: F) -> Option<R>
     where
-        F: FnOnce(&Peer) -> R,
+        F: FnOnce(&Data) -> R,
     {
         self.connections.borrow().get(&self.key).map(f)
     }
@@ -320,9 +320,7 @@ impl ConnectionPermitHalf {
     }
 
     pub fn tracker(&self) -> TrafficTracker {
-        self.0
-            .with_peer(|peer| peer.tracker.clone())
-            .unwrap_or_default()
+        self.0.with(|data| data.tracker.clone()).unwrap_or_default()
     }
 
     pub fn released(&self) -> AwaitDrop {
@@ -331,12 +329,12 @@ impl ConnectionPermitHalf {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-struct ConnectionKey {
-    pub addr: PeerAddr,
-    pub dir: ConnectionDirection,
+struct Key {
+    addr: PeerAddr,
+    dir: ConnectionDirection,
 }
 
-struct Peer {
+struct Data {
     id: ConnectionId,
     state: PeerState,
     source: PeerSource,
