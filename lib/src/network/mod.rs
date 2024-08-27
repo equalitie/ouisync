@@ -763,7 +763,7 @@ impl Inner {
 
             let permit = match self.connection_deduplicator.reserve(addr, source) {
                 ReserveResult::Permit(permit) => permit,
-                ReserveResult::Occupied(on_release, their_source, permit_id) => {
+                ReserveResult::Occupied(on_release, their_source, connection_id) => {
                     if source == their_source {
                         // This is a duplicate from the same source, ignore it.
                         return;
@@ -774,7 +774,7 @@ impl Inner {
                     monitor.mark_as_awaiting_permit();
                     tracing::debug!(
                         parent: monitor.span(),
-                        permit_id,
+                        %connection_id,
                         "Duplicate from different source - awaiting permit"
                     );
 

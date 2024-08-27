@@ -14,7 +14,25 @@ use std::{
     time::SystemTime,
 };
 
-pub(super) type PermitId = u64;
+/// Unique identifier of a connection. Connections are mostly already identified by the peer address
+/// and direction (incoming / outgoing), but this type allows to distinguish even connections with
+/// the same address/direction but that were established in two separate occasions.
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[repr(transparent)]
+pub(super) struct ConnectionId(u64);
+
+impl ConnectionId {
+    pub fn next() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl fmt::Display for ConnectionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 // NOTE: Watch (or uninitialized_watch) has an advantage over Notify in that it's better at
 // broadcasting to multiple consumers. This particular line is problematic in Notify documentation:
@@ -30,8 +48,7 @@ use crate::sync::{uninitialized_watch, AwaitDrop, DropAwaitable};
 
 /// Prevents establishing duplicate connections.
 pub(super) struct ConnectionDeduplicator {
-    next_id: AtomicU64,
-    connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
+    connections: Arc<BlockingMutex<HashMap<ConnectionKey, Peer>>>,
     on_change_tx: uninitialized_watch::Sender<()>,
 }
 
@@ -40,7 +57,6 @@ impl ConnectionDeduplicator {
         let (on_change_tx, _) = uninitialized_watch::channel();
 
         Self {
-            next_id: AtomicU64::new(0),
             connections: Arc::new(BlockingMutex::new(HashMap::default())),
             on_change_tx,
         }
@@ -51,14 +67,14 @@ impl ConnectionDeduplicator {
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
     /// Also returns a notification object that can be used to wait until the permit gets released.
     pub fn reserve(&self, addr: PeerAddr, source: PeerSource) -> ReserveResult {
-        let info = ConnectionInfo {
+        let key = ConnectionKey {
             addr,
             dir: ConnectionDirection::from_source(source),
         };
 
-        match self.connections.lock().unwrap().entry(info) {
+        match self.connections.lock().unwrap().entry(key) {
             Entry::Vacant(entry) => {
-                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let id = ConnectionId::next();
                 let on_release_tx = DropAwaitable::new();
 
                 entry.insert(Peer {
@@ -72,7 +88,7 @@ impl ConnectionDeduplicator {
 
                 ReserveResult::Permit(ConnectionPermit {
                     connections: self.connections.clone(),
-                    info,
+                    key,
                     id,
                     on_deduplicator_change: self.on_change_tx.clone(),
                 })
@@ -95,11 +111,11 @@ impl ConnectionDeduplicator {
     pub fn get_peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
         let connections = self.connections.lock().unwrap();
 
-        let incoming = ConnectionInfo {
+        let incoming = ConnectionKey {
             addr,
             dir: ConnectionDirection::Incoming,
         };
-        let outgoing = ConnectionInfo {
+        let outgoing = ConnectionKey {
             addr,
             dir: ConnectionDirection::Outgoing,
         };
@@ -123,11 +139,11 @@ impl ConnectionDeduplicator {
 pub(super) enum ReserveResult {
     Permit(ConnectionPermit),
     // Use the receiver to get notified when the existing permit is destroyed.
-    Occupied(AwaitDrop, PeerSource, PermitId),
+    Occupied(AwaitDrop, PeerSource, ConnectionId),
 }
 
 #[derive(Clone)]
-pub struct PeerInfoCollector(Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>);
+pub struct PeerInfoCollector(Arc<BlockingMutex<HashMap<ConnectionKey, Peer>>>);
 
 impl PeerInfoCollector {
     pub fn collect(&self) -> Vec<PeerInfo> {
@@ -146,7 +162,7 @@ impl PeerInfoCollector {
 }
 
 pub(super) struct Peer {
-    id: PermitId,
+    id: ConnectionId,
     state: PeerState,
     source: PeerSource,
     tracker: TrafficTracker,
@@ -174,9 +190,9 @@ impl ConnectionDirection {
 /// Connection permit that prevents another connection to the same peer (socket address) to be
 /// established as long as it remains in scope.
 pub(super) struct ConnectionPermit {
-    connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
-    info: ConnectionInfo,
-    id: PermitId,
+    connections: Arc<BlockingMutex<HashMap<ConnectionKey, Peer>>>,
+    key: ConnectionKey,
+    id: ConnectionId,
     on_deduplicator_change: uninitialized_watch::Sender<()>,
 }
 
@@ -190,7 +206,7 @@ impl ConnectionPermit {
         (
             ConnectionPermitHalf(Self {
                 connections: self.connections.clone(),
-                info: self.info,
+                key: self.key,
                 id: self.id,
                 on_deduplicator_change: self.on_deduplicator_change.clone(),
             }),
@@ -217,7 +233,7 @@ impl ConnectionPermit {
         let mut lock = self.connections.lock().unwrap();
 
         // unwrap is ok because if `self` exists then the entry should exists as well.
-        let peer = lock.get_mut(&self.info).unwrap();
+        let peer = lock.get_mut(&self.key).unwrap();
 
         if peer.state != new_state {
             peer.state = new_state;
@@ -234,10 +250,10 @@ impl ConnectionPermit {
     }
 
     pub fn addr(&self) -> PeerAddr {
-        self.info.addr
+        self.key.addr
     }
 
-    pub fn id(&self) -> PermitId {
+    pub fn id(&self) -> ConnectionId {
         self.id
     }
 
@@ -251,11 +267,11 @@ impl ConnectionPermit {
     pub fn dummy() -> Self {
         use std::net::Ipv4Addr;
 
-        let info = ConnectionInfo {
+        let key = ConnectionKey {
             addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
             dir: ConnectionDirection::Incoming,
         };
-        let id = 0;
+        let id = ConnectionId::next();
         let peer = Peer {
             id,
             state: PeerState::Known,
@@ -265,8 +281,8 @@ impl ConnectionPermit {
         };
 
         Self {
-            connections: Arc::new(BlockingMutex::new([(info, peer)].into_iter().collect())),
-            info,
+            connections: Arc::new(BlockingMutex::new([(key, peer)].into())),
+            key,
             id,
             on_deduplicator_change: uninitialized_watch::channel().0,
         }
@@ -276,13 +292,16 @@ impl ConnectionPermit {
     where
         F: FnOnce(&Peer) -> R,
     {
-        self.connections.lock().unwrap().get(&self.info).map(f)
+        self.connections.lock().unwrap().get(&self.key).map(f)
     }
 }
 
 impl fmt::Debug for ConnectionPermit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ConnectionPermit(id:{}, {:?})", self.id, self.info)
+        f.debug_struct("ConnectionPermit")
+            .field("key", &self.key)
+            .field("id", &self.id)
+            .finish_non_exhaustive()
     }
 }
 
@@ -292,7 +311,7 @@ impl Drop for ConnectionPermit {
             return;
         };
 
-        let Entry::Occupied(entry) = connections.entry(self.info) else {
+        let Entry::Occupied(entry) = connections.entry(self.key) else {
             return;
         };
 
@@ -310,7 +329,7 @@ impl Drop for ConnectionPermit {
 pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 
 impl ConnectionPermitHalf {
-    pub fn id(&self) -> PermitId {
+    pub fn id(&self) -> ConnectionId {
         self.0.id
     }
 
@@ -326,7 +345,7 @@ impl ConnectionPermitHalf {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub(super) struct ConnectionInfo {
+struct ConnectionKey {
     pub addr: PeerAddr,
     pub dir: ConnectionDirection,
 }

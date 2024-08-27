@@ -1,4 +1,8 @@
-use super::{connection::ConnectionDirection, peer_addr::PeerAddr, PeerSource, PublicRuntimeId};
+use super::{
+    connection::{ConnectionDirection, ConnectionId},
+    peer_addr::PeerAddr,
+    PeerSource, PublicRuntimeId,
+};
 use crate::crypto::sign::PublicKey;
 use state_monitor::{MonitoredValue, StateMonitor};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,7 +13,7 @@ pub(super) struct ConnectionMonitor {
     span: Span,
     _source: MonitoredValue<PeerSource>,
     state: MonitoredValue<State>,
-    permit_id: MonitoredValue<Option<u64>>,
+    connection_id: MonitoredValue<Option<ConnectionId>>,
     runtime_id: MonitoredValue<Option<PublicKey>>,
 }
 
@@ -37,14 +41,14 @@ impl ConnectionMonitor {
 
         let source = node.make_value("source", source);
         let state = node.make_value("state", State::Idle);
-        let permit_id = node.make_value("permit_id", None);
+        let connection_id = node.make_value("connection_id", None);
         let runtime_id = node.make_value("runtime_id", None);
 
         Self {
             span,
             _source: source,
             state,
-            permit_id,
+            connection_id,
             runtime_id,
         }
     }
@@ -57,9 +61,9 @@ impl ConnectionMonitor {
         *self.state.get() = State::AwaitingPermit;
     }
 
-    pub fn mark_as_connecting(&self, permit_id: u64) {
+    pub fn mark_as_connecting(&self, connection_id: ConnectionId) {
         *self.state.get() = State::Connecting;
-        *self.permit_id.get() = Some(permit_id);
+        *self.connection_id.get() = Some(connection_id);
     }
 
     pub fn mark_as_handshaking(&self) {

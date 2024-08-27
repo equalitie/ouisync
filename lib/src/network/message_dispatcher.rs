@@ -1,7 +1,7 @@
 //! Utilities for sending and receiving messages across the network.
 
 use super::{
-    connection::{ConnectionPermit, ConnectionPermitHalf, PermitId},
+    connection::{ConnectionId, ConnectionPermit, ConnectionPermitHalf},
     message::{Message, MessageChannelId},
     message_io::{MessageSink, MessageStream},
     raw,
@@ -108,8 +108,8 @@ impl MessageDispatcher {
 pub(super) struct ContentStream {
     channel: MessageChannelId,
     command_tx: mpsc::UnboundedSender<Command>,
-    stream_rx: mpsc::Receiver<(PermitId, Vec<u8>)>,
-    last_transport_id: Option<PermitId>,
+    stream_rx: mpsc::Receiver<(ConnectionId, Vec<u8>)>,
+    last_transport_id: Option<ConnectionId>,
     parked_message: Option<Vec<u8>>,
 }
 
@@ -120,22 +120,22 @@ impl ContentStream {
             return Ok(content);
         }
 
-        let (permit_id, content) = self
+        let (connection_id, content) = self
             .stream_rx
             .recv()
             .await
             .ok_or(ContentStreamError::ChannelClosed)?;
 
         if let Some(last_transport_id) = self.last_transport_id {
-            if last_transport_id == permit_id {
+            if last_transport_id == connection_id {
                 Ok(content)
             } else {
-                self.last_transport_id = Some(permit_id);
+                self.last_transport_id = Some(connection_id);
                 self.parked_message = Some(content);
                 Err(ContentStreamError::TransportChanged)
             }
         } else {
-            self.last_transport_id = Some(permit_id);
+            self.last_transport_id = Some(connection_id);
             Ok(content)
         }
     }
@@ -155,7 +155,7 @@ impl Drop for ContentStream {
     }
 }
 
-#[derive(Debug)]
+#[derive(Eq, PartialEq, Debug)]
 pub(super) enum ContentStreamError {
     ChannelClosed,
     TransportChanged,
@@ -247,7 +247,7 @@ impl ConnectionStream {
 }
 
 impl Stream for ConnectionStream {
-    type Item = (PermitId, Message);
+    type Item = (ConnectionId, Message);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Check if our sink was closed.
@@ -416,7 +416,7 @@ impl Worker {
 enum Command {
     Open {
         channel: MessageChannelId,
-        stream_tx: mpsc::Sender<(PermitId, Vec<u8>)>,
+        stream_tx: mpsc::Sender<(ConnectionId, Vec<u8>)>,
     },
     Close {
         channel: MessageChannelId,
@@ -470,8 +470,8 @@ impl SendState {
 
 struct RecvState {
     streams: SelectAll<ConnectionStream>,
-    channels: HashMap<MessageChannelId, mpsc::Sender<(PermitId, Vec<u8>)>>,
-    message: Option<(MessageChannelId, PermitId, Vec<u8>)>,
+    channels: HashMap<MessageChannelId, mpsc::Sender<(ConnectionId, Vec<u8>)>>,
+    message: Option<(MessageChannelId, ConnectionId, Vec<u8>)>,
 }
 
 impl RecvState {
@@ -479,10 +479,12 @@ impl RecvState {
     // This function never returns but it's safe to cancel.
     async fn run(&mut self) {
         loop {
-            let (channel, permit_id, content) = match self.message.take() {
+            let (channel, connection_id, content) = match self.message.take() {
                 Some(message) => message,
                 None => match self.streams.next().await {
-                    Some((permit_id, message)) => (message.channel, permit_id, message.content),
+                    Some((connection_id, message)) => {
+                        (message.channel, connection_id, message.content)
+                    }
                     None => break,
                 },
             };
@@ -494,16 +496,16 @@ impl RecvState {
             // Cancel safety: Remember the message while we are awaiting the send permit, so that if
             // this function is cancelled here we can resume sending of the message on the next
             // invocation.
-            self.message = Some((channel, permit_id, content));
+            self.message = Some((channel, connection_id, content));
 
             let Ok(send_permit) = tx.reserve().await else {
                 continue;
             };
 
             // unwrap is ok because `self.message` is `Some` here.
-            let (_, permit_id, content) = self.message.take().unwrap();
+            let (_, connection_id, content) = self.message.take().unwrap();
 
-            send_permit.send((permit_id, content));
+            send_permit.send((connection_id, content));
         }
 
         future::pending().await
@@ -692,6 +694,12 @@ mod tests {
         }
 
         let recv_content0 = server_stream.recv().await.unwrap();
+
+        assert_eq!(
+            server_stream.recv().await,
+            Err(ContentStreamError::TransportChanged)
+        );
+
         let recv_content1 = server_stream.recv().await.unwrap();
 
         // The messages may be received in any order
