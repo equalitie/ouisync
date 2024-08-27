@@ -5,6 +5,7 @@ use super::{
 };
 use crate::{
     block_tracker::{BlockOffer, BlockPromise},
+    collections::HashMap,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     protocol::{Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, UntrustedProof},
     repository::RepositoryMonitor,
@@ -12,7 +13,7 @@ use crate::{
 };
 use deadlock::BlockingMutex;
 use scoped_task::ScopedJoinHandle;
-use std::{future, sync::Arc, task::ready};
+use std::{collections::hash_map::Entry, future, sync::Arc, task::ready};
 use std::{task::Poll, time::Instant};
 use tokio::sync::Notify;
 
@@ -34,40 +35,6 @@ pub(super) enum PreparedResponse {
     RootNodeError(PublicKey, DebugResponse),
     ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
     BlockError(BlockId, DebugResponse),
-}
-
-impl PreparedResponse {
-    fn to_key(&self) -> Key {
-        match self {
-            Self::RootNode(proof, ..) => Key::RootNode(proof.writer_id),
-            Self::InnerNodes(nodes, disambiguator, _) => {
-                Key::ChildNodes(nodes.hash(), *disambiguator)
-            }
-            Self::LeafNodes(nodes, disambiguator, _) => {
-                Key::ChildNodes(nodes.hash(), *disambiguator)
-            }
-            Self::BlockOffer(block_id, _) => Key::BlockOffer(*block_id),
-            Self::Block(block, _, _) => Key::Block(block.id),
-            Self::RootNodeError(writer_id, _) => Key::RootNode(*writer_id),
-            Self::ChildNodesError(hash, disambiguator, _) => Key::ChildNodes(*hash, *disambiguator),
-            Self::BlockError(block_id, _) => Key::Block(*block_id),
-        }
-    }
-
-    fn set_block_promise(&mut self, new_block_promise: BlockPromise) {
-        match self {
-            Self::Block(_, block_promise, _) => {
-                *block_promise = Some(new_block_promise);
-            }
-            Self::RootNode(..)
-            | Self::InnerNodes(..)
-            | Self::LeafNodes(..)
-            | Self::BlockOffer(..)
-            | Self::BlockError(..)
-            | Self::RootNodeError(..)
-            | Self::ChildNodesError(..) => (),
-        }
-    }
 }
 
 impl From<Response> for PreparedResponse {
@@ -109,19 +76,29 @@ pub(super) enum PersistableResponse {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-pub(crate) enum Key {
+pub(crate) enum IndexKey {
     RootNode(PublicKey),
     ChildNodes(Hash, ResponseDisambiguator),
-    BlockOffer(BlockId),
-    Block(BlockId),
 }
 
+/// Tracks sent requests whose responses have not been received yet.
+///
+/// This has multiple purposes:
+///
+/// - To prevent sending duplicate requests.
+/// - To know how many requests are in flight which in turn is used to indicate activity.
+/// - To track round trip time / latency.
+/// - To timeout block requests so that we can send them to other peers instead.
+///
+/// Note that only block requests are currently timeouted. This is because we currently send block
+/// request to only one peer at a time. So if this peer was faulty, without the timeout it could
+/// prevent us from receiving that block indefinitely. Index requests, on the other hand, are
+/// currently sent to all peers so even with some of the peers being faulty, the responses from the
+/// non-faulty ones should eventually be received.
 pub(super) struct PendingRequests {
     monitor: Arc<RepositoryMonitor>,
-    map: Arc<BlockingMutex<DelayMap<Key, RequestData>>>,
-    // Notify when item is inserted into previously empty map. This restarts the expiration tracker
-    // task.
-    add_notify: Arc<Notify>,
+    index: PendingIndexRequests,
+    block: Arc<PendingBlockRequests>,
     // This is to ensure the `run_expiration_tracker` task is destroyed with PendingRequests (as
     // opposed to the task being destroyed "sometime after"). This is important because the task
     // holds an Arc to the RepositoryMonitor which must be destroyed prior to reimporting its
@@ -131,77 +108,100 @@ pub(super) struct PendingRequests {
 
 impl PendingRequests {
     pub fn new(monitor: Arc<RepositoryMonitor>) -> Self {
-        let map = Arc::new(BlockingMutex::new(DelayMap::default()));
-        let add_notify = Arc::new(Notify::new());
+        let index = PendingIndexRequests::default();
+        let block = Arc::new(PendingBlockRequests::default());
 
         Self {
             monitor: monitor.clone(),
-            map: map.clone(),
-            add_notify: add_notify.clone(),
-            _expiration_tracker_task: scoped_task::spawn(run_expiration_tracker(
-                monitor, map, add_notify,
-            )),
+            index,
+            block: block.clone(),
+            _expiration_tracker_task: scoped_task::spawn(run_expiration_tracker(monitor, block)),
         }
     }
 
     pub fn insert(&self, pending_request: PendingRequest) -> Option<Request> {
-        let (key, block_promise, request) = match pending_request {
-            PendingRequest::RootNode(public_key, debug) => (
-                Key::RootNode(public_key),
-                None,
-                Request::RootNode(public_key, debug.send()),
-            ),
-            PendingRequest::ChildNodes(hash, disambiguator, debug) => (
-                Key::ChildNodes(hash, disambiguator),
-                None,
-                Request::ChildNodes(hash, disambiguator, debug.send()),
-            ),
-            PendingRequest::Block(offer, debug) => {
-                let promise = offer.accept()?;
-                let block_id = *promise.block_id();
-
-                (
-                    Key::Block(block_id),
-                    Some(promise),
-                    Request::Block(block_id, debug.send()),
-                )
+        let request = match pending_request {
+            PendingRequest::RootNode(writer_id, debug) => self
+                .index
+                .try_insert(IndexKey::RootNode(writer_id))
+                .then(|| Request::RootNode(writer_id, debug.send()))?,
+            PendingRequest::ChildNodes(hash, disambiguator, debug) => self
+                .index
+                .try_insert(IndexKey::ChildNodes(hash, disambiguator))
+                .then(|| Request::ChildNodes(hash, disambiguator, debug.send()))?,
+            PendingRequest::Block(block_offer, debug) => {
+                let block_promise = block_offer.accept()?;
+                let block_id = *block_promise.block_id();
+                self.block
+                    .try_insert(block_promise)
+                    .then(|| Request::Block(block_id, debug.send()))?
             }
         };
 
-        let mut map = self.map.lock().unwrap();
-
-        map.try_insert(key)?.insert(
-            RequestData {
-                timestamp: Instant::now(),
-                block_promise,
-            },
-            REQUEST_TIMEOUT,
-        );
-
-        if map.len() == 1 {
-            self.add_notify.notify_waiters();
+        match request {
+            Request::RootNode(..) | Request::ChildNodes(..) => {
+                self.monitor.index_requests_sent.increment(1);
+                self.monitor.index_requests_inflight.increment(1.0);
+            }
+            Request::Block(..) => {
+                self.monitor.block_requests_sent.increment(1);
+                self.monitor.block_requests_inflight.increment(1.0);
+            }
         }
-
-        request_added(&self.monitor, &key);
 
         Some(request)
     }
 
     pub fn remove(&self, response: Response) -> PreparedResponse {
         let mut response = PreparedResponse::from(response);
-        let key = response.to_key();
 
-        let mut map = self.map.lock().unwrap();
+        enum ResponseKind {
+            Index,
+            Block,
+        }
 
-        if let Some(request_data) = map.remove(&key) {
-            request_removed(&self.monitor, &key);
+        let status = match &mut response {
+            PreparedResponse::RootNode(proof, ..) => self
+                .index
+                .remove(&IndexKey::RootNode(proof.writer_id))
+                .map(|timestamp| (timestamp, ResponseKind::Index)),
+            PreparedResponse::RootNodeError(writer_id, ..) => self
+                .index
+                .remove(&IndexKey::RootNode(*writer_id))
+                .map(|timestamp| (timestamp, ResponseKind::Index)),
+            PreparedResponse::InnerNodes(nodes, disambiguator, ..) => self
+                .index
+                .remove(&IndexKey::ChildNodes(nodes.hash(), *disambiguator))
+                .map(|timestamp| (timestamp, ResponseKind::Index)),
+            PreparedResponse::LeafNodes(nodes, disambiguator, ..) => self
+                .index
+                .remove(&IndexKey::ChildNodes(nodes.hash(), *disambiguator))
+                .map(|timestamp| (timestamp, ResponseKind::Index)),
+            PreparedResponse::ChildNodesError(hash, disambiguator, ..) => self
+                .index
+                .remove(&IndexKey::ChildNodes(*hash, *disambiguator))
+                .map(|timestamp| (timestamp, ResponseKind::Index)),
+            PreparedResponse::Block(block, block_promise, ..) => {
+                self.block
+                    .remove(&block.id)
+                    .map(|(timestamp, new_block_promise)| {
+                        *block_promise = Some(new_block_promise);
+                        (timestamp, ResponseKind::Block)
+                    })
+            }
+            PreparedResponse::BlockError(block_id, ..) => self
+                .block
+                .remove(block_id)
+                .map(|(timestamp, _)| (timestamp, ResponseKind::Block)),
+            PreparedResponse::BlockOffer(..) => None,
+        };
 
-            self.monitor
-                .request_latency
-                .record(request_data.timestamp.elapsed());
+        if let Some((timestamp, kind)) = status {
+            self.monitor.request_latency.record(timestamp.elapsed());
 
-            if let Some(block_promise) = request_data.block_promise {
-                response.set_block_promise(block_promise);
+            match kind {
+                ResponseKind::Index => self.monitor.index_requests_inflight.decrement(1.0),
+                ResponseKind::Block => self.monitor.block_requests_inflight.decrement(1.0),
             }
         }
 
@@ -209,43 +209,83 @@ impl PendingRequests {
     }
 }
 
-fn request_added(monitor: &RepositoryMonitor, key: &Key) {
-    match key {
-        Key::RootNode(_) | Key::ChildNodes { .. } => {
-            monitor.index_requests_sent.increment(1);
-            monitor.index_requests_inflight.increment(1.0);
-        }
-        Key::Block(_) => {
-            monitor.block_requests_sent.increment(1);
-            monitor.block_requests_inflight.increment(1.0);
-        }
-        Key::BlockOffer(_) => (),
+impl Drop for PendingRequests {
+    fn drop(&mut self) {
+        self.monitor
+            .index_requests_inflight
+            .decrement(self.index.map.lock().unwrap().len() as f64);
+        self.monitor
+            .block_requests_inflight
+            .decrement(self.block.map.lock().unwrap().len() as f64);
     }
 }
 
-fn request_removed(monitor: &RepositoryMonitor, key: &Key) {
-    match key {
-        Key::RootNode(_) | Key::ChildNodes { .. } => monitor.index_requests_inflight.decrement(1.0),
-        Key::Block(_) => monitor.block_requests_inflight.decrement(1.0),
-        Key::BlockOffer(_) => (),
+#[derive(Default)]
+struct PendingIndexRequests {
+    map: BlockingMutex<HashMap<IndexKey, Instant>>,
+}
+
+impl PendingIndexRequests {
+    fn try_insert(&self, key: IndexKey) -> bool {
+        match self.map.lock().unwrap().entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(Instant::now());
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
+    }
+
+    fn remove(&self, key: &IndexKey) -> Option<Instant> {
+        self.map.lock().unwrap().remove(key)
+    }
+}
+
+#[derive(Default)]
+struct PendingBlockRequests {
+    map: BlockingMutex<DelayMap<BlockId, (Instant, BlockPromise)>>,
+    // Notify when item is inserted into previously empty map. This restarts the expiration tracker
+    // task.
+    notify: Notify,
+}
+
+impl PendingBlockRequests {
+    fn try_insert(&self, block_promise: BlockPromise) -> bool {
+        let mut map = self.map.lock().unwrap();
+
+        if let Some(entry) = map.try_insert(*block_promise.block_id()) {
+            entry.insert((Instant::now(), block_promise), REQUEST_TIMEOUT);
+
+            if map.len() == 1 {
+                drop(map);
+                self.notify.notify_waiters();
+            }
+
+            true
+        } else {
+            false
+        }
+    }
+
+    fn remove(&self, block_id: &BlockId) -> Option<(Instant, BlockPromise)> {
+        self.map.lock().unwrap().remove(block_id)
     }
 }
 
 async fn run_expiration_tracker(
     monitor: Arc<RepositoryMonitor>,
-    map: Arc<BlockingMutex<DelayMap<Key, RequestData>>>,
-    add_notify: Arc<Notify>,
+    pending: Arc<PendingBlockRequests>,
 ) {
     // NOTE: The `expired` fn does not always complete when the last item is removed from the
     // DelayMap. There is an issue in the DelayQueue used by DelayMap, reported here:
     // https://github.com/tokio-rs/tokio/issues/6751
 
     loop {
-        let notified = add_notify.notified();
+        let notified = pending.notify.notified();
 
-        while let Some((key, _)) = expired(&map).await {
+        while expired(&pending.map).await {
             monitor.request_timeouts.increment(1);
-            request_removed(&monitor, &key);
+            monitor.block_requests_inflight.decrement(1.0);
         }
 
         // Last item removed from the map. Wait until new item added.
@@ -255,19 +295,9 @@ async fn run_expiration_tracker(
 
 // Wait for the next expired request. This does not block the map so it can be inserted / removed
 // from while this is being awaited.
-async fn expired(map: &BlockingMutex<DelayMap<Key, RequestData>>) -> Option<(Key, RequestData)> {
-    future::poll_fn(|cx| Poll::Ready(ready!(map.lock().unwrap().poll_expired(cx)))).await
-}
-
-impl Drop for PendingRequests {
-    fn drop(&mut self) {
-        for (key, ..) in self.map.lock().unwrap().drain() {
-            request_removed(&self.monitor, &key);
-        }
-    }
-}
-
-struct RequestData {
-    timestamp: Instant,
-    block_promise: Option<BlockPromise>,
+// Returns `true` if a request expired and `false` if there are no more pending requests.
+async fn expired(map: &BlockingMutex<DelayMap<BlockId, (Instant, BlockPromise)>>) -> bool {
+    future::poll_fn(|cx| Poll::Ready(ready!(map.lock().unwrap().poll_expired(cx))))
+        .await
+        .is_some()
 }
