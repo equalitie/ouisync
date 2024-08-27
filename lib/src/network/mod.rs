@@ -28,6 +28,7 @@ mod stun;
 mod stun_server_list;
 #[cfg(test)]
 mod tests;
+mod throughput;
 mod traffic_tracker;
 mod upnp;
 
@@ -39,6 +40,7 @@ pub use self::{
     peer_source::PeerSource,
     peer_state::PeerState,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
+    throughput::Throughput,
     traffic_tracker::TrafficStats,
 };
 pub use net::stun::NatBehavior;

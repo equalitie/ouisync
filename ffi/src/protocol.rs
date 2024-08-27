@@ -604,7 +604,7 @@ mod tests {
 
     use super::*;
     use ouisync_lib::{
-        AccessSecrets, Credentials, PeerInfo, PeerSource, PeerState, SecretRuntimeId,
+        AccessSecrets, Credentials, PeerInfo, PeerSource, PeerState, SecretRuntimeId, Throughput,
     };
 
     #[test]
@@ -657,7 +657,8 @@ mod tests {
                     addr: PeerAddr::Quic(([192, 168, 1, 204], 65535).into()),
                     source: PeerSource::LocalDiscovery,
                     state: PeerState::Connecting,
-                    stats: TrafficStats::default(),
+                    traffic_stats: TrafficStats::default(),
+                    throughput: Throughput::default(),
                 },
                 PeerInfo {
                     addr: PeerAddr::Quic(
@@ -668,7 +669,8 @@ mod tests {
                         id: SecretRuntimeId::random().public(),
                         since: SystemTime::UNIX_EPOCH,
                     },
-                    stats: TrafficStats::default(),
+                    traffic_stats: TrafficStats::default(),
+                    throughput: Throughput::default(),
                 },
             ]),
             Response::PeerAddrs(vec![PeerAddr::Tcp(([192, 168, 1, 234], 45678).into())]),

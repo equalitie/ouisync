@@ -238,7 +238,7 @@ impl ConnectionStream {
         let permit_released = permit.released();
 
         Self {
-            reader: MessageStream::new(TrackingWrapper::new(reader, permit.tracker())),
+            reader: MessageStream::new(TrackingWrapper::new(reader, permit.traffic_tracker())),
             permit,
             permit_released,
             connection_count,
@@ -284,7 +284,7 @@ impl ConnectionSink {
         let permit_released = permit.released();
 
         Self {
-            writer: MessageSink::new(TrackingWrapper::new(writer, permit.tracker())),
+            writer: MessageSink::new(TrackingWrapper::new(writer, permit.traffic_tracker())),
             _permit: permit,
             permit_released,
         }

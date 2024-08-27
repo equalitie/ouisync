@@ -1,6 +1,6 @@
 use super::{
     peer_addr::PeerAddr, peer_info::PeerInfo, peer_source::PeerSource, peer_state::PeerState,
-    runtime_id::PublicRuntimeId, traffic_tracker::TrafficTracker,
+    runtime_id::PublicRuntimeId, throughput::ThroughputTracker, traffic_tracker::TrafficTracker,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
@@ -9,7 +9,10 @@ use crate::{
 use serde::Serialize;
 use std::{
     fmt,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::SystemTime,
 };
 use tokio::sync::watch;
@@ -45,7 +48,8 @@ impl ConnectionSet {
                         id,
                         state: PeerState::Known,
                         source,
-                        tracker: TrafficTracker::new(),
+                        traffic_tracker: TrafficTracker::new(),
+                        throughput_tracker: Mutex::new(ThroughputTracker::new()),
                         on_release: DropAwaitable::new(),
                     });
 
@@ -91,12 +95,7 @@ impl ConnectionSet {
                     dir: ConnectionDirection::Outgoing,
                 })
             })
-            .map(|peer| PeerInfo {
-                addr,
-                source: peer.source,
-                state: peer.state,
-                stats: peer.tracker.get(),
-            })
+            .map(|data| data.peer_info(addr))
     }
 
     pub fn subscribe(&self) -> ConnectionSetSubscription {
@@ -148,12 +147,7 @@ impl PeerInfoCollector {
         self.0
             .borrow()
             .iter()
-            .map(|(key, peer)| PeerInfo {
-                addr: key.addr,
-                source: peer.source,
-                state: peer.state,
-                stats: peer.tracker.get(),
-            })
+            .map(|(key, data)| data.peer_info(key.addr))
             .collect()
     }
 }
@@ -265,7 +259,8 @@ impl ConnectionPermit {
             id,
             state: PeerState::Known,
             source: PeerSource::UserProvided,
-            tracker: TrafficTracker::new(),
+            traffic_tracker: TrafficTracker::new(),
+            throughput_tracker: Mutex::new(ThroughputTracker::new()),
             on_release: DropAwaitable::new(),
         };
 
@@ -319,8 +314,10 @@ impl ConnectionPermitHalf {
         self.0.id
     }
 
-    pub fn tracker(&self) -> TrafficTracker {
-        self.0.with(|data| data.tracker.clone()).unwrap_or_default()
+    pub fn traffic_tracker(&self) -> TrafficTracker {
+        self.0
+            .with(|data| data.traffic_tracker.clone())
+            .unwrap_or_default()
     }
 
     pub fn released(&self) -> AwaitDrop {
@@ -338,6 +335,27 @@ struct Data {
     id: ConnectionId,
     state: PeerState,
     source: PeerSource,
-    tracker: TrafficTracker,
+    traffic_tracker: TrafficTracker,
+    throughput_tracker: Mutex<ThroughputTracker>,
     on_release: DropAwaitable,
+}
+
+impl Data {
+    fn peer_info(&self, addr: PeerAddr) -> PeerInfo {
+        let traffic_stats = self.traffic_tracker.get();
+
+        let throughput = self
+            .throughput_tracker
+            .lock()
+            .unwrap()
+            .sample(traffic_stats.send, traffic_stats.recv);
+
+        PeerInfo {
+            addr,
+            source: self.source,
+            state: self.state,
+            traffic_stats,
+            throughput,
+        }
+    }
 }

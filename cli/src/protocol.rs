@@ -581,9 +581,9 @@ impl fmt::Display for PeerInfoDisplay<'_> {
                 " {} {} {} {} {}",
                 id.as_public_key(),
                 format_time(*since),
-                self.0.stats.send,
-                self.0.stats.recv,
-                format_time(self.0.stats.recv_at),
+                self.0.traffic_stats.send,
+                self.0.traffic_stats.recv,
+                format_time(self.0.traffic_stats.recv_at),
             )?;
         }
 
@@ -598,7 +598,7 @@ fn format_time(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ouisync_lib::{PeerSource, PeerState, SecretRuntimeId, TrafficStats};
+    use ouisync_lib::{PeerSource, PeerState, SecretRuntimeId, Throughput, TrafficStats};
     use rand::{rngs::StdRng, SeedableRng};
     use std::net::Ipv4Addr;
 
@@ -614,7 +614,8 @@ mod tests {
                 addr: PeerAddr::Quic(addr),
                 source: PeerSource::Dht,
                 state: PeerState::Connecting,
-                stats: TrafficStats::default(),
+                traffic_stats: TrafficStats::default(),
+                throughput: Throughput::default(),
             })
             .to_string(),
             "127.0.0.1 1248 quic dht connecting"
@@ -630,13 +631,14 @@ mod tests {
                         .unwrap()
                         .into(),
                 },
-                stats: TrafficStats {
+                traffic_stats: TrafficStats {
                     send: 1024,
                     recv: 4096,
                     recv_at: DateTime::parse_from_rfc3339("2024-06-12T14:00:00Z")
                         .unwrap()
                         .into(),
                 },
+                throughput: Throughput::default(),
             })
             .to_string(),
             "127.0.0.1 \
