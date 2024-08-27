@@ -699,3 +699,38 @@ pub(crate) mod delay_map {
         delay_key: Key,
     }
 }
+
+/// Extensions for `tokio::sync::watch::Sender`.
+pub(crate) trait WatchSenderExt<T> {
+    // Like `send_modify` but allows returning a value from the closure.
+    fn send_modify_return<R>(&self, modify: impl FnOnce(&mut T) -> R) -> R;
+
+    // Like `send_if_modified` but allows returning a value from the closure.
+    fn send_if_modified_return<R>(&self, modify: impl FnOnce(&mut T) -> (bool, R)) -> R;
+}
+
+impl<T> WatchSenderExt<T> for watch::Sender<T> {
+    fn send_modify_return<R>(&self, modify: impl FnOnce(&mut T) -> R) -> R {
+        let mut output_slot = None;
+
+        self.send_modify(|value| {
+            output_slot = Some(modify(value));
+        });
+
+        // unwrap is OK because output_slot is set to `Some` in the `send_modify` closure.
+        output_slot.unwrap()
+    }
+
+    fn send_if_modified_return<R>(&self, modify: impl FnOnce(&mut T) -> (bool, R)) -> R {
+        let mut output_slot = None;
+
+        self.send_if_modified(|value| {
+            let (modified, output) = modify(value);
+            output_slot = Some(output);
+            modified
+        });
+
+        // unwrap is OK because output_slot is set to `Some` in the `send_if_modified` closure.
+        output_slot.unwrap()
+    }
+}

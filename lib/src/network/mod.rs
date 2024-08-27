@@ -32,7 +32,7 @@ mod traffic_tracker;
 mod upnp;
 
 pub use self::{
-    connection::PeerInfoCollector,
+    connection::{ConnectionSetSubscription, PeerInfoCollector},
     dht_discovery::{DhtContactsStoreTrait, DHT_ROUTERS},
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
@@ -315,8 +315,8 @@ impl Network {
     }
 
     /// Subscribe change in connected peers events.
-    pub fn on_peer_set_change(&self) -> uninitialized_watch::Receiver<()> {
-        self.inner.connection_deduplicator.on_change()
+    pub fn on_peer_set_change(&self) -> ConnectionSetSubscription {
+        self.inner.connection_deduplicator.subscribe()
     }
 
     /// Register a local repository into the network. This links the repository with all matching

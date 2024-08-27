@@ -9,7 +9,10 @@ use super::{
     seen_peers::{SeenPeer, SeenPeers},
     PeerSource,
 };
-use crate::{collections::HashSet, sync::AwaitDrop};
+use crate::{
+    collections::HashSet,
+    sync::{AwaitDrop, WatchSenderExt},
+};
 use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
@@ -421,24 +424,6 @@ struct RepoState {
 struct PeerState {
     // Set of addresses of this peer.
     addrs: HashSet<PeerAddr>,
-}
-
-trait WatchSenderExt<T> {
-    // Like `send_modify` but allows returning a value from the closure.
-    fn send_modify_return<R>(&self, modify: impl FnOnce(&mut T) -> R) -> R;
-}
-
-impl<T> WatchSenderExt<T> for watch::Sender<T> {
-    fn send_modify_return<R>(&self, modify: impl FnOnce(&mut T) -> R) -> R {
-        let mut output = None;
-
-        self.send_modify(|value| {
-            output = Some(modify(value));
-        });
-
-        // unwrap is OK because output is set to `Some` in the `send_modify` closure.
-        output.unwrap()
-    }
 }
 
 #[cfg(test)]
