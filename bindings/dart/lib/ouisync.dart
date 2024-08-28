@@ -153,9 +153,9 @@ class Session {
   Future<String?> get natBehavior =>
       _client.invoke<String?>('network_nat_behavior');
 
-  Future<TrafficStats> get trafficStats => _client
-      .invoke<List<Object?>>('network_traffic_stats')
-      .then((list) => TrafficStats.decode(list));
+  Future<NetworkStats> get networkStats => _client
+      .invoke<List<Object?>>('network_stats')
+      .then((list) => NetworkStats.decode(list));
 
   Future<List<PeerInfo>> get peers => _client
       .invoke<List<Object?>>('network_known_peers')
@@ -244,16 +244,14 @@ class PeerInfo {
   final PeerSource source;
   final PeerStateKind state;
   final String? runtimeId;
-  final int sendThroughput;
-  final int recvThroughput;
+  final NetworkStats stats;
 
   PeerInfo({
     required this.addr,
     required this.source,
     required this.state,
     this.runtimeId,
-    this.sendThroughput = 0,
-    this.recvThroughput = 0,
+    this.stats = const NetworkStats(),
   });
 
   static PeerInfo decode(Object? raw) {
@@ -262,7 +260,6 @@ class PeerInfo {
     final addr = list[0] as String;
     final source = PeerSource.decode(list[1] as int);
     final rawState = list[2];
-    final stats = list[3] as List<Object?>;
 
     PeerStateKind state;
     String? runtimeId;
@@ -276,18 +273,14 @@ class PeerInfo {
       throw Exception('invalid peer info state');
     }
 
-    // Note `stats[0]` and `stats[1]` are the total bytes sent and received respectively, which we
-    // currently don't use.
-    final sendThroughput = stats[2] as int;
-    final recvThroughput = stats[3] as int;
+    final stats = NetworkStats.decode(list[3] as List<Object?>);
 
     return PeerInfo(
       addr: addr,
       source: source,
       state: state,
       runtimeId: runtimeId,
-      sendThroughput: sendThroughput,
-      recvThroughput: recvThroughput,
+      stats: stats,
     );
   }
 
@@ -299,21 +292,29 @@ class PeerInfo {
       '$runtimeType(addr: $addr, source: $source, state: $state, runtimeId: $runtimeId)';
 }
 
-class TrafficStats {
-  final int send;
-  final int recv;
+class NetworkStats {
+  final int bytesTx;
+  final int bytesRx;
+  final int throughputTx;
+  final int throughputRx;
 
-  const TrafficStats({required this.send, required this.recv});
+  const NetworkStats({
+    this.bytesTx = 0,
+    this.bytesRx = 0,
+    this.throughputTx = 0,
+    this.throughputRx = 0,
+  });
 
-  static TrafficStats decode(List<Object?> raw) {
-    final send = raw[0] as int;
-    final recv = raw[1] as int;
-
-    return TrafficStats(send: send, recv: recv);
-  }
+  static NetworkStats decode(List<Object?> raw) => NetworkStats(
+        bytesTx: raw[0] as int,
+        bytesRx: raw[1] as int,
+        throughputTx: raw[2] as int,
+        throughputRx: raw[3] as int,
+      );
 
   @override
-  String toString() => '$runtimeType(send: $send, recv: $recv)';
+  String toString() =>
+      '$runtimeType(bytesTx: $bytesTx, bytesRx: $bytesRx, throughputTx: $throughputTx, throughputRx: $throughputRx)';
 }
 
 /// A handle to a Ouisync repository.
