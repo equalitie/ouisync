@@ -98,29 +98,27 @@ impl Throughput {
     ///
     /// Note: For best results, call this in regular intervals (e.g., once per second).
     pub fn sample(&mut self, bytes: u64, timestamp: Instant) -> u64 {
-        let (prev_throughput, next_throughput) = if let Some(prev) = self.prev.take() {
-            let time = timestamp - prev.timestamp;
-            let secs = time.as_secs();
+        let throughput = if let Some(prev) = self.prev.take() {
+            let secs = timestamp
+                .saturating_duration_since(prev.timestamp)
+                .as_secs();
 
-            let next_throughput = if secs == 0 {
+            if secs == 0 {
                 prev.throughput
             } else {
                 bytes.saturating_sub(prev.bytes) / secs
-            };
-
-            (prev.throughput, next_throughput)
+            }
         } else {
-            (0, 0)
+            0
         };
 
         self.prev = Some(ThroughputSample {
             timestamp,
             bytes,
-            throughput: next_throughput,
+            throughput,
         });
 
-        // Rolling average using window of two samples.
-        (prev_throughput + next_throughput) / 2
+        throughput
     }
 }
 
@@ -234,6 +232,56 @@ impl Instrumented<raw::Stream> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
-    // ...
+    #[test]
+    fn throughput_sanity_check() {
+        let mut throughput = Throughput::default();
+        let start = Instant::now();
+
+        assert_eq!(throughput.sample(1024, start), 0);
+        assert_eq!(throughput.sample(1024, start + s(1)), 0);
+        assert_eq!(throughput.sample(2 * 1024, start + s(2)), 1024);
+        assert_eq!(throughput.sample(3 * 1024, start + s(3)), 1024);
+    }
+
+    #[test]
+    fn throughput_zero_duration() {
+        let mut throughput = Throughput::default();
+        let start = Instant::now();
+
+        assert_eq!(throughput.sample(1024, start), 0);
+        assert_eq!(throughput.sample(1024, start), 0);
+        assert_eq!(throughput.sample(2048, start), 0);
+
+        assert_eq!(throughput.sample(2048, start + s(1)), 0);
+        assert_eq!(throughput.sample(3072, start + s(1)), 0);
+
+        assert_eq!(throughput.sample(4096, start + s(2)), 1024);
+        assert_eq!(throughput.sample(5120, start + s(2)), 1024);
+    }
+
+    #[test]
+    fn throughput_negative_duration() {
+        let mut throughput = Throughput::default();
+        let start = Instant::now();
+
+        assert_eq!(throughput.sample(1024, start), 0);
+        assert_eq!(throughput.sample(2048, start + s(1)), 1024);
+        assert_eq!(throughput.sample(3072, start), 1024);
+    }
+
+    #[test]
+    fn throughput_non_monotonic_bytes() {
+        let mut throughput = Throughput::default();
+        let start = Instant::now();
+
+        assert_eq!(throughput.sample(1024, start), 0);
+        assert_eq!(throughput.sample(2048, start + s(1)), 1024);
+        assert_eq!(throughput.sample(1024, start + s(2)), 0);
+    }
+
+    fn s(value: u64) -> Duration {
+        Duration::from_secs(value)
+    }
 }
