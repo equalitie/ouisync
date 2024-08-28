@@ -99,14 +99,16 @@ impl Throughput {
     /// Note: For best results, call this in regular intervals (e.g., once per second).
     pub fn sample(&mut self, bytes: u64, timestamp: Instant) -> u64 {
         let throughput = if let Some(prev) = self.prev.take() {
-            let secs = timestamp
+            let millis = timestamp
                 .saturating_duration_since(prev.timestamp)
-                .as_secs();
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX);
 
-            if secs == 0 {
+            if millis == 0 {
                 prev.throughput
             } else {
-                bytes.saturating_sub(prev.bytes) / secs
+                bytes.saturating_sub(prev.bytes) * 1000 / millis
             }
         } else {
             0
