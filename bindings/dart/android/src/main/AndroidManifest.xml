@@ -1,11 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  xmlns:tools="http://schemas.android.com/tools">
+    xmlns:tools="http://schemas.android.com/tools">
 
-  <application>
-    <provider
-      tools:replace="android:authorities"
-      android:name=".PipeProvider"
-      android:authorities="${applicationId}.pipe"
-      android:exported="true"/>
-  </application>
+    <application>
+        <provider
+            tools:replace="android:authorities"
+            android:name=".PipeProvider"
+            android:authorities="${applicationId}.pipe"
+            android:exported="true"/>
+    </application>
 </manifest>

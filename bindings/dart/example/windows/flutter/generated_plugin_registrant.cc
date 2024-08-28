@@ -6,7 +6,7 @@
 
 #include "generated_plugin_registrant.h"
 
-#include <ouisync_plugin/ouisync_plugin.h>
+#include <ouisync/ouisync_plugin.h>
 
 void RegisterPlugins(flutter::PluginRegistry* registry) {
   OuisyncPluginRegisterWithRegistrar(
