@@ -24,12 +24,11 @@ mod raw;
 mod runtime_id;
 mod seen_peers;
 mod server;
+mod stats;
 mod stun;
 mod stun_server_list;
 #[cfg(test)]
 mod tests;
-mod throughput;
-mod traffic_tracker;
 mod upnp;
 
 pub use self::{
@@ -40,8 +39,7 @@ pub use self::{
     peer_source::PeerSource,
     peer_state::PeerState,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
-    throughput::Throughput,
-    traffic_tracker::TrafficStats,
+    stats::Stats,
 };
 pub use net::stun::NatBehavior;
 
@@ -57,8 +55,8 @@ use self::{
     peer_exchange::{PexDiscovery, PexRepository},
     protocol::{Version, MAGIC, VERSION},
     seen_peers::{SeenPeer, SeenPeers},
+    stats::StatsTracker,
     stun::StunClients,
-    traffic_tracker::TrafficTracker,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -138,7 +136,6 @@ impl Network {
             main_monitor: monitor,
             connections_monitor,
             peers_monitor,
-            traffic_tracker: TrafficTracker::new(),
             span: Span::current(),
             gateway,
             this_runtime_id,
@@ -163,6 +160,7 @@ impl Network {
             tasks: Arc::downgrade(&tasks),
             highest_seen_protocol_version: BlockingMutex::new(VERSION),
             our_addresses: BlockingMutex::new(HashSet::default()),
+            stats_tracker: StatsTracker::default(),
         });
 
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
@@ -278,9 +276,9 @@ impl Network {
         self.inner.stun_clients.nat_behavior().await
     }
 
-    /// Get the network traffic stats (total bytes sent and received).
-    pub fn traffic_stats(&self) -> TrafficStats {
-        self.inner.traffic_tracker.get()
+    /// Get the network traffic stats.
+    pub fn stats(&self) -> Stats {
+        self.inner.stats_tracker.read()
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -473,7 +471,6 @@ struct Inner {
     main_monitor: StateMonitor,
     connections_monitor: StateMonitor,
     peers_monitor: StateMonitor,
-    traffic_tracker: TrafficTracker,
     span: Span,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
@@ -494,6 +491,7 @@ struct Inner {
     highest_seen_protocol_version: BlockingMutex<Version>,
     // Used to prevent repeatedly connecting to self.
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
+    stats_tracker: StatsTracker,
 }
 
 struct State {
@@ -862,7 +860,6 @@ impl Inner {
                         self.pex_discovery.new_peer(),
                         self.peers_monitor
                             .make_child(format!("{:?}", that_runtime_id.as_public_key())),
-                        self.traffic_tracker.clone(),
                     )
                 });
 

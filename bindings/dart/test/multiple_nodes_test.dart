@@ -67,7 +67,7 @@ void main() {
     final addr = (await session1.quicListenerLocalAddressV4)!;
 
     final expect = expectLater(
-      session2.onPeersChange,
+      session2.networkEvents.asyncMap((_) => session2.peers),
       emitsThrough(contains(isA<PeerInfo>()
           .having((peer) => peer.addr, 'addr', equals('quic/$addr'))
           .having(

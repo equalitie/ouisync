@@ -11,7 +11,7 @@ mod summary;
 use clap::Parser;
 use common::{actor, progress::ProgressReporter, sync_watch, Env, Proto, DEFAULT_REPO};
 use metrics::{Counter, Gauge, Recorder};
-use ouisync::{Access, AccessMode, File, Network, Repository, TrafficStats};
+use ouisync::{Access, AccessMode, File, Network, Repository, Stats};
 use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{
     fmt,
@@ -393,10 +393,12 @@ impl ThroughputMonitor {
 
     async fn run(&self, network: &Network) {
         loop {
-            let TrafficStats { send, recv, .. } = network.traffic_stats();
+            let Stats {
+                bytes_tx, bytes_rx, ..
+            } = network.stats();
 
-            self.bytes_sent.absolute(send);
-            self.bytes_received.absolute(recv);
+            self.bytes_sent.absolute(bytes_tx);
+            self.bytes_received.absolute(bytes_rx);
 
             time::sleep(Duration::from_millis(250)).await;
         }

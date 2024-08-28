@@ -157,13 +157,6 @@ class Session {
       .invoke<List<Object?>>('network_traffic_stats')
       .then((list) => TrafficStats.decode(list));
 
-  /// Gets a stream that yields lists of known peers.
-  Stream<List<PeerInfo>> get onPeersChange async* {
-    await for (final _ in networkEvents) {
-      yield await peers;
-    }
-  }
-
   Future<List<PeerInfo>> get peers => _client
       .invoke<List<Object?>>('network_known_peers')
       .then(PeerInfo.decodeAll);
@@ -251,12 +244,16 @@ class PeerInfo {
   final PeerSource source;
   final PeerStateKind state;
   final String? runtimeId;
+  final int sendThroughput;
+  final int recvThroughput;
 
   PeerInfo({
     required this.addr,
     required this.source,
     required this.state,
     this.runtimeId,
+    this.sendThroughput = 0,
+    this.recvThroughput = 0,
   });
 
   static PeerInfo decode(Object? raw) {
@@ -265,6 +262,7 @@ class PeerInfo {
     final addr = list[0] as String;
     final source = PeerSource.decode(list[1] as int);
     final rawState = list[2];
+    final stats = list[3] as List<Object?>;
 
     PeerStateKind state;
     String? runtimeId;
@@ -278,11 +276,18 @@ class PeerInfo {
       throw Exception('invalid peer info state');
     }
 
+    // Note `stats[0]` and `stats[1]` are the total bytes sent and received respectively, which we
+    // currently don't use.
+    final sendThroughput = stats[2] as int;
+    final recvThroughput = stats[3] as int;
+
     return PeerInfo(
       addr: addr,
       source: source,
       state: state,
       runtimeId: runtimeId,
+      sendThroughput: sendThroughput,
+      recvThroughput: recvThroughput,
     );
   }
 

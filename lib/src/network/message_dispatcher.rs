@@ -5,7 +5,7 @@ use super::{
     message::{Message, MessageChannelId},
     message_io::{MessageSink, MessageStream},
     raw,
-    traffic_tracker::TrackingWrapper,
+    stats::Instrumented,
 };
 use crate::{collections::HashMap, sync::AwaitDrop};
 use async_trait::async_trait;
@@ -221,7 +221,7 @@ pub(super) struct ChannelClosed;
 // Stream for receiving messages from a single connection. Contains a connection permit half which
 // gets released on drop. Automatically closes when the corresponding `ConnectionSink` closes.
 struct ConnectionStream {
-    reader: MessageStream<TrackingWrapper<raw::OwnedReadHalf>>,
+    reader: MessageStream<Instrumented<raw::OwnedReadHalf>>,
     permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
     connection_count: Arc<AtomicUsize>,
@@ -238,7 +238,7 @@ impl ConnectionStream {
         let permit_released = permit.released();
 
         Self {
-            reader: MessageStream::new(TrackingWrapper::new(reader, permit.traffic_tracker())),
+            reader: MessageStream::new(Instrumented::new(reader, permit.byte_counters())),
             permit,
             permit_released,
             connection_count,
@@ -274,7 +274,7 @@ impl Drop for ConnectionStream {
 // Sink for sending messages on a single connection. Contains a connection permit half which gets
 // released on drop. Automatically closes when the corresponding `ConnectionStream` is closed.
 struct ConnectionSink {
-    writer: MessageSink<TrackingWrapper<raw::OwnedWriteHalf>>,
+    writer: MessageSink<Instrumented<raw::OwnedWriteHalf>>,
     _permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
 }
@@ -284,7 +284,7 @@ impl ConnectionSink {
         let permit_released = permit.released();
 
         Self {
-            writer: MessageSink::new(TrackingWrapper::new(writer, permit.traffic_tracker())),
+            writer: MessageSink::new(Instrumented::new(writer, permit.byte_counters())),
             _permit: permit,
             permit_released,
         }

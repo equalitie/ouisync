@@ -9,7 +9,6 @@ use super::{
     raw,
     runtime_id::PublicRuntimeId,
     server::Server,
-    traffic_tracker::TrafficTracker,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
@@ -44,7 +43,6 @@ pub(super) struct MessageBroker {
     links: HashMap<RepositoryId, oneshot::Sender<()>>,
     pex_peer: PexPeer,
     monitor: StateMonitor,
-    tracker: TrafficTracker,
     span: SpanGuard,
 }
 
@@ -54,7 +52,6 @@ impl MessageBroker {
         that_runtime_id: PublicRuntimeId,
         pex_peer: PexPeer,
         monitor: StateMonitor,
-        tracker: TrafficTracker,
     ) -> Self {
         let span = SpanGuard::new(&that_runtime_id);
 
@@ -65,7 +62,6 @@ impl MessageBroker {
             links: HashMap::default(),
             pex_peer,
             monitor,
-            tracker,
             span,
         }
     }
@@ -139,7 +135,6 @@ impl MessageBroker {
             pex_tx,
             pex_rx,
             monitor,
-            tracker: self.tracker.clone(),
         };
 
         drop(span_enter);
@@ -196,7 +191,6 @@ struct Link {
     pex_tx: PexSender,
     pex_rx: PexReceiver,
     monitor: StateMonitor,
-    tracker: TrafficTracker,
 }
 
 impl Link {
@@ -241,20 +235,15 @@ impl Link {
 
             *state.get() = State::EstablishingChannel;
 
-            let (crypto_stream, crypto_sink) = match establish_channel(
-                self.role,
-                &mut self.stream,
-                &mut self.sink,
-                &self.vault,
-                self.tracker.clone(),
-            )
-            .await
-            {
-                Ok(io) => io,
-                Err(EstablishError::Crypto) => continue,
-                Err(EstablishError::Closed) => break,
-                Err(EstablishError::TransportChanged) => continue,
-            };
+            let (crypto_stream, crypto_sink) =
+                match establish_channel(self.role, &mut self.stream, &mut self.sink, &self.vault)
+                    .await
+                {
+                    Ok(io) => io,
+                    Err(EstablishError::Crypto) => continue,
+                    Err(EstablishError::Closed) => break,
+                    Err(EstablishError::TransportChanged) => continue,
+                };
 
             *state.get() = State::Running;
 
@@ -280,9 +269,8 @@ async fn establish_channel<'a>(
     stream: &'a mut ContentStream,
     sink: &'a mut ContentSink,
     vault: &Vault,
-    tracker: TrafficTracker,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
-    match crypto::establish_channel(role, vault.repository_id(), stream, sink, tracker).await {
+    match crypto::establish_channel(role, vault.repository_id(), stream, sink).await {
         Ok(io) => {
             tracing::debug!("Established encrypted channel");
             Ok(io)

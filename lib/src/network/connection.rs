@@ -1,6 +1,10 @@
 use super::{
-    peer_addr::PeerAddr, peer_info::PeerInfo, peer_source::PeerSource, peer_state::PeerState,
-    runtime_id::PublicRuntimeId, throughput::ThroughputTracker, traffic_tracker::TrafficTracker,
+    peer_addr::PeerAddr,
+    peer_info::PeerInfo,
+    peer_source::PeerSource,
+    peer_state::PeerState,
+    runtime_id::PublicRuntimeId,
+    stats::{ByteCounters, StatsTracker},
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
@@ -11,7 +15,7 @@ use std::{
     fmt,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Mutex,
+        Arc,
     },
     time::SystemTime,
 };
@@ -48,8 +52,7 @@ impl ConnectionSet {
                         id,
                         state: PeerState::Known,
                         source,
-                        traffic_tracker: TrafficTracker::new(),
-                        throughput_tracker: Mutex::new(ThroughputTracker::new()),
+                        stats_tracker: StatsTracker::default(),
                         on_release: DropAwaitable::new(),
                     });
 
@@ -245,6 +248,11 @@ impl ConnectionPermit {
         self.with(|data| data.source).unwrap()
     }
 
+    pub fn byte_counters(&self) -> Arc<ByteCounters> {
+        self.with(|data| data.stats_tracker.bytes.clone())
+            .unwrap_or_default()
+    }
+
     /// Dummy connection permit for tests.
     #[cfg(test)]
     pub fn dummy() -> Self {
@@ -259,8 +267,7 @@ impl ConnectionPermit {
             id,
             state: PeerState::Known,
             source: PeerSource::UserProvided,
-            traffic_tracker: TrafficTracker::new(),
-            throughput_tracker: Mutex::new(ThroughputTracker::new()),
+            stats_tracker: StatsTracker::default(),
             on_release: DropAwaitable::new(),
         };
 
@@ -314,10 +321,8 @@ impl ConnectionPermitHalf {
         self.0.id
     }
 
-    pub fn traffic_tracker(&self) -> TrafficTracker {
-        self.0
-            .with(|data| data.traffic_tracker.clone())
-            .unwrap_or_default()
+    pub fn byte_counters(&self) -> Arc<ByteCounters> {
+        self.0.byte_counters()
     }
 
     pub fn released(&self) -> AwaitDrop {
@@ -335,27 +340,19 @@ struct Data {
     id: ConnectionId,
     state: PeerState,
     source: PeerSource,
-    traffic_tracker: TrafficTracker,
-    throughput_tracker: Mutex<ThroughputTracker>,
+    stats_tracker: StatsTracker,
     on_release: DropAwaitable,
 }
 
 impl Data {
     fn peer_info(&self, addr: PeerAddr) -> PeerInfo {
-        let traffic_stats = self.traffic_tracker.get();
-
-        let throughput = self
-            .throughput_tracker
-            .lock()
-            .unwrap()
-            .sample(traffic_stats.send, traffic_stats.recv);
+        let stats = self.stats_tracker.read();
 
         PeerInfo {
             addr,
             source: self.source,
             state: self.state,
-            traffic_stats,
-            throughput,
+            stats,
         }
     }
 }
