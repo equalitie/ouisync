@@ -9,7 +9,7 @@ use super::{
     raw,
     runtime_id::PublicRuntimeId,
     server::Server,
-    stats::Instrumented,
+    stats::{ByteCounters, Instrumented},
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
@@ -86,6 +86,7 @@ impl MessageBroker {
         vault: Vault,
         pex_repo: &PexRepository,
         response_limiter: Arc<Semaphore>,
+        byte_counters: Arc<ByteCounters>,
     ) {
         let monitor = self.monitor.make_child(vault.monitor.name());
         let span = tracing::info_span!(
@@ -127,10 +128,14 @@ impl MessageBroker {
 
         let (pex_tx, pex_rx) = self.pex_peer.new_link(pex_repo);
 
+        let stream =
+            Instrumented::new(self.dispatcher.open_recv(channel_id), byte_counters.clone());
+        let sink = Instrumented::new(self.dispatcher.open_send(channel_id), byte_counters);
+
         let mut link = Link {
             role,
-            stream: self.dispatcher.open_recv(channel_id),
-            sink: self.dispatcher.open_send(channel_id),
+            stream,
+            sink,
             vault,
             response_limiter,
             pex_tx,
@@ -185,8 +190,8 @@ impl Drop for SpanGuard {
 
 struct Link {
     role: Role,
-    stream: ContentStream,
-    sink: ContentSink,
+    stream: Instrumented<ContentStream>,
+    sink: Instrumented<ContentSink>,
     vault: Vault,
     response_limiter: Arc<Semaphore>,
     pex_tx: PexSender,
@@ -224,7 +229,7 @@ impl Link {
 
             *state.get() = State::AwaitingBarrier;
 
-            match Barrier::new(&mut self.stream, &self.sink, &self.monitor)
+            match Barrier::new(self.stream.as_mut(), self.sink.as_ref(), &self.monitor)
                 .run()
                 .await
             {
@@ -267,8 +272,8 @@ impl Link {
 
 async fn establish_channel<'a>(
     role: Role,
-    stream: &'a mut ContentStream,
-    sink: &'a mut ContentSink,
+    stream: &'a mut Instrumented<ContentStream>,
+    sink: &'a mut Instrumented<ContentSink>,
     vault: &Vault,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     match crypto::establish_channel(role, vault.repository_id(), stream, sink).await {

@@ -3,7 +3,7 @@
 use super::{
     connection::{ConnectionId, ConnectionPermit, ConnectionPermitHalf},
     message::{Message, MessageChannelId},
-    message_io::{MessageSink, MessageStream},
+    message_io::{MessageSink, MessageStream, MESSAGE_OVERHEAD},
     raw,
     stats::Instrumented,
 };
@@ -145,6 +145,19 @@ impl ContentStream {
     }
 }
 
+impl Instrumented<ContentStream> {
+    pub async fn recv(&mut self) -> Result<Vec<u8>, ContentStreamError> {
+        let content = self.as_mut().recv().await?;
+        self.counters()
+            .increment_rx(content.len() as u64 + MESSAGE_OVERHEAD as u64);
+        Ok(content)
+    }
+
+    pub fn channel(&self) -> &MessageChannelId {
+        self.as_ref().channel()
+    }
+}
+
 impl Drop for ContentStream {
     fn drop(&mut self) {
         self.command_tx
@@ -181,6 +194,20 @@ impl ContentSink {
             })
             .await
             .map_err(|_| ChannelClosed)
+    }
+}
+
+impl Instrumented<ContentSink> {
+    pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
+        let len = content.len();
+        self.as_ref().send(content).await?;
+        self.counters()
+            .increment_tx(len as u64 + MESSAGE_OVERHEAD as u64);
+        Ok(())
+    }
+
+    pub fn channel(&self) -> &MessageChannelId {
+        self.as_ref().channel()
     }
 }
 

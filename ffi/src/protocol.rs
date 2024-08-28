@@ -117,6 +117,7 @@ pub(crate) enum Request {
     },
     RepositoryMount(RepositoryHandle),
     RepositoryUnmount(RepositoryHandle),
+    RepositoryStats(RepositoryHandle),
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),

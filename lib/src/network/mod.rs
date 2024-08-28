@@ -55,7 +55,7 @@ use self::{
     peer_exchange::{PexDiscovery, PexRepository},
     protocol::{Version, MAGIC, VERSION},
     seen_peers::{SeenPeer, SeenPeers},
-    stats::StatsTracker,
+    stats::{ByteCounters, StatsTracker},
     stun::StunClients,
 };
 use crate::{
@@ -358,16 +358,23 @@ impl Network {
 
         // TODO: This should be global, not per repo
         let response_limiter = Arc::new(Semaphore::new(MAX_UNCHOKED_COUNT));
+        let stats_tracker = StatsTracker::default();
 
         let mut network_state = self.inner.state.lock().unwrap();
 
-        network_state.create_link(handle.vault.clone(), &pex, response_limiter.clone());
+        network_state.create_link(
+            handle.vault.clone(),
+            &pex,
+            response_limiter.clone(),
+            stats_tracker.bytes.clone(),
+        );
 
         let key = network_state.registry.insert(RegistrationHolder {
             vault: handle.vault,
             dht,
             pex,
             response_limiter,
+            stats_tracker,
         });
 
         Registration {
@@ -420,8 +427,9 @@ impl Registration {
     /// difference is in that this function should return true even in case e.g. the whole network
     /// is disabled.
     pub fn is_dht_enabled(&self) -> bool {
-        let state = self.inner.state.lock().unwrap();
-        state.registry[self.key].dht.is_some()
+        self.inner.state.lock().unwrap().registry[self.key]
+            .dht
+            .is_some()
     }
 
     /// Enables/disables peer exchange for this repo.
@@ -437,8 +445,16 @@ impl Registration {
     }
 
     pub fn is_pex_enabled(&self) -> bool {
-        let state = self.inner.state.lock().unwrap();
-        state.registry[self.key].pex.is_enabled()
+        self.inner.state.lock().unwrap().registry[self.key]
+            .pex
+            .is_enabled()
+    }
+
+    /// Fetch per-repository network statistics.
+    pub fn stats(&self) -> Stats {
+        self.inner.state.lock().unwrap().registry[self.key]
+            .stats_tracker
+            .read()
     }
 }
 
@@ -466,6 +482,7 @@ struct RegistrationHolder {
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexRepository,
     response_limiter: Arc<Semaphore>,
+    stats_tracker: StatsTracker,
 }
 
 struct Inner {
@@ -502,10 +519,21 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, repo: Vault, pex: &PexRepository, response_limiter: Arc<Semaphore>) {
+    fn create_link(
+        &mut self,
+        repo: Vault,
+        pex: &PexRepository,
+        response_limiter: Arc<Semaphore>,
+        byte_counters: Arc<ByteCounters>,
+    ) {
         if let Some(brokers) = &mut self.message_brokers {
             for broker in brokers.values_mut() {
-                broker.create_link(repo.clone(), pex, response_limiter.clone())
+                broker.create_link(
+                    repo.clone(),
+                    pex,
+                    response_limiter.clone(),
+                    byte_counters.clone(),
+                )
             }
         }
     }
@@ -872,6 +900,7 @@ impl Inner {
                         holder.vault.clone(),
                         &holder.pex,
                         holder.response_limiter.clone(),
+                        holder.stats_tracker.bytes.clone(),
                     );
                 }
 

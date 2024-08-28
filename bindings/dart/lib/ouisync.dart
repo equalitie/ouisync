@@ -600,6 +600,11 @@ class Repository {
 
   /// Unmount the repository.
   Future<void> unmount() => _client.invoke<void>("repository_unmount", _handle);
+
+  /// Fetch the per-repository network statistics.
+  Future<NetworkStats> get networkStats => _client
+      .invoke<List<Object?>>('repository_stats', _handle)
+      .then((list) => NetworkStats.decode(list));
 }
 
 sealed class AccessChange {

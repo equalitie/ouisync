@@ -245,6 +245,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .await?
                     .into()
             }
+            Request::RepositoryStats(repository) => {
+                repository::stats(&self.state, repository).await?.into()
+            }
             Request::DirectoryCreate { repository, path } => {
                 directory::create(&self.state, repository, path)
                     .await?
