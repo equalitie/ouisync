@@ -9,6 +9,7 @@ use super::{
     raw,
     runtime_id::PublicRuntimeId,
     server::Server,
+    stats::Instrumented,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
@@ -66,7 +67,7 @@ impl MessageBroker {
         }
     }
 
-    pub fn add_connection(&self, stream: raw::Stream, permit: ConnectionPermit) {
+    pub fn add_connection(&self, stream: Instrumented<raw::Stream>, permit: ConnectionPermit) {
         self.pex_peer
             .handle_connection(permit.addr(), permit.source(), permit.released());
         self.dispatcher.bind(stream, permit)

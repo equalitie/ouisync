@@ -60,6 +60,7 @@ use self::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
+    network::stats::Instrumented,
     protocol::RepositoryId,
     repository::{RepositoryHandle, Vault},
     sync::uninitialized_watch,
@@ -877,6 +878,7 @@ impl Inner {
                 broker
             });
 
+            let stream = Instrumented::new(stream, self.stats_tracker.bytes.clone());
             broker.add_connection(stream, permit);
         }
 

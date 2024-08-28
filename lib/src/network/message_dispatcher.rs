@@ -56,7 +56,7 @@ impl MessageDispatcher {
 
     /// Bind this dispatcher to the given TCP of QUIC socket. Can be bound to multiple sockets and
     /// the failed ones are automatically removed.
-    pub fn bind(&self, socket: raw::Stream, permit: ConnectionPermit) {
+    pub fn bind(&self, socket: Instrumented<raw::Stream>, permit: ConnectionPermit) {
         self.command_tx.send(Command::Bind { socket, permit }).ok();
     }
 
@@ -221,7 +221,9 @@ pub(super) struct ChannelClosed;
 // Stream for receiving messages from a single connection. Contains a connection permit half which
 // gets released on drop. Automatically closes when the corresponding `ConnectionSink` closes.
 struct ConnectionStream {
-    reader: MessageStream<Instrumented<raw::OwnedReadHalf>>,
+    // The reader is doubly instrumented - first time to track per connection stats and second time
+    // to track cumulative stats across all connections.
+    reader: MessageStream<Instrumented<Instrumented<raw::OwnedReadHalf>>>,
     permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
     connection_count: Arc<AtomicUsize>,
@@ -229,7 +231,7 @@ struct ConnectionStream {
 
 impl ConnectionStream {
     fn new(
-        reader: raw::OwnedReadHalf,
+        reader: Instrumented<raw::OwnedReadHalf>,
         permit: ConnectionPermitHalf,
         connection_count: Arc<AtomicUsize>,
     ) -> Self {
@@ -274,13 +276,15 @@ impl Drop for ConnectionStream {
 // Sink for sending messages on a single connection. Contains a connection permit half which gets
 // released on drop. Automatically closes when the corresponding `ConnectionStream` is closed.
 struct ConnectionSink {
-    writer: MessageSink<Instrumented<raw::OwnedWriteHalf>>,
+    // The writer is doubly instrumented - first time to track per connection stats and second time
+    // to track cumulative stats across all connections.
+    writer: MessageSink<Instrumented<Instrumented<raw::OwnedWriteHalf>>>,
     _permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
 }
 
 impl ConnectionSink {
-    fn new(writer: raw::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
+    fn new(writer: Instrumented<raw::OwnedWriteHalf>, permit: ConnectionPermitHalf) -> Self {
         let permit_released = permit.released();
 
         Self {
@@ -422,7 +426,7 @@ enum Command {
         channel: MessageChannelId,
     },
     Bind {
-        socket: raw::Stream,
+        socket: Instrumented<raw::Stream>,
         permit: ConnectionPermit,
     },
     Shutdown {
@@ -514,7 +518,7 @@ impl RecvState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{super::stats::ByteCounters, *};
     use assert_matches::assert_matches;
     use futures_util::stream;
     use net::tcp::{TcpListener, TcpStream};
@@ -767,7 +771,7 @@ mod tests {
         assert_matches!(server_sink.send(vec![]).await, Err(ChannelClosed));
     }
 
-    async fn create_connected_sockets() -> (raw::Stream, raw::Stream) {
+    async fn create_connected_sockets() -> (Instrumented<raw::Stream>, Instrumented<raw::Stream>) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0u16))
             .await
             .unwrap();
@@ -776,6 +780,9 @@ mod tests {
             .unwrap();
         let (server, _) = listener.accept().await.unwrap();
 
-        (raw::Stream::Tcp(client), raw::Stream::Tcp(server))
+        (
+            Instrumented::new(raw::Stream::Tcp(client), Arc::new(ByteCounters::default())),
+            Instrumented::new(raw::Stream::Tcp(server), Arc::new(ByteCounters::default())),
+        )
     }
 }
