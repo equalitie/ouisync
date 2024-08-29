@@ -78,11 +78,11 @@ pub(super) async fn save(
     node: &InnerNode,
     parent: &Hash,
     bucket: u8,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     debug_assert_ne!(node.hash, *EMPTY_INNER_HASH);
     debug_assert_ne!(node.hash, *EMPTY_LEAF_HASH);
 
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO snapshot_inner_nodes (
              parent,
              bucket,
@@ -101,7 +101,7 @@ pub(super) async fn save(
     .execute(tx)
     .await?;
 
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
 /// Atomically saves all nodes in this map to the db.
@@ -109,12 +109,16 @@ pub(super) async fn save_all(
     tx: &mut db::WriteTransaction,
     nodes: &InnerNodes,
     parent: &Hash,
-) -> Result<(), Error> {
+) -> Result<usize, Error> {
+    let mut updated = 0;
+
     for (bucket, node) in nodes {
-        save(tx, node, parent, bucket).await?;
+        if save(tx, node, parent, bucket).await? {
+            updated += 1;
+        }
     }
 
-    Ok(())
+    Ok(updated)
 }
 
 /// Compute summaries from the children nodes of the specified parent nodes.

@@ -16,7 +16,7 @@ use crate::{
     future::TryStreamExt as _,
     protocol::{
         Block, BlockId, InnerNode, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, Proof,
-        RootNodeFilter, SingleBlockPresence, Summary, EMPTY_INNER_HASH,
+        RootNodeFilter, SingleBlockPresence, Summary,
     },
     repository, StorageSize,
 };
@@ -67,10 +67,7 @@ impl ClientWriter {
             )
             .await?;
 
-            // Empty root nodes are approved immediately.
-            if node.proof.hash == *EMPTY_INNER_HASH {
-                self.summary_updates.push(node.proof.hash);
-            }
+            self.summary_updates.push(node.proof.hash);
         }
 
         Ok(status)
@@ -106,7 +103,10 @@ impl ClientWriter {
 
         let mut nodes = nodes.into_incomplete();
         inner_node::inherit_summaries(&mut self.db, &mut nodes).await?;
-        inner_node::save_all(&mut self.db, &nodes, &parent_hash).await?;
+
+        if inner_node::save_all(&mut self.db, &nodes, &parent_hash).await? > 0 {
+            self.summary_updates.push(parent_hash);
+        }
 
         Ok(InnerNodesStatus { new_children })
     }
@@ -949,5 +949,80 @@ mod tests {
         for id in snapshot.blocks().keys() {
             assert!(!reader.block_exists(id).await.unwrap());
         }
+    }
+
+    #[tokio::test]
+    async fn update_incomplete_snapshot_by_removing_blocks() {
+        let mut rng = rand::thread_rng();
+        let (_base_dir, pool) = db::create_temp().await.unwrap();
+        let store = Store::new(pool);
+        let secrets = WriteSecrets::generate(&mut rng);
+        let branch_id = PublicKey::generate(&mut rng);
+        let snapshot = Snapshot::generate(&mut rng, 2);
+
+        let block_to_remove = snapshot.blocks().keys().copied().next().unwrap();
+
+        let vv1 = VersionVector::first(branch_id);
+        let mut writer = SnapshotWriter::begin(&store, &snapshot)
+            .await
+            .save_root_nodes(&secrets.write_keys, branch_id, vv1.clone())
+            .await
+            .save_inner_nodes()
+            .await;
+
+        // Skip the leaf nodes that point to the block to be removed.
+        for (_, nodes) in snapshot.leaf_sets() {
+            if nodes.iter().any(|node| node.block_id == block_to_remove) {
+                continue;
+            }
+
+            writer
+                .client_writer()
+                .save_leaf_nodes(nodes.clone().into())
+                .await
+                .unwrap();
+        }
+
+        writer.commit().await;
+
+        // Verify the latest snapshot is incomplete
+        let node = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&branch_id)
+            .try_next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(node.summary.state, NodeState::Incomplete);
+
+        // Remove the block
+        let snapshot = Snapshot::new(
+            snapshot
+                .locators_and_blocks()
+                .filter(|(_, block)| block.id != block_to_remove)
+                .map(|(locator, block)| (*locator, block.clone())),
+        );
+
+        let vv2 = vv1.incremented(branch_id);
+        SnapshotWriter::begin(&store, &snapshot)
+            .await
+            .save_nodes(&secrets.write_keys, branch_id, vv2)
+            .await
+            .commit()
+            .await;
+
+        // Verify the latest snapshot is now complete
+        let node = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&branch_id)
+            .try_next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(node.summary.state, NodeState::Approved);
     }
 }

@@ -83,6 +83,18 @@ impl Snapshot {
         })
     }
 
+    pub fn leaf_nodes(&self) -> impl Iterator<Item = &LeafNode> {
+        self.leaf_sets().flat_map(|(_, nodes)| nodes)
+    }
+
+    pub fn locators_and_blocks(&self) -> impl Iterator<Item = (&Hash, &Block)> {
+        self.leaf_nodes().filter_map(|node| {
+            self.blocks
+                .get(&node.block_id)
+                .map(|block| (&node.locator, block))
+        })
+    }
+
     pub fn leaf_count(&self) -> usize {
         self.leaves.values().map(|nodes| nodes.len()).sum()
     }
