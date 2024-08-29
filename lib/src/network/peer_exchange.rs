@@ -9,7 +9,10 @@ use super::{
     seen_peers::{SeenPeer, SeenPeers},
     PeerSource,
 };
-use crate::{collections::HashSet, sync::AwaitDrop};
+use crate::{
+    collections::HashSet,
+    sync::{AwaitDrop, WatchSenderExt},
+};
 use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
@@ -229,7 +232,7 @@ pub(crate) struct PexSender {
 impl PexSender {
     /// While this method is running, it periodically sends contacts of other peers that share the
     /// same repo to this peer and makes the contacts of this peer aailable to them.
-    pub async fn run(&mut self, content_tx: mpsc::Sender<Content>) {
+    pub async fn run(&mut self, content_tx: mpsc::UnboundedSender<Content>) {
         let Some(collector) = self.enable() else {
             // Another collector for this link already exists.
             return;
@@ -250,7 +253,7 @@ impl PexSender {
             };
 
             if !addrs.is_empty() {
-                content_tx.send(Content::Pex(PexPayload(addrs))).await.ok();
+                content_tx.send(Content::Pex(PexPayload(addrs))).ok();
             }
 
             let interval = rand::thread_rng().gen_range(SEND_INTERVAL_RANGE);
@@ -421,24 +424,6 @@ struct RepoState {
 struct PeerState {
     // Set of addresses of this peer.
     addrs: HashSet<PeerAddr>,
-}
-
-trait WatchSenderExt<T> {
-    // Like `send_modify` but allows returning a value from the closure.
-    fn send_modify_return<R>(&self, modify: impl FnOnce(&mut T) -> R) -> R;
-}
-
-impl<T> WatchSenderExt<T> for watch::Sender<T> {
-    fn send_modify_return<R>(&self, modify: impl FnOnce(&mut T) -> R) -> R {
-        let mut output = None;
-
-        self.send_modify(|value| {
-            output = Some(modify(value));
-        });
-
-        // unwrap is OK because output is set to `Some` in the `send_modify` closure.
-        output.unwrap()
-    }
 }
 
 #[cfg(test)]

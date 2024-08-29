@@ -578,12 +578,11 @@ impl fmt::Display for PeerInfoDisplay<'_> {
         if let PeerState::Active { id, since } = &self.0.state {
             write!(
                 f,
-                " {} {} {} {} {}",
+                " {} {} {} {}",
                 id.as_public_key(),
                 format_time(*since),
-                self.0.stats.send,
-                self.0.stats.recv,
-                format_time(self.0.stats.recv_at),
+                self.0.stats.bytes_tx,
+                self.0.stats.bytes_rx,
             )?;
         }
 
@@ -598,7 +597,7 @@ fn format_time(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ouisync_lib::{PeerSource, PeerState, SecretRuntimeId, TrafficStats};
+    use ouisync_lib::{PeerSource, PeerState, SecretRuntimeId, Stats};
     use rand::{rngs::StdRng, SeedableRng};
     use std::net::Ipv4Addr;
 
@@ -614,7 +613,7 @@ mod tests {
                 addr: PeerAddr::Quic(addr),
                 source: PeerSource::Dht,
                 state: PeerState::Connecting,
-                stats: TrafficStats::default(),
+                stats: Stats::default(),
             })
             .to_string(),
             "127.0.0.1 1248 quic dht connecting"
@@ -630,12 +629,11 @@ mod tests {
                         .unwrap()
                         .into(),
                 },
-                stats: TrafficStats {
-                    send: 1024,
-                    recv: 4096,
-                    recv_at: DateTime::parse_from_rfc3339("2024-06-12T14:00:00Z")
-                        .unwrap()
-                        .into(),
+                stats: Stats {
+                    bytes_tx: 1024,
+                    bytes_rx: 4096,
+                    throughput_tx: 0,
+                    throughput_rx: 0,
                 },
             })
             .to_string(),
@@ -647,8 +645,7 @@ mod tests {
              ee1aa49a4459dfe813a3cf6eb882041230c7b2558469de81f87c9bf23bf10a03 \
              2024-06-12T02:30:00Z \
              1024 \
-             4096 \
-             2024-06-12T14:00:00Z"
+             4096"
         );
     }
 }

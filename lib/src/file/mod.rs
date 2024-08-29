@@ -1,13 +1,9 @@
-mod progress_cache;
-
-pub(crate) use progress_cache::FileProgressCache;
-
 use crate::{
-    blob::{lock::UpgradableLock, Blob, ReadWriteError},
+    blob::{lock::UpgradableLock, Blob, BlockIds, ReadWriteError},
     branch::Branch,
     directory::{Directory, ParentContext},
     error::{Error, Result},
-    protocol::{Bump, Locator, BLOCK_SIZE},
+    protocol::{Bump, Locator, SingleBlockPresence, BLOCK_SIZE},
     store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
@@ -79,31 +75,23 @@ impl File {
     /// while awaiting the result.
     pub fn progress(&self) -> impl Future<Output = Result<u64>> {
         let branch = self.branch().clone();
-        let locator = Locator::head(*self.blob.id());
-        let block_count = self.blob.block_count();
+        let blob_id = *self.blob.id();
         let len = self.len();
 
         async move {
-            let permit = branch.file_progress_cache().acquire().await;
+            let mut block_ids = BlockIds::open(branch, blob_id).await?;
+            let mut present = 0;
 
-            let mut tx = branch.store().begin_read().await?;
-            let mut entry = permit.get(*locator.blob_id());
-            let mut count = *entry;
-
-            for index in *entry..block_count {
-                let encoded_locator = locator.nth(index).encode(branch.keys().read());
-                let block_id = tx.find_block(branch.id(), &encoded_locator).await?;
-
-                if tx.block_exists(&block_id).await? {
-                    count = count.saturating_add(1);
-                } else {
-                    break;
+            while let Some((_, block_presence)) = block_ids.try_next().await? {
+                match block_presence {
+                    SingleBlockPresence::Present => {
+                        present += 1;
+                    }
+                    SingleBlockPresence::Missing | SingleBlockPresence::Expired => (),
                 }
             }
 
-            *entry = count;
-
-            Ok((count as u64 * BLOCK_SIZE as u64).min(len))
+            Ok((present as u64 * BLOCK_SIZE as u64).min(len))
         }
     }
 

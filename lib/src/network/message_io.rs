@@ -12,6 +12,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// This is also the maximum allowed message size in the Noise Protocol Framework.
 const MAX_MESSAGE_SIZE: u16 = u16::MAX - 1;
 
+/// Size overhead of a single message in addition to the length of its content.
+pub(super) const MESSAGE_OVERHEAD: usize = Header::SIZE + 2;
+
 // Messages are encoded like this:
 //
 // [ header: `Header::SIZE` bytes ][ len: 2 bytes ][ content: `len` bytes ]

@@ -245,6 +245,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .await?
                     .into()
             }
+            Request::RepositoryStats(repository) => {
+                repository::stats(&self.state, repository).await?.into()
+            }
             Request::DirectoryCreate { repository, path } => {
                 directory::create(&self.state, repository, path)
                     .await?
@@ -412,7 +415,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::NetworkExternalAddrV4 => self.state.network.external_addr_v4().await.into(),
             Request::NetworkExternalAddrV6 => self.state.network.external_addr_v6().await.into(),
             Request::NetworkNatBehavior => self.state.network.nat_behavior().await.into(),
-            Request::NetworkTrafficStats => self.state.network.traffic_stats().into(),
+            Request::NetworkStats => self.state.network.stats().into(),
             Request::NetworkShutdown => {
                 self.state.network.shutdown().await;
                 ().into()

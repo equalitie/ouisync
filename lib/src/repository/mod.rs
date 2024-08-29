@@ -50,7 +50,7 @@ use tokio::{
 };
 use tracing::instrument::Instrument;
 
-const EVENT_CHANNEL_CAPACITY: usize = 256;
+const EVENT_CHANNEL_CAPACITY: usize = 10000;
 
 pub struct Repository {
     shared: Arc<Shared>,

@@ -1,9 +1,4 @@
-use super::{
-    block,
-    cache::{Cache, CacheTransaction},
-    error::Error,
-    index, leaf_node, root_node,
-};
+use super::{block, error::Error, index, leaf_node, root_node};
 use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
     collections::{hash_map, HashMap, HashSet},
@@ -65,7 +60,6 @@ impl BlockExpirationTracker {
         expiration_time: Duration,
         block_download_tracker: BlockDownloadTracker,
         client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
-        cache: Arc<Cache>,
     ) -> Result<Self, Error> {
         let mut shared = Shared {
             blocks_by_id: Default::default(),
@@ -104,7 +98,6 @@ impl BlockExpirationTracker {
                     expiration_time_rx,
                     block_download_tracker,
                     client_reload_index_tx,
-                    cache,
                 )
                 .await
                 {
@@ -291,7 +284,6 @@ async fn run_task(
     mut expiration_time_rx: watch::Receiver<Duration>,
     block_download_tracker: BlockDownloadTracker,
     client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
-    cache: Arc<Cache>,
 ) -> Result<(), Error> {
     loop {
         let expiration_time = *expiration_time_rx.borrow();
@@ -331,7 +323,6 @@ async fn run_task(
                         to_missing_if_expired,
                         &block_download_tracker,
                         &client_reload_index_tx,
-                        cache.begin(),
                     )
                     .await?;
                     continue;
@@ -388,7 +379,6 @@ async fn set_as_missing_if_expired(
     block_ids: HashSet<BlockId>,
     block_download_tracker: &BlockDownloadTracker,
     client_reload_index_tx: &broadcast_hash_set::Sender<PublicKey>,
-    mut cache: CacheTransaction,
 ) -> Result<(), Error> {
     let mut tx = pool.begin_write().await?;
 
@@ -407,7 +397,7 @@ async fn set_as_missing_if_expired(
 
         block_download_tracker.require(*block_id);
 
-        for (hash, _state) in index::update_summaries(&mut tx, &mut cache, parent_hashes).await? {
+        for (hash, _state) in index::update_summaries(&mut tx, parent_hashes).await? {
             root_node::load_writer_ids_by_hash(&mut tx, &hash)
                 .try_collect_into(&mut branches)
                 .await?;
@@ -503,7 +493,6 @@ mod test {
             Duration::from_secs(1),
             BlockDownloadTracker::new(),
             broadcast_hash_set::channel().0,
-            Arc::new(Cache::new()),
         )
         .await
         .unwrap();

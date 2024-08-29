@@ -370,17 +370,6 @@ pub(super) async fn load_node_state_of_missing(
     .await
 }
 
-/// Does this node exist in the db?
-pub(super) async fn exists(conn: &mut db::Connection, node: &RootNode) -> Result<bool, Error> {
-    Ok(
-        sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE snapshot_id = ?")
-            .bind(node.snapshot_id)
-            .fetch_optional(conn)
-            .await?
-            .is_some(),
-    )
-}
-
 /// Removes the given root node including all its descendants that are not referenced from any
 /// other root nodes.
 pub(super) async fn remove(tx: &mut db::WriteTransaction, node: &RootNode) -> Result<(), Error> {

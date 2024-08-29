@@ -1,9 +1,15 @@
 use super::{
-    peer_addr::PeerAddr, peer_info::PeerInfo, peer_source::PeerSource, peer_state::PeerState,
-    runtime_id::PublicRuntimeId, traffic_tracker::TrafficTracker,
+    peer_addr::PeerAddr,
+    peer_info::PeerInfo,
+    peer_source::PeerSource,
+    peer_state::PeerState,
+    runtime_id::PublicRuntimeId,
+    stats::{ByteCounters, StatsTracker},
 };
-use crate::collections::{hash_map::Entry, HashMap};
-use deadlock::BlockingMutex;
+use crate::{
+    collections::{hash_map::Entry, HashMap},
+    sync::{AwaitDrop, DropAwaitable, WatchSenderExt},
+};
 use serde::Serialize;
 use std::{
     fmt,
@@ -13,36 +19,17 @@ use std::{
     },
     time::SystemTime,
 };
+use tokio::sync::watch;
 
-pub(super) type PermitId = u64;
-
-// NOTE: Watch (or uninitialized_watch) has an advantage over Notify in that it's better at
-// broadcasting to multiple consumers. This particular line is problematic in Notify documentation:
-//
-//   https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html#method.notify_waiters
-//
-//   "Unlike with notify_one(), no permit is stored to be used by the next call to notified().await."
-//
-// The issue is described in more detail here:
-//
-//   https://github.com/tokio-rs/tokio/issues/3757
-use crate::sync::{uninitialized_watch, AwaitDrop, DropAwaitable};
-
-/// Prevents establishing duplicate connections.
-pub(super) struct ConnectionDeduplicator {
-    next_id: AtomicU64,
-    connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
-    on_change_tx: uninitialized_watch::Sender<()>,
+/// Container for known connections.
+pub(super) struct ConnectionSet {
+    connections: watch::Sender<HashMap<Key, Data>>,
 }
 
-impl ConnectionDeduplicator {
+impl ConnectionSet {
     pub fn new() -> Self {
-        let (on_change_tx, _) = uninitialized_watch::channel();
-
         Self {
-            next_id: AtomicU64::new(0),
-            connections: Arc::new(BlockingMutex::new(HashMap::default())),
-            on_change_tx,
+            connections: watch::Sender::new(HashMap::default()),
         }
     }
 
@@ -51,41 +38,46 @@ impl ConnectionDeduplicator {
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
     /// Also returns a notification object that can be used to wait until the permit gets released.
     pub fn reserve(&self, addr: PeerAddr, source: PeerSource) -> ReserveResult {
-        let info = ConnectionInfo {
+        let key = Key {
             addr,
             dir: ConnectionDirection::from_source(source),
         };
 
-        match self.connections.lock().unwrap().entry(info) {
-            Entry::Vacant(entry) => {
-                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let on_release_tx = DropAwaitable::new();
+        self.connections
+            .send_if_modified_return(|connections| match connections.entry(key) {
+                Entry::Vacant(entry) => {
+                    let id = ConnectionId::next();
 
-                entry.insert(Peer {
-                    id,
-                    state: PeerState::Known,
-                    source,
-                    tracker: TrafficTracker::new(),
-                    on_release: on_release_tx,
-                });
-                self.on_change_tx.send(()).unwrap_or(());
+                    entry.insert(Data {
+                        id,
+                        state: PeerState::Known,
+                        source,
+                        stats_tracker: StatsTracker::default(),
+                        on_release: DropAwaitable::new(),
+                    });
 
-                ReserveResult::Permit(ConnectionPermit {
-                    connections: self.connections.clone(),
-                    info,
-                    id,
-                    on_deduplicator_change: self.on_change_tx.clone(),
-                })
-            }
-            Entry::Occupied(entry) => {
-                let peer_permit = entry.get();
-                ReserveResult::Occupied(
-                    peer_permit.on_release.subscribe(),
-                    peer_permit.source,
-                    peer_permit.id,
-                )
-            }
-        }
+                    (
+                        true,
+                        ReserveResult::Permit(ConnectionPermit {
+                            connections: self.connections.clone(),
+                            key,
+                            id,
+                        }),
+                    )
+                }
+                Entry::Occupied(entry) => {
+                    let peer_permit = entry.get();
+
+                    (
+                        false,
+                        ReserveResult::Occupied(
+                            peer_permit.on_release.subscribe(),
+                            peer_permit.source,
+                            peer_permit.id,
+                        ),
+                    )
+                }
+            })
     }
 
     pub fn peer_info_collector(&self) -> PeerInfoCollector {
@@ -93,64 +85,74 @@ impl ConnectionDeduplicator {
     }
 
     pub fn get_peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
-        let connections = self.connections.lock().unwrap();
-
-        let incoming = ConnectionInfo {
-            addr,
-            dir: ConnectionDirection::Incoming,
-        };
-        let outgoing = ConnectionInfo {
-            addr,
-            dir: ConnectionDirection::Outgoing,
-        };
+        let connections = self.connections.borrow();
 
         connections
-            .get(&incoming)
-            .or_else(|| connections.get(&outgoing))
-            .map(|peer| PeerInfo {
+            .get(&Key {
                 addr,
-                source: peer.source,
-                state: peer.state,
-                stats: peer.tracker.get(),
+                dir: ConnectionDirection::Incoming,
             })
+            .or_else(|| {
+                connections.get(&Key {
+                    addr,
+                    dir: ConnectionDirection::Outgoing,
+                })
+            })
+            .map(|data| data.peer_info(addr))
     }
 
-    pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
-        self.on_change_tx.subscribe()
+    pub fn subscribe(&self) -> ConnectionSetSubscription {
+        ConnectionSetSubscription(self.connections.subscribe())
+    }
+}
+
+/// Unique identifier of a connection. Connections are mostly already identified by the peer address
+/// and direction (incoming / outgoing), but this type allows to distinguish even connections with
+/// the same address/direction but that were established in two separate occasions.
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[repr(transparent)]
+pub(super) struct ConnectionId(u64);
+
+impl ConnectionId {
+    pub fn next() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl fmt::Display for ConnectionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
 pub(super) enum ReserveResult {
     Permit(ConnectionPermit),
     // Use the receiver to get notified when the existing permit is destroyed.
-    Occupied(AwaitDrop, PeerSource, PermitId),
+    Occupied(AwaitDrop, PeerSource, ConnectionId),
 }
 
 #[derive(Clone)]
-pub struct PeerInfoCollector(Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>);
+pub struct ConnectionSetSubscription(watch::Receiver<HashMap<Key, Data>>);
+
+impl ConnectionSetSubscription {
+    pub async fn changed(&mut self) -> Result<(), watch::error::RecvError> {
+        self.0.changed().await?;
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct PeerInfoCollector(watch::Sender<HashMap<Key, Data>>);
 
 impl PeerInfoCollector {
     pub fn collect(&self) -> Vec<PeerInfo> {
         self.0
-            .lock()
-            .unwrap()
+            .borrow()
             .iter()
-            .map(|(key, peer)| PeerInfo {
-                addr: key.addr,
-                source: peer.source,
-                state: peer.state,
-                stats: peer.tracker.get(),
-            })
+            .map(|(key, data)| data.peer_info(key.addr))
             .collect()
     }
-}
-
-pub(super) struct Peer {
-    id: PermitId,
-    state: PeerState,
-    source: PeerSource,
-    tracker: TrafficTracker,
-    on_release: DropAwaitable,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
@@ -174,10 +176,9 @@ impl ConnectionDirection {
 /// Connection permit that prevents another connection to the same peer (socket address) to be
 /// established as long as it remains in scope.
 pub(super) struct ConnectionPermit {
-    connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
-    info: ConnectionInfo,
-    id: PermitId,
-    on_deduplicator_change: uninitialized_watch::Sender<()>,
+    connections: watch::Sender<HashMap<Key, Data>>,
+    key: Key,
+    id: ConnectionId,
 }
 
 impl ConnectionPermit {
@@ -190,9 +191,8 @@ impl ConnectionPermit {
         (
             ConnectionPermitHalf(Self {
                 connections: self.connections.clone(),
-                info: self.info,
+                key: self.key,
                 id: self.id,
-                on_deduplicator_change: self.on_deduplicator_change.clone(),
             }),
             ConnectionPermitHalf(self),
         )
@@ -214,36 +214,43 @@ impl ConnectionPermit {
     }
 
     fn set_state(&self, new_state: PeerState) {
-        let mut lock = self.connections.lock().unwrap();
+        self.connections.send_if_modified(|connections| {
+            // unwrap is ok because if `self` exists then the entry should exists as well.
+            let peer = connections.get_mut(&self.key).unwrap();
 
-        // unwrap is ok because if `self` exists then the entry should exists as well.
-        let peer = lock.get_mut(&self.info).unwrap();
-
-        if peer.state != new_state {
-            peer.state = new_state;
-            self.on_deduplicator_change.send(()).unwrap_or(());
-        }
+            if peer.state != new_state {
+                peer.state = new_state;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     /// Returns a `AwaitDrop` that gets notified when this permit gets released.
     pub fn released(&self) -> AwaitDrop {
         // We can't use unwrap here because this method is used in `ConnectionPermitHalf` which can
         // outlive the entry if the other half gets dropped.
-        self.with_peer(|peer| peer.on_release.subscribe())
+        self.with(|data| data.on_release.subscribe())
             .unwrap_or_else(|| DropAwaitable::new().subscribe())
     }
 
     pub fn addr(&self) -> PeerAddr {
-        self.info.addr
+        self.key.addr
     }
 
-    pub fn id(&self) -> PermitId {
+    pub fn id(&self) -> ConnectionId {
         self.id
     }
 
     pub fn source(&self) -> PeerSource {
         // unwrap is ok because if `self` exists then the entry should exists as well.
-        self.with_peer(|peer| peer.source).unwrap()
+        self.with(|data| data.source).unwrap()
+    }
+
+    pub fn byte_counters(&self) -> Arc<ByteCounters> {
+        self.with(|data| data.stats_tracker.bytes.clone())
+            .unwrap_or_default()
     }
 
     /// Dummy connection permit for tests.
@@ -251,57 +258,57 @@ impl ConnectionPermit {
     pub fn dummy() -> Self {
         use std::net::Ipv4Addr;
 
-        let info = ConnectionInfo {
+        let key = Key {
             addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
             dir: ConnectionDirection::Incoming,
         };
-        let id = 0;
-        let peer = Peer {
+        let id = ConnectionId::next();
+        let data = Data {
             id,
             state: PeerState::Known,
             source: PeerSource::UserProvided,
-            tracker: TrafficTracker::new(),
+            stats_tracker: StatsTracker::default(),
             on_release: DropAwaitable::new(),
         };
 
         Self {
-            connections: Arc::new(BlockingMutex::new([(info, peer)].into_iter().collect())),
-            info,
+            connections: watch::Sender::new([(key, data)].into()),
+            key,
             id,
-            on_deduplicator_change: uninitialized_watch::channel().0,
         }
     }
 
-    fn with_peer<F, R>(&self, f: F) -> Option<R>
+    fn with<F, R>(&self, f: F) -> Option<R>
     where
-        F: FnOnce(&Peer) -> R,
+        F: FnOnce(&Data) -> R,
     {
-        self.connections.lock().unwrap().get(&self.info).map(f)
+        self.connections.borrow().get(&self.key).map(f)
     }
 }
 
 impl fmt::Debug for ConnectionPermit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ConnectionPermit(id:{}, {:?})", self.id, self.info)
+        f.debug_struct("ConnectionPermit")
+            .field("key", &self.key)
+            .field("id", &self.id)
+            .finish_non_exhaustive()
     }
 }
 
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
-        let Ok(mut connections) = self.connections.lock() else {
-            return;
-        };
+        self.connections.send_if_modified(|connections| {
+            let Entry::Occupied(entry) = connections.entry(self.key) else {
+                return false;
+            };
 
-        let Entry::Occupied(entry) = connections.entry(self.info) else {
-            return;
-        };
+            if entry.get().id != self.id {
+                return false;
+            }
 
-        if entry.get().id != self.id {
-            return;
-        }
-
-        entry.remove();
-        self.on_deduplicator_change.send(()).ok();
+            entry.remove();
+            true
+        });
     }
 }
 
@@ -310,14 +317,12 @@ impl Drop for ConnectionPermit {
 pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 
 impl ConnectionPermitHalf {
-    pub fn id(&self) -> PermitId {
+    pub fn id(&self) -> ConnectionId {
         self.0.id
     }
 
-    pub fn tracker(&self) -> TrafficTracker {
-        self.0
-            .with_peer(|peer| peer.tracker.clone())
-            .unwrap_or_default()
+    pub fn byte_counters(&self) -> Arc<ByteCounters> {
+        self.0.byte_counters()
     }
 
     pub fn released(&self) -> AwaitDrop {
@@ -326,7 +331,28 @@ impl ConnectionPermitHalf {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub(super) struct ConnectionInfo {
-    pub addr: PeerAddr,
-    pub dir: ConnectionDirection,
+struct Key {
+    addr: PeerAddr,
+    dir: ConnectionDirection,
+}
+
+struct Data {
+    id: ConnectionId,
+    state: PeerState,
+    source: PeerSource,
+    stats_tracker: StatsTracker,
+    on_release: DropAwaitable,
+}
+
+impl Data {
+    fn peer_info(&self, addr: PeerAddr) -> PeerInfo {
+        let stats = self.stats_tracker.read();
+
+        PeerInfo {
+            addr,
+            source: self.source,
+            state: self.state,
+            stats,
+        }
+    }
 }

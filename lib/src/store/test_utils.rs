@@ -84,4 +84,8 @@ impl<'a> SnapshotWriter<'a> {
     pub async fn commit(self) -> CommitStatus {
         self.writer.commit().await.unwrap()
     }
+
+    pub fn client_writer(&mut self) -> &mut ClientWriter {
+        &mut self.writer
+    }
 }

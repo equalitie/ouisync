@@ -1,4 +1,4 @@
-use super::{peer_addr::PeerAddr, peer_source::PeerSource, peer_state::PeerState, TrafficStats};
+use super::{peer_addr::PeerAddr, peer_source::PeerSource, peer_state::PeerState, stats::Stats};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 
 /// Information about a peer.
@@ -8,7 +8,7 @@ pub struct PeerInfo {
     pub addr: PeerAddr,
     pub source: PeerSource,
     pub state: PeerState,
-    pub stats: TrafficStats,
+    pub stats: Stats,
 }
 
 mod as_str {

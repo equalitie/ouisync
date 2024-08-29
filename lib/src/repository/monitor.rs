@@ -34,16 +34,11 @@ pub(crate) struct RepositoryMonitor {
     pub request_latency: Histogram,
     // Total number of timeouted requests.
     pub request_timeouts: Counter,
-    // Time a request spends in the send queue.
-    pub request_queue_time: Histogram,
 
     // Total number of responses sent.
     pub responses_sent: Counter,
     // Total number of responses received.
     pub responses_received: Counter,
-
-    // Total number of responses currently being processed.
-    pub responses_in_processing: Gauge,
 
     pub scan_job: JobMonitor,
     pub merge_job: JobMonitor,
@@ -73,7 +68,6 @@ impl RepositoryMonitor {
         let requests_received = create_counter(recorder, "requests received", Unit::Count);
         let request_latency = create_histogram(recorder, "request latency", Unit::Seconds);
         let request_timeouts = create_counter(recorder, "request timeouts", Unit::Count);
-        let request_queue_time = create_histogram(recorder, "request queue time", Unit::Seconds);
 
         let responses_sent = create_counter(recorder, "responses sent", Unit::Count);
         let responses_received = create_counter(recorder, "responses received", Unit::Count);
@@ -93,12 +87,9 @@ impl RepositoryMonitor {
             requests_received,
             request_latency,
             request_timeouts,
-            request_queue_time,
 
             responses_sent,
             responses_received,
-
-            responses_in_processing: create_gauge(recorder, "responses in processing", Unit::Count),
 
             scan_job,
             merge_job,

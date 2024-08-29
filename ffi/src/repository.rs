@@ -6,8 +6,8 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
-    self, crypto::Hashable, path, AccessMode, Credentials, Event, LocalSecret, Payload, Progress,
-    Registration, Repository, SetLocalSecret, ShareToken,
+    self, crypto::Hashable, path, AccessMode, Credentials, Event, LocalSecret, Progress,
+    Registration, Repository, SetLocalSecret, ShareToken, Stats,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -357,12 +357,7 @@ pub(crate) fn subscribe(
     let handle = state.spawn_task(|id| async move {
         loop {
             match notification_rx.recv().await {
-                Ok(Event {
-                    payload: Payload::SnapshotApproved(_) | Payload::BlockReceived { .. },
-                    ..
-                }) => (),
-                Ok(Event { .. }) => continue,
-                Err(RecvError::Lagged(_)) => (),
+                Ok(Event { .. }) | Err(RecvError::Lagged(_)) => (),
                 Err(RecvError::Closed) => break,
             }
 
@@ -559,6 +554,19 @@ pub(crate) async fn metadata_set(
     tx.commit().await?;
 
     Ok(())
+}
+
+/// Fetch per-repository network statistics
+pub(crate) async fn stats(state: &State, handle: RepositoryHandle) -> Result<Stats, Error> {
+    Ok(state
+        .repositories
+        .get(handle)?
+        .registration
+        .read()
+        .await
+        .as_ref()
+        .ok_or(RegistrationRequired)?
+        .stats())
 }
 
 /// Edit of a single metadata entry.

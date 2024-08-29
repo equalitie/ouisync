@@ -1,9 +1,10 @@
+use futures_util::TryStreamExt as _;
+
 use super::{
     block,
     block_expiration_tracker::BlockExpirationTracker,
-    block_ids,
-    cache::CacheTransaction,
-    index, inner_node, leaf_node,
+    block_id_cache::BlockIdCache,
+    block_ids, index, inner_node, leaf_node,
     quota::{self, QuotaError},
     root_node::{self, RootNodeStatus},
     Error,
@@ -16,7 +17,7 @@ use crate::{
     future::TryStreamExt as _,
     protocol::{
         Block, BlockId, InnerNode, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, Proof,
-        RootNodeFilter, SingleBlockPresence, Summary, EMPTY_INNER_HASH,
+        RootNodeFilter, SingleBlockPresence, Summary,
     },
     repository, StorageSize,
 };
@@ -25,28 +26,30 @@ use std::{mem, sync::Arc};
 /// Store operations for the client side of the sync protocol.
 pub(crate) struct ClientWriter {
     db: db::WriteTransaction,
-    cache: CacheTransaction,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     quota: Option<StorageSize>,
     summary_updates: Vec<Hash>,
     block_promises: Vec<BlockPromise>,
+    block_id_cache: BlockIdCache,
+    block_id_cache_updates: Vec<(Hash, BlockId)>,
 }
 
 impl ClientWriter {
     pub(super) async fn begin(
         mut db: db::WriteTransaction,
-        cache: CacheTransaction,
+        block_id_cache: BlockIdCache,
         block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     ) -> Result<Self, Error> {
         let quota = repository::quota::get(&mut db).await?;
 
         Ok(Self {
             db,
-            cache,
             block_expiration_tracker,
             quota,
             summary_updates: Vec::new(),
             block_promises: Vec::new(),
+            block_id_cache,
+            block_id_cache_updates: Vec::new(),
         })
     }
 
@@ -67,10 +70,7 @@ impl ClientWriter {
             )
             .await?;
 
-            // Empty root nodes are approved immediately.
-            if node.proof.hash == *EMPTY_INNER_HASH {
-                self.summary_updates.push(node.proof.hash);
-            }
+            self.summary_updates.push(node.proof.hash);
         }
 
         Ok(status)
@@ -106,7 +106,10 @@ impl ClientWriter {
 
         let mut nodes = nodes.into_incomplete();
         inner_node::inherit_summaries(&mut self.db, &mut nodes).await?;
-        inner_node::save_all(&mut self.db, &nodes, &parent_hash).await?;
+
+        if inner_node::save_all(&mut self.db, &nodes, &parent_hash).await? > 0 {
+            self.summary_updates.push(parent_hash);
+        }
 
         Ok(InnerNodesStatus { new_children })
     }
@@ -141,7 +144,7 @@ impl ClientWriter {
                             let offer_state = if self.quota.is_some() {
                                 // OPTIMIZE: the state is the same for all the nodes in `nodes`, so
                                 // it only needs to be loaded once.
-                                self.load_block_offer_state_assuming_quota(&node.block_id)
+                                load_block_offer_state_assuming_quota(&mut self.db, &node.block_id)
                                     .await?
                             } else {
                                 Some(OfferState::Approved)
@@ -170,13 +173,21 @@ impl ClientWriter {
         block: &Block,
         block_promise: Option<BlockPromise>,
     ) -> Result<(), Error> {
-        let old_len = self.summary_updates.len();
+        let updated = {
+            let mut updated = false;
+            let mut updates = leaf_node::set_present(&mut self.db, &block.id);
 
-        leaf_node::set_present(&mut self.db, &block.id)
-            .try_collect_into(&mut self.summary_updates)
-            .await?;
+            while let Some(update) = updates.try_next().await? {
+                self.summary_updates.push(update.parent);
+                self.block_id_cache_updates
+                    .push((update.encoded_locator, block.id));
+                updated = true;
+            }
 
-        if self.summary_updates.len() > old_len {
+            updated
+        };
+
+        if updated {
             block::write(&mut self.db, block).await?;
 
             if let Some(tracker) = &self.block_expiration_tracker {
@@ -187,24 +198,6 @@ impl ClientWriter {
         self.block_promises.extend(block_promise);
 
         Ok(())
-    }
-
-    /// Returns the state (`Pending` or `Approved`) that the offer for the given block should be
-    /// registered with. If the block isn't referenced or isn't missing, returns `None`.
-    pub async fn load_block_offer_state(
-        &mut self,
-        block_id: &BlockId,
-    ) -> Result<Option<OfferState>, Error> {
-        if self.quota.is_some() {
-            self.load_block_offer_state_assuming_quota(block_id).await
-        } else {
-            match leaf_node::load_block_presence(&mut self.db, block_id).await? {
-                Some(SingleBlockPresence::Missing) | Some(SingleBlockPresence::Expired) => {
-                    Ok(Some(OfferState::Approved))
-                }
-                Some(SingleBlockPresence::Present) | None => Ok(None),
-            }
-        }
     }
 
     /// Commit all pending writes and execute the given callback if and only if the commit completes
@@ -231,8 +224,9 @@ impl ClientWriter {
 
         let Self {
             db,
-            cache,
             block_promises,
+            block_id_cache,
+            block_id_cache_updates,
             ..
         } = self;
 
@@ -245,7 +239,7 @@ impl ClientWriter {
 
         let output = db
             .commit_and_then(move || {
-                cache.commit();
+                block_id_cache.set_present(&block_id_cache_updates);
 
                 for promise in block_promises {
                     promise.complete();
@@ -263,27 +257,12 @@ impl ClientWriter {
         self.commit_and_then(|status| status).await
     }
 
-    async fn load_block_offer_state_assuming_quota(
-        &mut self,
-        block_id: &BlockId,
-    ) -> Result<Option<OfferState>, Error> {
-        match root_node::load_node_state_of_missing(&mut self.db, block_id).await? {
-            NodeState::Incomplete | NodeState::Complete => Ok(Some(OfferState::Pending)),
-            NodeState::Approved => Ok(Some(OfferState::Approved)),
-            NodeState::Rejected => Ok(None),
-        }
-    }
-
     async fn finalize_snapshots(&mut self) -> Result<FinalizeStatus, Error> {
         self.summary_updates.sort();
         self.summary_updates.dedup();
 
-        let states = index::update_summaries(
-            &mut self.db,
-            &mut self.cache,
-            mem::take(&mut self.summary_updates),
-        )
-        .await?;
+        let states =
+            index::update_summaries(&mut self.db, mem::take(&mut self.summary_updates)).await?;
 
         let mut approved_branches = Vec::new();
         let mut rejected_branches = Vec::new();
@@ -354,6 +333,37 @@ impl ClientWriter {
     }
 }
 
+pub(crate) struct ClientReader {
+    db: db::ReadTransaction,
+    quota: Option<StorageSize>,
+}
+
+impl ClientReader {
+    pub(super) async fn begin(mut db: db::ReadTransaction) -> Result<Self, Error> {
+        let quota = repository::quota::get(&mut db).await?;
+
+        Ok(Self { db, quota })
+    }
+
+    /// Returns the state (`Pending` or `Approved`) that the offer for the given block should be
+    /// registered with. If the block isn't referenced or isn't missing, returns `None`.
+    pub async fn load_block_offer_state(
+        &mut self,
+        block_id: &BlockId,
+    ) -> Result<Option<OfferState>, Error> {
+        if self.quota.is_some() {
+            load_block_offer_state_assuming_quota(&mut self.db, block_id).await
+        } else {
+            match leaf_node::load_block_presence(&mut self.db, block_id).await? {
+                Some(SingleBlockPresence::Missing) | Some(SingleBlockPresence::Expired) => {
+                    Ok(Some(OfferState::Approved))
+                }
+                Some(SingleBlockPresence::Present) | None => Ok(None),
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct InnerNodesStatus {
     /// Which of the received nodes should we request the children of.
@@ -380,6 +390,17 @@ pub(crate) struct CommitStatus {
 struct FinalizeStatus {
     approved_branches: Vec<PublicKey>,
     rejected_branches: Vec<PublicKey>,
+}
+
+async fn load_block_offer_state_assuming_quota(
+    conn: &mut db::Connection,
+    block_id: &BlockId,
+) -> Result<Option<OfferState>, Error> {
+    match root_node::load_node_state_of_missing(conn, block_id).await? {
+        NodeState::Incomplete | NodeState::Complete => Ok(Some(OfferState::Pending)),
+        NodeState::Approved => Ok(Some(OfferState::Approved)),
+        NodeState::Rejected => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -936,5 +957,80 @@ mod tests {
         for id in snapshot.blocks().keys() {
             assert!(!reader.block_exists(id).await.unwrap());
         }
+    }
+
+    #[tokio::test]
+    async fn update_incomplete_snapshot_by_removing_blocks() {
+        let mut rng = rand::thread_rng();
+        let (_base_dir, pool) = db::create_temp().await.unwrap();
+        let store = Store::new(pool);
+        let secrets = WriteSecrets::generate(&mut rng);
+        let branch_id = PublicKey::generate(&mut rng);
+        let snapshot = Snapshot::generate(&mut rng, 2);
+
+        let block_to_remove = snapshot.blocks().keys().copied().next().unwrap();
+
+        let vv1 = VersionVector::first(branch_id);
+        let mut writer = SnapshotWriter::begin(&store, &snapshot)
+            .await
+            .save_root_nodes(&secrets.write_keys, branch_id, vv1.clone())
+            .await
+            .save_inner_nodes()
+            .await;
+
+        // Skip the leaf nodes that point to the block to be removed.
+        for (_, nodes) in snapshot.leaf_sets() {
+            if nodes.iter().any(|node| node.block_id == block_to_remove) {
+                continue;
+            }
+
+            writer
+                .client_writer()
+                .save_leaf_nodes(nodes.clone().into())
+                .await
+                .unwrap();
+        }
+
+        writer.commit().await;
+
+        // Verify the latest snapshot is incomplete
+        let node = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&branch_id)
+            .try_next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(node.summary.state, NodeState::Incomplete);
+
+        // Remove the block
+        let snapshot = Snapshot::new(
+            snapshot
+                .locators_and_blocks()
+                .filter(|(_, block)| block.id != block_to_remove)
+                .map(|(locator, block)| (*locator, block.clone())),
+        );
+
+        let vv2 = vv1.incremented(branch_id);
+        SnapshotWriter::begin(&store, &snapshot)
+            .await
+            .save_nodes(&secrets.write_keys, branch_id, vv2)
+            .await
+            .commit()
+            .await;
+
+        // Verify the latest snapshot is now complete
+        let node = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&branch_id)
+            .try_next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(node.summary.state, NodeState::Approved);
     }
 }

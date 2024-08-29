@@ -2,11 +2,11 @@ use super::timer::{Id, Timer};
 use once_cell::sync::Lazy;
 use std::{
     backtrace::Backtrace,
-    fmt,
     panic::Location,
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+use tracing::Span;
 
 /// Attach this to objects that are expected to be short-lived to be warned when they live longer
 /// than expected.
@@ -17,13 +17,13 @@ pub struct ExpectShortLifetime {
 
 impl ExpectShortLifetime {
     #[track_caller]
-    pub fn new(max_lifetime: Duration) -> Self {
-        Self::new_in(max_lifetime, Location::caller())
+    pub fn new(deadline: Duration) -> Self {
+        Self::new_in(deadline, Location::caller())
     }
 
-    pub fn new_in(max_lifetime: Duration, location: &'static Location<'static>) -> Self {
-        let context = Context::new(location);
-        let id = schedule(max_lifetime, context);
+    pub fn new_in(deadline: Duration, location: &'static Location<'static>) -> Self {
+        let context = Context::new(location, deadline);
+        let id = schedule(deadline, context);
 
         Self {
             id,
@@ -39,30 +39,20 @@ impl Drop for ExpectShortLifetime {
 }
 
 struct Context {
-    start_time: Instant,
+    deadline: Duration,
+    span: Span,
     location: &'static Location<'static>,
     backtrace: Backtrace,
 }
 
 impl Context {
-    fn new(location: &'static Location<'static>) -> Self {
+    fn new(location: &'static Location<'static>, deadline: Duration) -> Self {
         Self {
-            start_time: Instant::now(),
+            deadline,
+            span: Span::current(),
             location,
             backtrace: Backtrace::capture(),
         }
-    }
-}
-
-impl fmt::Display for Context {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "elapsed: {:?}, started at: {}\nbacktrace:\n{}",
-            self.start_time.elapsed(),
-            self.location,
-            self.backtrace
-        )
     }
 }
 
@@ -80,7 +70,7 @@ fn schedule(duration: Duration, context: Context) -> Id {
 fn cancel(id: Id, start: Instant) {
     if TIMER.cancel(id).is_none() {
         tracing::warn!(
-            "🐢🐢🐢 Previously reported task (id: {}) eventually completed in {:?} 🐢🐢🐢",
+            "🐢🐢🐢 Previously reported task {} eventually completed in {:?} 🐢🐢🐢",
             id,
             start.elapsed(),
         );
@@ -91,10 +81,20 @@ fn watching_thread() {
     loop {
         let (id, context) = TIMER.wait();
 
+        let Context {
+            deadline,
+            span,
+            location,
+            backtrace,
+        } = context;
+
         tracing::warn!(
-            "🐢🐢🐢 Task taking too long (id: {}) 🐢🐢🐢\n{}\n",
+            parent: span,
+            "🐢🐢🐢 Task {} (started in {}) is taking longer than {:?} 🐢🐢🐢\n{}",
             id,
-            context
+            location,
+            deadline,
+            backtrace,
         );
     }
 }

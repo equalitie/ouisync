@@ -9,7 +9,7 @@ use camino::Utf8PathBuf;
 use ouisync_bridge::network::NetworkDefaults;
 use ouisync_lib::{
     crypto::PasswordSalt, AccessChange, AccessMode, LocalSecret, NatBehavior, PeerAddr, PeerInfo,
-    Progress, SetLocalSecret, ShareToken, TrafficStats,
+    Progress, SetLocalSecret, ShareToken, Stats,
 };
 use serde::{Deserialize, Serialize};
 use state_monitor::{MonitorId, StateMonitor};
@@ -117,6 +117,7 @@ pub(crate) enum Request {
     },
     RepositoryMount(RepositoryHandle),
     RepositoryUnmount(RepositoryHandle),
+    RepositoryStats(RepositoryHandle),
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
@@ -207,7 +208,7 @@ pub(crate) enum Request {
     NetworkExternalAddrV4,
     NetworkExternalAddrV6,
     NetworkNatBehavior,
-    NetworkTrafficStats,
+    NetworkStats,
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
@@ -238,7 +239,7 @@ pub(crate) enum Response {
     Progress(Progress),
     PeerInfos(Vec<PeerInfo>),
     PeerAddrs(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
-    TrafficStats(TrafficStats),
+    NetworkStats(Stats),
 }
 
 impl<T> From<Option<T>> for Response
@@ -435,9 +436,9 @@ impl From<Option<NatBehavior>> for Response {
     }
 }
 
-impl From<TrafficStats> for Response {
-    fn from(value: TrafficStats) -> Self {
-        Self::TrafficStats(value)
+impl From<Stats> for Response {
+    fn from(value: Stats) -> Self {
+        Self::NetworkStats(value)
     }
 }
 
@@ -461,7 +462,7 @@ impl fmt::Debug for Response {
                 .field("len", &value.len())
                 .finish(),
             Self::PeerAddrs(value) => f.debug_tuple("PeerAddrs").field(value).finish(),
-            Self::TrafficStats(value) => f.debug_tuple("TrafficStats").field(value).finish(),
+            Self::NetworkStats(value) => f.debug_tuple("NetworkStats").field(value).finish(),
         }
     }
 }
@@ -657,7 +658,7 @@ mod tests {
                     addr: PeerAddr::Quic(([192, 168, 1, 204], 65535).into()),
                     source: PeerSource::LocalDiscovery,
                     state: PeerState::Connecting,
-                    stats: TrafficStats::default(),
+                    stats: Stats::default(),
                 },
                 PeerInfo {
                     addr: PeerAddr::Quic(
@@ -668,7 +669,7 @@ mod tests {
                         id: SecretRuntimeId::random().public(),
                         since: SystemTime::UNIX_EPOCH,
                     },
-                    stats: TrafficStats::default(),
+                    stats: Stats::default(),
                 },
             ]),
             Response::PeerAddrs(vec![PeerAddr::Tcp(([192, 168, 1, 234], 45678).into())]),

@@ -9,11 +9,11 @@ use super::{
     raw,
     runtime_id::PublicRuntimeId,
     server::Server,
-    traffic_tracker::TrafficTracker,
+    stats::{ByteCounters, Instrumented},
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
-    network::constants::MAX_RESPONSE_BATCH_SIZE,
+    network::constants::{REQUEST_BUFFER_SIZE, RESPONSE_BUFFER_SIZE},
     protocol::RepositoryId,
     repository::Vault,
 };
@@ -44,7 +44,6 @@ pub(super) struct MessageBroker {
     links: HashMap<RepositoryId, oneshot::Sender<()>>,
     pex_peer: PexPeer,
     monitor: StateMonitor,
-    tracker: TrafficTracker,
     span: SpanGuard,
 }
 
@@ -54,7 +53,6 @@ impl MessageBroker {
         that_runtime_id: PublicRuntimeId,
         pex_peer: PexPeer,
         monitor: StateMonitor,
-        tracker: TrafficTracker,
     ) -> Self {
         let span = SpanGuard::new(&that_runtime_id);
 
@@ -65,12 +63,11 @@ impl MessageBroker {
             links: HashMap::default(),
             pex_peer,
             monitor,
-            tracker,
             span,
         }
     }
 
-    pub fn add_connection(&self, stream: raw::Stream, permit: ConnectionPermit) {
+    pub fn add_connection(&self, stream: Instrumented<raw::Stream>, permit: ConnectionPermit) {
         self.pex_peer
             .handle_connection(permit.addr(), permit.source(), permit.released());
         self.dispatcher.bind(stream, permit)
@@ -89,6 +86,7 @@ impl MessageBroker {
         vault: Vault,
         pex_repo: &PexRepository,
         response_limiter: Arc<Semaphore>,
+        byte_counters: Arc<ByteCounters>,
     ) {
         let monitor = self.monitor.make_child(vault.monitor.name());
         let span = tracing::info_span!(
@@ -130,16 +128,19 @@ impl MessageBroker {
 
         let (pex_tx, pex_rx) = self.pex_peer.new_link(pex_repo);
 
+        let stream =
+            Instrumented::new(self.dispatcher.open_recv(channel_id), byte_counters.clone());
+        let sink = Instrumented::new(self.dispatcher.open_send(channel_id), byte_counters);
+
         let mut link = Link {
             role,
-            stream: self.dispatcher.open_recv(channel_id),
-            sink: self.dispatcher.open_send(channel_id),
+            stream,
+            sink,
             vault,
             response_limiter,
             pex_tx,
             pex_rx,
             monitor,
-            tracker: self.tracker.clone(),
         };
 
         drop(span_enter);
@@ -189,14 +190,13 @@ impl Drop for SpanGuard {
 
 struct Link {
     role: Role,
-    stream: ContentStream,
-    sink: ContentSink,
+    stream: Instrumented<ContentStream>,
+    sink: Instrumented<ContentSink>,
     vault: Vault,
     response_limiter: Arc<Semaphore>,
     pex_tx: PexSender,
     pex_rx: PexReceiver,
     monitor: StateMonitor,
-    tracker: TrafficTracker,
 }
 
 impl Link {
@@ -229,7 +229,7 @@ impl Link {
 
             *state.get() = State::AwaitingBarrier;
 
-            match Barrier::new(&mut self.stream, &self.sink, &self.monitor)
+            match Barrier::new(self.stream.as_mut(), self.sink.as_ref(), &self.monitor)
                 .run()
                 .await
             {
@@ -241,20 +241,15 @@ impl Link {
 
             *state.get() = State::EstablishingChannel;
 
-            let (crypto_stream, crypto_sink) = match establish_channel(
-                self.role,
-                &mut self.stream,
-                &mut self.sink,
-                &self.vault,
-                self.tracker.clone(),
-            )
-            .await
-            {
-                Ok(io) => io,
-                Err(EstablishError::Crypto) => continue,
-                Err(EstablishError::Closed) => break,
-                Err(EstablishError::TransportChanged) => continue,
-            };
+            let (crypto_stream, crypto_sink) =
+                match establish_channel(self.role, &mut self.stream, &mut self.sink, &self.vault)
+                    .await
+                {
+                    Ok(io) => io,
+                    Err(EstablishError::Crypto) => continue,
+                    Err(EstablishError::Closed) => break,
+                    Err(EstablishError::TransportChanged) => continue,
+                };
 
             *state.get() = State::Running;
 
@@ -277,12 +272,11 @@ impl Link {
 
 async fn establish_channel<'a>(
     role: Role,
-    stream: &'a mut ContentStream,
-    sink: &'a mut ContentSink,
+    stream: &'a mut Instrumented<ContentStream>,
+    sink: &'a mut Instrumented<ContentSink>,
     vault: &Vault,
-    tracker: TrafficTracker,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
-    match crypto::establish_channel(role, vault.repository_id(), stream, sink, tracker).await {
+    match crypto::establish_channel(role, vault.repository_id(), stream, sink).await {
         Ok(io) => {
             tracing::debug!("Established encrypted channel");
             Ok(io)
@@ -303,9 +297,12 @@ async fn run_link(
     pex_tx: &mut PexSender,
     pex_rx: &mut PexReceiver,
 ) -> ControlFlow {
-    let (request_tx, request_rx) = mpsc::channel(1);
-    let (response_tx, response_rx) = mpsc::channel(MAX_RESPONSE_BATCH_SIZE);
-    let (content_tx, content_rx) = mpsc::channel(1);
+    // Incoming message channels are bounded to prevent malicious peers from sending us too many
+    // messages and exhausting our memory.
+    let (request_tx, request_rx) = mpsc::channel(REQUEST_BUFFER_SIZE);
+    let (response_tx, response_rx) = mpsc::channel(RESPONSE_BUFFER_SIZE);
+    // Outgoing message channel is unbounded because we fully control how much stuff goes into it.
+    let (content_tx, content_rx) = mpsc::unbounded_channel();
 
     tracing::info!("Link opened");
 
@@ -369,7 +366,7 @@ async fn recv_messages(
 
 // Handle outgoing messages
 async fn send_messages(
-    mut content_rx: mpsc::Receiver<Content>,
+    mut content_rx: mpsc::UnboundedReceiver<Content>,
     mut sink: EncryptingSink<'_>,
 ) -> ControlFlow {
     loop {
@@ -400,7 +397,7 @@ async fn send_messages(
 // Create and run client. Returns only on error.
 async fn run_client(
     repo: Vault,
-    content_tx: mpsc::Sender<Content>,
+    content_tx: mpsc::UnboundedSender<Content>,
     response_rx: mpsc::Receiver<Response>,
 ) -> ControlFlow {
     let mut client = Client::new(repo, content_tx, response_rx);
@@ -417,7 +414,7 @@ async fn run_client(
 // Create and run server. Returns only on error.
 async fn run_server(
     repo: Vault,
-    content_tx: mpsc::Sender<Content>,
+    content_tx: mpsc::UnboundedSender<Content>,
     request_rx: mpsc::Receiver<Request>,
     response_limiter: Arc<Semaphore>,
 ) -> ControlFlow {

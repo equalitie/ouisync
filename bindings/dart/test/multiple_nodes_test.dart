@@ -67,7 +67,7 @@ void main() {
     final addr = (await session1.quicListenerLocalAddressV4)!;
 
     final expect = expectLater(
-      session2.onPeersChange,
+      session2.networkEvents.asyncMap((_) => session2.peers),
       emitsThrough(contains(isA<PeerInfo>()
           .having((peer) => peer.addr, 'addr', equals('quic/$addr'))
           .having(
@@ -81,7 +81,7 @@ void main() {
     await expect;
   });
 
-  test('traffic stats', () async {
+  test('network stats', () async {
     final addr = (await session1.quicListenerLocalAddressV4)!;
     await session2.addUserProvidedPeer('quic/$addr');
 
@@ -99,8 +99,9 @@ void main() {
       await repo2.events.first;
     }
 
-    final stats = await session2.trafficStats;
-    expect(stats.send, greaterThan(0));
-    expect(stats.recv, greaterThan(65536)); // at least two blocks received
+    final stats = await session2.networkStats;
+
+    expect(stats.bytesTx, greaterThan(0));
+    expect(stats.bytesRx, greaterThan(65536)); // at least two blocks received
   });
 }
