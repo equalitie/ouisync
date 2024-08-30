@@ -15,8 +15,3 @@ pubspec.lock
 .idea/workspace.xml
 
 .DS_Store
-
-# This is a symbolic link created by {windows,linux}/CMakeLists.txt scripts
-# because git often doesn't support symlinks by default (depends on which OS,
-# git version and .gitconfig).
-ouisync

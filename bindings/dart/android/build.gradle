@@ -1,11 +1,11 @@
-group 'org.equalitie.ouisync.lib'
-version '1.0-SNAPSHOT'
+group = "org.equalitie.ouisync.lib"
+version = "1.0-SNAPSHOT"
 
 buildscript {
-    ext.kotlin_version = '1.8.20'
+    ext.kotlin_version = "2.0.20"
     repositories {
         google()
-        jcenter()
+        mavenCentral()
 
         maven {
             url "https://plugins.gradle.org/m2/"
@@ -13,44 +13,51 @@ buildscript {
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:7.4.2'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-        classpath "org.mozilla.rust-android-gradle:plugin:0.9.3"
+        classpath("com.android.tools.build:gradle:8.5.2")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
+        classpath("org.mozilla.rust-android-gradle:plugin:0.9.4")
     }
 }
 
-rootProject.allprojects {
+allprojects {
     repositories {
         google()
-        jcenter()
+        mavenCentral()
     }
 }
 
-apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
-apply plugin: 'org.mozilla.rust-android-gradle.rust-android'
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+apply plugin: "org.mozilla.rust-android-gradle.rust-android"
 
 android {
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+    if (project.android.hasProperty("namespace")) {
+        namespace = "org.equalitie.ouisync.lib"
     }
 
-    kotlin {
-        jvmToolchain(17)
-    }
-
-    compileSdkVersion 34
-
+    compileSdk = 34
     // At time of writing, this is the LTS version
-    ndkVersion '26.3.11579264'
+    ndkVersion = "27.0.12077973"
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_17
+    }
 
     sourceSets {
-        main.java.srcDirs += 'src/main/kotlin'
+        main.java.srcDirs += "src/main/kotlin"
+        test.java.srcDirs += "src/test/kotlin"
     }
+
     defaultConfig {
-        minSdkVersion 21
+        minSdk = 21
+        targetSdkVersion = 35
     }
+
     buildTypes {
         debug {
             android.packagingOptions.doNotStrip '**.so'
@@ -58,11 +65,23 @@ android {
         profile {
         }
     }
-}
 
-dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
-    implementation 'androidx.annotation:annotation:1.0.2'
+    dependencies {
+        testImplementation("org.jetbrains.kotlin:kotlin-test")
+        testImplementation("org.mockito:mockito-core:5.10.0")
+    }
+
+    testOptions {
+        unitTests.all {
+            useJUnitPlatform()
+
+            testLogging {
+               events "passed", "skipped", "failed", "standardOut", "standardError"
+               outputs.upToDateWhen {false}
+               showStandardStreams = true
+            }
+        }
+    }
 }
 
 def abiTargets = {
@@ -100,20 +119,6 @@ cargo {
     profile = gradle.startParameter.taskNames.any{it.toLowerCase().contains("debug")} ? "debug" : "release"
 
     extraCargoBuildArguments = ['-p', 'ouisync-ffi']
-
-    // HACK: Recent NDK (since r23) no longer links `libgcc`, which breaks some libraries since
-    // they depended on the symbols from `libclang_rt.builtins-x86_64-android`
-    // (e.g. `__extenddftf2`, ...). To work around it, we link the library explicitly by setting
-    // it through the RUSTFLAGS env variable.
-    // More info: https://github.com/bbqsrc/cargo-ndk/issues/94.
-    exec { spec, toolchain ->
-        if (toolchain.target == 'x86_64-linux-android') {
-            def clangVersion = '17'
-            def libDir = "${android.sdkDirectory}/ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/${clangVersion}/lib/linux"
-
-            spec.environment('RUSTFLAGS', "-L${libDir} -lstatic=clang_rt.builtins-x86_64-android")
-        }
-    }
 }
 
 preBuild.dependsOn 'cargoBuild'

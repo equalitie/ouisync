@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:async/async.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:ouisync/native_channels.dart';
@@ -10,10 +11,12 @@ import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 
 void main() async {
-  runApp(MaterialApp(home: MyApp()));
+  runApp(const MaterialApp(home: MyApp()));
 }
 
 class MyApp extends StatefulWidget {
+  const MyApp({super.key});
+
   @override
   State<MyApp> createState() => _MyAppState();
 }
@@ -71,9 +74,9 @@ class _MyAppState extends State<MyApp> {
         length: 2,
         child: Scaffold(
             appBar: AppBar(
-                title: Text("Ouisync Example App"),
-                bottom:
-                    TabBar(tabs: [Tab(text: "Files"), Tab(text: "Settings")])),
+                title: const Text("Ouisync Example App"),
+                bottom: const TabBar(
+                    tabs: [Tab(text: "Files"), Tab(text: "Settings")])),
             body: TabBarView(
               children: [
                 makeFileListBody(),
@@ -86,13 +89,13 @@ class _MyAppState extends State<MyApp> {
     return Column(
       children: [
         Padding(
-          padding: EdgeInsets.all(4.0),
+          padding: const EdgeInsets.all(4.0),
           child: Row(
             children: [
               ElevatedButton(
                   onPressed: () async =>
                       await addFile().then((value) => getFiles('/')),
-                  child: Text('Add file')),
+                  child: const Text('Add file')),
             ],
           ),
         ),
@@ -105,7 +108,7 @@ class _MyAppState extends State<MyApp> {
     return Column(
       children: <Widget>[
         SwitchListTile(
-          title: Text("BitTorrent DHT"),
+          title: const Text("BitTorrent DHT"),
           value: bittorrentDhtEnabled,
           onChanged: (bool value) {
             setDhtEnabled(value);
@@ -126,7 +129,7 @@ class _MyAppState extends State<MyApp> {
 
   Widget fileList() => ListView.separated(
       separatorBuilder: (context, index) =>
-          Divider(height: 1, color: Colors.transparent),
+          const Divider(height: 1, color: Colors.transparent),
       shrinkWrap: true,
       itemCount: contents.length,
       itemBuilder: (context, index) {
@@ -153,10 +156,14 @@ class _MyAppState extends State<MyApp> {
     File? newFile;
 
     try {
-      print('Creating file $filePath');
+      if (kDebugMode) {
+        print('Creating file $filePath');
+      }
       newFile = await File.create(repo, filePath);
     } catch (e) {
-      print('Error creating file $filePath: $e');
+      if (kDebugMode) {
+        print('Error creating file $filePath: $e');
+      }
     }
 
     return newFile!;
@@ -164,7 +171,9 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> saveFile(
       File file, String path, Stream<List<int>> stream) async {
-    print('Writing file $path');
+    if (kDebugMode) {
+      print('Writing file $path');
+    }
 
     int offset = 0;
 
@@ -172,10 +181,14 @@ class _MyAppState extends State<MyApp> {
       final streamReader = ChunkedStreamReader(stream);
       while (true) {
         final buffer = await streamReader.readChunk(64000);
-        print('Buffer size: ${buffer.length} - offset: $offset');
+        if (kDebugMode) {
+          print('Buffer size: ${buffer.length} - offset: $offset');
+        }
 
         if (buffer.isEmpty) {
-          print('The buffer is empty; reading from the stream is done!');
+          if (kDebugMode) {
+            print('The buffer is empty; reading from the stream is done!');
+          }
           break;
         }
 
@@ -183,7 +196,9 @@ class _MyAppState extends State<MyApp> {
         offset += buffer.length;
       }
     } catch (e) {
-      print('Exception writing the file $path:\n${e.toString()}');
+      if (kDebugMode) {
+        print('Exception writing the file $path:\n${e.toString()}');
+      }
     } finally {
       await file.close();
     }
@@ -206,7 +221,7 @@ class _MyAppState extends State<MyApp> {
 
   void showAlertDialog(BuildContext context, String path, int size) {
     Widget previewFileButton = TextButton(
-      child: Text("Preview"),
+      child: const Text("Preview"),
       onPressed: () async {
         Navigator.of(context).pop();
         await nativeChannels.previewOuiSyncFile(
@@ -214,21 +229,21 @@ class _MyAppState extends State<MyApp> {
       },
     );
     Widget shareFileButton = TextButton(
-        child: Text("Share"),
+        child: const Text("Share"),
         onPressed: () async {
           Navigator.of(context).pop();
           await nativeChannels.shareOuiSyncFile(
               "org.equalitie.ouisync_example", path, size);
         });
     Widget cancelButton = TextButton(
-      child: Text("Cancel"),
+      child: const Text("Cancel"),
       onPressed: () {
         Navigator.of(context).pop();
       },
     );
 
     AlertDialog alert = AlertDialog(
-      title: Text("Ouisync Plugin Example App"),
+      title: const Text("Ouisync Plugin Example App"),
       content: Text("File:\n$path"),
       actions: [
         previewFileButton,
