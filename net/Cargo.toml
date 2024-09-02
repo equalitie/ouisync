@@ -12,7 +12,6 @@ bytecodec = "0.4.15"
 bytes = "1.1.0"
 futures-util = { workspace = true }
 quinn = "0.10.2"
-quinn-proto = "0.10.2"
 rand = { package = "ouisync-rand", path = "../rand" }
 rcgen = { workspace = true }
 rustls = { workspace = true, features = ["quic", "dangerous_configuration"] }
