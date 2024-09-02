@@ -2,10 +2,10 @@
 
 use std::{io, path::Path};
 use tokio::fs;
-use tokio_rustls::rustls::{Certificate, PrivateKey};
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
 /// Loads all certificates in the given directory (non-recursively).
-pub async fn load_certificates_from_dir(dir: &Path) -> io::Result<Vec<Certificate>> {
+pub async fn load_certificates_from_dir(dir: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
     let mut read_dir = match fs::read_dir(dir).await {
         Ok(read_dir) => read_dir,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -33,17 +33,22 @@ pub async fn load_certificates_from_dir(dir: &Path) -> io::Result<Vec<Certificat
 }
 
 /// Loads certificates from the given file.
-pub async fn load_certificates_from_file(path: impl AsRef<Path>) -> io::Result<Vec<Certificate>> {
+pub async fn load_certificates_from_file(
+    path: impl AsRef<Path>,
+) -> io::Result<Vec<CertificateDer<'static>>> {
     load_pems(path.as_ref(), "CERTIFICATE")
         .await
-        .map(|pems| pems.map(Certificate).collect())
+        .map(|pems| pems.map(|content| content.into()).collect())
 }
 
 /// Loads private keys from the given file.
-pub async fn load_keys_from_file(path: impl AsRef<Path>) -> io::Result<Vec<PrivateKey>> {
-    load_pems(path.as_ref(), "PRIVATE KEY")
-        .await
-        .map(|pems| pems.map(PrivateKey).collect())
+pub async fn load_keys_from_file(
+    path: impl AsRef<Path>,
+) -> io::Result<Vec<PrivateKeyDer<'static>>> {
+    load_pems(path.as_ref(), "PRIVATE KEY").await.map(|pems| {
+        pems.map(|content| PrivatePkcs8KeyDer::from(content).into())
+            .collect()
+    })
 }
 
 async fn load_pems<'a>(

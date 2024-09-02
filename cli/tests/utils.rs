@@ -27,7 +27,7 @@ const CONFIG_DIR: &str = "config";
 const API_SOCKET: &str = "api.sock";
 const DEFAULT_REPO: &str = "test";
 
-static CERT: Lazy<rcgen::Certificate> =
+static CERT: Lazy<rcgen::CertifiedKey> =
     Lazy::new(|| rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap());
 
 impl Bin {
@@ -43,11 +43,11 @@ impl Bin {
         fs::create_dir_all(config_dir.join("root_certs")).unwrap();
 
         // Install the certificate
-        let cert = CERT.serialize_pem().unwrap();
+        let cert = CERT.cert.pem();
 
         // For server:
         fs::write(config_dir.join("cert.pem"), &cert).unwrap();
-        fs::write(config_dir.join("key.pem"), CERT.serialize_private_key_pem()).unwrap();
+        fs::write(config_dir.join("key.pem"), CERT.key_pair.serialize_pem()).unwrap();
 
         // For client:
         fs::write(config_dir.join("root_certs").join("localhost.pem"), &cert).unwrap();

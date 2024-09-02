@@ -205,11 +205,14 @@ mod tests {
         make_client_config, make_server_config, RemoteClient, RemoteServer,
     };
     use ouisync_lib::{crypto::sign::Keypair, AccessMode, WriteSecrets};
-    use rustls::{Certificate, ClientConfig, PrivateKey};
     use state_monitor::StateMonitor;
     use std::net::Ipv4Addr;
     use tempfile::TempDir;
     use tokio::task;
+    use tokio_rustls::rustls::{
+        pki_types::{CertificateDer, PrivatePkcs8KeyDer},
+        ClientConfig,
+    };
 
     #[test]
     fn insert_separators_test() {
@@ -467,11 +470,11 @@ mod tests {
             mount_dir: temp_dir.path().join("mount"),
         };
 
-        let certs = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-        let cert = Certificate(certs.serialize_der().unwrap());
-        let private_key = PrivateKey(certs.serialize_private_key_der());
+        let gen = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let cert = CertificateDer::from(gen.cert);
+        let private_key = PrivatePkcs8KeyDer::from(gen.key_pair.serialize_der());
 
-        let server_config = make_server_config(vec![cert.clone()], private_key).unwrap();
+        let server_config = make_server_config(vec![cert.clone()], private_key.into()).unwrap();
         let client_config = make_client_config(&[cert]).unwrap();
 
         let state = State::init(&dirs, StateMonitor::make_root()).await.unwrap();

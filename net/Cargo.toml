@@ -11,10 +11,10 @@ version.workspace = true
 bytecodec = "0.4.15"
 bytes = "1.1.0"
 futures-util = { workspace = true }
-quinn = "0.10.2"
+pin-project-lite = { workspace = true }
+quinn = "0.11.4"
 rand = { package = "ouisync-rand", path = "../rand" }
 rcgen = { workspace = true }
-rustls = { workspace = true, features = ["quic", "dangerous_configuration"] }
 socket2 = "0.5.7" # To be able to setsockopts before a socket is bound
 stun_codec = "0.3.4"
 thiserror = "1.0.31"

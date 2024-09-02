@@ -22,8 +22,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 dirs = "4.0.0"
 futures-util = { workspace = true }
-hyper = { version = "0.14.27", features = ["server", "http1", "http2"] }
-hyper-rustls = { version = "0.24.1", default-features = false, features = ["acceptor"] }
+hyper = { version = "1.4.1", features = ["server", "http1"] }
 interprocess = { version = "1.2.1", features = ["tokio_support"] }
 maxminddb = "0.23.0"
 metrics = { workspace = true }
@@ -32,12 +31,12 @@ ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }
 rand = { workspace = true }
-rustls = { workspace = true }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 state_monitor = { path = "../state_monitor" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["signal", "io-std"] }
+tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "compat"] }
 tracing = { workspace = true }

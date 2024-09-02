@@ -19,6 +19,7 @@ use std::{
     time::Duration,
 };
 use tokio::{sync::OnceCell, time};
+use tokio_rustls::rustls;
 
 pub(crate) struct State {
     pub config: ConfigStore,
