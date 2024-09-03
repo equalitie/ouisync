@@ -20,7 +20,6 @@ mod peer_source;
 mod peer_state;
 mod pending;
 mod protocol;
-mod raw;
 mod runtime_id;
 mod seen_peers;
 mod server;
@@ -41,6 +40,7 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
+use net::connection::Connection;
 pub use net::stun::NatBehavior;
 
 use self::{
@@ -718,9 +718,9 @@ impl Inner {
 
     async fn handle_incoming_connections(
         self: Arc<Self>,
-        mut rx: mpsc::Receiver<(raw::Stream, PeerAddr)>,
+        mut rx: mpsc::Receiver<(Connection, PeerAddr)>,
     ) {
-        while let Some((stream, addr)) = rx.recv().await {
+        while let Some((connection, addr)) = rx.recv().await {
             match self.connections.reserve(addr, PeerSource::Listener) {
                 ReserveResult::Permit(permit) => {
                     if self.is_shutdown() {
@@ -739,7 +739,7 @@ impl Inner {
                     monitor.mark_as_connecting(permit.id());
 
                     self.spawn(async move {
-                        this.handle_connection(stream, permit, &monitor).await;
+                        this.handle_connection(connection, permit, &monitor).await;
                     });
                 }
                 ReserveResult::Occupied(_, _their_source, permit_id) => {
@@ -840,7 +840,7 @@ impl Inner {
     /// Return true iff the peer is suitable for reconnection.
     async fn handle_connection(
         &self,
-        mut stream: raw::Stream,
+        mut connection: Connection,
         permit: ConnectionPermit,
         monitor: &ConnectionMonitor,
     ) -> bool {
@@ -849,7 +849,8 @@ impl Inner {
         permit.mark_as_handshaking();
         monitor.mark_as_handshaking();
 
-        let handshake_result = perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await;
+        let handshake_result =
+            perform_handshake(&mut connection, VERSION, &self.this_runtime_id).await;
 
         if let Err(error) = &handshake_result {
             tracing::debug!(parent: monitor.span(), ?error, "Handshake failed");
@@ -915,8 +916,8 @@ impl Inner {
                 broker
             });
 
-            let stream = Instrumented::new(stream, self.stats_tracker.bytes.clone());
-            broker.add_connection(stream, permit);
+            let connection = Instrumented::new(connection, self.stats_tracker.bytes.clone());
+            broker.add_connection(connection, permit);
         }
 
         let _remover = MessageBrokerEntryGuard {
@@ -962,28 +963,28 @@ impl Inner {
 
 // Exchange runtime ids with the peer. Returns their (verified) runtime id.
 async fn perform_handshake(
-    stream: &mut raw::Stream,
+    connection: &mut Connection,
     this_version: Version,
     this_runtime_id: &SecretRuntimeId,
 ) -> Result<PublicRuntimeId, HandshakeError> {
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
-        stream.write_all(MAGIC).await?;
+        connection.write_all(MAGIC).await?;
 
-        this_version.write_into(stream).await?;
+        this_version.write_into(connection).await?;
 
         let mut that_magic = [0; MAGIC.len()];
-        stream.read_exact(&mut that_magic).await?;
+        connection.read_exact(&mut that_magic).await?;
 
         if MAGIC != &that_magic {
             return Err(HandshakeError::BadMagic);
         }
 
-        let that_version = Version::read_from(stream).await?;
+        let that_version = Version::read_from(connection).await?;
         if that_version > this_version {
             return Err(HandshakeError::ProtocolVersionMismatch(that_version));
         }
 
-        let that_runtime_id = runtime_id::exchange(this_runtime_id, stream).await?;
+        let that_runtime_id = runtime_id::exchange(this_runtime_id, connection).await?;
 
         Ok(that_runtime_id)
     })

@@ -742,7 +742,7 @@ mod tests {
                         quinn::ReadError::ConnectionLost(
                             quinn::ConnectionError::ApplicationClosed(_),
                         ) => {
-                            // connection graceflly closed by the peer, this is expected.
+                            // connection gracefully closed by the peer, this is expected.
                         }
                         error => panic!("unexpected error: {:?}", error),
                     },

@@ -1,4 +1,4 @@
-use super::raw;
+use net::connection::{Connection, OwnedReadHalf, OwnedWriteHalf};
 use pin_project_lite::pin_project;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -223,13 +223,8 @@ where
     }
 }
 
-impl Instrumented<raw::Stream> {
-    pub fn into_split(
-        self,
-    ) -> (
-        Instrumented<raw::OwnedReadHalf>,
-        Instrumented<raw::OwnedWriteHalf>,
-    ) {
+impl Instrumented<Connection> {
+    pub fn into_split(self) -> (Instrumented<OwnedReadHalf>, Instrumented<OwnedWriteHalf>) {
         let (reader, writer) = self.inner.into_split();
 
         (

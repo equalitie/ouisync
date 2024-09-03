@@ -6,7 +6,6 @@ use super::{
     message::{Content, MessageChannelId, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     peer_exchange::{PexPeer, PexReceiver, PexRepository, PexSender},
-    raw,
     runtime_id::PublicRuntimeId,
     server::Server,
     stats::{ByteCounters, Instrumented},
@@ -18,6 +17,7 @@ use crate::{
     repository::Vault,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use net::connection::Connection;
 use state_monitor::StateMonitor;
 use std::{future, sync::Arc};
 use tokio::{
@@ -67,10 +67,10 @@ impl MessageBroker {
         }
     }
 
-    pub fn add_connection(&self, stream: Instrumented<raw::Stream>, permit: ConnectionPermit) {
+    pub fn add_connection(&self, connection: Instrumented<Connection>, permit: ConnectionPermit) {
         self.pex_peer
             .handle_connection(permit.addr(), permit.source(), permit.released());
-        self.dispatcher.bind(stream, permit)
+        self.dispatcher.bind(connection, permit)
     }
 
     /// Has this broker at least one live connection?

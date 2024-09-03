@@ -4,12 +4,12 @@ use super::{
     connection::{ConnectionId, ConnectionPermit, ConnectionPermitHalf},
     message::{Message, MessageChannelId},
     message_io::{MessageSink, MessageStream, MESSAGE_OVERHEAD},
-    raw,
     stats::Instrumented,
 };
 use crate::{collections::HashMap, sync::AwaitDrop};
 use async_trait::async_trait;
 use futures_util::{future, ready, stream::SelectAll, FutureExt, Sink, SinkExt, Stream, StreamExt};
+use net::connection::{Connection, OwnedReadHalf, OwnedWriteHalf};
 use std::{
     io,
     pin::Pin,
@@ -56,8 +56,10 @@ impl MessageDispatcher {
 
     /// Bind this dispatcher to the given TCP of QUIC socket. Can be bound to multiple sockets and
     /// the failed ones are automatically removed.
-    pub fn bind(&self, socket: Instrumented<raw::Stream>, permit: ConnectionPermit) {
-        self.command_tx.send(Command::Bind { socket, permit }).ok();
+    pub fn bind(&self, connection: Instrumented<Connection>, permit: ConnectionPermit) {
+        self.command_tx
+            .send(Command::Bind { connection, permit })
+            .ok();
     }
 
     /// Is this dispatcher bound to at least one connection?
@@ -250,7 +252,7 @@ pub(super) struct ChannelClosed;
 struct ConnectionStream {
     // The reader is doubly instrumented - first time to track per connection stats and second time
     // to track cumulative stats across all connections.
-    reader: MessageStream<Instrumented<Instrumented<raw::OwnedReadHalf>>>,
+    reader: MessageStream<Instrumented<Instrumented<OwnedReadHalf>>>,
     permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
     connection_count: Arc<AtomicUsize>,
@@ -258,7 +260,7 @@ struct ConnectionStream {
 
 impl ConnectionStream {
     fn new(
-        reader: Instrumented<raw::OwnedReadHalf>,
+        reader: Instrumented<OwnedReadHalf>,
         permit: ConnectionPermitHalf,
         connection_count: Arc<AtomicUsize>,
     ) -> Self {
@@ -305,13 +307,13 @@ impl Drop for ConnectionStream {
 struct ConnectionSink {
     // The writer is doubly instrumented - first time to track per connection stats and second time
     // to track cumulative stats across all connections.
-    writer: MessageSink<Instrumented<Instrumented<raw::OwnedWriteHalf>>>,
+    writer: MessageSink<Instrumented<Instrumented<OwnedWriteHalf>>>,
     _permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
 }
 
 impl ConnectionSink {
-    fn new(writer: Instrumented<raw::OwnedWriteHalf>, permit: ConnectionPermitHalf) -> Self {
+    fn new(writer: Instrumented<OwnedWriteHalf>, permit: ConnectionPermitHalf) -> Self {
         let permit_released = permit.released();
 
         Self {
@@ -407,8 +409,8 @@ impl Worker {
             Command::Close { channel } => {
                 self.recv.channels.remove(&channel);
             }
-            Command::Bind { socket, permit } => {
-                let (reader, writer) = socket.into_split();
+            Command::Bind { connection, permit } => {
+                let (reader, writer) = connection.into_split();
                 let (send_permit, recv_permit) = permit.into_split();
 
                 self.send
@@ -453,7 +455,7 @@ enum Command {
         channel: MessageChannelId,
     },
     Bind {
-        socket: Instrumented<raw::Stream>,
+        connection: Instrumented<Connection>,
         permit: ConnectionPermit,
     },
     Shutdown {
@@ -548,7 +550,10 @@ mod tests {
     use super::{super::stats::ByteCounters, *};
     use assert_matches::assert_matches;
     use futures_util::stream;
-    use net::tcp::{TcpListener, TcpStream};
+    use net::{
+        connection::Connection,
+        tcp::{TcpListener, TcpStream},
+    };
     use std::{collections::BTreeSet, net::Ipv4Addr, str::from_utf8, time::Duration};
 
     #[tokio::test(flavor = "multi_thread")]
@@ -559,9 +564,9 @@ mod tests {
         let server_dispatcher = MessageDispatcher::new();
         let mut server_stream = server_dispatcher.open_recv(channel);
 
-        let (client_socket, server_socket) = create_connected_sockets().await;
-        let mut client_sink = MessageSink::new(client_socket);
-        server_dispatcher.bind(server_socket, ConnectionPermit::dummy());
+        let (client, server) = create_connection_pair().await;
+        let mut client_sink = MessageSink::new(client);
+        server_dispatcher.bind(server, ConnectionPermit::dummy());
 
         client_sink
             .send(Message {
@@ -587,9 +592,9 @@ mod tests {
         let server_stream0 = server_dispatcher.open_recv(channel0);
         let server_stream1 = server_dispatcher.open_recv(channel1);
 
-        let (client_socket, server_socket) = create_connected_sockets().await;
-        let mut client_sink = MessageSink::new(client_socket);
-        server_dispatcher.bind(server_socket, ConnectionPermit::dummy());
+        let (client, server) = create_connection_pair().await;
+        let mut client_sink = MessageSink::new(client);
+        server_dispatcher.bind(server, ConnectionPermit::dummy());
 
         for (channel, content) in [(channel0, send_content0), (channel1, send_content1)] {
             client_sink
@@ -625,9 +630,9 @@ mod tests {
         let server_stream0 = server_dispatcher.open_recv(channel0);
         let server_stream1 = server_dispatcher.open_recv(channel1);
 
-        let (client_socket, server_socket) = create_connected_sockets().await;
-        client_dispatcher.bind(client_socket, ConnectionPermit::dummy());
-        server_dispatcher.bind(server_socket, ConnectionPermit::dummy());
+        let (client, server) = create_connection_pair().await;
+        client_dispatcher.bind(client, ConnectionPermit::dummy());
+        server_dispatcher.bind(server, ConnectionPermit::dummy());
 
         let num_messages = 20;
         let mut send_tasks = vec![];
@@ -671,9 +676,9 @@ mod tests {
         let mut server_stream0 = server_dispatcher.open_recv(channel);
         let mut server_stream1 = server_dispatcher.open_recv(channel);
 
-        let (client_socket, server_socket) = create_connected_sockets().await;
-        let mut client_sink = MessageSink::new(client_socket);
-        server_dispatcher.bind(server_socket, ConnectionPermit::dummy());
+        let (client, server) = create_connection_pair().await;
+        let mut client_sink = MessageSink::new(client);
+        server_dispatcher.bind(server, ConnectionPermit::dummy());
 
         for content in [send_content0, send_content1] {
             client_sink
@@ -703,8 +708,8 @@ mod tests {
         let server_dispatcher = MessageDispatcher::new();
         let mut server_stream = server_dispatcher.open_recv(channel);
 
-        let (client_socket0, server_socket0) = create_connected_sockets().await;
-        let (client_socket1, server_socket1) = create_connected_sockets().await;
+        let (client_socket0, server_socket0) = create_connection_pair().await;
+        let (client_socket1, server_socket1) = create_connection_pair().await;
 
         let client_sink0 = MessageSink::new(client_socket0);
         let client_sink1 = MessageSink::new(client_socket1);
@@ -754,8 +759,8 @@ mod tests {
         let server_dispatcher = MessageDispatcher::new();
         let server_sink = server_dispatcher.open_send(channel);
 
-        let (client_socket0, server_socket0) = create_connected_sockets().await;
-        let (client_socket1, server_socket1) = create_connected_sockets().await;
+        let (client_socket0, server_socket0) = create_connection_pair().await;
+        let (client_socket1, server_socket1) = create_connection_pair().await;
 
         let client_stream0 = MessageStream::new(client_socket0);
         let client_stream1 = MessageStream::new(client_socket1);
@@ -798,7 +803,7 @@ mod tests {
         assert_matches!(server_sink.send(vec![]).await, Err(ChannelClosed));
     }
 
-    async fn create_connected_sockets() -> (Instrumented<raw::Stream>, Instrumented<raw::Stream>) {
+    async fn create_connection_pair() -> (Instrumented<Connection>, Instrumented<Connection>) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0u16))
             .await
             .unwrap();
@@ -808,8 +813,8 @@ mod tests {
         let (server, _) = listener.accept().await.unwrap();
 
         (
-            Instrumented::new(raw::Stream::Tcp(client), Arc::new(ByteCounters::default())),
-            Instrumented::new(raw::Stream::Tcp(server), Arc::new(ByteCounters::default())),
+            Instrumented::new(Connection::Tcp(client), Arc::new(ByteCounters::default())),
+            Instrumented::new(Connection::Tcp(server), Arc::new(ByteCounters::default())),
         )
     }
 }

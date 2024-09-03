@@ -1,7 +1,8 @@
-use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, raw, seen_peers::SeenPeer};
+use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, seen_peers::SeenPeer};
 use crate::sync::atomic_slot::AtomicSlot;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use net::{
+    connection::Connection,
     quic,
     tcp::{TcpListener, TcpStream},
 };
@@ -19,7 +20,7 @@ use tracing::{field, Instrument, Span};
 /// Established incoming and outgoing connections.
 pub(super) struct Gateway {
     stacks: AtomicSlot<Stacks>,
-    incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+    incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     connectivity_tx: watch::Sender<Connectivity>,
 }
 
@@ -27,7 +28,7 @@ impl Gateway {
     /// Create a new `Gateway` that is initially disabled.
     ///
     /// `incoming_tx` is the sender for the incoming connections.
-    pub fn new(incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>) -> Self {
+    pub fn new(incoming_tx: mpsc::Sender<(Connection, PeerAddr)>) -> Self {
         let stacks = Stacks::unbound();
         let stacks = AtomicSlot::new(stacks);
 
@@ -120,7 +121,7 @@ impl Gateway {
         &self,
         peer: &SeenPeer,
         source: PeerSource,
-    ) -> Option<raw::Stream> {
+    ) -> Option<Connection> {
         if !ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
             tracing::debug!("Invalid peer address - discarding");
             return None;
@@ -262,7 +263,7 @@ impl Stacks {
 
     async fn bind(
         bind: &StackAddresses,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> (
         Self,
         Option<quic::SideChannelMaker>,
@@ -337,11 +338,11 @@ impl Stacks {
         self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
     }
 
-    async fn connect(&self, addr: PeerAddr) -> Result<raw::Stream, ConnectError> {
+    async fn connect(&self, addr: PeerAddr) -> Result<Connection, ConnectError> {
         match addr {
             PeerAddr::Tcp(addr) => TcpStream::connect(addr)
                 .await
-                .map(raw::Stream::Tcp)
+                .map(Connection::Tcp)
                 .map_err(ConnectError::Tcp),
             PeerAddr::Quic(addr) => {
                 let stack = self
@@ -352,7 +353,7 @@ impl Stacks {
                     .connector
                     .connect(addr)
                     .await
-                    .map(raw::Stream::Quic)
+                    .map(Connection::Quic)
                     .map_err(ConnectError::Quic)
             }
         }
@@ -439,7 +440,7 @@ struct QuicStack {
 impl QuicStack {
     async fn new(
         bind_addr: SocketAddr,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<(Self, quic::SideChannelMaker)> {
         let span = tracing::info_span!("listener", addr = field::Empty);
 
@@ -494,7 +495,7 @@ struct TcpStack {
 impl TcpStack {
     async fn new(
         bind_addr: SocketAddr,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<Self> {
         let span = tracing::info_span!("listener", addr = field::Empty);
 
@@ -539,7 +540,7 @@ impl TcpStack {
     }
 }
 
-async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(raw::Stream, PeerAddr)>) {
+async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(Connection, PeerAddr)>) {
     loop {
         let result = select! {
             result = listener.accept() => result,
@@ -548,7 +549,7 @@ async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(raw::Stream, 
 
         match result {
             Ok((stream, addr)) => {
-                tx.send((raw::Stream::Tcp(stream), PeerAddr::Tcp(addr)))
+                tx.send((Connection::Tcp(stream), PeerAddr::Tcp(addr)))
                     .await
                     .ok();
             }
@@ -560,7 +561,7 @@ async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(raw::Stream, 
     }
 }
 
-async fn run_quic_listener(listener: quic::Acceptor, tx: mpsc::Sender<(raw::Stream, PeerAddr)>) {
+async fn run_quic_listener(listener: quic::Acceptor, tx: mpsc::Sender<(Connection, PeerAddr)>) {
     let mut tasks = JoinSet::new();
 
     loop {
@@ -577,7 +578,7 @@ async fn run_quic_listener(listener: quic::Acceptor, tx: mpsc::Sender<(raw::Stre
             tasks.spawn(async move {
                 match connecting.complete().await {
                     Ok(connection) => {
-                        tx.send((raw::Stream::Quic(connection), PeerAddr::Quic(addr)))
+                        tx.send((Connection::Quic(connection), PeerAddr::Quic(addr)))
                             .await
                             .ok();
                     }
