@@ -17,10 +17,7 @@ use std::{
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::Arc,
     task::{Context, Poll},
 };
 use tokio::{
@@ -89,19 +86,21 @@ impl Connecting {
 
 //------------------------------------------------------------------------------
 pub struct Connection {
-    rx: Option<quinn::RecvStream>,
-    tx: Option<quinn::SendStream>,
+    reader: quinn::RecvStream,
+    writer: quinn::SendStream,
     remote_addr: SocketAddr,
-    can_finish: bool,
 }
 
 impl Connection {
-    pub fn new(rx: quinn::RecvStream, tx: quinn::SendStream, remote_addr: SocketAddr) -> Self {
+    pub fn new(
+        reader: quinn::RecvStream,
+        writer: quinn::SendStream,
+        remote_addr: SocketAddr,
+    ) -> Self {
         Self {
-            rx: Some(rx),
-            tx: Some(tx),
+            reader,
+            writer,
             remote_addr,
-            can_finish: true,
         }
     }
 
@@ -109,191 +108,76 @@ impl Connection {
         &self.remote_addr
     }
 
-    pub fn into_split(mut self) -> (OwnedReadHalf, OwnedWriteHalf) {
-        // Unwrap OK because `self` can't be split more than once and we're not `taking` from `rx`
-        // anywhere else.
-        let rx = self.rx.take().unwrap();
-        let tx = self.tx.take();
-        let can_finish = Arc::new(AtomicBool::new(self.can_finish));
+    pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
         (
-            OwnedReadHalf {
-                rx,
-                can_finish: can_finish.clone(),
-            },
-            OwnedWriteHalf { tx, can_finish },
+            OwnedReadHalf { inner: self.reader },
+            OwnedWriteHalf { inner: self.writer },
         )
     }
 }
 
 impl AsyncRead for Connection {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match &mut this.rx {
-            Some(rx) => {
-                let poll = Pin::new(rx).poll_read(cx, buf);
-                if let Poll::Ready(r) = &poll {
-                    this.can_finish &= r.is_ok();
-                };
-                poll
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "connection was split",
-            ))),
-        }
+        AsyncRead::poll_read(Pin::new(&mut self.reader), cx, buf)
     }
 }
 
 impl AsyncWrite for Connection {
     fn poll_write(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => Pin::new(tx)
-                .poll_write(cx, buf)
-                .map_err(|error| error.into()),
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
+        AsyncWrite::poll_write(Pin::new(&mut self.writer), cx, buf)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        match &mut self.get_mut().tx {
-            Some(tx) => Pin::new(tx).poll_flush(cx),
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        AsyncWrite::poll_flush(Pin::new(&mut self.writer), cx)
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        match &mut self.get_mut().tx {
-            Some(tx) => Pin::new(tx).poll_shutdown(cx),
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
-    }
-}
-
-impl Drop for Connection {
-    fn drop(&mut self) {
-        if !self.can_finish {
-            return;
-        }
-
-        if let Some(mut tx) = self.tx.take() {
-            tx.finish().ok();
-        }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        AsyncWrite::poll_shutdown(Pin::new(&mut self.writer), cx)
     }
 }
 
 //------------------------------------------------------------------------------
 pub struct OwnedReadHalf {
-    rx: quinn::RecvStream,
-    can_finish: Arc<AtomicBool>,
+    inner: quinn::RecvStream,
 }
+
 pub struct OwnedWriteHalf {
-    tx: Option<quinn::SendStream>,
-    can_finish: Arc<AtomicBool>,
+    inner: quinn::SendStream,
 }
 
 impl AsyncRead for OwnedReadHalf {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        let poll = Pin::new(&mut this.rx).poll_read(cx, buf);
-        if let Poll::Ready(r) = &poll {
-            if r.is_err() {
-                this.can_finish.store(false, Ordering::SeqCst);
-            }
-        }
-        poll
+        AsyncRead::poll_read(Pin::new(&mut self.inner), cx, buf)
     }
 }
 
 impl AsyncWrite for OwnedWriteHalf {
     fn poll_write(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => match Pin::new(tx).poll_write(cx, buf) {
-                Poll::Ready(Ok(n)) => Poll::Ready(Ok(n)),
-                Poll::Ready(Err(error)) => {
-                    this.can_finish.store(false, Ordering::SeqCst);
-                    Poll::Ready(Err(error.into()))
-                }
-                Poll::Pending => Poll::Pending,
-            },
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
+        AsyncWrite::poll_write(Pin::new(&mut self.inner), cx, buf)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => {
-                let poll = Pin::new(tx).poll_flush(cx);
-
-                if let Poll::Ready(r) = &poll {
-                    if r.is_err() {
-                        this.can_finish.store(false, Ordering::SeqCst);
-                    }
-                }
-
-                poll
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        AsyncWrite::poll_flush(Pin::new(&mut self.inner), cx)
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => {
-                this.can_finish.store(false, Ordering::SeqCst);
-                Pin::new(tx).poll_shutdown(cx)
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
-    }
-}
-
-impl Drop for OwnedWriteHalf {
-    fn drop(&mut self) {
-        if !self.can_finish.load(Ordering::SeqCst) {
-            return;
-        }
-
-        if let Some(mut tx) = self.tx.take() {
-            tx.finish().ok();
-        }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        AsyncWrite::poll_shutdown(Pin::new(&mut self.inner), cx)
     }
 }
 
@@ -490,10 +374,7 @@ impl CustomUdpSocket {
     }
 
     fn side_channel_maker(self: Arc<Self>) -> SideChannelMaker {
-        SideChannelMaker {
-            socket: self.clone(),
-            packet_tx: self.side_channel_tx.clone(),
-        }
+        SideChannelMaker { socket: self }
     }
 }
 
@@ -628,14 +509,13 @@ impl<MakeFut, Fut> fmt::Debug for UdpPollHelper<MakeFut, Fut> {
 /// Makes new `SideChannel`s.
 pub struct SideChannelMaker {
     socket: Arc<CustomUdpSocket>,
-    packet_tx: broadcast::Sender<Packet>,
 }
 
 impl SideChannelMaker {
     pub fn make(&self) -> SideChannel {
         SideChannel {
             socket: self.socket.clone(),
-            packet_rx: AsyncMutex::new(self.packet_tx.subscribe()),
+            packet_rx: AsyncMutex::new(self.socket.side_channel_tx.subscribe()),
         }
     }
 }
