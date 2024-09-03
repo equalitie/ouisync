@@ -550,10 +550,7 @@ mod tests {
     use super::{super::stats::ByteCounters, *};
     use assert_matches::assert_matches;
     use futures_util::stream;
-    use net::{
-        connection::Connection,
-        tcp::{TcpListener, TcpStream},
-    };
+    use net::{connection::Connection, tcp};
     use std::{collections::BTreeSet, net::Ipv4Addr, str::from_utf8, time::Duration};
 
     #[tokio::test(flavor = "multi_thread")]
@@ -804,13 +801,16 @@ mod tests {
     }
 
     async fn create_connection_pair() -> (Instrumented<Connection>, Instrumented<Connection>) {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0u16))
+        let (_server_connector, server_acceptor) =
+            tcp::configure((Ipv4Addr::LOCALHOST, 0u16).into()).unwrap();
+        let (client_connector, _client_acceptor) =
+            tcp::configure((Ipv4Addr::LOCALHOST, 0u16).into()).unwrap();
+
+        let client = client_connector
+            .connect(*server_acceptor.local_addr())
             .await
             .unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap())
-            .await
-            .unwrap();
-        let (server, _) = listener.accept().await.unwrap();
+        let (server, _) = server_acceptor.accept().await.unwrap();
 
         (
             Instrumented::new(Connection::Tcp(client), Arc::new(ByteCounters::default())),

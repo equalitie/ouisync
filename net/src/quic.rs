@@ -182,11 +182,9 @@ impl AsyncWrite for OwnedWriteHalf {
 }
 
 //------------------------------------------------------------------------------
-pub async fn configure(
-    bind_addr: SocketAddr,
-) -> Result<(Connector, Acceptor, SideChannelMaker), Error> {
+pub fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor, SideChannelMaker), Error> {
     let server_config = make_server_config()?;
-    let custom_socket = Arc::new(CustomUdpSocket::bind(bind_addr).await?);
+    let custom_socket = Arc::new(CustomUdpSocket::bind(bind_addr)?);
     let side_channel_maker = custom_socket.clone().side_channel_maker();
 
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
@@ -360,8 +358,8 @@ struct CustomUdpSocket {
 }
 
 impl CustomUdpSocket {
-    async fn bind(addr: SocketAddr) -> io::Result<Self> {
-        let socket = crate::udp::UdpSocket::bind(addr).await?;
+    fn bind(addr: SocketAddr) -> io::Result<Self> {
+        let socket = crate::udp::UdpSocket::bind(addr)?;
         let socket = socket.into_std()?;
 
         let state = quinn::udp::UdpSocketState::new((&socket).into())?;
@@ -596,7 +594,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn small_data_exchange() {
-        let (connector, acceptor, _) = configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
+        let (connector, acceptor, _) = configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
 
         let addr = *acceptor.local_addr();
 
@@ -638,7 +636,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn side_channel() {
         let (_connector, acceptor, side_channel_maker) =
-            configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
+            configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
         let addr = *acceptor.local_addr();
         let side_channel = side_channel_maker.make();
 

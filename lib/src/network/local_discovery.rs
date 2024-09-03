@@ -401,7 +401,7 @@ impl SocketProvider {
                 let mut last_error: Option<io::ErrorKind> = None;
 
                 let socket = loop {
-                    match UdpSocket::bind_multicast(self.interface).await {
+                    match UdpSocket::bind_multicast(self.interface) {
                         Ok(socket) => break Arc::new(socket),
                         Err(error) => {
                             if last_error != Some(error.kind()) {

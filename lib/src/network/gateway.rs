@@ -1,11 +1,7 @@
 use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, seen_peers::SeenPeer};
 use crate::sync::atomic_slot::AtomicSlot;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
-use net::{
-    connection::Connection,
-    quic,
-    tcp::{TcpListener, TcpStream},
-};
+use net::{connection::Connection, quic, tcp};
 use scoped_task::ScopedJoinHandle;
 use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
@@ -65,7 +61,7 @@ impl Gateway {
     }
 
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
-    pub async fn bind(
+    pub fn bind(
         &self,
         bind: &StackAddresses,
     ) -> (
@@ -73,7 +69,7 @@ impl Gateway {
         Option<quic::SideChannelMaker>,
     ) {
         let (next, side_channel_maker_v4, side_channel_maker_v6) =
-            Stacks::bind(bind, self.incoming_tx.clone()).await;
+            Stacks::bind(bind, self.incoming_tx.clone());
 
         let prev = self.stacks.swap(next);
         let next = self.stacks.read();
@@ -226,11 +222,11 @@ impl Gateway {
 #[derive(Debug, Error)]
 pub(super) enum ConnectError {
     #[error("TCP error")]
-    Tcp(std::io::Error),
+    Tcp(tcp::Error),
     #[error("QUIC error")]
     Quic(quic::Error),
-    #[error("No corresponding QUIC connector")]
-    NoSuitableQuicConnector,
+    #[error("No corresponding connector")]
+    NoSuitableConnector,
 }
 
 impl ConnectError {
@@ -261,7 +257,7 @@ impl Stacks {
         }
     }
 
-    async fn bind(
+    fn bind(
         bind: &StackAddresses,
         incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> (
@@ -271,7 +267,6 @@ impl Stacks {
     ) {
         let (quic_v4, side_channel_maker_v4) = if let Some(addr) = bind.quic_v4 {
             QuicStack::new(addr, incoming_tx.clone())
-                .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
                 .unwrap_or((None, None))
         } else {
@@ -280,7 +275,6 @@ impl Stacks {
 
         let (quic_v6, side_channel_maker_v6) = if let Some(addr) = bind.quic_v6 {
             QuicStack::new(addr, incoming_tx.clone())
-                .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
                 .unwrap_or((None, None))
         } else {
@@ -288,13 +282,13 @@ impl Stacks {
         };
 
         let tcp_v4 = if let Some(addr) = bind.tcp_v4 {
-            TcpStack::new(addr, incoming_tx.clone()).await
+            TcpStack::new(addr, incoming_tx.clone())
         } else {
             None
         };
 
         let tcp_v6 = if let Some(addr) = bind.tcp_v6 {
-            TcpStack::new(addr, incoming_tx).await
+            TcpStack::new(addr, incoming_tx)
         } else {
             None
         };
@@ -340,22 +334,23 @@ impl Stacks {
 
     async fn connect(&self, addr: PeerAddr) -> Result<Connection, ConnectError> {
         match addr {
-            PeerAddr::Tcp(addr) => TcpStream::connect(addr)
+            PeerAddr::Tcp(addr) => self
+                .tcp_stack_for(&addr.ip())
+                .ok_or(ConnectError::NoSuitableConnector)?
+                .connector
+                .connect(addr)
                 .await
                 .map(Connection::Tcp)
                 .map_err(ConnectError::Tcp),
-            PeerAddr::Quic(addr) => {
-                let stack = self
-                    .quic_stack_for(&addr.ip())
-                    .ok_or(ConnectError::NoSuitableQuicConnector)?;
 
-                stack
-                    .connector
-                    .connect(addr)
-                    .await
-                    .map(Connection::Quic)
-                    .map_err(ConnectError::Quic)
-            }
+            PeerAddr::Quic(addr) => self
+                .quic_stack_for(&addr.ip())
+                .ok_or(ConnectError::NoSuitableConnector)?
+                .connector
+                .connect(addr)
+                .await
+                .map(Connection::Quic)
+                .map_err(ConnectError::Quic),
         }
     }
 
@@ -412,6 +407,13 @@ impl Stacks {
         Some(task)
     }
 
+    fn tcp_stack_for(&self, ip: &IpAddr) -> Option<&TcpStack> {
+        match ip {
+            IpAddr::V4(_) => self.tcp_v4.as_ref(),
+            IpAddr::V6(_) => self.tcp_v6.as_ref(),
+        }
+    }
+
     fn quic_stack_for(&self, ip: &IpAddr) -> Option<&QuicStack> {
         match ip {
             IpAddr::V4(_) => self.quic_v4.as_ref(),
@@ -438,36 +440,36 @@ struct QuicStack {
 }
 
 impl QuicStack {
-    async fn new(
+    fn new(
         bind_addr: SocketAddr,
         incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<(Self, quic::SideChannelMaker)> {
-        let span = tracing::info_span!("listener", addr = field::Empty);
+        let span = tracing::info_span!("quic", addr = field::Empty);
 
-        let (connector, listener, side_channel_maker) = match quic::configure(bind_addr).await {
-            Ok((connector, listener, side_channel_maker)) => {
+        let (connector, acceptor, side_channel_maker) = match quic::configure(bind_addr) {
+            Ok((connector, acceptor, side_channel_maker)) => {
                 span.record(
                     "addr",
-                    field::display(PeerAddr::Quic(*listener.local_addr())),
+                    field::display(PeerAddr::Quic(*acceptor.local_addr())),
                 );
-                tracing::info!(parent: &span, "Listener started");
+                tracing::info!(parent: &span, "Stack configured");
 
-                (connector, listener, side_channel_maker)
+                (connector, acceptor, side_channel_maker)
             }
             Err(error) => {
                 tracing::warn!(
                     parent: &span,
                     bind_addr = %PeerAddr::Quic(bind_addr),
                     ?error,
-                    "Failed to start listener"
+                    "Failed to configure stack"
                 );
                 return None;
             }
         };
 
-        let listener_local_addr = *listener.local_addr();
+        let listener_local_addr = *acceptor.local_addr();
         let listener_task =
-            scoped_task::spawn(run_quic_listener(listener, incoming_tx).instrument(span));
+            scoped_task::spawn(run_quic_listener(acceptor, incoming_tx).instrument(span));
 
         let hole_puncher = side_channel_maker.make().sender();
 
@@ -490,60 +492,45 @@ impl QuicStack {
 struct TcpStack {
     listener_local_addr: SocketAddr,
     _listener_task: ScopedJoinHandle<()>,
+    connector: tcp::Connector,
 }
 
 impl TcpStack {
-    async fn new(
+    fn new(
         bind_addr: SocketAddr,
         incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<Self> {
-        let span = tracing::info_span!("listener", addr = field::Empty);
+        let span = tracing::info_span!("tcp", addr = field::Empty);
 
-        let listener = match TcpListener::bind(bind_addr).await {
-            Ok(listener) => listener,
+        let (connector, acceptor) = match tcp::configure(bind_addr) {
+            Ok(stack) => stack,
             Err(error) => {
                 tracing::warn!(
                     parent: &span,
                     bind_addr = %PeerAddr::Tcp(bind_addr),
                     ?error,
-                    "Failed to start listener",
+                    "Failed to configure stack",
                 );
                 return None;
             }
         };
 
-        let listener_local_addr = match listener.local_addr() {
-            Ok(addr) => {
-                span.record("addr", field::display(PeerAddr::Tcp(addr)));
-                tracing::info!(parent: &span, "Listener started");
-
-                addr
-            }
-            Err(error) => {
-                tracing::warn!(
-                    parent: &span,
-                    bind_addr = %PeerAddr::Tcp(bind_addr),
-                    ?error,
-                    "Failed to get listener local address",
-                );
-                return None;
-            }
-        };
-
+        let listener_local_addr = *acceptor.local_addr();
         let listener_task =
-            scoped_task::spawn(run_tcp_listener(listener, incoming_tx).instrument(span));
+            scoped_task::spawn(run_tcp_listener(acceptor, incoming_tx).instrument(span));
 
         Some(Self {
             listener_local_addr,
             _listener_task: listener_task,
+            connector,
         })
     }
 }
 
-async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(Connection, PeerAddr)>) {
+async fn run_tcp_listener(acceptor: tcp::Acceptor, tx: mpsc::Sender<(Connection, PeerAddr)>) {
     loop {
         let result = select! {
-            result = listener.accept() => result,
+            result = acceptor.accept() => result,
             _ = tx.closed() => break,
         };
 

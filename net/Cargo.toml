@@ -20,6 +20,7 @@ stun_codec = "0.3.4"
 thiserror = "1.0.31"
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
 turmoil = { workspace = true, optional = true }
+yamux = "0.13.3"
 
 [dev-dependencies]
 anyhow = { workspace = true }

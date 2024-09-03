@@ -553,7 +553,7 @@ impl Inner {
         }
 
         // Gateway
-        let side_channel_makers = self.gateway.bind(&bind).instrument(self.span.clone()).await;
+        let side_channel_makers = self.span.in_scope(|| self.gateway.bind(&bind));
 
         let conn = self.gateway.connectivity();
 

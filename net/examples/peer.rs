@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use ouisync_net::{
     quic,
-    tcp::{TcpListener, TcpStream},
+    tcp::{self, TcpStream},
 };
 use std::{
     future,
@@ -81,7 +81,7 @@ async fn run_tcp_client(addr: SocketAddr, count: Option<usize>) -> Result<()> {
 }
 
 async fn run_quic_client(addr: SocketAddr, count: Option<usize>) -> Result<()> {
-    let (connector, _, _) = quic::configure((Ipv4Addr::UNSPECIFIED, 0).into()).await?;
+    let (connector, _, _) = quic::configure((Ipv4Addr::UNSPECIFIED, 0).into())?;
     let connection = connector.connect(addr).await?;
     run_client_connection(connection, count).await
 }
@@ -96,8 +96,8 @@ async fn run_server(options: &Options) -> Result<()> {
 }
 
 async fn run_tcp_server(addr: SocketAddr) -> Result<()> {
-    let acceptor = TcpListener::bind(addr).await?;
-    println!("bound to {}", acceptor.local_addr()?);
+    let (_, acceptor) = tcp::configure(addr)?;
+    println!("bound to {}", acceptor.local_addr());
 
     loop {
         let (stream, addr) = acceptor.accept().await?;
@@ -106,7 +106,7 @@ async fn run_tcp_server(addr: SocketAddr) -> Result<()> {
 }
 
 async fn run_quic_server(addr: SocketAddr) -> Result<()> {
-    let (_, acceptor, _) = quic::configure(addr).await?;
+    let (_, acceptor, _) = quic::configure(addr)?;
     println!("bound to {}", acceptor.local_addr());
 
     loop {

@@ -37,7 +37,7 @@ mod implementation {
 
     impl UdpSocket {
         /// Binds UDP socket to the given address. If the port is taken, uses a random one,
-        pub async fn bind(addr: SocketAddr) -> io::Result<Self> {
+        pub fn bind(addr: SocketAddr) -> io::Result<Self> {
             let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, None)?;
             socket.set_nonblocking(true)?;
             // Ignore errors - reuse address is nice to have but not required.
@@ -47,7 +47,7 @@ mod implementation {
             Ok(Self(tokio::net::UdpSocket::from_std(socket.into())?))
         }
 
-        pub async fn bind_multicast(interface: Ipv4Addr) -> io::Result<Self> {
+        pub fn bind_multicast(interface: Ipv4Addr) -> io::Result<Self> {
             let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, MULTICAST_PORT));
 
             let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, None)?;

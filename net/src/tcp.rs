@@ -1,4 +1,50 @@
-pub use self::implementation::*;
+pub use self::implementation::{OwnedReadHalf, OwnedWriteHalf, TcpStream};
+
+use self::implementation::TcpListener;
+use std::{io, net::SocketAddr};
+
+/// Configure TCP endpoint
+pub fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor), Error> {
+    let listener = TcpListener::bind(bind_addr)?;
+    let local_addr = listener.local_addr()?;
+
+    Ok((
+        Connector,
+        Acceptor {
+            listener,
+            local_addr,
+        },
+    ))
+}
+
+pub struct Connector;
+
+impl Connector {
+    pub async fn connect(&self, addr: SocketAddr) -> Result<TcpStream, Error> {
+        Ok(TcpStream::connect(addr).await?)
+    }
+}
+
+pub struct Acceptor {
+    listener: TcpListener,
+    local_addr: SocketAddr,
+}
+
+impl Acceptor {
+    pub async fn accept(&self) -> Result<(TcpStream, SocketAddr), Error> {
+        Ok(self.listener.accept().await?)
+    }
+
+    pub fn local_addr(&self) -> &SocketAddr {
+        &self.local_addr
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("IO error")]
+    Io(#[from] io::Error),
+}
 
 // Real
 #[cfg(not(feature = "simulation"))]
@@ -20,7 +66,7 @@ mod implementation {
 
     impl TcpListener {
         /// Binds TCP socket to the given address. If the port is taken, uses a random one,
-        pub async fn bind(addr: impl Into<SocketAddr>) -> io::Result<Self> {
+        pub fn bind(addr: impl Into<SocketAddr>) -> io::Result<Self> {
             let addr = addr.into();
 
             let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;

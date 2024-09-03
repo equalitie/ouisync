@@ -10,10 +10,12 @@ use tokio::net;
 async fn main() -> io::Result<()> {
     let options = Options::parse();
 
-    let client_v4 =
-        StunClient::new(UdpSocket::bind((Ipv4Addr::UNSPECIFIED, options.port).into()).await?);
-    let client_v6 =
-        StunClient::new(UdpSocket::bind((Ipv6Addr::UNSPECIFIED, options.port).into()).await?);
+    let client_v4 = StunClient::new(UdpSocket::bind(
+        (Ipv4Addr::UNSPECIFIED, options.port).into(),
+    )?);
+    let client_v6 = StunClient::new(UdpSocket::bind(
+        (Ipv6Addr::UNSPECIFIED, options.port).into(),
+    )?);
 
     for server_name in options.servers {
         for server_addr in net::lookup_host(server_name).await? {
