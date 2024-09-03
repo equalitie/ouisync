@@ -106,7 +106,7 @@ async fn run_tcp_server(addr: SocketAddr) -> Result<()> {
 }
 
 async fn run_quic_server(addr: SocketAddr) -> Result<()> {
-    let (_, mut acceptor, _) = quic::configure(addr).await?;
+    let (_, acceptor, _) = quic::configure(addr).await?;
     println!("bound to {}", acceptor.local_addr());
 
     loop {
@@ -114,9 +114,9 @@ async fn run_quic_server(addr: SocketAddr) -> Result<()> {
             .accept()
             .await
             .context("failed to accept")?
-            .finish()
+            .complete()
             .await?;
-        let addr = *connection.remote_address();
+        let addr = *connection.remote_addr();
         task::spawn(run_server_connection(connection, addr));
     }
 }

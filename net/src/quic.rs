@@ -59,7 +59,7 @@ pub struct Acceptor {
 }
 
 impl Acceptor {
-    pub async fn accept(&mut self) -> Option<Connecting> {
+    pub async fn accept(&self) -> Option<Connecting> {
         self.endpoint
             .accept()
             .await
@@ -76,7 +76,11 @@ pub struct Connecting {
 }
 
 impl Connecting {
-    pub async fn finish(self) -> Result<Connection, Error> {
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.incoming.remote_address()
+    }
+
+    pub async fn complete(self) -> Result<Connection, Error> {
         let connection = self.incoming.await?;
         let (tx, rx) = connection.accept_bi().await?;
         Ok(Connection::new(rx, tx, connection.remote_address()))
@@ -87,22 +91,22 @@ impl Connecting {
 pub struct Connection {
     rx: Option<quinn::RecvStream>,
     tx: Option<quinn::SendStream>,
-    remote_address: SocketAddr,
+    remote_addr: SocketAddr,
     can_finish: bool,
 }
 
 impl Connection {
-    pub fn new(rx: quinn::RecvStream, tx: quinn::SendStream, remote_address: SocketAddr) -> Self {
+    pub fn new(rx: quinn::RecvStream, tx: quinn::SendStream, remote_addr: SocketAddr) -> Self {
         Self {
             rx: Some(rx),
             tx: Some(tx),
-            remote_address,
+            remote_addr,
             can_finish: true,
         }
     }
 
-    pub fn remote_address(&self) -> &SocketAddr {
-        &self.remote_address
+    pub fn remote_addr(&self) -> &SocketAddr {
+        &self.remote_addr
     }
 
     pub fn into_split(mut self) -> (OwnedReadHalf, OwnedWriteHalf) {
@@ -712,13 +716,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn small_data_exchange() {
-        let (connector, mut acceptor, _) =
-            configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
+        let (connector, acceptor, _) = configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
 
         let addr = *acceptor.local_addr();
 
         let h1 = task::spawn(async move {
-            let mut conn = acceptor.accept().await.unwrap().finish().await.unwrap();
+            let mut conn = acceptor.accept().await.unwrap().complete().await.unwrap();
 
             let mut buf = [0; 4];
             conn.read_exact(&mut buf).await.unwrap();
@@ -754,7 +757,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn side_channel() {
-        let (_connector, mut acceptor, side_channel_maker) =
+        let (_connector, acceptor, side_channel_maker) =
             configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
         let addr = *acceptor.local_addr();
         let side_channel = side_channel_maker.make();
