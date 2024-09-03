@@ -8,19 +8,20 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-bytecodec = "0.4.15"
-bytes = "1.1.0"
-futures-util = { workspace = true }
+bytecodec        = "0.4.15"
+bytes            = "1.1.0"
+futures-util     = { workspace = true }
 pin-project-lite = { workspace = true }
-quinn = "0.11.4"
-rand = { package = "ouisync-rand", path = "../rand" }
-rcgen = { workspace = true }
-socket2 = "0.5.7" # To be able to setsockopts before a socket is bound
-stun_codec = "0.3.4"
-thiserror = "1.0.31"
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
-turmoil = { workspace = true, optional = true }
-yamux = "0.13.3"
+quinn            = "0.11.4"
+rand             = { package = "ouisync-rand", path = "../rand" }
+rcgen            = { workspace = true }
+socket2          = "0.5.7" # To be able to setsockopts before a socket is bound
+stun_codec       = "0.3.4"
+thiserror        = "1.0.31"
+tokio            = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
+tokio-util       = { workspace = true, features = ["compat"] }
+turmoil          = { workspace = true, optional = true }
+yamux            = "0.13.3"
 
 [dev-dependencies]
 anyhow = { workspace = true }

@@ -13,19 +13,16 @@ use quinn::{
 };
 use std::{
     fmt,
-    future::Future,
+    future::{Future, IntoFuture},
     io,
     net::SocketAddr,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::{
-        broadcast::{self, error::RecvError},
-        Mutex as AsyncMutex,
-    },
+use tokio::sync::{
+    broadcast::{self, error::RecvError},
+    Mutex as AsyncMutex,
 };
 
 const CERT_DOMAIN: &str = "ouisync.net";
@@ -37,9 +34,11 @@ pub struct Connector {
 
 impl Connector {
     pub async fn connect(&self, remote_addr: SocketAddr) -> Result<Connection, Error> {
-        let connection = self.endpoint.connect(remote_addr, CERT_DOMAIN)?.await?;
-        let (tx, rx) = connection.open_bi().await?;
-        Ok(Connection::new(rx, tx, connection.remote_address()))
+        self.endpoint
+            .connect(remote_addr, CERT_DOMAIN)?
+            .await
+            .map(|inner| Connection { inner })
+            .map_err(Into::into)
     }
 
     // forcefully close all connections (any pending operation on any connection will immediatelly
@@ -56,11 +55,14 @@ pub struct Acceptor {
 }
 
 impl Acceptor {
-    pub async fn accept(&self) -> Option<Connecting> {
+    pub async fn accept(&self) -> Result<Connecting, Error> {
         self.endpoint
             .accept()
             .await
-            .map(|incoming| Connecting { incoming })
+            .map(|inner| Connecting {
+                inner: inner.into_future(),
+            })
+            .ok_or(Error::EndpointClosed)
     }
 
     pub fn local_addr(&self) -> &SocketAddr {
@@ -69,117 +71,44 @@ impl Acceptor {
 }
 
 pub struct Connecting {
-    incoming: quinn::Incoming,
+    inner: quinn::IncomingFuture,
 }
 
-impl Connecting {
-    pub fn remote_addr(&self) -> SocketAddr {
-        self.incoming.remote_address()
-    }
+impl Future for Connecting {
+    type Output = Result<Connection, Error>;
 
-    pub async fn complete(self) -> Result<Connection, Error> {
-        let connection = self.incoming.await?;
-        let (tx, rx) = connection.accept_bi().await?;
-        Ok(Connection::new(rx, tx, connection.remote_address()))
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.inner)
+            .poll(cx)
+            .map_ok(|inner| Connection { inner })
+            .map_err(Into::into)
     }
 }
 
-//------------------------------------------------------------------------------
 pub struct Connection {
-    reader: quinn::RecvStream,
-    writer: quinn::SendStream,
-    remote_addr: SocketAddr,
+    inner: quinn::Connection,
 }
 
 impl Connection {
-    pub fn new(
-        reader: quinn::RecvStream,
-        writer: quinn::SendStream,
-        remote_addr: SocketAddr,
-    ) -> Self {
-        Self {
-            reader,
-            writer,
-            remote_addr,
-        }
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.inner.remote_address()
     }
 
-    pub fn remote_addr(&self) -> &SocketAddr {
-        &self.remote_addr
+    pub async fn incoming(&self) -> Result<(SendStream, RecvStream), Error> {
+        self.inner.accept_bi().await.map_err(Into::into)
     }
 
-    pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
-        (
-            OwnedReadHalf { inner: self.reader },
-            OwnedWriteHalf { inner: self.writer },
-        )
+    pub async fn outgoing(&self) -> Result<(SendStream, RecvStream), Error> {
+        self.inner.open_bi().await.map_err(Into::into)
+    }
+
+    pub fn close(&self) {
+        self.inner.close(0u8.into(), &[]);
     }
 }
 
-impl AsyncRead for Connection {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        AsyncRead::poll_read(Pin::new(&mut self.reader), cx, buf)
-    }
-}
-
-impl AsyncWrite for Connection {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        AsyncWrite::poll_write(Pin::new(&mut self.writer), cx, buf)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        AsyncWrite::poll_flush(Pin::new(&mut self.writer), cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        AsyncWrite::poll_shutdown(Pin::new(&mut self.writer), cx)
-    }
-}
-
-//------------------------------------------------------------------------------
-pub struct OwnedReadHalf {
-    inner: quinn::RecvStream,
-}
-
-pub struct OwnedWriteHalf {
-    inner: quinn::SendStream,
-}
-
-impl AsyncRead for OwnedReadHalf {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        AsyncRead::poll_read(Pin::new(&mut self.inner), cx, buf)
-    }
-}
-
-impl AsyncWrite for OwnedWriteHalf {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        AsyncWrite::poll_write(Pin::new(&mut self.inner), cx, buf)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        AsyncWrite::poll_flush(Pin::new(&mut self.inner), cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        AsyncWrite::poll_shutdown(Pin::new(&mut self.inner), cx)
-    }
-}
+pub type SendStream = quinn::SendStream;
+pub type RecvStream = quinn::RecvStream;
 
 //------------------------------------------------------------------------------
 pub fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor, SideChannelMaker), Error> {
@@ -218,10 +147,8 @@ pub enum Error {
     Connect(#[from] ConnectError),
     #[error("connection error")]
     Connection(#[from] ConnectionError),
-    #[error("write error")]
-    Write(#[from] WriteError),
-    #[error("done accepting error")]
-    DoneAccepting,
+    #[error("endpoint closed")]
+    EndpointClosed,
     #[error("IO error")]
     Io(#[from] std::io::Error),
     #[error("TLS error")]
@@ -587,51 +514,7 @@ impl SideChannelSender {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        task,
-    };
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn small_data_exchange() {
-        let (connector, acceptor, _) = configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-
-        let addr = *acceptor.local_addr();
-
-        let h1 = task::spawn(async move {
-            let mut conn = acceptor.accept().await.unwrap().complete().await.unwrap();
-
-            let mut buf = [0; 4];
-            conn.read_exact(&mut buf).await.unwrap();
-            assert_eq!(&buf, b"ping");
-
-            conn.write_all(b"pong").await.unwrap();
-        });
-
-        let h2 = task::spawn(async move {
-            let mut conn = connector.connect(addr).await.unwrap();
-            conn.write_all(b"ping").await.unwrap();
-
-            let mut buf = [0; 4];
-            match conn.read_exact(&mut buf).await {
-                Ok(_) => (),
-                Err(error) => match error.downcast::<quinn::ReadError>() {
-                    Ok(error) => match error {
-                        quinn::ReadError::ConnectionLost(
-                            quinn::ConnectionError::ApplicationClosed(_),
-                        ) => {
-                            // connection gracefully closed by the peer, this is expected.
-                        }
-                        error => panic!("unexpected error: {:?}", error),
-                    },
-                    Err(error) => panic!("unexpected error: {:?}", error),
-                },
-            }
-        });
-
-        h1.await.unwrap();
-        h2.await.unwrap();
-    }
+    use tokio::task;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn side_channel() {
