@@ -1,7 +1,10 @@
 use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, seen_peers::SeenPeer};
 use crate::sync::atomic_slot::AtomicSlot;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
-use net::{connection::Connection, quic, tcp};
+use net::{
+    connection::{Acceptor, Connection},
+    quic, tcp,
+};
 use scoped_task::ScopedJoinHandle;
 use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
@@ -468,8 +471,9 @@ impl QuicStack {
         };
 
         let listener_local_addr = *acceptor.local_addr();
-        let listener_task =
-            scoped_task::spawn(run_quic_listener(acceptor, incoming_tx).instrument(span));
+        let listener_task = scoped_task::spawn(
+            run_listener(Acceptor::Quic(acceptor), incoming_tx).instrument(span),
+        );
 
         let hole_puncher = side_channel_maker.make().sender();
 
@@ -517,7 +521,7 @@ impl TcpStack {
 
         let listener_local_addr = *acceptor.local_addr();
         let listener_task =
-            scoped_task::spawn(run_tcp_listener(acceptor, incoming_tx).instrument(span));
+            scoped_task::spawn(run_listener(Acceptor::Tcp(acceptor), incoming_tx).instrument(span));
 
         Some(Self {
             listener_local_addr,
@@ -527,28 +531,7 @@ impl TcpStack {
     }
 }
 
-async fn run_tcp_listener(acceptor: tcp::Acceptor, tx: mpsc::Sender<(Connection, PeerAddr)>) {
-    loop {
-        let result = select! {
-            result = acceptor.accept() => result,
-            _ = tx.closed() => break,
-        };
-
-        match result {
-            Ok((stream, addr)) => {
-                tx.send((Connection::Tcp(stream), PeerAddr::Tcp(addr)))
-                    .await
-                    .ok();
-            }
-            Err(error) => {
-                tracing::error!(?error, "Failed to accept connection");
-                break;
-            }
-        }
-    }
-}
-
-async fn run_quic_listener(listener: quic::Acceptor, tx: mpsc::Sender<(Connection, PeerAddr)>) {
+async fn run_listener(listener: Acceptor, tx: mpsc::Sender<(Connection, PeerAddr)>) {
     let mut tasks = JoinSet::new();
 
     loop {
@@ -557,24 +540,30 @@ async fn run_quic_listener(listener: quic::Acceptor, tx: mpsc::Sender<(Connectio
             _ = tx.closed() => break,
         };
 
-        if let Some(connecting) = connecting {
-            let tx = tx.clone();
-            let addr = connecting.remote_addr();
+        match connecting {
+            Ok(connecting) => {
+                let tx = tx.clone();
 
-            // Spawn so we can start listening for the next connection ASAP.
-            tasks.spawn(async move {
-                match connecting.complete().await {
-                    Ok(connection) => {
-                        tx.send((Connection::Quic(connection), PeerAddr::Quic(addr)))
-                            .await
-                            .ok();
+                let addr = connecting.remote_addr();
+                let addr = match listener {
+                    Acceptor::Tcp(_) => PeerAddr::Tcp(addr),
+                    Acceptor::Quic(_) => PeerAddr::Quic(addr),
+                };
+
+                // Spawn so we can start listening for the next connection ASAP.
+                tasks.spawn(async move {
+                    match connecting.await {
+                        Ok(connection) => {
+                            tx.send((connection, addr)).await.ok();
+                        }
+                        Err(error) => tracing::error!(?error, %addr, "Failed to accept connection"),
                     }
-                    Err(error) => tracing::error!(?error, %addr, "Failed to accept connection"),
-                }
-            });
-        } else {
-            tracing::error!("Stopped accepting new connections");
-            break;
+                });
+            }
+            Err(error) => {
+                tracing::error!(?error, "Stopped accepting new connections");
+                break;
+            }
         }
     }
 }

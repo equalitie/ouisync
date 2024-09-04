@@ -1,4 +1,3 @@
-use net::connection::{Connection, OwnedReadHalf, OwnedWriteHalf};
 use pin_project_lite::pin_project;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -65,6 +64,10 @@ pub(super) struct ByteCounters {
 }
 
 impl ByteCounters {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn increment_tx(&self, by: u64) {
         self.tx.fetch_add(by, Ordering::Relaxed);
     }
@@ -220,17 +223,6 @@ where
 
     fn is_write_vectored(&self) -> bool {
         self.inner.is_write_vectored()
-    }
-}
-
-impl Instrumented<Connection> {
-    pub fn into_split(self) -> (Instrumented<OwnedReadHalf>, Instrumented<OwnedWriteHalf>) {
-        let (reader, writer) = self.inner.into_split();
-
-        (
-            Instrumented::new(reader, self.counters.clone()),
-            Instrumented::new(writer, self.counters),
-        )
     }
 }
 

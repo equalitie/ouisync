@@ -40,7 +40,6 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
-use net::connection::Connection;
 pub use net::stun::NatBehavior;
 
 use self::{
@@ -60,7 +59,7 @@ use self::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    network::stats::Instrumented,
+    network::connection::ConnectionDirection,
     protocol::RepositoryId,
     repository::{RepositoryHandle, Vault},
     sync::uninitialized_watch,
@@ -69,6 +68,7 @@ use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use deadlock::BlockingMutex;
 use futures_util::future;
+use net::connection::{Connection, Error as ConnectionError};
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;
@@ -840,7 +840,7 @@ impl Inner {
     /// Return true iff the peer is suitable for reconnection.
     async fn handle_connection(
         &self,
-        mut connection: Connection,
+        connection: Connection,
         permit: ConnectionPermit,
         monitor: &ConnectionMonitor,
     ) -> bool {
@@ -849,8 +849,13 @@ impl Inner {
         permit.mark_as_handshaking();
         monitor.mark_as_handshaking();
 
-        let handshake_result =
-            perform_handshake(&mut connection, VERSION, &self.this_runtime_id).await;
+        let handshake_result = perform_handshake(
+            &connection,
+            VERSION,
+            &self.this_runtime_id,
+            ConnectionDirection::from_source(permit.source()),
+        )
+        .await;
 
         if let Err(error) = &handshake_result {
             tracing::debug!(parent: monitor.span(), ?error, "Handshake failed");
@@ -862,9 +867,12 @@ impl Inner {
                 self.on_protocol_mismatch(their_version);
                 return false;
             }
-            Err(HandshakeError::Timeout | HandshakeError::BadMagic | HandshakeError::Fatal(_)) => {
-                return false
-            }
+            Err(
+                HandshakeError::Timeout
+                | HandshakeError::BadMagic
+                | HandshakeError::Io(_)
+                | HandshakeError::Connection(_),
+            ) => return false,
         };
 
         // prevent self-connections.
@@ -916,8 +924,7 @@ impl Inner {
                 broker
             });
 
-            let connection = Instrumented::new(connection, self.stats_tracker.bytes.clone());
-            broker.add_connection(connection, permit);
+            broker.add_connection(connection, permit, self.stats_tracker.bytes.clone());
         }
 
         let _remover = MessageBrokerEntryGuard {
@@ -963,28 +970,37 @@ impl Inner {
 
 // Exchange runtime ids with the peer. Returns their (verified) runtime id.
 async fn perform_handshake(
-    connection: &mut Connection,
+    connection: &Connection,
     this_version: Version,
     this_runtime_id: &SecretRuntimeId,
+    dir: ConnectionDirection,
 ) -> Result<PublicRuntimeId, HandshakeError> {
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
-        connection.write_all(MAGIC).await?;
+        let (mut writer, mut reader) = match dir {
+            ConnectionDirection::Incoming => connection.incoming().await?,
+            ConnectionDirection::Outgoing => connection.outgoing().await?,
+        };
 
-        this_version.write_into(connection).await?;
+        writer.write_all(MAGIC).await?;
+
+        this_version.write_into(&mut writer).await?;
 
         let mut that_magic = [0; MAGIC.len()];
-        connection.read_exact(&mut that_magic).await?;
+        reader.read_exact(&mut that_magic).await?;
 
         if MAGIC != &that_magic {
             return Err(HandshakeError::BadMagic);
         }
 
-        let that_version = Version::read_from(connection).await?;
+        let that_version = Version::read_from(&mut reader).await?;
         if that_version > this_version {
             return Err(HandshakeError::ProtocolVersionMismatch(that_version));
         }
 
-        let that_runtime_id = runtime_id::exchange(this_runtime_id, connection).await?;
+        let that_runtime_id =
+            runtime_id::exchange(this_runtime_id, &mut writer, &mut reader).await?;
+
+        writer.shutdown().await?;
 
         Ok(that_runtime_id)
     })
@@ -1004,8 +1020,10 @@ enum HandshakeError {
     BadMagic,
     #[error("timeout")]
     Timeout,
-    #[error("fatal error")]
-    Fatal(#[from] io::Error),
+    #[error("IO error")]
+    Io(#[from] io::Error),
+    #[error("connection error")]
+    Connection(#[from] ConnectionError),
 }
 
 // RAII guard which when dropped removes the broker from the network state if it has no connections.

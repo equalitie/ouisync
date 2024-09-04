@@ -255,18 +255,22 @@ impl ConnectionPermit {
 
     /// Dummy connection permit for tests.
     #[cfg(test)]
-    pub fn dummy() -> Self {
+    pub fn dummy(dir: ConnectionDirection) -> Self {
         use std::net::Ipv4Addr;
 
         let key = Key {
             addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
-            dir: ConnectionDirection::Incoming,
+            dir,
         };
         let id = ConnectionId::next();
+        let source = match dir {
+            ConnectionDirection::Incoming => PeerSource::Listener,
+            ConnectionDirection::Outgoing => PeerSource::UserProvided,
+        };
         let data = Data {
             id,
             state: PeerState::Known,
-            source: PeerSource::UserProvided,
+            source,
             stats_tracker: StatsTracker::default(),
             on_release: DropAwaitable::new(),
         };

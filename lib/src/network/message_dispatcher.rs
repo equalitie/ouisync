@@ -1,15 +1,19 @@
 //! Utilities for sending and receiving messages across the network.
 
 use super::{
-    connection::{ConnectionId, ConnectionPermit, ConnectionPermitHalf},
+    connection::{ConnectionDirection, ConnectionId, ConnectionPermit, ConnectionPermitHalf},
     message::{Message, MessageChannelId},
     message_io::{MessageSink, MessageStream, MESSAGE_OVERHEAD},
-    stats::Instrumented,
+    stats::{ByteCounters, Instrumented},
 };
 use crate::{collections::HashMap, sync::AwaitDrop};
 use async_trait::async_trait;
-use futures_util::{future, ready, stream::SelectAll, FutureExt, Sink, SinkExt, Stream, StreamExt};
-use net::connection::{Connection, OwnedReadHalf, OwnedWriteHalf};
+use futures_util::{
+    future, ready,
+    stream::{FuturesUnordered, SelectAll},
+    FutureExt, Sink, SinkExt, Stream, StreamExt,
+};
+use net::connection::{Connection, Error as ConnectionError, RecvStream, SendStream};
 use std::{
     io,
     pin::Pin,
@@ -56,9 +60,18 @@ impl MessageDispatcher {
 
     /// Bind this dispatcher to the given TCP of QUIC socket. Can be bound to multiple sockets and
     /// the failed ones are automatically removed.
-    pub fn bind(&self, connection: Instrumented<Connection>, permit: ConnectionPermit) {
+    pub fn bind(
+        &self,
+        connection: Connection,
+        permit: ConnectionPermit,
+        byte_counters: Arc<ByteCounters>,
+    ) {
         self.command_tx
-            .send(Command::Bind { connection, permit })
+            .send(Command::Bind {
+                connection,
+                permit,
+                byte_counters,
+            })
             .ok();
     }
 
@@ -252,7 +265,7 @@ pub(super) struct ChannelClosed;
 struct ConnectionStream {
     // The reader is doubly instrumented - first time to track per connection stats and second time
     // to track cumulative stats across all connections.
-    reader: MessageStream<Instrumented<Instrumented<OwnedReadHalf>>>,
+    reader: MessageStream<Instrumented<Instrumented<RecvStream>>>,
     permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
     connection_count: Arc<AtomicUsize>,
@@ -260,7 +273,7 @@ struct ConnectionStream {
 
 impl ConnectionStream {
     fn new(
-        reader: Instrumented<OwnedReadHalf>,
+        reader: Instrumented<RecvStream>,
         permit: ConnectionPermitHalf,
         connection_count: Arc<AtomicUsize>,
     ) -> Self {
@@ -307,13 +320,13 @@ impl Drop for ConnectionStream {
 struct ConnectionSink {
     // The writer is doubly instrumented - first time to track per connection stats and second time
     // to track cumulative stats across all connections.
-    writer: MessageSink<Instrumented<Instrumented<OwnedWriteHalf>>>,
+    writer: MessageSink<Instrumented<Instrumented<SendStream>>>,
     _permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
 }
 
 impl ConnectionSink {
-    fn new(writer: Instrumented<OwnedWriteHalf>, permit: ConnectionPermitHalf) -> Self {
+    fn new(writer: Instrumented<SendStream>, permit: ConnectionPermitHalf) -> Self {
         let permit_released = permit.released();
 
         Self {
@@ -384,59 +397,77 @@ impl Worker {
     }
 
     async fn run(mut self) {
+        let mut streams = FuturesUnordered::new();
+
         loop {
-            select! {
-                command = self.command_rx.recv() => {
-                    if let Some(command) = command {
-                        self.handle_command(command).await;
-                    } else {
-                        break;
+            let command = select! {
+                command = self.command_rx.recv() => command,
+                Some(result) = streams.next() => {
+                    match result {
+                        Ok((connection, tx, rx)) => {
+                            self.send.sinks.push((connection, tx));
+                            self.recv.streams.push(rx);
+                        }
+                        Err(error) => {
+                            tracing::debug!(?error, "Failed to establish a new connection stream");
+                        }
                     }
+
+                    continue;
                 }
-                _ = self.send.run()=> unreachable!(),
-                _ = self.recv.run()=> unreachable!(),
+                _ = self.send.run() => unreachable!(),
+                _ = self.recv.run() => unreachable!(),
+            };
+
+            let Some(command) = command else {
+                break;
+            };
+
+            match command {
+                Command::Open { channel, stream_tx } => {
+                    self.recv.channels.insert(channel, stream_tx);
+                }
+                Command::Close { channel } => {
+                    self.recv.channels.remove(&channel);
+                }
+                Command::Bind {
+                    connection,
+                    permit,
+                    byte_counters,
+                } => {
+                    let connection_count = self.connection_count.clone();
+
+                    streams.push(async move {
+                        let (tx, rx) = match ConnectionDirection::from_source(permit.source()) {
+                            ConnectionDirection::Incoming => connection.incoming().await?,
+                            ConnectionDirection::Outgoing => connection.outgoing().await?,
+                        };
+
+                        let (tx_permit, rx_permit) = permit.into_split();
+
+                        let tx = Instrumented::new(tx, byte_counters.clone());
+                        let tx = ConnectionSink::new(tx, tx_permit);
+
+                        let rx = Instrumented::new(rx, byte_counters.clone());
+                        let rx = ConnectionStream::new(rx, rx_permit, connection_count);
+
+                        Ok::<_, ConnectionError>((connection, tx, rx))
+                    });
+                }
+                Command::Shutdown { tx } => {
+                    self.shutdown().await;
+                    tx.send(()).ok();
+                }
             }
         }
 
         self.shutdown().await;
     }
 
-    async fn handle_command(&mut self, command: Command) {
-        match command {
-            Command::Open { channel, stream_tx } => {
-                self.recv.channels.insert(channel, stream_tx);
-            }
-            Command::Close { channel } => {
-                self.recv.channels.remove(&channel);
-            }
-            Command::Bind { connection, permit } => {
-                let (reader, writer) = connection.into_split();
-                let (send_permit, recv_permit) = permit.into_split();
-
-                self.send
-                    .sinks
-                    .push(ConnectionSink::new(writer, send_permit));
-
-                self.recv.streams.push(ConnectionStream::new(
-                    reader,
-                    recv_permit,
-                    self.connection_count.clone(),
-                ));
-            }
-            Command::Shutdown { tx } => {
-                self.shutdown().await;
-                tx.send(()).ok();
-            }
-        }
-    }
-
     async fn shutdown(&mut self) {
-        future::join_all(
-            self.send
-                .sinks
-                .drain(..)
-                .map(|mut sink| async move { sink.close().await.ok() }),
-        )
+        future::join_all(self.send.sinks.drain(..).map(|(connection, _)| async move {
+            connection.close().await;
+        }))
         .await;
 
         self.send.sink_rx.close();
@@ -455,8 +486,9 @@ enum Command {
         channel: MessageChannelId,
     },
     Bind {
-        connection: Instrumented<Connection>,
+        connection: Connection,
         permit: ConnectionPermit,
+        byte_counters: Arc<ByteCounters>,
     },
     Shutdown {
         tx: oneshot::Sender<()>,
@@ -465,13 +497,15 @@ enum Command {
 
 struct SendState {
     sink_rx: mpsc::Receiver<Message>,
-    sinks: Vec<ConnectionSink>,
+    // We need to keep the `Connection` around so the sink/stream stay opened. We can store it here
+    // or in the `RecvState` but storing it here is slightly simpler.
+    sinks: Vec<(Connection, ConnectionSink)>,
 }
 
 impl SendState {
     // Keep sending outgoing messages. This function never returns, but it's safe to cancel.
     async fn run(&mut self) {
-        while let Some(sink) = self.sinks.first_mut() {
+        while let Some((_, sink)) = self.sinks.first_mut() {
             // The order of operations here is important for cancel-safety: first wait for the sink
             // to become ready for sending, then receive the message to be sent and finally send
             // the message on the sink. This order ensures that if this function is cancelled at
@@ -549,8 +583,8 @@ impl RecvState {
 mod tests {
     use super::{super::stats::ByteCounters, *};
     use assert_matches::assert_matches;
-    use futures_util::stream;
-    use net::{connection::Connection, tcp};
+    use futures_util::{future, stream};
+    use net::connection::{Acceptor, Connection, Connector};
     use std::{collections::BTreeSet, net::Ipv4Addr, str::from_utf8, time::Duration};
 
     #[tokio::test(flavor = "multi_thread")]
@@ -562,8 +596,15 @@ mod tests {
         let mut server_stream = server_dispatcher.open_recv(channel);
 
         let (client, server) = create_connection_pair().await;
-        let mut client_sink = MessageSink::new(client);
-        server_dispatcher.bind(server, ConnectionPermit::dummy());
+
+        let (client_tx, _client_rx) = client.outgoing().await.unwrap();
+        let mut client_sink = MessageSink::new(client_tx);
+
+        server_dispatcher.bind(
+            server,
+            ConnectionPermit::dummy(ConnectionDirection::Incoming),
+            Arc::new(ByteCounters::default()),
+        );
 
         client_sink
             .send(Message {
@@ -590,8 +631,14 @@ mod tests {
         let server_stream1 = server_dispatcher.open_recv(channel1);
 
         let (client, server) = create_connection_pair().await;
-        let mut client_sink = MessageSink::new(client);
-        server_dispatcher.bind(server, ConnectionPermit::dummy());
+
+        let mut client_sink = MessageSink::new(client.outgoing().await.unwrap().0);
+
+        server_dispatcher.bind(
+            server,
+            ConnectionPermit::dummy(ConnectionDirection::Incoming),
+            Arc::new(ByteCounters::default()),
+        );
 
         for (channel, content) in [(channel0, send_content0), (channel1, send_content1)] {
             client_sink
@@ -628,8 +675,16 @@ mod tests {
         let server_stream1 = server_dispatcher.open_recv(channel1);
 
         let (client, server) = create_connection_pair().await;
-        client_dispatcher.bind(client, ConnectionPermit::dummy());
-        server_dispatcher.bind(server, ConnectionPermit::dummy());
+        client_dispatcher.bind(
+            client,
+            ConnectionPermit::dummy(ConnectionDirection::Outgoing),
+            Arc::new(ByteCounters::new()),
+        );
+        server_dispatcher.bind(
+            server,
+            ConnectionPermit::dummy(ConnectionDirection::Incoming),
+            Arc::new(ByteCounters::new()),
+        );
 
         let num_messages = 20;
         let mut send_tasks = vec![];
@@ -674,8 +729,14 @@ mod tests {
         let mut server_stream1 = server_dispatcher.open_recv(channel);
 
         let (client, server) = create_connection_pair().await;
-        let mut client_sink = MessageSink::new(client);
-        server_dispatcher.bind(server, ConnectionPermit::dummy());
+
+        let mut client_sink = MessageSink::new(client.outgoing().await.unwrap().0);
+
+        server_dispatcher.bind(
+            server,
+            ConnectionPermit::dummy(ConnectionDirection::Incoming),
+            Arc::new(ByteCounters::new()),
+        );
 
         for content in [send_content0, send_content1] {
             client_sink
@@ -697,6 +758,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn multiple_connections_recv() {
+        crate::test_utils::init_log();
+
         let channel = MessageChannelId::random();
 
         let send_content0 = b"one two three";
@@ -705,14 +768,22 @@ mod tests {
         let server_dispatcher = MessageDispatcher::new();
         let mut server_stream = server_dispatcher.open_recv(channel);
 
-        let (client_socket0, server_socket0) = create_connection_pair().await;
-        let (client_socket1, server_socket1) = create_connection_pair().await;
+        let (client0, server0) = create_connection_pair().await;
+        let (client1, server1) = create_connection_pair().await;
 
-        let client_sink0 = MessageSink::new(client_socket0);
-        let client_sink1 = MessageSink::new(client_socket1);
+        let client_sink0 = MessageSink::new(client0.outgoing().await.unwrap().0);
+        let client_sink1 = MessageSink::new(client1.outgoing().await.unwrap().0);
 
-        server_dispatcher.bind(server_socket0, ConnectionPermit::dummy());
-        server_dispatcher.bind(server_socket1, ConnectionPermit::dummy());
+        server_dispatcher.bind(
+            server0,
+            ConnectionPermit::dummy(ConnectionDirection::Incoming),
+            Arc::new(ByteCounters::new()),
+        );
+        server_dispatcher.bind(
+            server1,
+            ConnectionPermit::dummy(ConnectionDirection::Incoming),
+            Arc::new(ByteCounters::new()),
+        );
 
         for (mut client_sink, content) in
             [(client_sink0, send_content0), (client_sink1, send_content1)]
@@ -737,13 +808,13 @@ mod tests {
 
         // The messages may be received in any order
         assert_eq!(
-            [recv_content0.as_slice(), recv_content1.as_slice()]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
-            [send_content0.as_slice(), send_content1.as_slice()]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([recv_content0.as_slice(), recv_content1.as_slice()]),
+            BTreeSet::from([send_content0.as_slice(), send_content1.as_slice()]),
         );
+
+        client0.close().await;
+        client1.close().await;
+        server_dispatcher.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -756,21 +827,46 @@ mod tests {
         let server_dispatcher = MessageDispatcher::new();
         let server_sink = server_dispatcher.open_send(channel);
 
-        let (client_socket0, server_socket0) = create_connection_pair().await;
-        let (client_socket1, server_socket1) = create_connection_pair().await;
+        let (client0, server0) = create_connection_pair().await;
+        let (client1, server1) = create_connection_pair().await;
 
-        let client_stream0 = MessageStream::new(client_socket0);
-        let client_stream1 = MessageStream::new(client_socket1);
+        let (client0_tx, client0_rx) = client0.outgoing().await.unwrap();
+        let (client1_tx, client1_rx) = client1.outgoing().await.unwrap();
 
-        server_dispatcher.bind(server_socket0, ConnectionPermit::dummy());
-        server_dispatcher.bind(server_socket1, ConnectionPermit::dummy());
+        // The incoming streams are accepted only after something is sent on the corresponding
+        // outgoing streams first.
+        let mut client0_sink = MessageSink::new(client0_tx);
+        let mut client1_sink = MessageSink::new(client1_tx);
+
+        for sink in [&mut client0_sink, &mut client1_sink] {
+            sink.send(Message {
+                channel,
+                content: Vec::new(),
+            })
+            .await
+            .unwrap();
+        }
+
+        let client0_stream = MessageStream::new(client0_rx);
+        let client1_stream = MessageStream::new(client1_rx);
+
+        server_dispatcher.bind(
+            server0,
+            ConnectionPermit::dummy(ConnectionDirection::Incoming),
+            Arc::new(ByteCounters::new()),
+        );
+        server_dispatcher.bind(
+            server1,
+            ConnectionPermit::dummy(ConnectionDirection::Incoming),
+            Arc::new(ByteCounters::new()),
+        );
 
         for content in [send_content0, send_content1] {
             server_sink.send(content.to_vec()).await.unwrap();
         }
 
         // The messages may be received on any stream
-        let recv_contents: BTreeSet<_> = stream::select(client_stream0, client_stream1)
+        let recv_contents: BTreeSet<_> = stream::select(client0_stream, client1_stream)
             .map(|message| message.unwrap().content)
             .take(2)
             .collect()
@@ -800,21 +896,20 @@ mod tests {
         assert_matches!(server_sink.send(vec![]).await, Err(ChannelClosed));
     }
 
-    async fn create_connection_pair() -> (Instrumented<Connection>, Instrumented<Connection>) {
-        let (_server_connector, server_acceptor) =
-            tcp::configure((Ipv4Addr::LOCALHOST, 0u16).into()).unwrap();
-        let (client_connector, _client_acceptor) =
-            tcp::configure((Ipv4Addr::LOCALHOST, 0u16).into()).unwrap();
+    async fn create_connection_pair() -> (Connection, Connection) {
+        let client = net::tcp::configure((Ipv4Addr::LOCALHOST, 0).into())
+            .unwrap()
+            .0;
+        let server = net::tcp::configure((Ipv4Addr::LOCALHOST, 0).into())
+            .unwrap()
+            .1;
 
-        let client = client_connector
-            .connect(*server_acceptor.local_addr())
-            .await
-            .unwrap();
-        let (server, _) = server_acceptor.accept().await.unwrap();
+        let client = Connector::from(client);
+        let server = Acceptor::from(server);
 
-        (
-            Instrumented::new(Connection::Tcp(client), Arc::new(ByteCounters::default())),
-            Instrumented::new(Connection::Tcp(server), Arc::new(ByteCounters::default())),
-        )
+        let client = client.connect(*server.local_addr());
+        let server = async { server.accept().await?.await };
+
+        future::try_join(client, server).await.unwrap()
     }
 }

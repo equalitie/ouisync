@@ -67,10 +67,15 @@ impl MessageBroker {
         }
     }
 
-    pub fn add_connection(&self, connection: Instrumented<Connection>, permit: ConnectionPermit) {
+    pub fn add_connection(
+        &self,
+        connection: Connection,
+        permit: ConnectionPermit,
+        byte_counters: Arc<ByteCounters>,
+    ) {
         self.pex_peer
             .handle_connection(permit.addr(), permit.source(), permit.released());
-        self.dispatcher.bind(connection, permit)
+        self.dispatcher.bind(connection, permit, byte_counters)
     }
 
     /// Has this broker at least one live connection?

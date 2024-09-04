@@ -1,6 +1,5 @@
-use crate::sync::rendezvous;
-
 use self::implementation::{TcpListener, TcpStream};
+use crate::sync::rendezvous;
 use std::{future, io, net::SocketAddr};
 use tokio::{
     io::{ReadHalf, WriteHalf},
@@ -125,17 +124,22 @@ impl Connection {
     /// # Cancel safety
     ///
     /// This function is idempotent even in the presence of cancellation.
-    pub async fn close(&self) -> Result<(), Error> {
+    pub async fn close(&self) {
         let (reply_tx, reply_rx) = oneshot::channel();
 
-        // If send or receive return an error it means the connection is already closed. Returning
-        // `Ok` in that case to make this function idempotent.
-        self.command_tx
+        if self
+            .command_tx
             .send(Command::Close(Some(reply_tx)))
             .await
-            .ok();
+            .is_err()
+        {
+            return;
+        }
 
-        reply_rx.await.unwrap_or(Ok(())).map_err(Into::into)
+        match reply_rx.await {
+            Ok(Ok(())) | Err(_) => (),
+            Ok(Err(error)) => tracing::debug!(?error, "failed to close connection"),
+        }
     }
 }
 
@@ -180,19 +184,24 @@ async fn drive_connection(
             Command::Incoming(reply_tx) => {
                 let result = if let Some(result) = incoming.pop() {
                     result
-                } else if let Some(result) = future::poll_fn(|cx| conn.poll_next_inbound(cx)).await
-                {
-                    result
                 } else {
-                    break;
+                    select! {
+                        result = future::poll_fn(|cx| conn.poll_next_inbound(cx)) => {
+                            if let Some(result) = result {
+                                result
+                            } else {
+                                // connection closed
+                                break;
+                            }
+                        }
+                        _ = reply_tx.closed() => continue,
+                    }
                 };
 
                 if let Err(result) = reply_tx.send(result).await {
                     // reply_rx dropped before receiving the result, save it for next time.
                     incoming.push(result);
                 }
-
-                continue;
             }
             Command::Outgoing(reply_tx) => {
                 let result = if let Some(result) = outgoing.pop() {
@@ -224,7 +233,7 @@ enum Command {
     // got cancelled.
     Incoming(rendezvous::Sender<Result<yamux::Stream, yamux::ConnectionError>>),
     Outgoing(rendezvous::Sender<Result<yamux::Stream, yamux::ConnectionError>>),
-    // Using regular oneshot as we don't care about cancellation here:
+    // Using regular oneshot as we don't care about cancellation here
     Close(Option<oneshot::Sender<Result<(), yamux::ConnectionError>>>),
 }
 
@@ -238,7 +247,7 @@ mod implementation {
     use crate::{socket, KEEP_ALIVE_INTERVAL};
     use socket2::{Domain, Socket, TcpKeepalive, Type};
     use std::{
-        io,
+        fmt, io,
         net::SocketAddr,
         pin::Pin,
         task::{Context, Poll},
@@ -295,6 +304,12 @@ mod implementation {
                     .connect(addr)
                     .await?,
             ))
+        }
+    }
+
+    impl fmt::Debug for TcpStream {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{:?}", self.0)
         }
     }
 

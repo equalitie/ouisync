@@ -42,6 +42,17 @@ pub(crate) mod rendezvous {
                 }
             }
         }
+
+        /// Waits for the associated [`Receiver`] to close (that is, to be dropped).
+        pub async fn closed(&self) {
+            loop {
+                if self.shared.state.lock().unwrap().rx_drop {
+                    break;
+                }
+
+                self.shared.rx_notify.notified().await;
+            }
+        }
     }
 
     impl<T> Drop for Sender<T> {

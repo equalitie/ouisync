@@ -59,9 +59,7 @@ impl Acceptor {
         self.endpoint
             .accept()
             .await
-            .map(|inner| Connecting {
-                inner: inner.into_future(),
-            })
+            .map(|inner| Connecting { inner })
             .ok_or(Error::EndpointClosed)
     }
 
@@ -71,10 +69,31 @@ impl Acceptor {
 }
 
 pub struct Connecting {
+    inner: quinn::Incoming,
+}
+
+impl Connecting {
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.inner.remote_address()
+    }
+}
+
+impl IntoFuture for Connecting {
+    type Output = Result<Connection, Error>;
+    type IntoFuture = ConnectingFuture;
+
+    fn into_future(self) -> Self::IntoFuture {
+        ConnectingFuture {
+            inner: self.inner.into_future(),
+        }
+    }
+}
+
+pub struct ConnectingFuture {
     inner: quinn::IncomingFuture,
 }
 
-impl Future for Connecting {
+impl Future for ConnectingFuture {
     type Output = Result<Connection, Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

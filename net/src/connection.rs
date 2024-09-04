@@ -1,6 +1,6 @@
 use crate::{quic, tcp};
 use std::{
-    future::Future,
+    future::{self, Future, IntoFuture, Ready},
     io,
     net::SocketAddr,
     pin::Pin,
@@ -32,6 +32,18 @@ impl Connector {
     }
 }
 
+impl From<tcp::Connector> for Connector {
+    fn from(inner: tcp::Connector) -> Self {
+        Self::Tcp(inner)
+    }
+}
+
+impl From<quic::Connector> for Connector {
+    fn from(inner: quic::Connector) -> Self {
+        Self::Quic(inner)
+    }
+}
+
 /// Unified acceptor
 pub enum Acceptor {
     Tcp(tcp::Acceptor),
@@ -48,29 +60,67 @@ impl Acceptor {
 
     pub async fn accept(&self) -> Result<Connecting, Error> {
         match self {
-            Self::Tcp(inner) => Ok(Connecting::Tcp(Some(inner.accept().await?))),
+            Self::Tcp(inner) => Ok(Connecting::Tcp(inner.accept().await?)),
             Self::Quic(inner) => Ok(Connecting::Quic(inner.accept().await?)),
         }
     }
 }
 
-/// Incoming connection which being established.
+impl From<tcp::Acceptor> for Acceptor {
+    fn from(inner: tcp::Acceptor) -> Self {
+        Self::Tcp(inner)
+    }
+}
+
+impl From<quic::Acceptor> for Acceptor {
+    fn from(inner: quic::Acceptor) -> Self {
+        Self::Quic(inner)
+    }
+}
+
+/// Incoming connection while being established.
 pub enum Connecting {
     // Note TCP doesn't support two phase accept so this is already a fully established
     // connection.
-    Tcp(Option<tcp::Connection>),
+    Tcp(tcp::Connection),
     Quic(quic::Connecting),
 }
 
-impl Future for Connecting {
+impl Connecting {
+    pub fn remote_addr(&self) -> SocketAddr {
+        match self {
+            Self::Tcp(inner) => inner.remote_addr(),
+            Self::Quic(inner) => inner.remote_addr(),
+        }
+    }
+}
+
+impl IntoFuture for Connecting {
+    type Output = Result<Connection, Error>;
+    type IntoFuture = ConnectingFuture;
+
+    fn into_future(self) -> Self::IntoFuture {
+        match self {
+            Self::Tcp(inner) => ConnectingFuture::Tcp(future::ready(inner)),
+            Self::Quic(inner) => ConnectingFuture::Quic(inner.into_future()),
+        }
+    }
+}
+
+pub enum ConnectingFuture {
+    Tcp(Ready<tcp::Connection>),
+    Quic(quic::ConnectingFuture),
+}
+
+impl Future for ConnectingFuture {
     type Output = Result<Connection, Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.get_mut() {
-            Self::Tcp(connection) => Poll::Ready(Ok(Connection::Tcp(
-                connection.take().expect("future polled after completion"),
-            ))),
-            Self::Quic(connecting) => Pin::new(connecting)
+            Self::Tcp(inner) => Pin::new(inner)
+                .poll(cx)
+                .map(|inner| Ok(Connection::Tcp(inner))),
+            Self::Quic(inner) => Pin::new(inner)
                 .poll(cx)
                 .map_ok(Connection::Quic)
                 .map_err(Into::into),
@@ -125,13 +175,11 @@ impl Connection {
     }
 
     /// Gracefully close the connection
-    pub async fn close(&self) -> Result<(), Error> {
+    pub async fn close(&self) {
         match self {
-            Self::Tcp(inner) => inner.close().await?,
+            Self::Tcp(inner) => inner.close().await,
             Self::Quic(inner) => inner.close(),
         }
-
-        Ok(())
     }
 }
 
@@ -323,7 +371,7 @@ mod tests {
 
             let sent_messages: Vec<_> = tasks.collect().await;
 
-            conn.close().await.unwrap();
+            conn.close().await;
 
             sent_messages
         }
