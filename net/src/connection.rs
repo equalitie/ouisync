@@ -214,26 +214,25 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::{future, stream::FuturesUnordered, StreamExt};
+    use rand::{distributions::Standard, Rng};
     use std::net::Ipv4Addr;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        task,
+        select, task,
     };
+    use tracing::Instrument;
 
     #[tokio::test]
     async fn ping_tcp() {
-        let (client, _) = tcp::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-        let (_, server) = tcp::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-
-        ping_case(Connector::Tcp(client), Acceptor::Tcp(server)).await
+        let (client, server) = setup_tcp_peers();
+        ping_case(client, server).await
     }
 
     #[tokio::test]
     async fn ping_quic() {
-        let (client, _, _) = quic::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-        let (_, server, _) = quic::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-
-        ping_case(Connector::Quic(client), Acceptor::Quic(server)).await
+        let (client, server) = setup_quic_peers();
+        ping_case(client, server).await
     }
 
     async fn ping_case(client_connector: Connector, server_acceptor: Acceptor) {
@@ -265,5 +264,131 @@ mod tests {
 
         server.await.unwrap();
         client.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn multi_streams_tcp() {
+        let (client, server) = setup_tcp_peers();
+        multi_streams_case(client, server).await;
+    }
+
+    #[tokio::test]
+    async fn multi_streams_quic() {
+        let (client, server) = setup_quic_peers();
+        multi_streams_case(client, server).await;
+    }
+
+    async fn multi_streams_case(client_connector: Connector, server_acceptor: Acceptor) {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .compact()
+            .init();
+
+        let num_messages = 32;
+        let min_message_size = 1;
+        let max_message_size = 256 * 1024;
+
+        let mut rng = rand::thread_rng();
+        let mut messages: Vec<Vec<u8>> = (0..num_messages)
+            .map(|_| {
+                let size = rng.gen_range(min_message_size..=max_message_size);
+                (&mut rng).sample_iter(Standard).take(size).collect()
+            })
+            .collect();
+
+        let server_addr = *server_acceptor.local_addr();
+
+        let client = async {
+            let conn = client_connector.connect(server_addr).await.unwrap();
+            let tasks = FuturesUnordered::new();
+
+            for message in &messages {
+                tasks.push(async {
+                    let (mut tx, mut rx) = conn.outgoing().await.unwrap();
+
+                    // Send message
+                    tx.write_u32(message.len() as u32).await.unwrap();
+                    tx.write_all(message).await.unwrap();
+
+                    // Receive response and close the stream
+                    let mut buf = [0; 2];
+                    rx.read_exact(&mut buf).await.unwrap();
+                    assert_eq!(&buf, b"ok");
+
+                    tx.shutdown().await.unwrap();
+
+                    message.clone()
+                });
+            }
+
+            let sent_messages: Vec<_> = tasks.collect().await;
+
+            conn.close().await.unwrap();
+
+            sent_messages
+        }
+        .instrument(tracing::info_span!("client"));
+
+        let server = async {
+            let conn = server_acceptor.accept().await.unwrap().await.unwrap();
+            let mut tasks = FuturesUnordered::new();
+            let mut received_messages = Vec::new();
+
+            loop {
+                let (mut tx, mut rx) = select! {
+                    Ok(stream) = conn.incoming() => stream,
+                    Some(message) = tasks.next() => {
+                        received_messages.push(message);
+                        continue;
+                    }
+                    else => break,
+                };
+
+                tasks.push(async move {
+                    // Read message len
+                    let len = rx.read_u32().await.unwrap() as usize;
+
+                    // Read message content
+                    let mut message = vec![0; len];
+                    rx.read_exact(&mut message).await.unwrap();
+
+                    // Send response and close the stream
+                    tx.write_all(b"ok").await.unwrap();
+
+                    tx.shutdown().await.unwrap();
+
+                    message
+                });
+            }
+
+            received_messages
+        }
+        .instrument(tracing::info_span!("server"));
+
+        let (mut sent_messages, mut received_messages) = future::join(client, server).await;
+
+        assert_eq!(sent_messages.len(), messages.len());
+        assert_eq!(received_messages.len(), messages.len());
+
+        sent_messages.sort();
+        received_messages.sort();
+        messages.sort();
+
+        similar_asserts::assert_eq!(sent_messages, messages);
+        similar_asserts::assert_eq!(received_messages, messages);
+    }
+
+    fn setup_tcp_peers() -> (Connector, Acceptor) {
+        let (client, _) = tcp::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let (_, server) = tcp::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+
+        (Connector::Tcp(client), Acceptor::Tcp(server))
+    }
+
+    fn setup_quic_peers() -> (Connector, Acceptor) {
+        let (client, _, _) = quic::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let (_, server, _) = quic::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+
+        (Connector::Quic(client), Acceptor::Quic(server))
     }
 }

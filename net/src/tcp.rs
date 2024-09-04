@@ -1,5 +1,7 @@
+use crate::sync::rendezvous;
+
 use self::implementation::{TcpListener, TcpStream};
-use std::{collections::VecDeque, future, io, net::SocketAddr};
+use std::{future, io, net::SocketAddr};
 use tokio::{
     io::{ReadHalf, WriteHalf},
     select,
@@ -7,6 +9,7 @@ use tokio::{
     task,
 };
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+use tracing::{Instrument, Span};
 
 /// Configure TCP endpoint
 pub fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor), Error> {
@@ -61,7 +64,7 @@ impl Connection {
         let connection = yamux::Connection::new(stream.compat(), connection_config(), mode);
         let (command_tx, command_rx) = mpsc::channel(1);
 
-        task::spawn(drive_connection(connection, command_rx));
+        task::spawn(drive_connection(connection, command_rx).instrument(Span::current()));
 
         Self {
             command_tx,
@@ -73,9 +76,13 @@ impl Connection {
         self.remote_addr
     }
 
-    /// Accept the next incoming stream
+    /// Accept the next incoming stream.
+    ///
+    /// # Cancel safety
+    ///
+    /// In case this function is cancelled, no stream gets lost and the call can be safely retried.
     pub async fn incoming(&self) -> Result<(SendStream, RecvStream), Error> {
-        let (reply_tx, reply_rx) = oneshot::channel();
+        let (reply_tx, reply_rx) = rendezvous::channel();
 
         self.command_tx
             .send(Command::Incoming(reply_tx))
@@ -83,6 +90,7 @@ impl Connection {
             .map_err(|_| yamux::ConnectionError::Closed)?;
 
         let stream = reply_rx
+            .recv()
             .await
             .map_err(|_| yamux::ConnectionError::Closed)??;
         let (recv, send) = tokio::io::split(stream.compat());
@@ -91,8 +99,12 @@ impl Connection {
     }
 
     /// Open a new outgoing stream
+    ///
+    /// # Cancel safety
+    ///
+    /// In case this function is cancelled, no stream gets lost and the call can be safely retried.
     pub async fn outgoing(&self) -> Result<(SendStream, RecvStream), Error> {
-        let (reply_tx, reply_rx) = oneshot::channel();
+        let (reply_tx, reply_rx) = rendezvous::channel();
 
         self.command_tx
             .send(Command::Outgoing(reply_tx))
@@ -100,6 +112,7 @@ impl Connection {
             .map_err(|_| yamux::ConnectionError::Closed)?;
 
         let stream = reply_rx
+            .recv()
             .await
             .map_err(|_| yamux::ConnectionError::Closed)??;
         let (recv, send) = tokio::io::split(stream.compat());
@@ -108,6 +121,10 @@ impl Connection {
     }
 
     /// Gracefully close the connection
+    ///
+    /// # Cancel safety
+    ///
+    /// This function is idempotent even in the presence of cancellation.
     pub async fn close(&self) -> Result<(), Error> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -139,10 +156,11 @@ async fn drive_connection(
     mut conn: yamux::Connection<Compat<TcpStream>>,
     mut command_rx: mpsc::Receiver<Command>,
 ) {
-    // Buffer for incoming streams. This buffer is unbounded but yamux itself has a limit on the
-    // total number of concurrently open streams which effectively puts a bound on this buffer as
-    // well.
-    let mut incoming = VecDeque::new();
+    // Buffers for incoming and outgoing streams. These guarantee that no streams are ever lost,
+    // even if `Connection::incoming` or `Connection::outgoing` are cancelled. Due to the limit on
+    // the number of streams per connection, these buffers are effectively bounded.
+    let mut incoming = Vec::new();
+    let mut outgoing = Vec::new();
 
     loop {
         let command = select! {
@@ -150,7 +168,7 @@ async fn drive_connection(
             result = future::poll_fn(|cx| conn.poll_next_inbound(cx)) => {
                 match result {
                     Some(result) => {
-                        incoming.push_front(result);
+                        incoming.push(result);
                         continue;
                     }
                     None => break,
@@ -160,20 +178,33 @@ async fn drive_connection(
 
         match command.unwrap_or(Command::Close(None)) {
             Command::Incoming(reply_tx) => {
-                if let Some(result) = incoming.pop_back() {
-                    reply_tx.send(result).ok();
-                    continue;
-                }
-
-                if let Some(result) = future::poll_fn(|cx| conn.poll_next_inbound(cx)).await {
-                    reply_tx.send(result).ok();
+                let result = if let Some(result) = incoming.pop() {
+                    result
+                } else if let Some(result) = future::poll_fn(|cx| conn.poll_next_inbound(cx)).await
+                {
+                    result
                 } else {
                     break;
+                };
+
+                if let Err(result) = reply_tx.send(result).await {
+                    // reply_rx dropped before receiving the result, save it for next time.
+                    incoming.push(result);
                 }
+
+                continue;
             }
             Command::Outgoing(reply_tx) => {
-                let result = future::poll_fn(|cx| conn.poll_new_outbound(cx)).await;
-                reply_tx.send(result).ok();
+                let result = if let Some(result) = outgoing.pop() {
+                    result
+                } else {
+                    future::poll_fn(|cx| conn.poll_new_outbound(cx)).await
+                };
+
+                if let Err(result) = reply_tx.send(result).await {
+                    // reply_rx dropped before receiving the result, save it for next time.
+                    outgoing.push(result);
+                }
             }
             Command::Close(reply_tx) => {
                 let result = future::poll_fn(|cx| conn.poll_close(cx)).await;
@@ -189,8 +220,11 @@ async fn drive_connection(
 }
 
 enum Command {
-    Incoming(oneshot::Sender<Result<yamux::Stream, yamux::ConnectionError>>),
-    Outgoing(oneshot::Sender<Result<yamux::Stream, yamux::ConnectionError>>),
+    // Using rendezvous to guarantee the reply is either received or we get it back if the receive
+    // got cancelled.
+    Incoming(rendezvous::Sender<Result<yamux::Stream, yamux::ConnectionError>>),
+    Outgoing(rendezvous::Sender<Result<yamux::Stream, yamux::ConnectionError>>),
+    // Using regular oneshot as we don't care about cancellation here:
     Close(Option<oneshot::Sender<Result<(), yamux::ConnectionError>>>),
 }
 
