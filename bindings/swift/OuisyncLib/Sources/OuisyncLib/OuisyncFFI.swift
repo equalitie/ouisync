@@ -11,7 +11,7 @@ import OuisyncLibFFI
 typealias FFISessionKind = UInt8
 typealias FFIContext = UnsafeRawPointer
 typealias FFICallback = @convention(c) (FFIContext?, UnsafePointer<UInt8>, CUnsignedLongLong) -> Void;
-typealias FFISessionCreate = @convention(c) (FFISessionKind, UnsafePointer<UInt8>, UnsafePointer<UInt8>, UnsafeRawPointer?, FFICallback) -> OuisyncSessionCreateResult;
+typealias FFISessionCreate = @convention(c) (FFISessionKind, UnsafePointer<UInt8>, UnsafePointer<UInt8>, UnsafePointer<UInt8>, UnsafeRawPointer?, FFICallback) -> OuisyncSessionCreateResult;
 typealias FFISessionGrab = @convention(c) (UnsafeRawPointer?, FFICallback) -> OuisyncSessionCreateResult;
 typealias FFISessionClose = @convention(c) (OuisyncClientHandle, FFIContext?, FFICallback) -> Void;
 typealias FFISessionChannelSend = @convention(c) (OuisyncClientHandle, UnsafeRawPointer, UInt64) -> Void;

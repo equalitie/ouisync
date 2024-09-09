@@ -26,7 +26,8 @@ public class OuisyncClient {
             onReceive(Array(UnsafeBufferPointer(start: dataPointer, count: Int(exactly: size)!)))
         }
 
-        let result = ffi.ffiSessionCreate(ffi.sessionKindShared, configPath, logPath, OuisyncFFI.toUnretainedPtr(obj: client), callback);
+        let logTag = "ouisync-backend"
+        let result = ffi.ffiSessionCreate(ffi.sessionKindShared, configPath, logPath, logTag, OuisyncFFI.toUnretainedPtr(obj: client), callback);
 
         if result.errorCode != 0 {
             throw SessionCreateError("Failed to create session, code:\(result.errorCode), message:\(result.errorMessage!)")
