@@ -68,7 +68,7 @@ use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use deadlock::BlockingMutex;
 use futures_util::future;
-use net::connection::{Connection, Error as ConnectionError};
+use net::unified::{Connection, ConnectionError};
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;

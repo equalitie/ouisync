@@ -17,7 +17,7 @@ use crate::{
     repository::Vault,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
-use net::connection::Connection;
+use net::unified::Connection;
 use state_monitor::StateMonitor;
 use std::{future, sync::Arc};
 use tokio::{

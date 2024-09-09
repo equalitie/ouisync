@@ -1,3 +1,5 @@
+//! Unified interface over different network protocols (currently TCP and QUIC).
+
 use crate::{quic, tcp};
 use std::{
     future::{self, Future, IntoFuture, Ready},
@@ -16,7 +18,7 @@ pub enum Connector {
 }
 
 impl Connector {
-    pub async fn connect(&self, addr: SocketAddr) -> Result<Connection, Error> {
+    pub async fn connect(&self, addr: SocketAddr) -> Result<Connection, ConnectionError> {
         match self {
             Self::Tcp(inner) => inner
                 .connect(addr)
@@ -58,7 +60,7 @@ impl Acceptor {
         }
     }
 
-    pub async fn accept(&self) -> Result<Connecting, Error> {
+    pub async fn accept(&self) -> Result<Connecting, ConnectionError> {
         match self {
             Self::Tcp(inner) => Ok(Connecting::Tcp(inner.accept().await?)),
             Self::Quic(inner) => Ok(Connecting::Quic(inner.accept().await?)),
@@ -96,7 +98,7 @@ impl Connecting {
 }
 
 impl IntoFuture for Connecting {
-    type Output = Result<Connection, Error>;
+    type Output = Result<Connection, ConnectionError>;
     type IntoFuture = ConnectingFuture;
 
     fn into_future(self) -> Self::IntoFuture {
@@ -113,7 +115,7 @@ pub enum ConnectingFuture {
 }
 
 impl Future for ConnectingFuture {
-    type Output = Result<Connection, Error>;
+    type Output = Result<Connection, ConnectionError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.get_mut() {
@@ -143,7 +145,7 @@ impl Connection {
     }
 
     /// Accept a new incoming stream
-    pub async fn incoming(&self) -> Result<(SendStream, RecvStream), Error> {
+    pub async fn incoming(&self) -> Result<(SendStream, RecvStream), ConnectionError> {
         match self {
             Self::Tcp(inner) => inner
                 .incoming()
@@ -159,7 +161,7 @@ impl Connection {
     }
 
     /// Open a new outgoing stream
-    pub async fn outgoing(&self) -> Result<(SendStream, RecvStream), Error> {
+    pub async fn outgoing(&self) -> Result<(SendStream, RecvStream), ConnectionError> {
         match self {
             Self::Tcp(inner) => inner
                 .outgoing()
@@ -252,7 +254,7 @@ impl AsyncRead for RecvStream {
 }
 
 #[derive(Error, Debug)]
-pub enum Error {
+pub enum ConnectionError {
     #[error("tcp")]
     Tcp(#[from] tcp::Error),
     #[error("quic")]

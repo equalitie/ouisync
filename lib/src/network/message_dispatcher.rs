@@ -13,7 +13,7 @@ use futures_util::{
     stream::{FuturesUnordered, SelectAll},
     FutureExt, Sink, SinkExt, Stream, StreamExt,
 };
-use net::connection::{Connection, Error as ConnectionError, RecvStream, SendStream};
+use net::unified::{Connection, ConnectionError, RecvStream, SendStream};
 use std::{
     io,
     pin::Pin,
@@ -584,7 +584,7 @@ mod tests {
     use super::{super::stats::ByteCounters, *};
     use assert_matches::assert_matches;
     use futures_util::{future, stream};
-    use net::connection::{Acceptor, Connection, Connector};
+    use net::unified::{Acceptor, Connection, Connector};
     use std::{collections::BTreeSet, net::Ipv4Addr, str::from_utf8, time::Duration};
 
     #[tokio::test(flavor = "multi_thread")]

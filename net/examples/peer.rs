@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use ouisync_net::{
-    connection::{Acceptor, Connection, Connector, RecvStream, SendStream},
     quic, tcp,
+    unified::{Acceptor, Connection, Connector, RecvStream, SendStream},
 };
 use std::{
     future,

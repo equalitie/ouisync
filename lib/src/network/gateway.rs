@@ -2,8 +2,8 @@ use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, seen_peers::SeenPe
 use crate::sync::atomic_slot::AtomicSlot;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use net::{
-    connection::{Acceptor, Connection},
     quic, tcp,
+    unified::{Acceptor, Connection},
 };
 use scoped_task::ScopedJoinHandle;
 use std::net::{IpAddr, SocketAddr};
