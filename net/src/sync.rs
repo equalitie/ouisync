@@ -13,7 +13,10 @@ pub(crate) mod rendezvous {
 
     use std::{
         fmt,
-        sync::{Arc, Mutex},
+        sync::{
+            atomic::{AtomicU8, Ordering},
+            Arc, Mutex,
+        },
     };
     use tokio::sync::Notify;
 
@@ -25,20 +28,20 @@ pub(crate) mod rendezvous {
     impl<T> Sender<T> {
         /// Sends the `value` to the [`Receiver`].
         pub async fn send(self, value: T) -> Result<(), T> {
-            self.shared.state.lock().unwrap().value = Some(value);
+            *self.shared.value.lock().unwrap() = Some(value);
             self.shared.tx_notify.notify_one();
 
             loop {
                 self.shared.rx_notify.notified().await;
 
-                let mut state = self.shared.state.lock().unwrap();
+                let mut value = self.shared.value.lock().unwrap();
 
-                if state.value.is_none() {
+                if value.is_none() {
                     return Ok(());
                 }
 
-                if state.rx_drop {
-                    return Err(state.value.take().unwrap());
+                if self.shared.state.get(RX_DROP) {
+                    return Err(value.take().unwrap());
                 }
             }
         }
@@ -46,7 +49,7 @@ pub(crate) mod rendezvous {
         /// Waits for the associated [`Receiver`] to close (that is, to be dropped).
         pub async fn closed(&self) {
             loop {
-                if self.shared.state.lock().unwrap().rx_drop {
+                if self.shared.state.get(RX_DROP) {
                     break;
                 }
 
@@ -57,7 +60,7 @@ pub(crate) mod rendezvous {
 
     impl<T> Drop for Sender<T> {
         fn drop(&mut self) {
-            self.shared.state.lock().unwrap().tx_drop = true;
+            self.shared.state.set(TX_DROP);
             self.shared.tx_notify.notify_one();
         }
     }
@@ -76,14 +79,14 @@ pub(crate) mod rendezvous {
             loop {
                 self.shared.tx_notify.notified().await;
 
-                let mut state = self.shared.state.lock().unwrap();
+                let value = self.shared.value.lock().unwrap().take();
 
-                if let Some(value) = state.value.take() {
+                if let Some(value) = value {
                     self.shared.rx_notify.notify_one();
                     return Ok(value);
                 }
 
-                if state.tx_drop {
+                if self.shared.state.get(TX_DROP) {
                     return Err(RecvError);
                 }
             }
@@ -92,7 +95,7 @@ pub(crate) mod rendezvous {
 
     impl<T> Drop for Receiver<T> {
         fn drop(&mut self) {
-            self.shared.state.lock().unwrap().rx_drop = true;
+            self.shared.state.set(RX_DROP);
             self.shared.rx_notify.notify_one();
         }
     }
@@ -100,11 +103,8 @@ pub(crate) mod rendezvous {
     /// Create a rendezvous channel for sending a single message of type `T`.
     pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         let shared = Arc::new(Shared {
-            state: Mutex::new(State {
-                value: None,
-                tx_drop: false,
-                rx_drop: false,
-            }),
+            value: Mutex::new(None),
+            state: State::new(),
             tx_notify: Notify::new(),
             rx_notify: Notify::new(),
         });
@@ -129,16 +129,30 @@ pub(crate) mod rendezvous {
     impl std::error::Error for RecvError {}
 
     struct Shared<T> {
-        state: Mutex<State<T>>,
+        value: Mutex<Option<T>>,
+        state: State,
         tx_notify: Notify,
         rx_notify: Notify,
     }
 
-    struct State<T> {
-        value: Option<T>,
-        tx_drop: bool,
-        rx_drop: bool,
+    struct State(AtomicU8);
+
+    impl State {
+        fn new() -> Self {
+            Self(AtomicU8::new(0))
+        }
+
+        fn get(&self, flag: u8) -> bool {
+            self.0.load(Ordering::Acquire) & flag == flag
+        }
+
+        fn set(&self, flag: u8) {
+            self.0.fetch_or(flag, Ordering::AcqRel);
+        }
     }
+
+    const TX_DROP: u8 = 1;
+    const RX_DROP: u8 = 2;
 
     #[cfg(test)]
     mod tests {

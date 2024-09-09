@@ -897,10 +897,10 @@ mod tests {
     }
 
     async fn create_connection_pair() -> (Connection, Connection) {
-        let client = net::tcp::configure((Ipv4Addr::LOCALHOST, 0).into())
+        let client = net::quic::configure((Ipv4Addr::LOCALHOST, 0).into())
             .unwrap()
             .0;
-        let server = net::tcp::configure((Ipv4Addr::LOCALHOST, 0).into())
+        let server = net::quic::configure((Ipv4Addr::LOCALHOST, 0).into())
             .unwrap()
             .1;
 
