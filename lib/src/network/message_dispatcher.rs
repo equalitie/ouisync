@@ -660,6 +660,9 @@ mod tests {
             let recv_content = server_stream.recv().await.unwrap();
             assert_eq!(recv_content, send_content);
         }
+
+        client.close().await;
+        server_dispatcher.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -718,6 +721,9 @@ mod tests {
                 );
             }
         }
+
+        client_dispatcher.shutdown().await;
+        server_dispatcher.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -757,6 +763,9 @@ mod tests {
         );
         assert_eq!(server_stream1.recv().await.unwrap(), send_content0);
         assert_eq!(server_stream1.recv().await.unwrap(), send_content1);
+
+        client.close().await;
+        server_dispatcher.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -881,6 +890,10 @@ mod tests {
                 .into_iter()
                 .collect::<BTreeSet<_>>(),
         );
+
+        client0.close().await;
+        client1.close().await;
+        server_dispatcher.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

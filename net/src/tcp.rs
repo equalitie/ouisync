@@ -210,7 +210,10 @@ async fn drive_connection(
                 let result = if let Some(result) = outgoing.pop() {
                     result
                 } else {
-                    future::poll_fn(|cx| conn.poll_new_outbound(cx)).await
+                    select! {
+                        result = future::poll_fn(|cx| conn.poll_new_outbound(cx)) => result,
+                        _ = reply_tx.closed() => continue,
+                    }
                 };
 
                 if let Err(result) = reply_tx.send(result).await {

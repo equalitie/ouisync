@@ -436,7 +436,7 @@ mod tests {
         let (_, server) =
             tcp::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
 
-        (Connector::Tcp(client), Acceptor::Tcp(server))
+        (client.into(), server.into())
     }
 
     fn setup_quic_peers() -> (Connector, Acceptor) {
@@ -445,6 +445,6 @@ mod tests {
         let (_, server, _) =
             quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
 
-        (Connector::Quic(client), Acceptor::Quic(server))
+        (client.into(), server.into())
     }
 }
