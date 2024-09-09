@@ -17,3 +17,16 @@ pub(crate) fn bind_with_fallback(socket: &Socket, mut addr: SocketAddr) -> io::R
         }
     }
 }
+
+/// Options for the underlying network socket.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct SocketOptions {
+    pub(crate) reuse_addr: bool,
+}
+
+impl SocketOptions {
+    /// Enables the `SO_REUSEADDR` option on the socket.
+    pub fn with_reuse_addr(self) -> Self {
+        Self { reuse_addr: true }
+    }
+}

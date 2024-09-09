@@ -1,5 +1,5 @@
 use self::implementation::{TcpListener, TcpStream};
-use crate::sync::rendezvous;
+use crate::{sync::rendezvous, SocketOptions};
 use std::{future, io, net::SocketAddr};
 use tokio::{
     io::{ReadHalf, WriteHalf},
@@ -11,8 +11,11 @@ use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompat
 use tracing::{Instrument, Span};
 
 /// Configure TCP endpoint
-pub fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor), Error> {
-    let listener = TcpListener::bind(bind_addr)?;
+pub fn configure(
+    bind_addr: SocketAddr,
+    options: SocketOptions,
+) -> Result<(Connector, Acceptor), Error> {
+    let listener = TcpListener::bind_with_options(bind_addr, options)?;
     let local_addr = listener.local_addr()?;
 
     Ok((
@@ -244,7 +247,7 @@ fn connection_config() -> yamux::Config {
 // Real
 #[cfg(not(feature = "simulation"))]
 mod implementation {
-    use crate::{socket, KEEP_ALIVE_INTERVAL};
+    use crate::{socket, SocketOptions, KEEP_ALIVE_INTERVAL};
     use socket2::{Domain, Socket, TcpKeepalive, Type};
     use std::{
         fmt, io,
@@ -258,14 +261,17 @@ mod implementation {
     pub(super) struct TcpListener(tokio::net::TcpListener);
 
     impl TcpListener {
-        /// Binds TCP socket to the given address. If the port is taken, uses a random one,
-        pub fn bind(addr: impl Into<SocketAddr>) -> io::Result<Self> {
-            let addr = addr.into();
-
+        /// Configures a TCP socket with the given options and binds it to the given address. If the
+        /// port is taken, uses a random one,
+        pub fn bind_with_options(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
             let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
             socket.set_nonblocking(true)?;
-            // Ignore errors - reuse address is nice to have but not required.
-            socket.set_reuse_address(true).ok();
+
+            if options.reuse_addr {
+                // Ignore errors - reuse address is nice to have but not required.
+                socket.set_reuse_address(true).ok();
+            }
+
             set_keep_alive(&socket)?;
             socket::bind_with_fallback(&socket, addr)?;
 
@@ -276,6 +282,11 @@ mod implementation {
             socket.listen(128)?;
 
             Ok(Self(tokio::net::TcpListener::from_std(socket.into())?))
+        }
+
+        /// Binds TCP socket to the given address. If the port is taken, uses a random one,
+        pub fn bind(addr: SocketAddr) -> io::Result<Self> {
+            Self::bind_with_options(addr, SocketOptions::default())
         }
 
         pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {

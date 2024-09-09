@@ -263,6 +263,8 @@ pub enum ConnectionError {
 
 #[cfg(test)]
 mod tests {
+    use crate::SocketOptions;
+
     use super::*;
     use futures_util::{future, stream::FuturesUnordered, StreamExt};
     use rand::{distributions::Standard, Rng};
@@ -429,15 +431,19 @@ mod tests {
     }
 
     fn setup_tcp_peers() -> (Connector, Acceptor) {
-        let (client, _) = tcp::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-        let (_, server) = tcp::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let (client, _) =
+            tcp::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
+        let (_, server) =
+            tcp::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
 
         (Connector::Tcp(client), Acceptor::Tcp(server))
     }
 
     fn setup_quic_peers() -> (Connector, Acceptor) {
-        let (client, _, _) = quic::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-        let (_, server, _) = quic::configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let (client, _, _) =
+            quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
+        let (_, server, _) =
+            quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
 
         (Connector::Quic(client), Acceptor::Quic(server))
     }

@@ -30,21 +30,31 @@ pub trait DatagramSocket {
 #[cfg(not(feature = "simulation"))]
 mod implementation {
     use super::*;
-    use crate::socket;
+    use crate::{socket, SocketOptions};
     use socket2::{Domain, Socket, Type};
 
     pub struct UdpSocket(tokio::net::UdpSocket);
 
     impl UdpSocket {
-        /// Binds UDP socket to the given address. If the port is taken, uses a random one,
-        pub fn bind(addr: SocketAddr) -> io::Result<Self> {
+        /// Configures a UDP the socket with the given options and binds it to the given address. If
+        /// the port is taken, uses a random one,
+        pub fn bind_with_options(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
             let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, None)?;
             socket.set_nonblocking(true)?;
-            // Ignore errors - reuse address is nice to have but not required.
-            socket.set_reuse_address(true).ok();
+
+            if options.reuse_addr {
+                // Ignore errors - reuse address is nice to have but not required.
+                socket.set_reuse_address(true).ok();
+            }
+
             socket::bind_with_fallback(&socket, addr)?;
 
             Ok(Self(tokio::net::UdpSocket::from_std(socket.into())?))
+        }
+
+        /// Binds UDP socket to the given address. If the port is taken, uses a random one,
+        pub fn bind(addr: SocketAddr) -> io::Result<Self> {
+            Self::bind_with_options(addr, SocketOptions::default())
         }
 
         pub fn bind_multicast(interface: Ipv4Addr) -> io::Result<Self> {

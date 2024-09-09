@@ -10,4 +10,6 @@ pub mod unified;
 mod socket;
 mod sync;
 
+pub use socket::SocketOptions;
+
 pub const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);

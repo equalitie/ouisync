@@ -584,7 +584,10 @@ mod tests {
     use super::{super::stats::ByteCounters, *};
     use assert_matches::assert_matches;
     use futures_util::{future, stream};
-    use net::unified::{Acceptor, Connection, Connector};
+    use net::{
+        unified::{Acceptor, Connection, Connector},
+        SocketOptions,
+    };
     use std::{collections::BTreeSet, net::Ipv4Addr, str::from_utf8, time::Duration};
 
     #[tokio::test(flavor = "multi_thread")]
@@ -897,12 +900,18 @@ mod tests {
     }
 
     async fn create_connection_pair() -> (Connection, Connection) {
-        let client = net::quic::configure((Ipv4Addr::LOCALHOST, 0).into())
-            .unwrap()
-            .0;
-        let server = net::quic::configure((Ipv4Addr::LOCALHOST, 0).into())
-            .unwrap()
-            .1;
+        // NOTE: Make sure to keep the `reuse_addr` option disabled here to avoid one test to
+        // accidentally connect to a different test. More details here:
+        // https://gavv.net/articles/ephemeral-port-reuse/.
+
+        let client =
+            net::quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default())
+                .unwrap()
+                .0;
+        let server =
+            net::quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default())
+                .unwrap()
+                .1;
 
         let client = Connector::from(client);
         let server = Acceptor::from(server);

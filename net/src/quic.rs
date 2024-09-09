@@ -1,4 +1,4 @@
-use crate::KEEP_ALIVE_INTERVAL;
+use crate::{SocketOptions, KEEP_ALIVE_INTERVAL};
 use bytes::BytesMut;
 use pin_project_lite::pin_project;
 use quinn::{
@@ -130,9 +130,12 @@ pub type SendStream = quinn::SendStream;
 pub type RecvStream = quinn::RecvStream;
 
 //------------------------------------------------------------------------------
-pub fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor, SideChannelMaker), Error> {
+pub fn configure(
+    bind_addr: SocketAddr,
+    options: SocketOptions,
+) -> Result<(Connector, Acceptor, SideChannelMaker), Error> {
     let server_config = make_server_config()?;
-    let custom_socket = Arc::new(CustomUdpSocket::bind(bind_addr)?);
+    let custom_socket = Arc::new(CustomUdpSocket::bind(bind_addr, options)?);
     let side_channel_maker = custom_socket.clone().side_channel_maker();
 
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
@@ -304,8 +307,8 @@ struct CustomUdpSocket {
 }
 
 impl CustomUdpSocket {
-    fn bind(addr: SocketAddr) -> io::Result<Self> {
-        let socket = crate::udp::UdpSocket::bind(addr)?;
+    fn bind(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
+        let socket = crate::udp::UdpSocket::bind_with_options(addr, options)?;
         let socket = socket.into_std()?;
 
         let state = quinn::udp::UdpSocketState::new((&socket).into())?;
@@ -538,7 +541,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn side_channel() {
         let (_connector, acceptor, side_channel_maker) =
-            configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+            configure((Ipv4Addr::LOCALHOST, 0).into(), Default::default()).unwrap();
         let addr = *acceptor.local_addr();
         let side_channel = side_channel_maker.make();
 

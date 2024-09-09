@@ -3,6 +3,7 @@ use clap::{Parser, ValueEnum};
 use ouisync_net::{
     quic, tcp,
     unified::{Acceptor, Connection, Connector, RecvStream, SendStream},
+    SocketOptions,
 };
 use std::{
     future,
@@ -70,11 +71,13 @@ async fn run_client(options: &Options) -> Result<()> {
     let addr: SocketAddr = (options.addr.unwrap_or(DEFAULT_CONNECT_ADDR), options.port).into();
     let connector = match options.proto {
         Proto::Tcp => {
-            let (connector, _) = tcp::configure((DEFAULT_BIND_ADDR, 0).into())?;
+            let (connector, _) =
+                tcp::configure((DEFAULT_BIND_ADDR, 0).into(), SocketOptions::default())?;
             Connector::Tcp(connector)
         }
         Proto::Quic => {
-            let (connector, _, _) = quic::configure((DEFAULT_BIND_ADDR, 0).into())?;
+            let (connector, _, _) =
+                quic::configure((DEFAULT_BIND_ADDR, 0).into(), SocketOptions::default())?;
             Connector::Quic(connector)
         }
     };
@@ -111,11 +114,11 @@ async fn run_server(options: &Options) -> Result<()> {
 
     let acceptor = match options.proto {
         Proto::Tcp => {
-            let (_, acceptor) = tcp::configure(bind_addr)?;
+            let (_, acceptor) = tcp::configure(bind_addr, SocketOptions::default())?;
             Acceptor::Tcp(acceptor)
         }
         Proto::Quic => {
-            let (_, acceptor, _) = quic::configure(bind_addr)?;
+            let (_, acceptor, _) = quic::configure(bind_addr, SocketOptions::default())?;
             Acceptor::Quic(acceptor)
         }
     };

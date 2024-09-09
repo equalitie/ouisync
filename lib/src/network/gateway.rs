@@ -4,6 +4,7 @@ use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use net::{
     quic, tcp,
     unified::{Acceptor, Connection},
+    SocketOptions,
 };
 use scoped_task::ScopedJoinHandle;
 use std::net::{IpAddr, SocketAddr};
@@ -449,26 +450,27 @@ impl QuicStack {
     ) -> Option<(Self, quic::SideChannelMaker)> {
         let span = tracing::info_span!("quic", addr = field::Empty);
 
-        let (connector, acceptor, side_channel_maker) = match quic::configure(bind_addr) {
-            Ok((connector, acceptor, side_channel_maker)) => {
-                span.record(
-                    "addr",
-                    field::display(PeerAddr::Quic(*acceptor.local_addr())),
-                );
-                tracing::info!(parent: &span, "Stack configured");
+        let (connector, acceptor, side_channel_maker) =
+            match quic::configure(bind_addr, SocketOptions::default().with_reuse_addr()) {
+                Ok((connector, acceptor, side_channel_maker)) => {
+                    span.record(
+                        "addr",
+                        field::display(PeerAddr::Quic(*acceptor.local_addr())),
+                    );
+                    tracing::info!(parent: &span, "Stack configured");
 
-                (connector, acceptor, side_channel_maker)
-            }
-            Err(error) => {
-                tracing::warn!(
-                    parent: &span,
-                    bind_addr = %PeerAddr::Quic(bind_addr),
-                    ?error,
-                    "Failed to configure stack"
-                );
-                return None;
-            }
-        };
+                    (connector, acceptor, side_channel_maker)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        parent: &span,
+                        bind_addr = %PeerAddr::Quic(bind_addr),
+                        ?error,
+                        "Failed to configure stack"
+                    );
+                    return None;
+                }
+            };
 
         let listener_local_addr = *acceptor.local_addr();
         let listener_task = scoped_task::spawn(
@@ -506,18 +508,19 @@ impl TcpStack {
     ) -> Option<Self> {
         let span = tracing::info_span!("tcp", addr = field::Empty);
 
-        let (connector, acceptor) = match tcp::configure(bind_addr) {
-            Ok(stack) => stack,
-            Err(error) => {
-                tracing::warn!(
-                    parent: &span,
-                    bind_addr = %PeerAddr::Tcp(bind_addr),
-                    ?error,
-                    "Failed to configure stack",
-                );
-                return None;
-            }
-        };
+        let (connector, acceptor) =
+            match tcp::configure(bind_addr, SocketOptions::default().with_reuse_addr()) {
+                Ok(stack) => stack,
+                Err(error) => {
+                    tracing::warn!(
+                        parent: &span,
+                        bind_addr = %PeerAddr::Tcp(bind_addr),
+                        ?error,
+                        "Failed to configure stack",
+                    );
+                    return None;
+                }
+            };
 
         let listener_local_addr = *acceptor.local_addr();
         let listener_task =
