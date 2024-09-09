@@ -7,7 +7,7 @@ use common::{dump, sync_watch};
 use futures_util::future;
 use once_cell::sync::Lazy;
 use ouisync::{
-    network::Network, Access, AccessMode, AccessSecrets, PeerAddr, Repository, RepositoryParams,
+    Access, AccessMode, AccessSecrets, Network, PeerAddr, Repository, RepositoryParams,
     DATA_VERSION, DIRECTORY_VERSION, SCHEMA_VERSION,
 };
 use rand::{

@@ -307,7 +307,7 @@ enum Mode {
 
 // Gracefully terminate the process, unlike `Child::kill` which sends `SIGKILL` and thus doesn't
 // allow destructors to run.
-#[cfg(any(target_os = "linux", target_os = "osx"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn terminate(process: &Child) {
     // SAFETY: we are just sending a `SIGTERM` signal to the process, there should be no reason for
     // undefined behaviour here.
@@ -316,7 +316,7 @@ fn terminate(process: &Child) {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_is = "osx")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn terminate(_process: &Child) {
     todo!()
 }

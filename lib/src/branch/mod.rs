@@ -6,7 +6,7 @@ use crate::{
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef},
     error::{Error, Result},
     event::{EventScope, EventSender, Payload},
-    file::{File, FileProgressCache},
+    file::File,
     path,
     protocol::{BlockId, Locator, Proof, RootNodeFilter},
     store::{self, Store},
@@ -70,7 +70,7 @@ impl Branch {
             .store
             .acquire_read()
             .await?
-            .load_root_node(self.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(self.id(), RootNodeFilter::Any)
             .await?
             .proof)
     }
@@ -141,20 +141,18 @@ impl Branch {
     }
 
     pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
-        Ok(self
+        let (block_id, _) = self
             .store
             .begin_read()
             .await?
             .find_block(self.id(), &Locator::ROOT.encode(self.keys().read()))
-            .await?)
+            .await?;
+
+        Ok(block_id)
     }
 
     pub(crate) fn locker(&self) -> BranchLocker {
         self.shared.locker.branch(*self.id())
-    }
-
-    pub(crate) fn file_progress_cache(&self) -> &FileProgressCache {
-        &self.shared.file_progress_cache
     }
 
     pub(crate) fn notify(&self) -> BranchEventSender {
@@ -186,7 +184,10 @@ impl Branch {
     pub(crate) async fn clone_into(&self, dst_id: PublicKey) -> Result<Self> {
         let mut tx = self.store().begin_write().await?;
 
-        match tx.load_root_node(self.id(), RootNodeFilter::Any).await {
+        match tx
+            .load_latest_approved_root_node(self.id(), RootNodeFilter::Any)
+            .await
+        {
             Ok(node) => {
                 tx.clone_root_node_into(
                     node,
@@ -212,14 +213,12 @@ impl Branch {
 #[derive(Clone)]
 pub(crate) struct BranchShared {
     pub locker: Locker,
-    pub file_progress_cache: FileProgressCache,
 }
 
 impl BranchShared {
     pub fn new() -> Self {
         Self {
             locker: Locker::new(),
-            file_progress_cache: FileProgressCache::new(),
         }
     }
 }
@@ -233,7 +232,8 @@ pub(crate) struct BranchEventSender {
 
 impl BranchEventSender {
     pub fn send(&self) {
-        self.event_tx.send(Payload::BranchChanged(self.branch_id));
+        self.event_tx
+            .send(Payload::SnapshotApproved(self.branch_id));
     }
 }
 

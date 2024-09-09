@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     crypto::{cipher::SecretKey, sign::Keypair},
-    protocol::{Bump, Locator, SingleBlockPresence, EMPTY_INNER_HASH},
+    protocol::{Block, Bump, Locator, SingleBlockPresence, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     test_utils,
 };
 use proptest::{arbitrary::any, collection::vec};
@@ -36,7 +36,7 @@ async fn link_and_find_block() {
 
     let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
 
-    assert_eq!(r, block_id);
+    assert_eq!(r, (block_id, SingleBlockPresence::Present));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -65,7 +65,7 @@ async fn rewrite_locator() {
             .unwrap();
 
         let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
-        assert_eq!(r, b2);
+        assert_eq!(r, (b2, SingleBlockPresence::Present));
 
         assert_eq!(
             INNER_LAYER_COUNT + 1,
@@ -97,7 +97,7 @@ async fn remove_locator() {
         .unwrap();
 
     let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
-    assert_eq!(r, b);
+    assert_eq!(r, (b, SingleBlockPresence::Present));
 
     assert_eq!(
         INNER_LAYER_COUNT + 1,
@@ -269,25 +269,39 @@ async fn fallback() {
         .acquire_read()
         .await
         .unwrap()
-        .load_root_node(&branch_0_id, RootNodeFilter::Any)
+        .load_latest_approved_root_node(&branch_0_id, RootNodeFilter::Any)
         .await
         .unwrap();
     store.remove_outdated_snapshots(&root_node).await.unwrap();
 
     let mut tx = store.begin_read().await.unwrap();
 
-    assert_eq!(tx.find_block(&branch_0_id, &locator).await.unwrap(), id3);
+    assert_eq!(
+        tx.find_block(&branch_0_id, &locator).await.unwrap(),
+        (id3, SingleBlockPresence::Missing)
+    );
     assert!(!tx.block_exists(&id3).await.unwrap());
 
     // The previous snapshot was pruned because it can't serve as fallback for the latest one
     // but the one before it was not because it can.
-    let root_node = tx.load_prev_root_node(&root_node).await.unwrap().unwrap();
+    let root_node = tx
+        .load_prev_approved_root_node(&root_node)
+        .await
+        .unwrap()
+        .unwrap();
 
-    assert_eq!(tx.find_block_at(&root_node, &locator).await.unwrap(), id1);
+    assert_eq!(
+        tx.find_block_at(&root_node, &locator).await.unwrap(),
+        (id1, SingleBlockPresence::Present)
+    );
     assert!(tx.block_exists(&id1).await.unwrap());
 
     // All the further snapshots were pruned as well
-    assert!(tx.load_prev_root_node(&root_node).await.unwrap().is_none());
+    assert!(tx
+        .load_prev_approved_root_node(&root_node)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[proptest]
@@ -363,6 +377,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
     let write_keys = Keypair::generate(&mut rng);
 
     let mut expected = BTreeMap::new();
+    let mut approved = false;
 
     for op in ops {
         // Apply op
@@ -381,6 +396,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 tx.commit().await.unwrap();
 
                 expected.insert(locator, block_id);
+                approved = true;
             }
             PruneTestOp::Remove => {
                 let Some(locator) = expected.keys().choose(&mut rng).copied() else {
@@ -397,6 +413,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 tx.commit().await.unwrap();
 
                 expected.remove(&locator);
+                approved = true;
             }
             PruneTestOp::Bump => {
                 let mut tx = store.begin_write().await.unwrap();
@@ -414,7 +431,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                     .acquire_read()
                     .await
                     .unwrap()
-                    .load_root_node(&branch_id, RootNodeFilter::Any)
+                    .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
                     .await
                 {
                     Ok(root_node) => root_node,
@@ -430,18 +447,20 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
         let mut tx = store.begin_read().await.unwrap();
 
         for (locator, expected_block_id) in &expected {
-            let actual_block_id = tx.find_block(&branch_id, locator).await.unwrap();
+            let (actual_block_id, _) = tx.find_block(&branch_id, locator).await.unwrap();
             assert_eq!(actual_block_id, *expected_block_id);
         }
 
         // Verify the snapshot is still complete
-        let root_hash = tx
-            .load_root_node(&branch_id, RootNodeFilter::Any)
-            .await
-            .unwrap()
-            .proof
-            .hash;
-        check_complete(&mut tx, &root_hash).await;
+        if approved {
+            let root_hash = tx
+                .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
+                .await
+                .unwrap()
+                .proof
+                .hash;
+            check_complete(&mut tx, &root_hash).await;
+        }
     }
 }
 

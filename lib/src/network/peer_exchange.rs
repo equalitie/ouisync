@@ -9,19 +9,17 @@ use super::{
     seen_peers::{SeenPeer, SeenPeers},
     PeerSource,
 };
-use crate::{collections::HashSet, sync::AwaitDrop};
+use crate::{
+    collections::HashSet,
+    sync::{AwaitDrop, WatchSenderExt},
+};
 use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
 use slab::Slab;
-use std::{
-    fmt,
-    ops::Range,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{ops::Range, time::Duration};
 use tokio::{
-    sync::{mpsc, Notify},
+    sync::{mpsc, watch},
     task, time,
 };
 
@@ -37,8 +35,7 @@ pub(crate) struct PexPayload(HashSet<PeerAddr>);
 
 /// Entry point to the peer exchange.
 pub(crate) struct PexDiscovery {
-    state: Arc<RwLock<State>>,
-    state_notify: Arc<Notify>,
+    state: watch::Sender<State>,
     seen_peers: SeenPeers,
     discover_tx: mpsc::Sender<SeenPeer>,
     _round_task: ScopedJoinHandle<()>,
@@ -60,35 +57,66 @@ impl PexDiscovery {
         });
 
         Self {
-            state: Arc::new(RwLock::new(State::default())),
-            state_notify: Arc::new(Notify::new()),
+            state: watch::Sender::new(State::default()),
             seen_peers,
             discover_tx,
             _round_task: round_task,
         }
     }
 
+    /// Sets whether sending contacts to other peers is enabled.
+    pub fn set_send_enabled(&self, enabled: bool) {
+        self.state.send_if_modified(|state| {
+            if state.send_enabled != enabled {
+                state.send_enabled = enabled;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub fn is_send_enabled(&self) -> bool {
+        self.state.borrow().send_enabled
+    }
+
+    /// Sets whether receiving contacts from other peers is enabled.
+    pub fn set_recv_enabled(&self, enabled: bool) {
+        self.state.send_if_modified(|state| {
+            if state.recv_enabled != enabled {
+                state.recv_enabled = enabled;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub fn is_recv_enabled(&self) -> bool {
+        self.state.borrow().recv_enabled
+    }
+
     pub fn new_peer(&self) -> PexPeer {
-        let mut state = self.state.write().unwrap();
-        let peer_id = state.peers.insert(PeerState::default());
+        let peer_id = self
+            .state
+            .send_modify_return(|state| state.peers.insert(PeerState::default()));
 
         PexPeer {
             peer_id,
             state: self.state.clone(),
-            state_notify: self.state_notify.clone(),
             seen_peers: self.seen_peers.clone(),
             discover_tx: self.discover_tx.clone(),
         }
     }
 
     pub fn new_repository(&self) -> PexRepository {
-        let mut state = self.state.write().unwrap();
-        let repo_id = state.repos.insert(RepoState::default());
+        let repo_id = self
+            .state
+            .send_modify_return(|state| state.repos.insert(RepoState::default()));
 
         PexRepository {
             repo_id,
             state: self.state.clone(),
-            state_notify: self.state_notify.clone(),
         }
     }
 }
@@ -96,33 +124,33 @@ impl PexDiscovery {
 /// Handle to manage the peer exchange for a single repository.
 pub(crate) struct PexRepository {
     repo_id: RepoId,
-    state: Arc<RwLock<State>>,
-    state_notify: Arc<Notify>,
+    state: watch::Sender<State>,
 }
 
 impl PexRepository {
     pub fn is_enabled(&self) -> bool {
-        self.state.read().unwrap().repos[self.repo_id].enabled
+        self.state.borrow().repos[self.repo_id].enabled
     }
 
     pub fn set_enabled(&self, enabled: bool) {
-        self.state.write().unwrap().repos[self.repo_id].enabled = enabled;
-        self.state_notify.notify_waiters();
+        self.state.send_modify(|state| {
+            state.repos[self.repo_id].enabled = enabled;
+        });
     }
 }
 
 impl Drop for PexRepository {
     fn drop(&mut self) {
-        self.state.write().unwrap().repos.remove(self.repo_id);
-        self.state_notify.notify_waiters();
+        self.state.send_modify(|state| {
+            state.repos.remove(self.repo_id);
+        });
     }
 }
 
 /// Handle to manage peer exchange for a single peer.
 pub(crate) struct PexPeer {
     peer_id: PeerId,
-    state: Arc<RwLock<State>>,
-    state_notify: Arc<Notify>,
+    state: watch::Sender<State>,
     seen_peers: SeenPeers,
     discover_tx: mpsc::Sender<SeenPeer>,
 }
@@ -139,10 +167,11 @@ impl PexPeer {
             return;
         }
 
-        if !self.state.write().unwrap().peers[self.peer_id]
-            .addrs
-            .insert(addr)
-        {
+        let inserted = self
+            .state
+            .send_if_modified(|state| state.peers[self.peer_id].addrs.insert(addr));
+
+        if !inserted {
             // Already added
             return;
         }
@@ -155,9 +184,13 @@ impl PexPeer {
             async move {
                 closed.await;
 
-                if let Some(peer) = state.write().unwrap().peers.get_mut(peer_id) {
-                    peer.addrs.remove(&addr);
-                }
+                state.send_if_modified(|state| {
+                    if let Some(peer) = state.peers.get_mut(peer_id) {
+                        peer.addrs.remove(&addr)
+                    } else {
+                        false
+                    }
+                });
             }
         });
     }
@@ -168,7 +201,6 @@ impl PexPeer {
             repo_id: repo.repo_id,
             peer_id: self.peer_id,
             state: self.state.clone(),
-            state_notify: self.state_notify.clone(),
         };
 
         let rx = PexReceiver {
@@ -184,7 +216,9 @@ impl PexPeer {
 
 impl Drop for PexPeer {
     fn drop(&mut self) {
-        self.state.write().unwrap().peers.remove(self.peer_id);
+        self.state.send_modify(|state| {
+            state.peers.remove(self.peer_id);
+        });
     }
 }
 
@@ -192,14 +226,13 @@ impl Drop for PexPeer {
 pub(crate) struct PexSender {
     repo_id: RepoId,
     peer_id: PeerId,
-    state: Arc<RwLock<State>>,
-    state_notify: Arc<Notify>,
+    state: watch::Sender<State>,
 }
 
 impl PexSender {
     /// While this method is running, it periodically sends contacts of other peers that share the
     /// same repo to this peer and makes the contacts of this peer aailable to them.
-    pub async fn run(&mut self, content_tx: mpsc::Sender<Content>) {
+    pub async fn run(&mut self, content_tx: mpsc::UnboundedSender<Content>) {
         let Some(collector) = self.enable() else {
             // Another collector for this link already exists.
             return;
@@ -208,15 +241,19 @@ impl PexSender {
         loop {
             let addrs = match collector.collect() {
                 Ok(addrs) => addrs,
-                Err(CollectError::Disabled(notify)) => {
-                    notify.notified().await;
+                Err(CollectError::Disabled) => {
+                    self.state
+                        .subscribe()
+                        .wait_for(|state| state.is_send_enabled_for(self.repo_id))
+                        .await
+                        .ok();
                     continue;
                 }
                 Err(CollectError::Closed) => break,
             };
 
             if !addrs.is_empty() {
-                content_tx.send(Content::Pex(PexPayload(addrs))).await.ok();
+                content_tx.send(Content::Pex(PexPayload(addrs))).ok();
             }
 
             let interval = rand::thread_rng().gen_range(SEND_INTERVAL_RANGE);
@@ -228,14 +265,18 @@ impl PexSender {
     /// as the returned `PexCollector` is in scope. Returns `None` if a collector for this link
     /// already exists.
     fn enable(&self) -> Option<PexCollector<'_>> {
-        let mut state = self.state.write().unwrap();
-        let repo = state.repos.get_mut(self.repo_id)?;
-
-        if repo.peers.insert(self.peer_id) {
-            Some(PexCollector(self))
-        } else {
-            None
-        }
+        self.state.send_modify_return(|state| {
+            if state
+                .repos
+                .get_mut(self.repo_id)?
+                .peers
+                .insert(self.peer_id)
+            {
+                Some(PexCollector(self))
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -244,7 +285,7 @@ pub(crate) struct PexCollector<'a>(&'a PexSender);
 
 impl<'a> PexCollector<'a> {
     fn collect(&self) -> Result<HashSet<PeerAddr>, CollectError> {
-        let state = self.0.state.read().unwrap();
+        let state = self.0.state.borrow();
 
         let repo = state
             .repos
@@ -255,8 +296,8 @@ impl<'a> PexCollector<'a> {
             .get(self.0.peer_id)
             .ok_or(CollectError::Closed)?;
 
-        if !repo.enabled {
-            return Err(CollectError::Disabled(self.0.state_notify.clone()));
+        if !state.send_enabled || !repo.enabled {
+            return Err(CollectError::Disabled);
         }
 
         // If two peers are on the same LAN we exchange also their local addresses. Otherwise we
@@ -285,12 +326,15 @@ impl<'a> PexCollector<'a> {
 
 impl<'a> Drop for PexCollector<'a> {
     fn drop(&mut self) {
-        if let Some(repo) = self.0.state.write().unwrap().repos.get_mut(self.0.repo_id) {
-            repo.peers.remove(&self.0.peer_id);
-        }
+        self.0.state.send_modify(|state| {
+            if let Some(repo) = state.repos.get_mut(self.0.repo_id) {
+                repo.peers.remove(&self.0.peer_id);
+            }
+        });
     }
 }
 
+#[derive(Eq, PartialEq, Debug)]
 pub(crate) enum CollectError {
     /// All the connections to the peer have been closed or the repository has been unlinked.
     ///
@@ -298,24 +342,14 @@ pub(crate) enum CollectError {
     /// be removed which removes the `PexSender` as well and so there should be no way to call
     /// `collect` in the first place.
     Closed,
-    /// Peer exchange is disabled for the repository. The `Notify` can be used to wait until it gets
-    /// enabled.
-    Disabled(Arc<Notify>),
-}
-
-impl fmt::Debug for CollectError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Closed => write!(f, "Closed"),
-            Self::Disabled(_) => write!(f, "Disabled(_)"),
-        }
-    }
+    /// Peer exchange is disabled for the repository.
+    Disabled,
 }
 
 /// Receives contacts from other peers and pushes them to the peer discovery channel.
 pub(crate) struct PexReceiver {
     repo_id: RepoId,
-    state: Arc<RwLock<State>>,
+    state: watch::Sender<State>,
     seen_peers: SeenPeers,
     discover_tx: mpsc::Sender<SeenPeer>,
 }
@@ -334,23 +368,48 @@ impl PexReceiver {
     }
 
     fn is_enabled(&self) -> bool {
-        self.state
-            .read()
-            .unwrap()
-            .repos
-            .get(self.repo_id)
-            .map(|repo| repo.enabled)
-            .unwrap_or(false)
+        self.state.borrow().is_recv_enabled_for(self.repo_id)
     }
 }
 
 type RepoId = usize;
 type PeerId = usize;
 
-#[derive(Default)]
 struct State {
     repos: Slab<RepoState>,
     peers: Slab<PeerState>,
+    // Whether peer contacts are sent to other peers.
+    send_enabled: bool,
+    // Whether peer contacts are received from peers.
+    recv_enabled: bool,
+}
+
+impl State {
+    fn is_send_enabled_for(&self, repo_id: RepoId) -> bool {
+        self.send_enabled && self.is_repo_enabled(repo_id)
+    }
+
+    fn is_recv_enabled_for(&self, repo_id: RepoId) -> bool {
+        self.recv_enabled && self.is_repo_enabled(repo_id)
+    }
+
+    fn is_repo_enabled(&self, repo_id: RepoId) -> bool {
+        self.repos
+            .get(repo_id)
+            .map(|repo| repo.enabled)
+            .unwrap_or(false)
+    }
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            repos: Slab::default(),
+            peers: Slab::default(),
+            send_enabled: true,
+            recv_enabled: true,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -369,11 +428,14 @@ struct PeerState {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc::error::TryRecvError;
+
     use crate::sync::DropAwaitable;
 
     use super::*;
     use std::{
         hash::Hash,
+        iter,
         net::Ipv4Addr,
         sync::atomic::{AtomicU8, Ordering},
     };
@@ -389,24 +451,13 @@ mod tests {
         let repo_1 = discovery.new_repository();
         repo_1.set_enabled(true);
 
-        let peer_a = discovery.new_peer();
-        let addr_a = make_peer_addr();
-        let close_a = DropAwaitable::new();
-        peer_a.handle_connection(addr_a, PeerSource::Dht, close_a.subscribe());
-
-        let peer_b = discovery.new_peer();
-        let addr_b = make_peer_addr();
-        let close_b = DropAwaitable::new();
-        peer_b.handle_connection(addr_b, PeerSource::Dht, close_b.subscribe());
-
-        let peer_c = discovery.new_peer();
-        let addr_c = make_peer_addr();
-        let close_c = DropAwaitable::new();
-        peer_c.handle_connection(addr_c, PeerSource::Dht, close_c.subscribe());
+        let (peer_a, addr_a, _close_a) = make_peer(&discovery);
+        let (peer_b, addr_b, _close_b) = make_peer(&discovery);
+        let (peer_c, _addr_c, _close_c) = make_peer(&discovery);
 
         let (a0, _) = peer_a.new_link(&repo_0);
         let (b0, _) = peer_b.new_link(&repo_0);
-        let (c1, _) = peer_b.new_link(&repo_1);
+        let (c1, _) = peer_c.new_link(&repo_1);
 
         let a0_collector = a0.enable().unwrap();
         let b0_collector = b0.enable().unwrap();
@@ -415,6 +466,89 @@ mod tests {
         assert_eq!(a0_collector.collect().unwrap(), into_set([addr_b]));
         assert_eq!(b0_collector.collect().unwrap(), into_set([addr_a]));
         assert_eq!(c1_collector.collect().unwrap(), into_set([]));
+    }
+
+    #[tokio::test]
+    async fn config() {
+        let (discover_tx, mut discover_rx) = mpsc::channel(1);
+        let discovery = PexDiscovery::new(discover_tx);
+        let repo = discovery.new_repository();
+
+        let (peer_a, _addr_a, _close_a) = make_peer(&discovery);
+        let (peer_b, addr_b, _close_b) = make_peer(&discovery);
+        let addr_c = make_peer_addr();
+
+        let (tx_a, rx_a) = peer_a.new_link(&repo);
+        let (tx_b, _rx_b) = peer_b.new_link(&repo);
+
+        for (send_enabled, recv_enabled, repo_enabled, expected_send, expected_recv) in [
+            (
+                false,
+                false,
+                false,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (
+                false,
+                false,
+                true,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (
+                false,
+                true,
+                false,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (false, true, true, Err(CollectError::Disabled), Ok(addr_c)),
+            (
+                true,
+                false,
+                false,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (true, false, true, Ok(addr_b), Err(TryRecvError::Empty)),
+            (
+                true,
+                true,
+                false,
+                Err(CollectError::Disabled),
+                Err(TryRecvError::Empty),
+            ),
+            (true, true, true, Ok(addr_b), Ok(addr_c)),
+        ] {
+            discovery.set_send_enabled(send_enabled);
+            discovery.set_recv_enabled(recv_enabled);
+            repo.set_enabled(repo_enabled);
+
+            let collector_a = tx_a.enable().unwrap();
+            let _collector_b = tx_b.enable().unwrap();
+
+            assert_eq!(
+                collector_a.collect(),
+                expected_send.map(iter::once).map(into_set),
+                "send_enabled: {:?}, recv_enabled: {:?}, repo_enabled: {:?}",
+                discovery.is_send_enabled(),
+                discovery.is_recv_enabled(),
+                repo.is_enabled(),
+            );
+
+            rx_a.handle_message(PexPayload(into_set([addr_c]))).await;
+            assert_eq!(
+                discover_rx
+                    .try_recv()
+                    .map(|seen_peer| *seen_peer.initial_addr()),
+                expected_recv,
+                "send_enabled: {:?}, recv_enabled: {:?}, repo_enabled: {:?}",
+                discovery.is_send_enabled(),
+                discovery.is_recv_enabled(),
+                repo.is_enabled(),
+            );
+        }
     }
 
     fn make_peer_addr() -> PeerAddr {
@@ -428,7 +562,20 @@ mod tests {
         )
     }
 
-    fn into_set<T: Eq + Hash, const N: usize>(items: [T; N]) -> HashSet<T> {
+    fn make_peer(discovery: &PexDiscovery) -> (PexPeer, PeerAddr, DropAwaitable) {
+        let peer = discovery.new_peer();
+        let addr = make_peer_addr();
+        let close = DropAwaitable::new();
+        peer.handle_connection(addr, PeerSource::Dht, close.subscribe());
+
+        (peer, addr, close)
+    }
+
+    fn into_set<T>(items: T) -> HashSet<T::Item>
+    where
+        T: IntoIterator,
+        T::Item: Eq + Hash,
+    {
         items.into_iter().collect()
     }
 }

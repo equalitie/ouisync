@@ -25,7 +25,12 @@ use tracing_subscriber::{
 pub(super) struct Inner;
 
 impl Inner {
-    pub fn new(path: Option<&Path>, format: LogFormat, color: LogColor) -> io::Result<Self> {
+    pub fn new(
+        path: Option<&Path>,
+        _tag: String,
+        format: LogFormat,
+        color: LogColor,
+    ) -> io::Result<Self> {
         let color = match color {
             LogColor::Always => true,
             LogColor::Never => false,

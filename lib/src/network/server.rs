@@ -32,7 +32,7 @@ pub(crate) struct Server {
 impl Server {
     pub fn new(
         vault: Vault,
-        content_tx: mpsc::Sender<Content>,
+        content_tx: mpsc::UnboundedSender<Content>,
         request_rx: mpsc::Receiver<Request>,
         response_limiter: Arc<Semaphore>,
     ) -> Self {
@@ -64,7 +64,7 @@ impl Server {
 struct Inner {
     vault: Vault,
     response_tx: mpsc::Sender<Response>,
-    content_tx: mpsc::Sender<Content>,
+    content_tx: mpsc::UnboundedSender<Content>,
     response_limiter: Arc<Semaphore>,
 }
 
@@ -112,7 +112,7 @@ impl Inner {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(&writer_id, RootNodeFilter::Published)
+            .load_latest_approved_root_node(&writer_id, RootNodeFilter::Published)
             .await;
 
         match root_node {
@@ -229,13 +229,13 @@ impl Inner {
         loop {
             match event_rx.recv().await {
                 Ok(Event { payload, .. }) => match payload {
-                    Payload::BranchChanged(branch_id) => {
+                    Payload::SnapshotApproved(branch_id) => {
                         self.handle_branch_changed_event(branch_id).await?
                     }
                     Payload::BlockReceived(block_id) => {
                         self.handle_block_received_event(block_id).await?;
                     }
-                    Payload::MaintenanceCompleted => continue,
+                    Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted => continue,
                 },
                 Err(RecvError::Lagged(_)) => self.handle_unknown_event().await?,
                 Err(RecvError::Closed) => return Ok(()),
@@ -314,7 +314,7 @@ impl Inner {
 
         for writer_id in writer_ids {
             match tx
-                .load_root_node(&writer_id, RootNodeFilter::Published)
+                .load_latest_approved_root_node(&writer_id, RootNodeFilter::Published)
                 .await
             {
                 Ok(node) => root_nodes.push(node),
@@ -335,7 +335,7 @@ impl Inner {
             .store()
             .acquire_read()
             .await?
-            .load_root_node(writer_id, RootNodeFilter::Published)
+            .load_latest_approved_root_node(writer_id, RootNodeFilter::Published)
             .await?)
     }
 
@@ -351,7 +351,7 @@ impl Inner {
 
             loop {
                 select! {
-                    Some(response) = response_rx.recv() => self.send_response(response).await,
+                    Some(response) = response_rx.recv() => self.send_response(response),
                     _ = time::sleep_until(permit_expiry) => break,
                     _ = time::sleep(INTEREST_TIMEOUT) => break,
                     else => return,
@@ -360,13 +360,8 @@ impl Inner {
         }
     }
 
-    async fn send_response(&self, response: Response) {
-        if self
-            .content_tx
-            .send(Content::Response(response))
-            .await
-            .is_ok()
-        {
+    fn send_response(&self, response: Response) {
+        if self.content_tx.send(Content::Response(response)).is_ok() {
             self.vault.monitor.responses_sent.increment(1);
         }
     }

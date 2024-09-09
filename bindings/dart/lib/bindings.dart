@@ -16,11 +16,13 @@ typedef _session_create_c = SessionCreateResult Function(
   Uint8,
   Pointer<Char>,
   Pointer<Char>,
+  Pointer<Char>,
   Pointer<NativeFunction<PostCObject>>,
   Int64,
 );
 typedef session_create_dart = SessionCreateResult Function(
   int,
+  Pointer<Char>,
   Pointer<Char>,
   Pointer<Char>,
   Pointer<NativeFunction<PostCObject>>,

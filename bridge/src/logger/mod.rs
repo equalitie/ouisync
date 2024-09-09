@@ -28,6 +28,7 @@ pub struct Logger {
 impl Logger {
     pub fn new(
         path: Option<&Path>,
+        tag: String,
         root_monitor: Option<StateMonitor>,
         format: LogFormat,
         color: LogColor,
@@ -36,7 +37,7 @@ impl Logger {
             fs::create_dir_all(parent)?;
         }
 
-        let inner = Inner::new(path, format, color)?;
+        let inner = Inner::new(path, tag, format, color)?;
 
         // Panic hook
         let default_panic_hook = panic::take_hook();

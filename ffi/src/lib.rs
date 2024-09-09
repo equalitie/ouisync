@@ -41,7 +41,8 @@ use std::{
 ///
 /// # Safety
 ///
-/// - `configs_path` and `log_path` must be pointers to nul-terminated utf-8 encoded strings.
+/// - `configs_path`, `log_path` and `log_tag` must be pointers to nul-terminated utf-8 encoded
+///   strings.
 /// - `context` must be a valid pointer to a value that outlives the `Session` and that is safe
 ///   to be sent to other threads or null.
 /// - `callback` must be a valid function pointer which does not leak the passed `msg_ptr`.
@@ -50,29 +51,32 @@ pub unsafe extern "C" fn session_create(
     kind: SessionKind,
     configs_path: *const c_char,
     log_path: *const c_char,
+    log_tag: *const c_char,
     context: *mut (),
     callback: Callback,
 ) -> SessionCreateResult {
     let sender = CallbackSender::new(context, callback);
-    session::create(kind, configs_path, log_path, sender).into()
+    session::create(kind, configs_path, log_path, log_tag, sender).into()
 }
 
 /// Creates a ouisync session (dart-specific API)
 ///
 /// # Safety
 ///
-/// - `configs_path` and `log_path` must be pointers to nul-terminated utf-8 encoded strings.
+/// - `configs_path`, `log_path` and `log_tag` must be pointers to nul-terminated utf-8 encoded
+///   strings.
 /// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
 #[no_mangle]
 pub unsafe extern "C" fn session_create_dart(
     kind: SessionKind,
     configs_path: *const c_char,
     log_path: *const c_char,
+    log_tag: *const c_char,
     post_c_object_fn: PostDartCObjectFn,
     port: Port,
 ) -> SessionCreateResult {
     let sender = PortSender::new(post_c_object_fn, port);
-    session::create(kind, configs_path, log_path, sender).into()
+    session::create(kind, configs_path, log_path, log_tag, sender).into()
 }
 
 /// Get an existing session if one was created and not yet destroyed, otherwise returns result with

@@ -6,18 +6,21 @@ mod bump;
 mod inner_node;
 mod leaf_node;
 mod locator;
-pub mod proof;
-pub mod root_node;
-pub mod summary;
+mod proof;
+mod repository;
+mod root_node;
+mod storage_size;
+mod summary;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
 
 pub use self::block::BLOCK_SIZE;
-
 pub use self::{
     proof::{Proof, UntrustedProof},
+    repository::RepositoryId,
     root_node::RootNode,
+    storage_size::StorageSize,
     summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
 };
 
@@ -32,4 +35,4 @@ pub(crate) use self::{
 };
 
 #[cfg(test)]
-pub(crate) use self::block::BLOCK_NONCE_SIZE;
+pub(crate) use self::{block::BLOCK_NONCE_SIZE, root_node::SnapshotId};

@@ -1,6 +1,3 @@
-pub mod dht_discovery;
-pub mod peer_addr;
-
 mod barrier;
 mod client;
 mod connection;
@@ -8,6 +5,7 @@ mod connection_monitor;
 mod constants;
 mod crypto;
 mod debug_payload;
+mod dht_discovery;
 mod gateway;
 mod ip;
 mod local_discovery;
@@ -15,7 +13,8 @@ mod message;
 mod message_broker;
 mod message_dispatcher;
 mod message_io;
-mod peer_exchange; // TODO: replace with v2
+mod peer_addr;
+mod peer_exchange;
 mod peer_info;
 mod peer_source;
 mod peer_state;
@@ -25,47 +24,51 @@ mod raw;
 mod runtime_id;
 mod seen_peers;
 mod server;
+mod stats;
 mod stun;
 mod stun_server_list;
 #[cfg(test)]
 mod tests;
-mod traffic_tracker;
 mod upnp;
 
 pub use self::{
-    connection::PeerInfoCollector,
+    connection::{ConnectionSetSubscription, PeerInfoCollector},
+    dht_discovery::{DhtContactsStoreTrait, DHT_ROUTERS},
+    peer_addr::PeerAddr,
     peer_info::PeerInfo,
     peer_source::PeerSource,
     peer_state::PeerState,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
-    traffic_tracker::TrafficStats,
+    stats::Stats,
 };
-use futures_util::future;
 pub use net::stun::NatBehavior;
 
 use self::{
-    connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
+    connection::{ConnectionPermit, ConnectionSet, ReserveResult},
     connection_monitor::ConnectionMonitor,
     constants::MAX_UNCHOKED_COUNT,
-    dht_discovery::{DhtContactsStoreTrait, DhtDiscovery},
+    dht_discovery::DhtDiscovery,
     gateway::{Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    peer_addr::{PeerAddr, PeerPort},
+    peer_addr::PeerPort,
     peer_exchange::{PexDiscovery, PexRepository},
     protocol::{Version, MAGIC, VERSION},
     seen_peers::{SeenPeer, SeenPeers},
+    stats::{ByteCounters, StatsTracker},
     stun::StunClients,
-    traffic_tracker::TrafficTracker,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    repository::{RepositoryHandle, RepositoryId, Vault},
+    network::stats::Instrumented,
+    protocol::RepositoryId,
+    repository::{RepositoryHandle, Vault},
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use deadlock::BlockingMutex;
+use futures_util::future;
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;
@@ -134,7 +137,6 @@ impl Network {
             main_monitor: monitor,
             connections_monitor,
             peers_monitor,
-            traffic_tracker: TrafficTracker::new(),
             span: Span::current(),
             gateway,
             this_runtime_id,
@@ -153,12 +155,13 @@ impl Network {
             dht_discovery_tx,
             pex_discovery,
             stun_clients: StunClients::new(),
-            connection_deduplicator: ConnectionDeduplicator::new(),
+            connections: ConnectionSet::new(),
             on_protocol_mismatch_tx,
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
             highest_seen_protocol_version: BlockingMutex::new(VERSION),
             our_addresses: BlockingMutex::new(HashSet::default()),
+            stats_tracker: StatsTracker::default(),
         });
 
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
@@ -233,6 +236,29 @@ impl Network {
             .is_enabled()
     }
 
+    /// Sets whether sending contacts to other peer over peer exchange is enabled.
+    ///
+    /// Note: PEX sending for a given repo is enabled only if it's enabled globally using this
+    /// function and also for the repo using [Registration::set_pex_enabled].
+    pub fn set_pex_send_enabled(&self, enabled: bool) {
+        self.inner.pex_discovery.set_send_enabled(enabled)
+    }
+
+    pub fn is_pex_send_enabled(&self) -> bool {
+        self.inner.pex_discovery.is_send_enabled()
+    }
+
+    /// Sets whether receiving contacts over peer exchange is enabled.
+    ///
+    /// Note: PEX receiving for a given repo is enabled only if it's enabled globally using this
+    /// function and also for the repo using [Registration::set_pex_enabled].
+    pub fn set_pex_recv_enabled(&self, enabled: bool) {
+        self.inner.pex_discovery.set_recv_enabled(enabled)
+    }
+
+    pub fn is_pex_recv_enabled(&self) -> bool {
+        self.inner.pex_discovery.is_recv_enabled()
+    }
     /// Find out external address using the STUN protocol.
     /// Currently QUIC only.
     pub async fn external_addr_v4(&self) -> Option<SocketAddrV4> {
@@ -251,9 +277,9 @@ impl Network {
         self.inner.stun_clients.nat_behavior().await
     }
 
-    /// Get the network traffic stats (total bytes sent and received).
-    pub fn traffic_stats(&self) -> TrafficStats {
-        self.inner.traffic_tracker.get()
+    /// Get the network traffic stats.
+    pub fn stats(&self) -> Stats {
+        self.inner.stats_tracker.read()
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -269,11 +295,11 @@ impl Network {
     }
 
     pub fn peer_info_collector(&self) -> PeerInfoCollector {
-        self.inner.connection_deduplicator.peer_info_collector()
+        self.inner.connections.peer_info_collector()
     }
 
     pub fn peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
-        self.inner.connection_deduplicator.get_peer_info(addr)
+        self.inner.connections.get_peer_info(addr)
     }
 
     pub fn current_protocol_version(&self) -> u32 {
@@ -290,8 +316,8 @@ impl Network {
     }
 
     /// Subscribe change in connected peers events.
-    pub fn on_peer_set_change(&self) -> uninitialized_watch::Receiver<()> {
-        self.inner.connection_deduplicator.on_change()
+    pub fn on_peer_set_change(&self) -> ConnectionSetSubscription {
+        self.inner.connections.subscribe()
     }
 
     /// Register a local repository into the network. This links the repository with all matching
@@ -332,16 +358,23 @@ impl Network {
 
         // TODO: This should be global, not per repo
         let response_limiter = Arc::new(Semaphore::new(MAX_UNCHOKED_COUNT));
+        let stats_tracker = StatsTracker::default();
 
         let mut network_state = self.inner.state.lock().unwrap();
 
-        network_state.create_link(handle.vault.clone(), &pex, response_limiter.clone());
+        network_state.create_link(
+            handle.vault.clone(),
+            &pex,
+            response_limiter.clone(),
+            stats_tracker.bytes.clone(),
+        );
 
         let key = network_state.registry.insert(RegistrationHolder {
             vault: handle.vault,
             dht,
             pex,
             response_limiter,
+            stats_tracker,
         });
 
         Registration {
@@ -394,10 +427,16 @@ impl Registration {
     /// difference is in that this function should return true even in case e.g. the whole network
     /// is disabled.
     pub fn is_dht_enabled(&self) -> bool {
-        let state = self.inner.state.lock().unwrap();
-        state.registry[self.key].dht.is_some()
+        self.inner.state.lock().unwrap().registry[self.key]
+            .dht
+            .is_some()
     }
 
+    /// Enables/disables peer exchange for this repo.
+    ///
+    /// Note: sending/receiving over PEX for this repo is enabled only if it's enabled using this
+    /// function and also globally using [Network::set_pex_send_enabled] and/or
+    /// [Network::set_pex_recv_enabled].
     pub async fn set_pex_enabled(&self, enabled: bool) {
         set_metadata_bool(&self.inner, self.key, PEX_ENABLED, enabled).await;
 
@@ -406,8 +445,16 @@ impl Registration {
     }
 
     pub fn is_pex_enabled(&self) -> bool {
-        let state = self.inner.state.lock().unwrap();
-        state.registry[self.key].pex.is_enabled()
+        self.inner.state.lock().unwrap().registry[self.key]
+            .pex
+            .is_enabled()
+    }
+
+    /// Fetch per-repository network statistics.
+    pub fn stats(&self) -> Stats {
+        self.inner.state.lock().unwrap().registry[self.key]
+            .stats_tracker
+            .read()
     }
 }
 
@@ -418,7 +465,7 @@ impl Drop for Registration {
         if let Some(holder) = state.registry.try_remove(self.key) {
             if let Some(brokers) = &mut state.message_brokers {
                 for broker in brokers.values_mut() {
-                    broker.destroy_link(holder.vault.local_id);
+                    broker.destroy_link(holder.vault.repository_id());
                 }
             }
         }
@@ -435,13 +482,13 @@ struct RegistrationHolder {
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexRepository,
     response_limiter: Arc<Semaphore>,
+    stats_tracker: StatsTracker,
 }
 
 struct Inner {
     main_monitor: StateMonitor,
     connections_monitor: StateMonitor,
     peers_monitor: StateMonitor,
-    traffic_tracker: TrafficTracker,
     span: Span,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
@@ -453,7 +500,7 @@ struct Inner {
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery: PexDiscovery,
     stun_clients: StunClients,
-    connection_deduplicator: ConnectionDeduplicator,
+    connections: ConnectionSet,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
@@ -462,6 +509,7 @@ struct Inner {
     highest_seen_protocol_version: BlockingMutex<Version>,
     // Used to prevent repeatedly connecting to self.
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
+    stats_tracker: StatsTracker,
 }
 
 struct State {
@@ -471,10 +519,21 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, repo: Vault, pex: &PexRepository, response_limiter: Arc<Semaphore>) {
+    fn create_link(
+        &mut self,
+        repo: Vault,
+        pex: &PexRepository,
+        response_limiter: Arc<Semaphore>,
+        byte_counters: Arc<ByteCounters>,
+    ) {
         if let Some(brokers) = &mut self.message_brokers {
             for broker in brokers.values_mut() {
-                broker.create_link(repo.clone(), pex, response_limiter.clone())
+                broker.create_link(
+                    repo.clone(),
+                    pex,
+                    response_limiter.clone(),
+                    byte_counters.clone(),
+                )
             }
         }
     }
@@ -662,10 +721,7 @@ impl Inner {
         mut rx: mpsc::Receiver<(raw::Stream, PeerAddr)>,
     ) {
         while let Some((stream, addr)) = rx.recv().await {
-            match self
-                .connection_deduplicator
-                .reserve(addr, PeerSource::Listener)
-            {
+            match self.connections.reserve(addr, PeerSource::Listener) {
                 ReserveResult::Permit(permit) => {
                     if self.is_shutdown() {
                         break;
@@ -731,9 +787,9 @@ impl Inner {
 
             next_sleep = backoff.next_backoff();
 
-            let permit = match self.connection_deduplicator.reserve(addr, source) {
+            let permit = match self.connections.reserve(addr, source) {
                 ReserveResult::Permit(permit) => permit,
-                ReserveResult::Occupied(on_release, their_source, permit_id) => {
+                ReserveResult::Occupied(on_release, their_source, connection_id) => {
                     if source == their_source {
                         // This is a duplicate from the same source, ignore it.
                         return;
@@ -744,7 +800,7 @@ impl Inner {
                     monitor.mark_as_awaiting_permit();
                     tracing::debug!(
                         parent: monitor.span(),
-                        permit_id,
+                        %connection_id,
                         "Duplicate from different source - awaiting permit"
                     );
 
@@ -755,7 +811,7 @@ impl Inner {
 
             permit.mark_as_connecting();
             monitor.mark_as_connecting(permit.id());
-            tracing::debug!(parent: monitor.span(), "Connecting");
+            tracing::trace!(parent: monitor.span(), "Connecting");
 
             let socket = match self
                 .gateway
@@ -780,7 +836,7 @@ impl Inner {
         permit: ConnectionPermit,
         monitor: &ConnectionMonitor,
     ) -> bool {
-        tracing::debug!(parent: monitor.span(), "Handshaking");
+        tracing::trace!(parent: monitor.span(), "Handshaking");
 
         permit.mark_as_handshaking();
         monitor.mark_as_handshaking();
@@ -833,7 +889,6 @@ impl Inner {
                         self.pex_discovery.new_peer(),
                         self.peers_monitor
                             .make_child(format!("{:?}", that_runtime_id.as_public_key())),
-                        self.traffic_tracker.clone(),
                     )
                 });
 
@@ -845,12 +900,14 @@ impl Inner {
                         holder.vault.clone(),
                         &holder.pex,
                         holder.response_limiter.clone(),
+                        holder.stats_tracker.bytes.clone(),
                     );
                 }
 
                 broker
             });
 
+            let stream = Instrumented::new(stream, self.stats_tracker.bytes.clone());
             broker.add_connection(stream, permit);
         }
 
@@ -1085,7 +1142,7 @@ impl Connectivity {
 }
 
 pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
-    // Calculate the info hash by hashing the id with SHA3-256 and taking the first 20 bytes.
+    // Calculate the info hash by hashing the id with BLAKE3 and taking the first 20 bytes.
     // (bittorrent uses SHA-1 but that is less secure).
     // `unwrap` is OK because the byte slice has the correct length.
     InfoHash::try_from(&id.salted_hash(b"ouisync repository info-hash").as_ref()[..INFO_HASH_LEN])

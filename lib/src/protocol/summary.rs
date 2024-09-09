@@ -144,6 +144,29 @@ impl<'r> Decode<'r, Sqlite> for NodeState {
     }
 }
 
+#[cfg(test)]
+mod test_utils {
+    use super::NodeState;
+    use proptest::{
+        arbitrary::Arbitrary,
+        strategy::{Just, Union},
+    };
+
+    impl Arbitrary for NodeState {
+        type Parameters = ();
+        type Strategy = Union<Just<Self>>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            Union::new([
+                Just(NodeState::Incomplete),
+                Just(NodeState::Complete),
+                Just(NodeState::Approved),
+                Just(NodeState::Rejected),
+            ])
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("invalid value: {0}")]
 pub(crate) struct InvalidValue(u8);

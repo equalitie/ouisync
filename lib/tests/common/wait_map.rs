@@ -52,19 +52,27 @@ where
         Q: ToOwned<Owned = K> + ?Sized,
     {
         loop {
-            let notify = match self.inner.lock().unwrap().entry(key.to_owned()) {
-                Entry::Occupied(entry) => match entry.get() {
-                    Slot::Occupied(value) => return value.clone(),
-                    Slot::Waiting(notify) => notify.clone(),
-                },
-                Entry::Vacant(entry) => {
-                    let notify = Arc::new(Notify::new());
-                    entry.insert(Slot::Waiting(notify.clone()));
-                    notify
-                }
+            // We need to call `Notify::notified` while the mutex is still locked but then await it
+            // only after it's been unlocked. This is so we don't miss any notifications.
+            let mut notify = None;
+            let notified = {
+                let mut inner = self.inner.lock().unwrap();
+                let new_notify = match inner.entry(key.to_owned()) {
+                    Entry::Occupied(entry) => match entry.get() {
+                        Slot::Occupied(value) => return value.clone(),
+                        Slot::Waiting(notify) => notify.clone(),
+                    },
+                    Entry::Vacant(entry) => {
+                        let notify = Arc::new(Notify::new());
+                        entry.insert(Slot::Waiting(notify.clone()));
+                        notify
+                    }
+                };
+
+                notify.get_or_insert(new_notify).notified()
             };
 
-            notify.notified().await;
+            notified.await;
         }
     }
 

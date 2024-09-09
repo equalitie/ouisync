@@ -14,6 +14,12 @@ use futures_util::{stream, StreamExt};
 use std::{future, sync::Arc};
 use tokio::select;
 
+#[cfg(test)]
+mod tests;
+
+/// Notify the block tracker after marking this many blocks as required.
+const BLOCK_REQUIRE_BATCH_SIZE: u32 = 1024;
+
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
 /// - remove outdated branches and snapshots
@@ -43,7 +49,7 @@ pub(super) async fn run(shared: Arc<Shared>) {
                 future::ready(match event {
                     Ok(Event { scope, .. }) if scope == event_scope => None,
                     Ok(Event {
-                        payload: Payload::BranchChanged(_),
+                        payload: Payload::SnapshotApproved(_),
                         ..
                     }) => Some(Command::Interrupt),
                     Ok(Event {
@@ -52,7 +58,7 @@ pub(super) async fn run(shared: Arc<Shared>) {
                     })
                     | Err(Lagged) => Some(Command::Wait),
                     Ok(Event {
-                        payload: Payload::MaintenanceCompleted,
+                        payload: Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted,
                         ..
                     }) => None,
                 })
@@ -89,16 +95,16 @@ pub(super) async fn run(shared: Arc<Shared>) {
             event::into_stream(shared.vault.event_tx.subscribe()).filter_map(move |event| {
                 future::ready(match event {
                     Ok(Event {
-                        payload: Payload::BranchChanged(_),
+                        payload: Payload::SnapshotApproved(_),
                         scope,
                     }) if scope != event_scope => Some(Command::Interrupt),
                     Ok(Event {
-                        payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                        payload: Payload::SnapshotApproved(_) | Payload::BlockReceived { .. },
                         ..
                     })
                     | Err(Lagged) => Some(Command::Wait),
                     Ok(Event {
-                        payload: Payload::MaintenanceCompleted,
+                        payload: Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted,
                         ..
                     }) => None,
                 })
@@ -170,6 +176,8 @@ async fn scan(shared: &Shared, prune_counter: &Counter) {
 
 /// Find missing blocks and mark them as required.
 mod scan {
+    use crate::protocol::SingleBlockPresence;
+
     use super::*;
     use tracing::instrument;
 
@@ -279,27 +287,25 @@ mod scan {
                     error
                 })?;
         let mut block_number = 0;
-        let mut file_progress_cache_reset = false;
         let mut require_batch = shared.vault.block_tracker.require_batch();
 
-        while let Some(block_id) = blob_block_ids.try_next().await.map_err(|error| {
-            tracing::trace!(block_number, ?error, "try_next failed");
-            error
-        })? {
-            if !shared
-                .vault
-                .store()
-                .acquire_read()
-                .await?
-                .block_exists(&block_id)
-                .await?
-            {
-                require_batch.add(block_id);
-
-                if !file_progress_cache_reset {
-                    file_progress_cache_reset = true;
-                    branch.file_progress_cache().reset(&blob_id, block_number);
+        while let Some((block_id, block_presence)) =
+            blob_block_ids.try_next().await.map_err(|error| {
+                tracing::trace!(block_number, ?error, "try_next failed");
+                error
+            })?
+        {
+            match block_presence {
+                SingleBlockPresence::Present => (),
+                SingleBlockPresence::Missing | SingleBlockPresence::Expired => {
+                    require_batch.add(block_id);
                 }
+            }
+
+            // Notify the block tracker after processing each batch of blocks (also notify on the
+            // first blocks so that it's requested first).
+            if block_number % BLOCK_REQUIRE_BATCH_SIZE == 0 {
+                require_batch.commit();
             }
 
             block_number = block_number.saturating_add(1);
@@ -348,9 +354,8 @@ mod merge {
 
 /// Remove outdated branches and snapshots.
 mod prune {
-    use crate::versioned::PreferBranch;
-
     use super::*;
+    use crate::{protocol::NodeState, versioned::PreferBranch};
     use futures_util::TryStreamExt;
 
     pub(super) async fn run(
@@ -363,7 +368,7 @@ mod prune {
             .store()
             .acquire_read()
             .await?
-            .load_root_nodes()
+            .load_latest_preferred_root_nodes()
             .try_collect()
             .await?;
 
@@ -371,6 +376,22 @@ mod prune {
 
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
             versioned::partition(all, PreferBranch(Some(&writer_id)));
+
+        // For the purpose of pruning, any approved snapshot is always considered more up-to-date
+        // than any non-approved one even if the approved's version vector is happens-before the
+        // non-approved one. This is because the non-approved ones are not visible to the users
+        // until they become approved and there is no guarantee that they ever will (e.g., due to
+        // peers disconnecting before receiving all nodes, etc...). For this reason, until there is
+        // at least one branch with approved snapshot in `uptodate`, we consider all branches as
+        // up-to-date.
+        let (uptodate, outdated) = if uptodate
+            .iter()
+            .any(|node| node.summary.state == NodeState::Approved)
+        {
+            (uptodate, outdated)
+        } else {
+            (uptodate.into_iter().chain(outdated).collect(), Vec::new())
+        };
 
         // Remove outdated branches
         for node in outdated {
@@ -450,6 +471,7 @@ mod trash {
 
         loop {
             let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;
+
             if unreachable_block_ids.is_empty() {
                 break;
             }
@@ -573,7 +595,7 @@ mod trash {
     ) -> Result<()> {
         let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
-        while let Some(block_id) = blob_block_ids.try_next().await? {
+        while let Some((block_id, _)) = blob_block_ids.try_next().await? {
             unreachable_block_ids.remove(&block_id);
         }
 
@@ -610,7 +632,7 @@ mod trash {
 
                 unlock_tx.send(notify).await;
 
-                while let Some(block_id) = blob_block_ids.try_next().await? {
+                while let Some((block_id, _)) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);
                 }
             }
@@ -628,7 +650,7 @@ mod trash {
         // case they become needed again) in their corresponding leaf nodes and then update the
         // summaries of the corresponding ancestor nodes. This is a complex and potentially
         // expensive operation which is why we do it a few blocks at a time.
-        const BATCH_SIZE: usize = 32;
+        const BATCH_SIZE: usize = 2048;
 
         let mut unreachable_block_ids = unreachable_block_ids.into_iter();
         let mut batch = Vec::with_capacity(BATCH_SIZE);

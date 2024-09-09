@@ -33,9 +33,10 @@ use thiserror::Error;
 // a 32bit or 64bit processor (if we want two such replicas to be able to sync).
 pub const HEADER_SIZE: usize = mem::size_of::<u64>();
 
-// Max number of blocks in the cache. Increasing this number decreases the number of flushes needed
-// during writes but increases the coplexity of the individual flushes.
-const CACHE_CAPACITY: usize = 2048; // 64 MiB
+// Max number of blocks processed in a single batch (write transaction). Increasing this number
+// decreases the number of flushes needed during writes but increases the coplexity of the
+// individual flushes.
+pub const BATCH_SIZE: usize = 2048; // 64 MiB
 
 #[derive(Debug, Error)]
 pub(crate) enum ReadWriteError {
@@ -57,7 +58,9 @@ pub(crate) struct Blob {
 impl Blob {
     /// Opens an existing blob.
     pub async fn open(tx: &mut ReadTransaction, branch: Branch, id: BlobId) -> Result<Self> {
-        let root_node = tx.load_root_node(branch.id(), RootNodeFilter::Any).await?;
+        let root_node = tx
+            .load_latest_approved_root_node(branch.id(), RootNodeFilter::Any)
+            .await?;
         Self::open_at(tx, &root_node, branch, id).await
     }
 
@@ -201,7 +204,7 @@ impl Blob {
     #[cfg(test)]
     pub async fn read_all(&mut self, tx: &mut ReadTransaction, buffer: &mut [u8]) -> Result<usize> {
         let root_node = tx
-            .load_root_node(self.branch.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(self.branch.id(), RootNodeFilter::Any)
             .await?;
         self.read_all_at(tx, &root_node, buffer).await
     }
@@ -238,7 +241,7 @@ impl Blob {
     #[cfg(test)]
     pub async fn read_to_end(&mut self, tx: &mut ReadTransaction) -> Result<Vec<u8>> {
         let root_node = tx
-            .load_root_node(self.branch.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(self.branch.id(), RootNodeFilter::Any)
             .await?;
         self.read_to_end_at(tx, &root_node).await
     }
@@ -335,7 +338,7 @@ impl Blob {
     /// Load the current block into the cache.
     pub async fn warmup(&mut self, tx: &mut ReadTransaction) -> Result<()> {
         let root_node = tx
-            .load_root_node(self.branch.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(self.branch.id(), RootNodeFilter::Any)
             .await?;
         self.warmup_at(tx, &root_node).await?;
 
@@ -407,7 +410,7 @@ impl Blob {
     }
 
     fn check_cache_capacity(&mut self) -> bool {
-        if self.cache.len() < CACHE_CAPACITY {
+        if self.cache.len() < BATCH_SIZE {
             return true;
         }
 
@@ -441,7 +444,7 @@ impl Blob {
         } else {
             let locator = Locator::head(self.id);
             let root_node = tx
-                .load_root_node(self.branch.id(), RootNodeFilter::Any)
+                .load_latest_approved_root_node(self.branch.id(), RootNodeFilter::Any)
                 .await?;
             let (_, mut content) =
                 read_block(tx, &root_node, &locator, self.branch.keys().read()).await?;
@@ -536,7 +539,7 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
     let end = {
         let mut tx = src_branch.store().begin_read().await?;
         let root_node = tx
-            .load_root_node(src_branch.id(), RootNodeFilter::Any)
+            .load_latest_approved_root_node(src_branch.id(), RootNodeFilter::Any)
             .await?;
         load_block_count_hint(&mut tx, &root_node, blob_id, src_branch.keys().read()).await?
     };
@@ -555,48 +558,38 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
         }
     }
 
-    // Based on some benchmarking it seems that batch values don't hurt the syncing performance too
-    // much. https://github.com/equalitie/ouisync/issues/143#issuecomment-1757951167
-    let batch_size = 2048;
-    let mut opt_batch = None;
-
+    let mut batch = None;
     let locators = Locator::head(blob_id).sequence().take(end as usize);
 
     for locator in locators {
-        if opt_batch.is_none() {
-            let tx = src_branch.store().begin_write().await?;
-            let changeset = Changeset::new();
-            opt_batch = Some(Batch { tx, changeset });
-        }
-
-        let Batch { tx, changeset } = opt_batch.as_mut().unwrap();
+        let Batch { tx, changeset } = if let Some(batch) = &mut batch {
+            batch
+        } else {
+            batch.insert(Batch {
+                tx: src_branch.store().begin_write().await?,
+                changeset: Changeset::new(),
+            })
+        };
 
         let encoded_locator = locator.encode(read_key);
 
-        let block_id = match tx.find_block(src_branch.id(), &encoded_locator).await {
-            Ok(id) => id,
-            Err(store::Error::LocatorNotFound) => {
-                // end of the blob
-                break;
-            }
-            Err(error) => return Err(error.into()),
-        };
-
-        let block_presence = if tx.block_exists(&block_id).await? {
-            SingleBlockPresence::Present
-        } else {
-            SingleBlockPresence::Missing
-        };
+        let (block_id, block_presence) =
+            match tx.find_block(src_branch.id(), &encoded_locator).await {
+                Ok(id) => id,
+                Err(store::Error::LocatorNotFound) => {
+                    // end of the blob
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            };
 
         changeset.link_block(encoded_locator, block_id, block_presence);
 
         // The `+ 1` is there to not hit on the first run.
-        if (locator.number() + 1) % batch_size == 0 {
-            opt_batch
-                .take()
-                .unwrap()
-                .apply(dst_branch.id(), write_keys)
-                .await?;
+        if (locator.number() + 1) as usize % BATCH_SIZE == 0 {
+            if let Some(batch) = batch.take() {
+                batch.apply(dst_branch.id(), write_keys).await?;
+            }
         }
 
         tracing::trace!(
@@ -607,7 +600,7 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
         );
     }
 
-    if let Some(batch) = opt_batch {
+    if let Some(batch) = batch {
         batch.apply(dst_branch.id(), write_keys).await?;
     }
 
@@ -652,7 +645,7 @@ async fn read_block(
     locator: &Locator,
     read_key: &cipher::SecretKey,
 ) -> Result<(BlockId, BlockContent)> {
-    let id = tx
+    let (id, _) = tx
         .find_block_at(root_node, &locator.encode(read_key))
         .await?;
 

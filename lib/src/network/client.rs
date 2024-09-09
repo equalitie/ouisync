@@ -1,199 +1,192 @@
 use super::{
-    constants::MAX_PENDING_REQUESTS_PER_CLIENT,
+    constants::RESPONSE_BATCH_SIZE,
     debug_payload::{DebugResponse, PendingDebugRequest},
-    message::{Content, Request, Response, ResponseDisambiguator},
-    pending::{PendingRequest, PendingRequests, PendingResponse, ProcessedResponse},
+    message::{Content, Response, ResponseDisambiguator},
+    pending::{
+        EphemeralResponse, PendingRequest, PendingRequests, PersistableResponse, PreparedResponse,
+    },
 };
 use crate::{
-    block_tracker::{BlockPromise, OfferState, TrackerClient},
+    block_tracker::{BlockPromise, TrackerClient},
     crypto::{sign::PublicKey, CacheHash, Hashable},
-    error::{Error, Result},
+    error::Result,
+    event::Payload,
     protocol::{
-        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, RootNodeFilter, UntrustedProof,
+        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, ProofError, RootNodeFilter,
+        UntrustedProof,
     },
-    repository::{BlockRequestMode, Vault},
-    store,
+    repository::Vault,
+    store::{ClientReader, ClientWriter},
 };
-use std::{future, sync::Arc, time::Instant};
-use tokio::{
-    select,
-    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
-};
+use std::iter;
+use tokio::{select, sync::mpsc};
 use tracing::{instrument, Level};
+
+mod future {
+    pub(super) use futures_util::future::try_join;
+    pub(super) use std::future::pending;
+}
 
 pub(super) struct Client {
     inner: Inner,
     response_rx: mpsc::Receiver<Response>,
-    send_queue_rx: mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
 }
 
 impl Client {
     pub fn new(
         vault: Vault,
-        content_tx: mpsc::Sender<Content>,
+        content_tx: mpsc::UnboundedSender<Content>,
         response_rx: mpsc::Receiver<Response>,
-        peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pending_requests = PendingRequests::new(vault.monitor.clone());
         let block_tracker = vault.block_tracker.client();
 
-        // We run the sender in a separate task so we can keep sending requests while we're
-        // processing responses (which sometimes takes a while).
-        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
-
         let inner = Inner {
             vault,
             pending_requests,
-            peer_request_limiter,
-            link_request_limiter: Arc::new(Semaphore::new(MAX_PENDING_REQUESTS_PER_CLIENT)),
             block_tracker,
             content_tx,
-            send_queue_tx,
         };
 
-        Self {
-            inner,
-            response_rx,
-            send_queue_rx,
-        }
+        Self { inner, response_rx }
     }
 }
 
 impl Client {
     pub async fn run(&mut self) -> Result<()> {
-        let Self {
-            inner,
-            response_rx,
-            send_queue_rx,
-        } = self;
+        let Self { inner, response_rx } = self;
 
-        inner.run(response_rx, send_queue_rx).await
+        inner.run(response_rx).await
     }
 }
 
 struct Inner {
     vault: Vault,
     pending_requests: PendingRequests,
-    peer_request_limiter: Arc<Semaphore>,
-    link_request_limiter: Arc<Semaphore>,
     block_tracker: TrackerClient,
-    content_tx: mpsc::Sender<Content>,
-    send_queue_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
+    content_tx: mpsc::UnboundedSender<Content>,
 }
 
 impl Inner {
-    async fn run(
-        &mut self,
-        response_rx: &mut mpsc::Receiver<Response>,
-        send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-    ) -> Result<()> {
+    async fn run(&mut self, response_rx: &mut mpsc::Receiver<Response>) -> Result<()> {
         select! {
             result = self.handle_responses(response_rx) => result,
-            _ = self.send_requests(send_queue_rx) => Ok(()),
             _ = self.handle_available_block_offers() => Ok(()),
             _ = self.handle_reload_index() => Ok(()),
         }
     }
 
-    fn enqueue_request(&self, request: PendingRequest) {
-        self.send_queue_tx.send((request, Instant::now())).ok();
-    }
-
-    async fn send_requests(
-        &self,
-        send_queue_rx: &mut mpsc::UnboundedReceiver<(PendingRequest, Instant)>,
-    ) {
-        loop {
-            let Some((request, timestamp)) = send_queue_rx.recv().await else {
-                break;
-            };
-
-            let permits = self.acquire_send_permits().await;
-
-            self.vault
-                .monitor
-                .request_queue_time
-                .record(timestamp.elapsed());
-
-            if let Some(request) = self
-                .pending_requests
-                .insert(request, permits.link, permits.peer)
-            {
-                self.send_request(request).await;
-            }
+    fn send_request(&self, request: PendingRequest) {
+        if let Some(request) = self.pending_requests.insert(request) {
+            self.content_tx
+                .send(Content::Request(request))
+                .unwrap_or(());
         }
-    }
-
-    async fn send_request(&self, request: Request) {
-        self.content_tx
-            .send(Content::Request(request))
-            .await
-            .unwrap_or(());
-    }
-
-    async fn acquire_send_permits(&self) -> SendPermits {
-        // Unwraps OK because we never `close()` the semaphores.
-        //
-        // NOTE that the order here is important, we don't want to block the other clients
-        // on this peer if we have too many responses queued up (which is what the
-        // `link_permit` is responsible for limiting)..
-        let link = self
-            .link_request_limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .unwrap();
-
-        let peer = self
-            .peer_request_limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .unwrap();
-
-        SendPermits { link, peer }
     }
 
     async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
-        while let Some(response) = rx.recv().await {
-            self.vault.monitor.responses_received.increment(1);
+        let mut ephemeral = Vec::with_capacity(RESPONSE_BATCH_SIZE);
+        let mut persistable = Vec::with_capacity(RESPONSE_BATCH_SIZE);
 
-            let response = self.pending_requests.remove(response);
+        loop {
+            for response in recv_iter(rx).await {
+                self.vault.monitor.responses_received.increment(1);
 
-            let start = Instant::now();
-            self.handle_response(response).await?;
-            self.vault
-                .monitor
-                .response_handle_time
-                .record(start.elapsed());
+                let response = self.pending_requests.remove(response);
+
+                match response {
+                    PreparedResponse::RootNode(proof, block_presence, debug) => {
+                        persistable.push(PersistableResponse::RootNode(
+                            proof,
+                            block_presence,
+                            debug,
+                        ));
+                    }
+                    PreparedResponse::InnerNodes(nodes, _, debug) => {
+                        persistable.push(PersistableResponse::InnerNodes(nodes, debug));
+                    }
+                    PreparedResponse::LeafNodes(nodes, _, debug) => {
+                        persistable.push(PersistableResponse::LeafNodes(nodes, debug));
+                    }
+                    PreparedResponse::Block(block, block_promise, debug) => {
+                        persistable.push(PersistableResponse::Block(block, block_promise, debug));
+                    }
+                    PreparedResponse::BlockOffer(block_id, debug) => {
+                        ephemeral.push(EphemeralResponse::BlockOffer(block_id, debug));
+                    }
+                    PreparedResponse::RootNodeError(..)
+                    | PreparedResponse::ChildNodesError(..)
+                    | PreparedResponse::BlockError(..) => (),
+                }
+
+                if ephemeral.len() >= RESPONSE_BATCH_SIZE {
+                    break;
+                }
+
+                if persistable.len() >= RESPONSE_BATCH_SIZE {
+                    break;
+                }
+            }
+
+            future::try_join(
+                self.handle_ephemeral_responses(&mut ephemeral),
+                self.handle_persistable_responses(&mut persistable),
+            )
+            .await?;
         }
+    }
+
+    async fn handle_persistable_responses(
+        &self,
+        batch: &mut Vec<PersistableResponse>,
+    ) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        let mut writer = self.vault.store().begin_client_write().await?;
+
+        for response in batch.drain(..) {
+            match response {
+                PersistableResponse::RootNode(proof, block_presence, debug) => {
+                    self.handle_root_node(&mut writer, proof, block_presence, debug)
+                        .await?;
+                }
+                PersistableResponse::InnerNodes(nodes, debug) => {
+                    self.handle_inner_nodes(&mut writer, nodes, debug).await?;
+                }
+                PersistableResponse::LeafNodes(nodes, debug) => {
+                    self.handle_leaf_nodes(&mut writer, nodes, debug).await?;
+                }
+                PersistableResponse::Block(block, block_promise, debug) => {
+                    self.handle_block(&mut writer, block, block_promise, debug)
+                        .await?;
+                }
+            }
+        }
+
+        self.commit_responses(writer).await?;
 
         Ok(())
     }
 
-    async fn handle_response(&self, response: PendingResponse) -> Result<()> {
-        match response.response {
-            ProcessedResponse::RootNode(proof, block_presence, debug) => {
-                self.handle_root_node(proof, block_presence, debug).await
-            }
-            ProcessedResponse::InnerNodes(nodes, _, debug) => {
-                self.handle_inner_nodes(nodes, debug).await
-            }
-            ProcessedResponse::LeafNodes(nodes, _, debug) => {
-                self.handle_leaf_nodes(nodes, debug).await
-            }
-            ProcessedResponse::BlockOffer(block_id, debug) => {
-                self.handle_block_offer(block_id, debug).await
-            }
-            ProcessedResponse::Block(block, debug) => {
-                self.handle_block(block, response.block_promise, debug)
-                    .await
-            }
-            ProcessedResponse::BlockError(block_id, debug) => {
-                self.handle_block_not_found(block_id, debug).await
-            }
-            ProcessedResponse::RootNodeError(..) | ProcessedResponse::ChildNodesError(..) => Ok(()),
+    async fn handle_ephemeral_responses(&self, batch: &mut Vec<EphemeralResponse>) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
         }
+
+        let mut reader = self.vault.store().begin_client_read().await?;
+
+        for response in batch.drain(..) {
+            match response {
+                EphemeralResponse::BlockOffer(block_id, debug) => {
+                    self.handle_block_offer(&mut reader, block_id, debug)
+                        .await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     #[instrument(
@@ -209,30 +202,36 @@ impl Inner {
     )]
     async fn handle_root_node(
         &self,
+        writer: &mut ClientWriter,
         proof: UntrustedProof,
         block_presence: MultiBlockPresence,
         debug_payload: DebugResponse,
     ) -> Result<()> {
-        let hash = proof.hash;
-        let status = self.vault.receive_root_node(proof, block_presence).await?;
+        let proof = match proof.verify(self.vault.repository_id()) {
+            Ok(proof) => proof,
+            Err(ProofError(_)) => {
+                tracing::trace!("Invalid proof");
+                return Ok(());
+            }
+        };
 
-        if status.request_children {
-            self.enqueue_request(PendingRequest::ChildNodes(
+        // Ignore branches with empty version vectors because they have no content yet.
+        if proof.version_vector.is_empty() {
+            return Ok(());
+        }
+
+        let hash = proof.hash;
+        let status = writer.save_root_node(proof, &block_presence).await?;
+
+        tracing::debug!("Received root node - {status}");
+
+        if status.request_children() {
+            self.send_request(PendingRequest::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(block_presence),
                 debug_payload.follow_up(),
             ));
         }
-
-        if status.new_snapshot {
-            tracing::debug!("Received root node - new snapshot");
-        } else if status.request_children {
-            tracing::debug!("Received root node - new blocks");
-        } else {
-            tracing::trace!("Received root node - outdated");
-        }
-
-        self.log_approved(&status.new_approved).await;
 
         Ok(())
     }
@@ -240,43 +239,26 @@ impl Inner {
     #[instrument(skip_all, fields(hash = ?nodes.hash(), ?debug_payload), err(Debug))]
     async fn handle_inner_nodes(
         &self,
+        writer: &mut ClientWriter,
         nodes: CacheHash<InnerNodes>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
         let total = nodes.len();
-
-        let quota = self.vault.quota().await?.map(Into::into);
-        let status = self.vault.receive_inner_nodes(nodes, quota).await?;
-
-        let debug = debug_payload.follow_up();
+        let status = writer.save_inner_nodes(nodes).await?;
 
         tracing::trace!(
-            "Received {}/{} inner nodes: {:?}",
-            status.request_children.len(),
-            total,
-            status
-                .request_children
-                .iter()
-                .map(|node| &node.hash)
-                .collect::<Vec<_>>()
+            "Received {}/{} inner nodes",
+            status.new_children.len(),
+            total
         );
 
-        for node in status.request_children {
-            self.enqueue_request(PendingRequest::ChildNodes(
+        for node in status.new_children {
+            self.send_request(PendingRequest::ChildNodes(
                 node.hash,
                 ResponseDisambiguator::new(node.summary.block_presence),
-                debug.clone(),
+                debug_payload.clone().follow_up(),
             ));
         }
-
-        if quota.is_some() {
-            for branch_id in &status.new_approved {
-                self.vault.approve_offers(branch_id).await?;
-            }
-        }
-
-        self.refresh_branches(status.new_approved.iter().copied());
-        self.log_approved(&status.new_approved).await;
 
         Ok(())
     }
@@ -284,54 +266,22 @@ impl Inner {
     #[instrument(skip_all, fields(hash = ?nodes.hash(), ?debug_payload), err(Debug))]
     async fn handle_leaf_nodes(
         &self,
+        writer: &mut ClientWriter,
         nodes: CacheHash<LeafNodes>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
         let total = nodes.len();
-        let quota = self.vault.quota().await?.map(Into::into);
-        let status = self.vault.receive_leaf_nodes(nodes, quota).await?;
+        let status = writer.save_leaf_nodes(nodes).await?;
 
         tracing::trace!(
-            "Received {}/{} leaf nodes: {:?}",
-            status.request_blocks.len(),
+            "Received {}/{} leaf nodes",
+            status.new_block_offers.len(),
             total,
-            status
-                .request_blocks
-                .iter()
-                .map(|node| &node.block_id)
-                .collect::<Vec<_>>(),
         );
 
-        let offer_state =
-            if quota.is_none() || !status.new_approved.is_empty() || status.old_approved {
-                OfferState::Approved
-            } else {
-                OfferState::Pending
-            };
-
-        match self.vault.block_request_mode {
-            BlockRequestMode::Lazy => {
-                for node in status.request_blocks {
-                    self.block_tracker.register(node.block_id, offer_state);
-                }
-            }
-            BlockRequestMode::Greedy => {
-                for node in status.request_blocks {
-                    if self.block_tracker.register(node.block_id, offer_state) {
-                        self.vault.block_tracker.require(node.block_id);
-                    }
-                }
-            }
+        for (block_id, state) in status.new_block_offers {
+            self.block_tracker.register(block_id, state);
         }
-
-        if quota.is_some() {
-            for branch_id in &status.new_approved {
-                self.vault.approve_offers(branch_id).await?;
-            }
-        }
-
-        self.refresh_branches(status.new_approved.iter().copied());
-        self.log_approved(&status.new_approved).await;
 
         Ok(())
     }
@@ -339,25 +289,17 @@ impl Inner {
     #[instrument(skip_all, fields(id = ?block_id, ?debug_payload), err(Debug))]
     async fn handle_block_offer(
         &self,
+        reader: &mut ClientReader,
         block_id: BlockId,
         debug_payload: DebugResponse,
     ) -> Result<()> {
-        let Some(offer_state) = self.vault.offer_state(&block_id).await? else {
+        let Some(offer_state) = reader.load_block_offer_state(&block_id).await? else {
             return Ok(());
         };
 
         tracing::trace!(?offer_state, "Received block offer");
 
-        if !self.block_tracker.register(block_id, offer_state) {
-            return Ok(());
-        }
-
-        match self.vault.block_request_mode {
-            BlockRequestMode::Lazy => (),
-            BlockRequestMode::Greedy => {
-                self.vault.block_tracker.require(block_id);
-            }
-        }
+        self.block_tracker.register(block_id, offer_state);
 
         Ok(())
     }
@@ -365,27 +307,49 @@ impl Inner {
     #[instrument(skip_all, fields(id = ?block.id, ?debug_payload), err(Debug))]
     async fn handle_block(
         &self,
+        writer: &mut ClientWriter,
         block: Block,
         block_promise: Option<BlockPromise>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
+        writer.save_block(&block, block_promise).await?;
+
         tracing::trace!("Received block");
 
-        match self.vault.receive_block(&block, block_promise).await {
-            // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
-            // needed.
-            Ok(()) | Err(Error::Store(store::Error::BlockNotReferenced)) => Ok(()),
-            Err(error) => Err(error),
-        }
+        Ok(())
     }
 
-    #[instrument(skip_all, fields(block_id, debug_payload = ?_debug_payload), err(Debug))]
-    async fn handle_block_not_found(
-        &self,
-        block_id: BlockId,
-        _debug_payload: DebugResponse,
-    ) -> Result<()> {
-        tracing::trace!("Received block not found {:?}", block_id);
+    async fn commit_responses(&self, writer: ClientWriter) -> Result<()> {
+        let event_tx = self.vault.event_tx.clone();
+        let status = writer
+            .commit_and_then(move |status| {
+                // Notify about newly written blocks.
+                for block_id in &status.new_blocks {
+                    event_tx.send(Payload::BlockReceived(*block_id));
+                }
+
+                // Notify about newly approved snapshots
+                for branch_id in &status.approved_branches {
+                    event_tx.send(Payload::SnapshotApproved(*branch_id));
+                }
+
+                // Notify about newly rejected snapshots
+                for branch_id in &status.rejected_branches {
+                    event_tx.send(Payload::SnapshotRejected(*branch_id));
+                }
+
+                status
+            })
+            .await?;
+
+        // Approve pending block offers referenced from the newly approved snapshots.
+        for block_id in status.approved_missing_blocks {
+            self.vault.block_tracker.approve(block_id);
+        }
+
+        self.refresh_branches(status.approved_branches.iter().copied());
+        self.log_approved(&status.approved_branches).await;
+
         Ok(())
     }
 
@@ -395,7 +359,7 @@ impl Inner {
         loop {
             let block_offer = block_offers.next().await;
             let debug = PendingDebugRequest::start();
-            self.enqueue_request(PendingRequest::Block(block_offer, debug));
+            self.send_request(PendingRequest::Block(block_offer, debug));
         }
     }
 
@@ -428,7 +392,7 @@ impl Inner {
     // requested as soon as possible.
     fn refresh_branches(&self, branches: impl IntoIterator<Item = PublicKey>) {
         for branch_id in branches {
-            self.enqueue_request(PendingRequest::RootNode(
+            self.send_request(PendingRequest::RootNode(
                 branch_id,
                 PendingDebugRequest::start(),
             ));
@@ -454,7 +418,10 @@ impl Inner {
         };
 
         for branch_id in branches {
-            let root_node = match reader.load_root_node(branch_id, RootNodeFilter::Any).await {
+            let root_node = match reader
+                .load_latest_approved_root_node(branch_id, RootNodeFilter::Any)
+                .await
+            {
                 Ok(root_node) => root_node,
                 Err(error) => {
                     tracing::error!(?branch_id, ?error, "Failed to load root node");
@@ -473,7 +440,129 @@ impl Inner {
     }
 }
 
-struct SendPermits {
-    peer: OwnedSemaphorePermit,
-    link: OwnedSemaphorePermit,
+/// Waits for at least one item to become available (or the chanel getting closed) and then yields
+/// all the buffered items from the channel.
+async fn recv_iter<T>(rx: &mut mpsc::Receiver<T>) -> impl Iterator<Item = T> + '_ {
+    rx.recv()
+        .await
+        .into_iter()
+        .chain(iter::from_fn(|| rx.try_recv().ok()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        access_control::WriteSecrets,
+        block_tracker::RequestMode,
+        crypto::sign::Keypair,
+        db,
+        event::EventSender,
+        protocol::{Proof, RepositoryId, EMPTY_INNER_HASH},
+        repository::RepositoryMonitor,
+        version_vector::VersionVector,
+    };
+    use futures_util::TryStreamExt;
+    use metrics::NoopRecorder;
+    use state_monitor::StateMonitor;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn receive_root_node_with_invalid_proof() {
+        let (_base_dir, inner, _) = setup().await;
+        let remote_id = PublicKey::random();
+
+        // Receive invalid root node from the remote replica.
+        let invalid_write_keys = Keypair::random();
+        inner
+            .handle_persistable_responses(&mut vec![PersistableResponse::RootNode(
+                Proof::new(
+                    remote_id,
+                    VersionVector::first(remote_id),
+                    *EMPTY_INNER_HASH,
+                    &invalid_write_keys,
+                )
+                .into(),
+                MultiBlockPresence::None,
+                DebugResponse::unsolicited(),
+            )])
+            .await
+            .unwrap();
+
+        // The invalid root was not written to the db.
+        assert!(inner
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&remote_id)
+            .try_next()
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn receive_root_node_with_empty_version_vector() {
+        let (_base_dir, inner, secrets) = setup().await;
+        let remote_id = PublicKey::random();
+
+        inner
+            .handle_persistable_responses(&mut vec![PersistableResponse::RootNode(
+                Proof::new(
+                    remote_id,
+                    VersionVector::new(),
+                    *EMPTY_INNER_HASH,
+                    &secrets.write_keys,
+                )
+                .into(),
+                MultiBlockPresence::None,
+                DebugResponse::unsolicited(),
+            )])
+            .await
+            .unwrap();
+
+        assert!(inner
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&remote_id)
+            .try_next()
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    async fn setup() -> (TempDir, Inner, WriteSecrets) {
+        let (base_dir, pool) = db::create_temp().await.unwrap();
+
+        let secrets = WriteSecrets::random();
+        let repository_id = RepositoryId::from(secrets.write_keys.public_key());
+
+        let vault = Vault::new(
+            repository_id,
+            EventSender::new(1),
+            pool,
+            RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
+        );
+
+        vault.block_tracker.set_request_mode(RequestMode::Lazy);
+
+        let pending_requests = PendingRequests::new(vault.monitor.clone());
+        let block_tracker = vault.block_tracker.client();
+
+        let (content_tx, _content_rx) = mpsc::unbounded_channel();
+
+        let inner = Inner {
+            vault,
+            pending_requests,
+            block_tracker,
+            content_tx,
+        };
+
+        (base_dir, inner, secrets)
+    }
 }

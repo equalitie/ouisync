@@ -36,6 +36,13 @@ impl LeafNode {
             block_presence: SingleBlockPresence::Missing,
         }
     }
+
+    pub fn into_missing(self) -> Self {
+        Self {
+            block_presence: SingleBlockPresence::Missing,
+            ..self
+        }
+    }
 }
 
 impl Hashable for LeafNode {

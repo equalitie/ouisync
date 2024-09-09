@@ -11,7 +11,7 @@ use ouisync_bridge::{
     network::{self, NetworkDefaults},
     transport,
 };
-use ouisync_lib::network::Network;
+use ouisync_lib::Network;
 use state_monitor::StateMonitor;
 use std::{
     path::{Path, PathBuf},

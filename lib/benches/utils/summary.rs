@@ -1,5 +1,5 @@
 use hdrhistogram::{sync::Recorder, Histogram, SyncHistogram};
-use ouisync::network::{Network, TrafficStats};
+use ouisync::{Network, Stats};
 use serde::{ser::SerializeMap, Serialize};
 use std::{
     mem,
@@ -51,12 +51,14 @@ pub(crate) struct ActorSummaryRecorder {
 
 impl ActorSummaryRecorder {
     pub fn record(mut self, network: &Network) {
-        let TrafficStats { send, recv, .. } = network.traffic_stats();
+        let Stats {
+            bytes_tx, bytes_rx, ..
+        } = network.stats();
 
-        info!(send, recv);
+        info!(send = bytes_rx, recv = bytes_rx);
 
-        self.send.record(send).unwrap();
-        self.recv.record(recv).unwrap();
+        self.send.record(bytes_tx).unwrap();
+        self.recv.record(bytes_rx).unwrap();
     }
 }
 

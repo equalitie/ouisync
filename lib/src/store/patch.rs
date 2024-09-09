@@ -30,17 +30,24 @@ pub(super) struct Patch {
 
 impl Patch {
     pub async fn new(tx: &mut ReadTransaction, branch_id: PublicKey) -> Result<Self, Error> {
-        let (vv, root_hash, root_summary) =
-            match tx.load_root_node(&branch_id, RootNodeFilter::Any).await {
-                Ok(node) => {
-                    let hash = node.proof.hash;
-                    (node.proof.into_version_vector(), hash, node.summary)
-                }
-                Err(Error::BranchNotFound) => {
-                    (VersionVector::new(), *EMPTY_INNER_HASH, Summary::INCOMPLETE)
-                }
-                Err(error) => return Err(error),
-            };
+        let (vv, root_hash, root_summary) = match tx
+            .load_latest_approved_root_node(&branch_id, RootNodeFilter::Any)
+            .await
+        {
+            Ok(node) => {
+                let hash = node.proof.hash;
+                (node.proof.into_version_vector(), hash, node.summary)
+            }
+            Err(Error::BranchNotFound) => (
+                VersionVector::new(),
+                *EMPTY_INNER_HASH,
+                Summary {
+                    state: NodeState::Approved,
+                    block_presence: crate::protocol::MultiBlockPresence::Full,
+                },
+            ),
+            Err(error) => return Err(error),
+        };
 
         Ok(Self {
             branch_id,
@@ -111,9 +118,7 @@ impl Patch {
             let bucket = get_bucket(encoded_locator, layer);
             let nodes = match self.inners.entry(key) {
                 Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => {
-                    entry.insert(tx.load_inner_nodes_with_cache(&parent_hash).await?)
-                }
+                Entry::Vacant(entry) => entry.insert(tx.load_inner_nodes(&parent_hash).await?),
             };
 
             parent_hash = nodes
@@ -126,9 +131,7 @@ impl Patch {
 
         let nodes = match self.leaves.entry(key) {
             Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                entry.insert(tx.load_leaf_nodes_with_cache(&parent_hash).await?)
-            }
+            Entry::Vacant(entry) => entry.insert(tx.load_leaf_nodes(&parent_hash).await?),
         };
 
         Ok(nodes)
@@ -193,12 +196,9 @@ impl Patch {
                     for (bucket, node) in &nodes {
                         stack.push((node.hash, key.child(bucket)));
                     }
-
-                    tx.inner.inner.cache.put_inners(parent_hash, nodes);
                 }
             } else if let Some(nodes) = self.leaves.remove(&key) {
                 leaf_node::save_all(tx.db(), &nodes, &parent_hash).await?;
-                tx.inner.inner.cache.put_leaves(parent_hash, nodes);
             }
         }
 
@@ -235,8 +235,6 @@ impl Patch {
             block_presence = ?root_node.summary.block_presence,
             "Local snapshot created"
         );
-
-        tx.inner.inner.cache.put_root(root_node);
 
         Ok(())
     }

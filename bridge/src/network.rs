@@ -1,5 +1,5 @@
 use crate::config::{ConfigKey, ConfigStore};
-use ouisync_lib::network::{peer_addr::PeerAddr, Network};
+use ouisync_lib::{Network, PeerAddr};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
@@ -43,6 +43,8 @@ const LAST_USED_UDP_PORT_COMMENT: &str =
      This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
      default to manually setting up port forwarding on their routers.";
 
+const PEX_KEY: ConfigKey<PexConfig> = ConfigKey::new("pex", "Peer exchange configuration");
+
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NetworkDefaults {
     pub port_forwarding_enabled: bool,
@@ -72,6 +74,10 @@ pub async fn init(network: &Network, config: &ConfigStore, defaults: NetworkDefa
     for peer in peers {
         network.add_user_provided_peer(&peer);
     }
+
+    let PexConfig { send, recv } = config.entry(PEX_KEY).get().await.unwrap_or_default();
+    network.set_pex_send_enabled(send);
+    network.set_pex_recv_enabled(recv);
 }
 
 /// Binds the network to the specified addresses.
@@ -160,6 +166,28 @@ pub async fn remove_user_provided_peers(
 /// Gets all user provided peers
 pub async fn user_provided_peers(config: &ConfigStore) -> Vec<PeerAddr> {
     config.entry(PEERS_KEY).get().await.unwrap_or_default()
+}
+
+/// Enables/disables sending contacts over PEX.
+pub async fn set_pex_send_enabled(network: &Network, config: &ConfigStore, enabled: bool) {
+    config
+        .entry(PEX_KEY)
+        .modify(|pex_config| pex_config.send = enabled)
+        .await
+        .ok();
+
+    network.set_pex_send_enabled(enabled);
+}
+
+/// Enables/disables receiving contacts over PEX.
+pub async fn set_pex_recv_enabled(network: &Network, config: &ConfigStore, enabled: bool) {
+    config
+        .entry(PEX_KEY)
+        .modify(|pex_config| pex_config.recv = enabled)
+        .await
+        .ok();
+
+    network.set_pex_recv_enabled(enabled);
 }
 
 /// Utility to help reuse bind ports across network restarts.
@@ -265,6 +293,23 @@ impl LastUsedPorts {
             }
         }) {
             self.tcp_v6 = port;
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PexConfig {
+    // Is sending contacts over PEX enabled?
+    send: bool,
+    // Is receiving contacts over PEX enabled?
+    recv: bool,
+}
+
+impl Default for PexConfig {
+    fn default() -> Self {
+        Self {
+            send: true,
+            recv: true,
         }
     }
 }

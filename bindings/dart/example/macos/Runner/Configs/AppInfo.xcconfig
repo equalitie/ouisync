@@ -5,10 +5,10 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = ouisync_plugin_example
+PRODUCT_NAME = ouisync_example
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = org.equalitie.ouisyncExample
+PRODUCT_BUNDLE_IDENTIFIER = org.equalitie.ouisync.lib.ouisyncExample
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2024 org.equalitie. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2024 org.equalitie.ouisync.lib. All rights reserved.

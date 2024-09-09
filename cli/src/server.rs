@@ -27,7 +27,13 @@ pub(crate) async fn run(
     log_color: LogColor,
 ) -> Result<(), Error> {
     let monitor = StateMonitor::make_root();
-    let _logger = Logger::new(None, Some(monitor.clone()), log_format, log_color)?;
+    let _logger = Logger::new(
+        None,
+        String::new(), // log tag, not used here
+        Some(monitor.clone()),
+        log_format,
+        log_color,
+    )?;
 
     let state = State::init(&dirs, monitor).await?;
     let server = LocalServer::bind(socket.as_path())?;

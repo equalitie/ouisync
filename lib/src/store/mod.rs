@@ -1,8 +1,9 @@
 mod block;
 mod block_expiration_tracker;
+mod block_id_cache;
 mod block_ids;
-mod cache;
 mod changeset;
+mod client;
 mod error;
 mod index;
 mod inner_node;
@@ -14,41 +15,45 @@ mod quota;
 mod root_node;
 
 #[cfg(test)]
+mod test_utils;
+#[cfg(test)]
 mod tests;
 
 pub use error::Error;
 pub use migrations::DATA_VERSION;
 
 pub(crate) use {
-    block_ids::BlockIdsPage, changeset::Changeset,
-    inner_node::ReceiveStatus as InnerNodeReceiveStatus,
-    leaf_node::ReceiveStatus as LeafNodeReceiveStatus,
-    root_node::ReceiveStatus as RootNodeReceiveStatus,
+    block_ids::BlockIdsPage,
+    changeset::Changeset,
+    client::{ClientReader, ClientWriter},
 };
+
+#[cfg(test)]
+pub(crate) use test_utils::SnapshotWriter;
 
 use self::{
     block_expiration_tracker::BlockExpirationTracker,
-    cache::{Cache, CacheTransaction},
+    block_id_cache::{BlockIdCache, LookupError},
 };
 use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
     crypto::{
         sign::{Keypair, PublicKey},
-        CacheHash, Hash, Hashable,
+        Hash,
     },
     db,
     debug::DebugPrinter,
     progress::Progress,
     protocol::{
-        get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes,
-        MultiBlockPresence, NodeState, Proof, RootNode, RootNodeFilter, Summary, INNER_LAYER_COUNT,
+        BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, RootNode, RootNodeFilter,
+        SingleBlockPresence,
     },
-    storage_size::StorageSize,
     sync::broadcast_hash_set,
 };
 use futures_util::{Stream, TryStreamExt};
 use std::{
     borrow::Cow,
+    future::Future,
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
@@ -61,7 +66,7 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 pub(crate) struct Store {
     db: db::Pool,
-    cache: Arc<Cache>,
+    block_id_cache: BlockIdCache,
     pub client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
     block_expiration_tracker: Arc<RwLock<Option<Arc<BlockExpirationTracker>>>>,
 }
@@ -72,7 +77,7 @@ impl Store {
 
         Self {
             db,
-            cache: Arc::new(Cache::new()),
+            block_id_cache: BlockIdCache::new(),
             client_reload_index_tx,
             block_expiration_tracker: Arc::new(RwLock::new(None)),
         }
@@ -117,7 +122,6 @@ impl Store {
             expiration_time,
             block_download_tracker,
             self.client_reload_index_tx.clone(),
-            self.cache.clone(),
         )
         .await?;
 
@@ -148,34 +152,69 @@ impl Store {
     pub async fn acquire_read(&self) -> Result<Reader, Error> {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
-            cache: self.cache.begin(),
+            block_id_cache: self.block_id_cache.clone(),
             block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
         })
     }
 
     /// Begins a `ReadTransaction`
-    pub async fn begin_read(&self) -> Result<ReadTransaction, Error> {
-        Ok(ReadTransaction {
-            inner: Reader {
-                inner: Handle::ReadTransaction(self.db.begin_read().await?),
-                cache: self.cache.begin(),
-                block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
-            },
-        })
+    #[track_caller]
+    pub fn begin_read(&self) -> impl Future<Output = Result<ReadTransaction, Error>> + '_ {
+        let tx = self.db.begin_read();
+
+        async move {
+            Ok(ReadTransaction {
+                inner: Reader {
+                    inner: Handle::ReadTransaction(tx.await?),
+                    block_id_cache: self.block_id_cache.clone(),
+                    block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
+                },
+            })
+        }
     }
 
     /// Begins a `WriteTransaction`
-    pub async fn begin_write(&self) -> Result<WriteTransaction, Error> {
-        Ok(WriteTransaction {
-            inner: ReadTransaction {
-                inner: Reader {
-                    inner: Handle::WriteTransaction(self.db.begin_write().await?),
-                    cache: self.cache.begin(),
-                    block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
+    #[track_caller]
+    pub fn begin_write(&self) -> impl Future<Output = Result<WriteTransaction, Error>> + '_ {
+        let tx = self.db.begin_write();
+
+        async move {
+            Ok(WriteTransaction {
+                inner: ReadTransaction {
+                    inner: Reader {
+                        inner: Handle::WriteTransaction(tx.await?),
+                        block_id_cache: self.block_id_cache.clone(),
+                        block_expiration_tracker: self
+                            .block_expiration_tracker
+                            .read()
+                            .await
+                            .clone(),
+                    },
                 },
-            },
-            untrack_blocks: None,
-        })
+                untrack_blocks: None,
+            })
+        }
+    }
+
+    #[track_caller]
+    pub fn begin_client_read(&self) -> impl Future<Output = Result<ClientReader, Error>> + '_ {
+        let tx = self.db().begin_read();
+
+        async move { ClientReader::begin(tx.await?).await }
+    }
+
+    #[track_caller]
+    pub fn begin_client_write(&self) -> impl Future<Output = Result<ClientWriter, Error>> + '_ {
+        let tx = self.db().begin_write();
+
+        async move {
+            ClientWriter::begin(
+                tx.await?,
+                self.block_id_cache.clone(),
+                self.block_expiration_tracker.read().await.clone(),
+            )
+            .await
+        }
     }
 
     pub async fn count_blocks(&self) -> Result<u64, Error> {
@@ -212,7 +251,7 @@ impl Store {
         // Then remove those snapshots that can't serve as fallback for the current one.
         let mut new = Cow::Borrowed(root_node);
 
-        while let Some(old) = reader.load_prev_root_node(&new).await? {
+        while let Some(old) = reader.load_prev_approved_root_node(&new).await? {
             if old.proof.version_vector == new.proof.version_vector {
                 // `new` is a draft and so we can't remove `old`. Try the previous snapshot.
                 tracing::trace!(
@@ -285,7 +324,7 @@ impl Store {
 /// Read-only operations. This is an up-to-date view of the data.
 pub(crate) struct Reader {
     inner: Handle,
-    cache: CacheTransaction,
+    block_id_cache: BlockIdCache,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
 }
 
@@ -311,17 +350,9 @@ impl Reader {
     }
 
     /// Checks whether the block exists in the store.
+    #[cfg(test)]
     pub async fn block_exists(&mut self, id: &BlockId) -> Result<bool, Error> {
         block::exists(self.db(), id).await
-    }
-
-    /// Checks whether the block is missing - that is, it's referenced from some snapshot but
-    /// doesn't exist in the store.
-    ///
-    /// NOTE: This is not the same as `!block_exists` because that only checks the block existence
-    /// but not whether it's referenced.
-    pub async fn is_block_missing(&mut self, id: &BlockId) -> Result<bool, Error> {
-        leaf_node::is_missing(self.db(), id).await
     }
 
     /// Returns the total number of blocks in the store.
@@ -340,7 +371,7 @@ impl Reader {
         branch_id: &PublicKey,
     ) -> Result<usize, Error> {
         let root_hash = self
-            .load_root_node(branch_id, RootNodeFilter::Any)
+            .load_latest_approved_root_node(branch_id, RootNodeFilter::Any)
             .await?
             .proof
             .hash;
@@ -348,23 +379,21 @@ impl Reader {
     }
 
     /// Load the latest approved root node of the given branch.
-    pub async fn load_root_node(
+    pub async fn load_latest_approved_root_node(
         &mut self,
         branch_id: &PublicKey,
         filter: RootNodeFilter,
     ) -> Result<RootNode, Error> {
-        let node = if let Some(node) = self.cache.get_root(branch_id) {
-            node
-        } else {
-            root_node::load(self.db(), branch_id).await?
-        };
+        // TODO: use only one query that returns stream of approved nodes ordered from the latest to the oldest.
+
+        let node = root_node::load_latest_approved(self.db(), branch_id).await?;
 
         match filter {
             RootNodeFilter::Any => Ok(node),
             RootNodeFilter::Published => {
                 let mut new = node;
 
-                while let Some(old) = self.load_prev_root_node(&new).await? {
+                while let Some(old) = self.load_prev_approved_root_node(&new).await? {
                     if new.proof.version_vector > old.proof.version_vector {
                         break;
                     } else {
@@ -377,31 +406,35 @@ impl Reader {
         }
     }
 
-    pub async fn load_prev_root_node(
+    pub async fn load_prev_approved_root_node(
         &mut self,
         node: &RootNode,
     ) -> Result<Option<RootNode>, Error> {
-        root_node::load_prev(self.db(), node).await
+        root_node::load_prev_approved(self.db(), node).await
     }
 
     pub fn load_writer_ids(&mut self) -> impl Stream<Item = Result<PublicKey, Error>> + '_ {
         root_node::load_writer_ids(self.db())
     }
 
-    pub fn load_root_nodes(&mut self) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
-        root_node::load_all(self.db())
+    pub fn load_latest_approved_root_nodes(
+        &mut self,
+    ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+        root_node::load_all_latest_approved(self.db())
+    }
+
+    pub fn load_latest_preferred_root_nodes(
+        &mut self,
+    ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+        root_node::load_all_latest_preferred(self.db())
     }
 
     #[cfg(test)]
-    pub fn load_root_nodes_by_writer_in_any_state<'a>(
+    pub fn load_root_nodes_by_writer<'a>(
         &'a mut self,
         writer_id: &'a PublicKey,
     ) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
-        root_node::load_all_by_writer_in_any_state(self.db(), writer_id)
-    }
-
-    pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
-        root_node::exists(self.db(), node).await
+        root_node::load_all_by_writer(self.db(), writer_id)
     }
 
     // TODO: use cache and remove `ReadTransaction::load_inner_nodes_with_cache`
@@ -420,22 +453,6 @@ impl Reader {
     ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
         leaf_node::load_locators(self.db(), block_id)
     }
-
-    /// Load the `NodeState` of the root node(s) that reference the given missing block.
-    pub async fn load_root_node_state_of_missing(
-        &mut self,
-        block_id: &BlockId,
-    ) -> Result<NodeState, Error> {
-        root_node::load_node_state_of_missing(self.db(), block_id).await
-    }
-
-    pub(super) fn missing_block_ids_in_branch<'a>(
-        &'a mut self,
-        branch_id: &'a PublicKey,
-    ) -> impl Stream<Item = Result<BlockId, Error>> + 'a {
-        block_ids::missing_block_ids_in_branch(self.db(), branch_id)
-    }
-
     // Access the underlying database connection.
     // TODO: Make this private, but first we need to move the `metadata` module to `store`.
     pub(crate) fn db(&mut self) -> &mut db::Connection {
@@ -455,8 +472,10 @@ impl ReadTransaction {
         &mut self,
         branch_id: &PublicKey,
         encoded_locator: &Hash,
-    ) -> Result<BlockId, Error> {
-        let root_node = self.load_root_node(branch_id, RootNodeFilter::Any).await?;
+    ) -> Result<(BlockId, SingleBlockPresence), Error> {
+        let root_node = self
+            .load_latest_approved_root_node(branch_id, RootNodeFilter::Any)
+            .await?;
         self.find_block_at(&root_node, encoded_locator).await
     }
 
@@ -464,44 +483,26 @@ impl ReadTransaction {
         &mut self,
         root_node: &RootNode,
         encoded_locator: &Hash,
-    ) -> Result<BlockId, Error> {
-        // TODO: On cache miss load only the one node we actually need per layer.
+    ) -> Result<(BlockId, SingleBlockPresence), Error> {
+        loop {
+            match self
+                .inner
+                .block_id_cache
+                .lookup(&root_node.proof.hash, encoded_locator)
+            {
+                Ok(block_info) => return Ok(block_info),
+                Err(LookupError::NotFound) => return Err(Error::LocatorNotFound),
+                Err(LookupError::CacheMiss) => (),
+            }
 
-        let mut parent_hash = root_node.proof.hash;
+            let Reader {
+                inner,
+                block_id_cache,
+                ..
+            } = &mut self.inner;
 
-        for layer in 0..INNER_LAYER_COUNT {
-            parent_hash = self
-                .load_inner_nodes_with_cache(&parent_hash)
-                .await?
-                .get(get_bucket(encoded_locator, layer))
-                .ok_or(Error::LocatorNotFound)?
-                .hash;
+            block_id_cache.load(inner, root_node).await?;
         }
-
-        self.load_leaf_nodes_with_cache(&parent_hash)
-            .await?
-            .get(encoded_locator)
-            .map(|node| node.block_id)
-            .ok_or(Error::LocatorNotFound)
-    }
-
-    async fn load_inner_nodes_with_cache(
-        &mut self,
-        parent_hash: &Hash,
-    ) -> Result<InnerNodes, Error> {
-        if let Some(nodes) = self.cache.get_inners(parent_hash) {
-            return Ok(nodes);
-        }
-
-        self.load_inner_nodes(parent_hash).await
-    }
-
-    async fn load_leaf_nodes_with_cache(&mut self, parent_hash: &Hash) -> Result<LeafNodes, Error> {
-        if let Some(nodes) = self.cache.get_leaves(parent_hash) {
-            return Ok(nodes);
-        }
-
-        self.load_leaf_nodes(parent_hash).await
     }
 }
 
@@ -527,14 +528,11 @@ pub(crate) struct WriteTransaction {
 impl WriteTransaction {
     /// Removes the specified block from the store and marks it as missing in the index.
     pub async fn remove_block(&mut self, id: &BlockId) -> Result<(), Error> {
-        let (db, cache) = self.db_and_cache();
+        let db = self.db();
 
         block::remove(db, id).await?;
-        leaf_node::set_missing(db, id).await?;
-
-        let parent_hashes: Vec<_> = leaf_node::load_parent_hashes(db, id).try_collect().await?;
-
-        index::update_summaries(db, cache, parent_hashes).await?;
+        let parent_hashes = leaf_node::set_missing(db, id).try_collect().await?;
+        index::update_summaries(db, parent_hashes).await?;
 
         let WriteTransaction {
             inner:
@@ -560,122 +558,7 @@ impl WriteTransaction {
         root_node::remove_older(self.db(), root_node).await?;
         root_node::remove(self.db(), root_node).await?;
 
-        self.inner
-            .inner
-            .cache
-            .remove_root(&root_node.proof.writer_id);
-
         Ok(())
-    }
-
-    /// Write a root node received from a remote replica.
-    pub async fn receive_root_node(
-        &mut self,
-        proof: Proof,
-        block_presence: MultiBlockPresence,
-    ) -> Result<RootNodeReceiveStatus, Error> {
-        let (db, cache) = self.db_and_cache();
-        let hash = proof.hash;
-
-        // Make sure the loading of the existing nodes and the potential creation of the new node
-        // happens atomically. Otherwise we could conclude the incoming node is up-to-date but
-        // just before we start inserting it another snapshot might get created locally and the
-        // incoming node might become outdated. But because we already concluded it's up-to-date,
-        // we end up inserting it anyway which breaks the invariant that a node inserted later must
-        // be happens-after any node inserted earlier in the same branch.
-
-        // Determine further actions by comparing the incoming node against the existing nodes:
-        let action = root_node::decide_action(db, &proof, &block_presence).await?;
-
-        if action.insert {
-            root_node::create(db, proof, Summary::INCOMPLETE, RootNodeFilter::Published).await?;
-
-            // Ignoring quota here because if the snapshot became complete by receiving this root
-            // node it means that we already have all the other nodes and so the quota validation
-            // already took place.
-            let status = index::finalize(db, cache, hash, None).await?;
-
-            Ok(RootNodeReceiveStatus {
-                new_approved: status.new_approved,
-                new_snapshot: true,
-                request_children: action.request_children,
-            })
-        } else {
-            Ok(RootNodeReceiveStatus {
-                new_approved: Vec::new(),
-                new_snapshot: false,
-                request_children: action.request_children,
-            })
-        }
-    }
-
-    /// Write inner nodes received from a remote replica.
-    pub async fn receive_inner_nodes(
-        &mut self,
-        nodes: CacheHash<InnerNodes>,
-        quota: Option<StorageSize>,
-    ) -> Result<InnerNodeReceiveStatus, Error> {
-        let (db, cache) = self.db_and_cache();
-        let parent_hash = nodes.hash();
-
-        if !index::parent_exists(db, &parent_hash).await? {
-            return Ok(InnerNodeReceiveStatus::default());
-        }
-
-        let request_children = inner_node::filter_nodes_with_new_blocks(db, &nodes).await?;
-
-        let mut nodes = nodes.into_inner().into_incomplete();
-        inner_node::inherit_summaries(db, &mut nodes).await?;
-        inner_node::save_all(db, &nodes, &parent_hash).await?;
-
-        let status = index::finalize(db, cache, parent_hash, quota).await?;
-
-        Ok(InnerNodeReceiveStatus {
-            new_approved: status.new_approved,
-            request_children,
-        })
-    }
-
-    /// Receive leaf nodes from other replica and store them into the db.
-    /// Returns the ids of the blocks that the remote replica has but the local one has not.
-    /// Also returns the receive status.
-    pub async fn receive_leaf_nodes(
-        &mut self,
-        nodes: CacheHash<LeafNodes>,
-        quota: Option<StorageSize>,
-    ) -> Result<LeafNodeReceiveStatus, Error> {
-        let (db, cache) = self.db_and_cache();
-        let parent_hash = nodes.hash();
-
-        if !index::parent_exists(db, &parent_hash).await? {
-            return Ok(LeafNodeReceiveStatus::default());
-        }
-
-        let request_blocks = leaf_node::filter_nodes_with_new_blocks(db, &nodes).await?;
-
-        leaf_node::save_all(db, &nodes.into_inner().into_missing(), &parent_hash).await?;
-
-        let status = index::finalize(db, cache, parent_hash, quota).await?;
-
-        Ok(LeafNodeReceiveStatus {
-            old_approved: status.old_approved,
-            new_approved: status.new_approved,
-            request_blocks,
-        })
-    }
-
-    /// Write a block received from a remote replica and marks it as present in the index.
-    /// The block must already be referenced by the index, otherwise an `BlockNotReferenced` error
-    /// is returned.
-    pub async fn receive_block(&mut self, block: &Block) -> Result<(), Error> {
-        let (db, cache) = self.db_and_cache();
-        let result = block::receive(db, cache, block).await;
-
-        if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_update(&block.id, false);
-        }
-
-        result
     }
 
     #[cfg(test)]
@@ -685,6 +568,8 @@ impl WriteTransaction {
         dst_writer_id: PublicKey,
         write_keys: &crate::crypto::sign::Keypair,
     ) -> Result<RootNode, Error> {
+        use crate::protocol::Proof;
+
         let hash = src.proof.hash;
         let vv = src.proof.into_version_vector();
         let proof = Proof::new(dst_writer_id, vv, hash, write_keys);
@@ -697,35 +582,16 @@ impl WriteTransaction {
 
     pub async fn commit(self) -> Result<(), Error> {
         let inner = self.inner.inner.inner.into_write();
-        let cache = self.inner.inner.cache;
 
-        match (cache.is_dirty(), self.untrack_blocks) {
-            (true, Some(untrack)) => {
-                inner
-                    .commit_and_then(move || {
-                        cache.commit();
-                        untrack.commit();
-                    })
-                    .await?
-            }
-            (false, Some(untrack)) => {
-                inner
-                    .commit_and_then(move || {
-                        untrack.commit();
-                    })
-                    .await?
-            }
-            (true, None) => {
-                inner
-                    .commit_and_then(move || {
-                        cache.commit();
-                    })
-                    .await?
-            }
-            (false, None) => {
-                inner.commit().await?;
-            }
-        };
+        if let Some(untrack) = self.untrack_blocks {
+            inner
+                .commit_and_then(move || {
+                    untrack.commit();
+                })
+                .await?
+        } else {
+            inner.commit().await?;
+        }
 
         Ok(())
     }
@@ -740,50 +606,22 @@ impl WriteTransaction {
         R: Send + 'static,
     {
         let inner = self.inner.inner.inner.into_write();
-        let cache = self.inner.inner.cache;
 
-        Ok(match (cache.is_dirty(), self.untrack_blocks) {
-            (true, Some(untrack)) => {
-                inner
-                    .commit_and_then(move || {
-                        cache.commit();
-                        untrack.commit();
-                        f()
-                    })
-                    .await?
-            }
-            (false, Some(untrack)) => {
-                inner
-                    .commit_and_then(move || {
-                        untrack.commit();
-                        f()
-                    })
-                    .await?
-            }
-            (true, None) => {
-                inner
-                    .commit_and_then(move || {
-                        cache.commit();
-                        f()
-                    })
-                    .await?
-            }
-            (false, None) => inner.commit_and_then(f).await?,
-        })
-
-        //Ok(inner.commit_and_then(then).await?)
+        if let Some(untrack) = self.untrack_blocks {
+            Ok(inner
+                .commit_and_then(move || {
+                    untrack.commit();
+                    f()
+                })
+                .await?)
+        } else {
+            Ok(inner.commit_and_then(f).await?)
+        }
     }
 
     // Access the underlying database transaction.
     fn db(&mut self) -> &mut db::WriteTransaction {
         self.inner.inner.inner.as_write()
-    }
-
-    fn db_and_cache(&mut self) -> (&mut db::WriteTransaction, &mut CacheTransaction) {
-        (
-            self.inner.inner.inner.as_write(),
-            &mut self.inner.inner.cache,
-        )
     }
 }
 

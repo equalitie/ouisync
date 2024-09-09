@@ -1,9 +1,5 @@
-use futures_util::{Stream, StreamExt, TryStreamExt};
-use ouisync::{
-    db,
-    protocol::{NodeState, Proof, RootNode, Summary},
-};
-use sqlx::Row;
+use futures_util::StreamExt;
+use ouisync::{db, protocol::RootNode};
 use std::{env, ops::DerefMut, process::ExitCode};
 
 // Tool for inspecting (and possibly to do modifications in the future) ouisync repositories.
@@ -14,7 +10,7 @@ use std::{env, ops::DerefMut, process::ExitCode};
 async fn main() -> ExitCode {
     let arg = env::args().nth(1).unwrap_or_default();
 
-    if arg.as_str().is_empty() {
+    if arg.is_empty() {
         println!("Missing repository path");
         help();
         return ExitCode::FAILURE;
@@ -23,26 +19,19 @@ async fn main() -> ExitCode {
     let pool = db::open_without_migrations(arg).await.unwrap();
     let mut conn = pool.acquire().await.unwrap();
 
-    let mut query = sqlx::query(
+    let mut query = sqlx::query_as::<_, RootNode>(
         "SELECT
             snapshot_id,
             writer_id,
             versions,
             hash,
             signature,
+            state,
             block_presence
          FROM snapshot_root_nodes
          ORDER BY snapshot_id ASC",
     )
-    .fetch(conn.deref_mut())
-    .map_ok(|row| RootNode {
-        snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
-        summary: Summary {
-            state: NodeState::Approved,
-            block_presence: row.get(5),
-        },
-    });
+    .fetch(conn.deref_mut());
 
     while let Some(value) = query.next().await {
         match value {

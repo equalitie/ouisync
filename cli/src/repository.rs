@@ -1,10 +1,7 @@
 use crate::{options::Dirs, protocol::Error, utils, DB_EXTENSION};
 use camino::Utf8Path;
 use ouisync_bridge::{config::ConfigStore, protocol::remote::v1, transport::RemoteClient};
-use ouisync_lib::{
-    network::{Network, Registration},
-    Repository,
-};
+use ouisync_lib::{Network, Registration, Repository};
 use ouisync_vfs::MountGuard;
 use state_monitor::StateMonitor;
 use std::{

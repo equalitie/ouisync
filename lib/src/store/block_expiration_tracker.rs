@@ -1,15 +1,10 @@
-use super::{
-    block,
-    cache::{Cache, CacheTransaction},
-    error::Error,
-    index, leaf_node, root_node,
-};
+use super::{block, error::Error, index, leaf_node, root_node};
 use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
     collections::{hash_map, HashMap, HashSet},
     crypto::sign::PublicKey,
     db,
-    future::try_collect_into,
+    future::TryStreamExt as _,
     protocol::{BlockId, SingleBlockPresence},
     sync::{broadcast_hash_set, uninitialized_watch},
 };
@@ -65,7 +60,6 @@ impl BlockExpirationTracker {
         expiration_time: Duration,
         block_download_tracker: BlockDownloadTracker,
         client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
-        cache: Arc<Cache>,
     ) -> Result<Self, Error> {
         let mut shared = Shared {
             blocks_by_id: Default::default(),
@@ -104,7 +98,6 @@ impl BlockExpirationTracker {
                     expiration_time_rx,
                     block_download_tracker,
                     client_reload_index_tx,
-                    cache,
                 )
                 .await
                 {
@@ -291,7 +284,6 @@ async fn run_task(
     mut expiration_time_rx: watch::Receiver<Duration>,
     block_download_tracker: BlockDownloadTracker,
     client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
-    cache: Arc<Cache>,
 ) -> Result<(), Error> {
     loop {
         let expiration_time = *expiration_time_rx.borrow();
@@ -331,7 +323,6 @@ async fn run_task(
                         to_missing_if_expired,
                         &block_download_tracker,
                         &client_reload_index_tx,
-                        cache.begin(),
                     )
                     .await?;
                     continue;
@@ -388,7 +379,6 @@ async fn set_as_missing_if_expired(
     block_ids: HashSet<BlockId>,
     block_download_tracker: &BlockDownloadTracker,
     client_reload_index_tx: &broadcast_hash_set::Sender<PublicKey>,
-    mut cache: CacheTransaction,
 ) -> Result<(), Error> {
     let mut tx = pool.begin_write().await?;
 
@@ -397,24 +387,20 @@ async fn set_as_missing_if_expired(
     let mut branches: HashSet<PublicKey> = HashSet::default();
 
     for block_id in &block_ids {
-        let changed = leaf_node::set_missing_if_expired(&mut tx, block_id).await?;
+        let parent_hashes: Vec<_> = leaf_node::set_missing_if_expired(&mut tx, block_id)
+            .try_collect()
+            .await?;
 
-        if !changed {
+        if parent_hashes.is_empty() {
             continue;
         }
 
         block_download_tracker.require(*block_id);
 
-        let nodes: Vec<_> = leaf_node::load_parent_hashes(&mut tx, block_id)
-            .try_collect()
-            .await?;
-
-        for (hash, _state) in index::update_summaries(&mut tx, &mut cache, nodes).await? {
-            try_collect_into(
-                root_node::load_writer_ids_by_hash(&mut tx, &hash),
-                &mut branches,
-            )
-            .await?;
+        for (hash, _state) in index::update_summaries(&mut tx, parent_hashes).await? {
+            root_node::load_writer_ids_by_hash(&mut tx, &hash)
+                .try_collect_into(&mut branches)
+                .await?;
         }
     }
 
@@ -433,6 +419,7 @@ mod test {
     use super::super::*;
     use super::*;
     use crate::crypto::sign::Keypair;
+    use crate::protocol::Block;
     use futures_util::future;
     use rand::distributions::Standard;
     use rand::seq::SliceRandom;
@@ -506,7 +493,6 @@ mod test {
             Duration::from_secs(1),
             BlockDownloadTracker::new(),
             broadcast_hash_set::channel().0,
-            Arc::new(Cache::new()),
         )
         .await
         .unwrap();
@@ -587,16 +573,18 @@ mod test {
                 let store = store.clone();
 
                 task::spawn(async move {
-                    let mut tx = store.begin_write().await.unwrap();
                     match op {
                         Op::Receive(block) => {
-                            tx.receive_block(&block).await.unwrap();
+                            let mut writer = store.begin_client_write().await.unwrap();
+                            writer.save_block(&block, None).await.unwrap();
+                            writer.commit().await.unwrap();
                         }
                         Op::Remove(id) => {
+                            let mut tx = store.begin_write().await.unwrap();
                             tx.remove_block(&id).await.unwrap();
+                            tx.commit().await.unwrap();
                         }
                     }
-                    tx.commit().await.unwrap();
                 })
             })
             .collect();

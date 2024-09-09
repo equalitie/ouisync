@@ -26,7 +26,8 @@ class NativeChannels {
     _channel.setMethodCallHandler(_methodHandler);
   }
 
-  final MethodChannel _channel = const MethodChannel('org.equalitie.ouisync');
+  final MethodChannel _channel =
+      const MethodChannel('org.equalitie.ouisync.lib');
 
   // We need this session` variable to be able to close the session
   // from inside the java/kotlin code when the plugin is detached from the

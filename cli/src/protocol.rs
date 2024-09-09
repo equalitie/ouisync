@@ -1,9 +1,9 @@
 use chrono::{DateTime, SecondsFormat, Utc};
-use clap::{builder::BoolishValueParser, Subcommand, ValueEnum};
-use ouisync_lib::{
-    network::{PeerSource, PeerState},
-    AccessMode, PeerAddr, PeerInfo, StorageSize,
+use clap::{
+    builder::{ArgPredicate, BoolishValueParser},
+    Subcommand, ValueEnum,
 };
+use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, PeerSource, PeerState, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt, iter,
@@ -213,13 +213,39 @@ pub(crate) enum Request {
         #[arg(value_parser = BoolishValueParser::new())]
         enabled: Option<bool>,
     },
-    /// Enable or disable Peer Exchange (PEX)
+    /// Configure Peer Exchange (PEX)
     Pex {
+        /// Name of the repository to enable/disable PEX for.
         #[arg(short = 'n', long)]
-        name: String,
+        name: Option<String>,
 
-        /// Whether to enable or disable. If omitted, prints the current state.
-        #[arg(value_parser = BoolishValueParser::new())]
+        /// Globally enable/disable sending contacts over PEX. If all of name, send, recv are
+        /// omitted, prints the current state.
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["name", "enabled"],
+            value_parser = BoolishValueParser::new(),
+            value_name = "ENABLED"
+        )]
+        send: Option<bool>,
+
+        /// Globally enable/disable receiving contacts over PEX. If all of name, send, recv are
+        /// omitted, prints the current state.
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["name", "enabled"],
+            value_parser = BoolishValueParser::new(),
+            value_name = "ENABLED"
+        )]
+        recv: Option<bool>,
+
+        /// Enable/disable PEX for the specified repository. If omitted, prints the current state.
+        #[arg(
+            requires_if(ArgPredicate::IsPresent, "name"),
+            value_parser = BoolishValueParser::new(),
+        )]
         enabled: Option<bool>,
     },
     /// Get or set storage quota
@@ -316,6 +342,12 @@ impl From<bool> for Response {
 impl From<String> for Response {
     fn from(value: String) -> Self {
         Self::String(value)
+    }
+}
+
+impl<'a> From<&'a str> for Response {
+    fn from(value: &'a str) -> Self {
+        Self::String(value.to_owned())
     }
 }
 
@@ -546,12 +578,11 @@ impl fmt::Display for PeerInfoDisplay<'_> {
         if let PeerState::Active { id, since } = &self.0.state {
             write!(
                 f,
-                " {} {} {} {} {}",
+                " {} {} {} {}",
                 id.as_public_key(),
                 format_time(*since),
-                self.0.stats.send,
-                self.0.stats.recv,
-                format_time(self.0.stats.recv_at),
+                self.0.stats.bytes_tx,
+                self.0.stats.bytes_rx,
             )?;
         }
 
@@ -566,10 +597,7 @@ fn format_time(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ouisync_lib::{
-        network::{PeerSource, PeerState, TrafficStats},
-        SecretRuntimeId,
-    };
+    use ouisync_lib::{PeerSource, PeerState, SecretRuntimeId, Stats};
     use rand::{rngs::StdRng, SeedableRng};
     use std::net::Ipv4Addr;
 
@@ -585,7 +613,7 @@ mod tests {
                 addr: PeerAddr::Quic(addr),
                 source: PeerSource::Dht,
                 state: PeerState::Connecting,
-                stats: TrafficStats::default(),
+                stats: Stats::default(),
             })
             .to_string(),
             "127.0.0.1 1248 quic dht connecting"
@@ -601,12 +629,11 @@ mod tests {
                         .unwrap()
                         .into(),
                 },
-                stats: TrafficStats {
-                    send: 1024,
-                    recv: 4096,
-                    recv_at: DateTime::parse_from_rfc3339("2024-06-12T14:00:00Z")
-                        .unwrap()
-                        .into(),
+                stats: Stats {
+                    bytes_tx: 1024,
+                    bytes_rx: 4096,
+                    throughput_tx: 0,
+                    throughput_rx: 0,
                 },
             })
             .to_string(),
@@ -618,8 +645,7 @@ mod tests {
              ee1aa49a4459dfe813a3cf6eb882041230c7b2558469de81f87c9bf23bf10a03 \
              2024-06-12T02:30:00Z \
              1024 \
-             4096 \
-             2024-06-12T14:00:00Z"
+             4096"
         );
     }
 }

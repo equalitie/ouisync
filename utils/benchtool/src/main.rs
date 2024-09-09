@@ -98,6 +98,8 @@ fn build(options: &Options) -> Result<()> {
     let mut command = process::Command::new("cargo");
     command
         .arg("build")
+        .arg("--profile")
+        .arg("bench")
         .arg("--message-format")
         .arg("json")
         .arg("--color")

@@ -4,7 +4,7 @@ use crate::parse::{Enum, EnumRepr, Source};
 use std::io::{self, Write};
 
 pub(crate) fn generate(source: &Source, out: &mut dyn Write) -> io::Result<()> {
-    writeln!(out, "package org.equalitie.ouisync")?;
+    writeln!(out, "package org.equalitie.ouisync.lib")?;
     writeln!(out)?;
 
     for (name, value) in &source.enums {

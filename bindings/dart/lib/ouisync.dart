@@ -28,6 +28,11 @@ part 'local_secret.dart';
 
 const bool debugTrace = false;
 
+// Default log tag.
+// HACK: if the tag doesn't start with 'flutter' then the logs won't show up in
+// the app if built in release mode.
+const defaultLogTag = 'flutter-ouisync';
+
 /// Entry point to the ouisync bindings. A session should be opened at the start of the application
 /// and closed at the end. There can be only one session at the time.
 class Session {
@@ -46,6 +51,7 @@ class Session {
     SessionKind kind = SessionKind.shared,
     required String configPath,
     String? logPath,
+    String logTag = defaultLogTag,
   }) {
     if (debugTrace) {
       print("Session.open $configPath");
@@ -61,6 +67,7 @@ class Session {
           kind.encode(),
           pool.toNativeUtf8(configPath),
           logPath != null ? pool.toNativeUtf8(logPath) : nullptr,
+          pool.toNativeUtf8(logTag),
           NativeApi.postCObject,
           recvPort.sendPort.nativePort,
         ));
@@ -161,16 +168,9 @@ class Session {
   Future<String?> get natBehavior =>
       _client.invoke<String?>('network_nat_behavior');
 
-  Future<TrafficStats> get trafficStats => _client
-      .invoke<List<Object?>>('network_traffic_stats')
-      .then((list) => TrafficStats.decode(list));
-
-  /// Gets a stream that yields lists of known peers.
-  Stream<List<PeerInfo>> get onPeersChange async* {
-    await for (final _ in networkEvents) {
-      yield await peers;
-    }
-  }
+  Future<NetworkStats> get networkStats => _client
+      .invoke<List<Object?>>('network_stats')
+      .then((list) => NetworkStats.decode(list));
 
   Future<List<PeerInfo>> get peers => _client
       .invoke<List<Object?>>('network_known_peers')
@@ -250,12 +250,14 @@ class PeerInfo {
   final PeerSource source;
   final PeerStateKind state;
   final String? runtimeId;
+  final NetworkStats stats;
 
   PeerInfo({
     required this.addr,
     required this.source,
     required this.state,
     this.runtimeId,
+    this.stats = const NetworkStats(),
   });
 
   static PeerInfo decode(Object? raw) {
@@ -277,11 +279,14 @@ class PeerInfo {
       throw Exception('invalid peer info state');
     }
 
+    final stats = NetworkStats.decode(list[3] as List<Object?>);
+
     return PeerInfo(
       addr: addr,
       source: source,
       state: state,
       runtimeId: runtimeId,
+      stats: stats,
     );
   }
 
@@ -293,21 +298,29 @@ class PeerInfo {
       '$runtimeType(addr: $addr, source: $source, state: $state, runtimeId: $runtimeId)';
 }
 
-class TrafficStats {
-  final int send;
-  final int recv;
+class NetworkStats {
+  final int bytesTx;
+  final int bytesRx;
+  final int throughputTx;
+  final int throughputRx;
 
-  const TrafficStats({required this.send, required this.recv});
+  const NetworkStats({
+    this.bytesTx = 0,
+    this.bytesRx = 0,
+    this.throughputTx = 0,
+    this.throughputRx = 0,
+  });
 
-  static TrafficStats decode(List<Object?> raw) {
-    final send = raw[0] as int;
-    final recv = raw[1] as int;
-
-    return TrafficStats(send: send, recv: recv);
-  }
+  static NetworkStats decode(List<Object?> raw) => NetworkStats(
+        bytesTx: raw[0] as int,
+        bytesRx: raw[1] as int,
+        throughputTx: raw[2] as int,
+        throughputRx: raw[3] as int,
+      );
 
   @override
-  String toString() => '$runtimeType(send: $send, recv: $recv)';
+  String toString() =>
+      '$runtimeType(bytesTx: $bytesTx, bytesRx: $bytesRx, throughputTx: $throughputTx, throughputRx: $throughputRx)';
 }
 
 /// A handle to a Ouisync repository.
@@ -593,6 +606,11 @@ class Repository {
 
   /// Unmount the repository.
   Future<void> unmount() => _client.invoke<void>("repository_unmount", _handle);
+
+  /// Fetch the per-repository network statistics.
+  Future<NetworkStats> get networkStats => _client
+      .invoke<List<Object?>>('repository_stats', _handle)
+      .then((list) => NetworkStats.decode(list));
 }
 
 sealed class AccessChange {

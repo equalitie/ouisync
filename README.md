@@ -39,3 +39,8 @@ Build
     $ cargo build --release
 
 The results will then be found in the `./target/release/` directory.
+
+## Testing
+
+This project is tested with BrowserStack.
+

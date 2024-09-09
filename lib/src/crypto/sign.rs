@@ -9,12 +9,7 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Sqlite,
 };
-use std::{
-    cmp::Ordering,
-    fmt,
-    hash::{Hash as StdHash, Hasher},
-    str::FromStr,
-};
+use std::{cmp::Ordering, fmt, str::FromStr};
 use thiserror::Error;
 
 #[derive(Serialize, Deserialize)]
@@ -60,7 +55,15 @@ impl TryFrom<&'_ [u8]> for Keypair {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Deserialize, Serialize)]
+impl fmt::Debug for Keypair {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Keypair")
+            .field("public_key", &self.public_key())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Deserialize, Serialize)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct PublicKey(ext::VerifyingKey);
@@ -102,14 +105,6 @@ impl Ord for PublicKey {
 impl fmt::LowerHex for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         format::hex(f, self.0.as_bytes())
-    }
-}
-
-// https://github.com/dalek-cryptography/ed25519-dalek/issues/183
-#[allow(clippy::derived_hash_with_manual_eq)]
-impl StdHash for PublicKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        StdHash::hash(self.0.as_bytes(), state);
     }
 }
 
@@ -177,7 +172,7 @@ mod test_utils {
         strategy::{Map, NoShrink, Strategy},
     };
 
-    impl Arbitrary for PublicKey {
+    impl Arbitrary for Keypair {
         type Parameters = ();
         type Strategy = Map<
             NoShrink<UniformArrayStrategy<num::u8::Any, [u8; Keypair::SECRET_KEY_SIZE]>>,
@@ -187,7 +182,16 @@ mod test_utils {
         fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
             any::<[u8; Keypair::SECRET_KEY_SIZE]>()
                 .no_shrink()
-                .prop_map(|array| Keypair::from(&array).public_key())
+                .prop_map(|array| Keypair::from(&array))
+        }
+    }
+
+    impl Arbitrary for PublicKey {
+        type Parameters = ();
+        type Strategy = Map<<Keypair as Arbitrary>::Strategy, fn(Keypair) -> Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            any::<Keypair>().prop_map(|keypair| keypair.public_key())
         }
     }
 }

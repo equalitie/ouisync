@@ -10,9 +10,9 @@
 use super::{
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream, ContentStreamError},
     runtime_id::PublicRuntimeId,
-    traffic_tracker::TrafficTracker,
+    stats::Instrumented,
 };
-use crate::repository::RepositoryId;
+use crate::protocol::RepositoryId;
 use noise_protocol::Cipher as _;
 use noise_rust_crypto::{Blake2s, ChaCha20Poly1305, X25519};
 use std::mem;
@@ -62,10 +62,9 @@ const MAX_NONCE: u64 = u64::MAX - 1;
 
 /// Wrapper for [`ContentStream`] that decrypts incoming messages.
 pub(super) struct DecryptingStream<'a> {
-    inner: &'a mut ContentStream,
+    inner: &'a mut Instrumented<ContentStream>,
     cipher: CipherState,
     buffer: Vec<u8>,
-    tracker: TrafficTracker,
 }
 
 impl DecryptingStream<'_> {
@@ -85,10 +84,6 @@ impl DecryptingStream<'_> {
             .decrypt_ad(self.inner.channel().as_ref(), &content, &mut self.buffer)
             .map_err(|_| RecvError::Crypto)?;
 
-        // Record the ciphertext length to account for the encryption overhead, but do it only
-        // after succesfull decryption to avoid including invalid data (e.g., spam).
-        self.tracker.record_recv(content.len() as u64);
-
         mem::swap(&mut content, &mut self.buffer);
 
         Ok(content)
@@ -97,10 +92,9 @@ impl DecryptingStream<'_> {
 
 /// Wrapper for [`ContentSink`] that encrypts outgoing messages.
 pub(super) struct EncryptingSink<'a> {
-    inner: &'a mut ContentSink,
+    inner: &'a mut Instrumented<ContentSink>,
     cipher: CipherState,
     buffer: Vec<u8>,
-    tracker: TrafficTracker,
 }
 
 impl EncryptingSink<'_> {
@@ -113,9 +107,6 @@ impl EncryptingSink<'_> {
         self.cipher
             .encrypt_ad(self.inner.channel().as_ref(), &content, &mut self.buffer);
 
-        // Record the ciphertext length to account for the encryption overhead.
-        self.tracker.record_send(self.buffer.len() as u64);
-
         mem::swap(&mut content, &mut self.buffer);
 
         Ok(self.inner.send(content).await?)
@@ -127,9 +118,8 @@ impl EncryptingSink<'_> {
 pub(super) async fn establish_channel<'a>(
     role: Role,
     repo_id: &RepositoryId,
-    stream: &'a mut ContentStream,
-    sink: &'a mut ContentSink,
-    tracker: TrafficTracker,
+    stream: &'a mut Instrumented<ContentStream>,
+    sink: &'a mut Instrumented<ContentSink>,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     let mut handshake_state = build_handshake_state(role, repo_id);
 
@@ -157,14 +147,12 @@ pub(super) async fn establish_channel<'a>(
         inner: stream,
         cipher: recv_cipher,
         buffer: vec![],
-        tracker: tracker.clone(),
     };
 
     let sink = EncryptingSink {
         inner: sink,
         cipher: send_cipher,
         buffer: vec![],
-        tracker,
     };
 
     Ok((stream, sink))
@@ -254,7 +242,7 @@ fn build_handshake_state(role: Role, repo_id: &RepositoryId) -> HandshakeState {
 
 async fn handshake_send(
     state: &mut HandshakeState,
-    sink: &mut ContentSink,
+    sink: &mut Instrumented<ContentSink>,
     msg: &[u8],
 ) -> Result<(), EstablishError> {
     let content = state.write_message_vec(msg)?;
@@ -263,7 +251,7 @@ async fn handshake_send(
 
 async fn handshake_recv(
     state: &mut HandshakeState,
-    stream: &mut ContentStream,
+    stream: &mut Instrumented<ContentStream>,
 ) -> Result<Vec<u8>, EstablishError> {
     let content = stream.recv().await?;
     Ok(state.read_message_vec(&content)?)

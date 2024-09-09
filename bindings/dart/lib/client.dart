@@ -12,16 +12,17 @@ abstract class Client {
 }
 
 class Subscriptions {
-    final _sinks = HashMap<int, StreamSink<Object?>>();
+  final _sinks = HashMap<int, StreamSink<Object?>>();
 
-    void handle(int subscriptionId, Object? payload) {
-      final sink = _sinks[subscriptionId];
+  void handle(int subscriptionId, Object? payload) {
+    final sink = _sinks[subscriptionId];
 
-      if (sink == null) {
-        print('unsolicited notification');
-        return;
-      }
+    if (sink == null) {
+      print('unsolicited notification');
+      return;
+    }
 
+    try {
       if (payload is String) {
         sink.add(null);
       } else if (payload is Map && payload.length == 1) {
@@ -30,7 +31,13 @@ class Subscriptions {
         final error = Exception('invalid notification');
         sink.addError(error);
       }
+    } catch (error) {
+      // We can get here if the `_controller` has been `close`d but the
+      // `_controller.onCancel` has not yet been executed (that's where the
+      // `Subscription` is removed from `_subscriptions`). We just ignore that
+      // error.
     }
+  }
 }
 
 class Subscription {

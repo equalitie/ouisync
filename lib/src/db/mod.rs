@@ -33,8 +33,9 @@ use tempfile::TempDir;
 use thiserror::Error;
 use tokio::{fs, task};
 
-const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
+const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const WARN_AFTER_CONNECTION_LIFETIME: Duration = Duration::from_secs(30);
 
 pub use self::connection::Connection;
 
@@ -58,7 +59,8 @@ impl Pool {
             // Disable the test as it breaks cancel-safety (also it's unnecessary in our case)
             .test_before_acquire(false)
             // Expire idle connections to conserve resources (threads, file descriptors)
-            .idle_timeout(IDLE_TIMEOUT);
+            .idle_timeout(IDLE_TIMEOUT)
+            .acquire_timeout(ACQUIRE_TIMEOUT);
 
         let write = pool_options
             .clone()
@@ -122,7 +124,7 @@ impl PoolConnection {
         location: &'static Location<'static>,
     ) -> Result<Self, sqlx::Error> {
         let inner = pool.acquire().await?;
-        let track_lifetime = ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
+        let track_lifetime = ExpectShortLifetime::new_in(WARN_AFTER_CONNECTION_LIFETIME, location);
 
         Ok(Self {
             inner,

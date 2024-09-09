@@ -1,9 +1,8 @@
 use super::{AccessMode, AccessSecrets, DecodeError};
-use crate::repository::RepositoryId;
+use crate::protocol::RepositoryId;
 use bincode::Options;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
-    borrow::Cow,
     fmt,
     str::{self, FromStr},
 };
@@ -34,16 +33,9 @@ impl ShareToken {
         self.secrets.id()
     }
 
-    /// Suggested name of the repository.
-    pub fn suggested_name(&self) -> Cow<str> {
-        if self.name.is_empty() {
-            Cow::Owned(format!(
-                "{:x}",
-                self.secrets.id().salted_hash(b"ouisync repository name")
-            ))
-        } else {
-            Cow::Borrowed(&self.name)
-        }
+    /// Suggested name of the repository, if provided.
+    pub fn suggested_name(&self) -> &str {
+        &self.name
     }
 
     pub fn secrets(&self) -> &AccessSecrets {

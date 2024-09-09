@@ -74,5 +74,3 @@ debug = 1
 [profile.dev.package."*"]
 opt-level = 3
 
-[patch.crates-io]
-subtle = { git = "https://github.com/madadam/subtle.git", branch = "only_one_black_box" }

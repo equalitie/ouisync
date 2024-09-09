@@ -3,20 +3,20 @@
 #[macro_use]
 mod common;
 
-use self::common::{
-    actor, dump, sync_watch, traffic_monitor::TrafficMonitor, Env, Proto, DEFAULT_REPO,
-};
+use crate::common::wait;
+
+use self::common::{actor, dump, sync_watch, Env, Proto, DEFAULT_REPO};
 use assert_matches::assert_matches;
-use metrics_ext::WatchRecorder;
+use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Repository, StorageSize, StoreError, VersionVector,
-    BLOB_HEADER_SIZE, BLOCK_SIZE,
+    Access, AccessMode, EntryType, Error, Payload, Repository, StorageSize, StoreError,
+    VersionVector, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
+use std::{cmp::Ordering, collections::HashSet, io::SeekFrom, sync::Arc, time::Duration};
 use tokio::{
     sync::{broadcast, mpsc, Barrier},
-    time::sleep,
+    time::{self, sleep},
 };
 use tracing::{instrument, Instrument};
 
@@ -972,12 +972,32 @@ fn redownload_expired_blocks() {
 
     let test_content = Arc::new(common::random_bytes(2 * 1024 * 1024));
 
-    async fn wait_for_block_count(repo: &Repository, block_count: u64) {
-        common::eventually(repo, || {
-            async { repo.count_blocks().await.unwrap() == block_count }
-                .instrument(tracing::Span::current())
-        })
-        .await;
+    // Wait until the number of blocks is the `expected`.
+    //
+    // NOTE: This use sleep instead of waiting for notification events, because no notification
+    // events are emitted on block expiration.
+    async fn wait_for_block_count(repo: &Repository, expected: u64) {
+        let mut backoff = ExponentialBackoffBuilder::new()
+            .with_initial_interval(Duration::from_millis(10))
+            .with_max_interval(Duration::from_millis(500))
+            .with_randomization_factor(0.0)
+            .with_multiplier(2.0)
+            .with_max_elapsed_time(Some(Duration::from_secs(60)))
+            .build();
+
+        loop {
+            let actual = repo.count_blocks().await.unwrap();
+
+            if actual == expected {
+                return;
+            }
+
+            if let Some(duration) = backoff.next_backoff() {
+                sleep(duration).await;
+            } else {
+                panic!("timeout waiting for block count (expected: {expected}, actual: {actual})");
+            }
+        }
     }
 
     env.actor("origin", {
@@ -1020,9 +1040,8 @@ fn redownload_expired_blocks() {
             .await
             .unwrap();
 
-        // Wait for the blocks to expire. TODO: We could also wait for the block count to drop to
-        // zero, but currently the expiration tracker does not trigger a repo change.
-        sleep(3 * expiration_duration).await;
+        sleep(expiration_duration).await;
+        wait_for_block_count(&repo, 0).await;
 
         cache_had_it_tx
             .send((block_count, normal_sync_duration))
@@ -1119,12 +1138,9 @@ fn quota_exceed() {
 
     env.actor("reader", {
         async move {
-            let watch_recorder = WatchRecorder::new();
-            let mut traffic = TrafficMonitor::new(watch_recorder.subscriber());
-
             let network = actor::create_network(Proto::Tcp).await;
 
-            let params = actor::get_repo_params(DEFAULT_REPO).with_recorder(watch_recorder);
+            let params = actor::get_repo_params(DEFAULT_REPO);
             let secrets = actor::get_repo_secrets(DEFAULT_REPO);
             let repo = Repository::create(
                 &params,
@@ -1144,10 +1160,18 @@ fn quota_exceed() {
             assert!(size0 <= quota);
 
             info!("read 0.dat");
+
+            let mut rx = repo.subscribe();
+
             tx.send(()).await.unwrap();
 
-            // Wait for the traffic to settle
-            traffic.wait().await;
+            // Wait for the next snapshot to be rejected
+            loop {
+                match wait(&mut rx).await {
+                    Some(Payload::SnapshotRejected(_)) => break,
+                    _ => continue,
+                }
+            }
 
             // The second file is rejected because it exceeds the quota
             let size1 = repo.size().await.unwrap();
@@ -1194,14 +1218,11 @@ fn quota_concurrent_writes() {
     }
 
     env.actor("reader", async move {
-        let watch_recorder = WatchRecorder::new();
-        let mut traffic = TrafficMonitor::new(watch_recorder.subscriber());
-
         let network = actor::create_network(Proto::Tcp).await;
         network.add_user_provided_peer(&actor::lookup_addr("writer-0").await);
         network.add_user_provided_peer(&actor::lookup_addr("writer-1").await);
 
-        let params = actor::get_repo_params(DEFAULT_REPO).with_recorder(watch_recorder);
+        let params = actor::get_repo_params(DEFAULT_REPO);
         let secrets = actor::get_repo_secrets(DEFAULT_REPO);
         let repo = Repository::create(
             &params,
@@ -1211,9 +1232,31 @@ fn quota_concurrent_writes() {
         .unwrap();
         repo.set_quota(Some(quota)).await.unwrap();
 
+        let mut rx = repo.subscribe();
+
         let _reg = network.register(repo.handle()).await;
 
-        traffic.wait().await;
+        // One snapshot is approved and one rejected.
+        let mut approved = HashSet::new();
+        let mut rejected = HashSet::new();
+
+        loop {
+            // HACK: wait 1 second after receiving the last event to ensure the sync has settled.
+            // TODO: Find a better way to do this.
+            match time::timeout(Duration::from_secs(1), wait(&mut rx)).await {
+                Ok(Some(Payload::SnapshotApproved(writer_id))) => {
+                    approved.insert(writer_id);
+                }
+                Ok(Some(Payload::SnapshotRejected(writer_id))) => {
+                    rejected.insert(writer_id);
+                }
+                Ok(_) => (),
+                Err(_) => break,
+            }
+        }
+
+        assert_eq!(approved.len(), 1);
+        assert_eq!(rejected.len(), 1);
 
         let size = repo.size().await.unwrap();
         assert!(size <= quota);

@@ -5,7 +5,7 @@ use crate::{
     repository::Repositories,
 };
 use ouisync_bridge::{config::ConfigStore, transport};
-use ouisync_lib::network::Network;
+use ouisync_lib::Network;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
 use std::{

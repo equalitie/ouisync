@@ -42,8 +42,8 @@ pub const DHT_ROUTERS: &[&str] = &[
 // BEP5 indicates that "After 15 minutes of inactivity, a node becomes questionable." so try not
 // to get too close to that value to avoid DHT churn. However, too frequent updates may cause
 // other nodes to put us on a blacklist.
-pub const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
-pub const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
+const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
+const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
 
 #[async_trait]
 pub trait DhtContactsStoreTrait: Sync + Send + 'static {

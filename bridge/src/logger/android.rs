@@ -4,7 +4,6 @@ use ndk_sys::{
     android_LogPriority_ANDROID_LOG_DEBUG as ANDROID_LOG_DEBUG,
     android_LogPriority_ANDROID_LOG_ERROR as ANDROID_LOG_ERROR,
 };
-use once_cell::sync::Lazy;
 use os_pipe::PipeWriter;
 use ouisync_tracing_fmt::Formatter;
 use paranoid_android::{AndroidLogMakeWriter, Buffer};
@@ -24,10 +23,6 @@ use tracing_subscriber::{
     layer::SubscriberExt,
     util::SubscriberInitExt,
 };
-// Android log tag.
-// HACK: if the tag doesn't start with 'flutter' then the logs won't show up in
-// the app if built in release mode.
-const TAG: &str = "flutter-ouisync";
 
 pub(super) struct Inner {
     _stdout: Redirect<Stdout, PipeWriter>,
@@ -35,14 +30,16 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    pub fn new(path: Option<&Path>, _format: LogFormat, _color: LogColor) -> io::Result<Self> {
+    pub fn new(
+        path: Option<&Path>,
+        tag: String,
+        _format: LogFormat,
+        _color: LogColor,
+    ) -> io::Result<Self> {
         let android_log_layer = fmt::layer()
-            .event_format(Formatter::<()>::default())
+            .event_format(Formatter::<()>::default()) // android log adds its own timestamp
             .with_ansi(false)
-            .with_writer(AndroidLogMakeWriter::with_buffer(
-                TAG.to_owned(),
-                Buffer::Main,
-            )); // android log adds its own timestamp
+            .with_writer(AndroidLogMakeWriter::with_buffer(tag.clone(), Buffer::Main));
 
         let file_layer = path.map(|path| {
             fmt::layer()
@@ -50,6 +47,8 @@ impl Inner {
                 .with_ansi(true)
                 .with_writer(Mutex::new(common::create_file_writer(path)))
         });
+
+        let tag = CString::new(tag)?;
 
         tracing_subscriber::registry()
             .with(common::create_log_filter())
@@ -60,13 +59,17 @@ impl Inner {
             .unwrap_or(());
 
         Ok(Self {
-            _stdout: redirect(io::stdout(), ANDROID_LOG_DEBUG)?,
-            _stderr: redirect(io::stderr(), ANDROID_LOG_ERROR)?,
+            _stdout: redirect(io::stdout(), ANDROID_LOG_DEBUG, tag.clone())?,
+            _stderr: redirect(io::stderr(), ANDROID_LOG_ERROR, tag)?,
         })
     }
 }
 
-fn redirect<S: AsFd>(stream: S, priority: LogPriority) -> io::Result<Redirect<S, PipeWriter>> {
+fn redirect<S: AsFd>(
+    stream: S,
+    priority: LogPriority,
+    tag: CString,
+) -> io::Result<Redirect<S, PipeWriter>> {
     let (reader, writer) = os_pipe::pipe()?;
     let redirect = Redirect::new(stream, writer)?;
 
@@ -82,12 +85,12 @@ fn redirect<S: AsFd>(stream: S, priority: LogPriority) -> io::Result<Redirect<S,
                         line.pop();
                     }
 
-                    line = print(priority, line);
+                    line = print(priority, &tag, line);
                     line.clear();
                 }
                 Ok(_) => break, // EOF
                 Err(error) => {
-                    print(ANDROID_LOG_ERROR, error.to_string());
+                    print(ANDROID_LOG_ERROR, &tag, error.to_string());
                     break;
                 }
             }
@@ -98,10 +101,10 @@ fn redirect<S: AsFd>(stream: S, priority: LogPriority) -> io::Result<Redirect<S,
 }
 
 // Prints `message` to the android log using zero allocations. Returns the original message.
-fn print(priority: LogPriority, message: String) -> String {
+fn print(priority: LogPriority, tag: &CStr, message: String) -> String {
     match CString::new(message) {
         Ok(message) => {
-            print_cstr(priority, &message);
+            print_cstr(priority, tag, &message);
 
             // `unwrap` is ok because the `CString` was created from a valid `String`.
             message.into_string().unwrap()
@@ -114,19 +117,17 @@ fn print(priority: LogPriority, message: String) -> String {
             let escaped = message.replace('\0', "\\0");
             // `unwrap` is ok because we replaced all the internal nul bytes.
             let escaped = CString::new(escaped).unwrap();
-            print_cstr(priority, &escaped);
+            print_cstr(priority, tag, &escaped);
 
             message
         }
     }
 }
 
-fn print_cstr(priority: LogPriority, message: &CStr) {
-    static TAG_C: Lazy<CString> = Lazy::new(|| CString::new(TAG).unwrap());
-
+fn print_cstr(priority: LogPriority, tag: &CStr, message: &CStr) {
     // SAFETY: both pointers point to valid c-style strings.
     unsafe {
-        __android_log_print(priority as c_int, TAG_C.as_ptr(), message.as_ptr());
+        __android_log_print(priority as c_int, tag.as_ptr(), message.as_ptr());
     }
 }
 

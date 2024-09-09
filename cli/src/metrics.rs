@@ -12,7 +12,7 @@ use hyper_rustls::TlsAcceptor;
 use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
 use ouisync_bridge::config::{ConfigError, ConfigKey};
-use ouisync_lib::{network::PeerState, PeerInfoCollector, PublicRuntimeId};
+use ouisync_lib::{PeerInfoCollector, PeerState, PublicRuntimeId};
 use scoped_task::ScopedAbortHandle;
 use std::{
     collections::HashMap,
