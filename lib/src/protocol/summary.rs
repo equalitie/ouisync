@@ -1,5 +1,4 @@
 use super::{InnerNodes, LeafNodes};
-use crate::format::Hex;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     encode::IsNull,
@@ -300,7 +299,7 @@ impl fmt::Debug for MultiBlockPresence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::None => write!(f, "None"),
-            Self::Some(checksum) => write!(f, "Some({:10x})", Hex(checksum)),
+            Self::Some(checksum) => write!(f, "Some({:<8})", hex_fmt::HexFmt(checksum)),
             Self::Full => write!(f, "Full"),
         }
     }

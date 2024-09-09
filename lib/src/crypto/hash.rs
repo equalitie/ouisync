@@ -1,6 +1,5 @@
 pub use blake3::traits::digest::Digest;
 
-use crate::format;
 use generic_array::{typenum::U32, GenericArray};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -81,13 +80,13 @@ impl fmt::Display for Hash {
 
 impl fmt::Debug for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:8x}")
+        write!(f, "{self:<8x}")
     }
 }
 
 impl fmt::LowerHex for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        format::hex(f, self.as_ref())
+        write!(f, "{}", hex_fmt::HexFmt(self.as_ref()))
     }
 }
 

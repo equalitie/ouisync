@@ -21,7 +21,6 @@ mod directory;
 mod error;
 mod event;
 mod file;
-mod format;
 mod future;
 mod iterator;
 mod joint_directory;

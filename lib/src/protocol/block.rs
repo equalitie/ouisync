@@ -1,7 +1,4 @@
-use crate::{
-    crypto::{Digest, Hash, Hashable},
-    format::Hex,
-};
+use crate::crypto::{Digest, Hash, Hashable};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -174,6 +171,6 @@ impl Distribution<BlockContent> for Standard {
 
 impl fmt::Debug for BlockContent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:6x}", Hex(&self[..]))
+        write!(f, "{:<8}", hex_fmt::HexFmt(&self[..]))
     }
 }

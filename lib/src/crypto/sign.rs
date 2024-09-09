@@ -1,7 +1,4 @@
-use crate::{
-    crypto::{Digest, Hashable},
-    format,
-};
+use crate::crypto::{Digest, Hashable};
 use ed25519_dalek::{self as ext, Signer, Verifier};
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
@@ -104,7 +101,7 @@ impl Ord for PublicKey {
 
 impl fmt::LowerHex for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        format::hex(f, self.0.as_bytes())
+        hex_fmt::HexFmt(self.0.as_bytes()).fmt(f)
     }
 }
 
@@ -142,7 +139,7 @@ impl fmt::Display for PublicKey {
 
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{self:8x}")
+        write!(f, "{self:<8x}")
     }
 }
 
