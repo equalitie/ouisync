@@ -64,7 +64,7 @@ rupnp = { version = "1.1.0", default-features = false, features = [] }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
-slab = "0.4.6"
+slab = { workspace = true }
 sqlx = { workspace = true }
 ssdp-client = "1.0"
 state_monitor = { path = "../state_monitor" }
@@ -88,13 +88,13 @@ criterion = { version = "0.4", features = ["html_reports"] }
 hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"] }
 metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
-proptest = "1.0"
+proptest = { workspace = true }
 rmp-serde = { workspace = true }
 serde_json = { workspace = true }
 serde_test = "1.0.176"
 similar-asserts = { workspace = true }
 tempfile = { workspace = true }
-test-strategy = "0.2.1"
+test-strategy = { workspace = true }
 tokio = { workspace = true, features = ["process", "test-util"] }
 
 [features]

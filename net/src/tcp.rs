@@ -163,66 +163,69 @@ async fn drive_connection(
     mut conn: yamux::Connection<Compat<TcpStream>>,
     mut command_rx: mpsc::Receiver<Command>,
 ) {
-    // Buffers for incoming and outgoing streams. These guarantee that no streams are ever lost,
-    // even if `Connection::incoming` or `Connection::outgoing` are cancelled. Due to the limit on
-    // the number of streams per connection, these buffers are effectively bounded.
-    let mut incoming = Vec::new();
-    let mut outgoing = Vec::new();
+    // Incoming streams are being polled continuously and placed here, then taken from here one by
+    // one on the next call to `Connection::incoming`. Note that yamux has a limit on the number of
+    // simultaneously open streams per connection which effectively puts a bound on this collection
+    // as well.
+    let mut incoming_results = Vec::<Result<_, _>>::new();
+    let mut incoming_senders = Vec::<rendezvous::Sender<_>>::new();
+
+    // If an `Connection::outgoing` calls gets cancelled after the outgoing stream's been already
+    // created, we store the stream here and use it next time `Connection::outgoing` is called.
+    // This ensures no outgoing stream gets lost and thus makes `outgoing` cancel safe.
+    let mut outgoing_result = None;
 
     loop {
+        while let Some(tx) = incoming_senders.pop() {
+            if let Some(result) = incoming_results.pop() {
+                if let Err(result) = tx.send(result).await {
+                    incoming_results.push(result);
+                }
+            } else {
+                incoming_senders.push(tx);
+                break;
+            }
+        }
+
         let command = select! {
             command = command_rx.recv() => command,
-            result = future::poll_fn(|cx| conn.poll_next_inbound(cx)) => {
-                match result {
-                    Some(result) => {
-                        incoming.push(result);
-                        continue;
+            result = incoming(&mut conn) => {
+                if let Some(result) = result {
+                    // Store at most one error
+                    if result.is_err() {
+                        incoming_results.retain(|result| result.is_ok());
                     }
-                    None => break,
+
+                    incoming_results.push(result);
+
+                    continue;
+                } else {
+                    // Connection closed by the peer
+                    break;
                 }
             }
         };
 
         match command.unwrap_or(Command::Close(None)) {
             Command::Incoming(reply_tx) => {
-                let result = if let Some(result) = incoming.pop() {
-                    result
-                } else {
-                    select! {
-                        result = future::poll_fn(|cx| conn.poll_next_inbound(cx)) => {
-                            if let Some(result) = result {
-                                result
-                            } else {
-                                // connection closed
-                                break;
-                            }
-                        }
-                        _ = reply_tx.closed() => continue,
-                    }
-                };
-
-                if let Err(result) = reply_tx.send(result).await {
-                    // reply_rx dropped before receiving the result, save it for next time.
-                    incoming.push(result);
-                }
+                incoming_senders.push(reply_tx);
             }
             Command::Outgoing(reply_tx) => {
-                let result = if let Some(result) = outgoing.pop() {
+                let result = if let Some(result) = outgoing_result.take() {
                     result
                 } else {
                     select! {
-                        result = future::poll_fn(|cx| conn.poll_new_outbound(cx)) => result,
+                        result = outgoing(&mut conn) => result,
                         _ = reply_tx.closed() => continue,
                     }
                 };
 
                 if let Err(result) = reply_tx.send(result).await {
-                    // reply_rx dropped before receiving the result, save it for next time.
-                    outgoing.push(result);
+                    outgoing_result = Some(result);
                 }
             }
             Command::Close(reply_tx) => {
-                let result = future::poll_fn(|cx| conn.poll_close(cx)).await;
+                let result = close(&mut conn).await;
 
                 if let Some(reply_tx) = reply_tx {
                     reply_tx.send(result).ok();
@@ -232,6 +235,24 @@ async fn drive_connection(
             }
         }
     }
+}
+
+async fn incoming(
+    conn: &mut yamux::Connection<Compat<TcpStream>>,
+) -> Option<Result<yamux::Stream, yamux::ConnectionError>> {
+    future::poll_fn(|cx| conn.poll_next_inbound(cx)).await
+}
+
+async fn outgoing(
+    conn: &mut yamux::Connection<Compat<TcpStream>>,
+) -> Result<yamux::Stream, yamux::ConnectionError> {
+    future::poll_fn(|cx| conn.poll_new_outbound(cx)).await
+}
+
+async fn close(
+    conn: &mut yamux::Connection<Compat<TcpStream>>,
+) -> Result<(), yamux::ConnectionError> {
+    future::poll_fn(|cx| conn.poll_close(cx)).await
 }
 
 enum Command {

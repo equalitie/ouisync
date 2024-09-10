@@ -263,12 +263,14 @@ pub enum ConnectionError {
 
 #[cfg(test)]
 mod tests {
-    use crate::SocketOptions;
-
-    use super::*;
+    use super::Connection;
+    use crate::test_utils::{
+        create_connected_connections, create_connected_peers, init_log, Proto,
+    };
     use futures_util::{future, stream::FuturesUnordered, StreamExt};
-    use rand::{distributions::Standard, Rng};
-    use std::net::Ipv4Addr;
+    use itertools::Itertools;
+    use proptest::{arbitrary::any, collection::vec};
+    use test_strategy::proptest;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         select, task,
@@ -277,21 +279,21 @@ mod tests {
 
     #[tokio::test]
     async fn ping_tcp() {
-        let (client, server) = setup_tcp_peers();
-        ping_case(client, server).await
+        ping_case(Proto::Tcp).await
     }
 
     #[tokio::test]
     async fn ping_quic() {
-        let (client, server) = setup_quic_peers();
-        ping_case(client, server).await
+        ping_case(Proto::Quic).await
     }
 
-    async fn ping_case(client_connector: Connector, server_acceptor: Acceptor) {
-        let addr = *server_acceptor.local_addr();
+    async fn ping_case(proto: Proto) {
+        let (client, server) = create_connected_peers(proto);
+
+        let addr = *server.local_addr();
 
         let server = task::spawn(async move {
-            let conn = server_acceptor.accept().await.unwrap().await.unwrap();
+            let conn = server.accept().await.unwrap().await.unwrap();
             let (mut tx, mut rx) = conn.incoming().await.unwrap();
 
             let mut buf = [0; 4];
@@ -302,7 +304,7 @@ mod tests {
         });
 
         let client = task::spawn(async move {
-            let conn = client_connector.connect(addr).await.unwrap();
+            let conn = client.connect(addr).await.unwrap();
             let (mut tx, mut rx) = conn.outgoing().await.unwrap();
 
             tx.write_all(b"ping").await.unwrap();
@@ -318,40 +320,24 @@ mod tests {
         client.await.unwrap();
     }
 
-    #[tokio::test]
-    async fn multi_streams_tcp() {
-        let (client, server) = setup_tcp_peers();
-        multi_streams_case(client, server).await;
+    #[proptest]
+    fn multi_streams(
+        proto: Proto,
+        #[strategy(vec(vec(any::<u8>(), 1..=1024), 1..32))] messages: Vec<Vec<u8>>,
+    ) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(multi_streams_case(proto, messages));
     }
 
-    #[tokio::test]
-    async fn multi_streams_quic() {
-        let (client, server) = setup_quic_peers();
-        multi_streams_case(client, server).await;
-    }
-
-    async fn multi_streams_case(client_connector: Connector, server_acceptor: Acceptor) {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .compact()
-            .init();
-
-        let num_messages = 32;
-        let min_message_size = 1;
-        let max_message_size = 256 * 1024;
-
-        let mut rng = rand::thread_rng();
-        let mut messages: Vec<Vec<u8>> = (0..num_messages)
-            .map(|_| {
-                let size = rng.gen_range(min_message_size..=max_message_size);
-                (&mut rng).sample_iter(Standard).take(size).collect()
-            })
-            .collect();
-
-        let server_addr = *server_acceptor.local_addr();
+    async fn multi_streams_case(proto: Proto, mut messages: Vec<Vec<u8>>) {
+        let (client, server) = create_connected_peers(proto);
+        let server_addr = *server.local_addr();
 
         let client = async {
-            let conn = client_connector.connect(server_addr).await.unwrap();
+            let conn = client.connect(server_addr).await.unwrap();
             let tasks = FuturesUnordered::new();
 
             for message in &messages {
@@ -382,7 +368,7 @@ mod tests {
         .instrument(tracing::info_span!("client"));
 
         let server = async {
-            let conn = server_acceptor.accept().await.unwrap().await.unwrap();
+            let conn = server.accept().await.unwrap().await.unwrap();
             let mut tasks = FuturesUnordered::new();
             let mut received_messages = Vec::new();
 
@@ -430,21 +416,77 @@ mod tests {
         similar_asserts::assert_eq!(received_messages, messages);
     }
 
-    fn setup_tcp_peers() -> (Connector, Acceptor) {
-        let (client, _) =
-            tcp::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
-        let (_, server) =
-            tcp::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
-
-        (client.into(), server.into())
+    #[tokio::test]
+    async fn concurrent_streams_tcp() {
+        concurrent_streams_case(Proto::Tcp).await
     }
 
-    fn setup_quic_peers() -> (Connector, Acceptor) {
-        let (client, _, _) =
-            quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
-        let (_, server, _) =
-            quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
+    #[tokio::test]
+    async fn concurrent_streams_quic() {
+        concurrent_streams_case(Proto::Quic).await
+    }
 
-        (client.into(), server.into())
+    // Test concurrent establishment of both incoming and outgoing streams
+    async fn concurrent_streams_case(proto: Proto) {
+        init_log();
+
+        let (client, server) = create_connected_peers(proto);
+        let (client, server) = create_connected_connections(&client, &server).await;
+
+        // Exhaustively test all permutations of the operations
+        let ops = [
+            "ping(client)",
+            "ping(server)",
+            "pong(client)",
+            "pong(server)",
+        ];
+
+        for order in ops.iter().permutations(ops.len()) {
+            async {
+                tracing::info!("init");
+
+                future::try_join_all(order.iter().map(|op| async {
+                    match **op {
+                        "ping(client)" => ping(&client).await,
+                        "ping(server)" => ping(&server).await,
+                        "pong(client)" => pong(&client).await,
+                        "pong(server)" => pong(&server).await,
+                        _ => unreachable!(),
+                    }
+                }))
+                .await?;
+
+                tracing::info!("done");
+
+                Ok::<_, anyhow::Error>(())
+            }
+            .instrument(tracing::info_span!("order", message = ?order))
+            .await
+            .unwrap()
+        }
+    }
+
+    async fn ping(connection: &Connection) -> anyhow::Result<()> {
+        let (mut send_stream, mut recv_stream) = connection.outgoing().await?;
+
+        send_stream.write_all(b"ping").await?;
+
+        let mut buffer = [0; 4];
+        recv_stream.read_exact(&mut buffer).await?;
+        assert_eq!(&buffer, b"pong");
+
+        Ok(())
+    }
+
+    async fn pong(connection: &Connection) -> anyhow::Result<()> {
+        let (mut send_stream, mut recv_stream) = connection.incoming().await?;
+
+        let mut buffer = [0; 4];
+        recv_stream.read_exact(&mut buffer).await?;
+        assert_eq!(&buffer, b"ping");
+
+        send_stream.write_all(b"pong").await?;
+
+        Ok(())
     }
 }

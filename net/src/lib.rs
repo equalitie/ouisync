@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+pub mod bus;
 pub mod quic;
 pub mod stun;
 pub mod tcp;
@@ -9,6 +10,9 @@ pub mod unified;
 #[cfg(not(feature = "simulation"))]
 mod socket;
 mod sync;
+
+#[cfg(test)]
+mod test_utils;
 
 pub use socket::SocketOptions;
 
