@@ -66,15 +66,11 @@ impl Bus {
         (send, recv)
     }
 
-    /// Gracefully shuts down the underlying connection.
-    pub async fn shutdown(&self) {
+    /// Gracefully close the underlying connection.
+    pub async fn close(&self) {
         let (reply_tx, reply_rx) = oneshot::channel();
 
-        if self
-            .command_tx
-            .send(Command::Shutdown { reply_tx })
-            .is_err()
-        {
+        if self.command_tx.send(Command::Close { reply_tx }).is_err() {
             return;
         }
 

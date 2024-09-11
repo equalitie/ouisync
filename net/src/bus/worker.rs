@@ -18,7 +18,7 @@ pub(super) enum Command {
         send_stream_tx: oneshot::Sender<io::Result<SendStream>>,
         recv_stream_tx: oneshot::Sender<io::Result<RecvStream>>,
     },
-    Shutdown {
+    Close {
         reply_tx: oneshot::Sender<()>,
     },
 }
@@ -32,6 +32,7 @@ pub(super) async fn run(connection: Connection, mut command_rx: mpsc::UnboundedR
         let command = select! {
             Some(command) = command_rx.recv() => command,
             Some(_) = topic_tasks.next() => continue,
+            _ = dispatcher.closed() => break,
         };
 
         match command {
@@ -47,7 +48,7 @@ pub(super) async fn run(connection: Connection, mut command_rx: mpsc::UnboundedR
                     &dispatcher,
                 ));
             }
-            Command::Shutdown { reply_tx } => {
+            Command::Close { reply_tx } => {
                 dispatcher.close().await;
                 reply_tx.send(()).ok();
                 break;

@@ -124,6 +124,13 @@ impl Connection {
     pub fn close(&self) {
         self.inner.close(0u8.into(), &[]);
     }
+
+    pub fn closed(&self) -> impl Future<Output = ()> + 'static {
+        let inner = self.inner.clone();
+        async move {
+            inner.closed().await;
+        }
+    }
 }
 
 pub type SendStream = quinn::SendStream;

@@ -1,6 +1,10 @@
 use self::implementation::{TcpListener, TcpStream};
 use crate::{sync::rendezvous, SocketOptions};
-use std::{future, io, net::SocketAddr};
+use std::{
+    future::{self, Future},
+    io,
+    net::SocketAddr,
+};
 use tokio::{
     io::{ReadHalf, WriteHalf},
     select,
@@ -69,8 +73,8 @@ impl Connection {
         task::spawn(drive_connection(connection, command_rx).instrument(Span::current()));
 
         Self {
-            command_tx,
             remote_addr,
+            command_tx,
         }
     }
 
@@ -143,6 +147,12 @@ impl Connection {
             Ok(Ok(())) | Err(_) => (),
             Ok(Err(error)) => tracing::debug!(?error, "failed to close connection"),
         }
+    }
+
+    /// Waits for the connection to be closed.
+    pub fn closed(&self) -> impl Future<Output = ()> + 'static {
+        let command_tx = self.command_tx.clone();
+        async move { command_tx.closed().await }
     }
 }
 

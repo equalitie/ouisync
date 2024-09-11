@@ -110,6 +110,10 @@ impl Dispatcher {
     pub async fn close(&self) {
         self.connection.close().await
     }
+
+    pub async fn closed(&self) {
+        self.connection.closed().await
+    }
 }
 
 type Registry = Slab<(TopicId, oneshot::Sender<(SendStream, RecvStream)>)>;

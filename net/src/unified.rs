@@ -1,6 +1,7 @@
 //! Unified interface over different network protocols (currently TCP and QUIC).
 
 use crate::{quic, tcp};
+use futures_util::future::Either;
 use std::{
     future::{self, Future, IntoFuture, Ready},
     io,
@@ -181,6 +182,17 @@ impl Connection {
         match self {
             Self::Tcp(inner) => inner.close().await,
             Self::Quic(inner) => inner.close(),
+        }
+    }
+
+    /// Wait for the connection to be closed for any reason (e.g., locally or by the remote peer)
+    ///
+    /// Note the returned future has a `'static` lifetime, so it can be moved to another task/thread
+    /// and awaited there.
+    pub fn closed(&self) -> impl Future<Output = ()> + 'static {
+        match self {
+            Self::Tcp(inner) => Either::Left(inner.closed()),
+            Self::Quic(inner) => Either::Right(inner.closed()),
         }
     }
 }
@@ -464,29 +476,71 @@ mod tests {
             .await
             .unwrap()
         }
+
+        async fn ping(connection: &Connection) -> anyhow::Result<()> {
+            let (mut send_stream, mut recv_stream) = connection.outgoing().await?;
+
+            send_stream.write_all(b"ping").await?;
+
+            let mut buffer = [0; 4];
+            recv_stream.read_exact(&mut buffer).await?;
+            assert_eq!(&buffer, b"pong");
+
+            Ok(())
+        }
+
+        async fn pong(connection: &Connection) -> anyhow::Result<()> {
+            let (mut send_stream, mut recv_stream) = connection.incoming().await?;
+
+            let mut buffer = [0; 4];
+            recv_stream.read_exact(&mut buffer).await?;
+            assert_eq!(&buffer, b"ping");
+
+            send_stream.write_all(b"pong").await?;
+
+            Ok(())
+        }
     }
 
-    async fn ping(connection: &Connection) -> anyhow::Result<()> {
-        let (mut send_stream, mut recv_stream) = connection.outgoing().await?;
-
-        send_stream.write_all(b"ping").await?;
-
-        let mut buffer = [0; 4];
-        recv_stream.read_exact(&mut buffer).await?;
-        assert_eq!(&buffer, b"pong");
-
-        Ok(())
+    #[tokio::test]
+    async fn close_tcp() {
+        close_case(Proto::Tcp).await
     }
 
-    async fn pong(connection: &Connection) -> anyhow::Result<()> {
-        let (mut send_stream, mut recv_stream) = connection.incoming().await?;
+    #[tokio::test]
+    async fn close_quic() {
+        close_case(Proto::Quic).await
+    }
 
-        let mut buffer = [0; 4];
-        recv_stream.read_exact(&mut buffer).await?;
-        assert_eq!(&buffer, b"ping");
+    async fn close_case(proto: Proto) {
+        let (client, server) = create_connected_peers(proto);
+        let (client, server) = create_connected_connections(&client, &server).await;
 
-        send_stream.write_all(b"pong").await?;
+        future::join(client.closed(), async {
+            task::yield_now().await;
+            server.close().await;
+        })
+        .await;
+    }
 
-        Ok(())
+    #[tokio::test]
+    async fn drop_tcp() {
+        drop_case(Proto::Tcp).await
+    }
+
+    #[tokio::test]
+    async fn drop_quic() {
+        drop_case(Proto::Quic).await
+    }
+
+    async fn drop_case(proto: Proto) {
+        let (client, server) = create_connected_peers(proto);
+        let (client, server) = create_connected_connections(&client, &server).await;
+
+        future::join(client.closed(), async {
+            task::yield_now().await;
+            drop(server);
+        })
+        .await;
     }
 }

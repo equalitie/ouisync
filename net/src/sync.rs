@@ -1,15 +1,15 @@
+/// Single producer, single consumer, oneshot, rendezvous channel.
+///
+/// Unlike `tokio::sync::oneshot`, this one guarantees that the message is never lost even when the
+/// receiver is dropped before receiving the message. Because of this, [`Sender::send`] must be
+/// `async`.
+///
+/// # Cancel safety
+///
+/// If `send` is cancelled before completion, the value is still guaranteed to be received by the
+/// receiver. If `recv` is cancelled before completion, the value is returned back from `send`. If
+/// both `send` and `recv` are cancelled, the value is lost.
 pub(crate) mod rendezvous {
-    //! Single producer, single consumer, oneshot, rendezvous channel.
-    //!
-    //! Unlike `tokio::sync::oneshot`, this one guarantees that the message is never lost even when
-    //! the receiver is dropped before receiving the message. Because of this,[`Sender::send`] must
-    //! be `async`.
-    //!
-    //! # Cancel safety
-    //!
-    //! If `send` is cancelled before completion, the value is still guaranteed to be received by
-    //! the receiver. If `recv` is cancelled before completion, the value is returned back from
-    //! `send`. If both `send` and `recv` are cancelled, the value is lost.
 
     use std::{
         fmt,
