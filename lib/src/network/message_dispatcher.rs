@@ -17,10 +17,7 @@ use net::unified::{Connection, ConnectionError, RecvStream, SendStream};
 use std::{
     io,
     pin::Pin,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::Arc,
     task::{Context, Poll},
 };
 use tokio::{
@@ -39,22 +36,19 @@ const CONTENT_STREAM_BUFFER_SIZE: usize = 1024;
 pub(super) struct MessageDispatcher {
     command_tx: mpsc::UnboundedSender<Command>,
     sink_tx: mpsc::Sender<Message>,
-    connection_count: Arc<AtomicUsize>,
 }
 
 impl MessageDispatcher {
     pub fn new() -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (sink_tx, sink_rx) = mpsc::channel(1);
-        let connection_count = Arc::new(AtomicUsize::new(0));
 
-        let worker = Worker::new(command_rx, sink_rx, connection_count.clone());
+        let worker = Worker::new(command_rx, sink_rx);
         task::spawn(worker.run());
 
         Self {
             command_tx,
             sink_tx,
-            connection_count,
         }
     }
 
@@ -73,11 +67,6 @@ impl MessageDispatcher {
                 byte_counters,
             })
             .ok();
-    }
-
-    /// Is this dispatcher bound to at least one connection?
-    pub fn is_bound(&self) -> bool {
-        self.connection_count.load(Ordering::Acquire) > 0
     }
 
     /// Opens a stream for receiving messages on the given channel. Any messages received on
@@ -268,24 +257,16 @@ struct ConnectionStream {
     reader: MessageStream<Instrumented<Instrumented<RecvStream>>>,
     permit: ConnectionPermitHalf,
     permit_released: AwaitDrop,
-    connection_count: Arc<AtomicUsize>,
 }
 
 impl ConnectionStream {
-    fn new(
-        reader: Instrumented<RecvStream>,
-        permit: ConnectionPermitHalf,
-        connection_count: Arc<AtomicUsize>,
-    ) -> Self {
-        connection_count.fetch_add(1, Ordering::Release);
-
+    fn new(reader: Instrumented<RecvStream>, permit: ConnectionPermitHalf) -> Self {
         let permit_released = permit.released();
 
         Self {
             reader: MessageStream::new(Instrumented::new(reader, permit.byte_counters())),
             permit,
             permit_released,
-            connection_count,
         }
     }
 }
@@ -306,12 +287,6 @@ impl Stream for ConnectionStream {
             Some(Ok(message)) => Poll::Ready(Some((self.permit.id(), message))),
             Some(Err(_)) | None => Poll::Ready(None),
         }
-    }
-}
-
-impl Drop for ConnectionStream {
-    fn drop(&mut self) {
-        self.connection_count.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -370,20 +345,14 @@ impl Sink<Message> for ConnectionSink {
 
 struct Worker {
     command_rx: mpsc::UnboundedReceiver<Command>,
-    connection_count: Arc<AtomicUsize>,
     send: SendState,
     recv: RecvState,
 }
 
 impl Worker {
-    fn new(
-        command_rx: mpsc::UnboundedReceiver<Command>,
-        sink_rx: mpsc::Receiver<Message>,
-        connection_count: Arc<AtomicUsize>,
-    ) -> Self {
+    fn new(command_rx: mpsc::UnboundedReceiver<Command>, sink_rx: mpsc::Receiver<Message>) -> Self {
         Self {
             command_rx,
-            connection_count,
             send: SendState {
                 sink_rx,
                 sinks: Vec::new(),
@@ -435,8 +404,6 @@ impl Worker {
                     permit,
                     byte_counters,
                 } => {
-                    let connection_count = self.connection_count.clone();
-
                     streams.push(async move {
                         let (tx, rx) = match ConnectionDirection::from_source(permit.source()) {
                             ConnectionDirection::Incoming => connection.incoming().await?,
@@ -449,7 +416,7 @@ impl Worker {
                         let tx = ConnectionSink::new(tx, tx_permit);
 
                         let rx = Instrumented::new(rx, byte_counters.clone());
-                        let rx = ConnectionStream::new(rx, rx_permit, connection_count);
+                        let rx = ConnectionStream::new(rx, rx_permit);
 
                         Ok::<_, ConnectionError>((connection, tx, rx))
                     });

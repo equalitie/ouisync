@@ -58,7 +58,7 @@ use self::{
     stun::StunClients,
 };
 use crate::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::HashSet,
     network::connection::ConnectionDirection,
     protocol::RepositoryId,
     repository::{RepositoryHandle, Vault},
@@ -141,7 +141,7 @@ impl Network {
             gateway,
             this_runtime_id,
             registry: BlockingMutex::new(Registry {
-                peers: Some(HashMap::default()),
+                peers: Some(Slab::new()),
                 repos: Slab::new(),
             }),
             port_forwarder,
@@ -467,10 +467,8 @@ impl Drop for Registration {
             .unwrap_or_else(|error| error.into_inner());
 
         if let Some(holder) = registry.repos.try_remove(self.key) {
-            if let Some(peers) = &mut registry.peers {
-                for peer in peers.values_mut() {
-                    peer.destroy_link(holder.vault.repository_id());
-                }
+            for (_, peer) in registry.peers.as_mut().into_iter().flatten() {
+                peer.destroy_link(holder.vault.repository_id());
             }
         }
     }
@@ -518,7 +516,7 @@ struct Inner {
 
 struct Registry {
     // This is None once the network calls shutdown.
-    peers: Option<HashMap<PublicRuntimeId, MessageBroker>>,
+    peers: Option<Slab<MessageBroker>>,
     repos: Slab<RegistrationHolder>,
 }
 
@@ -531,7 +529,7 @@ impl Registry {
         byte_counters: Arc<ByteCounters>,
     ) {
         if let Some(peers) = &mut self.peers {
-            for peer in peers.values_mut() {
+            for (_, peer) in peers {
                 peer.create_link(
                     repo.clone(),
                     pex,
@@ -622,7 +620,7 @@ impl Inner {
     async fn disconnect_all(&self) {
         let Some(peers) = mem::replace(
             &mut self.registry.lock().unwrap().peers,
-            Some(HashMap::default()),
+            Some(Slab::default()),
         ) else {
             return;
         };
@@ -892,7 +890,7 @@ impl Inner {
 
         let released = permit.released();
 
-        {
+        let key = {
             let mut registry = self.registry.lock().unwrap();
             let registry = &mut *registry;
 
@@ -901,38 +899,36 @@ impl Inner {
                 return false;
             };
 
-            let peer = peers.entry(that_runtime_id).or_insert_with(|| {
-                let mut peer = self.span.in_scope(|| {
-                    MessageBroker::new(
-                        self.this_runtime_id.public(),
-                        that_runtime_id,
-                        self.pex_discovery.new_peer(),
-                        self.peers_monitor
-                            .make_child(format!("{:?}", that_runtime_id.as_public_key())),
-                    )
-                });
-
-                // TODO: for DHT connection we should only link the repository for which we did the
-                // lookup but make sure we correctly handle edge cases, for example, when we have
-                // more than one repository shared with the peer.
-                for (_, holder) in &registry.repos {
-                    peer.create_link(
-                        holder.vault.clone(),
-                        &holder.pex,
-                        holder.response_limiter.clone(),
-                        holder.stats_tracker.bytes.clone(),
-                    );
-                }
-
-                peer
+            let mut peer = self.span.in_scope(|| {
+                MessageBroker::new(
+                    self.this_runtime_id.public(),
+                    that_runtime_id,
+                    self.pex_discovery.new_peer(),
+                    self.peers_monitor
+                        .make_child(format!("{:?}", that_runtime_id.as_public_key())),
+                )
             });
 
-            peer.add_connection(connection, permit, self.stats_tracker.bytes.clone());
-        }
+            // TODO: for DHT connection we should only link the repository for which we did the
+            // lookup but make sure we correctly handle edge cases, for example, when we have
+            // more than one repository shared with the peer.
+            for (_, holder) in &registry.repos {
+                peer.create_link(
+                    holder.vault.clone(),
+                    &holder.pex,
+                    holder.response_limiter.clone(),
+                    holder.stats_tracker.bytes.clone(),
+                );
+            }
 
-        let _remover = MessageBrokerEntryGuard {
+            peer.add_connection(connection, permit, self.stats_tracker.bytes.clone());
+
+            peers.insert(peer)
+        };
+
+        let _guard = PeerGuard {
             registry: &self.registry,
-            that_runtime_id,
+            key,
             monitor,
         };
 
@@ -1029,27 +1025,24 @@ enum HandshakeError {
     Connection(#[from] ConnectionError),
 }
 
-// RAII guard which when dropped removes the broker from the network state if it has no connections.
-struct MessageBrokerEntryGuard<'a> {
+// RAII guard which when dropped removes the peer from the registry.
+struct PeerGuard<'a> {
     registry: &'a BlockingMutex<Registry>,
-    that_runtime_id: PublicRuntimeId,
+    key: usize,
     monitor: &'a ConnectionMonitor,
 }
 
-impl Drop for MessageBrokerEntryGuard<'_> {
+impl Drop for PeerGuard<'_> {
     fn drop(&mut self) {
         tracing::info!(parent: self.monitor.span(), "Disconnected");
 
-        let mut registry = self
+        if let Some(peers) = &mut self
             .registry
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some(peers) = &mut registry.peers {
-            if let Entry::Occupied(entry) = peers.entry(self.that_runtime_id) {
-                if !entry.get().has_connections() {
-                    entry.remove();
-                }
-            }
+            .unwrap_or_else(|error| error.into_inner())
+            .peers
+        {
+            peers.try_remove(self.key);
         }
     }
 }
@@ -1157,6 +1150,6 @@ pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
         .unwrap()
 }
 
-async fn shutdown_peers(peers: HashMap<PublicRuntimeId, MessageBroker>) {
-    future::join_all(peers.into_values().map(|peer| peer.shutdown())).await;
+async fn shutdown_peers(peers: Slab<MessageBroker>) {
+    future::join_all(peers.into_iter().map(|(_, peer)| peer.shutdown())).await;
 }

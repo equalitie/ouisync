@@ -78,11 +78,6 @@ impl MessageBroker {
         self.dispatcher.bind(connection, permit, byte_counters)
     }
 
-    /// Has this broker at least one live connection?
-    pub fn has_connections(&self) -> bool {
-        self.dispatcher.is_bound()
-    }
-
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
