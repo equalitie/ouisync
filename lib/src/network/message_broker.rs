@@ -1,14 +1,12 @@
 use super::{
-    barrier::{Barrier, BarrierError},
     client::Client,
-    connection::ConnectionPermit,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannelId, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     peer_exchange::{PexPeer, PexReceiver, PexRepository, PexSender},
     runtime_id::PublicRuntimeId,
     server::Server,
-    stats::{ByteCounters, Instrumented},
+    stats::ByteCounters,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
@@ -17,26 +15,23 @@ use crate::{
     repository::Vault,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use bytes::{BufMut, BytesMut};
+use futures_util::{SinkExt, StreamExt};
 use net::unified::Connection;
 use state_monitor::StateMonitor;
 use std::{future, sync::Arc};
 use tokio::{
     select,
-    sync::{mpsc, oneshot, Semaphore},
+    sync::{
+        mpsc::{self, error::TryRecvError},
+        oneshot, Semaphore,
+    },
     task,
     time::Duration,
 };
 use tracing::{instrument::Instrument, Span};
 
-/// Maintains one or more connections to a single peer, listening on all of them at the same time.
-/// Note that at the present all the connections are UDP/QUIC based and so dropping some of them
-/// would make sense. However, in the future we may also have other transports (e.g. TCP,
-/// Bluetooth) and thus keeping all may make sence because even if one is dropped, the others may
-/// still function.
-///
-/// Once a message is received, it is determined whether it is a request or a response. Based on
-/// that it either goes to the ClientStream or ServerStream for processing by the Client and Server
-/// structures respectively.
+/// Handler for communication with one peer.
 pub(super) struct MessageBroker {
     this_runtime_id: PublicRuntimeId,
     that_runtime_id: PublicRuntimeId,
@@ -48,34 +43,30 @@ pub(super) struct MessageBroker {
 }
 
 impl MessageBroker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         this_runtime_id: PublicRuntimeId,
         that_runtime_id: PublicRuntimeId,
+        connection: Connection,
         pex_peer: PexPeer,
         monitor: StateMonitor,
+        total_counters: Arc<ByteCounters>,
+        peer_counters: Arc<ByteCounters>,
     ) -> Self {
         let span = SpanGuard::new(&that_runtime_id);
 
         Self {
             this_runtime_id,
             that_runtime_id,
-            dispatcher: MessageDispatcher::new(),
+            dispatcher: MessageDispatcher::builder(connection)
+                .with_total_counters(total_counters)
+                .with_peer_counters(peer_counters)
+                .build(),
             links: HashMap::default(),
             pex_peer,
             monitor,
             span,
         }
-    }
-
-    pub fn add_connection(
-        &self,
-        connection: Connection,
-        permit: ConnectionPermit,
-        byte_counters: Arc<ByteCounters>,
-    ) {
-        self.pex_peer
-            .handle_connection(permit.addr(), permit.source(), permit.released());
-        self.dispatcher.bind(connection, permit, byte_counters)
     }
 
     /// Try to establish a link between a local repository and a remote repository. The remote
@@ -86,7 +77,7 @@ impl MessageBroker {
         vault: Vault,
         pex_repo: &PexRepository,
         response_limiter: Arc<Semaphore>,
-        byte_counters: Arc<ByteCounters>,
+        repo_counters: Arc<ByteCounters>,
     ) {
         let monitor = self.monitor.make_child(vault.monitor.name());
         let span = tracing::info_span!(
@@ -123,14 +114,11 @@ impl MessageBroker {
             vault.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,
-            role,
         );
 
-        let (pex_tx, pex_rx) = self.pex_peer.new_link(pex_repo);
+        let (sink, stream) = self.dispatcher.open(channel_id, repo_counters);
 
-        let stream =
-            Instrumented::new(self.dispatcher.open_recv(channel_id), byte_counters.clone());
-        let sink = Instrumented::new(self.dispatcher.open_send(channel_id), byte_counters);
+        let (pex_tx, pex_rx) = self.pex_peer.new_link(pex_repo);
 
         let mut link = Link {
             role,
@@ -190,8 +178,8 @@ impl Drop for SpanGuard {
 
 struct Link {
     role: Role,
-    stream: Instrumented<ContentStream>,
-    sink: Instrumented<ContentSink>,
+    stream: ContentStream,
+    sink: ContentSink,
     vault: Vault,
     response_limiter: Arc<Semaphore>,
     pex_tx: PexSender,
@@ -205,7 +193,6 @@ impl Link {
         #[derive(Debug)]
         enum State {
             Sleeping(#[allow(dead_code)] Duration),
-            AwaitingBarrier,
             EstablishingChannel,
             Running,
         }
@@ -217,7 +204,7 @@ impl Link {
             .build();
 
         let mut next_sleep = None;
-        let state = self.monitor.make_value("state", State::AwaitingBarrier);
+        let state = self.monitor.make_value("state", State::EstablishingChannel);
 
         loop {
             if let Some(sleep) = next_sleep {
@@ -227,18 +214,6 @@ impl Link {
 
             next_sleep = backoff.next_backoff();
 
-            *state.get() = State::AwaitingBarrier;
-
-            match Barrier::new(self.stream.as_mut(), self.sink.as_ref(), &self.monitor)
-                .run()
-                .await
-            {
-                Ok(()) => (),
-                Err(BarrierError::Failure) => continue,
-                Err(BarrierError::ChannelClosed) => break,
-                Err(BarrierError::TransportChanged) => continue,
-            }
-
             *state.get() = State::EstablishingChannel;
 
             let (crypto_stream, crypto_sink) =
@@ -247,8 +222,7 @@ impl Link {
                 {
                     Ok(io) => io,
                     Err(EstablishError::Crypto) => continue,
-                    Err(EstablishError::Closed) => break,
-                    Err(EstablishError::TransportChanged) => continue,
+                    Err(EstablishError::Io(_)) => break,
                 };
 
             *state.get() = State::Running;
@@ -272,8 +246,8 @@ impl Link {
 
 async fn establish_channel<'a>(
     role: Role,
-    stream: &'a mut Instrumented<ContentStream>,
-    sink: &'a mut Instrumented<ContentSink>,
+    stream: &'a mut ContentStream,
+    sink: &'a mut ContentSink,
     vault: &Vault,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     match crypto::establish_channel(role, vault.repository_id(), stream, sink).await {
@@ -328,23 +302,23 @@ async fn recv_messages(
     pex_rx: &PexReceiver,
 ) -> ControlFlow {
     loop {
-        let content = match stream.recv().await {
-            Ok(content) => content,
-            Err(RecvError::Crypto) => {
+        let content = match stream.next().await {
+            Some(Ok(content)) => content,
+            Some(Err(RecvError::Crypto)) => {
                 tracing::warn!("Failed to decrypt incoming message",);
                 return ControlFlow::Continue;
             }
-            Err(RecvError::Exhausted) => {
+            Some(Err(RecvError::Exhausted)) => {
                 tracing::debug!("Incoming message nonce counter exhausted",);
                 return ControlFlow::Continue;
             }
-            Err(RecvError::Closed) => {
-                tracing::debug!("Message stream closed");
+            Some(Err(RecvError::Io(error))) => {
+                tracing::warn!(?error, "Failed to receive incoming message");
                 return ControlFlow::Break;
             }
-            Err(RecvError::TransportChanged) => {
-                tracing::debug!("Transport has changed");
-                return ControlFlow::Continue;
+            None => {
+                tracing::debug!("Message channel closed");
+                return ControlFlow::Break;
             }
         };
 
@@ -352,7 +326,7 @@ async fn recv_messages(
             Ok(content) => content,
             Err(error) => {
                 tracing::warn!(?error, "Failed to deserialize incoming message");
-                continue; // TODO: should we return `ControlFlow::Continue` here as well?
+                continue;
             }
         };
 
@@ -369,25 +343,41 @@ async fn send_messages(
     mut content_rx: mpsc::UnboundedReceiver<Content>,
     mut sink: EncryptingSink<'_>,
 ) -> ControlFlow {
+    let mut writer = BytesMut::new().writer();
+
     loop {
-        let content = if let Some(content) = content_rx.recv().await {
-            content
-        } else {
+        let content = match content_rx.try_recv() {
+            Ok(content) => Some(content),
+            Err(TryRecvError::Empty) => {
+                match sink.flush().await {
+                    Ok(()) => (),
+                    Err(error) => {
+                        tracing::warn!(?error, "Failed to flush outgoing messages");
+                        return ControlFlow::Break;
+                    }
+                }
+
+                content_rx.recv().await
+            }
+            Err(TryRecvError::Disconnected) => None,
+        };
+
+        let Some(content) = content else {
             forever().await
         };
 
         // unwrap is OK because serialization into a vec should never fail unless we have a bug
         // somewhere.
-        let content = bincode::serialize(&content).unwrap();
+        bincode::serialize_into(&mut writer, &content).unwrap();
 
-        match sink.send(content).await {
+        match sink.feed(writer.get_mut().split().freeze()).await {
             Ok(()) => (),
             Err(SendError::Exhausted) => {
                 tracing::debug!("Outgoing message nonce counter exhausted");
                 return ControlFlow::Continue;
             }
-            Err(SendError::Closed) => {
-                tracing::debug!("Message sink closed");
+            Err(SendError::Io(error)) => {
+                tracing::warn!(?error, "Failed to send outgoing message");
                 return ControlFlow::Break;
             }
         }

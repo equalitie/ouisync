@@ -182,22 +182,6 @@ pub(super) struct ConnectionPermit {
 }
 
 impl ConnectionPermit {
-    /// Split the permit into two halves where dropping any of them releases the whole permit.
-    /// This is useful when the connection needs to be split into a reader and a writer Then if any
-    /// of them closes, the whole connection closes. So both the reader and the writer should be
-    /// associated with one half of the permit so that when any of them closes, the permit is
-    /// released.
-    pub fn into_split(self) -> (ConnectionPermitHalf, ConnectionPermitHalf) {
-        (
-            ConnectionPermitHalf(Self {
-                connections: self.connections.clone(),
-                key: self.key,
-                id: self.id,
-            }),
-            ConnectionPermitHalf(self),
-        )
-    }
-
     pub fn mark_as_connecting(&self) {
         self.set_state(PeerState::Connecting);
     }
@@ -313,24 +297,6 @@ impl Drop for ConnectionPermit {
             entry.remove();
             true
         });
-    }
-}
-
-/// Half of a connection permit. Dropping it drops the whole permit.
-/// See [`ConnectionPermit::split`] for more details.
-pub(super) struct ConnectionPermitHalf(ConnectionPermit);
-
-impl ConnectionPermitHalf {
-    pub fn id(&self) -> ConnectionId {
-        self.0.id
-    }
-
-    pub fn byte_counters(&self) -> Arc<ByteCounters> {
-        self.0.byte_counters()
-    }
-
-    pub fn released(&self) -> AwaitDrop {
-        self.0.released()
     }
 }
 

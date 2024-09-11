@@ -142,18 +142,6 @@ impl<T> Instrumented<T> {
     pub fn new(inner: T, counters: Arc<ByteCounters>) -> Self {
         Self { inner, counters }
     }
-
-    pub fn as_ref(&self) -> &T {
-        &self.inner
-    }
-
-    pub fn as_mut(&mut self) -> &mut T {
-        &mut self.inner
-    }
-
-    pub fn counters(&self) -> &ByteCounters {
-        &self.counters
-    }
 }
 
 impl<T> AsyncRead for Instrumented<T>

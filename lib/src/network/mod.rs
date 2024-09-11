@@ -1,4 +1,3 @@
-mod barrier;
 mod client;
 mod connection;
 mod connection_monitor;
@@ -12,7 +11,6 @@ mod local_discovery;
 mod message;
 mod message_broker;
 mod message_dispatcher;
-mod message_io;
 mod peer_addr;
 mod peer_exchange;
 mod peer_info;
@@ -888,7 +886,7 @@ impl Inner {
         monitor.mark_as_active(that_runtime_id);
         tracing::info!(parent: monitor.span(), "Connected");
 
-        let released = permit.released();
+        let closed = connection.closed();
 
         let key = {
             let mut registry = self.registry.lock().unwrap();
@@ -899,13 +897,19 @@ impl Inner {
                 return false;
             };
 
+            let pex_peer = self.pex_discovery.new_peer();
+            pex_peer.handle_connection(permit.addr(), permit.source(), permit.released());
+
             let mut peer = self.span.in_scope(|| {
                 MessageBroker::new(
                     self.this_runtime_id.public(),
                     that_runtime_id,
-                    self.pex_discovery.new_peer(),
+                    connection,
+                    pex_peer,
                     self.peers_monitor
                         .make_child(format!("{:?}", that_runtime_id.as_public_key())),
+                    self.stats_tracker.bytes.clone(),
+                    permit.byte_counters(),
                 )
             });
 
@@ -921,18 +925,18 @@ impl Inner {
                 );
             }
 
-            peer.add_connection(connection, permit, self.stats_tracker.bytes.clone());
-
             peers.insert(peer)
         };
 
+        // Wait until the connection gets closed, then remove the `MessageBroker` instance. Using a
+        // RAII to also remove it in case this function gets cancelled.
         let _guard = PeerGuard {
             registry: &self.registry,
             key,
             monitor,
         };
 
-        released.await;
+        closed.await;
 
         true
     }

@@ -1,5 +1,4 @@
 use super::{
-    crypto::Role,
     debug_payload::{DebugRequest, DebugResponse},
     peer_exchange::PexPayload,
     runtime_id::PublicRuntimeId,
@@ -11,8 +10,8 @@ use crate::{
         UntrustedProof,
     },
 };
+use net::bus::TopicId;
 use serde::{Deserialize, Serialize};
-use std::{fmt, io::Write};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
@@ -60,98 +59,6 @@ pub(crate) enum Response {
     BlockError(BlockId, DebugResponse),
 }
 
-const LEGACY_TAG: u8 = 2;
-
-#[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
-pub(crate) struct Header {
-    pub channel: MessageChannelId,
-}
-
-impl Header {
-    pub(crate) const SIZE: usize = 1 + // One byte for the tag.
-        Hash::SIZE; // Channel
-
-    pub(crate) fn serialize(&self) -> [u8; Self::SIZE] {
-        let mut hdr = [0; Self::SIZE];
-        let mut w = ArrayWriter { array: &mut hdr };
-
-        w.write_u8(LEGACY_TAG);
-        w.write_channel(&self.channel);
-
-        hdr
-    }
-
-    pub(crate) fn deserialize(hdr: &[u8; Self::SIZE]) -> Option<Header> {
-        let mut r = ArrayReader { array: &hdr[..] };
-        // Tag is no longer used but we still read it for backwards compatibility.
-        let _ = r.read_u8();
-        let channel = r.read_channel();
-
-        Some(Header { channel })
-    }
-}
-
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Message {
-    pub channel: MessageChannelId,
-    pub content: Vec<u8>,
-}
-
-impl Message {
-    pub fn header(&self) -> Header {
-        Header {
-            channel: self.channel,
-        }
-    }
-}
-
-impl fmt::Debug for Message {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Message {{ channel: {:?}, content-hash: {:?} }}",
-            self.channel,
-            self.content.hash()
-        )
-    }
-}
-
-struct ArrayReader<'a> {
-    array: &'a [u8],
-}
-
-impl ArrayReader<'_> {
-    // Unwraps are OK because all sizes are known at compile time.
-
-    fn read_u8(&mut self) -> u8 {
-        let n = u8::from_le_bytes(self.array[..1].try_into().unwrap());
-        self.array = &self.array[1..];
-        n
-    }
-
-    fn read_channel(&mut self) -> MessageChannelId {
-        let hash: [u8; Hash::SIZE] = self.array[..Hash::SIZE].try_into().unwrap();
-        self.array = &self.array[Hash::SIZE..];
-        hash.into()
-    }
-}
-
-struct ArrayWriter<'a> {
-    array: &'a mut [u8],
-}
-
-impl ArrayWriter<'_> {
-    // Unwraps are OK because all sizes are known at compile time.
-
-    fn write_u8(&mut self, n: u8) {
-        self.array.write_all(&n.to_le_bytes()).unwrap();
-    }
-
-    fn write_channel(&mut self, channel: &MessageChannelId) {
-        self.array.write_all(channel.as_ref()).unwrap();
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Content {
     Request(Request),
@@ -193,14 +100,14 @@ define_byte_array_wrapper! {
 
 impl MessageChannelId {
     pub(super) fn new(
-        repo_id: &'_ RepositoryId,
-        this_runtime_id: &'_ PublicRuntimeId,
-        that_runtime_id: &'_ PublicRuntimeId,
-        role: Role,
+        repo_id: &RepositoryId,
+        this_runtime_id: &PublicRuntimeId,
+        that_runtime_id: &PublicRuntimeId,
     ) -> Self {
-        let (id1, id2) = match role {
-            Role::Initiator => (this_runtime_id, that_runtime_id),
-            Role::Responder => (that_runtime_id, this_runtime_id),
+        let (id1, id2) = if this_runtime_id > that_runtime_id {
+            (this_runtime_id, that_runtime_id)
+        } else {
+            (that_runtime_id, this_runtime_id)
         };
 
         Self(
@@ -222,17 +129,8 @@ impl Default for MessageChannelId {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn header_serialization() {
-        let header = Header {
-            channel: MessageChannelId::random(),
-        };
-
-        let serialized = header.serialize();
-        assert_eq!(Header::deserialize(&serialized), Some(header));
+impl From<MessageChannelId> for TopicId {
+    fn from(id: MessageChannelId) -> Self {
+        TopicId::from(id.0)
     }
 }
