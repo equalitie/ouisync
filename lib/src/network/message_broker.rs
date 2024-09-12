@@ -1,7 +1,7 @@
 use super::{
     client::Client,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
-    message::{Content, MessageChannelId, Request, Response},
+    message::{Content, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     peer_exchange::{PexPeer, PexReceiver, PexRepository, PexSender},
     runtime_id::PublicRuntimeId,
@@ -10,6 +10,7 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
+    crypto::Hashable,
     network::constants::{REQUEST_BUFFER_SIZE, RESPONSE_BUFFER_SIZE},
     protocol::RepositoryId,
     repository::Vault,
@@ -17,7 +18,7 @@ use crate::{
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use bytes::{BufMut, BytesMut};
 use futures_util::{SinkExt, StreamExt};
-use net::unified::Connection;
+use net::{bus::TopicId, unified::Connection};
 use state_monitor::StateMonitor;
 use std::{future, sync::Arc};
 use tokio::{
@@ -110,13 +111,13 @@ impl MessageBroker {
             &self.that_runtime_id,
         );
 
-        let channel_id = MessageChannelId::new(
+        let topic_id = make_topic_id(
             vault.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,
         );
 
-        let (sink, stream) = self.dispatcher.open(channel_id, repo_counters);
+        let (sink, stream) = self.dispatcher.open(topic_id, repo_counters);
 
         let (pex_tx, pex_rx) = self.pex_peer.new_link(pex_repo);
 
@@ -174,6 +175,24 @@ impl Drop for SpanGuard {
     fn drop(&mut self) {
         tracing::info!(parent: &self.0, "Message broker destroyed");
     }
+}
+
+fn make_topic_id(
+    repo_id: &RepositoryId,
+    this_runtime_id: &PublicRuntimeId,
+    that_runtime_id: &PublicRuntimeId,
+) -> TopicId {
+    let (id1, id2) = if this_runtime_id > that_runtime_id {
+        (this_runtime_id, that_runtime_id)
+    } else {
+        (that_runtime_id, this_runtime_id)
+    };
+
+    let bytes: [_; TopicId::SIZE] = (repo_id, id1, id2, b"ouisync message topic id")
+        .hash()
+        .into();
+
+    TopicId::from(bytes)
 }
 
 struct Link {

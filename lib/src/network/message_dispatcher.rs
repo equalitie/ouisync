@@ -1,19 +1,16 @@
 //! Utilities for sending and receiving messages across the network.
 
-use super::{
-    message::MessageChannelId,
-    stats::{ByteCounters, Instrumented},
-};
+use super::stats::{ByteCounters, Instrumented};
 use net::{
-    bus::{Bus, BusRecvStream, BusSendStream},
+    bus::{Bus, BusRecvStream, BusSendStream, TopicId},
     unified::Connection,
 };
 use std::sync::Arc;
 use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimitedCodec};
 
 /// Reads/writes messages from/to the underlying TCP or QUIC connection and dispatches them to
-/// individual streams/sinks based on their channel ids (in the MessageDispatcher's and
-/// MessageBroker's contexts, there is a one-to-one relationship between the channel id and a
+/// individual streams/sinks based on their topic ids (in the MessageDispatcher's and
+/// MessageBroker's contexts, there is a one-to-one relationship between the topic id and a
 /// repository id).
 pub(super) struct MessageDispatcher {
     bus: net::bus::Bus,
@@ -30,13 +27,13 @@ impl MessageDispatcher {
         }
     }
 
-    /// Opens a sink and a stream for communication on the given channel.
+    /// Opens a sink and a stream for communication on the given topic.
     pub fn open(
         &self,
-        channel_id: MessageChannelId,
+        topic_id: TopicId,
         repo_counters: Arc<ByteCounters>,
     ) -> (ContentSink, ContentStream) {
-        let (writer, reader) = self.bus.create_topic(channel_id.into());
+        let (writer, reader) = self.bus.create_topic(topic_id);
 
         let writer = Instrumented::new(writer, self.total_counters.clone());
         let writer = Instrumented::new(writer, self.peer_counters.clone());
@@ -151,7 +148,7 @@ mod tests {
     async fn sanity_check() {
         crate::test_utils::init_log();
 
-        let channel = MessageChannelId::random();
+        let topic_id = TopicId::random();
         let send_content = b"hello world";
 
         let (client, server) = create_connection_pair().await;
@@ -159,12 +156,12 @@ mod tests {
         let server_dispatcher = MessageDispatcher::builder(server).build();
 
         let (_server_sink, mut server_stream) =
-            server_dispatcher.open(channel, Arc::new(ByteCounters::new()));
+            server_dispatcher.open(topic_id, Arc::new(ByteCounters::new()));
 
         let client_dispatcher = MessageDispatcher::builder(client).build();
 
         let (mut client_sink, _client_stream) =
-            client_dispatcher.open(channel, Arc::new(ByteCounters::new()));
+            client_dispatcher.open(topic_id, Arc::new(ByteCounters::new()));
 
         client_sink
             .send(Bytes::from_static(send_content))

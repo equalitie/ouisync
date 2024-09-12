@@ -249,12 +249,11 @@ async fn handshake_recv(
 mod tests {
     use super::*;
     use crate::network::{
-        message::MessageChannelId,
         message_dispatcher::{create_connection_pair, MessageDispatcher},
-        runtime_id::SecretRuntimeId,
         stats::ByteCounters,
     };
     use futures_util::future;
+    use net::bus::TopicId;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -265,17 +264,13 @@ mod tests {
         let server = MessageDispatcher::builder(server).build();
 
         let repo_id = RepositoryId::random();
-
-        let client_id = SecretRuntimeId::random().public();
-        let server_id = SecretRuntimeId::random().public();
-
-        let channel_id = MessageChannelId::new(&repo_id, &client_id, &server_id);
+        let topic_id = TopicId::random();
 
         let (mut client_sink, mut client_stream) =
-            client.open(channel_id, Arc::new(ByteCounters::new()));
+            client.open(topic_id, Arc::new(ByteCounters::new()));
 
         let (mut server_sink, mut server_stream) =
-            server.open(channel_id, Arc::new(ByteCounters::new()));
+            server.open(topic_id, Arc::new(ByteCounters::new()));
 
         let ((mut client_stream, mut client_sink), (mut server_stream, mut server_sink)) =
             future::try_join(

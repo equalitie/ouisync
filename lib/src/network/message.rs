@@ -1,16 +1,14 @@
 use super::{
     debug_payload::{DebugRequest, DebugResponse},
     peer_exchange::PexPayload,
-    runtime_id::PublicRuntimeId,
 };
 use crate::{
-    crypto::{sign::PublicKey, Hash, Hashable},
+    crypto::{sign::PublicKey, Hash},
     protocol::{
-        BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, MultiBlockPresence, RepositoryId,
+        BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, MultiBlockPresence,
         UntrustedProof,
     },
 };
-use net::bus::TopicId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
@@ -88,49 +86,5 @@ impl From<Content> for Response {
                 panic!("not a response: {:?}", content)
             }
         }
-    }
-}
-
-define_byte_array_wrapper! {
-    // TODO: consider lower size (truncate the hash) which should still be enough to be unique
-    // while reducing the message size.
-    #[derive(Serialize, Deserialize)]
-    pub(crate) struct MessageChannelId([u8; Hash::SIZE]);
-}
-
-impl MessageChannelId {
-    pub(super) fn new(
-        repo_id: &RepositoryId,
-        this_runtime_id: &PublicRuntimeId,
-        that_runtime_id: &PublicRuntimeId,
-    ) -> Self {
-        let (id1, id2) = if this_runtime_id > that_runtime_id {
-            (this_runtime_id, that_runtime_id)
-        } else {
-            (that_runtime_id, this_runtime_id)
-        };
-
-        Self(
-            (repo_id, id1, id2, b"ouisync message channel id")
-                .hash()
-                .into(),
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn random() -> Self {
-        Self(rand::random())
-    }
-}
-
-impl Default for MessageChannelId {
-    fn default() -> Self {
-        Self([0; Self::SIZE])
-    }
-}
-
-impl From<MessageChannelId> for TopicId {
-    fn from(id: MessageChannelId) -> Self {
-        TopicId::from(id.0)
     }
 }
