@@ -1,8 +1,8 @@
 use super::{
     client::Client,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
-    message::{Content, Request, Response},
-    message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
+    message::{Message, Request, Response},
+    message_dispatcher::{MessageDispatcher, MessageSink, MessageStream},
     peer_exchange::{PexPeer, PexReceiver, PexRepository, PexSender},
     runtime_id::PublicRuntimeId,
     server::Server,
@@ -197,8 +197,8 @@ fn make_topic_id(
 
 struct Link {
     role: Role,
-    stream: ContentStream,
-    sink: ContentSink,
+    stream: MessageStream,
+    sink: MessageSink,
     vault: Vault,
     response_limiter: Arc<Semaphore>,
     pex_tx: PexSender,
@@ -265,8 +265,8 @@ impl Link {
 
 async fn establish_channel<'a>(
     role: Role,
-    stream: &'a mut ContentStream,
-    sink: &'a mut ContentSink,
+    stream: &'a mut MessageStream,
+    sink: &'a mut MessageSink,
     vault: &Vault,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     match crypto::establish_channel(role, vault.repository_id(), stream, sink).await {
@@ -295,17 +295,17 @@ async fn run_link(
     let (request_tx, request_rx) = mpsc::channel(REQUEST_BUFFER_SIZE);
     let (response_tx, response_rx) = mpsc::channel(RESPONSE_BUFFER_SIZE);
     // Outgoing message channel is unbounded because we fully control how much stuff goes into it.
-    let (content_tx, content_rx) = mpsc::unbounded_channel();
+    let (message_tx, message_rx) = mpsc::unbounded_channel();
 
     tracing::info!("Link opened");
 
     // Run everything in parallel:
     let flow = select! {
-        flow = run_client(repo.clone(), content_tx.clone(), response_rx) => flow,
-        flow = run_server(repo.clone(), content_tx.clone(), request_rx, response_limiter) => flow,
+        flow = run_client(repo.clone(), message_tx.clone(), response_rx) => flow,
+        flow = run_server(repo.clone(), message_tx.clone(), request_rx, response_limiter) => flow,
         flow = recv_messages(stream, request_tx, response_tx, pex_rx) => flow,
-        flow = send_messages(content_rx, sink) => flow,
-        _ = pex_tx.run(content_tx) => ControlFlow::Continue,
+        flow = send_messages(message_rx, sink) => flow,
+        _ = pex_tx.run(message_tx) => ControlFlow::Continue,
     };
 
     tracing::info!("Link closed");
@@ -321,8 +321,8 @@ async fn recv_messages(
     pex_rx: &PexReceiver,
 ) -> ControlFlow {
     loop {
-        let content = match stream.next().await {
-            Some(Ok(content)) => content,
+        let message = match stream.next().await {
+            Some(Ok(message)) => message,
             Some(Err(RecvError::Crypto)) => {
                 tracing::warn!("Failed to decrypt incoming message",);
                 return ControlFlow::Continue;
@@ -341,32 +341,32 @@ async fn recv_messages(
             }
         };
 
-        let content: Content = match bincode::deserialize(&content) {
-            Ok(content) => content,
+        let message: Message = match bincode::deserialize(&message) {
+            Ok(message) => message,
             Err(error) => {
                 tracing::warn!(?error, "Failed to deserialize incoming message");
                 continue;
             }
         };
 
-        match content {
-            Content::Request(request) => request_tx.send(request).await.unwrap_or(()),
-            Content::Response(response) => response_tx.send(response).await.unwrap_or(()),
-            Content::Pex(payload) => pex_rx.handle_message(payload).await,
+        match message {
+            Message::Request(request) => request_tx.send(request).await.unwrap_or(()),
+            Message::Response(response) => response_tx.send(response).await.unwrap_or(()),
+            Message::Pex(payload) => pex_rx.handle_message(payload).await,
         }
     }
 }
 
 // Handle outgoing messages
 async fn send_messages(
-    mut content_rx: mpsc::UnboundedReceiver<Content>,
+    mut message_rx: mpsc::UnboundedReceiver<Message>,
     mut sink: EncryptingSink<'_>,
 ) -> ControlFlow {
     let mut writer = BytesMut::new().writer();
 
     loop {
-        let content = match content_rx.try_recv() {
-            Ok(content) => Some(content),
+        let message = match message_rx.try_recv() {
+            Ok(message) => Some(message),
             Err(TryRecvError::Empty) => {
                 match sink.flush().await {
                     Ok(()) => (),
@@ -376,18 +376,18 @@ async fn send_messages(
                     }
                 }
 
-                content_rx.recv().await
+                message_rx.recv().await
             }
             Err(TryRecvError::Disconnected) => None,
         };
 
-        let Some(content) = content else {
+        let Some(message) = message else {
             forever().await
         };
 
         // unwrap is OK because serialization into a vec should never fail unless we have a bug
         // somewhere.
-        bincode::serialize_into(&mut writer, &content).unwrap();
+        bincode::serialize_into(&mut writer, &message).unwrap();
 
         match sink.feed(writer.get_mut().split().freeze()).await {
             Ok(()) => (),
@@ -406,10 +406,10 @@ async fn send_messages(
 // Create and run client. Returns only on error.
 async fn run_client(
     repo: Vault,
-    content_tx: mpsc::UnboundedSender<Content>,
+    message_tx: mpsc::UnboundedSender<Message>,
     response_rx: mpsc::Receiver<Response>,
 ) -> ControlFlow {
-    let mut client = Client::new(repo, content_tx, response_rx);
+    let mut client = Client::new(repo, message_tx, response_rx);
     let result = client.run().await;
 
     tracing::debug!("Client stopped running with result {:?}", result);
@@ -423,11 +423,11 @@ async fn run_client(
 // Create and run server. Returns only on error.
 async fn run_server(
     repo: Vault,
-    content_tx: mpsc::UnboundedSender<Content>,
+    message_tx: mpsc::UnboundedSender<Message>,
     request_rx: mpsc::Receiver<Request>,
     response_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
-    let mut server = Server::new(repo, content_tx, request_rx, response_limiter);
+    let mut server = Server::new(repo, message_tx, request_rx, response_limiter);
 
     let result = server.run().await;
 

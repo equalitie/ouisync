@@ -32,7 +32,7 @@ impl MessageDispatcher {
         &self,
         topic_id: TopicId,
         repo_counters: Arc<ByteCounters>,
-    ) -> (ContentSink, ContentStream) {
+    ) -> (MessageSink, MessageStream) {
         let (writer, reader) = self.bus.create_topic(topic_id);
 
         let writer = Instrumented::new(writer, self.total_counters.clone());
@@ -101,10 +101,10 @@ fn make_codec() -> LengthDelimitedCodec {
 
 // The streams/sinks are tripple-instrumented: once to collect the total cummulative traffic across
 // all peers, once to collect the traffic per peer and once to collect the traffic per repo.
-pub(super) type ContentStream =
+pub(super) type MessageStream =
     FramedRead<Instrumented<Instrumented<Instrumented<BusRecvStream>>>, LengthDelimitedCodec>;
 
-pub(super) type ContentSink =
+pub(super) type MessageSink =
     FramedWrite<Instrumented<Instrumented<Instrumented<BusSendStream>>>, LengthDelimitedCodec>;
 
 /// Create pair of Connections connected to each other. For tests only.

@@ -1,7 +1,7 @@
 use super::{
     constants::RESPONSE_BATCH_SIZE,
     debug_payload::{DebugResponse, PendingDebugRequest},
-    message::{Content, Response, ResponseDisambiguator},
+    message::{Message, Response, ResponseDisambiguator},
     pending::{
         EphemeralResponse, PendingRequest, PendingRequests, PersistableResponse, PreparedResponse,
     },
@@ -35,7 +35,7 @@ pub(super) struct Client {
 impl Client {
     pub fn new(
         vault: Vault,
-        content_tx: mpsc::UnboundedSender<Content>,
+        message_tx: mpsc::UnboundedSender<Message>,
         response_rx: mpsc::Receiver<Response>,
     ) -> Self {
         let pending_requests = PendingRequests::new(vault.monitor.clone());
@@ -45,7 +45,7 @@ impl Client {
             vault,
             pending_requests,
             block_tracker,
-            content_tx,
+            message_tx,
         };
 
         Self { inner, response_rx }
@@ -64,7 +64,7 @@ struct Inner {
     vault: Vault,
     pending_requests: PendingRequests,
     block_tracker: TrackerClient,
-    content_tx: mpsc::UnboundedSender<Content>,
+    message_tx: mpsc::UnboundedSender<Message>,
 }
 
 impl Inner {
@@ -78,8 +78,8 @@ impl Inner {
 
     fn send_request(&self, request: PendingRequest) {
         if let Some(request) = self.pending_requests.insert(request) {
-            self.content_tx
-                .send(Content::Request(request))
+            self.message_tx
+                .send(Message::Request(request))
                 .unwrap_or(());
         }
     }
@@ -554,13 +554,13 @@ mod tests {
         let pending_requests = PendingRequests::new(vault.monitor.clone());
         let block_tracker = vault.block_tracker.client();
 
-        let (content_tx, _content_rx) = mpsc::unbounded_channel();
+        let (message_tx, _message_rx) = mpsc::unbounded_channel();
 
         let inner = Inner {
             vault,
             pending_requests,
             block_tracker,
-            content_tx,
+            message_tx,
         };
 
         (base_dir, inner, secrets)

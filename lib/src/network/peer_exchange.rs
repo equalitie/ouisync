@@ -4,7 +4,7 @@
 use super::{
     connection::ConnectionDirection,
     ip,
-    message::Content,
+    message::Message,
     peer_addr::PeerAddr,
     seen_peers::{SeenPeer, SeenPeers},
     PeerSource,
@@ -232,7 +232,7 @@ pub(crate) struct PexSender {
 impl PexSender {
     /// While this method is running, it periodically sends contacts of other peers that share the
     /// same repo to this peer and makes the contacts of this peer aailable to them.
-    pub async fn run(&mut self, content_tx: mpsc::UnboundedSender<Content>) {
+    pub async fn run(&mut self, message_tx: mpsc::UnboundedSender<Message>) {
         let Some(collector) = self.enable() else {
             // Another collector for this link already exists.
             return;
@@ -253,7 +253,7 @@ impl PexSender {
             };
 
             if !addrs.is_empty() {
-                content_tx.send(Content::Pex(PexPayload(addrs))).ok();
+                message_tx.send(Message::Pex(PexPayload(addrs))).ok();
             }
 
             let interval = rand::thread_rng().gen_range(SEND_INTERVAL_RANGE);

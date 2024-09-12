@@ -1,7 +1,7 @@
 use super::{
     client::Client,
     constants::MAX_UNCHOKED_COUNT,
-    message::{Content, Request, Response},
+    message::{Message, Request, Response},
     server::Server,
 };
 use crate::{
@@ -620,12 +620,12 @@ where
 
 type ServerData = (
     Server,
-    mpsc::UnboundedReceiver<Content>,
+    mpsc::UnboundedReceiver<Message>,
     mpsc::Sender<Request>,
 );
 type ClientData = (
     Client,
-    mpsc::UnboundedReceiver<Content>,
+    mpsc::UnboundedReceiver<Message>,
     mpsc::Sender<Response>,
 );
 
@@ -647,13 +647,13 @@ fn create_client(repo: Vault) -> ClientData {
 
 // Simulated connection between a server and a client.
 struct Connection<'a, T> {
-    send_rx: &'a mut mpsc::UnboundedReceiver<Content>,
+    send_rx: &'a mut mpsc::UnboundedReceiver<Message>,
     recv_tx: &'a mut mpsc::Sender<T>,
 }
 
 impl<T> Connection<'_, T>
 where
-    T: From<Content> + fmt::Debug,
+    T: From<Message> + fmt::Debug,
 {
     async fn run(&mut self) {
         while let Some(content) = self.send_rx.recv().await {

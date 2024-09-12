@@ -8,7 +8,7 @@
 //! based on the identity of the replicas is needed.
 
 use super::{
-    message_dispatcher::{ContentSink, ContentStream},
+    message_dispatcher::{MessageSink, MessageStream},
     runtime_id::PublicRuntimeId,
 };
 use crate::protocol::RepositoryId;
@@ -65,9 +65,9 @@ impl Role {
 // session.
 const MAX_NONCE: u64 = u64::MAX - 1;
 
-/// Wrapper for [`ContentStream`] that decrypts incoming messages.
+/// Wrapper for [`MessageStream`] that decrypts incoming messages.
 pub(super) struct DecryptingStream<'a> {
-    inner: &'a mut ContentStream,
+    inner: &'a mut MessageStream,
     cipher: CipherState,
 }
 
@@ -94,9 +94,9 @@ impl Stream for DecryptingStream<'_> {
     }
 }
 
-/// Wrapper for [`ContentSink`] that encrypts outgoing messages.
+/// Wrapper for [`MessageSink`] that encrypts outgoing messages.
 pub(super) struct EncryptingSink<'a> {
-    inner: &'a mut ContentSink,
+    inner: &'a mut MessageSink,
     cipher: CipherState,
 }
 
@@ -137,8 +137,8 @@ impl Sink<Bytes> for EncryptingSink<'_> {
 pub(super) async fn establish_channel<'a>(
     role: Role,
     repo_id: &RepositoryId,
-    stream: &'a mut ContentStream,
-    sink: &'a mut ContentSink,
+    stream: &'a mut MessageStream,
+    sink: &'a mut MessageSink,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     let mut handshake_state = build_handshake_state(role, repo_id);
 
@@ -225,7 +225,7 @@ fn build_handshake_state(role: Role, repo_id: &RepositoryId) -> HandshakeState {
 
 async fn handshake_send(
     state: &mut HandshakeState,
-    sink: &mut ContentSink,
+    sink: &mut MessageSink,
     msg: &[u8],
 ) -> Result<(), EstablishError> {
     let content = state.write_message_vec(msg)?;
@@ -235,7 +235,7 @@ async fn handshake_send(
 
 async fn handshake_recv(
     state: &mut HandshakeState,
-    stream: &mut ContentStream,
+    stream: &mut MessageStream,
 ) -> Result<Vec<u8>, EstablishError> {
     let content = stream
         .try_next()

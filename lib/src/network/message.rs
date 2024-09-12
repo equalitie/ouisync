@@ -58,7 +58,7 @@ pub(crate) enum Response {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) enum Content {
+pub(crate) enum Message {
     Request(Request),
     Response(Response),
     // Peer exchange
@@ -66,24 +66,24 @@ pub(crate) enum Content {
 }
 
 #[cfg(test)]
-impl From<Content> for Request {
-    fn from(content: Content) -> Self {
-        match content {
-            Content::Request(request) => request,
-            Content::Response(_) | Content::Pex(_) => {
-                panic!("not a request: {:?}", content)
+impl From<Message> for Request {
+    fn from(message: Message) -> Self {
+        match message {
+            Message::Request(request) => request,
+            Message::Response(_) | Message::Pex(_) => {
+                panic!("not a request: {:?}", message)
             }
         }
     }
 }
 
 #[cfg(test)]
-impl From<Content> for Response {
-    fn from(content: Content) -> Self {
-        match content {
-            Content::Response(response) => response,
-            Content::Request(_) | Content::Pex(_) => {
-                panic!("not a response: {:?}", content)
+impl From<Message> for Response {
+    fn from(message: Message) -> Self {
+        match message {
+            Message::Response(response) => response,
+            Message::Request(_) | Message::Pex(_) => {
+                panic!("not a response: {:?}", message)
             }
         }
     }

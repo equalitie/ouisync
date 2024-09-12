@@ -1,7 +1,7 @@
 use super::{
     constants::{INTEREST_TIMEOUT, MAX_UNCHOKED_DURATION},
     debug_payload::{DebugRequest, DebugResponse},
-    message::{Content, Request, Response, ResponseDisambiguator},
+    message::{Message, Request, Response, ResponseDisambiguator},
 };
 use crate::{
     crypto::{sign::PublicKey, Hash},
@@ -32,7 +32,7 @@ pub(crate) struct Server {
 impl Server {
     pub fn new(
         vault: Vault,
-        content_tx: mpsc::UnboundedSender<Content>,
+        message_tx: mpsc::UnboundedSender<Message>,
         request_rx: mpsc::Receiver<Request>,
         response_limiter: Arc<Semaphore>,
     ) -> Self {
@@ -42,7 +42,7 @@ impl Server {
             inner: Inner {
                 vault,
                 response_tx,
-                content_tx,
+                message_tx,
                 response_limiter,
             },
             request_rx,
@@ -64,7 +64,7 @@ impl Server {
 struct Inner {
     vault: Vault,
     response_tx: mpsc::Sender<Response>,
-    content_tx: mpsc::UnboundedSender<Content>,
+    message_tx: mpsc::UnboundedSender<Message>,
     response_limiter: Arc<Semaphore>,
 }
 
@@ -361,7 +361,7 @@ impl Inner {
     }
 
     fn send_response(&self, response: Response) {
-        if self.content_tx.send(Content::Response(response)).is_ok() {
+        if self.message_tx.send(Message::Response(response)).is_ok() {
             self.vault.monitor.responses_sent.increment(1);
         }
     }
