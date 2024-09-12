@@ -29,7 +29,7 @@ pub(crate) struct ClientWriter {
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     quota: Option<StorageSize>,
     summary_updates: Vec<Hash>,
-    block_promises: Vec<BlockPromise>,
+    saved_blocks: Vec<SavedBlock>,
     block_id_cache: BlockIdCache,
     block_id_cache_updates: Vec<(Hash, BlockId)>,
 }
@@ -47,7 +47,7 @@ impl ClientWriter {
             block_expiration_tracker,
             quota,
             summary_updates: Vec::new(),
-            block_promises: Vec::new(),
+            saved_blocks: Vec::new(),
             block_id_cache,
             block_id_cache_updates: Vec::new(),
         })
@@ -195,7 +195,10 @@ impl ClientWriter {
             }
         }
 
-        self.block_promises.extend(block_promise);
+        self.saved_blocks.push(match block_promise {
+            Some(block_promise) => SavedBlock::WithPromise(block_promise),
+            None => SavedBlock::WithoutPromise(block.id),
+        });
 
         Ok(())
     }
@@ -217,14 +220,14 @@ impl ClientWriter {
             .await?;
 
         let new_blocks = self
-            .block_promises
+            .saved_blocks
             .iter()
-            .map(|promise| *promise.block_id())
+            .map(|saved_block| *saved_block.id())
             .collect();
 
         let Self {
             db,
-            block_promises,
+            saved_blocks,
             block_id_cache,
             block_id_cache_updates,
             ..
@@ -241,8 +244,10 @@ impl ClientWriter {
             .commit_and_then(move || {
                 block_id_cache.set_present(&block_id_cache_updates);
 
-                for promise in block_promises {
-                    promise.complete();
+                for saved_block in saved_blocks {
+                    if let SavedBlock::WithPromise(promise) = saved_block {
+                        promise.complete();
+                    }
                 }
 
                 f(status)
@@ -400,6 +405,20 @@ async fn load_block_offer_state_assuming_quota(
         NodeState::Incomplete | NodeState::Complete => Ok(Some(OfferState::Pending)),
         NodeState::Approved => Ok(Some(OfferState::Approved)),
         NodeState::Rejected => Ok(None),
+    }
+}
+
+enum SavedBlock {
+    WithPromise(BlockPromise),
+    WithoutPromise(BlockId),
+}
+
+impl SavedBlock {
+    fn id(&self) -> &BlockId {
+        match self {
+            SavedBlock::WithPromise(promise) => promise.block_id(),
+            SavedBlock::WithoutPromise(block_id) => block_id,
+        }
     }
 }
 
