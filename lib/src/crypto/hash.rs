@@ -86,7 +86,7 @@ impl fmt::Debug for Hash {
 
 impl fmt::LowerHex for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", hex_fmt::HexFmt(self.as_ref()))
+        hex_fmt::HexFmt(self.as_ref()).fmt(f)
     }
 }
 

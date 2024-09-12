@@ -22,6 +22,7 @@ use worker::Command;
 /// underlying connection) number of independent streams, each bound to a specific topic. When the
 /// two peers create streams bound to the same topic, they can communicate on them with each
 /// other.
+#[derive(Clone)]
 pub struct Bus {
     command_tx: mpsc::UnboundedSender<Command>,
 }
@@ -162,6 +163,8 @@ mod tests {
     use crate::test_utils::{
         create_connected_connections, create_connected_peers, init_log, Proto,
     };
+    use assert_matches::assert_matches;
+    use futures_util::future;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
@@ -252,5 +255,68 @@ mod tests {
             (b"ping 1", b"ping 0") => (),
             _ => panic!("unexpected {:?}", (&buffer_0, &buffer_1)),
         }
+    }
+
+    #[tokio::test]
+    async fn recreate_topic_tcp() {
+        recreate_topic_case(Proto::Tcp).await
+    }
+
+    #[tokio::test]
+    async fn recreate_topic_quic() {
+        recreate_topic_case(Proto::Quic).await
+    }
+
+    async fn recreate_topic_case(proto: Proto) {
+        init_log();
+
+        let (client, server) = create_connected_peers(proto);
+        let (client, server) = create_connected_connections(&client, &server).await;
+
+        let client = Bus::new(client);
+        let server = Bus::new(server);
+
+        let topic_id = TopicId::random();
+
+        let (mut client_send_stream, client_recv_stream) = client.create_topic(topic_id);
+        let (_server_send_stream, mut server_recv_stream) = server.create_topic(topic_id);
+
+        future::join(
+            async {
+                client_send_stream.write_all(b"ping 0").await.unwrap();
+            },
+            async {
+                let mut buffer = [0; 6];
+                server_recv_stream.read_exact(&mut buffer).await.unwrap();
+                assert_eq!(&buffer, b"ping 0");
+            },
+        )
+        .await;
+
+        // Close the client streams and create them again
+        drop(client_send_stream);
+        drop(client_recv_stream);
+
+        let (mut client_send_stream, _client_recv_stream) = client.create_topic(topic_id);
+
+        future::join(
+            async {
+                client_send_stream.write_all(b"ping 1").await.unwrap();
+            },
+            async {
+                // Reading from the stream fails because the client stream has been closed.
+                let mut buffer = [0; 6];
+                assert_matches!(
+                    server_recv_stream.read_exact(&mut buffer).await,
+                    Err(error) if error.kind() == io::ErrorKind::UnexpectedEof
+                );
+
+                // Recreate the stream and try again. This time is succeeds.
+                let (_server_send_stream, mut server_recv_stream) = server.create_topic(topic_id);
+                server_recv_stream.read_exact(&mut buffer).await.unwrap();
+                assert_eq!(&buffer, b"ping 1");
+            },
+        )
+        .await;
     }
 }

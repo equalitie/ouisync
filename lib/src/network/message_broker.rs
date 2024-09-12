@@ -1,6 +1,6 @@
 use super::{
     client::Client,
-    crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
+    crypto::{self, DecryptingStream, EncryptingSink, EstablishError, Role},
     message::{Message, Request, Response},
     message_dispatcher::{MessageDispatcher, MessageSink, MessageStream},
     peer_exchange::{PexPeer, PexReceiver, PexRepository, PexSender},
@@ -20,7 +20,7 @@ use bytes::{BufMut, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use net::{bus::TopicId, unified::Connection};
 use state_monitor::StateMonitor;
-use std::{future, sync::Arc};
+use std::{sync::Arc, time::Instant};
 use tokio::{
     select,
     sync::{
@@ -117,19 +117,18 @@ impl MessageBroker {
             &self.that_runtime_id,
         );
 
-        let (sink, stream) = self.dispatcher.open(topic_id, repo_counters);
-
         let (pex_tx, pex_rx) = self.pex_peer.new_link(pex_repo);
 
         let mut link = Link {
             role,
-            stream,
-            sink,
+            topic_id,
+            dispatcher: self.dispatcher.clone(),
             vault,
             response_limiter,
             pex_tx,
             pex_rx,
             monitor,
+            repo_counters,
         };
 
         drop(span_enter);
@@ -161,7 +160,7 @@ struct SpanGuard(Span);
 impl SpanGuard {
     fn new(that_runtime_id: &PublicRuntimeId) -> Self {
         let span = tracing::info_span!(
-            "message_broker",
+            "peer",
             message = ?that_runtime_id.as_public_key(),
         );
 
@@ -197,13 +196,14 @@ fn make_topic_id(
 
 struct Link {
     role: Role,
-    stream: MessageStream,
-    sink: MessageSink,
+    topic_id: TopicId,
+    dispatcher: MessageDispatcher,
     vault: Vault,
     response_limiter: Arc<Semaphore>,
     pex_tx: PexSender,
     pex_rx: PexReceiver,
     monitor: StateMonitor,
+    repo_counters: Arc<ByteCounters>,
 }
 
 impl Link {
@@ -216,9 +216,12 @@ impl Link {
             Running,
         }
 
+        let min_backoff = Duration::from_millis(100);
+        let max_backoff = Duration::from_secs(5);
+
         let mut backoff = ExponentialBackoffBuilder::new()
-            .with_initial_interval(Duration::from_millis(100))
-            .with_max_interval(Duration::from_secs(5))
+            .with_initial_interval(min_backoff)
+            .with_max_interval(max_backoff)
             .with_max_elapsed_time(None)
             .build();
 
@@ -235,18 +238,21 @@ impl Link {
 
             *state.get() = State::EstablishingChannel;
 
-            let (crypto_stream, crypto_sink) =
-                match establish_channel(self.role, &mut self.stream, &mut self.sink, &self.vault)
-                    .await
-                {
-                    Ok(io) => io,
-                    Err(EstablishError::Crypto) => continue,
-                    Err(EstablishError::Io(_)) => break,
-                };
+            let (mut sink, mut stream) = self
+                .dispatcher
+                .open(self.topic_id, self.repo_counters.clone());
+
+            let Ok((crypto_stream, crypto_sink)) =
+                establish_channel(self.role, &mut stream, &mut sink, &self.vault).await
+            else {
+                continue;
+            };
 
             *state.get() = State::Running;
 
-            match run_link(
+            let start = Instant::now();
+
+            run_link(
                 crypto_stream,
                 crypto_sink,
                 &self.vault,
@@ -254,10 +260,10 @@ impl Link {
                 &mut self.pex_tx,
                 &mut self.pex_rx,
             )
-            .await
-            {
-                ControlFlow::Continue => continue,
-                ControlFlow::Break => break,
+            .await;
+
+            if start.elapsed() > max_backoff {
+                backoff.reset();
             }
         }
     }
@@ -276,7 +282,6 @@ async fn establish_channel<'a>(
         }
         Err(error) => {
             tracing::warn!(?error, "Failed to establish encrypted channel");
-
             Err(error)
         }
     }
@@ -289,7 +294,7 @@ async fn run_link(
     response_limiter: Arc<Semaphore>,
     pex_tx: &mut PexSender,
     pex_rx: &mut PexReceiver,
-) -> ControlFlow {
+) {
     // Incoming message channels are bounded to prevent malicious peers from sending us too many
     // messages and exhausting our memory.
     let (request_tx, request_rx) = mpsc::channel(REQUEST_BUFFER_SIZE);
@@ -297,20 +302,30 @@ async fn run_link(
     // Outgoing message channel is unbounded because we fully control how much stuff goes into it.
     let (message_tx, message_rx) = mpsc::unbounded_channel();
 
-    tracing::info!("Link opened");
+    let _guard = LinkGuard::new();
 
-    // Run everything in parallel:
-    let flow = select! {
-        flow = run_client(repo.clone(), message_tx.clone(), response_rx) => flow,
-        flow = run_server(repo.clone(), message_tx.clone(), request_rx, response_limiter) => flow,
-        flow = recv_messages(stream, request_tx, response_tx, pex_rx) => flow,
-        flow = send_messages(message_rx, sink) => flow,
-        _ = pex_tx.run(message_tx) => ControlFlow::Continue,
+    select! {
+        _ = run_client(repo.clone(), message_tx.clone(), response_rx) => (),
+        _ = run_server(repo.clone(), message_tx.clone(), request_rx, response_limiter) => (),
+        _ = recv_messages(stream, request_tx, response_tx, pex_rx) => (),
+        _ = send_messages(message_rx, sink) => (),
+        _ = pex_tx.run(message_tx) => (),
     };
+}
 
-    tracing::info!("Link closed");
+struct LinkGuard;
 
-    flow
+impl LinkGuard {
+    fn new() -> Self {
+        tracing::info!("Link opened");
+        Self
+    }
+}
+
+impl Drop for LinkGuard {
+    fn drop(&mut self) {
+        tracing::info!("Link closed");
+    }
 }
 
 // Handle incoming messages
@@ -319,25 +334,17 @@ async fn recv_messages(
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
     pex_rx: &PexReceiver,
-) -> ControlFlow {
+) {
     loop {
         let message = match stream.next().await {
             Some(Ok(message)) => message,
-            Some(Err(RecvError::Crypto)) => {
-                tracing::warn!("Failed to decrypt incoming message",);
-                return ControlFlow::Continue;
-            }
-            Some(Err(RecvError::Exhausted)) => {
-                tracing::debug!("Incoming message nonce counter exhausted",);
-                return ControlFlow::Continue;
-            }
-            Some(Err(RecvError::Io(error))) => {
+            Some(Err(error)) => {
                 tracing::warn!(?error, "Failed to receive incoming message");
-                return ControlFlow::Break;
+                break;
             }
             None => {
                 tracing::debug!("Message channel closed");
-                return ControlFlow::Break;
+                break;
             }
         };
 
@@ -361,7 +368,7 @@ async fn recv_messages(
 async fn send_messages(
     mut message_rx: mpsc::UnboundedReceiver<Message>,
     mut sink: EncryptingSink<'_>,
-) -> ControlFlow {
+) {
     let mut writer = BytesMut::new().writer();
 
     loop {
@@ -372,7 +379,7 @@ async fn send_messages(
                     Ok(()) => (),
                     Err(error) => {
                         tracing::warn!(?error, "Failed to flush outgoing messages");
-                        return ControlFlow::Break;
+                        break;
                     }
                 }
 
@@ -382,7 +389,7 @@ async fn send_messages(
         };
 
         let Some(message) = message else {
-            forever().await
+            return;
         };
 
         // unwrap is OK because serialization into a vec should never fail unless we have a bug
@@ -391,13 +398,9 @@ async fn send_messages(
 
         match sink.feed(writer.get_mut().split().freeze()).await {
             Ok(()) => (),
-            Err(SendError::Exhausted) => {
-                tracing::debug!("Outgoing message nonce counter exhausted");
-                return ControlFlow::Continue;
-            }
-            Err(SendError::Io(error)) => {
+            Err(error) => {
                 tracing::warn!(?error, "Failed to send outgoing message");
-                return ControlFlow::Break;
+                break;
             }
         }
     }
@@ -408,16 +411,11 @@ async fn run_client(
     repo: Vault,
     message_tx: mpsc::UnboundedSender<Message>,
     response_rx: mpsc::Receiver<Response>,
-) -> ControlFlow {
+) {
     let mut client = Client::new(repo, message_tx, response_rx);
     let result = client.run().await;
 
     tracing::debug!("Client stopped running with result {:?}", result);
-
-    match result {
-        Ok(()) => forever().await,
-        Err(_) => ControlFlow::Continue,
-    }
 }
 
 // Create and run server. Returns only on error.
@@ -426,25 +424,10 @@ async fn run_server(
     message_tx: mpsc::UnboundedSender<Message>,
     request_rx: mpsc::Receiver<Request>,
     response_limiter: Arc<Semaphore>,
-) -> ControlFlow {
+) {
     let mut server = Server::new(repo, message_tx, request_rx, response_limiter);
 
     let result = server.run().await;
 
     tracing::debug!("Server stopped running with result {:?}", result);
-
-    match result {
-        Ok(()) => forever().await,
-        Err(_) => ControlFlow::Continue,
-    }
-}
-
-async fn forever() -> ! {
-    future::pending::<()>().await;
-    unreachable!()
-}
-
-enum ControlFlow {
-    Continue,
-    Break,
 }

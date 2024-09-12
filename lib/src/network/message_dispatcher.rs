@@ -12,6 +12,7 @@ use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimit
 /// individual streams/sinks based on their topic ids (in the MessageDispatcher's and
 /// MessageBroker's contexts, there is a one-to-one relationship between the topic id and a
 /// repository id).
+#[derive(Clone)]
 pub(super) struct MessageDispatcher {
     bus: net::bus::Bus,
     total_counters: Arc<ByteCounters>,
