@@ -19,7 +19,7 @@ pub fn configure(
     bind_addr: SocketAddr,
     options: SocketOptions,
 ) -> Result<(Connector, Acceptor), Error> {
-    let listener = TcpListener::bind_with_options(bind_addr, options)?;
+    let listener = TcpListener::bind(bind_addr, options)?;
     let local_addr = listener.local_addr()?;
 
     Ok((
@@ -297,7 +297,7 @@ mod implementation {
     impl TcpListener {
         /// Configures a TCP socket with the given options and binds it to the given address. If the
         /// port is taken, uses a random one,
-        pub fn bind_with_options(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
+        pub fn bind(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
             let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
             socket.set_nonblocking(true)?;
 
@@ -316,11 +316,6 @@ mod implementation {
             socket.listen(128)?;
 
             Ok(Self(tokio::net::TcpListener::from_std(socket.into())?))
-        }
-
-        /// Binds TCP socket to the given address. If the port is taken, uses a random one,
-        pub fn bind(addr: SocketAddr) -> io::Result<Self> {
-            Self::bind_with_options(addr, SocketOptions::default())
         }
 
         pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {

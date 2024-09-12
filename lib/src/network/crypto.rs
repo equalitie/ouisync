@@ -267,10 +267,10 @@ mod tests {
         let topic_id = TopicId::random();
 
         let (mut client_sink, mut client_stream) =
-            client.open(topic_id, Arc::new(ByteCounters::new()));
+            client.open(topic_id, Arc::new(ByteCounters::default()));
 
         let (mut server_sink, mut server_stream) =
-            server.open(topic_id, Arc::new(ByteCounters::new()));
+            server.open(topic_id, Arc::new(ByteCounters::default()));
 
         let ((mut client_stream, mut client_sink), (mut server_stream, mut server_sink)) =
             future::try_join(

@@ -64,10 +64,6 @@ pub(super) struct ByteCounters {
 }
 
 impl ByteCounters {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn increment_tx(&self, by: u64) {
         self.tx.fetch_add(by, Ordering::Relaxed);
     }

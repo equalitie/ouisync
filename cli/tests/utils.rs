@@ -121,7 +121,7 @@ impl Bin {
             "",
             self.client_command()
                 .arg("add-peers")
-                .arg(&format!("tcp/{}:{peer_port}", Ipv4Addr::LOCALHOST))
+                .arg(format!("tcp/{}:{peer_port}", Ipv4Addr::LOCALHOST))
                 .output()
                 .unwrap(),
         )
@@ -183,7 +183,7 @@ impl Bin {
             &self
                 .client_command()
                 .arg("bind-rpc")
-                .arg(&format!("{}:0", Ipv4Addr::LOCALHOST))
+                .arg(format!("{}:0", Ipv4Addr::LOCALHOST))
                 .output()
                 .unwrap()
                 .stdout,

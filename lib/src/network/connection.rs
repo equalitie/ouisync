@@ -237,35 +237,6 @@ impl ConnectionPermit {
             .unwrap_or_default()
     }
 
-    /// Dummy connection permit for tests.
-    #[cfg(test)]
-    pub fn dummy(dir: ConnectionDirection) -> Self {
-        use std::net::Ipv4Addr;
-
-        let key = Key {
-            addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
-            dir,
-        };
-        let id = ConnectionId::next();
-        let source = match dir {
-            ConnectionDirection::Incoming => PeerSource::Listener,
-            ConnectionDirection::Outgoing => PeerSource::UserProvided,
-        };
-        let data = Data {
-            id,
-            state: PeerState::Known,
-            source,
-            stats_tracker: StatsTracker::default(),
-            on_release: DropAwaitable::new(),
-        };
-
-        Self {
-            connections: watch::Sender::new([(key, data)].into()),
-            key,
-            id,
-        }
-    }
-
     fn with<F, R>(&self, f: F) -> Option<R>
     where
         F: FnOnce(&Data) -> R,

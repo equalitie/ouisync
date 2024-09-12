@@ -60,6 +60,7 @@ impl<E> Container<E> for Vec<E> {
 // but wouldn't compile without `Default` because `Container` requires it.
 #[allow(dead_code)]
 #[derive(Default)]
+#[expect(dead_code)] // False positive? This is used in `keep_maximal`.
 pub(crate) struct Discard;
 
 impl<E> Container<E> for Discard {

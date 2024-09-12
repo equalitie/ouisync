@@ -157,12 +157,12 @@ mod tests {
         let server_dispatcher = MessageDispatcher::builder(server).build();
 
         let (_server_sink, mut server_stream) =
-            server_dispatcher.open(topic_id, Arc::new(ByteCounters::new()));
+            server_dispatcher.open(topic_id, Arc::new(ByteCounters::default()));
 
         let client_dispatcher = MessageDispatcher::builder(client).build();
 
         let (mut client_sink, _client_stream) =
-            client_dispatcher.open(topic_id, Arc::new(ByteCounters::new()));
+            client_dispatcher.open(topic_id, Arc::new(ByteCounters::default()));
 
         client_sink
             .send(Bytes::from_static(send_content))
