@@ -643,20 +643,9 @@ pub(crate) mod delay_map {
             Some(item.value)
         }
 
-        pub fn drain(&mut self) -> impl Iterator<Item = (K, V)> + '_ {
-            self.items.drain().map(|(key, item)| {
-                self.delays.remove(&item.delay_key);
-                (key, item.value)
-            })
-        }
-
         pub fn len(&self) -> usize {
             self.items.len()
         }
-
-        // pub fn is_empty(&self) -> bool {
-        //     self.items.is_empty()
-        // }
 
         /// Poll for the next expired item. This can be wrapped in `future::poll_fn` and awaited.
         /// Returns `Poll::Ready(None)` if the map is empty.

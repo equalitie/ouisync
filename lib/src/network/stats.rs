@@ -89,10 +89,6 @@ pub(super) struct Throughput {
 }
 
 impl Throughput {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Returns the current throughput (in bytes per second), given the current total amount of
     /// bytes (sent or received) and the current time.
     ///

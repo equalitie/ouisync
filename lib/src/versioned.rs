@@ -56,6 +56,9 @@ impl<E> Container<E> for Vec<E> {
 }
 
 /// Container for outdated items that discards them.
+// TODO: Clippy complains that `Discard` is never constructed in rust 1.81.0
+// but wouldn't compile without `Default` because `Container` requires it.
+#[allow(dead_code)]
 #[derive(Default)]
 pub(crate) struct Discard;
 
