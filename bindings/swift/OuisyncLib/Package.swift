@@ -20,7 +20,11 @@ let package = Package(
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
             name: "OuisyncLib",
-            dependencies: [.product(name:"MessagePack", package: "MessagePack.swift")]),
+            dependencies: [.product(name:"MessagePack", package: "MessagePack.swift"), "OuisyncLibFFI"]
+        ),
+        .target(name: "OuisyncLibFFI", dependencies: ["OuisyncDyLibBuilder"]),
+        .plugin(name: "OuisyncDyLibBuilder", capability: .buildTool()),
+
         .testTarget(
             name: "OuisyncLibTests",
             dependencies: ["OuisyncLib"]),

@@ -3,6 +3,7 @@ import FlutterMacOS
 
 public class OuisyncPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
+
     let channel = FlutterMethodChannel(name: "ouisync", binaryMessenger: registrar.messenger)
     let instance = OuisyncPlugin()
     registrar.addMethodCallDelegate(instance, channel: channel)

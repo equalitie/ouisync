@@ -58,7 +58,12 @@ class Session {
     }
 
     final recvPort = ReceivePort();
-    final result = _withPoolSync((pool) => bindings.session_create(
+
+    if (bindings == null) {
+      bindings = Bindings.loadDefault();
+    }
+
+    final result = _withPoolSync((pool) => bindings!.session_create(
           kind.encode(),
           pool.toNativeUtf8(configPath),
           logPath != null ? pool.toNativeUtf8(logPath) : nullptr,
@@ -78,8 +83,18 @@ class Session {
       throw Error(errorCode, errorMessage);
     }
 
-    final client = Client(handle, recvPort);
+    final client = DirectClient(handle, recvPort, bindings!);
 
+    return Session._(client);
+  }
+
+  // Creates a new session which forwards calls to Ouisync backend running in the
+  // native code.
+  // [channelName] is the name of the MethodChannel to be used, equally named channel
+  // must be created and set up to listen to the commands in the native code.
+  static Future<Session> createChanneled(String channelName) async {
+    final client = ChannelClient(channelName);
+    await client.initialize();
     return Session._(client);
   }
 
@@ -207,19 +222,7 @@ class Session {
   /// `closeSync` function.
   Future<void> close() async {
     await _networkSubscription.close();
-
-    final handle = _client.close();
-    if (handle == 0) {
-      return;
-    }
-
-    await _invoke(
-      (port) => bindings.session_close(
-        handle,
-        NativeApi.postCObject,
-        port,
-      ),
-    );
+    await _client.close();
   }
 
   /// Try to gracefully close connections to peers then close the session.
@@ -227,15 +230,18 @@ class Session {
   /// shutdown (on app exit). In those situations the network needs to be shut
   /// down using a blocking call.
   ///
+  /// This function closes the session only if the client used is the DirectClient.
+  /// Otherwise it throws.
+  ///
   /// Note that this function is idempotent with itself as well as with the
   /// `close` function.
   void closeSync() {
-    final handle = _client.close();
-    if (handle == 0) {
-      return;
+    final client = _client;
+    if (client is DirectClient) {
+        client.closeSync();
+    } else {
+        throw "closeSync is currently only implemented for DirectClient";
     }
-
-    bindings.session_close_blocking(handle);
   }
 }
 
@@ -921,26 +927,26 @@ class File {
   Future<int> get progress => _client.invoke<int>('file_progress', _handle);
 
   /// Copy the contents of the file into the provided raw file descriptor.
-  Future<void> copyToRawFd(int fd) {
+  /// TODO: Right now this function only works when using the DirectClient,
+  /// otherwise throws.
+  Future<void> copyToRawFd(int fd) async {
     if (debugTrace) {
       print("File.copyToRawFd");
     }
 
-    return _invoke(
-      (port) => bindings.file_copy_to_raw_fd(
-        _client.handle,
-        _handle,
-        fd,
-        NativeApi.postCObject,
-        port,
-      ),
-    );
+    final client = _client;
+
+    if (client is DirectClient) {
+        await client.copyToRawFd(_handle, fd);
+    } else {
+        throw "copyToRawFd is currently implemented only for DirectClient";
+    }
   }
 }
 
 /// Print log message
 void logPrint(LogLevel level, String scope, String message) =>
-    _withPoolSync((pool) => bindings.log_print(
+    _withPoolSync((pool) => bindings!.log_print(
           level.encode(),
           pool.toNativeUtf8(scope),
           pool.toNativeUtf8(message),
@@ -967,32 +973,6 @@ T _withPoolSync<T>(T Function(_Pool) fun) {
     return fun(pool);
   } finally {
     pool.release();
-  }
-}
-
-// Helper to invoke a native async function.
-Future<void> _invoke(void Function(int) fun) async {
-  final recvPort = ReceivePort();
-
-  try {
-    fun(recvPort.sendPort.nativePort);
-
-    final bytes = await recvPort.cast<Uint8List>().first;
-
-    if (bytes.isEmpty) {
-      return;
-    }
-
-    final code = ErrorCode.decode(bytes.buffer.asByteData().getUint16(0));
-    final message = utf8.decode(bytes.sublist(2));
-
-    if (code == ErrorCode.ok) {
-      return;
-    } else {
-      throw Error(code, message);
-    }
-  } finally {
-    recvPort.close();
   }
 }
 
@@ -1035,5 +1015,5 @@ extension Utf8Pointer on Pointer<Utf8> {
 
 // Free a pointer that was allocated by the native side.
 void freeString(Pointer<Utf8> ptr) {
-  bindings.free_string(ptr.cast<Char>());
+  bindings!.free_string(ptr.cast<Char>());
 }

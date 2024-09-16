@@ -1,172 +1,27 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:ffi';
-import 'dart:isolate';
-import 'dart:typed_data';
 
-import 'package:ffi/ffi.dart';
-import 'package:msgpack_dart/msgpack_dart.dart';
+export 'internal/direct_client.dart';
 
-import 'bindings.dart';
-import 'ouisync.dart' show Error;
+export 'internal/channel_client.dart';
 
-/// Client to interface with ouisync
-class Client {
-  int _handle;
-  final Stream<Uint8List> _stream;
-  var _nextMessageId = 0;
-  final _responses = HashMap<int, Completer<Object?>>();
-  final _subscriptions = HashMap<int, StreamSink<Object?>>();
+abstract class Client {
+    Future<T> invoke<T>(String method, [Object? args]);
+    Future<void> close();
+    Subscriptions subscriptions();
+}
 
-  Client(this._handle, ReceivePort port) : _stream = port.cast<Uint8List>() {
-    unawaited(_receive());
-  }
+class Subscriptions {
+  final _sinks = HashMap<int, StreamSink<Object?>>();
 
-  int get handle => _handle;
+  void handle(int subscriptionId, Object? payload) {
+    final sink = _sinks[subscriptionId];
 
-  Future<T> invoke<T>(String method, [Object? args]) async {
-    final id = _nextMessageId++;
-    final completer = Completer();
-
-    _responses[id] = completer;
-
-    final request = {method: args};
-
-    // DEBUG
-    //print('send: id: $id, request: $request');
-
-    try {
-      // Message format:
-      //
-      // +-------------------------------------+-------------------------------------------+
-      // | id (big endian 64 bit unsigned int) | request (messagepack encoded byte string) |
-      // +-------------------------------------+-------------------------------------------+
-      //
-      // This allows the server to decode the id even if the request is malformed so it can send
-      // error response back.
-      final message = (BytesBuilder()
-            ..add((ByteData(8)..setUint64(0, id)).buffer.asUint8List())
-            ..add(serialize(request)))
-          .takeBytes();
-
-      _send(message);
-
-      return await completer.future as T;
-    } finally {
-      _responses.remove(id);
-    }
-  }
-
-  int close() {
-    final handle = _handle;
-    _handle = 0;
-    return handle;
-  }
-
-  bool get isClosed => _handle == 0;
-
-  void _send(Uint8List data) {
-    if (_handle == 0) {
-      throw StateError('session has been closed');
-    }
-
-    // TODO: is there a way to do this without having to allocate whole new buffer?
-    var buffer = malloc<Uint8>(data.length);
-
-    try {
-      buffer.asTypedList(data.length).setAll(0, data);
-      bindings.session_channel_send(_handle, buffer, data.length);
-    } finally {
-      malloc.free(buffer);
-    }
-  }
-
-  Future<void> _receive() async {
-    await for (final bytes in _stream) {
-      if (bytes.length < 8) {
-        continue;
-      }
-
-      final id = bytes.buffer.asByteData().getUint64(0);
-      final message = deserialize(bytes.sublist(8));
-
-      // DEBUG
-      //print('recv: id: $id, message: $message');
-
-      if (message is! Map) {
-        continue;
-      }
-
-      final isSuccess = message.containsKey('success');
-      final isFailure = message.containsKey('failure');
-      final isNotification = message.containsKey('notification');
-
-      if (isSuccess || isFailure) {
-        final responseCompleter = _responses.remove(id);
-        if (responseCompleter == null) {
-          print('unsolicited response');
-          continue;
-        }
-
-        if (isSuccess) {
-          _handleResponseSuccess(responseCompleter, message['success']);
-        } else if (isFailure) {
-          _handleResponseFailure(responseCompleter, message['failure']);
-        }
-      } else if (isNotification) {
-        final subscription = _subscriptions[id];
-        if (subscription == null) {
-          print('unsolicited notification');
-          continue;
-        }
-
-        _handleNotification(subscription, message['notification']);
-      } else {
-        final responseCompleter = _responses.remove(id);
-        if (responseCompleter != null) {
-          _handleInvalidResponse(responseCompleter);
-        }
-      }
-    }
-  }
-
-  void _handleResponseSuccess(Completer<Object?> completer, Object? payload) {
-    if (payload == "none") {
-      completer.complete(null);
+    if (sink == null) {
+      print('unsolicited notification');
       return;
     }
 
-    if (payload is Map && payload.length == 1) {
-      completer.complete(payload.entries.single.value);
-    } else {
-      _handleInvalidResponse(completer);
-    }
-  }
-
-  void _handleResponseFailure(Completer<Object?> completer, Object? payload) {
-    if (payload is! List) {
-      _handleInvalidResponse(completer);
-      return;
-    }
-
-    final code = payload[0];
-    final message = payload[1];
-
-    if (code is! int || message is! String) {
-      _handleInvalidResponse(completer);
-      return;
-    }
-
-    final error = Error(ErrorCode.decode(code), message);
-    completer.completeError(error);
-  }
-
-  void _handleInvalidResponse(Completer<Object?> completer) {
-    final error = Exception('invalid response');
-    completer.completeError(error);
-  }
-
-  void _handleNotification(StreamSink<Object?> sink, Object? payload) {
     try {
       if (payload is String) {
         sink.add(null);
@@ -203,7 +58,7 @@ class Subscription {
 
   Future<void> close() async {
     if (_controller.hasListener) {
-      await _controller.close();
+      return await _controller.close();
     }
   }
 
@@ -253,7 +108,7 @@ class Subscription {
         return;
       }
 
-      _client._subscriptions[_id] = _controller.sink;
+      _client.subscriptions()._sinks[_id] = _controller.sink;
     } catch (e) {
       print('failed to subscribe to $_name: $e');
     }
@@ -264,7 +119,7 @@ class Subscription {
       return;
     }
 
-    _client._subscriptions.remove(_id);
+    _client.subscriptions()._sinks.remove(_id);
 
     try {
       await _client.invoke('unsubscribe', _id);
@@ -281,3 +136,4 @@ enum _SubscriptionState {
   subscribing,
   unsubscribing,
 }
+

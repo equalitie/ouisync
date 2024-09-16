@@ -10,7 +10,7 @@ import System
 
 //--------------------------------------------------------------------
 
-public class MessageRequest {
+public class OuisyncRequest {
     let functionName: String
     let functionArguments: MessagePackValue
 
@@ -19,119 +19,119 @@ public class MessageRequest {
         self.functionArguments = functionArguments
     }
 
-    public static func listRepositories() -> MessageRequest {
-        return MessageRequest("list_repositories", MessagePackValue.nil)
+    public static func listRepositories() -> OuisyncRequest {
+        return OuisyncRequest("list_repositories", MessagePackValue.nil)
     }
 
-    public static func subscribeToRepositoryListChange() -> MessageRequest {
-        return MessageRequest("list_repositories_subscribe", MessagePackValue.nil)
+    public static func subscribeToRepositoryListChange() -> OuisyncRequest {
+        return OuisyncRequest("list_repositories_subscribe", MessagePackValue.nil)
     }
 
-    public static func subscribeToRepositoryChange(_ handle: RepositoryHandle) -> MessageRequest {
-        return MessageRequest("repository_subscribe", MessagePackValue(handle))
+    public static func subscribeToRepositoryChange(_ handle: RepositoryHandle) -> OuisyncRequest {
+        return OuisyncRequest("repository_subscribe", MessagePackValue(handle))
     }
 
-    public static func getRepositoryName(_ handle: RepositoryHandle) -> MessageRequest {
-        return MessageRequest("repository_name", MessagePackValue(handle))
+    public static func getRepositoryName(_ handle: RepositoryHandle) -> OuisyncRequest {
+        return OuisyncRequest("repository_name", MessagePackValue(handle))
     }
 
-    public static func repositoryMoveEntry(_ repoHandle: RepositoryHandle, _ srcPath: FilePath, _ dstPath: FilePath) -> MessageRequest {
-        return MessageRequest("repository_move_entry", MessagePackValue([
+    public static func repositoryMoveEntry(_ repoHandle: RepositoryHandle, _ srcPath: FilePath, _ dstPath: FilePath) -> OuisyncRequest {
+        return OuisyncRequest("repository_move_entry", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(repoHandle),
             MessagePackValue("src"): MessagePackValue(srcPath.description),
             MessagePackValue("dst"): MessagePackValue(dstPath.description),
         ]))
     }
 
-    public static func listEntries(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
-        return MessageRequest("directory_open", MessagePackValue([
+    public static func listEntries(_ handle: RepositoryHandle, _ path: FilePath) -> OuisyncRequest {
+        return OuisyncRequest("directory_open", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
     }
 
-    public static func getEntryVersionHash(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
-        return MessageRequest("repository_entry_version_hash", MessagePackValue([
+    public static func getEntryVersionHash(_ handle: RepositoryHandle, _ path: FilePath) -> OuisyncRequest {
+        return OuisyncRequest("repository_entry_version_hash", MessagePackValue([
           MessagePackValue("repository"): MessagePackValue(handle),
           MessagePackValue("path"): MessagePackValue(path.description),
         ]))
     }
 
-    public static func directoryExists(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
-        return MessageRequest("directory_exists", MessagePackValue([
+    public static func directoryExists(_ handle: RepositoryHandle, _ path: FilePath) -> OuisyncRequest {
+        return OuisyncRequest("directory_exists", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
     }
 
-    public static func directoryRemove(_ handle: RepositoryHandle, _ path: FilePath, _ recursive: Bool) -> MessageRequest {
-        return MessageRequest("directory_remove", MessagePackValue([
+    public static func directoryRemove(_ handle: RepositoryHandle, _ path: FilePath, _ recursive: Bool) -> OuisyncRequest {
+        return OuisyncRequest("directory_remove", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
             MessagePackValue("path"): MessagePackValue(path.description),
             MessagePackValue("recursive"): MessagePackValue(recursive),
         ]))
     }
 
-    public static func directoryCreate(_ repoHandle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
-        return MessageRequest("directory_create", MessagePackValue([
+    public static func directoryCreate(_ repoHandle: RepositoryHandle, _ path: FilePath) -> OuisyncRequest {
+        return OuisyncRequest("directory_create", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(repoHandle),
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
     }
 
-    public static func fileOpen(_ repoHandle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
-        return MessageRequest("file_open", MessagePackValue([
+    public static func fileOpen(_ repoHandle: RepositoryHandle, _ path: FilePath) -> OuisyncRequest {
+        return OuisyncRequest("file_open", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(repoHandle),
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
     }
 
-    public static func fileExists(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
-        return MessageRequest("file_exists", MessagePackValue([
+    public static func fileExists(_ handle: RepositoryHandle, _ path: FilePath) -> OuisyncRequest {
+        return OuisyncRequest("file_exists", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
     }
 
-    public static func fileRemove(_ handle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
-        return MessageRequest("file_remove", MessagePackValue([
+    public static func fileRemove(_ handle: RepositoryHandle, _ path: FilePath) -> OuisyncRequest {
+        return OuisyncRequest("file_remove", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(handle),
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
     }
 
-    public static func fileClose(_ fileHandle: FileHandle) -> MessageRequest {
-        return MessageRequest("file_close", MessagePackValue(fileHandle))
+    public static func fileClose(_ fileHandle: FileHandle) -> OuisyncRequest {
+        return OuisyncRequest("file_close", MessagePackValue(fileHandle))
     }
 
-    public static func fileRead(_ fileHandle: FileHandle, _ offset: UInt64, _ len: UInt64) -> MessageRequest {
-        return MessageRequest("file_read", MessagePackValue([
+    public static func fileRead(_ fileHandle: FileHandle, _ offset: UInt64, _ len: UInt64) -> OuisyncRequest {
+        return OuisyncRequest("file_read", MessagePackValue([
             MessagePackValue("file"): MessagePackValue(fileHandle),
             MessagePackValue("offset"): MessagePackValue(offset),
             MessagePackValue("len"): MessagePackValue(len),
         ]))
     }
 
-    public static func fileTruncate(_ fileHandle: FileHandle, _ len: UInt64) -> MessageRequest {
-        return MessageRequest("file_truncate", MessagePackValue([
+    public static func fileTruncate(_ fileHandle: FileHandle, _ len: UInt64) -> OuisyncRequest {
+        return OuisyncRequest("file_truncate", MessagePackValue([
             MessagePackValue("file"): MessagePackValue(fileHandle),
             MessagePackValue("len"): MessagePackValue(len),
         ]))
     }
 
-    public static func fileLen(_ fileHandle: FileHandle) -> MessageRequest {
-        return MessageRequest("file_len", MessagePackValue(fileHandle))
+    public static func fileLen(_ fileHandle: FileHandle) -> OuisyncRequest {
+        return OuisyncRequest("file_len", MessagePackValue(fileHandle))
     }
 
-    public static func fileCreate(_ repoHandle: RepositoryHandle, _ path: FilePath) -> MessageRequest {
-        return MessageRequest("file_create", MessagePackValue([
+    public static func fileCreate(_ repoHandle: RepositoryHandle, _ path: FilePath) -> OuisyncRequest {
+        return OuisyncRequest("file_create", MessagePackValue([
             MessagePackValue("repository"): MessagePackValue(repoHandle),
             MessagePackValue("path"): MessagePackValue(path.description),
         ]))
     }
 
-    public static func fileWrite(_ fileHandle: FileHandle, _ offset: UInt64, _ data: Data) -> MessageRequest {
-        return MessageRequest("file_write", MessagePackValue([
+    public static func fileWrite(_ fileHandle: FileHandle, _ offset: UInt64, _ data: Data) -> OuisyncRequest {
+        return OuisyncRequest("file_write", MessagePackValue([
             MessagePackValue("file"): MessagePackValue(fileHandle),
             MessagePackValue("offset"): MessagePackValue(offset),
             MessagePackValue("data"): MessagePackValue(data),
@@ -141,42 +141,95 @@ public class MessageRequest {
 
 //--------------------------------------------------------------------
 
-public class IncomingMessage {
+public class OuisyncRequestMessage {
     public let messageId: MessageId
-    public let payload: IncomingPayload
+    public let request: OuisyncRequest
 
-    init(_ messageId: MessageId, _ payload: IncomingPayload) {
+    init(_ messageId: MessageId, _ request: OuisyncRequest) {
+        self.messageId = messageId
+        self.request = request
+    }
+
+    public func serialize() -> [UInt8] {
+        var message: [UInt8] = []
+        message.append(contentsOf: withUnsafeBytes(of: messageId.bigEndian, Array.init))
+        let payload = [MessagePackValue.string(request.functionName): request.functionArguments]
+        message.append(contentsOf: pack(MessagePackValue.map(payload)))
+        return message
+    }
+
+    public static func deserialize(_ data: [UInt8]) -> OuisyncRequestMessage? {
+        guard let (id, data) = readMessageId(data) else {
+            return nil
+        }
+
+        let unpacked = (try? unpack(data))?.0
+
+        guard case let .map(m) = unpacked else { return nil }
+        if m.count != 1 { return nil }
+        guard let e = m.first else { return nil }
+        guard let functionName = e.key.stringValue else { return nil }
+        let functionArguments = e.value
+
+        return OuisyncRequestMessage(id, OuisyncRequest(functionName, functionArguments))
+    }
+}
+
+public class OuisyncResponseMessage {
+    public let messageId: MessageId
+    public let payload: OuisyncResponsePayload
+
+    public init(_ messageId: MessageId, _ payload: OuisyncResponsePayload) {
         self.messageId = messageId
         self.payload = payload
     }
 
-    public static func deserialize(_ data: [UInt8]) -> IncomingMessage? {
-        let idByteCount = (MessageId.bitWidth / UInt8.bitWidth)
+    public func serialize() -> [UInt8] {
+        var message: [UInt8] = []
+        message.append(contentsOf: withUnsafeBytes(of: messageId.bigEndian, Array.init))
+        let body: MessagePackValue;
+        switch payload {
+        case .response(let response):
+            body = MessagePackValue.map(["success": Self.responseValue(response.value)])
+        case .notification(let notification):
+            body = MessagePackValue.map(["notification": notification.value])
+        case .error(let error):
+            let code = Int64(exactly: error.code.rawValue)!
+            body = MessagePackValue.map(["failure": .array([.int(code), .string(error.message)])])
+        }
+        message.append(contentsOf: pack(body))
+        return message
+    }
 
-        if data.count < idByteCount {
+    static func responseValue(_ value: MessagePackValue) -> MessagePackValue {
+        switch value {
+        case .nil: return .string("none")
+        default:
+            // The flutter code doesn't read the key which is supposed to be a type,
+            // would still be nice to have a proper mapping.
+            return .map(["todo-type": value])
+        }
+    }
+
+    public static func deserialize(_ bytes: [UInt8]) -> OuisyncResponseMessage? {
+        guard let (id, data) = readMessageId(bytes) else {
             return nil
         }
 
-        let bigEndianValue = data.withUnsafeBufferPointer {
-            ($0.baseAddress!.withMemoryRebound(to: MessageId.self, capacity: 1) { $0 })
-        }.pointee
-
-        let id = MessageId(bigEndian: bigEndianValue)
-
-        let unpacked = (try? unpack(Data(data[idByteCount...])))?.0
+        let unpacked = (try? unpack(Data(data)))?.0
 
         if case let .map(m) = unpacked {
             if let success = m[.string("success")] {
                 if let value = parseResponse(success) {
-                    return IncomingMessage(id, IncomingPayload.response(value))
+                    return OuisyncResponseMessage(id, OuisyncResponsePayload.response(value))
                 }
             } else if let error = m[.string("failure")] {
                 if let response = parseFailure(error) {
-                    return IncomingMessage(id, IncomingPayload.error(response))
+                    return OuisyncResponseMessage(id, OuisyncResponsePayload.error(response))
                 }
             } else if let notification = m[.string("notification")] {
                 if let value = parseNotification(notification) {
-                    return IncomingMessage(id, IncomingPayload.notification(value))
+                    return OuisyncResponseMessage(id, OuisyncResponsePayload.notification(value))
                 }
             }
         }
@@ -185,21 +238,36 @@ public class IncomingMessage {
     }
 }
 
-extension IncomingMessage: CustomStringConvertible {
+extension OuisyncResponseMessage: CustomStringConvertible {
     public var description: String {
         return "IncomingMessage(\(messageId), \(payload))"
     }
 }
 
+fileprivate func readMessageId(_ data: [UInt8]) -> (MessageId, Data)? {
+    let idByteCount = (MessageId.bitWidth / UInt8.bitWidth)
+
+    if data.count < idByteCount {
+        return nil
+    }
+
+    let bigEndianValue = data.withUnsafeBufferPointer {
+        ($0.baseAddress!.withMemoryRebound(to: MessageId.self, capacity: 1) { $0 })
+    }.pointee
+
+    let id = MessageId(bigEndian: bigEndianValue)
+
+    return (id, Data(data[idByteCount...]))
+}
 //--------------------------------------------------------------------
 
-public enum IncomingPayload {
+public enum OuisyncResponsePayload {
     case response(Response)
     case notification(OuisyncNotification)
     case error(OuisyncError)
 }
 
-extension IncomingPayload: CustomStringConvertible {
+extension OuisyncResponsePayload: CustomStringConvertible {
     public var description: String {
         switch self {
         case .response(let response):
@@ -240,7 +308,7 @@ public class Response {
     // the actual types differ, then it is likely that there is a
     // mismatch between the front end and the backend in the FFI API.
 
-    init(_ value: MessagePackValue) {
+    public init(_ value: MessagePackValue) {
         self.value = value
     }
 

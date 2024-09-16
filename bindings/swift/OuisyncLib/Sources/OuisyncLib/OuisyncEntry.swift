@@ -111,7 +111,7 @@ public class OuisyncDirectoryEntry: CustomDebugStringConvertible {
     }
 
     public func listEntries() async throws -> [OuisyncEntry] {
-        let response = try await repository.session.sendRequest(MessageRequest.listEntries(repository.handle, path))
+        let response = try await repository.session.sendRequest(OuisyncRequest.listEntries(repository.handle, path))
         let entries = response.value.arrayValue!
         return entries.map({entry in
             let name: String = entry[0]!.stringValue!
@@ -138,7 +138,7 @@ public class OuisyncDirectoryEntry: CustomDebugStringConvertible {
     }
 
     public func exists() async throws -> Bool {
-        let response = try await repository.session.sendRequest(MessageRequest.directoryExists(repository.handle, path))
+        let response = try await repository.session.sendRequest(OuisyncRequest.directoryExists(repository.handle, path))
         return response.value.boolValue!
     }
 

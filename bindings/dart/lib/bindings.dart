@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart' show kReleaseMode;
 
 export 'bindings.g.dart';
 
-final bindings = Bindings(_defaultLib());
+Bindings? bindings;
 
 typedef PostCObject = Int8 Function(Int64, Pointer<Dart_CObject>);
 
@@ -87,6 +87,10 @@ class Bindings {
         free_string = library
             .lookup<NativeFunction<_free_string_c>>('free_string')
             .asFunction();
+
+  static Bindings loadDefault() {
+    return Bindings(_defaultLib());
+  }
 
   final session_create_dart session_create;
   final session_channel_send_dart session_channel_send;
