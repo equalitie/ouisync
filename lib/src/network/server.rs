@@ -105,8 +105,6 @@ impl Inner {
 
     #[instrument(skip(self, debug), err(Debug))]
     async fn handle_root_node(&self, writer_id: PublicKey, debug: DebugRequest) -> Result<()> {
-        let debug = debug.begin_reply();
-
         let root_node = self
             .vault
             .store()
@@ -122,7 +120,7 @@ impl Inner {
                 let response = Response::RootNode(
                     node.proof.into(),
                     node.summary.block_presence,
-                    debug.send(),
+                    debug.reply(),
                 );
 
                 self.enqueue_response(response).await;
@@ -130,12 +128,12 @@ impl Inner {
             }
             Err(store::Error::BranchNotFound) => {
                 tracing::trace!("root node not found");
-                self.enqueue_response(Response::RootNodeError(writer_id, debug.send()))
+                self.enqueue_response(Response::RootNodeError(writer_id, debug.reply()))
                     .await;
                 Ok(())
             }
             Err(error) => {
-                self.enqueue_response(Response::RootNodeError(writer_id, debug.send()))
+                self.enqueue_response(Response::RootNodeError(writer_id, debug.reply()))
                     .await;
                 Err(error.into())
             }
@@ -149,8 +147,6 @@ impl Inner {
         disambiguator: ResponseDisambiguator,
         debug: DebugRequest,
     ) -> Result<()> {
-        let debug = debug.begin_reply();
-
         let mut reader = self.vault.store().acquire_read().await?;
 
         // At most one of these will be non-empty.
@@ -165,22 +161,26 @@ impl Inner {
                 self.enqueue_response(Response::InnerNodes(
                     inner_nodes,
                     disambiguator,
-                    debug.clone().send(),
+                    debug.reply(),
                 ))
                 .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
-                self.enqueue_response(Response::LeafNodes(leaf_nodes, disambiguator, debug.send()))
-                    .await;
+                self.enqueue_response(Response::LeafNodes(
+                    leaf_nodes,
+                    disambiguator,
+                    debug.reply(),
+                ))
+                .await;
             }
         } else {
             tracing::trace!("child nodes not found");
             self.enqueue_response(Response::ChildNodesError(
                 parent_hash,
                 disambiguator,
-                debug.send(),
+                debug.reply(),
             ))
             .await;
         }
@@ -190,7 +190,6 @@ impl Inner {
 
     #[instrument(skip(self, debug), err(Debug))]
     async fn handle_block(&self, block_id: BlockId, debug: DebugRequest) -> Result<()> {
-        let debug = debug.begin_reply();
         let mut content = BlockContent::new();
         let result = self
             .vault
@@ -203,18 +202,18 @@ impl Inner {
         match result {
             Ok(nonce) => {
                 tracing::trace!("block found");
-                self.enqueue_response(Response::Block(content, nonce, debug.send()))
+                self.enqueue_response(Response::Block(content, nonce, debug.reply()))
                     .await;
                 Ok(())
             }
             Err(store::Error::BlockNotFound) => {
                 tracing::trace!("block not found");
-                self.enqueue_response(Response::BlockError(block_id, debug.send()))
+                self.enqueue_response(Response::BlockError(block_id, debug.reply()))
                     .await;
                 Ok(())
             }
             Err(error) => {
-                self.enqueue_response(Response::BlockError(block_id, debug.send()))
+                self.enqueue_response(Response::BlockError(block_id, debug.reply()))
                     .await;
                 Err(error.into())
             }

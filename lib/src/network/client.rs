@@ -1,6 +1,6 @@
 use super::{
     constants::RESPONSE_BATCH_SIZE,
-    debug_payload::{DebugResponse, PendingDebugRequest},
+    debug_payload::{DebugRequest, DebugResponse},
     message::{Message, Response, ResponseDisambiguator},
     pending::{
         EphemeralResponse, PendingRequest, PendingRequests, PersistableResponse, PreparedResponse,
@@ -256,7 +256,7 @@ impl Inner {
             self.send_request(PendingRequest::ChildNodes(
                 node.hash,
                 ResponseDisambiguator::new(node.summary.block_presence),
-                debug_payload.clone().follow_up(),
+                debug_payload.follow_up(),
             ));
         }
 
@@ -358,8 +358,7 @@ impl Inner {
 
         loop {
             let block_offer = block_offers.next().await;
-            let debug = PendingDebugRequest::start();
-            self.send_request(PendingRequest::Block(block_offer, debug));
+            self.send_request(PendingRequest::Block(block_offer, DebugRequest::start()));
         }
     }
 
@@ -392,10 +391,7 @@ impl Inner {
     // requested as soon as possible.
     fn refresh_branches(&self, branches: impl IntoIterator<Item = PublicKey>) {
         for branch_id in branches {
-            self.send_request(PendingRequest::RootNode(
-                branch_id,
-                PendingDebugRequest::start(),
-            ));
+            self.send_request(PendingRequest::RootNode(branch_id, DebugRequest::start()));
         }
     }
 

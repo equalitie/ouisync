@@ -1,6 +1,6 @@
 use super::{
     constants::REQUEST_TIMEOUT,
-    debug_payload::{DebugResponse, PendingDebugRequest},
+    debug_payload::{DebugRequest, DebugResponse},
     message::{Request, Response, ResponseDisambiguator},
 };
 use crate::{
@@ -18,9 +18,9 @@ use std::{task::Poll, time::Instant};
 use tokio::sync::Notify;
 
 pub(crate) enum PendingRequest {
-    RootNode(PublicKey, PendingDebugRequest),
-    ChildNodes(Hash, ResponseDisambiguator, PendingDebugRequest),
-    Block(BlockOffer, PendingDebugRequest),
+    RootNode(PublicKey, DebugRequest),
+    ChildNodes(Hash, ResponseDisambiguator, DebugRequest),
+    Block(BlockOffer, DebugRequest),
 }
 
 /// Response that's been prepared for processing.
@@ -124,17 +124,17 @@ impl PendingRequests {
             PendingRequest::RootNode(writer_id, debug) => self
                 .index
                 .try_insert(IndexKey::RootNode(writer_id))
-                .then(|| Request::RootNode(writer_id, debug.send()))?,
+                .then_some(Request::RootNode(writer_id, debug))?,
             PendingRequest::ChildNodes(hash, disambiguator, debug) => self
                 .index
                 .try_insert(IndexKey::ChildNodes(hash, disambiguator))
-                .then(|| Request::ChildNodes(hash, disambiguator, debug.send()))?,
+                .then_some(Request::ChildNodes(hash, disambiguator, debug))?,
             PendingRequest::Block(block_offer, debug) => {
                 let block_promise = block_offer.accept()?;
                 let block_id = *block_promise.block_id();
                 self.block
                     .try_insert(block_promise)
-                    .then(|| Request::Block(block_id, debug.send()))?
+                    .then_some(Request::Block(block_id, debug))?
             }
         };
 
