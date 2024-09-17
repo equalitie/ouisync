@@ -37,6 +37,12 @@ class LocalPassword implements LocalSecret, SetLocalSecret {
   // Discourage from writing local secret into the log.
   @override
   String toString() => "LocalPassword(***)";
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! LocalPassword) return false;
+    return string == other.string;
+  }
 }
 
 class LocalSecretKey implements LocalSecret {
