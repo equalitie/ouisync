@@ -9,11 +9,7 @@ use std::{
     iter,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use tokio::{
-    select,
-    sync::{mpsc, oneshot},
-    task,
-};
+use tokio::{select, sync::mpsc, task};
 use tokio_stream::StreamExt;
 use tokio_util::time::{delay_queue, DelayQueue};
 use tracing::instrument;
@@ -26,14 +22,11 @@ pub(super) struct RequestTracker {
 }
 
 impl RequestTracker {
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[expect(dead_code)]
     pub fn new() -> Self {
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let state = State::new();
-
-        task::spawn(run(state, command_rx));
-
-        Self { command_tx }
+        let (this, worker) = build();
+        task::spawn(worker.run());
+        this
     }
 
     #[cfg_attr(not(test), expect(dead_code))]
@@ -55,18 +48,6 @@ impl RequestTracker {
             },
             request_rx,
         )
-    }
-
-    // Wait until all previously invoked operations complete and returns the number of request that
-    // are still being tracked. This is useful to ensure that if any of the operations caused a
-    // request to be scheduled for sending, that request has already been queued, thus calling
-    // `try_recv` on the corresponding receiver is guaranteed to return it. This is mostly useful
-    // for testing.
-    #[cfg_attr(not(test), expect(dead_code))]
-    pub async fn flush(&self) -> usize {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.command_tx.send(Command::Flush { reply_tx }).ok();
-        reply_rx.await.ok().unwrap_or(0)
     }
 }
 
@@ -139,99 +120,92 @@ impl<'a> From<&'a Request> for MessageKey {
     }
 }
 
-async fn run(mut state: State, mut command_rx: mpsc::UnboundedReceiver<Command>) {
-    loop {
-        let command = select! {
-            command = command_rx.recv() => command,
-            true = state.wait_for_timeout() => continue,
-        };
-
-        match command {
-            Some(Command::InsertClient {
-                client_id,
-                request_tx,
-            }) => {
-                state.insert_client(client_id, request_tx);
-            }
-            Some(Command::RemoveClient { client_id }) => {
-                state.remove_client(client_id);
-            }
-            Some(Command::HandleInitial { client_id, request }) => {
-                state.handle_initial(client_id, request);
-            }
-            Some(Command::HandleSuccess {
-                client_id,
-                response_key,
-                requests,
-            }) => {
-                state.handle_success(client_id, response_key, requests);
-            }
-            Some(Command::HandleFailure {
-                client_id,
-                response_key,
-            }) => {
-                state.handle_failure(client_id, response_key);
-            }
-            Some(Command::Flush { reply_tx }) => {
-                reply_tx.send(state.request_count()).ok();
-            }
-            None => break,
-        }
-    }
+fn build() -> (RequestTracker, Worker) {
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    (RequestTracker { command_tx }, Worker::new(command_rx))
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-struct ClientId(usize);
-
-impl ClientId {
-    fn next() -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-enum Command {
-    InsertClient {
-        client_id: ClientId,
-        request_tx: mpsc::UnboundedSender<Request>,
-    },
-    RemoveClient {
-        client_id: ClientId,
-    },
-    HandleInitial {
-        client_id: ClientId,
-        request: Request,
-    },
-    HandleSuccess {
-        client_id: ClientId,
-        response_key: MessageKey,
-        requests: Vec<Request>,
-    },
-    HandleFailure {
-        client_id: ClientId,
-        response_key: MessageKey,
-    },
-    Flush {
-        reply_tx: oneshot::Sender<usize>,
-    },
-}
-
-struct State {
+struct Worker {
     clients: HashMap<ClientId, ClientState>,
     requests: HashMap<MessageKey, RequestState>,
     timeouts: DelayQueue<(ClientId, MessageKey)>,
+    command_rx: mpsc::UnboundedReceiver<Command>,
 }
 
-impl State {
-    fn new() -> Self {
+impl Worker {
+    fn new(command_rx: mpsc::UnboundedReceiver<Command>) -> Self {
         Self {
             clients: HashMap::default(),
             requests: HashMap::default(),
             timeouts: DelayQueue::new(),
+            command_rx,
         }
     }
 
-    #[instrument(skip(self, request_tx))]
+    pub async fn run(mut self) {
+        loop {
+            select! {
+                command = self.command_rx.recv() => {
+                    if let Some(command) = command {
+                        self.handle_command(command);
+                    } else {
+                        break;
+                    }
+                }
+                Some(expired) = self.timeouts.next() => {
+                    let (client_id, request_key) = expired.into_inner();
+                    self.handle_failure(client_id, request_key);
+                    continue;
+                }
+            }
+        }
+    }
+
+    /// Process all currently queued commands.
+    #[cfg(test)]
+    pub fn step(&mut self) {
+        while let Ok(command) = self.command_rx.try_recv() {
+            self.handle_command(command);
+        }
+
+        // TODO: Check timeouts
+    }
+
+    #[cfg(test)]
+    pub fn request_count(&self) -> usize {
+        self.requests.len()
+    }
+
+    fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::InsertClient {
+                client_id,
+                request_tx,
+            } => {
+                self.insert_client(client_id, request_tx);
+            }
+            Command::RemoveClient { client_id } => {
+                self.remove_client(client_id);
+            }
+            Command::HandleInitial { client_id, request } => {
+                self.handle_initial(client_id, request);
+            }
+            Command::HandleSuccess {
+                client_id,
+                response_key,
+                requests,
+            } => {
+                self.handle_success(client_id, response_key, requests);
+            }
+            Command::HandleFailure {
+                client_id,
+                response_key,
+            } => {
+                self.handle_failure(client_id, response_key);
+            }
+        }
+    }
+
     fn insert_client(&mut self, client_id: ClientId, request_tx: mpsc::UnboundedSender<Request>) {
         self.clients.insert(
             client_id,
@@ -399,23 +373,39 @@ impl State {
             entry.remove();
         }
     }
+}
 
-    /// Wait for the next timeout. Returns `true` if a requested timeouted, `false` if there are no
-    /// tracked requests.
-    async fn wait_for_timeout(&mut self) -> bool {
-        if let Some(expired) = self.timeouts.next().await {
-            let (client_id, request_key) = expired.into_inner();
-            self.handle_failure(client_id, request_key);
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+struct ClientId(usize);
 
-            true
-        } else {
-            false
-        }
+impl ClientId {
+    fn next() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
+}
 
-    fn request_count(&self) -> usize {
-        self.requests.len()
-    }
+enum Command {
+    InsertClient {
+        client_id: ClientId,
+        request_tx: mpsc::UnboundedSender<Request>,
+    },
+    RemoveClient {
+        client_id: ClientId,
+    },
+    HandleInitial {
+        client_id: ClientId,
+        request: Request,
+    },
+    HandleSuccess {
+        client_id: ClientId,
+        response_key: MessageKey,
+        requests: Vec<Request>,
+    },
+    HandleFailure {
+        client_id: ClientId,
+        response_key: MessageKey,
+    },
 }
 
 struct ClientState {
@@ -456,18 +446,25 @@ mod tests {
         #[strategy(1usize..=32)] num_blocks: usize,
         #[strategy(1usize..=3)] num_peers: usize,
     ) {
-        test_utils::run(sanity_check_case(seed, num_blocks, num_peers));
+        sanity_check_case(seed, num_blocks, num_peers);
     }
 
-    async fn sanity_check_case(seed: u64, num_blocks: usize, num_peers: usize) {
+    fn sanity_check_case(seed: u64, num_blocks: usize, num_peers: usize) {
         test_utils::init_log();
+
+        // Tokio runtime needed for `DelayQueue`.
+        let _runtime_guard = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .enter();
 
         let mut rng = StdRng::seed_from_u64(seed);
 
         let snapshot = Snapshot::generate(&mut rng, num_blocks);
         let mut summary = Summary::default();
 
-        let tracker = RequestTracker::new();
+        let (tracker, mut tracker_worker) = build();
 
         let mut peers: Vec<_> = (0..num_peers)
             .map(|_| {
@@ -482,13 +479,13 @@ mod tests {
             })
             .collect();
 
-        while poll(&mut rng, &mut peers, &snapshot, &mut summary) {
-            tracker.flush().await;
+        while poll_peers(&mut rng, &mut peers, &snapshot, &mut summary) {
+            tracker_worker.step();
         }
 
         summary.verify(peers.len(), &snapshot);
 
-        assert_eq!(tracker.flush().await, 0);
+        assert_eq!(tracker_worker.request_count(), 0);
     }
 
     #[derive(Default)]
@@ -728,7 +725,7 @@ mod tests {
     }
 
     // Polls every client and server once, in random order
-    fn poll<R: Rng>(
+    fn poll_peers<R: Rng>(
         rng: &mut R,
         peers: &mut [(TestClient, TestServer)],
         snapshot: &Snapshot,
