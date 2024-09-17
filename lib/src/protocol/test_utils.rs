@@ -103,6 +103,14 @@ impl Snapshot {
         (0..self.inners.len()).map(move |inner_layer| InnerLayer(self, inner_layer))
     }
 
+    pub fn inner_nodes(&self) -> impl Iterator<Item = &InnerNode> {
+        self.inners
+            .iter()
+            .flat_map(|layer| layer.values())
+            .flatten()
+            .map(|(_, node)| node)
+    }
+
     pub fn blocks(&self) -> &HashMap<BlockId, Block> {
         &self.blocks
     }
@@ -126,7 +134,7 @@ impl Snapshot {
 pub(crate) struct InnerLayer<'a>(&'a Snapshot, usize);
 
 impl<'a> InnerLayer<'a> {
-    pub fn inner_maps(&self) -> impl Iterator<Item = (&Hash, &InnerNodes)> {
+    pub fn inner_maps(self) -> impl Iterator<Item = (&'a Hash, &'a InnerNodes)> {
         self.0.inners[self.1].iter().map(move |(path, nodes)| {
             let parent_hash = self.0.parent_hash(self.1, path);
             (parent_hash, nodes)

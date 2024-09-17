@@ -11,7 +11,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
     /// Request the latest root node of the given writer.
     RootNode(PublicKey, DebugRequest),

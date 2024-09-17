@@ -18,6 +18,7 @@ mod peer_source;
 mod peer_state;
 mod pending;
 mod protocol;
+mod request_tracker;
 mod runtime_id;
 mod seen_peers;
 mod server;
