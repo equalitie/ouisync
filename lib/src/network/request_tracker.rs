@@ -155,7 +155,6 @@ impl Worker {
                 Some(expired) = self.timeouts.next() => {
                     let (client_id, request_key) = expired.into_inner();
                     self.handle_failure(client_id, request_key);
-                    continue;
                 }
             }
         }
@@ -440,8 +439,8 @@ mod tests {
     use std::collections::VecDeque;
     use test_strategy::proptest;
 
-    #[proptest]
-    fn sanity_check(
+    #[proptest(async = "tokio")]
+    async fn sanity_check(
         #[strategy(test_utils::rng_seed_strategy())] seed: u64,
         #[strategy(1usize..=32)] num_blocks: usize,
         #[strategy(1usize..=3)] num_peers: usize,
@@ -451,13 +450,6 @@ mod tests {
 
     fn sanity_check_case(seed: u64, num_blocks: usize, num_peers: usize) {
         test_utils::init_log();
-
-        // Tokio runtime needed for `DelayQueue`.
-        let _runtime_guard = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap()
-            .enter();
 
         let mut rng = StdRng::seed_from_u64(seed);
 

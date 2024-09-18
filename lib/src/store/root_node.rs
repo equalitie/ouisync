@@ -827,8 +827,8 @@ mod tests {
         use proptest::{arbitrary::any, collection::vec, sample::select, strategy::Strategy};
         use test_strategy::proptest;
 
-        #[proptest]
-        fn proptest(
+        #[proptest(async = "tokio")]
+        async fn proptest(
             write_keys: Keypair,
             #[strategy(root_node_params_strategy())] input: Vec<(
                 SnapshotId,
@@ -837,7 +837,7 @@ mod tests {
                 NodeState,
             )>,
         ) {
-            crate::test_utils::run(case(write_keys, input))
+            case(write_keys, input).await
         }
 
         async fn case(write_keys: Keypair, input: Vec<(SnapshotId, PublicKey, Hash, NodeState)>) {

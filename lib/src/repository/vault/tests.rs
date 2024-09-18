@@ -474,13 +474,13 @@ async fn block_ids_pagination() {
     assert!(actual.is_empty());
 }
 
-#[proptest]
-fn sync_progress(
+#[proptest(async = "tokio")]
+async fn sync_progress(
     #[strategy(1usize..16)] block_count: usize,
     #[strategy(1usize..5)] branch_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(sync_progress_case(block_count, branch_count, rng_seed))
+    sync_progress_case(block_count, branch_count, rng_seed).await
 }
 
 async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u64) {
