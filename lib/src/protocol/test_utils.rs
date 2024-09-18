@@ -7,9 +7,10 @@ use crate::{
     },
 };
 use rand::{distributions::Standard, Rng};
-use std::mem;
+use std::{fmt, mem};
 
 // In-memory snapshot for testing purposes.
+#[derive(Clone)]
 pub(crate) struct Snapshot {
     root_hash: Hash,
     inners: [HashMap<BucketPath, InnerNodes>; INNER_LAYER_COUNT],
@@ -128,6 +129,15 @@ impl Snapshot {
                 .unwrap()
                 .hash
         }
+    }
+}
+
+impl fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Snapshot")
+            .field("root_hash", &self.root_hash)
+            .field("num_blocks", &self.blocks.len())
+            .finish_non_exhaustive()
     }
 }
 

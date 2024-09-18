@@ -1,13 +1,21 @@
+#[cfg(test)]
+mod tests;
+
 use super::{constants::REQUEST_TIMEOUT, message::Request};
 use crate::{
     collections::{HashMap, HashSet},
     crypto::{sign::PublicKey, Hash},
     protocol::BlockId,
 };
+use futures_util::Stream;
 use std::{
     collections::hash_map::Entry,
     iter,
+    ops::{Deref, DerefMut},
+    pin::Pin,
     sync::atomic::{AtomicUsize, Ordering},
+    task::{Context, Poll},
+    time::Duration,
 };
 use tokio::{select, sync::mpsc, task};
 use tokio_stream::StreamExt;
@@ -24,7 +32,7 @@ pub(super) struct RequestTracker {
 impl RequestTracker {
     #[expect(dead_code)]
     pub fn new() -> Self {
-        let (this, worker) = build();
+        let (this, worker) = build(DelayQueue::new());
         task::spawn(worker.run());
         this
     }
@@ -120,24 +128,27 @@ impl<'a> From<&'a Request> for MessageKey {
     }
 }
 
-fn build() -> (RequestTracker, Worker) {
+fn build<T: Timer>(timer: T) -> (RequestTracker, Worker<T>) {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
-    (RequestTracker { command_tx }, Worker::new(command_rx))
+    (
+        RequestTracker { command_tx },
+        Worker::new(timer, command_rx),
+    )
 }
 
-struct Worker {
+struct Worker<T: Timer> {
     clients: HashMap<ClientId, ClientState>,
-    requests: HashMap<MessageKey, RequestState>,
-    timeouts: DelayQueue<(ClientId, MessageKey)>,
+    requests: HashMap<MessageKey, RequestState<T>>,
+    timer: TimerStream<T>,
     command_rx: mpsc::UnboundedReceiver<Command>,
 }
 
-impl Worker {
-    fn new(command_rx: mpsc::UnboundedReceiver<Command>) -> Self {
+impl<T: Timer> Worker<T> {
+    fn new(timer: T, command_rx: mpsc::UnboundedReceiver<Command>) -> Self {
         Self {
             clients: HashMap::default(),
             requests: HashMap::default(),
-            timeouts: DelayQueue::new(),
+            timer: TimerStream(timer),
             command_rx,
         }
     }
@@ -152,8 +163,7 @@ impl Worker {
                         break;
                     }
                 }
-                Some(expired) = self.timeouts.next() => {
-                    let (client_id, request_key) = expired.into_inner();
+                Some((client_id, request_key)) = self.timer.next() => {
                     self.handle_failure(client_id, request_key);
                 }
             }
@@ -166,8 +176,6 @@ impl Worker {
         while let Ok(command) = self.command_rx.try_recv() {
             self.handle_command(command);
         }
-
-        // TODO: Check timeouts
     }
 
     #[cfg(test)]
@@ -226,15 +234,15 @@ impl Worker {
                 continue;
             };
 
-            let Some(client_request_state) = entry.get_mut().clients.remove(&client_id) else {
+            let Some(interest) = entry.get_mut().interests.remove(&client_id) else {
                 continue;
             };
 
-            if let Some(timeout_key) = client_request_state.timeout_key {
-                self.timeouts.try_remove(&timeout_key);
+            if let Some(timeout_key) = interest.timer_key {
+                self.timer.remove(&timeout_key);
             }
 
-            if entry.get().clients.is_empty() {
+            if entry.get().interests.is_empty() {
                 entry.remove();
                 continue;
             }
@@ -259,30 +267,27 @@ impl Worker {
             .entry(request_key)
             .or_insert_with(|| RequestState {
                 request,
-                clients: HashMap::default(),
+                interests: HashMap::default(),
             });
 
-        let timeout_key = if request_state
-            .clients
+        let timer_key = if request_state
+            .interests
             .values()
-            .all(|state| state.timeout_key.is_none())
+            .all(|state| state.timer_key.is_none())
         {
             client_state
                 .request_tx
                 .send(request_state.request.clone())
                 .ok();
 
-            Some(
-                self.timeouts
-                    .insert((client_id, request_key), REQUEST_TIMEOUT),
-            )
+            Some(self.timer.insert(client_id, request_key, REQUEST_TIMEOUT))
         } else {
             None
         };
 
         request_state
-            .clients
-            .insert(client_id, RequestClientState { timeout_key });
+            .interests
+            .insert(client_id, Interest { timer_key });
     }
 
     #[instrument(skip(self))]
@@ -303,21 +308,24 @@ impl Worker {
         };
 
         if let Entry::Occupied(mut entry) = self.requests.entry(response_key) {
-            entry.get_mut().clients.retain(|other_client_id, state| {
-                // TODO: remove only those with the same or worse block presence.
+            entry
+                .get_mut()
+                .interests
+                .retain(|other_client_id, interest| {
+                    // TODO: remove only those with the same or worse block presence.
 
-                if let Some(timeout_key) = state.timeout_key {
-                    self.timeouts.try_remove(&timeout_key);
-                }
+                    if let Some(timer_key) = interest.timer_key {
+                        self.timer.remove(&timer_key);
+                    }
 
-                if !requests.is_empty() && *other_client_id != client_id {
-                    followup_client_ids.push(*other_client_id);
-                }
+                    if !requests.is_empty() && *other_client_id != client_id {
+                        followup_client_ids.push(*other_client_id);
+                    }
 
-                false
-            });
+                    false
+                });
 
-            if entry.get().clients.is_empty() {
+            if entry.get().interests.is_empty() {
                 entry.remove();
             }
         }
@@ -347,28 +355,29 @@ impl Worker {
             return;
         };
 
-        if let Some(state) = entry.get_mut().clients.remove(&client_id) {
-            if let Some(timeout_key) = state.timeout_key {
-                self.timeouts.try_remove(&timeout_key);
+        if let Some(interest) = entry.get_mut().interests.remove(&client_id) {
+            if let Some(timer_key) = interest.timer_key {
+                self.timer.remove(&timer_key);
             }
         }
 
         // TODO: prefer one with the same or better block presence as `client_id`.
-        if let Some((fallback_client_id, state)) = entry
+        if let Some((fallback_client_id, interest)) = entry
             .get_mut()
-            .clients
+            .interests
             .iter_mut()
-            .find(|(_, state)| state.timeout_key.is_none())
+            .find(|(_, interest)| interest.timer_key.is_none())
         {
-            state.timeout_key = Some(
-                self.timeouts
-                    .insert((*fallback_client_id, response_key), REQUEST_TIMEOUT),
-            );
+            interest.timer_key = Some(self.timer.insert(
+                *fallback_client_id,
+                response_key,
+                REQUEST_TIMEOUT,
+            ));
 
             // TODO: send the request
         }
 
-        if entry.get().clients.is_empty() {
+        if entry.get().interests.is_empty() {
             entry.remove();
         }
     }
@@ -412,349 +421,74 @@ struct ClientState {
     requests: HashSet<MessageKey>,
 }
 
-struct RequestState {
+struct RequestState<T: Timer> {
     request: Request,
-    clients: HashMap<ClientId, RequestClientState>,
+    interests: HashMap<ClientId, Interest<T>>,
 }
 
-struct RequestClientState {
+struct Interest<T: Timer> {
     // disambiguator: ResponseDisambiguator,
-    timeout_key: Option<delay_queue::Key>,
+    timer_key: Option<T::Key>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        super::{debug_payload::DebugResponse, message::Response},
-        *,
-    };
-    use crate::{
-        crypto::{sign::Keypair, Hashable},
-        network::message::ResponseDisambiguator,
-        protocol::{test_utils::Snapshot, Block, MultiBlockPresence, Proof, UntrustedProof},
-        test_utils,
-        version_vector::VersionVector,
-    };
-    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use std::collections::VecDeque;
-    use test_strategy::proptest;
+/// Trait for timer to to track request timeouts.
+trait Timer: Unpin {
+    type Key: Copy;
 
-    #[proptest(async = "tokio")]
-    async fn sanity_check(
-        #[strategy(test_utils::rng_seed_strategy())] seed: u64,
-        #[strategy(1usize..=32)] num_blocks: usize,
-        #[strategy(1usize..=3)] num_peers: usize,
-    ) {
-        sanity_check_case(seed, num_blocks, num_peers);
+    fn insert(
+        &mut self,
+        client_id: ClientId,
+        message_key: MessageKey,
+        timeout: Duration,
+    ) -> Self::Key;
+
+    fn remove(&mut self, key: &Self::Key);
+
+    fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<Option<(ClientId, MessageKey)>>;
+}
+
+struct TimerStream<T>(T);
+
+impl<T> Deref for TimerStream<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for TimerStream<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T: Timer> Stream for TimerStream<T> {
+    type Item = (ClientId, MessageKey);
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.get_mut().0.poll_expired(cx)
+    }
+}
+
+impl Timer for DelayQueue<(ClientId, MessageKey)> {
+    type Key = delay_queue::Key;
+
+    fn insert(
+        &mut self,
+        client_id: ClientId,
+        message_key: MessageKey,
+        timeout: Duration,
+    ) -> Self::Key {
+        DelayQueue::insert(self, (client_id, message_key), timeout)
     }
 
-    fn sanity_check_case(seed: u64, num_blocks: usize, num_peers: usize) {
-        test_utils::init_log();
-
-        let mut rng = StdRng::seed_from_u64(seed);
-
-        let snapshot = Snapshot::generate(&mut rng, num_blocks);
-        let mut summary = Summary::default();
-
-        let (tracker, mut tracker_worker) = build();
-
-        let mut peers: Vec<_> = (0..num_peers)
-            .map(|_| {
-                let (tracker_client, tracker_request_rx) = tracker.new_client();
-                let client = TestClient::new(tracker_client, tracker_request_rx);
-
-                let writer_id = PublicKey::generate(&mut rng);
-                let write_keys = Keypair::generate(&mut rng);
-                let server = TestServer::new(writer_id, write_keys, &snapshot);
-
-                (client, server)
-            })
-            .collect();
-
-        while poll_peers(&mut rng, &mut peers, &snapshot, &mut summary) {
-            tracker_worker.step();
-        }
-
-        summary.verify(peers.len(), &snapshot);
-
-        assert_eq!(tracker_worker.request_count(), 0);
+    fn remove(&mut self, key: &Self::Key) {
+        DelayQueue::try_remove(self, key);
     }
 
-    #[derive(Default)]
-    struct Summary {
-        nodes: HashMap<Hash, usize>,
-        blocks: HashMap<BlockId, usize>,
-    }
-
-    impl Summary {
-        fn receive_node(&mut self, hash: Hash) {
-            *self.nodes.entry(hash).or_default() += 1;
-        }
-
-        fn receive_block(&mut self, block_id: BlockId) {
-            *self.blocks.entry(block_id).or_default() += 1;
-        }
-
-        fn verify(&mut self, num_peers: usize, snapshot: &Snapshot) {
-            assert_eq!(
-                self.nodes.remove(snapshot.root_hash()).unwrap_or(0),
-                num_peers,
-                "root node not received exactly {num_peers} times: {:?}",
-                snapshot.root_hash()
-            );
-
-            for hash in snapshot
-                .inner_nodes()
-                .map(|node| &node.hash)
-                .chain(snapshot.leaf_nodes().map(|node| &node.locator))
-            {
-                assert_eq!(
-                    self.nodes.remove(hash).unwrap_or(0),
-                    1,
-                    "child node not received exactly once: {hash:?}"
-                );
-            }
-
-            for block_id in snapshot.blocks().keys() {
-                assert_eq!(
-                    self.blocks.remove(block_id).unwrap_or(0),
-                    1,
-                    "block not received exactly once: {block_id:?}"
-                );
-            }
-
-            // Verify we received only the expected nodes and blocks
-            assert!(
-                self.nodes.is_empty(),
-                "unexpected nodes received: {:?}",
-                self.nodes
-            );
-            assert!(
-                self.blocks.is_empty(),
-                "unexpected blocks received: {:?}",
-                self.blocks
-            );
-        }
-    }
-
-    struct TestClient {
-        tracker_client: RequestTrackerClient,
-        tracker_request_rx: mpsc::UnboundedReceiver<Request>,
-    }
-
-    impl TestClient {
-        fn new(
-            tracker_client: RequestTrackerClient,
-            tracker_request_rx: mpsc::UnboundedReceiver<Request>,
-        ) -> Self {
-            Self {
-                tracker_client,
-                tracker_request_rx,
-            }
-        }
-
-        fn handle_response(&mut self, response: Response, summary: &mut Summary) {
-            match response {
-                Response::RootNode(proof, block_presence, debug_payload) => {
-                    summary.receive_node(proof.hash);
-
-                    let requests = vec![Request::ChildNodes(
-                        proof.hash,
-                        ResponseDisambiguator::new(block_presence),
-                        debug_payload.follow_up(),
-                    )];
-
-                    self.tracker_client
-                        .success(MessageKey::RootNode(proof.writer_id), requests);
-                }
-                Response::InnerNodes(nodes, _disambiguator, debug_payload) => {
-                    let parent_hash = nodes.hash();
-                    let requests: Vec<_> = nodes
-                        .into_iter()
-                        .map(|(_, node)| {
-                            summary.receive_node(node.hash);
-
-                            Request::ChildNodes(
-                                node.hash,
-                                ResponseDisambiguator::new(node.summary.block_presence),
-                                debug_payload.follow_up(),
-                            )
-                        })
-                        .collect();
-
-                    self.tracker_client
-                        .success(MessageKey::ChildNodes(parent_hash), requests);
-                }
-                Response::LeafNodes(nodes, _disambiguator, debug_payload) => {
-                    let parent_hash = nodes.hash();
-                    let requests = nodes
-                        .into_iter()
-                        .map(|node| {
-                            summary.receive_node(node.locator);
-
-                            Request::Block(node.block_id, debug_payload.follow_up())
-                        })
-                        .collect();
-
-                    self.tracker_client
-                        .success(MessageKey::ChildNodes(parent_hash), requests);
-                }
-                Response::Block(content, nonce, _debug_payload) => {
-                    let block = Block::new(content, nonce);
-
-                    summary.receive_block(block.id);
-
-                    self.tracker_client
-                        .success(MessageKey::Block(block.id), vec![]);
-                }
-                Response::RootNodeError(writer_id, _debug_payload) => {
-                    self.tracker_client.failure(MessageKey::RootNode(writer_id));
-                }
-                Response::ChildNodesError(hash, _disambiguator, _debug_payload) => {
-                    self.tracker_client.failure(MessageKey::ChildNodes(hash));
-                }
-                Response::BlockError(block_id, _debug_payload) => {
-                    self.tracker_client.failure(MessageKey::Block(block_id));
-                }
-                Response::BlockOffer(_block_id, _debug_payload) => unimplemented!(),
-            };
-        }
-
-        fn poll_request(&mut self) -> Option<Request> {
-            self.tracker_request_rx.try_recv().ok()
-        }
-    }
-
-    struct TestServer {
-        writer_id: PublicKey,
-        write_keys: Keypair,
-        outbox: VecDeque<Response>,
-    }
-
-    impl TestServer {
-        fn new(writer_id: PublicKey, write_keys: Keypair, snapshot: &Snapshot) -> Self {
-            let proof = UntrustedProof::from(Proof::new(
-                writer_id,
-                VersionVector::first(writer_id),
-                *snapshot.root_hash(),
-                &write_keys,
-            ));
-
-            let outbox = [Response::RootNode(
-                proof.clone(),
-                MultiBlockPresence::Full,
-                DebugResponse::unsolicited(),
-            )]
-            .into();
-
-            Self {
-                writer_id,
-                write_keys,
-                outbox,
-            }
-        }
-
-        fn handle_request(&mut self, request: Request, snapshot: &Snapshot) {
-            match request {
-                Request::RootNode(writer_id, debug_payload) => {
-                    if writer_id == self.writer_id {
-                        let proof = Proof::new(
-                            writer_id,
-                            VersionVector::first(writer_id),
-                            *snapshot.root_hash(),
-                            &self.write_keys,
-                        );
-
-                        self.outbox.push_back(Response::RootNode(
-                            proof.into(),
-                            MultiBlockPresence::Full,
-                            debug_payload.reply(),
-                        ));
-                    } else {
-                        self.outbox
-                            .push_back(Response::RootNodeError(writer_id, debug_payload.reply()));
-                    }
-                }
-                Request::ChildNodes(hash, disambiguator, debug_payload) => {
-                    if let Some(nodes) = snapshot
-                        .inner_layers()
-                        .flat_map(|layer| layer.inner_maps())
-                        .find_map(|(parent_hash, nodes)| (*parent_hash == hash).then_some(nodes))
-                    {
-                        self.outbox.push_back(Response::InnerNodes(
-                            nodes.clone(),
-                            disambiguator,
-                            debug_payload.reply(),
-                        ));
-                    }
-
-                    if let Some(nodes) = snapshot
-                        .leaf_sets()
-                        .find_map(|(parent_hash, nodes)| (*parent_hash == hash).then_some(nodes))
-                    {
-                        self.outbox.push_back(Response::LeafNodes(
-                            nodes.clone(),
-                            disambiguator,
-                            debug_payload.reply(),
-                        ));
-                    }
-                }
-                Request::Block(block_id, debug_payload) => {
-                    if let Some(block) = snapshot.blocks().get(&block_id) {
-                        self.outbox.push_back(Response::Block(
-                            block.content.clone(),
-                            block.nonce,
-                            debug_payload.reply(),
-                        ));
-                    }
-                }
-            }
-        }
-
-        fn poll_response(&mut self) -> Option<Response> {
-            self.outbox.pop_front()
-        }
-    }
-
-    // Polls every client and server once, in random order
-    fn poll_peers<R: Rng>(
-        rng: &mut R,
-        peers: &mut [(TestClient, TestServer)],
-        snapshot: &Snapshot,
-        summary: &mut Summary,
-    ) -> bool {
-        enum Side {
-            Client,
-            Server,
-        }
-
-        let mut order: Vec<_> = (0..peers.len())
-            .flat_map(|index| [(Side::Client, index), (Side::Server, index)])
-            .collect();
-
-        order.shuffle(rng);
-
-        let mut changed = false;
-
-        for (side, index) in order {
-            let (client, server) = &mut peers[index];
-
-            match side {
-                Side::Client => {
-                    if let Some(request) = client.poll_request() {
-                        server.handle_request(request, snapshot);
-                        changed = true;
-                    }
-                }
-                Side::Server => {
-                    if let Some(response) = server.poll_response() {
-                        client.handle_response(response, summary);
-                        changed = true;
-                    }
-                }
-            }
-        }
-
-        changed
+    fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<Option<(ClientId, MessageKey)>> {
+        self.poll_expired(cx)
+            .map(|expired| expired.map(|expired| expired.into_inner()))
     }
 }

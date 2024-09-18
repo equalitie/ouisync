@@ -89,6 +89,14 @@ impl Distribution<Block> for Standard {
     }
 }
 
+impl fmt::Debug for Block {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Block")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct BlockContent(Box<[u8]>);
 
@@ -172,5 +180,39 @@ impl Distribution<BlockContent> for Standard {
 impl fmt::Debug for BlockContent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:<8}", hex_fmt::HexFmt(&self[..]))
+    }
+}
+
+#[cfg(test)]
+mod test_utils {
+    use super::{Block, BlockContent, BlockNonce, BLOCK_SIZE};
+    use proptest::{
+        arbitrary::{any, Arbitrary, StrategyFor},
+        collection::{vec, VecStrategy},
+        strategy::{Map, NoShrink, Strategy},
+    };
+
+    impl Arbitrary for BlockContent {
+        type Parameters = ();
+        type Strategy = Map<NoShrink<VecStrategy<StrategyFor<u8>>>, fn(Vec<u8>) -> Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            vec(any::<u8>(), BLOCK_SIZE)
+                .no_shrink()
+                .prop_map(|bytes| Self(bytes.into_boxed_slice()))
+        }
+    }
+
+    impl Arbitrary for Block {
+        type Parameters = ();
+        type Strategy = Map<
+            (StrategyFor<BlockContent>, NoShrink<StrategyFor<BlockNonce>>),
+            fn((BlockContent, BlockNonce)) -> Self,
+        >;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (any::<BlockContent>(), any::<BlockNonce>().no_shrink())
+                .prop_map(|(content, nonce)| Self::new(content, nonce))
+        }
     }
 }
