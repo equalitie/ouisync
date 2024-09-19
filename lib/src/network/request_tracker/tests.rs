@@ -12,8 +12,10 @@ use crate::{
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use std::collections::VecDeque;
 
-#[test]
-fn simulation() {
+// Note: We need `tokio::test` here because the `RequestTracker` uses `DelayQueue` internaly which
+// needs a tokio runtime.
+#[tokio::test]
+async fn simulation() {
     simulation_case(6045920800462135606, 1, 2, (1, 10), (1, 10));
     // let seed = rand::random();
     // simulation_case(seed, 32, 4, (1, 10), (1, 10));
@@ -38,8 +40,7 @@ fn simulation_case(
 
     let mut rng = StdRng::seed_from_u64(seed);
 
-    let (tracker, mut tracker_worker) = build(FakeTimer);
-    let mut summary = Summary::default();
+    let (tracker, mut tracker_worker) = build();
 
     let block_count = rng.gen_range(1..=max_blocks);
     let snapshot = Snapshot::generate(&mut rng, block_count);
@@ -48,6 +49,7 @@ fn simulation_case(
 
     let mut peers = Vec::new();
     let mut total_peer_count = 0;
+    let mut summary = Summary::new(snapshot.blocks().len());
 
     loop {
         let peers_len_before = peers.len();
@@ -89,18 +91,34 @@ fn simulation_case(
     assert_eq!(tracker_worker.request_count(), 0);
 }
 
-#[derive(Default)]
 struct Summary {
+    expected_blocks: usize,
     nodes: HashMap<Hash, usize>,
     blocks: HashMap<BlockId, usize>,
 }
 
 impl Summary {
+    fn new(expected_blocks: usize) -> Self {
+        Self {
+            expected_blocks,
+            nodes: HashMap::default(),
+            blocks: HashMap::default(),
+        }
+    }
+
     fn receive_node(&mut self, hash: Hash) {
+        if self.blocks.len() >= self.expected_blocks {
+            return;
+        }
+
         *self.nodes.entry(hash).or_default() += 1;
     }
 
     fn receive_block(&mut self, block_id: BlockId) {
+        if self.blocks.len() >= self.expected_blocks {
+            return;
+        }
+
         *self.blocks.entry(block_id).or_default() += 1;
     }
 
@@ -167,10 +185,13 @@ impl TestClient {
             Response::RootNode(proof, block_presence, debug_payload) => {
                 summary.receive_node(proof.hash);
 
-                let requests = vec![Request::ChildNodes(
-                    proof.hash,
-                    ResponseDisambiguator::new(block_presence),
-                    debug_payload.follow_up(),
+                let requests = vec![(
+                    Request::ChildNodes(
+                        proof.hash,
+                        ResponseDisambiguator::new(block_presence),
+                        debug_payload.follow_up(),
+                    ),
+                    block_presence,
                 )];
 
                 self.tracker_client
@@ -183,10 +204,13 @@ impl TestClient {
                     .map(|(_, node)| {
                         summary.receive_node(node.hash);
 
-                        Request::ChildNodes(
-                            node.hash,
-                            ResponseDisambiguator::new(node.summary.block_presence),
-                            debug_payload.follow_up(),
+                        (
+                            Request::ChildNodes(
+                                node.hash,
+                                ResponseDisambiguator::new(node.summary.block_presence),
+                                debug_payload.follow_up(),
+                            ),
+                            node.summary.block_presence,
                         )
                     })
                     .collect();
@@ -201,7 +225,10 @@ impl TestClient {
                     .map(|node| {
                         summary.receive_node(node.locator);
 
-                        Request::Block(node.block_id, debug_payload.follow_up())
+                        (
+                            Request::Block(node.block_id, debug_payload.follow_up()),
+                            MultiBlockPresence::None,
+                        )
                     })
                     .collect();
 
@@ -306,6 +333,12 @@ impl TestServer {
                         disambiguator,
                         debug_payload.reply(),
                     ));
+                } else {
+                    self.outbox.push_back(Response::ChildNodesError(
+                        hash,
+                        disambiguator,
+                        debug_payload.reply(),
+                    ));
                 }
             }
             Request::Block(block_id, debug_payload) => {
@@ -315,6 +348,9 @@ impl TestServer {
                         block.nonce,
                         debug_payload.reply(),
                     ));
+                } else {
+                    self.outbox
+                        .push_back(Response::BlockError(block_id, debug_payload.reply()));
                 }
             }
         }
@@ -365,24 +401,4 @@ fn poll_peers<R: Rng>(
     }
 
     changed
-}
-
-struct FakeTimer;
-
-impl Timer for FakeTimer {
-    type Key = ();
-
-    fn insert(
-        &mut self,
-        _client_id: ClientId,
-        _message_key: MessageKey,
-        _timeout: Duration,
-    ) -> Self::Key {
-    }
-
-    fn remove(&mut self, _key: &Self::Key) {}
-
-    fn poll_expired(&mut self, _cx: &mut Context<'_>) -> Poll<Option<(ClientId, MessageKey)>> {
-        Poll::Ready(None)
-    }
 }
