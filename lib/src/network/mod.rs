@@ -48,7 +48,7 @@ use self::{
     connection_monitor::ConnectionMonitor,
     constants::MAX_UNCHOKED_COUNT,
     dht_discovery::DhtDiscovery,
-    gateway::{Gateway, StackAddresses},
+    gateway::{Connectivity, Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::PeerPort,
@@ -545,8 +545,6 @@ impl Inner {
     }
 
     async fn bind(self: &Arc<Self>, bind: &[PeerAddr]) {
-        let conn = Connectivity::infer(bind);
-
         let bind = StackAddresses::from(bind);
 
         // TODO: Would be preferable to only rebind those stacks that actually need rebinding.
@@ -556,6 +554,8 @@ impl Inner {
 
         // Gateway
         let side_channel_makers = self.gateway.bind(&bind).instrument(self.span.clone()).await;
+
+        let conn = self.gateway.connectivity();
 
         let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
             Connectivity::Full => side_channel_makers,
@@ -750,11 +750,15 @@ impl Inner {
     }
 
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
-        let mut backoff = ExponentialBackoffBuilder::new()
-            .with_initial_interval(Duration::from_millis(100))
-            .with_max_interval(Duration::from_secs(8))
-            .with_max_elapsed_time(None)
-            .build();
+        let create_backoff = || {
+            ExponentialBackoffBuilder::new()
+                .with_initial_interval(Duration::from_millis(100))
+                .with_max_interval(Duration::from_secs(8))
+                .with_max_elapsed_time(None)
+                .build()
+        };
+
+        let mut backoff = create_backoff();
 
         let mut next_sleep = None;
 
@@ -780,13 +784,6 @@ impl Inner {
                 return;
             }
 
-            if let Some(sleep) = next_sleep {
-                tracing::debug!(parent: monitor.span(), "Next connection attempt in {:?}", sleep);
-                tokio::time::sleep(sleep).await;
-            }
-
-            next_sleep = backoff.next_backoff();
-
             let permit = match self.connections.reserve(addr, source) {
                 ReserveResult::Permit(permit) => permit,
                 ReserveResult::Occupied(on_release, their_source, connection_id) => {
@@ -805,9 +802,20 @@ impl Inner {
                     );
 
                     on_release.await;
+
+                    next_sleep = None;
+                    backoff = create_backoff();
+
                     continue;
                 }
             };
+
+            if let Some(sleep) = next_sleep {
+                tracing::debug!(parent: monitor.span(), "Next connection attempt in {:?}", sleep);
+                tokio::time::sleep(sleep).await;
+            }
+
+            next_sleep = backoff.next_backoff();
 
             permit.mark_as_connecting();
             monitor.mark_as_connecting(permit.id());
@@ -1114,31 +1122,6 @@ enum DisableReason {
     Implicit,
     // Disabled explicitly
     Explicit,
-}
-
-enum Connectivity {
-    Disabled,
-    LocalOnly,
-    Full,
-}
-
-impl Connectivity {
-    fn infer(addrs: &[PeerAddr]) -> Self {
-        if addrs.is_empty() {
-            return Self::Disabled;
-        }
-
-        let global = addrs
-            .iter()
-            .map(|addr| addr.ip())
-            .any(|ip| ip.is_unspecified() || ip::is_global(&ip));
-
-        if global {
-            Self::Full
-        } else {
-            Self::LocalOnly
-        }
-    }
 }
 
 pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
