@@ -2,10 +2,10 @@ mod graph;
 #[cfg(test)]
 mod tests;
 
-use self::graph::{Entry as GraphEntry, Graph, Key as GraphKey};
+use self::graph::{Graph, Key as GraphKey};
 use super::{constants::REQUEST_TIMEOUT, message::Request};
 use crate::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     crypto::{sign::PublicKey, Hash},
     protocol::{BlockId, MultiBlockPresence},
 };
@@ -76,11 +76,11 @@ impl RequestTrackerClient {
 
     /// Handle sending requests that follow from a received success response.
     #[cfg_attr(not(test), expect(dead_code))]
-    pub fn success(&self, response_key: MessageKey, requests: Vec<(Request, MultiBlockPresence)>) {
+    pub fn success(&self, request_key: MessageKey, requests: Vec<(Request, MultiBlockPresence)>) {
         self.command_tx
             .send(Command::HandleSuccess {
                 client_id: self.client_id,
-                response_key,
+                request_key,
                 requests,
             })
             .ok();
@@ -88,11 +88,11 @@ impl RequestTrackerClient {
 
     /// Handle failure response.
     #[cfg_attr(not(test), expect(dead_code))]
-    pub fn failure(&self, response_key: MessageKey) {
+    pub fn failure(&self, request_key: MessageKey) {
         self.command_tx
             .send(Command::HandleFailure {
                 client_id: self.client_id,
-                response_key,
+                request_key,
             })
             .ok();
     }
@@ -160,7 +160,7 @@ impl Worker {
                 }
                 Some(expired) = self.timer.next() => {
                     let (client_id, request_key) = expired.into_inner();
-                    self.handle_failure(client_id, request_key);
+                    self.handle_failure(client_id, request_key, FailureReason::Timeout);
                 }
             }
         }
@@ -199,33 +199,36 @@ impl Worker {
             }
             Command::HandleSuccess {
                 client_id,
-                response_key,
+                request_key,
                 requests,
             } => {
-                self.handle_success(client_id, response_key, requests);
+                self.handle_success(client_id, request_key, requests);
             }
             Command::HandleFailure {
                 client_id,
-                response_key,
+                request_key,
             } => {
-                self.handle_failure(client_id, response_key);
+                self.handle_failure(client_id, request_key, FailureReason::Response);
             }
         }
     }
 
     #[instrument(skip(self, request_tx))]
     fn insert_client(&mut self, client_id: ClientId, request_tx: mpsc::UnboundedSender<Request>) {
+        // tracing::debug!("insert_client");
         self.clients.insert(client_id, ClientState::new(request_tx));
     }
 
     #[instrument(skip(self))]
     fn remove_client(&mut self, client_id: ClientId) {
+        // tracing::debug!("remove_client");
+
         let Some(client_state) = self.clients.remove(&client_id) else {
             return;
         };
 
-        for (request_key, block_presence) in client_state.requests {
-            self.cancel_request(client_id, GraphKey(request_key, block_presence));
+        for (_, node_key) in client_state.requests {
+            self.cancel_request(client_id, node_key);
         }
     }
 
@@ -236,62 +239,61 @@ impl Worker {
         request: Request,
         block_presence: MultiBlockPresence,
     ) {
-        self.insert_request(
-            client_id,
-            GraphKey(MessageKey::from(&request), block_presence),
-            Some(request),
-            None,
-        )
+        // tracing::debug!("handle_initial");
+        self.insert_request(client_id, request, block_presence, None)
     }
 
     #[instrument(skip(self))]
     fn handle_success(
         &mut self,
         client_id: ClientId,
-        response_key: MessageKey,
+        request_key: MessageKey,
         requests: Vec<(Request, MultiBlockPresence)>,
     ) {
-        let Some(block_presence) = self
+        // tracing::debug!("handle_success");
+
+        let node_key = self
             .clients
             .get_mut(&client_id)
-            .and_then(|client_state| client_state.requests.remove(&response_key))
-        else {
-            return;
-        };
+            .and_then(|client_state| client_state.requests.remove(&request_key));
 
-        let request_key = GraphKey(response_key, block_presence);
+        let mut client_ids = if let Some(node_key) = node_key {
+            let (client_ids, remove) = match self.requests.get_mut(node_key) {
+                Some(node) => match node.value_mut() {
+                    RequestState::InFlight {
+                        sender_client_id,
+                        sender_timer_key,
+                        waiting,
+                    } if *sender_client_id == client_id => {
+                        self.timer.try_remove(sender_timer_key);
 
-        let (parent_keys, mut client_ids) = match self.requests.entry(request_key) {
-            GraphEntry::Occupied(mut entry) => match entry.get_mut() {
-                RequestState::InFlight {
-                    sender_client_id,
-                    sender_timer_key,
-                    waiting,
-                } if *sender_client_id == client_id => {
-                    self.timer.try_remove(sender_timer_key);
+                        let waiting = mem::take(waiting);
 
-                    let waiting = mem::take(waiting);
+                        // If this request has, or will have, children, mark it as complete, otherwise
+                        // remove it.
+                        let remove = if node.children().len() > 0 || !requests.is_empty() {
+                            *node.value_mut() = RequestState::Complete;
+                            false
+                        } else {
+                            true
+                        };
 
-                    // Add child requests to this request.
-                    for (request, block_presence) in &requests {
-                        entry.insert_child(GraphKey(MessageKey::from(request), *block_presence));
+                        (waiting, remove)
                     }
+                    RequestState::InFlight { .. }
+                    | RequestState::Complete
+                    | RequestState::Cancelled => return,
+                },
+                None => return,
+            };
 
-                    // If this request has children, mark it as complete, otherwise remove it.
-                    let parent_key = if !entry.children().is_empty() {
-                        *entry.get_mut() = RequestState::Complete;
-                        HashSet::default()
-                    } else {
-                        entry.remove().parents
-                    };
+            if remove {
+                self.remove_request(node_key);
+            }
 
-                    (parent_key, waiting)
-                }
-                RequestState::InFlight { .. }
-                | RequestState::Complete
-                | RequestState::Cancelled => return,
-            },
-            GraphEntry::Vacant(_) => return,
+            client_ids
+        } else {
+            Default::default()
         };
 
         // Register the followup (child) requests with this client but also with all the clients that
@@ -305,103 +307,102 @@ impl Worker {
             {
                 self.insert_request(
                     client_id,
-                    GraphKey(MessageKey::from(&child_request), child_block_presence),
-                    Some(child_request.clone()),
-                    Some(request_key),
+                    child_request.clone(),
+                    child_block_presence,
+                    node_key,
                 );
             }
 
             // Round-robin the requests among the clients.
             client_ids.rotate_left(1);
         }
-
-        for parent_key in parent_keys {
-            self.request_removed(request_key, parent_key);
-        }
     }
 
     #[instrument(skip(self))]
-    fn handle_failure(&mut self, client_id: ClientId, response_key: MessageKey) {
+    fn handle_failure(
+        &mut self,
+        client_id: ClientId,
+        request_key: MessageKey,
+        reason: FailureReason,
+    ) {
+        // tracing::debug!("handle_failure");
+
         let Some(client_state) = self.clients.get_mut(&client_id) else {
             return;
         };
 
-        let Some(block_presence) = client_state.requests.remove(&response_key) else {
+        let Some(node_key) = client_state.requests.remove(&request_key) else {
             return;
         };
 
-        self.cancel_request(client_id, GraphKey(response_key, block_presence));
+        self.cancel_request(client_id, node_key);
     }
 
     fn insert_request(
         &mut self,
         client_id: ClientId,
-        request_key: GraphKey,
-        request: Option<Request>,
+        request: Request,
+        block_presence: MultiBlockPresence,
         parent_key: Option<GraphKey>,
     ) {
+        let node_key = self.requests.get_or_insert(
+            request,
+            block_presence,
+            parent_key,
+            RequestState::Cancelled,
+        );
+
+        self.update_request(client_id, node_key);
+    }
+
+    fn update_request(&mut self, client_id: ClientId, node_key: GraphKey) {
+        let Some(node) = self.requests.get_mut(node_key) else {
+            return;
+        };
+
         let Some(client_state) = self.clients.get_mut(&client_id) else {
             return;
         };
 
-        let (children, request, request_state) = match self.requests.entry(request_key) {
-            GraphEntry::Occupied(mut entry) => {
-                if let Some(parent_key) = parent_key {
-                    entry.insert_parent(parent_key);
-                }
+        let request_key = MessageKey::from(node.request());
 
-                (
-                    entry.children().iter().copied().collect(),
-                    entry.request(),
-                    entry.into_mut(),
-                )
-            }
-            GraphEntry::Vacant(entry) => {
-                if let Some(request) = request {
-                    let (request, request_state) =
-                        entry.insert(request, parent_key, RequestState::Cancelled);
-                    (Vec::new(), request, request_state)
-                } else {
-                    return;
-                }
-            }
-        };
-
-        match request_state {
+        match node.value_mut() {
             RequestState::InFlight { waiting, .. } => {
                 waiting.push_back(client_id);
-                client_state.requests.insert(request_key.0, request_key.1);
+                client_state.requests.insert(request_key, node_key);
             }
             RequestState::Complete => (),
             RequestState::Cancelled => {
-                let timer_key = self
-                    .timer
-                    .insert((client_id, request_key.0), REQUEST_TIMEOUT);
+                let timer_key = self.timer.insert((client_id, request_key), REQUEST_TIMEOUT);
 
-                *request_state = RequestState::InFlight {
+                *node.value_mut() = RequestState::InFlight {
                     sender_client_id: client_id,
                     sender_timer_key: timer_key,
                     waiting: VecDeque::new(),
                 };
 
-                client_state.requests.insert(request_key.0, request_key.1);
-                client_state.request_tx.send(request.clone()).ok();
+                client_state.requests.insert(request_key, node_key);
+                client_state.request_tx.send(node.request().clone()).ok();
             }
         }
 
-        // NOTE: we are using recursion, but the graph is only a few layers deep (currently 5) so
+        // Note: we are using recursion, but the graph is only a few layers deep (currently 5) so
         // there is no danger of stack overflow.
+        let children: Vec<_> = node.children().collect();
+
         for child_key in children {
-            self.insert_request(client_id, child_key, None, Some(request_key));
+            self.update_request(client_id, child_key);
         }
     }
 
-    fn cancel_request(&mut self, client_id: ClientId, request_key: GraphKey) {
-        let GraphEntry::Occupied(mut entry) = self.requests.entry(request_key) else {
+    fn cancel_request(&mut self, client_id: ClientId, node_key: GraphKey) {
+        let Some(node) = self.requests.get_mut(node_key) else {
             return;
         };
 
-        let parent_keys = match entry.get_mut() {
+        let (request, state) = node.request_and_value_mut();
+
+        let remove = match state {
             RequestState::InFlight {
                 sender_client_id,
                 sender_timer_key,
@@ -426,23 +427,20 @@ impl Worker {
                         *sender_client_id = next_client_id;
                         *sender_timer_key = self
                             .timer
-                            .insert((next_client_id, request_key.0), REQUEST_TIMEOUT);
+                            .insert((next_client_id, MessageKey::from(request)), REQUEST_TIMEOUT);
 
                         // Send the request to the new sender.
-                        next_client_state
-                            .request_tx
-                            .send(entry.request().clone())
-                            .ok();
+                        next_client_state.request_tx.send(request.clone()).ok();
 
-                        return;
+                        false
                     } else {
                         // No waiting client found. If this request has no children, we can remove
                         // it, otherwise we mark it as cancelled.
-                        if !entry.children().is_empty() {
-                            *entry.get_mut() = RequestState::Cancelled;
-                            return;
+                        if node.children().len() > 0 {
+                            *node.value_mut() = RequestState::Cancelled;
+                            false
                         } else {
-                            entry.remove().parents
+                            true
                         }
                     }
                 } else {
@@ -455,34 +453,32 @@ impl Worker {
                         waiting.remove(index);
                     }
 
-                    return;
+                    false
                 }
             }
-            RequestState::Complete | RequestState::Cancelled => return,
+            RequestState::Complete | RequestState::Cancelled => false,
         };
 
-        for parent_key in parent_keys {
-            self.request_removed(request_key, parent_key);
+        if remove {
+            self.remove_request(node_key);
         }
     }
 
-    // Remove the request from its parent request and if it was the last child of the parent, remove
-    // the parent as well, recursively.
-    fn request_removed(&mut self, request_key: GraphKey, parent_key: GraphKey) {
-        let mut entry = match self.requests.entry(parent_key) {
-            GraphEntry::Occupied(entry) => entry,
-            GraphEntry::Vacant(_) => return,
+    fn remove_request(&mut self, node_key: GraphKey) {
+        let Some(node) = self.requests.remove(node_key) else {
+            return;
         };
 
-        entry.remove_child(&request_key);
+        for parent_key in node.parents() {
+            let Some(parent_node) = self.requests.get(parent_key) else {
+                continue;
+            };
 
-        if !entry.children().is_empty() {
-            return;
-        }
+            if parent_node.children().len() > 0 {
+                continue;
+            }
 
-        let grandparent_keys: Vec<_> = entry.parents().iter().copied().collect();
-        for grandparent_key in grandparent_keys {
-            self.request_removed(parent_key, grandparent_key);
+            self.remove_request(parent_key);
         }
     }
 }
@@ -512,18 +508,18 @@ enum Command {
     },
     HandleSuccess {
         client_id: ClientId,
-        response_key: MessageKey,
+        request_key: MessageKey,
         requests: Vec<(Request, MultiBlockPresence)>,
     },
     HandleFailure {
         client_id: ClientId,
-        response_key: MessageKey,
+        request_key: MessageKey,
     },
 }
 
 struct ClientState {
     request_tx: mpsc::UnboundedSender<Request>,
-    requests: HashMap<MessageKey, MultiBlockPresence>,
+    requests: HashMap<MessageKey, GraphKey>,
 }
 
 impl ClientState {
@@ -550,4 +546,10 @@ enum RequestState {
     Complete,
     /// The response for the current client failed and there are no more clients waiting.
     Cancelled,
+}
+
+#[derive(Debug)]
+enum FailureReason {
+    Response,
+    Timeout,
 }

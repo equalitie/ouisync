@@ -112,6 +112,14 @@ impl Snapshot {
             .map(|(_, node)| node)
     }
 
+    pub fn inner_count(&self) -> usize {
+        self.inners
+            .iter()
+            .flat_map(|layer| layer.values())
+            .map(|nodes| nodes.len())
+            .sum()
+    }
+
     pub fn blocks(&self) -> &HashMap<BlockId, Block> {
         &self.blocks
     }

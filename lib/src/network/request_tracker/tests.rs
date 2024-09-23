@@ -16,27 +16,14 @@ use std::collections::VecDeque;
 // needs a tokio runtime.
 #[tokio::test]
 async fn simulation() {
-    simulation_case(6045920800462135606, 1, 2, (1, 10), (1, 10));
-    // let seed = rand::random();
-    // simulation_case(seed, 32, 4, (1, 10), (1, 10));
+    let seed = rand::random();
+    simulation_case(seed, 64, 4);
 }
 
-fn simulation_case(
-    seed: u64,
-    max_blocks: usize,
-    max_peers: usize,
-    peer_insert_ratio: (u32, u32),
-    peer_remove_ratio: (u32, u32),
-) {
+fn simulation_case(seed: u64, max_blocks: usize, expected_peer_changes: usize) {
     test_utils::init_log();
 
-    tracing::info!(
-        seed,
-        max_blocks,
-        max_peers,
-        peer_insert_ratio = ?peer_insert_ratio,
-        peer_remove_ratio = ?peer_remove_ratio,
-    );
+    tracing::info!(seed, max_blocks, expected_peer_changes);
 
     let mut rng = StdRng::seed_from_u64(seed);
 
@@ -44,43 +31,74 @@ fn simulation_case(
 
     let block_count = rng.gen_range(1..=max_blocks);
     let snapshot = Snapshot::generate(&mut rng, block_count);
+    let mut summary = Summary::new(snapshot.blocks().len());
 
     tracing::info!(?snapshot);
 
     let mut peers = Vec::new();
-    let mut total_peer_count = 0;
-    let mut summary = Summary::new(snapshot.blocks().len());
+    let mut total_peer_count = 0; // total number of peers that participated in the simulation
 
-    loop {
-        let peers_len_before = peers.len();
+    // Action to perform on the set of peers.
+    #[derive(Debug)]
+    enum Action {
+        // Insert a new peer
+        Insert,
+        // Remove a random peer
+        Remove,
+        // Keep the peer set intact
+        Keep,
+    }
 
-        if peers.is_empty()
-            || (peers.len() < max_peers && rng.gen_ratio(peer_insert_ratio.0, peer_insert_ratio.1))
-        {
-            tracing::info!("insert peer");
+    // Total number of simulation steps is the number of index nodes plus the number of blocks in
+    // the snapshot. This is used to calculate the probability of the next action.
+    let steps = 1 + snapshot.inner_count() + snapshot.leaf_count() + snapshot.blocks().len();
 
-            let (tracker_client, tracker_request_rx) = tracker.new_client();
-            let client = TestClient::new(tracker_client, tracker_request_rx);
+    for tick in 0.. {
+        let _enter = tracing::info_span!("tick", message = tick);
 
-            let writer_id = PublicKey::generate(&mut rng);
-            let write_keys = Keypair::generate(&mut rng);
-            let server = TestServer::new(writer_id, write_keys, &snapshot);
+        // Generate the next action. The probability of `Insert` or `Remove` is chosen such that the
+        // expected number of such actions in the simulation is equal to `expected_peer_changes`.
+        // Both `Insert` and `Remove` have currently the same probability.
+        let action = if rng.gen_range(0..steps) < expected_peer_changes {
+            if rng.gen() {
+                Action::Insert
+            } else {
+                Action::Remove
+            }
+        } else {
+            Action::Keep
+        };
 
-            peers.push((client, server));
+        match action {
+            Action::Insert => {
+                let (tracker_client, tracker_request_rx) = tracker.new_client();
+                let client = TestClient::new(tracker_client, tracker_request_rx);
+
+                let writer_id = PublicKey::generate(&mut rng);
+                let write_keys = Keypair::generate(&mut rng);
+                let server = TestServer::new(writer_id, write_keys, &snapshot);
+
+                peers.push((client, server));
+                total_peer_count += 1;
+            }
+            Action::Remove => {
+                if peers.len() < 2 {
+                    continue;
+                }
+
+                let index = rng.gen_range(0..peers.len());
+                peers.remove(index);
+            }
+            Action::Keep => {
+                if peers.is_empty() {
+                    continue;
+                }
+            }
         }
 
-        if peers.len() > 1 && rng.gen_ratio(peer_remove_ratio.0, peer_remove_ratio.1) {
-            tracing::info!("remove peer");
+        let polled = poll_peers(&mut rng, &mut peers, &snapshot, &mut summary);
 
-            let index = rng.gen_range(0..peers.len());
-            peers.remove(index);
-        }
-
-        // Note some peers might be inserted and removed in the same tick. Such peers are discounted
-        // from the total because they would not send/receive any messages.
-        total_peer_count += peers.len().saturating_sub(peers_len_before);
-
-        if poll_peers(&mut rng, &mut peers, &snapshot, &mut summary) {
+        if polled || matches!(action, Action::Remove) {
             tracker_worker.step();
         } else {
             break;
@@ -106,19 +124,12 @@ impl Summary {
         }
     }
 
-    fn receive_node(&mut self, hash: Hash) {
-        if self.blocks.len() >= self.expected_blocks {
-            return;
-        }
-
+    fn receive_node(&mut self, hash: Hash) -> bool {
         *self.nodes.entry(hash).or_default() += 1;
+        self.blocks.len() < self.expected_blocks
     }
 
     fn receive_block(&mut self, block_id: BlockId) {
-        if self.blocks.len() >= self.expected_blocks {
-            return;
-        }
-
         *self.blocks.entry(block_id).or_default() += 1;
     }
 
@@ -183,16 +194,18 @@ impl TestClient {
     fn handle_response(&mut self, response: Response, summary: &mut Summary) {
         match response {
             Response::RootNode(proof, block_presence, debug_payload) => {
-                summary.receive_node(proof.hash);
-
-                let requests = vec![(
-                    Request::ChildNodes(
-                        proof.hash,
-                        ResponseDisambiguator::new(block_presence),
-                        debug_payload.follow_up(),
-                    ),
-                    block_presence,
-                )];
+                let requests = summary
+                    .receive_node(proof.hash)
+                    .then_some((
+                        Request::ChildNodes(
+                            proof.hash,
+                            ResponseDisambiguator::new(block_presence),
+                            debug_payload.follow_up(),
+                        ),
+                        block_presence,
+                    ))
+                    .into_iter()
+                    .collect();
 
                 self.tracker_client
                     .success(MessageKey::RootNode(proof.writer_id), requests);
@@ -201,17 +214,15 @@ impl TestClient {
                 let parent_hash = nodes.hash();
                 let requests: Vec<_> = nodes
                     .into_iter()
-                    .map(|(_, node)| {
-                        summary.receive_node(node.hash);
-
-                        (
+                    .filter_map(|(_, node)| {
+                        summary.receive_node(node.hash).then_some((
                             Request::ChildNodes(
                                 node.hash,
                                 ResponseDisambiguator::new(node.summary.block_presence),
                                 debug_payload.follow_up(),
                             ),
                             node.summary.block_presence,
-                        )
+                        ))
                     })
                     .collect();
 
@@ -222,13 +233,11 @@ impl TestClient {
                 let parent_hash = nodes.hash();
                 let requests = nodes
                     .into_iter()
-                    .map(|node| {
-                        summary.receive_node(node.locator);
-
-                        (
+                    .filter_map(|node| {
+                        summary.receive_node(node.locator).then_some((
                             Request::Block(node.block_id, debug_payload.follow_up()),
                             MultiBlockPresence::None,
-                        )
+                        ))
                     })
                     .collect();
 
@@ -322,9 +331,7 @@ impl TestServer {
                         disambiguator,
                         debug_payload.reply(),
                     ));
-                }
-
-                if let Some(nodes) = snapshot
+                } else if let Some(nodes) = snapshot
                     .leaf_sets()
                     .find_map(|(parent_hash, nodes)| (*parent_hash == hash).then_some(nodes))
                 {
@@ -368,6 +375,7 @@ fn poll_peers<R: Rng>(
     snapshot: &Snapshot,
     summary: &mut Summary,
 ) -> bool {
+    #[derive(Debug)]
     enum Side {
         Client,
         Server,
