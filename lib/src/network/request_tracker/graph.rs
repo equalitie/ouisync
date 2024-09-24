@@ -28,24 +28,34 @@ impl<T> Graph<T> {
         parent_key: Option<Key>,
         value: T,
     ) -> Key {
-        let entry = match self
+        let node_key = match self
             .index
             .entry((MessageKey::from(&request), block_presence))
         {
-            Entry::Occupied(entry) => return *entry.get(),
-            Entry::Vacant(entry) => entry,
+            Entry::Occupied(entry) => {
+                self.nodes
+                    .get_mut(entry.get().0)
+                    .expect("dangling index entry")
+                    .parents
+                    .extend(parent_key);
+
+                *entry.get()
+            }
+            Entry::Vacant(entry) => {
+                let node_key = self.nodes.insert(Node {
+                    request,
+                    block_presence,
+                    parents: parent_key.into_iter().collect(),
+                    children: HashSet::default(),
+                    value,
+                });
+                let node_key = Key(node_key);
+
+                entry.insert(node_key);
+
+                node_key
+            }
         };
-
-        let node_key = self.nodes.insert(Node {
-            request,
-            block_presence,
-            parents: parent_key.into_iter().collect(),
-            children: HashSet::default(),
-            value,
-        });
-        let node_key = Key(node_key);
-
-        entry.insert(node_key);
 
         if let Some(parent_key) = parent_key {
             if let Some(parent_node) = self.nodes.get_mut(parent_key.0) {
@@ -78,12 +88,20 @@ impl<T> Graph<T> {
             parent_node.children.remove(&key);
         }
 
+        for child_key in &node.children {
+            let Some(child_node) = self.nodes.get_mut(child_key.0) else {
+                continue;
+            };
+
+            child_node.parents.remove(&key);
+        }
+
         Some(node)
     }
 
     #[cfg_attr(not(test), expect(dead_code))]
-    pub fn len(&self) -> usize {
-        self.nodes.len()
+    pub fn requests(&self) -> impl ExactSizeIterator<Item = &Request> {
+        self.nodes.iter().map(|(_, node)| &node.request)
     }
 }
 
@@ -136,57 +154,62 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut graph = Graph::new();
 
-        assert_eq!(graph.len(), 0);
+        assert_eq!(graph.requests().len(), 0);
 
-        let request0 = Request::ChildNodes(
+        let parent_request = Request::ChildNodes(
             rng.gen(),
             ResponseDisambiguator::new(MultiBlockPresence::Full),
             DebugRequest::start(),
         );
 
-        let node_key0 = graph.get_or_insert(request0.clone(), MultiBlockPresence::Full, None, 1);
+        let parent_node_key =
+            graph.get_or_insert(parent_request.clone(), MultiBlockPresence::Full, None, 1);
 
-        assert_eq!(graph.len(), 1);
+        assert_eq!(graph.requests().len(), 1);
 
-        let Some(node) = graph.get(node_key0) else {
+        let Some(node) = graph.get(parent_node_key) else {
             unreachable!()
         };
 
         assert_eq!(*node.value(), 1);
         assert_eq!(node.children().len(), 0);
-        assert_eq!(node.request(), &request0);
+        assert_eq!(node.request(), &parent_request);
 
-        let request1 = Request::ChildNodes(
+        let child_request = Request::ChildNodes(
             rng.gen(),
             ResponseDisambiguator::new(MultiBlockPresence::Full),
             DebugRequest::start(),
         );
 
-        let node_key1 = graph.get_or_insert(
-            request1.clone(),
+        let child_node_key = graph.get_or_insert(
+            child_request.clone(),
             MultiBlockPresence::Full,
-            Some(node_key0),
+            Some(parent_node_key),
             2,
         );
 
-        assert_eq!(graph.len(), 2);
+        assert_eq!(graph.requests().len(), 2);
 
-        let Some(node) = graph.get(node_key1) else {
+        let Some(node) = graph.get(child_node_key) else {
             unreachable!()
         };
 
         assert_eq!(*node.value(), 2);
         assert_eq!(node.children().len(), 0);
-        assert_eq!(node.request(), &request1);
+        assert_eq!(node.request(), &child_request);
 
         assert_eq!(
-            graph.get(node_key0).unwrap().children().collect::<Vec<_>>(),
-            [node_key1]
+            graph
+                .get(parent_node_key)
+                .unwrap()
+                .children()
+                .collect::<Vec<_>>(),
+            [child_node_key]
         );
 
-        graph.remove(node_key1);
+        graph.remove(child_node_key);
 
-        assert_eq!(graph.get(node_key0).unwrap().children().len(), 0);
+        assert_eq!(graph.get(parent_node_key).unwrap().children().len(), 0);
     }
 
     #[test]
@@ -194,7 +217,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut graph = Graph::new();
 
-        assert_eq!(graph.len(), 0);
+        assert_eq!(graph.requests().len(), 0);
 
         let request = Request::ChildNodes(
             rng.gen(),
@@ -203,10 +226,177 @@ mod tests {
         );
 
         let node_key0 = graph.get_or_insert(request.clone(), MultiBlockPresence::Full, None, 1);
-        assert_eq!(graph.len(), 1);
+        assert_eq!(graph.requests().len(), 1);
 
         let node_key1 = graph.get_or_insert(request, MultiBlockPresence::Full, None, 1);
-        assert_eq!(graph.len(), 1);
+        assert_eq!(graph.requests().len(), 1);
         assert_eq!(node_key0, node_key1);
+    }
+
+    #[test]
+    fn multiple_parents() {
+        let mut rng = rand::thread_rng();
+        let mut graph = Graph::new();
+
+        let hash = rng.gen();
+
+        let parent_block_presence_0 = MultiBlockPresence::None;
+        let parent_request_0 = Request::ChildNodes(
+            hash,
+            ResponseDisambiguator::new(parent_block_presence_0),
+            DebugRequest::start(),
+        );
+
+        let parent_block_presence_1 = MultiBlockPresence::Full;
+        let parent_request_1 = Request::ChildNodes(
+            hash,
+            ResponseDisambiguator::new(parent_block_presence_1),
+            DebugRequest::start(),
+        );
+
+        let child_request = Request::Block(rng.gen(), DebugRequest::start());
+
+        let parent_key_0 = graph.get_or_insert(parent_request_0, parent_block_presence_0, None, 0);
+        let parent_key_1 = graph.get_or_insert(parent_request_1, parent_block_presence_1, None, 1);
+
+        let child_key_0 = graph.get_or_insert(
+            child_request.clone(),
+            MultiBlockPresence::None,
+            Some(parent_key_0),
+            2,
+        );
+
+        let child_key_1 = graph.get_or_insert(
+            child_request,
+            MultiBlockPresence::None,
+            Some(parent_key_1),
+            2,
+        );
+
+        assert_eq!(child_key_0, child_key_1);
+
+        for parent_key in [parent_key_0, parent_key_1] {
+            assert_eq!(
+                graph
+                    .get(parent_key)
+                    .unwrap()
+                    .children()
+                    .collect::<HashSet<_>>(),
+                HashSet::from([child_key_0])
+            );
+        }
+
+        assert_eq!(
+            graph
+                .get(child_key_0)
+                .unwrap()
+                .parents()
+                .collect::<HashSet<_>>(),
+            HashSet::from([parent_key_0, parent_key_1])
+        );
+
+        graph.remove(parent_key_0);
+
+        assert_eq!(
+            graph
+                .get(child_key_0)
+                .unwrap()
+                .parents()
+                .collect::<HashSet<_>>(),
+            HashSet::from([parent_key_1])
+        );
+
+        graph.remove(parent_key_1);
+
+        assert_eq!(
+            graph
+                .get(child_key_0)
+                .unwrap()
+                .parents()
+                .collect::<HashSet<_>>(),
+            HashSet::default(),
+        );
+    }
+
+    #[test]
+    fn multiple_children() {
+        let mut rng = rand::thread_rng();
+        let mut graph = Graph::new();
+
+        let parent_request = Request::ChildNodes(
+            rng.gen(),
+            ResponseDisambiguator::new(MultiBlockPresence::Full),
+            DebugRequest::start(),
+        );
+
+        let child_request_0 = Request::ChildNodes(
+            rng.gen(),
+            ResponseDisambiguator::new(MultiBlockPresence::Full),
+            DebugRequest::start(),
+        );
+
+        let child_request_1 = Request::ChildNodes(
+            rng.gen(),
+            ResponseDisambiguator::new(MultiBlockPresence::Full),
+            DebugRequest::start(),
+        );
+
+        let parent_key = graph.get_or_insert(parent_request, MultiBlockPresence::Full, None, 0);
+
+        let child_key_0 = graph.get_or_insert(
+            child_request_0,
+            MultiBlockPresence::Full,
+            Some(parent_key),
+            1,
+        );
+
+        let child_key_1 = graph.get_or_insert(
+            child_request_1,
+            MultiBlockPresence::Full,
+            Some(parent_key),
+            2,
+        );
+
+        assert_eq!(
+            graph
+                .get(parent_key)
+                .unwrap()
+                .children()
+                .collect::<HashSet<_>>(),
+            HashSet::from([child_key_0, child_key_1])
+        );
+
+        for child_key in [child_key_0, child_key_1] {
+            assert_eq!(
+                graph
+                    .get(child_key)
+                    .unwrap()
+                    .parents()
+                    .collect::<HashSet<_>>(),
+                HashSet::from([parent_key])
+            );
+        }
+
+        graph.remove(child_key_0);
+
+        assert_eq!(
+            graph
+                .get(parent_key)
+                .unwrap()
+                .children()
+                .collect::<HashSet<_>>(),
+            HashSet::from([child_key_1])
+        );
+
+        graph.remove(child_key_1);
+
+        assert_eq!(
+            graph
+                .get(parent_key)
+                .unwrap()
+                .children()
+                .collect::<HashSet<_>>(),
+            HashSet::default()
+        );
     }
 }

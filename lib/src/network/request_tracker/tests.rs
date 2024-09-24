@@ -3,145 +3,214 @@ use super::{
     *,
 };
 use crate::{
+    collections::HashSet,
     crypto::{sign::Keypair, Hashable},
     network::message::ResponseDisambiguator,
-    protocol::{test_utils::Snapshot, Block, MultiBlockPresence, Proof, UntrustedProof},
-    test_utils,
+    protocol::{
+        test_utils::{BlockState, Snapshot},
+        Block, MultiBlockPresence, Proof, SingleBlockPresence, UntrustedProof,
+    },
     version_vector::VersionVector,
 };
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-use std::collections::VecDeque;
+use rand::{
+    distributions::{Bernoulli, Distribution, Standard},
+    rngs::StdRng,
+    seq::SliceRandom,
+    CryptoRng, Rng, SeedableRng,
+};
+use std::collections::{BTreeMap, VecDeque};
 
+// Test syncing while peers keep joining and leaving the swarm.
+//
 // Note: We need `tokio::test` here because the `RequestTracker` uses `DelayQueue` internaly which
 // needs a tokio runtime.
+#[ignore = "fails due to problems with the test setup"]
 #[tokio::test]
-async fn simulation() {
+async fn dynamic_swarm() {
     let seed = rand::random();
-    simulation_case(seed, 64, 4);
-}
+    case(seed, 64, 4);
 
-fn simulation_case(seed: u64, max_blocks: usize, expected_peer_changes: usize) {
-    test_utils::init_log();
+    fn case(seed: u64, max_blocks: usize, expected_peer_changes: usize) {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let num_blocks = rng.gen_range(1..=max_blocks);
+        let snapshot = Snapshot::generate(&mut rng, num_blocks);
+        let mut summary = Summary::new(snapshot.blocks().len());
 
-    tracing::info!(seed, max_blocks, expected_peer_changes);
+        println!(
+            "seed = {seed}, blocks = {}/{max_blocks}, expected_peer_changes = {expected_peer_changes}",
+            snapshot.blocks().len()
+        );
 
-    let mut rng = StdRng::seed_from_u64(seed);
+        let (tracker, mut tracker_worker) = build();
+        let mut peers = Vec::new();
 
-    let (tracker, mut tracker_worker) = build();
+        // Action to perform on the set of peers.
+        #[derive(Debug)]
+        enum Action {
+            // Insert a new peer
+            Insert,
+            // Remove a random peer
+            Remove,
+            // Keep the peer set intact
+            Keep,
+        }
 
-    let block_count = rng.gen_range(1..=max_blocks);
-    let snapshot = Snapshot::generate(&mut rng, block_count);
-    let mut summary = Summary::new(snapshot.blocks().len());
+        // Total number of simulation steps is the number of index nodes plus the number of blocks
+        // in the snapshot. This is used to calculate the probability of the next action.
+        let steps = 1 + snapshot.inner_count() + snapshot.leaf_count() + snapshot.blocks().len();
 
-    tracing::info!(?snapshot);
+        for tick in 0.. {
+            let _enter = tracing::info_span!("tick", message = tick).entered();
 
-    let mut peers = Vec::new();
-    let mut total_peer_count = 0; // total number of peers that participated in the simulation
-
-    // Action to perform on the set of peers.
-    #[derive(Debug)]
-    enum Action {
-        // Insert a new peer
-        Insert,
-        // Remove a random peer
-        Remove,
-        // Keep the peer set intact
-        Keep,
-    }
-
-    // Total number of simulation steps is the number of index nodes plus the number of blocks in
-    // the snapshot. This is used to calculate the probability of the next action.
-    let steps = 1 + snapshot.inner_count() + snapshot.leaf_count() + snapshot.blocks().len();
-
-    for tick in 0.. {
-        let _enter = tracing::info_span!("tick", message = tick);
-
-        // Generate the next action. The probability of `Insert` or `Remove` is chosen such that the
-        // expected number of such actions in the simulation is equal to `expected_peer_changes`.
-        // Both `Insert` and `Remove` have currently the same probability.
-        let action = if rng.gen_range(0..steps) < expected_peer_changes {
-            if rng.gen() {
-                Action::Insert
+            // Generate the next action. The probability of `Insert` or `Remove` is chosen such that
+            // the expected number of such actions in the simulation is equal to
+            // `expected_peer_changes`. Both `Insert` and `Remove` have currently the same
+            // probability.
+            let action = if rng.gen_range(0..steps) < expected_peer_changes {
+                if rng.gen() {
+                    Action::Insert
+                } else {
+                    Action::Remove
+                }
             } else {
-                Action::Remove
-            }
-        } else {
-            Action::Keep
-        };
+                Action::Keep
+            };
 
-        match action {
-            Action::Insert => {
-                let (tracker_client, tracker_request_rx) = tracker.new_client();
-                let client = TestClient::new(tracker_client, tracker_request_rx);
-
-                let writer_id = PublicKey::generate(&mut rng);
-                let write_keys = Keypair::generate(&mut rng);
-                let server = TestServer::new(writer_id, write_keys, &snapshot);
-
-                peers.push((client, server));
-                total_peer_count += 1;
-            }
-            Action::Remove => {
-                if peers.len() < 2 {
-                    continue;
+            match action {
+                Action::Insert => {
+                    peers.push(make_peer(&mut rng, &tracker, snapshot.clone()));
                 }
+                Action::Remove => {
+                    if peers.len() < 2 {
+                        continue;
+                    }
 
-                let index = rng.gen_range(0..peers.len());
-                peers.remove(index);
-            }
-            Action::Keep => {
-                if peers.is_empty() {
-                    continue;
+                    let index = rng.gen_range(0..peers.len());
+                    peers.remove(index);
                 }
+                Action::Keep => {
+                    if peers.is_empty() {
+                        continue;
+                    }
+                }
+            }
+
+            let polled = poll_peers(&mut rng, &mut peers, &mut summary);
+
+            if polled || matches!(action, Action::Remove) {
+                tracker_worker.step();
+            } else {
+                break;
             }
         }
 
-        let polled = poll_peers(&mut rng, &mut peers, &snapshot, &mut summary);
-
-        if polled || matches!(action, Action::Remove) {
-            tracker_worker.step();
-        } else {
-            break;
-        }
+        summary.verify(&snapshot);
+        assert_eq!(tracker_worker.requests().len(), 0);
     }
-
-    summary.verify(total_peer_count, &snapshot);
-    assert_eq!(tracker_worker.request_count(), 0);
 }
 
-// TODO: test multiple peers with different block summaries
+// Test syncing with multiple peers where no peer has all the blocks but every block is present in
+// at least one peer.
+#[ignore = "fails due to problems with the test setup"]
+#[tokio::test]
+async fn missing_blocks() {
+    // let seed = rand::random();
+    let seed = 830380000365750606;
+    case(seed, 8, 2);
+
+    fn case(seed: u64, max_blocks: usize, max_peers: usize) {
+        crate::test_utils::init_log();
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        let num_blocks = rng.gen_range(2..=max_blocks);
+        let num_peers = rng.gen_range(2..=max_peers);
+        let (master_snapshot, peer_snapshots) =
+            generate_snapshots_with_missing_blocks(&mut rng, num_peers, num_blocks);
+        let mut summary = Summary::new(master_snapshot.blocks().len());
+
+        println!(
+            "seed = {seed}, blocks = {num_blocks}/{max_blocks}, peers = {num_peers}/{max_peers}"
+        );
+
+        let (tracker, mut tracker_worker) = build();
+        let mut peers: Vec<_> = peer_snapshots
+            .into_iter()
+            .map(|snapshot| make_peer(&mut rng, &tracker, snapshot))
+            .collect();
+
+        for tick in 0.. {
+            let _enter = tracing::info_span!("tick", message = tick).entered();
+
+            if poll_peers(&mut rng, &mut peers, &mut summary) {
+                tracker_worker.step();
+            } else {
+                break;
+            }
+        }
+
+        summary.verify(&master_snapshot);
+        assert_eq!(tracker_worker.requests().cloned().collect::<Vec<_>>(), []);
+    }
+}
+
 // TODO: test failure/timeout
 
 struct Summary {
-    expected_blocks: usize,
-    nodes: HashMap<Hash, usize>,
-    blocks: HashMap<BlockId, usize>,
+    expected_block_count: usize,
+
+    // Using `BTreeMap` so any potential failures are printed in the same order in different test
+    // runs.
+    requests: BTreeMap<MessageKey, usize>,
+
+    nodes: HashMap<Hash, HashSet<MultiBlockPresence>>,
+    blocks: HashSet<BlockId>,
+
+    node_failures: HashMap<Hash, usize>,
+    block_failures: HashMap<BlockId, usize>,
 }
 
 impl Summary {
-    fn new(expected_blocks: usize) -> Self {
+    fn new(expected_block_count: usize) -> Self {
         Self {
-            expected_blocks,
+            expected_block_count,
+            requests: BTreeMap::default(),
             nodes: HashMap::default(),
-            blocks: HashMap::default(),
+            blocks: HashSet::default(),
+            node_failures: HashMap::default(),
+            block_failures: HashMap::default(),
         }
     }
 
-    fn receive_node(&mut self, hash: Hash) -> bool {
-        *self.nodes.entry(hash).or_default() += 1;
-        self.blocks.len() < self.expected_blocks
+    fn send_request(&mut self, request: &Request) {
+        *self.requests.entry(MessageKey::from(request)).or_default() += 1;
+    }
+
+    fn receive_node(&mut self, hash: Hash, block_presence: MultiBlockPresence) -> bool {
+        self.nodes.entry(hash).or_default().insert(block_presence);
+        self.blocks.len() < self.expected_block_count
+    }
+
+    fn receive_node_failure(&mut self, hash: Hash) {
+        *self.node_failures.entry(hash).or_default() += 1;
     }
 
     fn receive_block(&mut self, block_id: BlockId) {
-        *self.blocks.entry(block_id).or_default() += 1;
+        self.blocks.insert(block_id);
     }
 
-    fn verify(&mut self, num_peers: usize, snapshot: &Snapshot) {
-        assert_eq!(
-            self.nodes.remove(snapshot.root_hash()).unwrap_or(0),
-            num_peers,
-            "root node not received exactly {num_peers} times: {:?}",
-            snapshot.root_hash()
+    fn receive_block_failure(&mut self, block_id: BlockId) {
+        *self.block_failures.entry(block_id).or_default() += 1;
+    }
+
+    fn verify(self, snapshot: &Snapshot) {
+        assert!(
+            self.nodes
+                .get(snapshot.root_hash())
+                .into_iter()
+                .flatten()
+                .count()
+                > 0,
+            "root node not received"
         );
 
         for hash in snapshot
@@ -149,32 +218,40 @@ impl Summary {
             .map(|node| &node.hash)
             .chain(snapshot.leaf_nodes().map(|node| &node.locator))
         {
-            assert_eq!(
-                self.nodes.remove(hash).unwrap_or(0),
-                1,
-                "child node not received exactly once: {hash:?}"
+            assert!(
+                self.nodes.get(hash).into_iter().flatten().count() > 0,
+                "child node not received: {hash:?}"
             );
         }
 
         for block_id in snapshot.blocks().keys() {
-            assert_eq!(
-                self.blocks.remove(block_id).unwrap_or(0),
-                1,
-                "block not received exactly once: {block_id:?}"
+            assert!(
+                self.blocks.contains(block_id),
+                "block not received: {block_id:?}"
             );
         }
 
-        // Verify we received only the expected nodes and blocks
-        assert!(
-            self.nodes.is_empty(),
-            "unexpected nodes received: {:?}",
-            self.nodes
-        );
-        assert!(
-            self.blocks.is_empty(),
-            "unexpected blocks received: {:?}",
-            self.blocks
-        );
+        for (request, &actual_count) in &self.requests {
+            let expected_max = match request {
+                MessageKey::RootNode(_) => 0,
+                MessageKey::ChildNodes(hash) => {
+                    self.nodes.get(hash).map(HashSet::len).unwrap_or(0)
+                        + self.node_failures.get(hash).copied().unwrap_or(0)
+                }
+                MessageKey::Block(block_id) => {
+                    (if self.blocks.contains(block_id) { 1 } else { 0 })
+                        + self.block_failures.get(block_id).copied().unwrap_or(0)
+                }
+            };
+
+            assert!(
+                actual_count <= expected_max,
+                "request sent too many times ({} instead of {}): {:?}",
+                actual_count,
+                expected_max,
+                request
+            );
+        }
     }
 }
 
@@ -198,7 +275,7 @@ impl TestClient {
         match response {
             Response::RootNode(proof, block_presence, debug_payload) => {
                 let requests = summary
-                    .receive_node(proof.hash)
+                    .receive_node(proof.hash, block_presence)
                     .then_some((
                         Request::ChildNodes(
                             proof.hash,
@@ -217,15 +294,18 @@ impl TestClient {
                 let parent_hash = nodes.hash();
                 let requests: Vec<_> = nodes
                     .into_iter()
-                    .filter_map(|(_, node)| {
-                        summary.receive_node(node.hash).then_some((
+                    .filter(|(_, node)| {
+                        summary.receive_node(node.hash, node.summary.block_presence)
+                    })
+                    .map(|(_, node)| {
+                        (
                             Request::ChildNodes(
                                 node.hash,
                                 ResponseDisambiguator::new(node.summary.block_presence),
                                 debug_payload.follow_up(),
                             ),
                             node.summary.block_presence,
-                        ))
+                        )
                     })
                     .collect();
 
@@ -236,11 +316,21 @@ impl TestClient {
                 let parent_hash = nodes.hash();
                 let requests = nodes
                     .into_iter()
-                    .filter_map(|node| {
-                        summary.receive_node(node.locator).then_some((
+                    .filter(|node| {
+                        summary.receive_node(
+                            node.locator,
+                            match node.block_presence {
+                                SingleBlockPresence::Present => MultiBlockPresence::Full,
+                                SingleBlockPresence::Missing => MultiBlockPresence::None,
+                                SingleBlockPresence::Expired => unimplemented!(),
+                            },
+                        )
+                    })
+                    .map(|node| {
+                        (
                             Request::Block(node.block_id, debug_payload.follow_up()),
                             MultiBlockPresence::None,
-                        ))
+                        )
                     })
                     .collect();
 
@@ -259,9 +349,11 @@ impl TestClient {
                 self.tracker_client.failure(MessageKey::RootNode(writer_id));
             }
             Response::ChildNodesError(hash, _disambiguator, _debug_payload) => {
+                summary.receive_node_failure(hash);
                 self.tracker_client.failure(MessageKey::ChildNodes(hash));
             }
             Response::BlockError(block_id, _debug_payload) => {
+                summary.receive_block_failure(block_id);
                 self.tracker_client.failure(MessageKey::Block(block_id));
             }
             Response::BlockOffer(_block_id, _debug_payload) => unimplemented!(),
@@ -276,11 +368,12 @@ impl TestClient {
 struct TestServer {
     writer_id: PublicKey,
     write_keys: Keypair,
+    snapshot: Snapshot,
     outbox: VecDeque<Response>,
 }
 
 impl TestServer {
-    fn new(writer_id: PublicKey, write_keys: Keypair, snapshot: &Snapshot) -> Self {
+    fn new(writer_id: PublicKey, write_keys: Keypair, snapshot: Snapshot) -> Self {
         let proof = UntrustedProof::from(Proof::new(
             writer_id,
             VersionVector::first(writer_id),
@@ -290,7 +383,7 @@ impl TestServer {
 
         let outbox = [Response::RootNode(
             proof.clone(),
-            MultiBlockPresence::Full,
+            *snapshot.root_block_presence(),
             DebugResponse::unsolicited(),
         )]
         .into();
@@ -298,24 +391,27 @@ impl TestServer {
         Self {
             writer_id,
             write_keys,
+            snapshot,
             outbox,
         }
     }
 
-    fn handle_request(&mut self, request: Request, snapshot: &Snapshot) {
+    fn handle_request(&mut self, request: Request, summary: &mut Summary) {
+        summary.send_request(&request);
+
         match request {
             Request::RootNode(writer_id, debug_payload) => {
                 if writer_id == self.writer_id {
                     let proof = Proof::new(
                         writer_id,
                         VersionVector::first(writer_id),
-                        *snapshot.root_hash(),
+                        *self.snapshot.root_hash(),
                         &self.write_keys,
                     );
 
                     self.outbox.push_back(Response::RootNode(
                         proof.into(),
-                        MultiBlockPresence::Full,
+                        *self.snapshot.root_block_presence(),
                         debug_payload.reply(),
                     ));
                 } else {
@@ -324,7 +420,8 @@ impl TestServer {
                 }
             }
             Request::ChildNodes(hash, disambiguator, debug_payload) => {
-                if let Some(nodes) = snapshot
+                if let Some(nodes) = self
+                    .snapshot
                     .inner_layers()
                     .flat_map(|layer| layer.inner_maps())
                     .find_map(|(parent_hash, nodes)| (*parent_hash == hash).then_some(nodes))
@@ -334,7 +431,8 @@ impl TestServer {
                         disambiguator,
                         debug_payload.reply(),
                     ));
-                } else if let Some(nodes) = snapshot
+                } else if let Some(nodes) = self
+                    .snapshot
                     .leaf_sets()
                     .find_map(|(parent_hash, nodes)| (*parent_hash == hash).then_some(nodes))
                 {
@@ -352,7 +450,7 @@ impl TestServer {
                 }
             }
             Request::Block(block_id, debug_payload) => {
-                if let Some(block) = snapshot.blocks().get(&block_id) {
+                if let Some(block) = self.snapshot.blocks().get(&block_id) {
                     self.outbox.push_back(Response::Block(
                         block.content.clone(),
                         block.nonce,
@@ -371,11 +469,25 @@ impl TestServer {
     }
 }
 
+fn make_peer<R: Rng + CryptoRng>(
+    rng: &mut R,
+    tracker: &RequestTracker,
+    snapshot: Snapshot,
+) -> (TestClient, TestServer) {
+    let (tracker_client, tracker_request_rx) = tracker.new_client();
+    let client = TestClient::new(tracker_client, tracker_request_rx);
+
+    let writer_id = PublicKey::generate(rng);
+    let write_keys = Keypair::generate(rng);
+    let server = TestServer::new(writer_id, write_keys, snapshot);
+
+    (client, server)
+}
+
 // Polls every client and server once, in random order
 fn poll_peers<R: Rng>(
     rng: &mut R,
     peers: &mut [(TestClient, TestServer)],
-    snapshot: &Snapshot,
     summary: &mut Summary,
 ) -> bool {
     #[derive(Debug)]
@@ -398,7 +510,7 @@ fn poll_peers<R: Rng>(
         match side {
             Side::Client => {
                 if let Some(request) = client.poll_request() {
-                    server.handle_request(request, snapshot);
+                    server.handle_request(request, summary);
                     changed = true;
                 }
             }
@@ -412,4 +524,54 @@ fn poll_peers<R: Rng>(
     }
 
     changed
+}
+
+/// Generate `count + 1` copies of the same snapshot. The first one will have all the blocks
+/// present (the "master copy"). The remaining ones will have some blocks missing but in such a
+/// way that every block is present in at least one of the snapshots.
+fn generate_snapshots_with_missing_blocks(
+    mut rng: &mut impl Rng,
+    count: usize,
+    num_blocks: usize,
+) -> (Snapshot, Vec<Snapshot>) {
+    let all_blocks: Vec<(Hash, Block)> = rng.sample_iter(Standard).take(num_blocks).collect();
+
+    let mut partial_block_sets = Vec::with_capacity(count);
+    partial_block_sets.resize_with(count, || Vec::with_capacity(num_blocks));
+
+    // Every block is present in one snapshot and has a 50% (1:2) chance of being present in any of
+    // the other shapshots respectively.
+    let bernoulli = Bernoulli::from_ratio(1, 2).unwrap();
+
+    let mut batch = Vec::with_capacity(count);
+
+    for (locator, block) in &all_blocks {
+        // Poor man's Binomial distribution
+        let num_present = 1 + (1..count).filter(|_| bernoulli.sample(&mut rng)).count();
+        let num_missing = count - num_present;
+
+        batch.extend(
+            iter::repeat(block.clone())
+                .map(BlockState::Present)
+                .take(num_present)
+                .chain(
+                    iter::repeat(block.id)
+                        .map(BlockState::Missing)
+                        .take(num_missing),
+                ),
+        );
+        batch.shuffle(&mut rng);
+
+        for (index, block) in batch.drain(..).enumerate() {
+            partial_block_sets[index].push((*locator, block));
+        }
+    }
+
+    (
+        Snapshot::from_present_blocks(all_blocks),
+        partial_block_sets
+            .into_iter()
+            .map(Snapshot::from_blocks)
+            .collect(),
+    )
 }

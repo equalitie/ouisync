@@ -25,6 +25,7 @@ impl Snapshot {
         Self::from_present_blocks(rng.sample_iter(Standard).take(block_count))
     }
 
+    // Convenience alternative to `from_blocks` when all blocks are present.
     pub fn from_present_blocks(
         locators_and_blocks: impl IntoIterator<Item = (Hash, Block)>,
     ) -> Self {
@@ -104,7 +105,6 @@ impl Snapshot {
         &self.root_hash
     }
 
-    #[expect(dead_code)]
     pub fn root_block_presence(&self) -> &MultiBlockPresence {
         &self.root_block_presence
     }
@@ -192,9 +192,9 @@ impl<'a> InnerLayer<'a> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum BlockState {
     Present(Block),
-    #[expect(dead_code)]
     Missing(BlockId),
 }
 
