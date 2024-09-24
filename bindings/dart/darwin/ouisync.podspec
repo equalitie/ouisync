@@ -14,12 +14,15 @@ A new Flutter plugin project.
   s.author           = { 'eQualitie' => 'support@ouisync.net' }
 
   s.source           = { :path => '.' }
+  s.public_header_files = 'Classes**/*.h'
   s.source_files     = 'Classes/**/*'
   s.static_framework = true
-  s.vendored_libraries = "**/*.dylib"
-  s.dependency 'FlutterMacOS'
+  s.ios.vendored_libraries = "**/*.a"
+  s.osx.vendored_libraries = "**/*.dylib"
+  s.ios.dependency 'Flutter'
+  s.osx.dependency 'FlutterMacOS'
 
-  s.platform = :osx, '10.11'
-  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
+  s.ios.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
+  s.osx.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'
 end

@@ -39,10 +39,12 @@ flutter:
         pluginClass: OuisyncPlugin
       ios:
         pluginClass: OuisyncPlugin
+        sharedDarwinSource: true
       windows:
         pluginClass: OuisyncPlugin
       linux:
         pluginClass: OuisyncPlugin
       macos:
         pluginClass: OuisyncPlugin
+        sharedDarwinSource: true
 
