@@ -306,7 +306,7 @@ impl Stacks {
         StackAddresses {
             quic_v4: self.quic_v4.as_ref().map(|stack| stack.listener_local_addr),
             quic_v6: self.quic_v6.as_ref().map(|stack| stack.listener_local_addr),
-            tcp_v4: self.tcp_v6.as_ref().map(|stack| stack.listener_local_addr),
+            tcp_v4: self.tcp_v4.as_ref().map(|stack| stack.listener_local_addr),
             tcp_v6: self.tcp_v6.as_ref().map(|stack| stack.listener_local_addr),
         }
     }
