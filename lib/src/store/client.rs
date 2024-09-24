@@ -1025,7 +1025,7 @@ mod tests {
         assert_eq!(node.summary.state, NodeState::Incomplete);
 
         // Remove the block
-        let snapshot = Snapshot::new(
+        let snapshot = Snapshot::from_present_blocks(
             snapshot
                 .locators_and_blocks()
                 .filter(|(_, block)| block.id != block_to_remove)

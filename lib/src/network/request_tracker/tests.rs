@@ -109,6 +109,9 @@ fn simulation_case(seed: u64, max_blocks: usize, expected_peer_changes: usize) {
     assert_eq!(tracker_worker.request_count(), 0);
 }
 
+// TODO: test multiple peers with different block summaries
+// TODO: test failure/timeout
+
 struct Summary {
     expected_blocks: usize,
     nodes: HashMap<Hash, usize>,

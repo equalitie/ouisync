@@ -7,12 +7,13 @@ use crate::{
     },
 };
 use rand::{distributions::Standard, Rng};
-use std::{fmt, mem};
+use std::{borrow::Cow, fmt, mem};
 
 // In-memory snapshot for testing purposes.
 #[derive(Clone)]
 pub(crate) struct Snapshot {
     root_hash: Hash,
+    root_block_presence: MultiBlockPresence,
     inners: [HashMap<BucketPath, InnerNodes>; INNER_LAYER_COUNT],
     leaves: HashMap<BucketPath, LeafNodes>,
     blocks: HashMap<BlockId, Block>,
@@ -21,52 +22,78 @@ pub(crate) struct Snapshot {
 impl Snapshot {
     // Generate a random snapshot with the given number of blocks.
     pub fn generate<R: Rng>(rng: &mut R, block_count: usize) -> Self {
-        Self::new(rng.sample_iter(Standard).take(block_count))
+        Self::from_present_blocks(rng.sample_iter(Standard).take(block_count))
+    }
+
+    pub fn from_present_blocks(
+        locators_and_blocks: impl IntoIterator<Item = (Hash, Block)>,
+    ) -> Self {
+        Self::from_blocks(
+            locators_and_blocks
+                .into_iter()
+                .map(|(locator, block)| (locator, BlockState::Present(block))),
+        )
     }
 
     // Create snapshot given an iterator of blocks where each block is associated to its encoded
     // locator.
-    pub fn new(locators_and_blocks: impl IntoIterator<Item = (Hash, Block)>) -> Self {
+    pub fn from_blocks(locators_and_blocks: impl IntoIterator<Item = (Hash, BlockState)>) -> Self {
         let mut blocks = HashMap::default();
         let mut leaves = HashMap::default();
 
         for (locator, block) in locators_and_blocks {
-            let id = block.id;
-            blocks.insert(id, block);
+            let block_id = *block.id();
+            let block_presence = block.presence();
 
-            let node = LeafNode::present(locator, id);
+            match block {
+                BlockState::Present(block) => {
+                    blocks.insert(block_id, block);
+                }
+                BlockState::Missing(_) => (),
+            }
+
             leaves
-                .entry(BucketPath::new(&node.locator, INNER_LAYER_COUNT - 1))
+                .entry(BucketPath::new(&locator, INNER_LAYER_COUNT - 1))
                 .or_insert_with(LeafNodes::default)
-                .insert(node.locator, node.block_id, SingleBlockPresence::Present);
+                .insert(locator, block_id, block_presence);
         }
 
         let mut inners: [HashMap<_, InnerNodes>; INNER_LAYER_COUNT] = Default::default();
 
-        for (path, set) in &leaves {
+        for (path, nodes) in &leaves {
             add_inner_node(
                 INNER_LAYER_COUNT - 1,
                 &mut inners[INNER_LAYER_COUNT - 1],
                 path,
-                set.hash(),
+                nodes.hash(),
+                Summary::from_leaves(nodes).block_presence,
             );
         }
 
         for layer in (0..INNER_LAYER_COUNT - 1).rev() {
             let (lo, hi) = inners.split_at_mut(layer + 1);
 
-            for (path, map) in &hi[0] {
-                add_inner_node(layer, lo.last_mut().unwrap(), path, map.hash());
+            for (path, nodes) in &hi[0] {
+                add_inner_node(
+                    layer,
+                    lo.last_mut().unwrap(),
+                    path,
+                    nodes.hash(),
+                    Summary::from_inners(nodes).block_presence,
+                );
             }
         }
 
-        let root_hash = inners[0]
+        let nodes = inners[0]
             .get(&BucketPath::default())
-            .unwrap_or(&InnerNodes::default())
-            .hash();
+            .map(Cow::Borrowed)
+            .unwrap_or(Cow::Owned(InnerNodes::default()));
+        let root_hash = nodes.hash();
+        let root_block_presence = Summary::from_inners(&nodes).block_presence;
 
         Self {
             root_hash,
+            root_block_presence,
             inners,
             leaves,
             blocks,
@@ -75,6 +102,11 @@ impl Snapshot {
 
     pub fn root_hash(&self) -> &Hash {
         &self.root_hash
+    }
+
+    #[expect(dead_code)]
+    pub fn root_block_presence(&self) -> &MultiBlockPresence {
+        &self.root_block_presence
     }
 
     pub fn leaf_sets(&self) -> impl Iterator<Item = (&Hash, &LeafNodes)> {
@@ -160,11 +192,34 @@ impl<'a> InnerLayer<'a> {
     }
 }
 
+pub(crate) enum BlockState {
+    Present(Block),
+    #[expect(dead_code)]
+    Missing(BlockId),
+}
+
+impl BlockState {
+    pub fn id(&self) -> &BlockId {
+        match self {
+            Self::Present(block) => &block.id,
+            Self::Missing(block_id) => block_id,
+        }
+    }
+
+    pub fn presence(&self) -> SingleBlockPresence {
+        match self {
+            Self::Present(_) => SingleBlockPresence::Present,
+            Self::Missing(_) => SingleBlockPresence::Missing,
+        }
+    }
+}
+
 fn add_inner_node(
     inner_layer: usize,
     maps: &mut HashMap<BucketPath, InnerNodes>,
     path: &BucketPath,
     hash: Hash,
+    block_presence: MultiBlockPresence,
 ) {
     let (bucket, parent_path) = path.pop(inner_layer);
     maps.entry(parent_path).or_default().insert(
@@ -173,7 +228,7 @@ fn add_inner_node(
             hash,
             Summary {
                 state: NodeState::Complete,
-                block_presence: MultiBlockPresence::Full,
+                block_presence,
             },
         ),
     );

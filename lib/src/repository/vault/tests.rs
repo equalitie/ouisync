@@ -87,14 +87,14 @@ async fn prune_snapshots_insert_present() {
 
     // snapshot 1
     let mut blocks = vec![rng.gen()];
-    let snapshot = Snapshot::new(blocks.clone());
+    let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&vault, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&vault, &blocks[0].1).await;
 
     // snapshot 2 (insert new block)
     blocks.push(rng.gen());
-    let snapshot = Snapshot::new(blocks.clone());
+    let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&vault, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&vault, &blocks[1].1).await;
@@ -115,14 +115,14 @@ async fn prune_snapshots_insert_missing() {
 
     // snapshot 1
     let mut blocks = vec![rng.gen()];
-    let snapshot = Snapshot::new(blocks.clone());
+    let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (insert new block)
     blocks.push(rng.gen());
-    let snapshot = Snapshot::new(blocks.clone());
+    let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the new block
@@ -145,14 +145,14 @@ async fn prune_snapshots_update_from_present_to_present() {
 
     // snapshot 1
     let mut blocks = [rng.gen()];
-    let snapshot = Snapshot::new(blocks.clone());
+    let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (update the first block)
     blocks[0].1 = rng.gen();
-    let snapshot = Snapshot::new(blocks.clone());
+    let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
@@ -173,14 +173,14 @@ async fn prune_snapshots_update_from_present_to_missing() {
 
     // snapshot 1
     let mut blocks = [rng.gen()];
-    let snapshot = Snapshot::new(blocks.clone());
+    let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (update the first block)
     blocks[0].1 = rng.gen();
-    let snapshot = Snapshot::new(blocks);
+    let snapshot = Snapshot::from_present_blocks(blocks);
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the new block
@@ -204,14 +204,14 @@ async fn prune_snapshots_update_from_missing_to_missing() {
 
     // snapshot 1
     let mut blocks = [rng.gen()];
-    let snapshot = Snapshot::new(blocks.clone());
+    let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the block
 
     // snapshot 2 (update the first block)
     blocks[0].1 = rng.gen();
-    let snapshot = Snapshot::new(blocks);
+    let snapshot = Snapshot::from_present_blocks(blocks);
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the new block
@@ -235,14 +235,14 @@ async fn prune_snapshots_keep_missing_and_insert_missing() {
 
     // snapshot 1
     let mut blocks = vec![rng.gen()];
-    let snapshot = Snapshot::new(blocks.clone());
+    let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the block
 
     // snapshot 2 (insert new block)
     blocks.push(rng.gen());
-    let snapshot = Snapshot::new(blocks);
+    let snapshot = Snapshot::from_present_blocks(blocks);
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the new block
@@ -388,8 +388,8 @@ async fn block_ids_multiple_branches() {
     let blocks_0 = &all_blocks[..2];
     let blocks_1 = &all_blocks[1..];
 
-    let snapshot_0 = Snapshot::new(blocks_0.iter().cloned());
-    let snapshot_1 = Snapshot::new(blocks_1.iter().cloned());
+    let snapshot_0 = Snapshot::from_present_blocks(blocks_0.iter().cloned());
+    let snapshot_1 = Snapshot::from_present_blocks(blocks_1.iter().cloned());
 
     SnapshotWriter::begin(vault.store(), &snapshot_0)
         .await
@@ -494,7 +494,7 @@ async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u
         .map(|_| {
             let block_count = rng.gen_range(0..block_count);
             let blocks = all_blocks.choose_multiple(&mut rng, block_count).cloned();
-            let snapshot = Snapshot::new(blocks);
+            let snapshot = Snapshot::from_present_blocks(blocks);
             let branch_id = PublicKey::generate(&mut rng);
 
             (branch_id, snapshot)
