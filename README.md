@@ -40,7 +40,32 @@ Build
 
 The results will then be found in the `./target/release/` directory.
 
-## Testing
+## Debugging tests
+
+Use the `tracing::[level]!` macros for easier debugging.
+
+The format for [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/) is either
+
+```
+RUST_LOG=[level]
+```
+
+or
+
+```
+RUST_LOG=[target]=[level],[target]=[level],...
+```
+
+Where `level` can be one of `error`, `warn`, `info`, `debug` or `trace`.  The
+`target` can be obtained from the list given by `cargo test --package` and by
+replacing dashes (`-`) with underscores (`_`) in the package names.
+
+ Ouisync uses
+[`tracing_subscriber`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
+to include information where individual output lines originated from. To enable
+this functionality, set the `level` to either `info`, `debug` or `trace`.
+
+## Testing help acknowlegement
 
 This project is tested with BrowserStack.
 
