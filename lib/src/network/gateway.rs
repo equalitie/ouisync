@@ -99,7 +99,11 @@ impl Gateway {
         self.connectivity_tx.send_if_modified(|conn| {
             let old_conn = *conn;
             *conn = Connectivity::infer(&next.addresses().ip_addrs());
-            *conn != old_conn
+            let changed = *conn != old_conn;
+            if changed {
+                tracing::info!("Changed connectivity from {:?} to {:?}", old_conn, *conn);
+            }
+            changed
         });
 
         prev.close();
@@ -159,9 +163,14 @@ impl Gateway {
                     break;
                 }
 
-                // Unwrap is OK because `connectivity_tx` lives in `self` so it can't be destroyed
-                // while this function is being executed.
-                connectivity_rx.changed().await.unwrap();
+                select! {
+                    result = connectivity_rx.changed() => {
+                        // Unwrap is OK because `connectivity_tx` lives in `self` so it can't be
+                        // destroyed while this function is being executed.
+                        result.unwrap();
+                    },
+                    _ = peer.on_unseen() => return None
+                }
             }
 
             // Note: we need to grab fresh stacks on each loop because the network might get
