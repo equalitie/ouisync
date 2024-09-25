@@ -14,7 +14,7 @@ use std::{
 use thiserror::Error;
 use tokio::{
     select,
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, watch},
     time::{self, Duration},
 };
 use tracing::{field, Instrument, Span};
@@ -23,6 +23,7 @@ use tracing::{field, Instrument, Span};
 pub(super) struct Gateway {
     stacks: AtomicSlot<Stacks>,
     incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+    connectivity_tx: watch::Sender<Connectivity>,
 }
 
 impl Gateway {
@@ -36,6 +37,7 @@ impl Gateway {
         Self {
             stacks,
             incoming_tx,
+            connectivity_tx: watch::channel(Connectivity::Disabled).0,
         }
     }
 
@@ -94,9 +96,27 @@ impl Gateway {
             tracing::info!("Terminated IPv6 TCP stack");
         }
 
+        self.connectivity_tx.send_if_modified(|conn| {
+            let old_conn = *conn;
+            *conn = Connectivity::infer(&next.addresses().ip_addrs());
+            let changed = *conn != old_conn;
+            if changed {
+                tracing::info!("Changed connectivity from {:?} to {:?}", old_conn, *conn);
+            }
+            changed
+        });
+
         prev.close();
 
         (side_channel_maker_v4, side_channel_maker_v6)
+    }
+
+    pub fn connectivity(&self) -> Connectivity {
+        *self.connectivity_tx.borrow()
+    }
+
+    pub fn connectivity_subscribe(&self) -> watch::Receiver<Connectivity> {
+        self.connectivity_tx.subscribe()
     }
 
     pub async fn connect_with_retries(
@@ -109,20 +129,49 @@ impl Gateway {
             return None;
         }
 
-        let mut backoff = ExponentialBackoffBuilder::new()
-            .with_initial_interval(Duration::from_millis(200))
-            .with_max_interval(Duration::from_secs(10))
-            // We'll continue trying for as long as `peer.addr().is_some()`.
-            .with_max_elapsed_time(None)
-            .build();
+        let create_backoff = || {
+            ExponentialBackoffBuilder::new()
+                .with_initial_interval(Duration::from_millis(200))
+                .with_max_interval(Duration::from_secs(10))
+                // We'll continue trying for as long as `peer.addr().is_some()`.
+                .with_max_elapsed_time(None)
+                .build()
+        };
+
+        let mut backoff = create_backoff();
 
         let mut hole_punching_task = None;
+        let mut last_conn = Connectivity::Disabled;
+        let mut connectivity_rx = self.connectivity_subscribe();
 
         loop {
             // Note: This needs to be probed each time the loop starts. When the `addr` fn returns
             // `None` that means whatever discovery mechanism (LocalDiscovery or DhtDiscovery)
             // found it is no longer seeing it.
             let addr = *peer.addr_if_seen()?;
+
+            // Wait for `Connectivity` to be such that it allows us to connect. E.g. if it's
+            // `Connectivity::LocalOnly` then we can't connect to global addresses.
+            loop {
+                let conn = *connectivity_rx.borrow_and_update();
+
+                if conn.allows_connection_to(addr) {
+                    if conn.is_less_restrictive_than(last_conn) {
+                        backoff = create_backoff();
+                    }
+                    last_conn = conn;
+                    break;
+                }
+
+                select! {
+                    result = connectivity_rx.changed() => {
+                        // Unwrap is OK because `connectivity_tx` lives in `self` so it can't be
+                        // destroyed while this function is being executed.
+                        result.unwrap();
+                    },
+                    _ = peer.on_unseen() => return None
+                }
+            }
 
             // Note: we need to grab fresh stacks on each loop because the network might get
             // re-bound in the meantime which would change the connectors.
@@ -134,6 +183,20 @@ impl Gateway {
 
             match stacks.connect(addr).await {
                 Ok(socket) => {
+                    // This condition is to avoid a race condition for when `Connectivity` grants
+                    // us connection, but then there is a re-`bind` after which the connection
+                    // should no longer exist. From now on it should be ok if re-`bind` happens
+                    // because it'll also call `network.rs/Inner/disconnect_all` and this socket
+                    // will disconnect.  TODO: This is a bit dirty because it depends on a
+                    // behaviour of a class which this module doesn't controll. Consider somehow
+                    // disconnecting the socket explicity when it's creation `stack` is destroyed
+                    // (note this already works for QUIC connections because they share a common
+                    // UDP socket inside `stack`, but it does not work this way for TCP
+                    // connections).
+                    if !connectivity_rx.borrow().allows_connection_to(addr) {
+                        continue;
+                    }
+
                     return Some(socket);
                 }
                 Err(error) => {
@@ -252,7 +315,7 @@ impl Stacks {
         StackAddresses {
             quic_v4: self.quic_v4.as_ref().map(|stack| stack.listener_local_addr),
             quic_v6: self.quic_v6.as_ref().map(|stack| stack.listener_local_addr),
-            tcp_v4: self.tcp_v6.as_ref().map(|stack| stack.listener_local_addr),
+            tcp_v4: self.tcp_v4.as_ref().map(|stack| stack.listener_local_addr),
             tcp_v6: self.tcp_v6.as_ref().map(|stack| stack.listener_local_addr),
         }
     }
@@ -618,6 +681,16 @@ impl StackAddresses {
             || needs_rebind(&self.tcp_v4, &new_stack_addresses.tcp_v4)
             || needs_rebind(&self.tcp_v6, &new_stack_addresses.tcp_v6)
     }
+
+    fn ip_addrs(&self) -> Vec<IpAddr> {
+        self.quic_v4
+            .iter()
+            .chain(self.quic_v6.iter())
+            .chain(self.tcp_v4.iter())
+            .chain(self.tcp_v6.iter())
+            .map(|addr| addr.ip())
+            .collect()
+    }
 }
 
 fn needs_rebind(old_addr: &Option<SocketAddr>, new_addr: &Option<SocketAddr>) -> bool {
@@ -687,6 +760,50 @@ impl From<&[PeerAddr]> for StackAddresses {
             quic_v6,
             tcp_v4,
             tcp_v6,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Connectivity {
+    Disabled,
+    LocalOnly,
+    Full,
+}
+
+impl Connectivity {
+    // `addrs` are the local addresses we're binding to.
+    pub fn infer(addrs: &[IpAddr]) -> Self {
+        if addrs.is_empty() {
+            return Self::Disabled;
+        }
+
+        let global = addrs
+            .iter()
+            .any(|ip| ip.is_unspecified() || ip::is_global(ip));
+
+        if global {
+            Self::Full
+        } else {
+            Self::LocalOnly
+        }
+    }
+
+    pub fn allows_connection_to(&self, addr: PeerAddr) -> bool {
+        match self {
+            Self::Disabled => false,
+            Self::LocalOnly => !ip::is_global(&addr.ip()),
+            Self::Full => true,
+        }
+    }
+
+    // `Full` is_less_restrictive_than `LocalOnly` is_less_restrictive_than `Disabled`.
+    pub fn is_less_restrictive_than(&self, other: Connectivity) -> bool {
+        match (self, other) {
+            (Self::LocalOnly, Self::Disabled)
+            | (Self::Full, Self::Disabled)
+            | (Self::Full, Self::LocalOnly) => true,
+            (_, _) => false,
         }
     }
 }
