@@ -834,24 +834,22 @@ mod tests {
             .unwrap();
         writer.commit().await.unwrap();
 
-        for layer in snapshot.inner_layers() {
-            for (hash, inner_nodes) in layer.inner_maps() {
-                let mut writer = store.begin_client_write().await.unwrap();
-                writer
-                    .save_inner_nodes(inner_nodes.clone().into())
-                    .await
-                    .unwrap();
-                writer.commit().await.unwrap();
+        for (hash, inner_nodes) in snapshot.inner_sets() {
+            let mut writer = store.begin_client_write().await.unwrap();
+            writer
+                .save_inner_nodes(inner_nodes.clone().into())
+                .await
+                .unwrap();
+            writer.commit().await.unwrap();
 
-                assert!(!store
-                    .acquire_read()
-                    .await
-                    .unwrap()
-                    .load_inner_nodes(hash)
-                    .await
-                    .unwrap()
-                    .is_empty());
-            }
+            assert!(!store
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_inner_nodes(hash)
+                .await
+                .unwrap()
+                .is_empty());
         }
 
         for (hash, leaf_nodes) in snapshot.leaf_sets() {
@@ -880,26 +878,24 @@ mod tests {
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
         // Try to save the inner nodes
-        for layer in snapshot.inner_layers() {
-            let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
-            let mut writer = store.begin_client_write().await.unwrap();
-            let status = writer
-                .save_inner_nodes(inner_nodes.clone().into())
-                .await
-                .unwrap();
-            assert!(status.new_children.is_empty());
-            writer.commit().await.unwrap();
+        let (hash, inner_nodes) = snapshot.inner_sets().next().unwrap();
+        let mut writer = store.begin_client_write().await.unwrap();
+        let status = writer
+            .save_inner_nodes(inner_nodes.clone().into())
+            .await
+            .unwrap();
+        assert!(status.new_children.is_empty());
+        writer.commit().await.unwrap();
 
-            // The orphaned inner nodes were not written to the db.
-            let inner_nodes = store
-                .acquire_read()
-                .await
-                .unwrap()
-                .load_inner_nodes(hash)
-                .await
-                .unwrap();
-            assert!(inner_nodes.is_empty());
-        }
+        // The orphaned inner nodes were not written to the db.
+        let inner_nodes = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_inner_nodes(hash)
+            .await
+            .unwrap();
+        assert!(inner_nodes.is_empty());
 
         // Try to save the leaf nodes
         let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();

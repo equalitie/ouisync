@@ -37,7 +37,7 @@ impl Hashable for InnerNode {
     }
 }
 
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct InnerNodes(BTreeMap<u8, InnerNode>);
 
 impl InnerNodes {

@@ -383,7 +383,7 @@ impl TestServer {
 
         let outbox = [Response::RootNode(
             proof.clone(),
-            *snapshot.root_block_presence(),
+            snapshot.root_summary().block_presence,
             DebugResponse::unsolicited(),
         )]
         .into();
@@ -411,7 +411,7 @@ impl TestServer {
 
                     self.outbox.push_back(Response::RootNode(
                         proof.into(),
-                        *self.snapshot.root_block_presence(),
+                        self.snapshot.root_summary().block_presence,
                         debug_payload.reply(),
                     ));
                 } else {
@@ -420,22 +420,13 @@ impl TestServer {
                 }
             }
             Request::ChildNodes(hash, disambiguator, debug_payload) => {
-                if let Some(nodes) = self
-                    .snapshot
-                    .inner_layers()
-                    .flat_map(|layer| layer.inner_maps())
-                    .find_map(|(parent_hash, nodes)| (*parent_hash == hash).then_some(nodes))
-                {
+                if let Some(nodes) = self.snapshot.get_inner_set(&hash) {
                     self.outbox.push_back(Response::InnerNodes(
                         nodes.clone(),
                         disambiguator,
                         debug_payload.reply(),
                     ));
-                } else if let Some(nodes) = self
-                    .snapshot
-                    .leaf_sets()
-                    .find_map(|(parent_hash, nodes)| (*parent_hash == hash).then_some(nodes))
-                {
+                } else if let Some(nodes) = self.snapshot.get_leaf_set(&hash) {
                     self.outbox.push_back(Response::LeafNodes(
                         nodes.clone(),
                         disambiguator,

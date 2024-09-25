@@ -320,17 +320,15 @@ mod tests {
         // TODO: consider randomizing the order the nodes are saved so it's not always
         // breadth-first.
 
-        for layer in snapshot.inner_layers() {
-            for (parent_hash, nodes) in layer.inner_maps() {
-                inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
-                    .await
-                    .unwrap();
+        for (parent_hash, nodes) in snapshot.inner_sets() {
+            inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
+                .await
+                .unwrap();
 
-                update_summaries_and_approve(&mut tx, *parent_hash).await;
+            update_summaries_and_approve(&mut tx, *parent_hash).await;
 
-                reload_root_node(&mut tx, &mut root_node).await.unwrap();
-                assert!(!root_node.summary.state.is_approved());
-            }
+            reload_root_node(&mut tx, &mut root_node).await.unwrap();
+            assert!(!root_node.summary.state.is_approved());
         }
 
         let mut unsaved_leaves = snapshot.leaf_count();
@@ -406,12 +404,10 @@ mod tests {
                 .unwrap();
         }
 
-        for layer in snapshot.inner_layers() {
-            for (parent_hash, nodes) in layer.inner_maps() {
-                inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
-                    .await
-                    .unwrap();
-            }
+        for (parent_hash, nodes) in snapshot.inner_sets() {
+            inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
+                .await
+                .unwrap();
         }
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {

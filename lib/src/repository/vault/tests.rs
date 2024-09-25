@@ -360,10 +360,8 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
         .await
         .unwrap();
 
-    for layer in snapshot.inner_layers() {
-        for (_, nodes) in layer.inner_maps() {
-            writer.save_inner_nodes(nodes.clone().into()).await.unwrap();
-        }
+    for (_, nodes) in snapshot.inner_sets() {
+        writer.save_inner_nodes(nodes.clone().into()).await.unwrap();
     }
 
     for (_, nodes) in snapshot.leaf_sets().take(1) {
