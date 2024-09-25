@@ -2,6 +2,7 @@ use super::PeerAddr;
 use crate::collections::{HashMap, HashSet};
 use deadlock::BlockingRwLock;
 use std::{fmt, sync::Arc};
+use tokio::sync::watch;
 
 /// When a peer is found using some discovery mechanisms (local discovery, DHT, PEX, ...), the
 /// networking code will try to connect to it. However, if connecting to the peer fails we would
@@ -50,7 +51,7 @@ type RefCount = usize;
 
 struct SeenPeersInner {
     current_round_id: RoundId,
-    peers: HashMap<PeerAddr, (RefCount, HashSet<RoundId>)>,
+    peers: HashMap<PeerAddr, PeerEntry>,
     rounds: HashMap<RoundId, HashSet<PeerAddr>>,
 }
 
@@ -77,7 +78,11 @@ impl SeenPeersInner {
                         Entry::Vacant(_) => unreachable!(),
                     };
 
-                    let (rc, rounds) = entry.get_mut();
+                    let PeerEntry {
+                        ref_count: rc,
+                        rounds,
+                        ..
+                    } = entry.get_mut();
                     rounds.remove(round);
 
                     if *rc == 0 && rounds.is_empty() {
@@ -104,10 +109,15 @@ impl SeenPeersInner {
             return None;
         };
 
-        let (rc, rounds) = self
-            .peers
-            .entry(addr)
-            .or_insert_with(|| (0, HashSet::default()));
+        let PeerEntry {
+            ref_count: rc,
+            rounds,
+            is_seen_tx,
+        } = self.peers.entry(addr).or_insert_with(|| PeerEntry {
+            ref_count: 0,
+            rounds: HashSet::default(),
+            is_seen_tx: watch::channel(()).0,
+        });
 
         let is_new = rounds.is_empty();
 
@@ -125,6 +135,7 @@ impl SeenPeersInner {
         Some(SeenPeer {
             addr,
             seen_peers: ext.clone(),
+            is_seen_rx: is_seen_tx.subscribe(),
         })
     }
 
@@ -140,24 +151,42 @@ impl SeenPeersInner {
     fn collect(&mut self, ext: &Arc<BlockingRwLock<SeenPeersInner>>) -> Vec<SeenPeer> {
         self.peers
             .iter_mut()
-            .filter_map(|(addr, (rc, rounds))| {
-                if rounds.is_empty() {
-                    None
-                } else {
-                    *rc += 1;
-                    Some(SeenPeer {
-                        addr: *addr,
-                        seen_peers: ext.clone(),
-                    })
-                }
-            })
+            .filter_map(
+                |(
+                    addr,
+                    PeerEntry {
+                        ref_count: rc,
+                        rounds,
+                        is_seen_tx,
+                    },
+                )| {
+                    if rounds.is_empty() {
+                        None
+                    } else {
+                        *rc += 1;
+                        Some(SeenPeer {
+                            addr: *addr,
+                            seen_peers: ext.clone(),
+                            is_seen_rx: is_seen_tx.subscribe(),
+                        })
+                    }
+                },
+            )
             .collect()
     }
+}
+
+struct PeerEntry {
+    ref_count: RefCount,
+    rounds: HashSet<RoundId>,
+    // Droping this will cause `on_unseen` to complete.
+    is_seen_tx: watch::Sender<()>,
 }
 
 pub(crate) struct SeenPeer {
     addr: PeerAddr,
     seen_peers: Arc<BlockingRwLock<SeenPeersInner>>,
+    is_seen_rx: watch::Receiver<()>,
 }
 
 impl SeenPeer {
@@ -167,13 +196,19 @@ impl SeenPeer {
 
     pub(crate) fn addr_if_seen(&self) -> Option<&PeerAddr> {
         let lock = self.seen_peers.read().unwrap();
-        lock.peers.get(&self.addr).and_then(|(_rc, rounds)| {
-            if rounds.is_empty() {
-                None
-            } else {
-                Some(&self.addr)
-            }
-        })
+        lock.peers
+            .get(&self.addr)
+            .and_then(|PeerEntry { rounds, .. }| {
+                if rounds.is_empty() {
+                    None
+                } else {
+                    Some(&self.addr)
+                }
+            })
+    }
+
+    pub(crate) async fn on_unseen(&self) {
+        while self.is_seen_rx.clone().changed().await.is_ok() {}
     }
 }
 
@@ -181,10 +216,11 @@ impl Clone for SeenPeer {
     fn clone(&self) -> Self {
         let mut seen_peers = self.seen_peers.write().unwrap();
         // Unwrap because if `self` exists, then there must be an entry in `peers` for it.
-        seen_peers.peers.get_mut(&self.addr).unwrap().0 += 1;
+        seen_peers.peers.get_mut(&self.addr).unwrap().ref_count += 1;
         Self {
             addr: self.addr,
             seen_peers: self.seen_peers.clone(),
+            is_seen_rx: self.is_seen_rx.clone(),
         }
     }
 }
@@ -217,11 +253,11 @@ impl Drop for SeenPeer {
             Entry::Vacant(_) => return,
         };
 
-        let (rc, _rounds) = peers_entry.get_mut();
+        let PeerEntry { ref_count: rc, .. } = peers_entry.get_mut();
         *rc -= 1;
 
         if *rc == 0 {
-            let (_rc, rounds) = peers_entry.remove();
+            let PeerEntry { rounds, .. } = peers_entry.remove();
 
             for round in rounds.iter() {
                 let mut rounds_entry = match seen_peers.rounds.entry(*round) {
