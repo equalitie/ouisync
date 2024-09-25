@@ -195,11 +195,13 @@ fn relay() {
     let share_token = r.share();
 
     let a = Bin::start();
+    a.bind();
     a.add_peer(r_port);
     a.create(Some(&share_token));
     a.mount();
 
     let b = Bin::start();
+    b.bind();
     b.add_peer(r_port);
     b.create(Some(&share_token));
     b.mount();
@@ -350,12 +352,14 @@ fn mirror() {
     let m_rpc_port = m.bind_rpc();
 
     let a = Bin::start();
+    a.bind();
     a.add_peer(m_sync_port);
     a.create(None);
     let share_token = a.share();
     a.mount();
 
     let b = Bin::start();
+    b.bind();
     b.add_peer(m_sync_port);
     b.create(Some(&share_token));
     b.mount();
@@ -391,6 +395,7 @@ fn setup() -> (Bin, Bin) {
     let share_token = a.share();
 
     let b = Bin::start();
+    b.bind();
     b.add_peer(a_port);
     b.create(Some(&share_token));
     b.mount();
