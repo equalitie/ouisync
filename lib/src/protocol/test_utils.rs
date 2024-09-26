@@ -1,4 +1,4 @@
-use super::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
+use super::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary, EMPTY_INNER_HASH};
 use crate::{
     crypto::{Hash, Hashable},
     protocol::{Block, BlockId, InnerNode, InnerNodes, LeafNode, LeafNodes, INNER_LAYER_COUNT},
@@ -188,8 +188,14 @@ impl Snapshot {
             }
         } else {
             self.root_hash = hash;
-            // FIXME: if hash == EMPTY_INNER_HASH we should set this to `Complete`:
-            self.root_summary = Summary::INCOMPLETE;
+            self.root_summary = if hash == *EMPTY_INNER_HASH {
+                Summary {
+                    state: NodeState::Complete,
+                    block_presence: MultiBlockPresence::None,
+                }
+            } else {
+                Summary::INCOMPLETE
+            };
 
             self.inners.clear();
             self.leaves.clear();

@@ -130,8 +130,12 @@ impl<T> Node<T> {
         &self.request
     }
 
-    pub fn request_and_value_mut(&mut self) -> (&Request, &mut T) {
-        (&self.request, &mut self.value)
+    pub fn block_presence(&self) -> &MultiBlockPresence {
+        &self.block_presence
+    }
+
+    pub fn parts_mut(&mut self) -> (&Request, &MultiBlockPresence, &mut T) {
+        (&self.request, &self.block_presence, &mut self.value)
     }
 
     pub fn parents(&self) -> impl ExactSizeIterator<Item = Key> + '_ {

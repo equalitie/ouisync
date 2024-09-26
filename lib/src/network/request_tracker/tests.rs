@@ -18,7 +18,7 @@ use rand::{
     seq::SliceRandom,
     CryptoRng, Rng, SeedableRng,
 };
-use std::collections::VecDeque;
+use std::collections::{hash_map::Entry, VecDeque};
 
 // Test syncing while peers keep joining and leaving the swarm.
 //
@@ -109,14 +109,10 @@ async fn dynamic_swarm() {
 
 // Test syncing with multiple peers where no peer has all the blocks but every block is present in
 // at least one peer.
-#[ignore = "duplicate request send checking is too strict"]
 #[tokio::test]
 async fn missing_blocks() {
-    crate::test_utils::init_log();
-
-    // let seed = rand::random();
-    let seed = 830380000365750606;
-    case(seed, 8, 2);
+    let seed = rand::random();
+    case(seed, 32, 4);
 
     fn case(seed: u64, max_blocks: usize, max_peers: usize) {
         let mut rng = StdRng::seed_from_u64(seed);
@@ -155,7 +151,11 @@ async fn missing_blocks() {
 
 struct Simulation {
     peers: Vec<TestPeer>,
-    requests: HashSet<MessageKey>,
+    // All requests sent by live peers. This is used to verify that every request is sent only once
+    // unless the peer that sent it died or the request failed. In those cases the request may be
+    // sent by another peer. It's also allowed to sent the same request more than once as long as
+    // each one has a different block presence.
+    requests: HashMap<MessageKey, HashSet<MultiBlockPresence>>,
     snapshot: Snapshot,
 }
 
@@ -163,7 +163,7 @@ impl Simulation {
     fn new() -> Self {
         Self {
             peers: Vec::new(),
-            requests: HashSet::default(),
+            requests: HashMap::default(),
             snapshot: Snapshot::default(),
         }
     }
@@ -188,7 +188,7 @@ impl Simulation {
         self.peers.push(TestPeer {
             client,
             server,
-            requests: Vec::new(),
+            requests: HashMap::default(),
         });
     }
 
@@ -196,8 +196,8 @@ impl Simulation {
         let index = rng.gen_range(0..self.peers.len());
         let peer = self.peers.remove(index);
 
-        for key in peer.requests {
-            self.requests.remove(&key);
+        for (key, block_presence) in peer.requests {
+            cancel_request(&mut self.requests, key, block_presence);
         }
     }
 
@@ -220,15 +220,19 @@ impl Simulation {
 
             match side {
                 Side::Client => {
-                    if let Some(request) = peer.client.poll_request() {
+                    if let Some(SendPermit {
+                        request,
+                        block_presence,
+                    }) = peer.client.poll_request()
+                    {
                         let key = MessageKey::from(&request);
 
                         assert!(
-                            self.requests.insert(key),
-                            "request sent more than once: {request:?}"
+                            self.requests.entry(key).or_default().insert(block_presence),
+                            "request sent more than once: {request:?} ({block_presence:?})"
                         );
 
-                        peer.requests.push(key);
+                        peer.requests.insert(key, block_presence);
                         peer.server.handle_request(request);
 
                         return true;
@@ -236,6 +240,29 @@ impl Simulation {
                 }
                 Side::Server => {
                     if let Some(response) = peer.server.poll_response() {
+                        // In case of failure,  cancel the request so it can be retried without it
+                        // triggering assertion failure.
+                        let key = match response {
+                            Response::RootNodeError(writer_id, _) => {
+                                Some(MessageKey::RootNode(writer_id))
+                            }
+                            Response::ChildNodesError(hash, _, _) => {
+                                Some(MessageKey::ChildNodes(hash))
+                            }
+                            Response::BlockError(block_id, _) => Some(MessageKey::Block(block_id)),
+                            Response::RootNode(..)
+                            | Response::InnerNodes(..)
+                            | Response::LeafNodes(..)
+                            | Response::Block(..)
+                            | Response::BlockOffer(..) => None,
+                        };
+
+                        if let Some(key) = key {
+                            if let Some(block_presence) = peer.requests.get(&key) {
+                                cancel_request(&mut self.requests, key, *block_presence);
+                            }
+                        }
+
                         peer.client.handle_response(response, &mut self.snapshot);
                         return true;
                     }
@@ -252,21 +279,36 @@ impl Simulation {
     }
 }
 
+fn cancel_request(
+    requests: &mut HashMap<MessageKey, HashSet<MultiBlockPresence>>,
+    key: MessageKey,
+    block_presence: MultiBlockPresence,
+) {
+    if let Entry::Occupied(mut entry) = requests.entry(key) {
+        entry.get_mut().remove(&block_presence);
+
+        if entry.get().is_empty() {
+            entry.remove();
+        }
+    }
+}
+
 struct TestPeer {
     client: TestClient,
     server: TestServer,
-    requests: Vec<MessageKey>,
+    // All requests sent by this peer.
+    requests: HashMap<MessageKey, MultiBlockPresence>,
 }
 
 struct TestClient {
     tracker_client: RequestTrackerClient,
-    tracker_request_rx: mpsc::UnboundedReceiver<Request>,
+    tracker_request_rx: mpsc::UnboundedReceiver<SendPermit>,
 }
 
 impl TestClient {
     fn new(
         tracker_client: RequestTrackerClient,
-        tracker_request_rx: mpsc::UnboundedReceiver<Request>,
+        tracker_request_rx: mpsc::UnboundedReceiver<SendPermit>,
     ) -> Self {
         Self {
             tracker_client,
@@ -352,7 +394,7 @@ impl TestClient {
         };
     }
 
-    fn poll_request(&mut self) -> Option<Request> {
+    fn poll_request(&mut self) -> Option<SendPermit> {
         self.tracker_request_rx.try_recv().ok()
     }
 }

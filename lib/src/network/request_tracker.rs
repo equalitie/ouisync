@@ -35,7 +35,7 @@ impl RequestTracker {
     }
 
     #[cfg_attr(not(test), expect(dead_code))]
-    pub fn new_client(&self) -> (RequestTrackerClient, mpsc::UnboundedReceiver<Request>) {
+    pub fn new_client(&self) -> (RequestTrackerClient, mpsc::UnboundedReceiver<SendPermit>) {
         let client_id = ClientId::next();
         let (request_tx, request_rx) = mpsc::unbounded_channel();
 
@@ -106,6 +106,17 @@ impl Drop for RequestTrackerClient {
             })
             .ok();
     }
+}
+
+/// Permit to send the specified request. Contains also the block presence as reported by the peer
+/// who sent the response that triggered this request. That is mostly useful for diagnostics and
+/// testing.
+#[derive(Debug)]
+pub(super) struct SendPermit {
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub request: Request,
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub block_presence: MultiBlockPresence,
 }
 
 /// Key identifying a request and its corresponding response.
@@ -214,13 +225,20 @@ impl Worker {
     }
 
     #[instrument(skip(self, request_tx))]
-    fn insert_client(&mut self, client_id: ClientId, request_tx: mpsc::UnboundedSender<Request>) {
+    fn insert_client(
+        &mut self,
+        client_id: ClientId,
+        request_tx: mpsc::UnboundedSender<SendPermit>,
+    ) {
+        #[cfg(test)]
         tracing::debug!("insert_client");
+
         self.clients.insert(client_id, ClientState::new(request_tx));
     }
 
     #[instrument(skip(self))]
     fn remove_client(&mut self, client_id: ClientId) {
+        #[cfg(test)]
         tracing::debug!("remove_client");
 
         let Some(client_state) = self.clients.remove(&client_id) else {
@@ -239,7 +257,9 @@ impl Worker {
         request: Request,
         block_presence: MultiBlockPresence,
     ) {
-        // tracing::debug!("handle_initial");
+        #[cfg(test)]
+        tracing::debug!("handle_initial");
+
         self.insert_request(client_id, request, block_presence, None)
     }
 
@@ -250,6 +270,7 @@ impl Worker {
         request_key: MessageKey,
         requests: Vec<(Request, MultiBlockPresence)>,
     ) {
+        #[cfg(test)]
         tracing::debug!("handle_success");
 
         let node_key = self
@@ -331,6 +352,7 @@ impl Worker {
         request_key: MessageKey,
         reason: FailureReason,
     ) {
+        #[cfg(test)]
         tracing::debug!("handle_failure");
 
         let Some(client_state) = self.clients.get_mut(&client_id) else {
@@ -388,7 +410,13 @@ impl Worker {
                 };
 
                 client_state.requests.insert(request_key, node_key);
-                client_state.request_tx.send(node.request().clone()).ok();
+                client_state
+                    .request_tx
+                    .send(SendPermit {
+                        request: node.request().clone(),
+                        block_presence: *node.block_presence(),
+                    })
+                    .ok();
             }
         }
 
@@ -406,7 +434,7 @@ impl Worker {
             return;
         };
 
-        let (request, state) = node.request_and_value_mut();
+        let (request, &block_presence, state) = node.parts_mut();
 
         match state {
             RequestState::InFlight {
@@ -435,8 +463,14 @@ impl Worker {
                             .timer
                             .insert((next_client_id, MessageKey::from(request)), REQUEST_TIMEOUT);
 
-                        // Send the request to the new sender.
-                        next_client_state.request_tx.send(request.clone()).ok();
+                        // Send the permit to the new sender.
+                        next_client_state
+                            .request_tx
+                            .send(SendPermit {
+                                request: request.clone(),
+                                block_presence,
+                            })
+                            .ok();
 
                         return;
                     } else {
@@ -492,7 +526,7 @@ impl ClientId {
 enum Command {
     InsertClient {
         client_id: ClientId,
-        request_tx: mpsc::UnboundedSender<Request>,
+        request_tx: mpsc::UnboundedSender<SendPermit>,
     },
     RemoveClient {
         client_id: ClientId,
@@ -514,12 +548,12 @@ enum Command {
 }
 
 struct ClientState {
-    request_tx: mpsc::UnboundedSender<Request>,
+    request_tx: mpsc::UnboundedSender<SendPermit>,
     requests: HashMap<MessageKey, GraphKey>,
 }
 
 impl ClientState {
-    fn new(request_tx: mpsc::UnboundedSender<Request>) -> Self {
+    fn new(request_tx: mpsc::UnboundedSender<SendPermit>) -> Self {
         Self {
             request_tx,
             requests: HashMap::default(),
