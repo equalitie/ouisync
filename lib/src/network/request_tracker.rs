@@ -1,4 +1,7 @@
 mod graph;
+
+#[cfg(test)]
+mod simulation;
 #[cfg(test)]
 mod tests;
 
