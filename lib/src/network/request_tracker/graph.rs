@@ -1,4 +1,4 @@
-use super::MessageKey;
+use super::{MessageKey, PendingRequest};
 use crate::{
     collections::{HashMap, HashSet},
     network::message::Request,
@@ -23,14 +23,13 @@ impl<T> Graph<T> {
 
     pub fn get_or_insert(
         &mut self,
-        request: Request,
-        block_presence: MultiBlockPresence,
+        request: PendingRequest,
         parent_key: Option<Key>,
         value: T,
     ) -> Key {
         let node_key = match self
             .index
-            .entry((MessageKey::from(&request), block_presence))
+            .entry((MessageKey::from(&request.request), request.block_presence))
         {
             Entry::Occupied(entry) => {
                 self.nodes
@@ -44,7 +43,6 @@ impl<T> Graph<T> {
             Entry::Vacant(entry) => {
                 let node_key = self.nodes.insert(Node {
                     request,
-                    block_presence,
                     parents: parent_key.into_iter().collect(),
                     children: HashSet::default(),
                     value,
@@ -77,8 +75,10 @@ impl<T> Graph<T> {
     pub fn remove(&mut self, key: Key) -> Option<Node<T>> {
         let node = self.nodes.try_remove(key.0)?;
 
-        self.index
-            .remove(&(MessageKey::from(&node.request), node.block_presence));
+        self.index.remove(&(
+            MessageKey::from(&node.request.request),
+            node.request.block_presence,
+        ));
 
         for parent_key in &node.parents {
             let Some(parent_node) = self.nodes.get_mut(parent_key.0) else {
@@ -101,7 +101,7 @@ impl<T> Graph<T> {
 
     #[cfg_attr(not(test), expect(dead_code))]
     pub fn requests(&self) -> impl ExactSizeIterator<Item = &Request> {
-        self.nodes.iter().map(|(_, node)| &node.request)
+        self.nodes.iter().map(|(_, node)| &node.request.request)
     }
 }
 
@@ -109,8 +109,7 @@ impl<T> Graph<T> {
 pub(super) struct Key(usize);
 
 pub(super) struct Node<T> {
-    request: Request,
-    block_presence: MultiBlockPresence,
+    request: PendingRequest,
     parents: HashSet<Key>,
     children: HashSet<Key>,
     value: T,
@@ -126,16 +125,12 @@ impl<T> Node<T> {
         &mut self.value
     }
 
-    pub fn request(&self) -> &Request {
+    pub fn request(&self) -> &PendingRequest {
         &self.request
     }
 
-    pub fn block_presence(&self) -> &MultiBlockPresence {
-        &self.block_presence
-    }
-
-    pub fn parts_mut(&mut self) -> (&Request, &MultiBlockPresence, &mut T) {
-        (&self.request, &self.block_presence, &mut self.value)
+    pub fn parts_mut(&mut self) -> (&PendingRequest, &mut T) {
+        (&self.request, &mut self.value)
     }
 
     pub fn parents(&self) -> impl ExactSizeIterator<Item = Key> + '_ {
@@ -166,8 +161,14 @@ mod tests {
             DebugRequest::start(),
         );
 
-        let parent_node_key =
-            graph.get_or_insert(parent_request.clone(), MultiBlockPresence::Full, None, 1);
+        let parent_node_key = graph.get_or_insert(
+            PendingRequest {
+                request: parent_request.clone(),
+                block_presence: MultiBlockPresence::Full,
+            },
+            None,
+            1,
+        );
 
         assert_eq!(graph.requests().len(), 1);
 
@@ -177,7 +178,7 @@ mod tests {
 
         assert_eq!(*node.value(), 1);
         assert_eq!(node.children().len(), 0);
-        assert_eq!(node.request(), &parent_request);
+        assert_eq!(node.request().request, parent_request);
 
         let child_request = Request::ChildNodes(
             rng.gen(),
@@ -186,8 +187,10 @@ mod tests {
         );
 
         let child_node_key = graph.get_or_insert(
-            child_request.clone(),
-            MultiBlockPresence::Full,
+            PendingRequest {
+                request: child_request.clone(),
+                block_presence: MultiBlockPresence::Full,
+            },
             Some(parent_node_key),
             2,
         );
@@ -200,7 +203,7 @@ mod tests {
 
         assert_eq!(*node.value(), 2);
         assert_eq!(node.children().len(), 0);
-        assert_eq!(node.request(), &child_request);
+        assert_eq!(node.request().request, child_request);
 
         assert_eq!(
             graph
@@ -229,10 +232,24 @@ mod tests {
             DebugRequest::start(),
         );
 
-        let node_key0 = graph.get_or_insert(request.clone(), MultiBlockPresence::Full, None, 1);
+        let node_key0 = graph.get_or_insert(
+            PendingRequest {
+                request: request.clone(),
+                block_presence: MultiBlockPresence::Full,
+            },
+            None,
+            1,
+        );
         assert_eq!(graph.requests().len(), 1);
 
-        let node_key1 = graph.get_or_insert(request, MultiBlockPresence::Full, None, 1);
+        let node_key1 = graph.get_or_insert(
+            PendingRequest {
+                request,
+                block_presence: MultiBlockPresence::Full,
+            },
+            None,
+            1,
+        );
         assert_eq!(graph.requests().len(), 1);
         assert_eq!(node_key0, node_key1);
     }
@@ -244,35 +261,43 @@ mod tests {
 
         let hash = rng.gen();
 
-        let parent_block_presence_0 = MultiBlockPresence::None;
-        let parent_request_0 = Request::ChildNodes(
-            hash,
-            ResponseDisambiguator::new(parent_block_presence_0),
-            DebugRequest::start(),
-        );
+        let parent_request_0 = PendingRequest {
+            request: Request::ChildNodes(
+                hash,
+                ResponseDisambiguator::new(MultiBlockPresence::None),
+                DebugRequest::start(),
+            ),
+            block_presence: MultiBlockPresence::None,
+        };
 
-        let parent_block_presence_1 = MultiBlockPresence::Full;
-        let parent_request_1 = Request::ChildNodes(
-            hash,
-            ResponseDisambiguator::new(parent_block_presence_1),
-            DebugRequest::start(),
-        );
+        let parent_request_1 = PendingRequest {
+            request: Request::ChildNodes(
+                hash,
+                ResponseDisambiguator::new(MultiBlockPresence::Full),
+                DebugRequest::start(),
+            ),
+            block_presence: MultiBlockPresence::Full,
+        };
 
         let child_request = Request::Block(rng.gen(), DebugRequest::start());
 
-        let parent_key_0 = graph.get_or_insert(parent_request_0, parent_block_presence_0, None, 0);
-        let parent_key_1 = graph.get_or_insert(parent_request_1, parent_block_presence_1, None, 1);
+        let parent_key_0 = graph.get_or_insert(parent_request_0, None, 0);
+        let parent_key_1 = graph.get_or_insert(parent_request_1, None, 1);
 
         let child_key_0 = graph.get_or_insert(
-            child_request.clone(),
-            MultiBlockPresence::None,
+            PendingRequest {
+                request: child_request.clone(),
+                block_presence: MultiBlockPresence::None,
+            },
             Some(parent_key_0),
             2,
         );
 
         let child_key_1 = graph.get_or_insert(
-            child_request,
-            MultiBlockPresence::None,
+            PendingRequest {
+                request: child_request,
+                block_presence: MultiBlockPresence::None,
+            },
             Some(parent_key_1),
             2,
         );
@@ -327,39 +352,36 @@ mod tests {
         let mut rng = rand::thread_rng();
         let mut graph = Graph::new();
 
-        let parent_request = Request::ChildNodes(
-            rng.gen(),
-            ResponseDisambiguator::new(MultiBlockPresence::Full),
-            DebugRequest::start(),
-        );
+        let parent_request = PendingRequest {
+            request: Request::ChildNodes(
+                rng.gen(),
+                ResponseDisambiguator::new(MultiBlockPresence::Full),
+                DebugRequest::start(),
+            ),
+            block_presence: MultiBlockPresence::Full,
+        };
 
-        let child_request_0 = Request::ChildNodes(
-            rng.gen(),
-            ResponseDisambiguator::new(MultiBlockPresence::Full),
-            DebugRequest::start(),
-        );
+        let child_request_0 = PendingRequest {
+            request: Request::ChildNodes(
+                rng.gen(),
+                ResponseDisambiguator::new(MultiBlockPresence::Full),
+                DebugRequest::start(),
+            ),
+            block_presence: MultiBlockPresence::Full,
+        };
 
-        let child_request_1 = Request::ChildNodes(
-            rng.gen(),
-            ResponseDisambiguator::new(MultiBlockPresence::Full),
-            DebugRequest::start(),
-        );
+        let child_request_1 = PendingRequest {
+            request: Request::ChildNodes(
+                rng.gen(),
+                ResponseDisambiguator::new(MultiBlockPresence::Full),
+                DebugRequest::start(),
+            ),
+            block_presence: MultiBlockPresence::Full,
+        };
 
-        let parent_key = graph.get_or_insert(parent_request, MultiBlockPresence::Full, None, 0);
-
-        let child_key_0 = graph.get_or_insert(
-            child_request_0,
-            MultiBlockPresence::Full,
-            Some(parent_key),
-            1,
-        );
-
-        let child_key_1 = graph.get_or_insert(
-            child_request_1,
-            MultiBlockPresence::Full,
-            Some(parent_key),
-            2,
-        );
+        let parent_key = graph.get_or_insert(parent_request, None, 0);
+        let child_key_0 = graph.get_or_insert(child_request_0, Some(parent_key), 1);
+        let child_key_1 = graph.get_or_insert(child_request_1, Some(parent_key), 2);
 
         assert_eq!(
             graph

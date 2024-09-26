@@ -108,7 +108,7 @@ struct LocalDiscoveryInner {
 
 impl LocalDiscoveryInner {
     fn add(&mut self, interface: IpAddr, parent_monitor: &StateMonitor) {
-        use crate::collections::hash_map::Entry;
+        use std::collections::hash_map::Entry;
 
         if interface.is_loopback() {
             return;

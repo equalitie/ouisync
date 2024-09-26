@@ -1,6 +1,6 @@
 use super::Error;
 use crate::{
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     crypto::Hash,
     db,
     protocol::{BlockId, RootNode, SingleBlockPresence},
@@ -10,6 +10,7 @@ use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{
     cmp::Ordering,
+    collections::hash_map::Entry,
     sync::{Arc, Mutex},
 };
 use tokio::sync::Notify;
@@ -232,11 +233,7 @@ mod tests {
         // ... make some of them as present.
         for node in snapshot.leaf_nodes().take(num_present) {
             let block = snapshot.blocks().get(&node.block_id).unwrap();
-            writer
-                .client_writer()
-                .save_block(block, None)
-                .await
-                .unwrap();
+            writer.client_writer().save_block(block).await.unwrap();
         }
 
         writer.commit().await;

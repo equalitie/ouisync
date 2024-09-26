@@ -1,6 +1,6 @@
 use super::{
     super::message::{Request, Response, ResponseDisambiguator},
-    MessageKey, RequestTracker, RequestTrackerClient, SendPermit,
+    MessageKey, PendingRequest, RequestTracker, RequestTrackerClient,
 };
 use crate::{
     collections::{HashMap, HashSet},
@@ -91,7 +91,7 @@ impl Simulation {
 
             match side {
                 Side::Client => {
-                    if let Some(SendPermit {
+                    if let Some(PendingRequest {
                         request,
                         block_presence,
                     }) = peer.client.poll_request()
@@ -173,13 +173,13 @@ struct TestPeer {
 
 struct TestClient {
     tracker_client: RequestTrackerClient,
-    tracker_request_rx: mpsc::UnboundedReceiver<SendPermit>,
+    tracker_request_rx: mpsc::UnboundedReceiver<PendingRequest>,
 }
 
 impl TestClient {
     fn new(
         tracker_client: RequestTrackerClient,
-        tracker_request_rx: mpsc::UnboundedReceiver<SendPermit>,
+        tracker_request_rx: mpsc::UnboundedReceiver<PendingRequest>,
     ) -> Self {
         Self {
             tracker_client,
@@ -192,14 +192,14 @@ impl TestClient {
             Response::RootNode(proof, block_presence, debug_payload) => {
                 let requests = snapshot
                     .insert_root(proof.hash, block_presence)
-                    .then_some((
-                        Request::ChildNodes(
+                    .then_some(PendingRequest {
+                        request: Request::ChildNodes(
                             proof.hash,
                             ResponseDisambiguator::new(block_presence),
                             debug_payload.follow_up(),
                         ),
                         block_presence,
-                    ))
+                    })
                     .into_iter()
                     .collect();
 
@@ -212,15 +212,13 @@ impl TestClient {
 
                 let requests: Vec<_> = nodes
                     .into_iter()
-                    .map(|(_, node)| {
-                        (
-                            Request::ChildNodes(
-                                node.hash,
-                                ResponseDisambiguator::new(node.summary.block_presence),
-                                debug_payload.follow_up(),
-                            ),
-                            node.summary.block_presence,
-                        )
+                    .map(|(_, node)| PendingRequest {
+                        request: Request::ChildNodes(
+                            node.hash,
+                            ResponseDisambiguator::new(node.summary.block_presence),
+                            debug_payload.follow_up(),
+                        ),
+                        block_presence: node.summary.block_presence,
                     })
                     .collect();
 
@@ -232,11 +230,9 @@ impl TestClient {
                 let nodes = snapshot.insert_leaves(nodes);
                 let requests = nodes
                     .into_iter()
-                    .map(|node| {
-                        (
-                            Request::Block(node.block_id, debug_payload.follow_up()),
-                            MultiBlockPresence::None,
-                        )
+                    .map(|node| PendingRequest {
+                        request: Request::Block(node.block_id, debug_payload.follow_up()),
+                        block_presence: MultiBlockPresence::None,
                     })
                     .collect();
 
@@ -265,7 +261,7 @@ impl TestClient {
         };
     }
 
-    fn poll_request(&mut self) -> Option<SendPermit> {
+    fn poll_request(&mut self) -> Option<PendingRequest> {
         self.tracker_request_rx.try_recv().ok()
     }
 }

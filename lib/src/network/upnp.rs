@@ -1,5 +1,5 @@
 use super::ip;
-use crate::collections::{hash_map, HashMap};
+use crate::collections::HashMap;
 use chrono::{offset::Local, DateTime};
 use deadlock::BlockingMutex;
 use futures_util::TryStreamExt;
@@ -12,6 +12,7 @@ use rupnp::{
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
 use std::{
+    collections::hash_map::Entry,
     fmt,
     future::Future,
     io, net,
@@ -62,11 +63,11 @@ impl PortForwarder {
         };
 
         let is_new_mapping = match self.mappings.lock().unwrap().entry(data) {
-            hash_map::Entry::Occupied(mut entry) => {
+            Entry::Occupied(mut entry) => {
                 *entry.get_mut() += 1;
                 false
             }
-            hash_map::Entry::Vacant(entry) => {
+            Entry::Vacant(entry) => {
                 tracing::info!(
                     parent: &self.span,
                     "UPnP starting port forwarding EXT:{} -> INT:{} ({})",
@@ -263,8 +264,6 @@ impl PortForwarder {
             })
         };
 
-        use crate::collections::hash_map::Entry;
-
         match job_handles.entry(device_url.clone()) {
             Entry::Occupied(mut entry) => {
                 let dev = entry.get_mut();
@@ -314,7 +313,7 @@ impl Drop for Mapping {
         let mut mappings = self.mappings.lock().unwrap();
 
         match mappings.entry(self.data) {
-            hash_map::Entry::Occupied(mut entry) => {
+            Entry::Occupied(mut entry) => {
                 let refcount = entry.get_mut();
                 *refcount -= 1;
 
@@ -323,7 +322,7 @@ impl Drop for Mapping {
                     self.on_change_tx.send(()).unwrap_or(());
                 }
             }
-            hash_map::Entry::Vacant(_) => {
+            Entry::Vacant(_) => {
                 unreachable!();
             }
         }
@@ -370,7 +369,7 @@ impl PerIGDPortForwarder {
 
             // Add to `active_mappings` those that are `active_mappings`.
             for k in new_mappings.keys() {
-                if let hash_map::Entry::Vacant(entry) = active_mappings.entry(*k) {
+                if let Entry::Vacant(entry) = active_mappings.entry(*k) {
                     entry.insert(self.activate_mapping(*k, local_ip, &mappings_monitor));
                 }
             }

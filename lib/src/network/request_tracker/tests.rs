@@ -162,12 +162,18 @@ async fn timeout() {
     // Register the request with both clients.
     client_a.success(
         preceding_request_key,
-        vec![(request.clone(), MultiBlockPresence::Full)],
+        vec![PendingRequest {
+            request: request.clone(),
+            block_presence: MultiBlockPresence::Full,
+        }],
     );
 
     client_b.success(
         preceding_request_key,
-        vec![(request.clone(), MultiBlockPresence::Full)],
+        vec![PendingRequest {
+            request: request.clone(),
+            block_presence: MultiBlockPresence::Full,
+        }],
     );
 
     time::timeout(Duration::from_millis(1), &mut work)

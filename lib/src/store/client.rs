@@ -10,7 +10,6 @@ use super::{
     Error,
 };
 use crate::{
-    block_tracker::{BlockPromise, OfferState},
     collections::HashSet,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
@@ -29,7 +28,7 @@ pub(crate) struct ClientWriter {
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     quota: Option<StorageSize>,
     summary_updates: Vec<Hash>,
-    saved_blocks: Vec<SavedBlock>,
+    new_blocks: Vec<BlockId>,
     block_id_cache: BlockIdCache,
     block_id_cache_updates: Vec<(Hash, BlockId)>,
 }
@@ -47,7 +46,7 @@ impl ClientWriter {
             block_expiration_tracker,
             quota,
             summary_updates: Vec::new(),
-            saved_blocks: Vec::new(),
+            new_blocks: Vec::new(),
             block_id_cache,
             block_id_cache_updates: Vec::new(),
         })
@@ -141,18 +140,16 @@ impl ClientWriter {
                     match leaf_node::load_block_presence(&mut self.db, &node.block_id).await? {
                         Some(SingleBlockPresence::Missing) | None => {
                             // Missing, expired or not yet stored locally
-                            let offer_state = if self.quota.is_some() {
+                            let node_state = if self.quota.is_some() {
                                 // OPTIMIZE: the state is the same for all the nodes in `nodes`, so
                                 // it only needs to be loaded once.
-                                load_block_offer_state_assuming_quota(&mut self.db, &node.block_id)
+                                root_node::load_node_state_of_missing(&mut self.db, &node.block_id)
                                     .await?
                             } else {
-                                Some(OfferState::Approved)
+                                NodeState::Approved
                             };
 
-                            if let Some(offer_state) = offer_state {
-                                new_block_offers.push((node.block_id, offer_state));
-                            }
+                            new_block_offers.push((node.block_id, node_state));
                         }
                         Some(SingleBlockPresence::Present | SingleBlockPresence::Expired) => (),
                     }
@@ -168,11 +165,7 @@ impl ClientWriter {
         Ok(LeafNodesStatus { new_block_offers })
     }
 
-    pub async fn save_block(
-        &mut self,
-        block: &Block,
-        block_promise: Option<BlockPromise>,
-    ) -> Result<(), Error> {
+    pub async fn save_block(&mut self, block: &Block) -> Result<(), Error> {
         let updated = {
             let mut updated = false;
             let mut updates = leaf_node::set_present(&mut self.db, &block.id);
@@ -193,12 +186,9 @@ impl ClientWriter {
             if let Some(tracker) = &self.block_expiration_tracker {
                 tracker.handle_block_update(&block.id, false);
             }
-        }
 
-        self.saved_blocks.push(match block_promise {
-            Some(block_promise) => SavedBlock::WithPromise(block_promise),
-            None => SavedBlock::WithoutPromise(block.id),
-        });
+            self.new_blocks.push(block.id);
+        }
 
         Ok(())
     }
@@ -219,15 +209,9 @@ impl ClientWriter {
             .load_approved_missing_blocks(&approved_branches)
             .await?;
 
-        let new_blocks = self
-            .saved_blocks
-            .iter()
-            .map(|saved_block| *saved_block.id())
-            .collect();
-
         let Self {
             db,
-            saved_blocks,
+            new_blocks,
             block_id_cache,
             block_id_cache_updates,
             ..
@@ -243,13 +227,6 @@ impl ClientWriter {
         let output = db
             .commit_and_then(move || {
                 block_id_cache.set_present(&block_id_cache_updates);
-
-                for saved_block in saved_blocks {
-                    if let SavedBlock::WithPromise(promise) = saved_block {
-                        promise.complete();
-                    }
-                }
-
                 f(status)
             })
             .await?;
@@ -350,20 +327,22 @@ impl ClientReader {
         Ok(Self { db, quota })
     }
 
-    /// Returns the state (`Pending` or `Approved`) that the offer for the given block should be
-    /// registered with. If the block isn't referenced or isn't missing, returns `None`.
-    pub async fn load_block_offer_state(
+    /// Loads the root node state that should be used for offers for the given block.
+    ///
+    /// NOTE: If quota is enabled, returns the actual root node state. Otherwise returns an assumed
+    /// state that depends only on the block presence, for efficiency.
+    pub async fn load_effective_root_node_state_for_block(
         &mut self,
         block_id: &BlockId,
-    ) -> Result<Option<OfferState>, Error> {
+    ) -> Result<NodeState, Error> {
         if self.quota.is_some() {
-            load_block_offer_state_assuming_quota(&mut self.db, block_id).await
+            root_node::load_node_state_of_missing(&mut self.db, block_id).await
         } else {
             match leaf_node::load_block_presence(&mut self.db, block_id).await? {
                 Some(SingleBlockPresence::Missing) | Some(SingleBlockPresence::Expired) => {
-                    Ok(Some(OfferState::Approved))
+                    Ok(NodeState::Approved)
                 }
-                Some(SingleBlockPresence::Present) | None => Ok(None),
+                Some(SingleBlockPresence::Present) | None => Ok(NodeState::Rejected),
             }
         }
     }
@@ -377,8 +356,8 @@ pub(crate) struct InnerNodesStatus {
 
 #[derive(Default)]
 pub(crate) struct LeafNodesStatus {
-    /// Number of new blocks offered by the received nodes.
-    pub new_block_offers: Vec<(BlockId, OfferState)>,
+    /// New blocks offered by the received nodes together with their root node states.
+    pub new_block_offers: Vec<(BlockId, NodeState)>,
 }
 
 pub(crate) struct CommitStatus {
@@ -395,31 +374,6 @@ pub(crate) struct CommitStatus {
 struct FinalizeStatus {
     approved_branches: Vec<PublicKey>,
     rejected_branches: Vec<PublicKey>,
-}
-
-async fn load_block_offer_state_assuming_quota(
-    conn: &mut db::Connection,
-    block_id: &BlockId,
-) -> Result<Option<OfferState>, Error> {
-    match root_node::load_node_state_of_missing(conn, block_id).await? {
-        NodeState::Incomplete | NodeState::Complete => Ok(Some(OfferState::Pending)),
-        NodeState::Approved => Ok(Some(OfferState::Approved)),
-        NodeState::Rejected => Ok(None),
-    }
-}
-
-enum SavedBlock {
-    WithPromise(BlockPromise),
-    WithoutPromise(BlockId),
-}
-
-impl SavedBlock {
-    fn id(&self) -> &BlockId {
-        match self {
-            SavedBlock::WithPromise(promise) => promise.block_id(),
-            SavedBlock::WithoutPromise(block_id) => block_id,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -733,7 +687,7 @@ mod tests {
             // Mark one of the missing block as present so the block presences are different (but still
             // `Some`).
             let mut writer = store.begin_client_write().await.unwrap();
-            writer.save_block(&block_1, None).await.unwrap();
+            writer.save_block(&block_1).await.unwrap();
             writer.commit().await.unwrap();
 
             // Receive the same node we already have. The hashes and version vectors are equal but the
@@ -964,7 +918,7 @@ mod tests {
 
         let mut writer = store.begin_client_write().await.unwrap();
         for block in snapshot.blocks().values() {
-            writer.save_block(block, None).await.unwrap();
+            writer.save_block(block).await.unwrap();
         }
         writer.commit().await.unwrap();
 

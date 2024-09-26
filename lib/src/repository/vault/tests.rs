@@ -1,7 +1,7 @@
 use super::{RepositoryId, RepositoryMonitor, Vault};
 use crate::{
     access_control::WriteSecrets,
-    block_tracker::RequestMode,
+    block_tracker::BlockRequestMode,
     collections::HashSet,
     crypto::{
         sign::{Keypair, PublicKey},
@@ -569,7 +569,7 @@ async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Vault, WriteSecrets) {
         RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
     );
 
-    vault.block_tracker.set_request_mode(RequestMode::Lazy);
+    vault.block_tracker.set_request_mode(BlockRequestMode::Lazy);
 
     (base_dir, vault, secrets)
 }
@@ -604,7 +604,7 @@ async fn receive_snapshot(
 
 async fn receive_block(vault: &Vault, block: &Block) {
     let mut writer = vault.store().begin_client_write().await.unwrap();
-    writer.save_block(block, None).await.unwrap();
+    writer.save_block(block).await.unwrap();
     writer.commit().await.unwrap();
 }
 

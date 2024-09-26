@@ -65,7 +65,7 @@ impl SeenPeersInner {
     }
 
     fn start_new_round(&mut self) {
-        use crate::collections::hash_map::Entry;
+        use std::collections::hash_map::Entry;
 
         self.current_round_id += 1;
         self.rounds.retain(|round, peers| {
@@ -243,7 +243,7 @@ impl fmt::Debug for SeenPeer {
 
 impl Drop for SeenPeer {
     fn drop(&mut self) {
-        use crate::collections::hash_map::Entry;
+        use std::collections::hash_map::Entry;
 
         let mut seen_peers = self.seen_peers.write().unwrap();
 

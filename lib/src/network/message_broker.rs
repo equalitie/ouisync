@@ -4,12 +4,13 @@ use super::{
     message::{Message, Request, Response},
     message_dispatcher::{MessageDispatcher, MessageSink, MessageStream},
     peer_exchange::{PexPeer, PexReceiver, PexRepository, PexSender},
+    request_tracker::RequestTracker,
     runtime_id::PublicRuntimeId,
     server::Server,
     stats::ByteCounters,
 };
 use crate::{
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     crypto::Hashable,
     network::constants::{REQUEST_BUFFER_SIZE, RESPONSE_BUFFER_SIZE},
     protocol::RepositoryId,
@@ -20,7 +21,7 @@ use bytes::{BufMut, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use net::{bus::TopicId, unified::Connection};
 use state_monitor::StateMonitor;
-use std::{sync::Arc, time::Instant};
+use std::{collections::hash_map::Entry, sync::Arc, time::Instant};
 use tokio::{
     select,
     sync::{
@@ -44,7 +45,6 @@ pub(super) struct MessageBroker {
 }
 
 impl MessageBroker {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         this_runtime_id: PublicRuntimeId,
         that_runtime_id: PublicRuntimeId,
@@ -77,6 +77,7 @@ impl MessageBroker {
         &mut self,
         vault: Vault,
         pex_repo: &PexRepository,
+        request_tracker: RequestTracker,
         response_limiter: Arc<Semaphore>,
         repo_counters: Arc<ByteCounters>,
     ) {
@@ -124,6 +125,7 @@ impl MessageBroker {
             topic_id,
             dispatcher: self.dispatcher.clone(),
             vault,
+            request_tracker,
             response_limiter,
             pex_tx,
             pex_rx,
@@ -199,6 +201,7 @@ struct Link {
     topic_id: TopicId,
     dispatcher: MessageDispatcher,
     vault: Vault,
+    request_tracker: RequestTracker,
     response_limiter: Arc<Semaphore>,
     pex_tx: PexSender,
     pex_rx: PexReceiver,
@@ -256,6 +259,7 @@ impl Link {
                 crypto_stream,
                 crypto_sink,
                 &self.vault,
+                &self.request_tracker,
                 self.response_limiter.clone(),
                 &mut self.pex_tx,
                 &mut self.pex_rx,
@@ -290,7 +294,8 @@ async fn establish_channel<'a>(
 async fn run_link(
     stream: DecryptingStream<'_>,
     sink: EncryptingSink<'_>,
-    repo: &Vault,
+    vault: &Vault,
+    request_tracker: &RequestTracker,
     response_limiter: Arc<Semaphore>,
     pex_tx: &mut PexSender,
     pex_rx: &mut PexReceiver,
@@ -305,8 +310,8 @@ async fn run_link(
     let _guard = LinkGuard::new();
 
     select! {
-        _ = run_client(repo.clone(), message_tx.clone(), response_rx) => (),
-        _ = run_server(repo.clone(), message_tx.clone(), request_rx, response_limiter) => (),
+        _ = run_client(vault.clone(), message_tx.clone(), response_rx, request_tracker) => (),
+        _ = run_server(vault.clone(), message_tx.clone(), request_rx, response_limiter) => (),
         _ = recv_messages(stream, request_tx, response_tx, pex_rx) => (),
         _ = send_messages(message_rx, sink) => (),
         _ = pex_tx.run(message_tx) => (),
@@ -408,11 +413,12 @@ async fn send_messages(
 
 // Create and run client. Returns only on error.
 async fn run_client(
-    repo: Vault,
+    vault: Vault,
     message_tx: mpsc::UnboundedSender<Message>,
     response_rx: mpsc::Receiver<Response>,
+    request_tracker: &RequestTracker,
 ) {
-    let mut client = Client::new(repo, message_tx, response_rx);
+    let mut client = Client::new(vault, message_tx, response_rx, request_tracker);
     let result = client.run().await;
 
     tracing::debug!("Client stopped running with result {:?}", result);
@@ -420,12 +426,12 @@ async fn run_client(
 
 // Create and run server. Returns only on error.
 async fn run_server(
-    repo: Vault,
+    vault: Vault,
     message_tx: mpsc::UnboundedSender<Message>,
     request_rx: mpsc::Receiver<Request>,
     response_limiter: Arc<Semaphore>,
 ) {
-    let mut server = Server::new(repo, message_tx, request_rx, response_limiter);
+    let mut server = Server::new(vault, message_tx, request_rx, response_limiter);
 
     let result = server.run().await;
 

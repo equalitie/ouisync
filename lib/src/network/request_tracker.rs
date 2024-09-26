@@ -25,20 +25,24 @@ use tracing::instrument;
 /// Keeps track of in-flight requests. Falls back on another peer in case the request failed (due to
 /// error response, timeout or disconnection). Evenly distributes the requests between the peers
 /// and ensures every request is only sent to one peer at a time.
+#[derive(Clone)]
 pub(super) struct RequestTracker {
     command_tx: mpsc::UnboundedSender<Command>,
 }
 
 impl RequestTracker {
-    #[expect(dead_code)]
     pub fn new() -> Self {
         let (this, worker) = build();
         task::spawn(worker.run());
         this
     }
 
-    #[cfg_attr(not(test), expect(dead_code))]
-    pub fn new_client(&self) -> (RequestTrackerClient, mpsc::UnboundedReceiver<SendPermit>) {
+    pub fn new_client(
+        &self,
+    ) -> (
+        RequestTrackerClient,
+        mpsc::UnboundedReceiver<PendingRequest>,
+    ) {
         let client_id = ClientId::next();
         let (request_tx, request_rx) = mpsc::unbounded_channel();
 
@@ -66,20 +70,17 @@ pub(super) struct RequestTrackerClient {
 
 impl RequestTrackerClient {
     /// Handle sending a request that does not follow from any previously received response.
-    #[expect(dead_code)]
-    pub fn initial(&self, request: Request, block_presence: MultiBlockPresence) {
+    pub fn initial(&self, request: Request) {
         self.command_tx
             .send(Command::HandleInitial {
                 client_id: self.client_id,
                 request,
-                block_presence,
             })
             .ok();
     }
 
     /// Handle sending requests that follow from a received success response.
-    #[cfg_attr(not(test), expect(dead_code))]
-    pub fn success(&self, request_key: MessageKey, requests: Vec<(Request, MultiBlockPresence)>) {
+    pub fn success(&self, request_key: MessageKey, requests: Vec<PendingRequest>) {
         self.command_tx
             .send(Command::HandleSuccess {
                 client_id: self.client_id,
@@ -90,12 +91,23 @@ impl RequestTrackerClient {
     }
 
     /// Handle failure response.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn failure(&self, request_key: MessageKey) {
         self.command_tx
             .send(Command::HandleFailure {
                 client_id: self.client_id,
                 request_key,
+            })
+            .ok();
+    }
+
+    /// Commit all successfully completed requests.
+    ///
+    /// If this client is dropped before this is called, all requests successfully completed by this
+    /// client will be considered failed and will be made available for retry by other clients.
+    pub fn commit(&self) {
+        self.command_tx
+            .send(Command::Commit {
+                client_id: self.client_id,
             })
             .ok();
     }
@@ -111,14 +123,13 @@ impl Drop for RequestTrackerClient {
     }
 }
 
-/// Permit to send the specified request. Contains also the block presence as reported by the peer
-/// who sent the response that triggered this request. That is mostly useful for diagnostics and
-/// testing.
-#[derive(Debug)]
-pub(super) struct SendPermit {
-    #[cfg_attr(not(test), expect(dead_code))]
+/// Request to be sent to the peer.
+///
+/// It also contains the block presence from the response that triggered this request. This is
+/// mostly useful for diagnostics and testing.
+#[derive(Clone, Debug)]
+pub(super) struct PendingRequest {
     pub request: Request,
-    #[cfg_attr(not(test), expect(dead_code))]
     pub block_presence: MultiBlockPresence,
 }
 
@@ -204,12 +215,8 @@ impl Worker {
             Command::RemoveClient { client_id } => {
                 self.remove_client(client_id);
             }
-            Command::HandleInitial {
-                client_id,
-                request,
-                block_presence,
-            } => {
-                self.handle_initial(client_id, request, block_presence);
+            Command::HandleInitial { client_id, request } => {
+                self.handle_initial(client_id, request);
             }
             Command::HandleSuccess {
                 client_id,
@@ -224,6 +231,9 @@ impl Worker {
             } => {
                 self.handle_failure(client_id, request_key, FailureReason::Response);
             }
+            Command::Commit { client_id } => {
+                self.commit(client_id);
+            }
         }
     }
 
@@ -231,18 +241,16 @@ impl Worker {
     fn insert_client(
         &mut self,
         client_id: ClientId,
-        request_tx: mpsc::UnboundedSender<SendPermit>,
+        request_tx: mpsc::UnboundedSender<PendingRequest>,
     ) {
-        #[cfg(test)]
-        tracing::debug!("insert_client");
+        tracing::trace!("insert_client");
 
         self.clients.insert(client_id, ClientState::new(request_tx));
     }
 
     #[instrument(skip(self))]
     fn remove_client(&mut self, client_id: ClientId) {
-        #[cfg(test)]
-        tracing::debug!("remove_client");
+        tracing::trace!("remove_client");
 
         let Some(client_state) = self.clients.remove(&client_id) else {
             return;
@@ -254,16 +262,17 @@ impl Worker {
     }
 
     #[instrument(skip(self))]
-    fn handle_initial(
-        &mut self,
-        client_id: ClientId,
-        request: Request,
-        block_presence: MultiBlockPresence,
-    ) {
-        #[cfg(test)]
-        tracing::debug!("handle_initial");
+    fn handle_initial(&mut self, client_id: ClientId, request: Request) {
+        tracing::trace!("handle_initial");
 
-        self.insert_request(client_id, request, block_presence, None)
+        self.insert_request(
+            client_id,
+            PendingRequest {
+                request,
+                block_presence: MultiBlockPresence::None,
+            },
+            None,
+        )
     }
 
     #[instrument(skip(self))]
@@ -271,10 +280,9 @@ impl Worker {
         &mut self,
         client_id: ClientId,
         request_key: MessageKey,
-        requests: Vec<(Request, MultiBlockPresence)>,
+        requests: Vec<PendingRequest>,
     ) {
-        #[cfg(test)]
-        tracing::debug!("handle_success");
+        tracing::trace!("handle_success");
 
         let node_key = self
             .clients
@@ -330,17 +338,12 @@ impl Worker {
         // were waiting for the original request.
         client_ids.push_front(client_id);
 
-        for (child_request, child_block_presence) in requests {
+        for child_request in requests {
             for (client_id, child_request) in
                 // TODO: use `repeat_n` once it gets stabilized.
                 client_ids.iter().copied().zip(iter::repeat(child_request))
             {
-                self.insert_request(
-                    client_id,
-                    child_request.clone(),
-                    child_block_presence,
-                    node_key,
-                );
+                self.insert_request(client_id, child_request, node_key);
             }
 
             // Round-robin the requests among the clients.
@@ -355,8 +358,7 @@ impl Worker {
         request_key: MessageKey,
         reason: FailureReason,
     ) {
-        #[cfg(test)]
-        tracing::debug!("handle_failure");
+        tracing::trace!("handle_failure");
 
         let Some(client_state) = self.clients.get_mut(&client_id) else {
             return;
@@ -369,19 +371,22 @@ impl Worker {
         self.cancel_request(client_id, node_key);
     }
 
+    #[instrument(skip(self))]
+    fn commit(&mut self, client_id: ClientId) {
+        tracing::trace!("commit_failure");
+
+        todo!()
+    }
+
     fn insert_request(
         &mut self,
         client_id: ClientId,
-        request: Request,
-        block_presence: MultiBlockPresence,
+        request: PendingRequest,
         parent_key: Option<GraphKey>,
     ) {
-        let node_key = self.requests.get_or_insert(
-            request,
-            block_presence,
-            parent_key,
-            RequestState::Cancelled,
-        );
+        let node_key = self
+            .requests
+            .get_or_insert(request, parent_key, RequestState::Cancelled);
 
         self.update_request(client_id, node_key);
     }
@@ -395,7 +400,7 @@ impl Worker {
             return;
         };
 
-        let request_key = MessageKey::from(node.request());
+        let request_key = MessageKey::from(&node.request().request);
 
         match node.value_mut() {
             RequestState::InFlight { waiters, .. } => {
@@ -413,13 +418,7 @@ impl Worker {
                 };
 
                 client_state.requests.insert(request_key, node_key);
-                client_state
-                    .request_tx
-                    .send(SendPermit {
-                        request: node.request().clone(),
-                        block_presence: *node.block_presence(),
-                    })
-                    .ok();
+                client_state.request_tx.send(node.request().clone()).ok();
             }
         }
 
@@ -437,7 +436,7 @@ impl Worker {
             return;
         };
 
-        let (request, &block_presence, state) = node.parts_mut();
+        let (request, state) = node.parts_mut();
 
         match state {
             RequestState::InFlight {
@@ -462,18 +461,13 @@ impl Worker {
                         // Next waiting client found. Promote it to a sender.
 
                         *sender_client_id = next_client_id;
-                        *sender_timer_key = self
-                            .timer
-                            .insert((next_client_id, MessageKey::from(request)), REQUEST_TIMEOUT);
+                        *sender_timer_key = self.timer.insert(
+                            (next_client_id, MessageKey::from(&request.request)),
+                            REQUEST_TIMEOUT,
+                        );
 
-                        // Send the permit to the new sender.
-                        next_client_state
-                            .request_tx
-                            .send(SendPermit {
-                                request: request.clone(),
-                                block_presence,
-                            })
-                            .ok();
+                        // Send the request to the new sender.
+                        next_client_state.request_tx.send(request.clone()).ok();
 
                         return;
                     } else {
@@ -529,7 +523,7 @@ impl ClientId {
 enum Command {
     InsertClient {
         client_id: ClientId,
-        request_tx: mpsc::UnboundedSender<SendPermit>,
+        request_tx: mpsc::UnboundedSender<PendingRequest>,
     },
     RemoveClient {
         client_id: ClientId,
@@ -537,26 +531,28 @@ enum Command {
     HandleInitial {
         client_id: ClientId,
         request: Request,
-        block_presence: MultiBlockPresence,
     },
     HandleSuccess {
         client_id: ClientId,
         request_key: MessageKey,
-        requests: Vec<(Request, MultiBlockPresence)>,
+        requests: Vec<PendingRequest>,
     },
     HandleFailure {
         client_id: ClientId,
         request_key: MessageKey,
     },
+    Commit {
+        client_id: ClientId,
+    },
 }
 
 struct ClientState {
-    request_tx: mpsc::UnboundedSender<SendPermit>,
+    request_tx: mpsc::UnboundedSender<PendingRequest>,
     requests: HashMap<MessageKey, GraphKey>,
 }
 
 impl ClientState {
-    fn new(request_tx: mpsc::UnboundedSender<SendPermit>) -> Self {
+    fn new(request_tx: mpsc::UnboundedSender<PendingRequest>) -> Self {
         Self {
             request_tx,
             requests: HashMap::default(),

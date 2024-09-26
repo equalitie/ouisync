@@ -16,7 +16,6 @@ mod peer_exchange;
 mod peer_info;
 mod peer_source;
 mod peer_state;
-mod pending;
 mod protocol;
 mod request_tracker;
 mod runtime_id;
@@ -40,6 +39,7 @@ pub use self::{
     stats::Stats,
 };
 pub use net::stun::NatBehavior;
+use request_tracker::RequestTracker;
 
 use self::{
     connection::{ConnectionPermit, ConnectionSet, ReserveResult},
@@ -355,6 +355,7 @@ impl Network {
         let pex = self.inner.pex_discovery.new_repository();
         pex.set_enabled(pex_enabled);
 
+        let request_tracker = RequestTracker::new();
         // TODO: This should be global, not per repo
         let response_limiter = Arc::new(Semaphore::new(MAX_UNCHOKED_COUNT));
         let stats_tracker = StatsTracker::default();
@@ -364,7 +365,8 @@ impl Network {
         registry.create_link(
             handle.vault.clone(),
             &pex,
-            response_limiter.clone(),
+            &request_tracker,
+            &response_limiter,
             stats_tracker.bytes.clone(),
         );
 
@@ -372,6 +374,7 @@ impl Network {
             vault: handle.vault,
             dht,
             pex,
+            request_tracker,
             response_limiter,
             stats_tracker,
         });
@@ -482,6 +485,7 @@ struct RegistrationHolder {
     vault: Vault,
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexRepository,
+    request_tracker: RequestTracker,
     response_limiter: Arc<Semaphore>,
     stats_tracker: StatsTracker,
 }
@@ -524,7 +528,8 @@ impl Registry {
         &mut self,
         repo: Vault,
         pex: &PexRepository,
-        response_limiter: Arc<Semaphore>,
+        request_tracker: &RequestTracker,
+        response_limiter: &Arc<Semaphore>,
         byte_counters: Arc<ByteCounters>,
     ) {
         if let Some(peers) = &mut self.peers {
@@ -532,6 +537,7 @@ impl Registry {
                 peer.create_link(
                     repo.clone(),
                     pex,
+                    request_tracker.clone(),
                     response_limiter.clone(),
                     byte_counters.clone(),
                 )
@@ -921,6 +927,7 @@ impl Inner {
                 peer.create_link(
                     holder.vault.clone(),
                     &holder.pex,
+                    holder.request_tracker.clone(),
                     holder.response_limiter.clone(),
                     holder.stats_tracker.bytes.clone(),
                 );

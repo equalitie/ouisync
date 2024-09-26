@@ -12,7 +12,7 @@ pub(crate) use self::{block_ids::BlockIds, id::BlobId};
 use self::position::Position;
 use crate::{
     branch::Branch,
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     crypto::{
         cipher::{self, Nonce, SecretKey},
         sign::{Keypair, PublicKey},
@@ -25,7 +25,7 @@ use crate::{
     },
     store::{self, Changeset, ReadTransaction},
 };
-use std::{io::SeekFrom, iter, mem};
+use std::{collections::hash_map::Entry, io::SeekFrom, iter, mem};
 use thiserror::Error;
 
 /// Size of the blob header in bytes.

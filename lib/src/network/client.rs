@@ -2,18 +2,17 @@ use super::{
     constants::RESPONSE_BATCH_SIZE,
     debug_payload::{DebugRequest, DebugResponse},
     message::{Message, Response, ResponseDisambiguator},
-    pending::{
-        EphemeralResponse, PendingRequest, PendingRequests, PersistableResponse, PreparedResponse,
-    },
+    request_tracker::{PendingRequest, RequestTracker, RequestTrackerClient},
 };
 use crate::{
-    block_tracker::{BlockPromise, TrackerClient},
+    block_tracker::{BlockOfferState, BlockTrackerClient},
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::Result,
     event::Payload,
+    network::{message::Request, request_tracker::MessageKey},
     protocol::{
-        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, ProofError, RootNodeFilter,
-        UntrustedProof,
+        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, ProofError,
+        RootNodeFilter, UntrustedProof,
     },
     repository::Vault,
     store::{ClientReader, ClientWriter},
@@ -29,7 +28,9 @@ mod future {
 
 pub(super) struct Client {
     inner: Inner,
+    request_rx: mpsc::UnboundedReceiver<PendingRequest>,
     response_rx: mpsc::Receiver<Response>,
+    block_rx: mpsc::UnboundedReceiver<BlockId>,
 }
 
 impl Client {
@@ -37,50 +38,65 @@ impl Client {
         vault: Vault,
         message_tx: mpsc::UnboundedSender<Message>,
         response_rx: mpsc::Receiver<Response>,
+        request_tracker: &RequestTracker,
     ) -> Self {
-        let pending_requests = PendingRequests::new(vault.monitor.clone());
-        let block_tracker = vault.block_tracker.client();
+        let (request_tracker, request_rx) = request_tracker.new_client();
+        let (block_tracker, block_rx) = vault.block_tracker.new_client();
 
         let inner = Inner {
             vault,
-            pending_requests,
+            request_tracker,
             block_tracker,
             message_tx,
         };
 
-        Self { inner, response_rx }
+        Self {
+            inner,
+            request_rx,
+            response_rx,
+            block_rx,
+        }
     }
 }
 
 impl Client {
     pub async fn run(&mut self) -> Result<()> {
-        let Self { inner, response_rx } = self;
+        let Self {
+            inner,
+            request_rx,
+            response_rx,
+            block_rx,
+        } = self;
 
-        inner.run(response_rx).await
+        inner.run(request_rx, response_rx, block_rx).await
     }
 }
 
 struct Inner {
     vault: Vault,
-    pending_requests: PendingRequests,
-    block_tracker: TrackerClient,
+    request_tracker: RequestTrackerClient,
+    block_tracker: BlockTrackerClient,
     message_tx: mpsc::UnboundedSender<Message>,
 }
 
 impl Inner {
-    async fn run(&mut self, response_rx: &mut mpsc::Receiver<Response>) -> Result<()> {
+    async fn run(
+        &mut self,
+        request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>,
+        response_rx: &mut mpsc::Receiver<Response>,
+        block_rx: &mut mpsc::UnboundedReceiver<BlockId>,
+    ) -> Result<()> {
         select! {
             result = self.handle_responses(response_rx) => result,
-            _ = self.handle_available_block_offers() => Ok(()),
+            _ = self.send_requests(request_rx) => Ok(()),
+            _ = self.request_blocks(block_rx) => Ok(()),
             _ = self.handle_reload_index() => Ok(()),
         }
     }
 
-    fn send_request(&self, request: PendingRequest) {
-        if let Some(request) = self.pending_requests.insert(request) {
-            self.message_tx
-                .send(Message::Request(request))
-                .unwrap_or(());
+    async fn send_requests(&self, request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>) {
+        while let Some(PendingRequest { request, .. }) = request_rx.recv().await {
+            self.message_tx.send(Message::Request(request)).ok();
         }
     }
 
@@ -92,31 +108,39 @@ impl Inner {
             for response in recv_iter(rx).await {
                 self.vault.monitor.responses_received.increment(1);
 
-                let response = self.pending_requests.remove(response);
-
                 match response {
-                    PreparedResponse::RootNode(proof, block_presence, debug) => {
+                    Response::RootNode(proof, block_presence, debug) => {
                         persistable.push(PersistableResponse::RootNode(
                             proof,
                             block_presence,
                             debug,
                         ));
                     }
-                    PreparedResponse::InnerNodes(nodes, _, debug) => {
-                        persistable.push(PersistableResponse::InnerNodes(nodes, debug));
+                    Response::InnerNodes(nodes, _, debug) => {
+                        persistable.push(PersistableResponse::InnerNodes(nodes.into(), debug));
                     }
-                    PreparedResponse::LeafNodes(nodes, _, debug) => {
-                        persistable.push(PersistableResponse::LeafNodes(nodes, debug));
+                    Response::LeafNodes(nodes, _, debug) => {
+                        persistable.push(PersistableResponse::LeafNodes(nodes.into(), debug));
                     }
-                    PreparedResponse::Block(block, block_promise, debug) => {
-                        persistable.push(PersistableResponse::Block(block, block_promise, debug));
+                    Response::Block(block_content, block_nonce, debug) => {
+                        persistable.push(PersistableResponse::Block(
+                            Block::new(block_content, block_nonce),
+                            debug,
+                        ));
                     }
-                    PreparedResponse::BlockOffer(block_id, debug) => {
+                    Response::BlockOffer(block_id, debug) => {
                         ephemeral.push(EphemeralResponse::BlockOffer(block_id, debug));
                     }
-                    PreparedResponse::RootNodeError(..)
-                    | PreparedResponse::ChildNodesError(..)
-                    | PreparedResponse::BlockError(..) => (),
+                    Response::RootNodeError(writer_id, _) => {
+                        self.request_tracker
+                            .failure(MessageKey::RootNode(writer_id));
+                    }
+                    Response::ChildNodesError(hash, _, _) => {
+                        self.request_tracker.failure(MessageKey::ChildNodes(hash));
+                    }
+                    Response::BlockError(block_id, _) => {
+                        self.request_tracker.failure(MessageKey::Block(block_id));
+                    }
                 }
 
                 if ephemeral.len() >= RESPONSE_BATCH_SIZE {
@@ -158,9 +182,8 @@ impl Inner {
                 PersistableResponse::LeafNodes(nodes, debug) => {
                     self.handle_leaf_nodes(&mut writer, nodes, debug).await?;
                 }
-                PersistableResponse::Block(block, block_promise, debug) => {
-                    self.handle_block(&mut writer, block, block_promise, debug)
-                        .await?;
+                PersistableResponse::Block(block, debug) => {
+                    self.handle_block(&mut writer, block, debug).await?;
                 }
             }
         }
@@ -221,16 +244,23 @@ impl Inner {
         }
 
         let hash = proof.hash;
+        let writer_id = proof.writer_id;
         let status = writer.save_root_node(proof, &block_presence).await?;
 
         tracing::debug!("Received root node - {status}");
 
         if status.request_children() {
-            self.send_request(PendingRequest::ChildNodes(
-                hash,
-                ResponseDisambiguator::new(block_presence),
-                debug_payload.follow_up(),
-            ));
+            self.request_tracker.success(
+                MessageKey::RootNode(writer_id),
+                vec![PendingRequest {
+                    request: Request::ChildNodes(
+                        hash,
+                        ResponseDisambiguator::new(block_presence),
+                        debug_payload.follow_up(),
+                    ),
+                    block_presence,
+                }],
+            );
         }
 
         Ok(())
@@ -243,6 +273,7 @@ impl Inner {
         nodes: CacheHash<InnerNodes>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
+        let hash = nodes.hash();
         let total = nodes.len();
         let status = writer.save_inner_nodes(nodes).await?;
 
@@ -252,13 +283,21 @@ impl Inner {
             total
         );
 
-        for node in status.new_children {
-            self.send_request(PendingRequest::ChildNodes(
-                node.hash,
-                ResponseDisambiguator::new(node.summary.block_presence),
-                debug_payload.follow_up(),
-            ));
-        }
+        self.request_tracker.success(
+            MessageKey::ChildNodes(hash),
+            status
+                .new_children
+                .into_iter()
+                .map(|node| PendingRequest {
+                    request: Request::ChildNodes(
+                        node.hash,
+                        ResponseDisambiguator::new(node.summary.block_presence),
+                        debug_payload.follow_up(),
+                    ),
+                    block_presence: node.summary.block_presence,
+                })
+                .collect(),
+        );
 
         Ok(())
     }
@@ -270,6 +309,7 @@ impl Inner {
         nodes: CacheHash<LeafNodes>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
+        let hash = nodes.hash();
         let total = nodes.len();
         let status = writer.save_leaf_nodes(nodes).await?;
 
@@ -280,8 +320,13 @@ impl Inner {
         );
 
         for (block_id, state) in status.new_block_offers {
-            self.block_tracker.register(block_id, state);
+            if let Some(state) = block_offer_state(state) {
+                self.block_tracker.offer(block_id, state);
+            }
         }
+
+        self.request_tracker
+            .success(MessageKey::ChildNodes(hash), Vec::new());
 
         Ok(())
     }
@@ -293,13 +338,13 @@ impl Inner {
         block_id: BlockId,
         debug_payload: DebugResponse,
     ) -> Result<()> {
-        let Some(offer_state) = reader.load_block_offer_state(&block_id).await? else {
-            return Ok(());
-        };
+        let root_node_state = reader
+            .load_effective_root_node_state_for_block(&block_id)
+            .await?;
 
-        tracing::trace!(?offer_state, "Received block offer");
-
-        self.block_tracker.register(block_id, offer_state);
+        if let Some(offer_state) = block_offer_state(root_node_state) {
+            self.block_tracker.offer(block_id, offer_state);
+        }
 
         Ok(())
     }
@@ -309,12 +354,14 @@ impl Inner {
         &self,
         writer: &mut ClientWriter,
         block: Block,
-        block_promise: Option<BlockPromise>,
         debug_payload: DebugResponse,
     ) -> Result<()> {
-        writer.save_block(&block, block_promise).await?;
+        writer.save_block(&block).await?;
 
         tracing::trace!("Received block");
+
+        self.request_tracker
+            .success(MessageKey::Block(block.id), vec![]);
 
         Ok(())
     }
@@ -344,7 +391,7 @@ impl Inner {
 
         // Approve pending block offers referenced from the newly approved snapshots.
         for block_id in status.approved_missing_blocks {
-            self.vault.block_tracker.approve(block_id);
+            self.block_tracker.approve(block_id);
         }
 
         self.refresh_branches(status.approved_branches.iter().copied());
@@ -353,12 +400,10 @@ impl Inner {
         Ok(())
     }
 
-    async fn handle_available_block_offers(&self) {
-        let mut block_offers = self.block_tracker.offers();
-
-        loop {
-            let block_offer = block_offers.next().await;
-            self.send_request(PendingRequest::Block(block_offer, DebugRequest::start()));
+    async fn request_blocks(&self, block_rx: &mut mpsc::UnboundedReceiver<BlockId>) {
+        while let Some(block_id) = block_rx.recv().await {
+            self.request_tracker
+                .initial(Request::Block(block_id, DebugRequest::start()));
         }
     }
 
@@ -391,7 +436,8 @@ impl Inner {
     // requested as soon as possible.
     fn refresh_branches(&self, branches: impl IntoIterator<Item = PublicKey>) {
         for branch_id in branches {
-            self.send_request(PendingRequest::RootNode(branch_id, DebugRequest::start()));
+            self.request_tracker
+                .initial(Request::RootNode(branch_id, DebugRequest::start()));
         }
     }
 
@@ -436,6 +482,19 @@ impl Inner {
     }
 }
 
+/// Response whose processing requires only read access to the store or no access at all.
+enum EphemeralResponse {
+    BlockOffer(BlockId, DebugResponse),
+}
+
+/// Response whose processing requires write access to the store.
+enum PersistableResponse {
+    RootNode(UntrustedProof, MultiBlockPresence, DebugResponse),
+    InnerNodes(CacheHash<InnerNodes>, DebugResponse),
+    LeafNodes(CacheHash<LeafNodes>, DebugResponse),
+    Block(Block, DebugResponse),
+}
+
 /// Waits for at least one item to become available (or the chanel getting closed) and then yields
 /// all the buffered items from the channel.
 async fn recv_iter<T>(rx: &mut mpsc::Receiver<T>) -> impl Iterator<Item = T> + '_ {
@@ -445,12 +504,20 @@ async fn recv_iter<T>(rx: &mut mpsc::Receiver<T>) -> impl Iterator<Item = T> + '
         .chain(iter::from_fn(|| rx.try_recv().ok()))
 }
 
+fn block_offer_state(root_node_state: NodeState) -> Option<BlockOfferState> {
+    match root_node_state {
+        NodeState::Approved => Some(BlockOfferState::Approved),
+        NodeState::Complete | NodeState::Incomplete => Some(BlockOfferState::Pending),
+        NodeState::Rejected => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         access_control::WriteSecrets,
-        block_tracker::RequestMode,
+        block_tracker::BlockRequestMode,
         crypto::sign::Keypair,
         db,
         event::EventSender,
@@ -545,16 +612,17 @@ mod tests {
             RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
         );
 
-        vault.block_tracker.set_request_mode(RequestMode::Lazy);
+        vault.block_tracker.set_request_mode(BlockRequestMode::Lazy);
 
-        let pending_requests = PendingRequests::new(vault.monitor.clone());
-        let block_tracker = vault.block_tracker.client();
+        let request_tracker = RequestTracker::new();
+        let (request_tracker, _request_rx) = request_tracker.new_client();
+        let (block_tracker, _block_rx) = vault.block_tracker.new_client();
 
         let (message_tx, _message_rx) = mpsc::unbounded_channel();
 
         let inner = Inner {
             vault,
-            pending_requests,
+            request_tracker,
             block_tracker,
             message_tx,
         };
