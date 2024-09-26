@@ -1,7 +1,10 @@
 use super::{simulation::Simulation, *};
-use crate::protocol::{
-    test_utils::{BlockState, Snapshot},
-    Block,
+use crate::{
+    network::{debug_payload::DebugRequest, message::ResponseDisambiguator},
+    protocol::{
+        test_utils::{BlockState, Snapshot},
+        Block,
+    },
 };
 use rand::{
     distributions::{Bernoulli, Distribution, Standard},
@@ -9,6 +12,8 @@ use rand::{
     seq::SliceRandom,
     Rng, SeedableRng,
 };
+use std::{pin::pin, time::Duration};
+use tokio::{sync::mpsc, time};
 
 // Test syncing while peers keep joining and leaving the swarm.
 //
@@ -137,7 +142,60 @@ async fn missing_blocks() {
     }
 }
 
-// TODO: test failure/timeout
+#[tokio::test(start_paused = true)]
+async fn timeout() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, tracker_worker) = build();
+
+    let mut work = pin!(tracker_worker.run());
+
+    let (client_a, mut request_rx_a) = tracker.new_client();
+    let (client_b, mut request_rx_b) = tracker.new_client();
+
+    let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng));
+    let request = Request::ChildNodes(
+        rng.gen(),
+        ResponseDisambiguator::new(MultiBlockPresence::Full),
+        DebugRequest::start(),
+    );
+
+    // Register the request with both clients.
+    client_a.success(
+        preceding_request_key,
+        vec![(request.clone(), MultiBlockPresence::Full)],
+    );
+
+    client_b.success(
+        preceding_request_key,
+        vec![(request.clone(), MultiBlockPresence::Full)],
+    );
+
+    time::timeout(Duration::from_millis(1), &mut work)
+        .await
+        .ok();
+
+    // Only the first client gets the send permit.
+    assert_eq!(
+        request_rx_a.try_recv().map(|permit| permit.request),
+        Ok(request.clone())
+    );
+
+    assert_eq!(
+        request_rx_b.try_recv().map(|permit| permit.request),
+        Err(mpsc::error::TryRecvError::Empty),
+    );
+
+    // Wait until the request timeout passes
+    time::timeout(REQUEST_TIMEOUT + Duration::from_millis(1), &mut work)
+        .await
+        .ok();
+
+    // The first client timeouted so the second client now gets the permit.
+    assert_eq!(
+        request_rx_b.try_recv().map(|permit| permit.request),
+        Ok(request.clone())
+    );
+}
 
 /// Generate `count + 1` copies of the same snapshot. The first one will have all the blocks
 /// present (the "master copy"). The remaining ones will have some blocks missing but in such a
