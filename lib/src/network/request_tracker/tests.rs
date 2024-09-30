@@ -13,7 +13,7 @@ use rand::{
     Rng, SeedableRng,
 };
 use std::{pin::pin, time::Duration};
-use tokio::{sync::mpsc, time};
+use tokio::{sync::mpsc::error::TryRecvError, time};
 
 // Test syncing while peers keep joining and leaving the swarm.
 //
@@ -182,15 +182,15 @@ async fn timeout() {
         .await
         .ok();
 
-    // Only the first client gets the send permit.
+    // Only the first client gets the request.
     assert_eq!(
-        request_rx_a.try_recv().map(|permit| permit.request),
+        request_rx_a.try_recv().map(|r| r.request),
         Ok(request.clone())
     );
 
     assert_eq!(
-        request_rx_b.try_recv().map(|permit| permit.request),
-        Err(mpsc::error::TryRecvError::Empty),
+        request_rx_b.try_recv().map(|r| r.request),
+        Err(TryRecvError::Empty)
     );
 
     // Wait until the request timeout passes
@@ -198,11 +198,70 @@ async fn timeout() {
         .await
         .ok();
 
-    // The first client timeouted so the second client now gets the permit.
+    // The first client timeouted so the second client now gets the request.
     assert_eq!(
-        request_rx_b.try_recv().map(|permit| permit.request),
+        request_rx_b.try_recv().map(|r| r.request),
         Ok(request.clone())
     );
+}
+
+#[tokio::test]
+async fn drop_uncommitted_client() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut tracker_worker) = build();
+
+    let (client_a, mut request_rx_a) = tracker.new_client();
+    let (client_b, mut request_rx_b) = tracker.new_client();
+
+    let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng));
+    let request = Request::ChildNodes(
+        rng.gen(),
+        ResponseDisambiguator::new(MultiBlockPresence::Full),
+        DebugRequest::start(),
+    );
+    let request_key = MessageKey::from(&request);
+
+    for client in [&client_a, &client_b] {
+        client.success(
+            preceding_request_key,
+            vec![PendingRequest {
+                request: request.clone(),
+                block_presence: MultiBlockPresence::Full,
+            }],
+        );
+    }
+
+    tracker_worker.step();
+
+    assert_eq!(
+        request_rx_a.try_recv().map(|r| r.request),
+        Ok(request.clone())
+    );
+    assert_eq!(
+        request_rx_b.try_recv().map(|r| r.request),
+        Err(TryRecvError::Empty)
+    );
+
+    // Complete the request by the first client.
+    client_a.success(request_key, vec![]);
+    tracker_worker.step();
+
+    assert_eq!(
+        request_rx_a.try_recv().map(|r| r.request),
+        Err(TryRecvError::Empty)
+    );
+    assert_eq!(
+        request_rx_b.try_recv().map(|r| r.request),
+        Err(TryRecvError::Empty)
+    );
+
+    // Drop the first client without commiting.
+    drop(client_a);
+    tracker_worker.step();
+
+    // The request falls back to the other client because although the request was completed, it
+    // wasn't committed.
+    assert_eq!(request_rx_b.try_recv().map(|r| r.request), Ok(request));
 }
 
 /// Generate `count + 1` copies of the same snapshot. The first one will have all the blocks

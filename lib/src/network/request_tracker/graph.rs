@@ -116,7 +116,6 @@ pub(super) struct Node<T> {
 }
 
 impl<T> Node<T> {
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn value(&self) -> &T {
         &self.value
     }
