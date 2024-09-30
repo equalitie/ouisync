@@ -163,33 +163,29 @@ impl Worker {
             Command::InsertClient {
                 client_id,
                 block_tx,
-            } => self.handle_insert_client(client_id, block_tx),
-            Command::RemoveClient { client_id } => self.handle_remove_client(client_id),
+            } => self.insert_client(client_id, block_tx),
+            Command::RemoveClient { client_id } => self.remove_client(client_id),
             Command::InsertOffer {
                 client_id,
                 block_id,
                 state,
-            } => self.handle_insert_offer(client_id, block_id, state),
+            } => self.insert_offer(client_id, block_id, state),
             Command::ApproveOffers { block_id } => self.handle_approve_offers(block_id),
-            Command::SetRequestMode { mode } => self.handle_set_request_mode(mode),
-            Command::InsertRequired { block_id } => self.handle_insert_required(block_id),
-            Command::ClearRequired => self.handle_clear_required(),
+            Command::SetRequestMode { mode } => self.set_request_mode(mode),
+            Command::InsertRequired { block_id } => self.insert_required(block_id),
+            Command::ClearRequired => self.clear_required(),
         }
     }
 
-    fn handle_insert_client(
-        &mut self,
-        client_id: ClientId,
-        block_tx: mpsc::UnboundedSender<BlockId>,
-    ) {
+    fn insert_client(&mut self, client_id: ClientId, block_tx: mpsc::UnboundedSender<BlockId>) {
         self.clients.insert(client_id, ClientState::new(block_tx));
     }
 
-    fn handle_remove_client(&mut self, client_id: ClientId) {
+    fn remove_client(&mut self, client_id: ClientId) {
         self.clients.remove(&client_id);
     }
 
-    fn handle_set_request_mode(&mut self, mode: BlockRequestMode) {
+    fn set_request_mode(&mut self, mode: BlockRequestMode) {
         self.request_mode = mode;
 
         match mode {
@@ -204,7 +200,7 @@ impl Worker {
         }
     }
 
-    fn handle_insert_required(&mut self, block_id: BlockId) {
+    fn insert_required(&mut self, block_id: BlockId) {
         if !self.required_blocks.insert(block_id) {
             // already required
             return;
@@ -224,16 +220,11 @@ impl Worker {
         }
     }
 
-    fn handle_clear_required(&mut self) {
+    fn clear_required(&mut self) {
         self.required_blocks.clear();
     }
 
-    fn handle_insert_offer(
-        &mut self,
-        client_id: ClientId,
-        block_id: BlockId,
-        new_state: BlockOfferState,
-    ) {
+    fn insert_offer(&mut self, client_id: ClientId, block_id: BlockId, new_state: BlockOfferState) {
         let Some(client_state) = self.clients.get_mut(&client_id) else {
             return;
         };

@@ -21,6 +21,8 @@ use tokio::{sync::mpsc, time};
 // needs a tokio runtime.
 #[tokio::test]
 async fn dynamic_swarm() {
+    // crate::test_utils::init_log();
+
     let seed = rand::random();
     case(seed, 64, 4);
 

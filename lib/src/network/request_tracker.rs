@@ -100,16 +100,13 @@ impl RequestTrackerClient {
             .ok();
     }
 
-    /// Commit all successfully completed requests.
-    ///
-    /// If this client is dropped before this is called, all requests successfully completed by this
-    /// client will be considered failed and will be made available for retry by other clients.
-    pub fn commit(&self) {
-        self.command_tx
-            .send(Command::Commit {
-                client_id: self.client_id,
-            })
-            .ok();
+    /// Obtain a handle to commit all the requests that were successfully completed by this client.
+    /// The handle can be sent to other tasks/threads before invoking the commit.
+    pub fn new_committer(&self) -> RequestTrackerCommitter {
+        RequestTrackerCommitter {
+            client_id: self.client_id,
+            command_tx: self.command_tx.clone(),
+        }
     }
 }
 
@@ -117,6 +114,26 @@ impl Drop for RequestTrackerClient {
     fn drop(&mut self) {
         self.command_tx
             .send(Command::RemoveClient {
+                client_id: self.client_id,
+            })
+            .ok();
+    }
+}
+
+pub(crate) struct RequestTrackerCommitter {
+    client_id: ClientId,
+    command_tx: mpsc::UnboundedSender<Command>,
+}
+
+impl RequestTrackerCommitter {
+    /// Commit all successfully completed requests.
+    ///
+    /// If the client associated with this committer is dropped before this is called, all requests
+    /// successfully completed by the client will be considered failed and will be made available
+    /// for retry by other clients.
+    pub fn commit(self) {
+        self.command_tx
+            .send(Command::Commit {
                 client_id: self.client_id,
             })
             .ok();
@@ -286,58 +303,49 @@ impl Worker {
 
         let node_key = self
             .clients
-            .get_mut(&client_id)
-            .and_then(|state| state.requests.remove(&request_key));
+            .get(&client_id)
+            .and_then(|state| state.requests.get(&request_key))
+            .copied();
 
-        let (mut client_ids, remove_key) = if let Some(node_key) = node_key {
+        let mut client_ids = if let Some(node_key) = node_key {
             let Some(node) = self.requests.get_mut(node_key) else {
                 return;
             };
 
-            match node.value_mut() {
+            let (sender_timer_key, waiters) = match node.value_mut() {
                 RequestState::InFlight {
                     sender_client_id,
                     sender_timer_key,
                     waiters,
-                } if *sender_client_id == client_id => {
-                    self.timer.try_remove(sender_timer_key);
+                } if *sender_client_id == client_id => (*sender_timer_key, mem::take(waiters)),
+                RequestState::InFlight { .. }
+                | RequestState::Complete { .. }
+                | RequestState::Committed
+                | RequestState::Cancelled => return,
+            };
 
-                    let waiters = mem::take(waiters);
-                    let remove_key = if node.children().len() > 0 || !requests.is_empty() {
-                        *node.value_mut() = RequestState::Complete;
-                        None
-                    } else {
-                        Some(node_key)
-                    };
+            let client_ids = if requests.is_empty() {
+                Vec::new()
+            } else {
+                iter::once(client_id)
+                    .chain(waiters.iter().cloned())
+                    .collect()
+            };
 
-                    (waiters, remove_key)
-                }
-                RequestState::InFlight { waiters, .. } => {
-                    remove_from_queue(waiters, &client_id);
-                    return;
-                }
-                RequestState::Complete | RequestState::Cancelled => return,
-            }
+            *node.value_mut() = RequestState::Complete {
+                sender_client_id: client_id,
+                waiters,
+            };
+
+            self.timer.try_remove(&sender_timer_key);
+
+            client_ids
         } else {
-            (Default::default(), None)
+            vec![client_id]
         };
 
-        // Remove the node from the other waiting clients, if any.
-        for client_id in &client_ids {
-            if let Some(state) = self.clients.get_mut(client_id) {
-                state.requests.remove(&request_key);
-            }
-        }
-
-        // If the node has no children, remove it.
-        if let Some(node_key) = remove_key {
-            self.remove_request(node_key);
-        }
-
-        // Register the followup (child) requests with this client but also with all the clients that
-        // were waiting for the original request.
-        client_ids.push_front(client_id);
-
+        // Register the followup (child) requests with this client but also with all the clients
+        // that were waiting for the original request.
         for child_request in requests {
             for (client_id, child_request) in
                 // TODO: use `repeat_n` once it gets stabilized.
@@ -373,9 +381,57 @@ impl Worker {
 
     #[instrument(skip(self))]
     fn commit(&mut self, client_id: ClientId) {
-        tracing::trace!("commit_failure");
+        tracing::trace!("commit");
 
-        todo!()
+        // Collect all requests completed by this client.
+        let requests: Vec<_> = self
+            .clients
+            .get_mut(&client_id)
+            .into_iter()
+            .flat_map(|client_state| client_state.requests.iter())
+            .filter(|(_, node_key)| {
+                self.requests
+                    .get(**node_key)
+                    .map(|node| match node.value() {
+                        RequestState::Complete {
+                            sender_client_id, ..
+                        } if *sender_client_id == client_id => true,
+                        RequestState::Complete { .. }
+                        | RequestState::InFlight { .. }
+                        | RequestState::Committed
+                        | RequestState::Cancelled => false,
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|(request_key, node_key)| (*request_key, *node_key))
+            .collect();
+
+        for (request_key, node_key) in requests {
+            let Some(node) = self.requests.get_mut(node_key) else {
+                unreachable!()
+            };
+
+            let waiters = match node.value_mut() {
+                RequestState::Complete { waiters, .. } => mem::take(waiters),
+                RequestState::InFlight { .. }
+                | RequestState::Committed
+                | RequestState::Cancelled => unreachable!(),
+            };
+
+            // Remove the requests from this client and all the waiters
+            for client_id in iter::once(client_id).chain(waiters) {
+                if let Some(client_state) = self.clients.get_mut(&client_id) {
+                    client_state.requests.remove(&request_key);
+                }
+            }
+
+            // If the node has no children, remove it, otherwise mark is as committed.
+            if node.children().len() == 0 {
+                self.remove_request(node_key);
+            } else {
+                *node.value_mut() = RequestState::Committed;
+            }
+        }
     }
 
     fn insert_request(
@@ -403,11 +459,11 @@ impl Worker {
         let request_key = MessageKey::from(&node.request().request);
 
         match node.value_mut() {
-            RequestState::InFlight { waiters, .. } => {
+            RequestState::InFlight { waiters, .. } | RequestState::Complete { waiters, .. } => {
                 waiters.push_back(client_id);
                 client_state.requests.insert(request_key, node_key);
             }
-            RequestState::Complete => (),
+            RequestState::Committed => (),
             RequestState::Cancelled => {
                 let timer_key = self.timer.insert((client_id, request_key), REQUEST_TIMEOUT);
 
@@ -438,57 +494,57 @@ impl Worker {
 
         let (request, state) = node.parts_mut();
 
-        match state {
+        let (sender_client_id, sender_timer_key, waiters) = match state {
             RequestState::InFlight {
                 sender_client_id,
                 sender_timer_key,
                 waiters,
-            } => {
-                if *sender_client_id == client_id {
-                    // The removed client is the current sender of this request.
-
-                    // Remove the timeout for the previous sender
-                    self.timer.try_remove(sender_timer_key);
-
-                    // Find a waiting client
-                    let next_client = iter::from_fn(|| waiters.pop_front()).find_map(|client_id| {
-                        self.clients
-                            .get(&client_id)
-                            .map(|client_state| (client_id, client_state))
-                    });
-
-                    if let Some((next_client_id, next_client_state)) = next_client {
-                        // Next waiting client found. Promote it to a sender.
-
-                        *sender_client_id = next_client_id;
-                        *sender_timer_key = self.timer.insert(
-                            (next_client_id, MessageKey::from(&request.request)),
-                            REQUEST_TIMEOUT,
-                        );
-
-                        // Send the request to the new sender.
-                        next_client_state.request_tx.send(request.clone()).ok();
-
-                        return;
-                    } else {
-                        // No waiting client found. If this request has no children, we can remove
-                        // it, otherwise we mark it as cancelled.
-                        if node.children().len() > 0 {
-                            *node.value_mut() = RequestState::Cancelled;
-                            return;
-                        }
-                    }
-                } else {
-                    // The removed client is one of the waiting clients - remove it from the
-                    // waiting queue.
-                    remove_from_queue(waiters, &client_id);
-                    return;
-                }
-            }
-            RequestState::Complete | RequestState::Cancelled => return,
+            } => (sender_client_id, Some(sender_timer_key), waiters),
+            RequestState::Complete {
+                sender_client_id,
+                waiters,
+            } => (sender_client_id, None, waiters),
+            RequestState::Committed | RequestState::Cancelled => return,
         };
 
-        self.remove_request(node_key);
+        if *sender_client_id != client_id {
+            remove_from_queue(waiters, &client_id);
+            return;
+        }
+
+        if let Some(timer_key) = sender_timer_key {
+            self.timer.try_remove(timer_key);
+        }
+
+        // Find next waiting client
+        let next_client = iter::from_fn(|| waiters.pop_front())
+            .find_map(|client_id| self.clients.get_key_value(&client_id));
+
+        if let Some((&next_client_id, next_client_state)) = next_client {
+            // Next waiting client found. Promote it to the sender.
+            let sender_client_id = next_client_id;
+            let sender_timer_key = self.timer.insert(
+                (next_client_id, MessageKey::from(&request.request)),
+                REQUEST_TIMEOUT,
+            );
+            let waiters = mem::take(waiters);
+
+            *state = RequestState::InFlight {
+                sender_client_id,
+                sender_timer_key,
+                waiters,
+            };
+
+            next_client_state.request_tx.send(request.clone()).ok();
+        } else {
+            // No waiting client found. If this request has no children, we can remove
+            // it, otherwise we mark it as cancelled.
+            if node.children().len() > 0 {
+                *node.value_mut() = RequestState::Cancelled;
+            } else {
+                self.remove_request(node_key);
+            }
+        }
     }
 
     fn remove_request(&mut self, node_key: GraphKey) {
@@ -571,8 +627,17 @@ enum RequestState {
         /// timeouts, a new one will be picked from this list.
         waiters: VecDeque<ClientId>,
     },
-    /// The response to this request has already been received.
-    Complete,
+    /// The response to this request has already been received but the request hasn't been committed
+    /// because the response hasn't been fully processed yet. If the sender client is dropped
+    /// before this request gets committed, a new sender is picked and the request is switched back
+    /// to `InFlight`.
+    Complete {
+        sender_client_id: ClientId,
+        waiters: VecDeque<ClientId>,
+    },
+    /// The response to this request has been received and fully processed. This request won't be
+    /// retried even when the sender client gets dropped.
+    Committed,
     /// The response for the current client failed and there are no more clients waiting.
     Cancelled,
 }

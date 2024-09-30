@@ -367,25 +367,31 @@ impl Inner {
     }
 
     async fn commit_responses(&self, writer: ClientWriter) -> Result<()> {
-        let event_tx = self.vault.event_tx.clone();
         let status = writer
-            .commit_and_then(move |status| {
-                // Notify about newly written blocks.
-                for block_id in &status.new_blocks {
-                    event_tx.send(Payload::BlockReceived(*block_id));
-                }
+            .commit_and_then({
+                let committer = self.request_tracker.new_committer();
+                let event_tx = self.vault.event_tx.clone();
 
-                // Notify about newly approved snapshots
-                for branch_id in &status.approved_branches {
-                    event_tx.send(Payload::SnapshotApproved(*branch_id));
-                }
+                move |status| {
+                    committer.commit();
 
-                // Notify about newly rejected snapshots
-                for branch_id in &status.rejected_branches {
-                    event_tx.send(Payload::SnapshotRejected(*branch_id));
-                }
+                    // Notify about newly written blocks.
+                    for block_id in &status.new_blocks {
+                        event_tx.send(Payload::BlockReceived(*block_id));
+                    }
 
-                status
+                    // Notify about newly approved snapshots
+                    for branch_id in &status.approved_branches {
+                        event_tx.send(Payload::SnapshotApproved(*branch_id));
+                    }
+
+                    // Notify about newly rejected snapshots
+                    for branch_id in &status.rejected_branches {
+                        event_tx.send(Payload::SnapshotRejected(*branch_id));
+                    }
+
+                    status
+                }
             })
             .await?;
 

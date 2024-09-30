@@ -259,6 +259,10 @@ impl TestClient {
             }
             Response::BlockOffer(_block_id, _debug_payload) => unimplemented!(),
         };
+
+        // Note: for simplicity, in this simulation we `commit` after every operation. To test
+        // committing properly, separate tests not based on this simulation need to be used.
+        self.tracker_client.new_committer().commit();
     }
 
     fn poll_request(&mut self) -> Option<PendingRequest> {
