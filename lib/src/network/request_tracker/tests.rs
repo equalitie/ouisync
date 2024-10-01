@@ -6,6 +6,7 @@ use crate::{
         Block,
     },
 };
+use assert_matches::assert_matches;
 use rand::{
     distributions::{Bernoulli, Distribution, Standard},
     rngs::StdRng,
@@ -262,6 +263,53 @@ async fn drop_uncommitted_client() {
     // The request falls back to the other client because although the request was completed, it
     // wasn't committed.
     assert_eq!(request_rx_b.try_recv().map(|r| r.request), Ok(request));
+}
+
+#[tokio::test]
+async fn multiple_responses_to_identical_requests() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build();
+    let (client, mut request_rx) = tracker.new_client();
+
+    let initial_request = Request::RootNode(PublicKey::generate(&mut rng), DebugRequest::start());
+    let followup_request = Request::ChildNodes(
+        rng.gen(),
+        ResponseDisambiguator::new(MultiBlockPresence::Full),
+        DebugRequest::start(),
+    );
+
+    // Send initial root node request
+    client.initial(initial_request.clone());
+    worker.step();
+
+    assert_matches!(request_rx.try_recv(), Ok(_));
+
+    // Receive response to it
+    client.success(MessageKey::from(&initial_request), vec![]);
+    worker.step();
+
+    // do not commmit yet
+
+    // Receive another response, this time unsolicited, which has the same key but different
+    // followups than the one received previously.
+    client.success(
+        MessageKey::from(&initial_request),
+        vec![PendingRequest {
+            request: followup_request.clone(),
+            block_presence: MultiBlockPresence::Full,
+        }],
+    );
+    worker.step();
+
+    // The followup requests are sent even though the
+    assert_eq!(
+        request_rx.try_recv().map(|r| r.request),
+        Ok(followup_request)
+    );
+
+    // TODO: test these cases as well:
+    // - the initial request gets committed, but remains tracked because it has in-flight followups.
+    // - the responses are received by different clients
 }
 
 /// Generate `count + 1` copies of the same snapshot. The first one will have all the blocks

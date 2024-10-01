@@ -312,32 +312,37 @@ impl Worker {
                 return;
             };
 
-            let (sender_timer_key, waiters) = match node.value_mut() {
+            let waiters = match node.value_mut() {
                 RequestState::InFlight {
                     sender_client_id,
                     sender_timer_key,
                     waiters,
-                } if *sender_client_id == client_id => (*sender_timer_key, mem::take(waiters)),
+                } if *sender_client_id == client_id => {
+                    self.timer.try_remove(sender_timer_key);
+                    Some(mem::take(waiters))
+                }
                 RequestState::InFlight { .. }
                 | RequestState::Complete { .. }
                 | RequestState::Committed
-                | RequestState::Cancelled => return,
+                | RequestState::Cancelled => None,
             };
 
             let client_ids = if requests.is_empty() {
                 Vec::new()
             } else {
                 iter::once(client_id)
-                    .chain(waiters.iter().cloned())
+                    .chain(waiters.as_ref().into_iter().flatten().copied())
                     .collect()
             };
 
-            *node.value_mut() = RequestState::Complete {
-                sender_client_id: client_id,
-                waiters,
-            };
-
-            self.timer.try_remove(&sender_timer_key);
+            // If the request was `InFlight` from this client, switch it to `Complete`. Otherwise
+            // keep it as is.
+            if let Some(waiters) = waiters {
+                *node.value_mut() = RequestState::Complete {
+                    sender_client_id: client_id,
+                    waiters,
+                };
+            }
 
             client_ids
         } else {
@@ -408,7 +413,7 @@ impl Worker {
 
         for (request_key, node_key) in requests {
             let Some(node) = self.requests.get_mut(node_key) else {
-                unreachable!()
+                continue;
             };
 
             let waiters = match node.value_mut() {

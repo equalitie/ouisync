@@ -91,6 +91,7 @@ async fn transfer_snapshot_between_two_replicas_case(
             wait_until_snapshots_in_sync(&a_vault, a_id, &b_vault).await;
 
             if remaining_changesets > 0 {
+                tracing::info!("create changeset");
                 create_changeset(&mut rng, &a_vault, &a_id, &write_keys, changeset_size).await;
                 remaining_changesets -= 1;
             } else {
@@ -115,12 +116,6 @@ async fn transfer_blocks_between_two_replicas(
 ) {
     transfer_blocks_between_two_replicas_case(block_count, rng_seed).await
 }
-
-// #[tokio::test]
-// async fn debug() {
-//     test_utils::init_log();
-//     transfer_blocks_between_two_replicas_case(1, 0).await
-// }
 
 async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
