@@ -112,12 +112,18 @@ impl Inner {
                 self.vault.monitor.responses_received.increment(1);
 
                 match response {
-                    Response::RootNode(proof, block_presence, debug) => {
-                        persistable.push(PersistableResponse::RootNode(
+                    Response::RootNode {
+                        proof,
+                        cookie,
+                        block_presence,
+                        debug,
+                    } => {
+                        persistable.push(PersistableResponse::RootNode {
                             proof,
+                            cookie,
                             block_presence,
                             debug,
-                        ));
+                        });
                     }
                     Response::InnerNodes(nodes, _, debug) => {
                         persistable.push(PersistableResponse::InnerNodes(nodes.into(), debug));
@@ -134,9 +140,11 @@ impl Inner {
                     Response::BlockOffer(block_id, debug) => {
                         ephemeral.push(EphemeralResponse::BlockOffer(block_id, debug));
                     }
-                    Response::RootNodeError(writer_id, _) => {
+                    Response::RootNodeError {
+                        writer_id, cookie, ..
+                    } => {
                         self.request_tracker
-                            .failure(MessageKey::RootNode(writer_id));
+                            .failure(MessageKey::RootNode(writer_id, cookie));
                     }
                     Response::ChildNodesError(hash, _, _) => {
                         self.request_tracker.failure(MessageKey::ChildNodes(hash));
@@ -175,8 +183,13 @@ impl Inner {
 
         for response in batch.drain(..) {
             match response {
-                PersistableResponse::RootNode(proof, block_presence, debug) => {
-                    self.handle_root_node(&mut writer, proof, block_presence, debug)
+                PersistableResponse::RootNode {
+                    proof,
+                    cookie,
+                    block_presence,
+                    debug,
+                } => {
+                    self.handle_root_node(&mut writer, proof, cookie, block_presence, debug)
                         .await?;
                 }
                 PersistableResponse::InnerNodes(nodes, debug) => {
@@ -222,6 +235,7 @@ impl Inner {
             vv = ?proof.version_vector,
             hash = ?proof.hash,
             ?block_presence,
+            cookie = cookie,
             ?debug_payload,
         ),
         err(Debug)
@@ -230,6 +244,7 @@ impl Inner {
         &self,
         writer: &mut ClientWriter,
         proof: UntrustedProof,
+        cookie: u64,
         block_presence: MultiBlockPresence,
         debug_payload: DebugResponse,
     ) -> Result<()> {
@@ -253,7 +268,7 @@ impl Inner {
         tracing::debug!("Received root node - {status}");
 
         self.request_tracker.success(
-            MessageKey::RootNode(writer_id),
+            MessageKey::RootNode(writer_id, cookie),
             status
                 .request_children()
                 .map(|local_block_presence| {
@@ -467,15 +482,16 @@ impl Inner {
     // before the block is marked as offered and only then we proceed with requesting it. This
     // can take arbitrarily long (even indefinitely).
     //
-    // By requesting the root node again immediatelly, we ensure that the missing block is
+    // By requesting the root node again immediately, we ensure that the missing block is
     // requested as soon as possible.
     fn refresh_branches(&self, branches: impl IntoIterator<Item = PublicKey>) {
         for writer_id in branches {
             self.request_tracker
-                .initial(CandidateRequest::new(Request::RootNode(
+                .initial(CandidateRequest::new(Request::RootNode {
                     writer_id,
-                    DebugRequest::start(),
-                )));
+                    cookie: next_root_node_cookie(),
+                    debug: DebugRequest::start(),
+                }));
         }
     }
 
@@ -527,7 +543,12 @@ enum EphemeralResponse {
 
 /// Response whose processing requires write access to the store.
 enum PersistableResponse {
-    RootNode(UntrustedProof, MultiBlockPresence, DebugResponse),
+    RootNode {
+        proof: UntrustedProof,
+        cookie: u64,
+        block_presence: MultiBlockPresence,
+        debug: DebugResponse,
+    },
     InnerNodes(CacheHash<InnerNodes>, DebugResponse),
     LeafNodes(CacheHash<LeafNodes>, DebugResponse),
     Block(Block, DebugResponse),
@@ -547,6 +568,22 @@ fn block_offer_state(root_node_state: NodeState) -> Option<BlockOfferState> {
         NodeState::Approved => Some(BlockOfferState::Approved),
         NodeState::Complete | NodeState::Incomplete => Some(BlockOfferState::Pending),
         NodeState::Rejected => None,
+    }
+}
+
+// Generate cookie for the next `RootNode` request. This value is guaranteed to be non-zero (zero is
+// used for unsolicited responses).
+fn next_root_node_cookie() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+
+    loop {
+        let next = NEXT.fetch_add(1, Ordering::Relaxed);
+
+        if next != 0 {
+            break next;
+        }
     }
 }
 
@@ -576,17 +613,18 @@ mod tests {
         // Receive invalid root node from the remote replica.
         let invalid_write_keys = Keypair::random();
         inner
-            .handle_persistable_responses(&mut vec![PersistableResponse::RootNode(
-                Proof::new(
+            .handle_persistable_responses(&mut vec![PersistableResponse::RootNode {
+                proof: Proof::new(
                     remote_id,
                     VersionVector::first(remote_id),
                     *EMPTY_INNER_HASH,
                     &invalid_write_keys,
                 )
                 .into(),
-                MultiBlockPresence::None,
-                DebugResponse::unsolicited(),
-            )])
+                block_presence: MultiBlockPresence::None,
+                cookie: 0,
+                debug: DebugResponse::unsolicited(),
+            }])
             .await
             .unwrap();
 
@@ -610,17 +648,18 @@ mod tests {
         let remote_id = PublicKey::random();
 
         inner
-            .handle_persistable_responses(&mut vec![PersistableResponse::RootNode(
-                Proof::new(
+            .handle_persistable_responses(&mut vec![PersistableResponse::RootNode {
+                proof: Proof::new(
                     remote_id,
                     VersionVector::new(),
                     *EMPTY_INNER_HASH,
                     &secrets.write_keys,
                 )
                 .into(),
-                MultiBlockPresence::None,
-                DebugResponse::unsolicited(),
-            )])
+                block_presence: MultiBlockPresence::None,
+                cookie: 0,
+                debug: DebugResponse::unsolicited(),
+            }])
             .await
             .unwrap();
 

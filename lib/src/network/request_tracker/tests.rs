@@ -155,7 +155,7 @@ async fn timeout() {
     let (client_a, mut request_rx_a) = tracker.new_client();
     let (client_b, mut request_rx_b) = tracker.new_client();
 
-    let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng));
+    let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng), 0);
     let request = Request::ChildNodes(
         rng.gen(),
         ResponseDisambiguator::new(MultiBlockPresence::Full),
@@ -208,7 +208,7 @@ async fn drop_uncommitted_client() {
     let (client_a, mut request_rx_a) = tracker.new_client();
     let (client_b, mut request_rx_b) = tracker.new_client();
 
-    let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng));
+    let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng), 0);
     let request = Request::ChildNodes(
         rng.gen(),
         ResponseDisambiguator::new(MultiBlockPresence::Full),
@@ -262,7 +262,11 @@ async fn multiple_responses_to_identical_requests() {
     let (tracker, mut worker) = build();
     let (client, mut request_rx) = tracker.new_client();
 
-    let initial_request = Request::RootNode(PublicKey::generate(&mut rng), DebugRequest::start());
+    let initial_request = Request::RootNode {
+        writer_id: PublicKey::generate(&mut rng),
+        cookie: 0,
+        debug: DebugRequest::start(),
+    };
     let followup_request = Request::ChildNodes(
         rng.gen(),
         ResponseDisambiguator::new(MultiBlockPresence::Full),

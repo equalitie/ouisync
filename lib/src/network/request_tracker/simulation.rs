@@ -111,14 +111,14 @@ impl Simulation {
                         // In case of failure,  cancel the request so it can be retried without it
                         // triggering assertion failure.
                         let key = match response {
-                            Response::RootNodeError(writer_id, _) => {
-                                Some(MessageKey::RootNode(writer_id))
-                            }
+                            Response::RootNodeError {
+                                writer_id, cookie, ..
+                            } => Some(MessageKey::RootNode(writer_id, cookie)),
                             Response::ChildNodesError(hash, _, _) => {
                                 Some(MessageKey::ChildNodes(hash))
                             }
                             Response::BlockError(block_id, _) => Some(MessageKey::Block(block_id)),
-                            Response::RootNode(..)
+                            Response::RootNode { .. }
                             | Response::InnerNodes(..)
                             | Response::LeafNodes(..)
                             | Response::Block(..)
@@ -186,14 +186,19 @@ impl TestClient {
 
     fn handle_response(&mut self, response: Response, snapshot: &mut Snapshot) {
         match response {
-            Response::RootNode(proof, block_presence, debug_payload) => {
+            Response::RootNode {
+                proof,
+                block_presence,
+                cookie,
+                debug,
+            } => {
                 let requests = snapshot
                     .insert_root(proof.hash, block_presence)
                     .then_some(
                         CandidateRequest::new(Request::ChildNodes(
                             proof.hash,
                             ResponseDisambiguator::new(block_presence),
-                            debug_payload.follow_up(),
+                            debug.follow_up(),
                         ))
                         .variant(RequestVariant::new(
                             MultiBlockPresence::None,
@@ -204,7 +209,7 @@ impl TestClient {
                     .collect();
 
                 self.tracker_client
-                    .success(MessageKey::RootNode(proof.writer_id), requests);
+                    .success(MessageKey::RootNode(proof.writer_id, cookie), requests);
             }
             Response::InnerNodes(nodes, _disambiguator, debug_payload) => {
                 let parent_hash = nodes.hash();
@@ -253,8 +258,11 @@ impl TestClient {
                 self.tracker_client
                     .success(MessageKey::Block(block_id), vec![]);
             }
-            Response::RootNodeError(writer_id, _debug_payload) => {
-                self.tracker_client.failure(MessageKey::RootNode(writer_id));
+            Response::RootNodeError {
+                writer_id, cookie, ..
+            } => {
+                self.tracker_client
+                    .failure(MessageKey::RootNode(writer_id, cookie));
             }
             Response::ChildNodesError(hash, _disambiguator, _debug_payload) => {
                 self.tracker_client.failure(MessageKey::ChildNodes(hash));
@@ -291,11 +299,12 @@ impl TestServer {
             &write_keys,
         ));
 
-        let outbox = [Response::RootNode(
-            proof.clone(),
-            snapshot.root_summary().block_presence,
-            DebugResponse::unsolicited(),
-        )]
+        let outbox = [Response::RootNode {
+            proof: proof.clone(),
+            block_presence: snapshot.root_summary().block_presence,
+            cookie: 0,
+            debug: DebugResponse::unsolicited(),
+        }]
         .into();
 
         Self {
@@ -308,7 +317,11 @@ impl TestServer {
 
     fn handle_request(&mut self, request: Request) {
         match request {
-            Request::RootNode(writer_id, debug_payload) => {
+            Request::RootNode {
+                writer_id,
+                cookie,
+                debug,
+            } => {
                 if writer_id == self.writer_id {
                     let proof = Proof::new(
                         writer_id,
@@ -317,14 +330,18 @@ impl TestServer {
                         &self.write_keys,
                     );
 
-                    self.outbox.push_back(Response::RootNode(
-                        proof.into(),
-                        self.snapshot.root_summary().block_presence,
-                        debug_payload.reply(),
-                    ));
+                    self.outbox.push_back(Response::RootNode {
+                        proof: proof.into(),
+                        block_presence: self.snapshot.root_summary().block_presence,
+                        cookie,
+                        debug: debug.reply(),
+                    });
                 } else {
-                    self.outbox
-                        .push_back(Response::RootNodeError(writer_id, debug_payload.reply()));
+                    self.outbox.push_back(Response::RootNodeError {
+                        writer_id,
+                        cookie,
+                        debug: debug.reply(),
+                    });
                 }
             }
             Request::ChildNodes(hash, disambiguator, debug_payload) => {

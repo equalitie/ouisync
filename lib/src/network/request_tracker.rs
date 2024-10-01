@@ -227,7 +227,7 @@ pub(super) struct PendingRequest {
 /// Key identifying a request and its corresponding response.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Debug)]
 pub(super) enum MessageKey {
-    RootNode(PublicKey),
+    RootNode(PublicKey, u64),
     ChildNodes(Hash),
     Block(BlockId),
 }
@@ -235,7 +235,9 @@ pub(super) enum MessageKey {
 impl<'a> From<&'a Request> for MessageKey {
     fn from(request: &'a Request) -> Self {
         match request {
-            Request::RootNode(writer_id, _) => MessageKey::RootNode(*writer_id),
+            Request::RootNode {
+                writer_id, cookie, ..
+            } => MessageKey::RootNode(*writer_id, *cookie),
             Request::ChildNodes(hash, _, _) => MessageKey::ChildNodes(*hash),
             Request::Block(block_id, _) => MessageKey::Block(*block_id),
         }

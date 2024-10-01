@@ -95,7 +95,11 @@ impl Inner {
         self.vault.monitor.requests_received.increment(1);
 
         match request {
-            Request::RootNode(public_key, debug) => self.handle_root_node(public_key, debug).await,
+            Request::RootNode {
+                writer_id,
+                cookie,
+                debug,
+            } => self.handle_root_node(writer_id, cookie, debug).await,
             Request::ChildNodes(hash, disambiguator, debug) => {
                 self.handle_child_nodes(hash, disambiguator, debug).await
             }
@@ -104,7 +108,12 @@ impl Inner {
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_root_node(&self, writer_id: PublicKey, debug: DebugRequest) -> Result<()> {
+    async fn handle_root_node(
+        &self,
+        writer_id: PublicKey,
+        cookie: u64,
+        debug: DebugRequest,
+    ) -> Result<()> {
         let root_node = self
             .vault
             .store()
@@ -117,24 +126,33 @@ impl Inner {
             Ok(node) => {
                 tracing::trace!("root node found");
 
-                let response = Response::RootNode(
-                    node.proof.into(),
-                    node.summary.block_presence,
-                    debug.reply(),
-                );
+                let response = Response::RootNode {
+                    proof: node.proof.into(),
+                    block_presence: node.summary.block_presence,
+                    cookie,
+                    debug: debug.reply(),
+                };
 
                 self.enqueue_response(response).await;
                 Ok(())
             }
             Err(store::Error::BranchNotFound) => {
                 tracing::trace!("root node not found");
-                self.enqueue_response(Response::RootNodeError(writer_id, debug.reply()))
-                    .await;
+                self.enqueue_response(Response::RootNodeError {
+                    writer_id,
+                    cookie,
+                    debug: debug.reply(),
+                })
+                .await;
                 Ok(())
             }
             Err(error) => {
-                self.enqueue_response(Response::RootNodeError(writer_id, debug.reply()))
-                    .await;
+                self.enqueue_response(Response::RootNodeError {
+                    writer_id,
+                    cookie,
+                    debug: debug.reply(),
+                })
+                .await;
                 Err(error.into())
             }
         }
@@ -289,14 +307,13 @@ impl Inner {
             "send_root_node",
         );
 
-        let response = Response::RootNode(
-            root_node.proof.into(),
-            root_node.summary.block_presence,
-            DebugResponse::unsolicited(),
-        );
+        let response = Response::RootNode {
+            proof: root_node.proof.into(),
+            block_presence: root_node.summary.block_presence,
+            cookie: 0,
+            debug: DebugResponse::unsolicited(),
+        };
 
-        // TODO: maybe this should use different metric counter, to distinguish
-        // solicited/unsolicited responses?
         self.enqueue_response(response).await;
 
         Ok(())
