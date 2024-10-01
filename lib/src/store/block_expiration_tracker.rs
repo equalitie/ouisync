@@ -395,6 +395,9 @@ async fn set_as_missing_if_expired(
             continue;
         }
 
+        // TODO: Why is this here? For blind replicas requiring blocks is never necessary because
+        // the block tracker produces block ids immediatelly after they become offered by peers.
+        // For non-blind replicas blocks are already required in the `scan` job.
         block_download_tracker.require(*block_id);
 
         for (hash, _state) in index::update_summaries(&mut tx, parent_hashes).await? {

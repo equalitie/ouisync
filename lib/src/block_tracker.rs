@@ -4,10 +4,10 @@ use crate::{
 };
 use std::{
     collections::hash_map::Entry,
-    mem,
     sync::atomic::{AtomicUsize, Ordering},
 };
 use tokio::{sync::mpsc, task};
+use tracing::{Instrument, Span};
 
 /// Tracks blocks that are offered for requesting from some peers and blocks that are required
 /// locally. If a block is both, a notification is triggered to prompt us to request the block from
@@ -23,7 +23,7 @@ pub(crate) struct BlockTracker {
 impl BlockTracker {
     pub fn new() -> Self {
         let (this, worker) = build();
-        task::spawn(worker.run());
+        task::spawn(worker.run().instrument(Span::current()));
         this
     }
 
@@ -108,7 +108,7 @@ impl Drop for BlockTrackerClient {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum BlockRequestMode {
     // Request only required blocks
     Lazy,
@@ -116,7 +116,7 @@ pub(crate) enum BlockRequestMode {
     Greedy,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum BlockOfferState {
     Pending,
     Approved,
@@ -229,30 +229,36 @@ impl Worker {
             return;
         };
 
-        let old_state = mem::replace(
-            client_state
-                .offers
-                .entry(block_id)
-                .or_insert(BlockOfferState::Pending),
-            new_state,
-        );
-
-        if matches!(new_state, BlockOfferState::Pending) {
-            return;
-        }
-
-        if matches!(old_state, BlockOfferState::Approved) {
-            return;
-        }
-
-        match self.request_mode {
-            BlockRequestMode::Greedy => {
-                client_state.block_tx.send(block_id).ok();
-            }
-            BlockRequestMode::Lazy if self.required_blocks.contains(&block_id) => {
-                client_state.block_tx.send(block_id).ok();
-            }
-            BlockRequestMode::Lazy => (),
+        match client_state.offers.entry(block_id) {
+            Entry::Occupied(mut entry) => match (entry.get(), new_state) {
+                (BlockOfferState::Pending, BlockOfferState::Approved) => {
+                    if self.request_mode == BlockRequestMode::Greedy
+                        || self.required_blocks.contains(&block_id)
+                    {
+                        entry.remove();
+                        client_state.block_tx.send(block_id).ok();
+                    } else {
+                        entry.insert(BlockOfferState::Approved);
+                    }
+                }
+                (BlockOfferState::Pending, BlockOfferState::Pending)
+                | (BlockOfferState::Approved, BlockOfferState::Pending)
+                | (BlockOfferState::Approved, BlockOfferState::Approved) => (),
+            },
+            Entry::Vacant(entry) => match new_state {
+                BlockOfferState::Pending => {
+                    entry.insert(BlockOfferState::Pending);
+                }
+                BlockOfferState::Approved => {
+                    if self.request_mode == BlockRequestMode::Greedy
+                        || self.required_blocks.contains(&block_id)
+                    {
+                        client_state.block_tx.send(block_id).ok();
+                    } else {
+                        entry.insert(BlockOfferState::Approved);
+                    }
+                }
+            },
         }
     }
 
@@ -650,7 +656,25 @@ mod tests {
 
         let (client, mut block_rx) = tracker.new_client();
         client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
 
         assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
+    }
+
+    #[test]
+    fn repeated_offer() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
+
+        let (client, mut block_rx) = tracker.new_client();
+        client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
+
+        client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
     }
 }
