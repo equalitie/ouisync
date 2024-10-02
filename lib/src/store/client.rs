@@ -95,6 +95,7 @@ impl ClientWriter {
             }
 
             let local_node = inner_node::load(&mut self.db, &remote_node.hash).await?;
+
             if local_node
                 .map(|local_node| local_node.summary.is_outdated(&remote_node.summary))
                 .unwrap_or(true)

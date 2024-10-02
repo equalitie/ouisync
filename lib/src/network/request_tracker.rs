@@ -506,25 +506,11 @@ impl Worker {
                 continue;
             };
 
-            let waiters = match node.value_mut() {
-                RequestState::Complete { waiters, .. } => mem::take(waiters),
-                RequestState::Suspended { .. }
-                | RequestState::InFlight { .. }
-                | RequestState::Committed
-                | RequestState::Cancelled => unreachable!(),
-            };
-
-            // Remove the requests from this client and all the waiters
-            for client_id in iter::once(client_id).chain(waiters) {
-                if let Some(client_state) = self.clients.get_mut(&client_id) {
-                    client_state.requests.remove(&request_key);
-                }
-            }
-
             // If the node has no children, remove it, otherwise mark is as committed.
             if node.children().len() == 0 {
                 self.remove_request(node_key);
             } else {
+                remove_request_from_clients(&mut self.clients, request_key, node.value());
                 *node.value_mut() = RequestState::Committed;
             }
         }
@@ -649,6 +635,8 @@ impl Worker {
             RequestState::Committed | RequestState::Cancelled => return,
         };
 
+        let request_key = MessageKey::from(&request.request);
+
         // Find next waiting client
         if let Some(waiters) = waiters {
             let next_client = iter::from_fn(|| waiters.pop_front())
@@ -657,10 +645,9 @@ impl Worker {
             if let Some((&next_client_id, next_client_state)) = next_client {
                 // Next waiting client found. Promote it to the sender.
                 let sender_client_id = next_client_id;
-                let sender_timer_key = self.timer.insert(
-                    (next_client_id, MessageKey::from(&request.request)),
-                    REQUEST_TIMEOUT,
-                );
+                let sender_timer_key = self
+                    .timer
+                    .insert((next_client_id, request_key), REQUEST_TIMEOUT);
                 let waiters = mem::take(waiters);
 
                 *state = RequestState::InFlight {
@@ -678,6 +665,7 @@ impl Worker {
         // No waiting client found. If this request has no children, we can remove
         // it, otherwise we mark it as cancelled.
         if node.children().len() > 0 {
+            remove_request_from_clients(&mut self.clients, request_key, node.value());
             *node.value_mut() = RequestState::Cancelled;
         } else {
             self.remove_request(node_key);
@@ -688,6 +676,9 @@ impl Worker {
         let Some(node) = self.requests.remove(node_key) else {
             return;
         };
+
+        let request_key = MessageKey::from(&node.request().request);
+        remove_request_from_clients(&mut self.clients, request_key, node.value());
 
         for parent_key in node.parents() {
             let Some(parent_node) = self.requests.get(parent_key) else {
@@ -757,6 +748,7 @@ impl ClientState {
     }
 }
 
+#[derive(Debug)]
 enum RequestState {
     /// This request is ready to be sent.
     Suspended { waiters: VecDeque<ClientId> },
@@ -785,6 +777,26 @@ enum RequestState {
     Cancelled,
 }
 
+impl RequestState {
+    fn clients(&self) -> impl Iterator<Item = &ClientId> {
+        match self {
+            Self::Suspended { waiters } => Some((None, waiters)),
+            Self::InFlight {
+                sender_client_id,
+                waiters,
+                ..
+            }
+            | Self::Complete {
+                sender_client_id,
+                waiters,
+            } => Some((Some(sender_client_id), waiters)),
+            Self::Committed | Self::Cancelled => None,
+        }
+        .into_iter()
+        .flat_map(|(sender_client_id, waiters)| sender_client_id.into_iter().chain(waiters))
+    }
+}
+
 #[derive(Debug)]
 enum FailureReason {
     Response,
@@ -794,5 +806,17 @@ enum FailureReason {
 fn remove_from_queue<T: Eq>(queue: &mut VecDeque<T>, item: &T) {
     if let Some(index) = queue.iter().position(|other| other == item) {
         queue.remove(index);
+    }
+}
+
+fn remove_request_from_clients(
+    clients: &mut HashMap<ClientId, ClientState>,
+    request_key: MessageKey,
+    state: &RequestState,
+) {
+    for client_id in state.clients() {
+        if let Some(client_state) = clients.get_mut(client_id) {
+            client_state.requests.remove(&request_key);
+        }
     }
 }
