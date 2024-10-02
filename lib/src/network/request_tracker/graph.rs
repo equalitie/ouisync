@@ -72,6 +72,27 @@ impl<T> Graph<T> {
         self.nodes.get_mut(key.0)
     }
 
+    #[expect(unused)]
+    pub fn lookup(
+        &self,
+        request_key: MessageKey,
+        block_presence: MultiBlockPresence,
+    ) -> Option<&Node<T>> {
+        self.index
+            .get(&(request_key, block_presence))
+            .and_then(|key| self.nodes.get(key.0))
+    }
+
+    pub fn lookup_mut(
+        &mut self,
+        request_key: MessageKey,
+        block_presence: MultiBlockPresence,
+    ) -> Option<&mut Node<T>> {
+        self.index
+            .get(&(request_key, block_presence))
+            .and_then(|key| self.nodes.get_mut(key.0))
+    }
+
     pub fn remove(&mut self, key: Key) -> Option<Node<T>> {
         let node = self.nodes.try_remove(key.0)?;
 

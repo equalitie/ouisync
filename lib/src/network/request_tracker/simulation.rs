@@ -1,6 +1,6 @@
 use super::{
     super::message::{Request, Response, ResponseDisambiguator},
-    MessageKey, PendingRequest, RequestTracker, RequestTrackerClient,
+    CandidateRequest, MessageKey, PendingRequest, RequestTracker, RequestTrackerClient,
 };
 use crate::{
     collections::{HashMap, HashSet},
@@ -192,14 +192,14 @@ impl TestClient {
             Response::RootNode(proof, block_presence, debug_payload) => {
                 let requests = snapshot
                     .insert_root(proof.hash, block_presence)
-                    .then_some(PendingRequest {
-                        request: Request::ChildNodes(
+                    .then_some(
+                        CandidateRequest::new(Request::ChildNodes(
                             proof.hash,
                             ResponseDisambiguator::new(block_presence),
                             debug_payload.follow_up(),
-                        ),
-                        block_presence,
-                    })
+                        ))
+                        .follow_up(block_presence),
+                    )
                     .into_iter()
                     .collect();
 
@@ -212,13 +212,13 @@ impl TestClient {
 
                 let requests: Vec<_> = nodes
                     .into_iter()
-                    .map(|(_, node)| PendingRequest {
-                        request: Request::ChildNodes(
+                    .map(|(_, node)| {
+                        CandidateRequest::new(Request::ChildNodes(
                             node.hash,
                             ResponseDisambiguator::new(node.summary.block_presence),
                             debug_payload.follow_up(),
-                        ),
-                        block_presence: node.summary.block_presence,
+                        ))
+                        .follow_up(node.summary.block_presence)
                     })
                     .collect();
 
@@ -230,9 +230,11 @@ impl TestClient {
                 let nodes = snapshot.insert_leaves(nodes);
                 let requests = nodes
                     .into_iter()
-                    .map(|node| PendingRequest {
-                        request: Request::Block(node.block_id, debug_payload.follow_up()),
-                        block_presence: MultiBlockPresence::None,
+                    .map(|node| {
+                        CandidateRequest::new(Request::Block(
+                            node.block_id,
+                            debug_payload.follow_up(),
+                        ))
                     })
                     .collect();
 

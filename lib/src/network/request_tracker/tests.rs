@@ -165,18 +165,12 @@ async fn timeout() {
     // Register the request with both clients.
     client_a.success(
         preceding_request_key,
-        vec![PendingRequest {
-            request: request.clone(),
-            block_presence: MultiBlockPresence::Full,
-        }],
+        vec![CandidateRequest::new(request.clone()).follow_up(MultiBlockPresence::Full)],
     );
 
     client_b.success(
         preceding_request_key,
-        vec![PendingRequest {
-            request: request.clone(),
-            block_presence: MultiBlockPresence::Full,
-        }],
+        vec![CandidateRequest::new(request.clone()).follow_up(MultiBlockPresence::Full)],
     );
 
     time::timeout(Duration::from_millis(1), &mut work)
@@ -225,10 +219,7 @@ async fn drop_uncommitted_client() {
     for client in [&client_a, &client_b] {
         client.success(
             preceding_request_key,
-            vec![PendingRequest {
-                request: request.clone(),
-                block_presence: MultiBlockPresence::Full,
-            }],
+            vec![CandidateRequest::new(request.clone()).follow_up(MultiBlockPresence::Full)],
         );
     }
 
@@ -279,7 +270,7 @@ async fn multiple_responses_to_identical_requests() {
     );
 
     // Send initial root node request
-    client.initial(initial_request.clone());
+    client.initial(CandidateRequest::new(initial_request.clone()));
     worker.step();
 
     assert_matches!(request_rx.try_recv(), Ok(_));
@@ -294,10 +285,7 @@ async fn multiple_responses_to_identical_requests() {
     // followups than the one received previously.
     client.success(
         MessageKey::from(&initial_request),
-        vec![PendingRequest {
-            request: followup_request.clone(),
-            block_presence: MultiBlockPresence::Full,
-        }],
+        vec![CandidateRequest::new(followup_request.clone()).follow_up(MultiBlockPresence::Full)],
     );
     worker.step();
 
@@ -310,6 +298,35 @@ async fn multiple_responses_to_identical_requests() {
     // TODO: test these cases as well:
     // - the initial request gets committed, but remains tracked because it has in-flight followups.
     // - the responses are received by different clients
+}
+
+#[tokio::test]
+async fn suspend_resume() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build();
+
+    let (client, mut request_rx) = tracker.new_client();
+    worker.step();
+
+    let preceding_request_key = MessageKey::ChildNodes(rng.gen());
+    let request = Request::Block(rng.gen(), DebugRequest::start());
+    let request_key = MessageKey::from(&request);
+
+    client.success(
+        preceding_request_key,
+        vec![CandidateRequest::new(request.clone()).suspended()],
+    );
+    worker.step();
+
+    assert_eq!(
+        request_rx.try_recv().map(|r| r.request),
+        Err(TryRecvError::Empty)
+    );
+
+    client.resume(request_key, MultiBlockPresence::None);
+    worker.step();
+
+    assert_eq!(request_rx.try_recv().map(|r| r.request), Ok(request));
 }
 
 /// Generate `count + 1` copies of the same snapshot. The first one will have all the blocks

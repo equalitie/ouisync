@@ -9,7 +9,10 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::Result,
     event::Payload,
-    network::{message::Request, request_tracker::MessageKey},
+    network::{
+        message::Request,
+        request_tracker::{CandidateRequest, MessageKey},
+    },
     protocol::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, ProofError,
         RootNodeFilter, UntrustedProof,
@@ -249,19 +252,21 @@ impl Inner {
 
         tracing::debug!("Received root node - {status}");
 
-        if status.request_children() {
-            self.request_tracker.success(
-                MessageKey::RootNode(writer_id),
-                vec![PendingRequest {
-                    request: Request::ChildNodes(
+        self.request_tracker.success(
+            MessageKey::RootNode(writer_id),
+            status
+                .request_children()
+                .then_some(
+                    CandidateRequest::new(Request::ChildNodes(
                         hash,
                         ResponseDisambiguator::new(block_presence),
                         debug_payload.follow_up(),
-                    ),
-                    block_presence,
-                }],
-            );
-        }
+                    ))
+                    .follow_up(block_presence),
+                )
+                .into_iter()
+                .collect(),
+        );
 
         Ok(())
     }
@@ -288,13 +293,13 @@ impl Inner {
             status
                 .new_children
                 .into_iter()
-                .map(|node| PendingRequest {
-                    request: Request::ChildNodes(
+                .map(|node| {
+                    CandidateRequest::new(Request::ChildNodes(
                         node.hash,
                         ResponseDisambiguator::new(node.summary.block_presence),
                         debug_payload.follow_up(),
-                    ),
-                    block_presence: node.summary.block_presence,
+                    ))
+                    .follow_up(node.summary.block_presence)
                 })
                 .collect(),
         );
@@ -319,14 +324,31 @@ impl Inner {
             total,
         );
 
-        for (block_id, state) in status.new_block_offers {
-            if let Some(state) = block_offer_state(state) {
-                self.block_tracker.offer(block_id, state);
-            }
-        }
+        // IMPORTANT: Make sure the request tracker is processed before the block tracker to ensure
+        // the request is first inserted and only then resumed.
 
-        self.request_tracker
-            .success(MessageKey::ChildNodes(hash), Vec::new());
+        let offers: Vec<_> = status
+            .new_block_offers
+            .into_iter()
+            .filter_map(|(block_id, root_node_state)| {
+                block_offer_state(root_node_state).map(move |offer_state| (block_id, offer_state))
+            })
+            .collect();
+
+        self.request_tracker.success(
+            MessageKey::ChildNodes(hash),
+            offers
+                .iter()
+                .map(|(block_id, _)| {
+                    CandidateRequest::new(Request::Block(*block_id, debug_payload.follow_up()))
+                        .suspended()
+                })
+                .collect(),
+        );
+
+        for (block_id, offer_state) in offers {
+            self.block_tracker.offer(block_id, offer_state);
+        }
 
         Ok(())
     }
@@ -342,9 +364,18 @@ impl Inner {
             .load_effective_root_node_state_for_block(&block_id)
             .await?;
 
-        if let Some(offer_state) = block_offer_state(root_node_state) {
-            self.block_tracker.offer(block_id, offer_state);
-        }
+        let Some(offer_state) = block_offer_state(root_node_state) else {
+            return Ok(());
+        };
+
+        // IMPORTANT: Make sure the request tracker is processed before the block tracker to ensure
+        // the request is first inserted and only then resumed.
+
+        self.request_tracker.initial(
+            CandidateRequest::new(Request::Block(block_id, debug_payload.follow_up())).suspended(),
+        );
+
+        self.block_tracker.offer(block_id, offer_state);
 
         Ok(())
     }
@@ -409,7 +440,7 @@ impl Inner {
     async fn request_blocks(&self, block_rx: &mut mpsc::UnboundedReceiver<BlockId>) {
         while let Some(block_id) = block_rx.recv().await {
             self.request_tracker
-                .initial(Request::Block(block_id, DebugRequest::start()));
+                .resume(MessageKey::Block(block_id), MultiBlockPresence::None);
         }
     }
 
@@ -441,9 +472,12 @@ impl Inner {
     // By requesting the root node again immediatelly, we ensure that the missing block is
     // requested as soon as possible.
     fn refresh_branches(&self, branches: impl IntoIterator<Item = PublicKey>) {
-        for branch_id in branches {
+        for writer_id in branches {
             self.request_tracker
-                .initial(Request::RootNode(branch_id, DebugRequest::start()));
+                .initial(CandidateRequest::new(Request::RootNode(
+                    writer_id,
+                    DebugRequest::start(),
+                )));
         }
     }
 
