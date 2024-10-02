@@ -148,6 +148,7 @@ where
             }
         }
 
+        drop(tasks_tx);
         future::pending::<()>().await;
     };
 
