@@ -38,6 +38,7 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
+use constants::REQUEST_TIMEOUT;
 pub use net::stun::NatBehavior;
 use request_tracker::RequestTracker;
 
@@ -356,6 +357,8 @@ impl Network {
         pex.set_enabled(pex_enabled);
 
         let request_tracker = RequestTracker::new();
+        request_tracker.set_timeout(REQUEST_TIMEOUT);
+
         // TODO: This should be global, not per repo
         let response_limiter = Arc::new(Semaphore::new(MAX_UNCHOKED_COUNT));
         let stats_tracker = StatsTracker::default();
@@ -399,6 +402,14 @@ impl Network {
         };
 
         shutdown_peers(peers).await;
+    }
+
+    /// Change the sync protocol request timeout. Useful mostly for testing and benchmarking as the
+    /// default value should be sufficient for most use cases.
+    pub fn set_request_timeout(&self, timeout: Duration) {
+        for (_, holder) in &self.inner.registry.lock().unwrap().repos {
+            holder.request_tracker.set_timeout(timeout);
+        }
     }
 }
 

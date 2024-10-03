@@ -6,7 +6,7 @@ mod simulation;
 mod tests;
 
 use self::graph::{Graph, Key as GraphKey};
-use super::{constants::REQUEST_TIMEOUT, message::Request};
+use super::message::Request;
 use crate::{
     collections::HashMap,
     crypto::{sign::PublicKey, Hash},
@@ -16,12 +16,15 @@ use std::{
     collections::{hash_map::Entry, VecDeque},
     fmt, iter, mem,
     sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
 };
 use tokio::{select, sync::mpsc, task};
 use tokio_stream::StreamExt;
 use tokio_util::time::{delay_queue, DelayQueue};
 use tracing::{instrument, Instrument, Span};
 use xxhash_rust::xxh3::Xxh3Default;
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Keeps track of in-flight requests. Falls back on another peer in case the request failed (due to
 /// error response, timeout or disconnection). Evenly distributes the requests between the peers
@@ -32,11 +35,14 @@ pub(super) struct RequestTracker {
 }
 
 impl RequestTracker {
-    // TODO: Make request timeout configurable
     pub fn new() -> Self {
         let (this, worker) = build();
         task::spawn(worker.run().instrument(Span::current()));
         this
+    }
+
+    pub fn set_timeout(&self, timeout: Duration) {
+        self.command_tx.send(Command::SetTimeout { timeout }).ok();
     }
 
     pub fn new_client(
@@ -252,6 +258,7 @@ struct Worker {
     clients: HashMap<ClientId, ClientState>,
     requests: Graph<RequestState>,
     timer: DelayQueue<(ClientId, MessageKey)>,
+    timeout: Duration,
 }
 
 impl Worker {
@@ -261,6 +268,7 @@ impl Worker {
             clients: HashMap::default(),
             requests: Graph::new(),
             timer: DelayQueue::new(),
+            timeout: DEFAULT_TIMEOUT,
         }
     }
 
@@ -305,6 +313,11 @@ impl Worker {
             }
             Command::RemoveClient { client_id } => {
                 self.remove_client(client_id);
+            }
+            Command::SetTimeout { timeout } => {
+                // Note: for simplicity, the new timeout is be applied to future requests only,
+                // not the ones that've been already scheduled.
+                self.timeout = timeout;
             }
             Command::HandleInitial { client_id, request } => {
                 self.handle_initial(client_id, request);
@@ -482,7 +495,7 @@ impl Worker {
 
         let sender_timer_key = self
             .timer
-            .insert((sender_client_id, request_key), REQUEST_TIMEOUT);
+            .insert((sender_client_id, request_key), self.timeout);
         sender_client_state
             .request_tx
             .send(node.request().clone())
@@ -585,7 +598,7 @@ impl Worker {
                     *node.value_mut() = match initial_state {
                         InitialRequestState::InFlight => {
                             let timer_key =
-                                self.timer.insert((client_id, request_key), REQUEST_TIMEOUT);
+                                self.timer.insert((client_id, request_key), self.timeout);
                             client_state.request_tx.send(node.request().clone()).ok();
 
                             RequestState::InFlight {
@@ -669,7 +682,7 @@ impl Worker {
                 let sender_client_id = next_client_id;
                 let sender_timer_key = self
                     .timer
-                    .insert((next_client_id, request_key), REQUEST_TIMEOUT);
+                    .insert((next_client_id, request_key), self.timeout);
                 let waiters = mem::take(waiters);
 
                 *state = RequestState::InFlight {
@@ -733,6 +746,9 @@ enum Command {
     },
     RemoveClient {
         client_id: ClientId,
+    },
+    SetTimeout {
+        timeout: Duration,
     },
     HandleInitial {
         client_id: ClientId,

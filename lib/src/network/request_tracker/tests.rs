@@ -185,7 +185,7 @@ async fn timeout() {
     );
 
     // Wait until the request timeout passes
-    time::timeout(REQUEST_TIMEOUT + Duration::from_millis(1), &mut work)
+    time::timeout(DEFAULT_TIMEOUT + Duration::from_millis(1), &mut work)
         .await
         .ok();
 
