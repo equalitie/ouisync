@@ -6,9 +6,9 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{fmt, hash::Hasher};
+use std::fmt;
 use thiserror::Error;
-use twox_hash::xxh3::{Hash128, HasherExt};
+use xxhash_rust::xxh3::Xxh3Default;
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
@@ -309,7 +309,7 @@ impl fmt::Debug for MultiBlockPresence {
 
 struct MultiBlockPresenceBuilder {
     state: BuilderState,
-    hasher: Hash128,
+    hasher: Xxh3Default,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -324,12 +324,12 @@ impl MultiBlockPresenceBuilder {
     fn new() -> Self {
         Self {
             state: BuilderState::Init,
-            hasher: Hash128::default(),
+            hasher: Xxh3Default::default(),
         }
     }
 
     fn update(&mut self, p: MultiBlockPresence) {
-        self.hasher.write(p.checksum());
+        self.hasher.update(p.checksum());
 
         self.state = match (self.state, p) {
             (BuilderState::Init, MultiBlockPresence::None) => BuilderState::None,
@@ -349,7 +349,7 @@ impl MultiBlockPresenceBuilder {
         match self.state {
             BuilderState::Init | BuilderState::None => MultiBlockPresence::None,
             BuilderState::Some => {
-                MultiBlockPresence::Some(clamp(self.hasher.finish_ext()).to_le_bytes())
+                MultiBlockPresence::Some(clamp(self.hasher.digest128()).to_le_bytes())
             }
             BuilderState::Full => MultiBlockPresence::Full,
         }

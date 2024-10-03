@@ -14,16 +14,14 @@ use crate::{
 };
 use std::{
     collections::{hash_map::Entry, VecDeque},
-    fmt,
-    hash::Hasher,
-    iter, mem,
+    fmt, iter, mem,
     sync::atomic::{AtomicUsize, Ordering},
 };
 use tokio::{select, sync::mpsc, task};
 use tokio_stream::StreamExt;
 use tokio_util::time::{delay_queue, DelayQueue};
 use tracing::{instrument, Instrument, Span};
-use twox_hash::xxh3::{Hash128, HasherExt};
+use xxhash_rust::xxh3::Xxh3Default;
 
 /// Keeps track of in-flight requests. Falls back on another peer in case the request failed (due to
 /// error response, timeout or disconnection). Evenly distributes the requests between the peers
@@ -186,25 +184,25 @@ impl CandidateRequest {
 }
 
 #[derive(Default, Clone, Copy, Eq, PartialEq, Hash)]
-pub(super) struct RequestVariant([u8; 16]);
+pub(super) struct RequestVariant(u128);
 
 impl RequestVariant {
     pub fn new(
         local_block_presence: MultiBlockPresence,
         remote_block_presence: MultiBlockPresence,
     ) -> Self {
-        let mut hasher = Hash128::default();
+        let mut hasher = Xxh3Default::default();
 
-        hasher.write(local_block_presence.checksum());
-        hasher.write(remote_block_presence.checksum());
+        hasher.update(local_block_presence.checksum());
+        hasher.update(remote_block_presence.checksum());
 
-        Self(hasher.finish_ext().to_le_bytes())
+        Self(hasher.digest128())
     }
 }
 
 impl fmt::Debug for RequestVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:<8x}", hex_fmt::HexFmt(&self.0))
+        write!(f, "{:<8x}", hex_fmt::HexFmt(&self.0.to_le_bytes()))
     }
 }
 
