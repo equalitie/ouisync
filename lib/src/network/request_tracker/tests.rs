@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use assert_matches::assert_matches;
+use metrics::NoopRecorder;
 use rand::{
     distributions::{Bernoulli, Distribution, Standard},
     rngs::StdRng,
@@ -39,7 +40,7 @@ async fn dynamic_swarm() {
             snapshot.blocks().len()
         );
 
-        let (tracker, mut tracker_worker) = build();
+        let (tracker, mut tracker_worker) = build(TrafficMonitor::new(&NoopRecorder));
 
         // Action to perform on the set of peers.
         #[derive(Debug)]
@@ -125,7 +126,7 @@ async fn missing_blocks() {
             "seed = {seed}, blocks = {num_blocks}/{max_blocks}, peers = {num_peers}/{max_peers}"
         );
 
-        let (tracker, mut tracker_worker) = build();
+        let (tracker, mut tracker_worker) = build(TrafficMonitor::new(&NoopRecorder));
         for snapshot in peer_snapshots {
             sim.insert_peer(&mut rng, &tracker, snapshot);
         }
@@ -148,7 +149,7 @@ async fn missing_blocks() {
 #[tokio::test(start_paused = true)]
 async fn timeout() {
     let mut rng = StdRng::seed_from_u64(0);
-    let (tracker, tracker_worker) = build();
+    let (tracker, tracker_worker) = build(TrafficMonitor::new(&NoopRecorder));
 
     let mut work = pin!(tracker_worker.run());
 
@@ -199,7 +200,7 @@ async fn timeout() {
 #[tokio::test]
 async fn drop_uncommitted_client() {
     let mut rng = StdRng::seed_from_u64(0);
-    let (tracker, mut tracker_worker) = build();
+    let (tracker, mut tracker_worker) = build(TrafficMonitor::new(&NoopRecorder));
 
     let (client_a, mut request_rx_a) = tracker.new_client();
     let (client_b, mut request_rx_b) = tracker.new_client();
@@ -251,7 +252,7 @@ async fn drop_uncommitted_client() {
 #[tokio::test]
 async fn multiple_responses_to_identical_requests() {
     let mut rng = StdRng::seed_from_u64(0);
-    let (tracker, mut worker) = build();
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
     let (client, mut request_rx) = tracker.new_client();
 
     let initial_request = Request::RootNode {
@@ -295,7 +296,7 @@ async fn multiple_responses_to_identical_requests() {
 #[tokio::test]
 async fn suspend_resume() {
     let mut rng = StdRng::seed_from_u64(0);
-    let (tracker, mut worker) = build();
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
 
     let (client, mut request_rx) = tracker.new_client();
     worker.step();

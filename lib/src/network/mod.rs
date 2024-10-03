@@ -356,7 +356,7 @@ impl Network {
         let pex = self.inner.pex_discovery.new_repository();
         pex.set_enabled(pex_enabled);
 
-        let request_tracker = RequestTracker::new();
+        let request_tracker = RequestTracker::new(handle.vault.monitor.traffic.clone());
         request_tracker.set_timeout(REQUEST_TIMEOUT);
 
         // TODO: This should be global, not per repo

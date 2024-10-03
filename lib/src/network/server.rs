@@ -92,7 +92,7 @@ impl Inner {
     }
 
     async fn handle_request(&self, request: Request) -> Result<()> {
-        self.vault.monitor.requests_received.increment(1);
+        self.vault.monitor.traffic.requests_received.increment(1);
 
         match request {
             Request::RootNode {
@@ -359,7 +359,7 @@ impl Inner {
 
     fn send_response(&self, response: Response) {
         if self.message_tx.send(Message::Response(response)).is_ok() {
-            self.vault.monitor.responses_sent.increment(1);
+            self.vault.monitor.traffic.responses_sent.increment(1);
         }
     }
 }

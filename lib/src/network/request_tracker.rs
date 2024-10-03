@@ -11,12 +11,13 @@ use crate::{
     collections::HashMap,
     crypto::{sign::PublicKey, Hash},
     protocol::{BlockId, MultiBlockPresence},
+    repository::monitor::{RequestEvent, RequestKind, TrafficMonitor},
 };
 use std::{
     collections::{hash_map::Entry, VecDeque},
     fmt, iter, mem,
     sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{select, sync::mpsc, task};
 use tokio_stream::StreamExt;
@@ -35,8 +36,8 @@ pub(super) struct RequestTracker {
 }
 
 impl RequestTracker {
-    pub fn new() -> Self {
-        let (this, worker) = build();
+    pub fn new(monitor: TrafficMonitor) -> Self {
+        let (this, worker) = build(monitor);
         task::spawn(worker.run().instrument(Span::current()));
         this
     }
@@ -236,6 +237,15 @@ pub(super) enum MessageKey {
     Block(BlockId),
 }
 
+impl MessageKey {
+    pub fn kind(&self) -> RequestKind {
+        match self {
+            Self::RootNode(..) | Self::ChildNodes(..) => RequestKind::Index,
+            Self::Block(..) => RequestKind::Block,
+        }
+    }
+}
+
 impl<'a> From<&'a Request> for MessageKey {
     fn from(request: &'a Request) -> Self {
         match request {
@@ -248,9 +258,12 @@ impl<'a> From<&'a Request> for MessageKey {
     }
 }
 
-fn build() -> (RequestTracker, Worker) {
+fn build(monitor: TrafficMonitor) -> (RequestTracker, Worker) {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
-    (RequestTracker { command_tx }, Worker::new(command_rx))
+    (
+        RequestTracker { command_tx },
+        Worker::new(command_rx, monitor),
+    )
 }
 
 struct Worker {
@@ -259,16 +272,18 @@ struct Worker {
     requests: Graph<RequestState>,
     timer: DelayQueue<(ClientId, MessageKey)>,
     timeout: Duration,
+    monitor: TrafficMonitor,
 }
 
 impl Worker {
-    fn new(command_rx: mpsc::UnboundedReceiver<Command>) -> Self {
+    fn new(command_rx: mpsc::UnboundedReceiver<Command>, monitor: TrafficMonitor) -> Self {
         Self {
             command_rx,
             clients: HashMap::default(),
             requests: Graph::new(),
             timer: DelayQueue::new(),
             timeout: DEFAULT_TIMEOUT,
+            monitor,
         }
     }
 
@@ -365,7 +380,7 @@ impl Worker {
         };
 
         for (_, node_key) in client_state.requests {
-            self.cancel_request(client_id, node_key);
+            self.cancel_request(client_id, node_key, None);
         }
     }
 
@@ -400,9 +415,18 @@ impl Worker {
                 RequestState::InFlight {
                     sender_client_id,
                     sender_timer_key,
+                    sent_at,
                     waiters,
                 } if *sender_client_id == client_id => {
                     self.timer.try_remove(sender_timer_key);
+
+                    self.monitor.record(
+                        RequestEvent::Success {
+                            rtt: sent_at.elapsed(),
+                        },
+                        request_key.kind(),
+                    );
+
                     Some(mem::take(waiters))
                 }
                 RequestState::InFlight { .. }
@@ -466,7 +490,7 @@ impl Worker {
             return;
         };
 
-        self.cancel_request(client_id, node_key);
+        self.cancel_request(client_id, node_key, Some(reason));
     }
 
     #[instrument(skip(self))]
@@ -504,8 +528,11 @@ impl Worker {
         *node.value_mut() = RequestState::InFlight {
             sender_client_id,
             sender_timer_key,
+            sent_at: Instant::now(),
             waiters,
         };
+
+        self.monitor.record(RequestEvent::Send, request_key.kind());
     }
 
     #[instrument(skip(self))]
@@ -601,9 +628,12 @@ impl Worker {
                                 self.timer.insert((client_id, request_key), self.timeout);
                             client_state.request_tx.send(node.request().clone()).ok();
 
+                            self.monitor.record(RequestEvent::Send, request_key.kind());
+
                             RequestState::InFlight {
                                 sender_client_id: client_id,
                                 sender_timer_key: timer_key,
+                                sent_at: Instant::now(),
                                 waiters: VecDeque::new(),
                             }
                         }
@@ -626,12 +656,18 @@ impl Worker {
         }
     }
 
-    fn cancel_request(&mut self, client_id: ClientId, node_key: GraphKey) {
+    fn cancel_request(
+        &mut self,
+        client_id: ClientId,
+        node_key: GraphKey,
+        failure_reason: Option<FailureReason>,
+    ) {
         let Some(node) = self.requests.get_mut(node_key) else {
             return;
         };
 
         let (request, state) = node.parts_mut();
+        let request_key = MessageKey::from(&request.payload);
 
         let waiters = match state {
             RequestState::Suspended { waiters } => {
@@ -646,10 +682,23 @@ impl Worker {
             RequestState::InFlight {
                 sender_client_id,
                 sender_timer_key,
+                sent_at,
                 waiters,
             } => {
                 if *sender_client_id == client_id {
                     self.timer.try_remove(sender_timer_key);
+
+                    self.monitor.record(
+                        match failure_reason {
+                            Some(FailureReason::Response) => RequestEvent::Failure {
+                                rtt: sent_at.elapsed(),
+                            },
+                            Some(FailureReason::Timeout) => RequestEvent::Timeout,
+                            None => RequestEvent::Cancel,
+                        },
+                        request_key.kind(),
+                    );
+
                     Some(waiters)
                 } else {
                     remove_from_queue(waiters, &client_id);
@@ -670,8 +719,6 @@ impl Worker {
             RequestState::Committed | RequestState::Cancelled => return,
         };
 
-        let request_key = MessageKey::from(&request.payload);
-
         // Find next waiting client
         if let Some(waiters) = waiters {
             let next_client = iter::from_fn(|| waiters.pop_front())
@@ -685,13 +732,16 @@ impl Worker {
                     .insert((next_client_id, request_key), self.timeout);
                 let waiters = mem::take(waiters);
 
+                next_client_state.request_tx.send(request.clone()).ok();
+
                 *state = RequestState::InFlight {
                     sender_client_id,
                     sender_timer_key,
+                    sent_at: Instant::now(),
                     waiters,
                 };
 
-                next_client_state.request_tx.send(request.clone()).ok();
+                self.monitor.record(RequestEvent::Send, request_key.kind());
 
                 return;
             }
@@ -796,6 +846,8 @@ enum RequestState {
         sender_client_id: ClientId,
         /// Timeout key for the request
         sender_timer_key: delay_queue::Key,
+        /// When was the request sent.
+        sent_at: Instant,
         /// Other clients interested in sending this request. If the current client fails or
         /// timeouts, a new one will be picked from this list.
         waiters: VecDeque<ClientId>,

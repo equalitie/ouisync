@@ -109,7 +109,7 @@ impl Inner {
 
         loop {
             for response in recv_iter(rx).await {
-                self.vault.monitor.responses_received.increment(1);
+                self.vault.monitor.traffic.responses_received.increment(1);
 
                 match response {
                     Response::RootNode {
@@ -592,7 +592,7 @@ mod tests {
         db,
         event::EventSender,
         protocol::{Proof, RepositoryId, EMPTY_INNER_HASH},
-        repository::RepositoryMonitor,
+        repository::monitor::RepositoryMonitor,
         version_vector::VersionVector,
     };
     use futures_util::TryStreamExt;
@@ -676,17 +676,14 @@ mod tests {
 
         let secrets = WriteSecrets::random();
         let repository_id = RepositoryId::from(secrets.write_keys.public_key());
+        let monitor = RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder);
+        let traffic_monitor = monitor.traffic.clone();
 
-        let vault = Vault::new(
-            repository_id,
-            EventSender::new(1),
-            pool,
-            RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
-        );
+        let vault = Vault::new(repository_id, EventSender::new(1), pool, monitor);
 
         vault.block_tracker.set_request_mode(BlockRequestMode::Lazy);
 
-        let request_tracker = RequestTracker::new();
+        let request_tracker = RequestTracker::new(traffic_monitor);
         let (request_tracker, _request_rx) = request_tracker.new_client();
         let (block_tracker, _block_rx) = vault.block_tracker.new_client();
 

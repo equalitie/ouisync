@@ -12,7 +12,7 @@ use crate::{
     protocol::{
         test_utils::Snapshot, Block, BlockId, Bump, RepositoryId, RootNode, SingleBlockPresence,
     },
-    repository::{RepositoryMonitor, Vault},
+    repository::{monitor::RepositoryMonitor, Vault},
     store::{Changeset, SnapshotWriter},
     test_utils,
     version_vector::VersionVector,
@@ -393,18 +393,14 @@ async fn create_repository<R: Rng + CryptoRng>(
     write_keys: &Keypair,
 ) -> (TempDir, Vault, RequestTracker, Arc<Semaphore>, PublicKey) {
     let (base_dir, db) = db::create_temp().await.unwrap();
+
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public_key());
     let event_tx = EventSender::new(1);
-
-    let state = Vault::new(
-        repository_id,
-        event_tx,
-        db,
-        RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder),
-    );
-
-    let request_tracker = RequestTracker::new();
+    let monitor = RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder);
+    let traffic_monitor = monitor.traffic.clone();
+    let state = Vault::new(repository_id, event_tx, db, monitor);
+    let request_tracker = RequestTracker::new(traffic_monitor);
     let response_limiter = Arc::new(Semaphore::new(MAX_UNCHOKED_COUNT));
 
     (

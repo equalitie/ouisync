@@ -1,6 +1,7 @@
+pub(crate) mod monitor;
+
 mod credentials;
 mod metadata;
-mod monitor;
 mod params;
 mod vault;
 mod worker;
@@ -12,10 +13,10 @@ pub use self::{credentials::Credentials, metadata::Metadata, params::RepositoryP
 
 pub(crate) use self::{
     metadata::{data_version, quota},
-    monitor::RepositoryMonitor,
     vault::Vault,
 };
 
+use self::monitor::RepositoryMonitor;
 use crate::{
     access_control::{Access, AccessChange, AccessKeys, AccessMode, AccessSecrets, LocalSecret},
     block_tracker::BlockRequestMode,
