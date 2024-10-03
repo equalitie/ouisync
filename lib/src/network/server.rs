@@ -1,7 +1,7 @@
 use super::{
     constants::{INTEREST_TIMEOUT, MAX_UNCHOKED_DURATION},
     debug_payload::{DebugRequest, DebugResponse},
-    message::{Message, Request, Response, ResponseDisambiguator},
+    message::{Message, Request, Response},
 };
 use crate::{
     crypto::{sign::PublicKey, Hash},
@@ -100,9 +100,7 @@ impl Inner {
                 cookie,
                 debug,
             } => self.handle_root_node(writer_id, cookie, debug).await,
-            Request::ChildNodes(hash, disambiguator, debug) => {
-                self.handle_child_nodes(hash, disambiguator, debug).await
-            }
+            Request::ChildNodes(hash, debug) => self.handle_child_nodes(hash, debug).await,
             Request::Block(block_id, debug) => self.handle_block(block_id, debug).await,
         }
     }
@@ -159,12 +157,7 @@ impl Inner {
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_child_nodes(
-        &self,
-        parent_hash: Hash,
-        disambiguator: ResponseDisambiguator,
-        debug: DebugRequest,
-    ) -> Result<()> {
+    async fn handle_child_nodes(&self, parent_hash: Hash, debug: DebugRequest) -> Result<()> {
         let mut reader = self.vault.store().acquire_read().await?;
 
         // At most one of these will be non-empty.
@@ -176,31 +169,19 @@ impl Inner {
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
-                self.enqueue_response(Response::InnerNodes(
-                    inner_nodes,
-                    disambiguator,
-                    debug.reply(),
-                ))
-                .await;
+                self.enqueue_response(Response::InnerNodes(inner_nodes, debug.reply()))
+                    .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
-                self.enqueue_response(Response::LeafNodes(
-                    leaf_nodes,
-                    disambiguator,
-                    debug.reply(),
-                ))
-                .await;
+                self.enqueue_response(Response::LeafNodes(leaf_nodes, debug.reply()))
+                    .await;
             }
         } else {
             tracing::trace!("child nodes not found");
-            self.enqueue_response(Response::ChildNodesError(
-                parent_hash,
-                disambiguator,
-                debug.reply(),
-            ))
-            .await;
+            self.enqueue_response(Response::ChildNodesError(parent_hash, debug.reply()))
+                .await;
         }
 
         Ok(())

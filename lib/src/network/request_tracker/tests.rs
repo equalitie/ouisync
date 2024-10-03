@@ -1,6 +1,6 @@
 use super::{simulation::Simulation, *};
 use crate::{
-    network::{debug_payload::DebugRequest, message::ResponseDisambiguator},
+    network::debug_payload::DebugRequest,
     protocol::{
         test_utils::{BlockState, Snapshot},
         Block,
@@ -156,11 +156,7 @@ async fn timeout() {
     let (client_b, mut request_rx_b) = tracker.new_client();
 
     let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng), 0);
-    let request = Request::ChildNodes(
-        rng.gen(),
-        ResponseDisambiguator::new(MultiBlockPresence::Full),
-        DebugRequest::start(),
-    );
+    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
 
     // Register the request with both clients.
     client_a.success(
@@ -209,11 +205,7 @@ async fn drop_uncommitted_client() {
     let (client_b, mut request_rx_b) = tracker.new_client();
 
     let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng), 0);
-    let request = Request::ChildNodes(
-        rng.gen(),
-        ResponseDisambiguator::new(MultiBlockPresence::Full),
-        DebugRequest::start(),
-    );
+    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
     let request_key = MessageKey::from(&request);
 
     for client in [&client_a, &client_b] {
@@ -267,11 +259,7 @@ async fn multiple_responses_to_identical_requests() {
         cookie: 0,
         debug: DebugRequest::start(),
     };
-    let followup_request = Request::ChildNodes(
-        rng.gen(),
-        ResponseDisambiguator::new(MultiBlockPresence::Full),
-        DebugRequest::start(),
-    );
+    let followup_request = Request::ChildNodes(rng.gen(), DebugRequest::start());
 
     // Send initial root node request
     client.initial(CandidateRequest::new(initial_request.clone()));

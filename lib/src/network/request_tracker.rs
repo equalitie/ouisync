@@ -236,7 +236,7 @@ impl<'a> From<&'a Request> for MessageKey {
             Request::RootNode {
                 writer_id, cookie, ..
             } => MessageKey::RootNode(*writer_id, *cookie),
-            Request::ChildNodes(hash, _, _) => MessageKey::ChildNodes(*hash),
+            Request::ChildNodes(hash, _) => MessageKey::ChildNodes(*hash),
             Request::Block(block_id, _) => MessageKey::Block(*block_id),
         }
     }

@@ -23,21 +23,9 @@ pub(crate) enum Request {
         debug: DebugRequest,
     },
     /// Request child nodes of the given parent node.
-    ChildNodes(Hash, ResponseDisambiguator, DebugRequest),
+    ChildNodes(Hash, DebugRequest),
     /// Request block with the given id.
     Block(BlockId, DebugRequest),
-}
-
-/// ResponseDisambiguator is used to uniquelly assign a response to a request.
-/// What we want to avoid is that an outdated response clears out a newer pending request.
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
-#[serde(transparent)]
-pub(crate) struct ResponseDisambiguator(MultiBlockPresence);
-
-impl ResponseDisambiguator {
-    pub fn new(multi_block_presence: MultiBlockPresence) -> Self {
-        Self(multi_block_presence)
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -60,11 +48,11 @@ pub(crate) enum Response {
         debug: DebugResponse,
     },
     /// Send inner nodes.
-    InnerNodes(InnerNodes, ResponseDisambiguator, DebugResponse),
+    InnerNodes(InnerNodes, DebugResponse),
     /// Send leaf nodes.
-    LeafNodes(LeafNodes, ResponseDisambiguator, DebugResponse),
+    LeafNodes(LeafNodes, DebugResponse),
     /// Send that a ChildNodes request failed
-    ChildNodesError(Hash, ResponseDisambiguator, DebugResponse),
+    ChildNodesError(Hash, DebugResponse),
     /// Send a notification that a block became available on this replica.
     /// NOTE: This is always unsolicited - the server sends it on its own when it detects a newly
     /// received block.

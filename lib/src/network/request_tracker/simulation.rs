@@ -1,5 +1,5 @@
 use super::{
-    super::message::{Request, Response, ResponseDisambiguator},
+    super::message::{Request, Response},
     CandidateRequest, MessageKey, PendingRequest, RequestTracker, RequestTrackerClient,
     RequestVariant,
 };
@@ -114,7 +114,7 @@ impl Simulation {
                             Response::RootNodeError {
                                 writer_id, cookie, ..
                             } => Some(MessageKey::RootNode(writer_id, cookie)),
-                            Response::ChildNodesError(hash, _, _) => {
+                            Response::ChildNodesError(hash, _) => {
                                 Some(MessageKey::ChildNodes(hash))
                             }
                             Response::BlockError(block_id, _) => Some(MessageKey::Block(block_id)),
@@ -195,15 +195,11 @@ impl TestClient {
                 let requests = snapshot
                     .insert_root(proof.hash, block_presence)
                     .then_some(
-                        CandidateRequest::new(Request::ChildNodes(
-                            proof.hash,
-                            ResponseDisambiguator::new(block_presence),
-                            debug.follow_up(),
-                        ))
-                        .variant(RequestVariant::new(
-                            MultiBlockPresence::None,
-                            block_presence,
-                        )),
+                        CandidateRequest::new(Request::ChildNodes(proof.hash, debug.follow_up()))
+                            .variant(RequestVariant::new(
+                                MultiBlockPresence::None,
+                                block_presence,
+                            )),
                     )
                     .into_iter()
                     .collect();
@@ -211,7 +207,7 @@ impl TestClient {
                 self.tracker_client
                     .success(MessageKey::RootNode(proof.writer_id, cookie), requests);
             }
-            Response::InnerNodes(nodes, _disambiguator, debug_payload) => {
+            Response::InnerNodes(nodes, debug_payload) => {
                 let parent_hash = nodes.hash();
                 let nodes = snapshot.insert_inners(nodes);
 
@@ -220,7 +216,6 @@ impl TestClient {
                     .map(|(_, node)| {
                         CandidateRequest::new(Request::ChildNodes(
                             node.hash,
-                            ResponseDisambiguator::new(node.summary.block_presence),
                             debug_payload.follow_up(),
                         ))
                         .variant(RequestVariant::new(
@@ -233,7 +228,7 @@ impl TestClient {
                 self.tracker_client
                     .success(MessageKey::ChildNodes(parent_hash), requests);
             }
-            Response::LeafNodes(nodes, _disambiguator, debug_payload) => {
+            Response::LeafNodes(nodes, debug_payload) => {
                 let parent_hash = nodes.hash();
                 let nodes = snapshot.insert_leaves(nodes);
                 let requests = nodes
@@ -264,7 +259,7 @@ impl TestClient {
                 self.tracker_client
                     .failure(MessageKey::RootNode(writer_id, cookie));
             }
-            Response::ChildNodesError(hash, _disambiguator, _debug_payload) => {
+            Response::ChildNodesError(hash, _debug_payload) => {
                 self.tracker_client.failure(MessageKey::ChildNodes(hash));
             }
             Response::BlockError(block_id, _debug_payload) => {
@@ -344,25 +339,16 @@ impl TestServer {
                     });
                 }
             }
-            Request::ChildNodes(hash, disambiguator, debug_payload) => {
+            Request::ChildNodes(hash, debug_payload) => {
                 if let Some(nodes) = self.snapshot.get_inner_set(&hash) {
-                    self.outbox.push_back(Response::InnerNodes(
-                        nodes.clone(),
-                        disambiguator,
-                        debug_payload.reply(),
-                    ));
+                    self.outbox
+                        .push_back(Response::InnerNodes(nodes.clone(), debug_payload.reply()));
                 } else if let Some(nodes) = self.snapshot.get_leaf_set(&hash) {
-                    self.outbox.push_back(Response::LeafNodes(
-                        nodes.clone(),
-                        disambiguator,
-                        debug_payload.reply(),
-                    ));
+                    self.outbox
+                        .push_back(Response::LeafNodes(nodes.clone(), debug_payload.reply()));
                 } else {
-                    self.outbox.push_back(Response::ChildNodesError(
-                        hash,
-                        disambiguator,
-                        debug_payload.reply(),
-                    ));
+                    self.outbox
+                        .push_back(Response::ChildNodesError(hash, debug_payload.reply()));
                 }
             }
             Request::Block(block_id, debug_payload) => {

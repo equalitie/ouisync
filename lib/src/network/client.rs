@@ -1,7 +1,7 @@
 use super::{
     constants::RESPONSE_BATCH_SIZE,
     debug_payload::{DebugRequest, DebugResponse},
-    message::{Message, Response, ResponseDisambiguator},
+    message::{Message, Response},
     request_tracker::{PendingRequest, RequestTracker, RequestTrackerClient},
 };
 use crate::{
@@ -125,10 +125,10 @@ impl Inner {
                             debug,
                         });
                     }
-                    Response::InnerNodes(nodes, _, debug) => {
+                    Response::InnerNodes(nodes, debug) => {
                         persistable.push(PersistableResponse::InnerNodes(nodes.into(), debug));
                     }
-                    Response::LeafNodes(nodes, _, debug) => {
+                    Response::LeafNodes(nodes, debug) => {
                         persistable.push(PersistableResponse::LeafNodes(nodes.into(), debug));
                     }
                     Response::Block(block_content, block_nonce, debug) => {
@@ -146,7 +146,7 @@ impl Inner {
                         self.request_tracker
                             .failure(MessageKey::RootNode(writer_id, cookie));
                     }
-                    Response::ChildNodesError(hash, _, _) => {
+                    Response::ChildNodesError(hash, _) => {
                         self.request_tracker.failure(MessageKey::ChildNodes(hash));
                     }
                     Response::BlockError(block_id, _) => {
@@ -272,12 +272,8 @@ impl Inner {
             status
                 .request_children()
                 .map(|local_block_presence| {
-                    CandidateRequest::new(Request::ChildNodes(
-                        hash,
-                        ResponseDisambiguator::new(block_presence),
-                        debug_payload.follow_up(),
-                    ))
-                    .variant(RequestVariant::new(local_block_presence, block_presence))
+                    CandidateRequest::new(Request::ChildNodes(hash, debug_payload.follow_up()))
+                        .variant(RequestVariant::new(local_block_presence, block_presence))
                 })
                 .into_iter()
                 .collect(),
@@ -306,7 +302,6 @@ impl Inner {
                 .map(|status| {
                     CandidateRequest::new(Request::ChildNodes(
                         status.hash,
-                        ResponseDisambiguator::new(status.remote_block_presence),
                         debug_payload.follow_up(),
                     ))
                     .variant(RequestVariant::new(
