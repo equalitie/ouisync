@@ -1,15 +1,14 @@
-use super::{MessageKey, PendingRequest};
+use super::{MessageKey, PendingRequest, RequestVariant};
 use crate::{
     collections::{HashMap, HashSet},
     network::message::Request,
-    protocol::MultiBlockPresence,
 };
 use slab::Slab;
 use std::collections::hash_map::Entry;
 
 /// DAG for storing data for the request tracker.
 pub(super) struct Graph<T> {
-    index: HashMap<(MessageKey, MultiBlockPresence), Key>,
+    index: HashMap<(MessageKey, RequestVariant), Key>,
     nodes: Slab<Node<T>>,
 }
 
@@ -29,7 +28,7 @@ impl<T> Graph<T> {
     ) -> Key {
         let node_key = match self
             .index
-            .entry((MessageKey::from(&request.request), request.block_presence))
+            .entry((MessageKey::from(&request.payload), request.variant))
         {
             Entry::Occupied(entry) => {
                 self.nodes
@@ -73,23 +72,19 @@ impl<T> Graph<T> {
     }
 
     #[expect(unused)]
-    pub fn lookup(
-        &self,
-        request_key: MessageKey,
-        block_presence: MultiBlockPresence,
-    ) -> Option<&Node<T>> {
+    pub fn lookup(&self, request_key: MessageKey, variant: RequestVariant) -> Option<&Node<T>> {
         self.index
-            .get(&(request_key, block_presence))
+            .get(&(request_key, variant))
             .and_then(|key| self.nodes.get(key.0))
     }
 
     pub fn lookup_mut(
         &mut self,
         request_key: MessageKey,
-        block_presence: MultiBlockPresence,
+        variant: RequestVariant,
     ) -> Option<&mut Node<T>> {
         self.index
-            .get(&(request_key, block_presence))
+            .get(&(request_key, variant))
             .and_then(|key| self.nodes.get_mut(key.0))
     }
 
@@ -97,8 +92,8 @@ impl<T> Graph<T> {
         let node = self.nodes.try_remove(key.0)?;
 
         self.index.remove(&(
-            MessageKey::from(&node.request.request),
-            node.request.block_presence,
+            MessageKey::from(&node.request.payload),
+            node.request.variant,
         ));
 
         for parent_key in &node.parents {
@@ -122,7 +117,7 @@ impl<T> Graph<T> {
 
     #[cfg_attr(not(test), expect(dead_code))]
     pub fn requests(&self) -> impl ExactSizeIterator<Item = &Request> {
-        self.nodes.iter().map(|(_, node)| &node.request.request)
+        self.nodes.iter().map(|(_, node)| &node.request.payload)
     }
 }
 
@@ -165,7 +160,10 @@ impl<T> Node<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::{debug_payload::DebugRequest, message::ResponseDisambiguator};
+    use crate::{
+        network::{debug_payload::DebugRequest, message::ResponseDisambiguator},
+        protocol::MultiBlockPresence,
+    };
     use rand::Rng;
 
     #[test]
@@ -183,8 +181,8 @@ mod tests {
 
         let parent_node_key = graph.get_or_insert(
             PendingRequest {
-                request: parent_request.clone(),
-                block_presence: MultiBlockPresence::Full,
+                payload: parent_request.clone(),
+                variant: RequestVariant::default(),
             },
             None,
             1,
@@ -198,7 +196,7 @@ mod tests {
 
         assert_eq!(*node.value(), 1);
         assert_eq!(node.children().len(), 0);
-        assert_eq!(node.request().request, parent_request);
+        assert_eq!(node.request().payload, parent_request);
 
         let child_request = Request::ChildNodes(
             rng.gen(),
@@ -208,8 +206,8 @@ mod tests {
 
         let child_node_key = graph.get_or_insert(
             PendingRequest {
-                request: child_request.clone(),
-                block_presence: MultiBlockPresence::Full,
+                payload: child_request.clone(),
+                variant: RequestVariant::default(),
             },
             Some(parent_node_key),
             2,
@@ -223,7 +221,7 @@ mod tests {
 
         assert_eq!(*node.value(), 2);
         assert_eq!(node.children().len(), 0);
-        assert_eq!(node.request().request, child_request);
+        assert_eq!(node.request().payload, child_request);
 
         assert_eq!(
             graph
@@ -254,8 +252,8 @@ mod tests {
 
         let node_key0 = graph.get_or_insert(
             PendingRequest {
-                request: request.clone(),
-                block_presence: MultiBlockPresence::Full,
+                payload: request.clone(),
+                variant: RequestVariant::default(),
             },
             None,
             1,
@@ -264,8 +262,8 @@ mod tests {
 
         let node_key1 = graph.get_or_insert(
             PendingRequest {
-                request,
-                block_presence: MultiBlockPresence::Full,
+                payload: request,
+                variant: RequestVariant::default(),
             },
             None,
             1,
@@ -282,21 +280,21 @@ mod tests {
         let hash = rng.gen();
 
         let parent_request_0 = PendingRequest {
-            request: Request::ChildNodes(
+            payload: Request::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(MultiBlockPresence::None),
                 DebugRequest::start(),
             ),
-            block_presence: MultiBlockPresence::None,
+            variant: RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::None),
         };
 
         let parent_request_1 = PendingRequest {
-            request: Request::ChildNodes(
+            payload: Request::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(MultiBlockPresence::Full),
                 DebugRequest::start(),
             ),
-            block_presence: MultiBlockPresence::Full,
+            variant: RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::Full),
         };
 
         let child_request = Request::Block(rng.gen(), DebugRequest::start());
@@ -306,8 +304,8 @@ mod tests {
 
         let child_key_0 = graph.get_or_insert(
             PendingRequest {
-                request: child_request.clone(),
-                block_presence: MultiBlockPresence::None,
+                payload: child_request.clone(),
+                variant: RequestVariant::default(),
             },
             Some(parent_key_0),
             2,
@@ -315,8 +313,8 @@ mod tests {
 
         let child_key_1 = graph.get_or_insert(
             PendingRequest {
-                request: child_request,
-                block_presence: MultiBlockPresence::None,
+                payload: child_request,
+                variant: RequestVariant::default(),
             },
             Some(parent_key_1),
             2,
@@ -373,30 +371,30 @@ mod tests {
         let mut graph = Graph::new();
 
         let parent_request = PendingRequest {
-            request: Request::ChildNodes(
+            payload: Request::ChildNodes(
                 rng.gen(),
                 ResponseDisambiguator::new(MultiBlockPresence::Full),
                 DebugRequest::start(),
             ),
-            block_presence: MultiBlockPresence::Full,
+            variant: RequestVariant::default(),
         };
 
         let child_request_0 = PendingRequest {
-            request: Request::ChildNodes(
+            payload: Request::ChildNodes(
                 rng.gen(),
                 ResponseDisambiguator::new(MultiBlockPresence::Full),
                 DebugRequest::start(),
             ),
-            block_presence: MultiBlockPresence::Full,
+            variant: RequestVariant::default(),
         };
 
         let child_request_1 = PendingRequest {
-            request: Request::ChildNodes(
+            payload: Request::ChildNodes(
                 rng.gen(),
                 ResponseDisambiguator::new(MultiBlockPresence::Full),
                 DebugRequest::start(),
             ),
-            block_presence: MultiBlockPresence::Full,
+            variant: RequestVariant::default(),
         };
 
         let parent_key = graph.get_or_insert(parent_request, None, 0);

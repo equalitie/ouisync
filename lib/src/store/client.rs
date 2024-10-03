@@ -15,7 +15,7 @@ use crate::{
     db,
     future::TryStreamExt as _,
     protocol::{
-        Block, BlockId, InnerNode, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, Proof,
+        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, Proof,
         RootNodeFilter, SingleBlockPresence, Summary,
     },
     repository, StorageSize,
@@ -78,14 +78,14 @@ impl ClientWriter {
     pub async fn save_inner_nodes(
         &mut self,
         nodes: CacheHash<InnerNodes>,
-    ) -> Result<InnerNodesStatus, Error> {
+    ) -> Result<Vec<InnerNodeStatus>, Error> {
         let parent_hash = nodes.hash();
 
         if !index::parent_exists(&mut self.db, &parent_hash).await? {
-            return Ok(InnerNodesStatus::default());
+            return Ok(Vec::new());
         }
 
-        let mut new_children = Vec::with_capacity(nodes.len());
+        let mut statuses = Vec::with_capacity(nodes.len());
         let nodes = nodes.into_inner();
 
         for (_, remote_node) in &nodes {
@@ -95,12 +95,16 @@ impl ClientWriter {
             }
 
             let local_node = inner_node::load(&mut self.db, &remote_node.hash).await?;
+            let local_node_summary = local_node
+                .map(|node| node.summary)
+                .unwrap_or(Summary::INCOMPLETE);
 
-            if local_node
-                .map(|local_node| local_node.summary.is_outdated(&remote_node.summary))
-                .unwrap_or(true)
-            {
-                new_children.push(*remote_node);
+            if local_node_summary.is_outdated(&remote_node.summary) {
+                statuses.push(InnerNodeStatus {
+                    hash: remote_node.hash,
+                    local_block_presence: local_node_summary.block_presence,
+                    remote_block_presence: remote_node.summary.block_presence,
+                });
             }
         }
 
@@ -111,7 +115,7 @@ impl ClientWriter {
             self.summary_updates.push(parent_hash);
         }
 
-        Ok(InnerNodesStatus { new_children })
+        Ok(statuses)
     }
 
     pub async fn save_leaf_nodes(
@@ -349,10 +353,10 @@ impl ClientReader {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct InnerNodesStatus {
-    /// Which of the received nodes should we request the children of.
-    pub new_children: Vec<InnerNode>,
+pub(crate) struct InnerNodeStatus {
+    pub hash: Hash,
+    pub local_block_presence: MultiBlockPresence,
+    pub remote_block_presence: MultiBlockPresence,
 }
 
 #[derive(Default)]
@@ -835,11 +839,11 @@ mod tests {
         // Try to save the inner nodes
         let (hash, inner_nodes) = snapshot.inner_sets().next().unwrap();
         let mut writer = store.begin_client_write().await.unwrap();
-        let status = writer
+        let statuses = writer
             .save_inner_nodes(inner_nodes.clone().into())
             .await
             .unwrap();
-        assert!(status.new_children.is_empty());
+        assert!(statuses.is_empty());
         writer.commit().await.unwrap();
 
         // The orphaned inner nodes were not written to the db.

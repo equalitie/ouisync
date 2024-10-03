@@ -11,7 +11,7 @@ use crate::{
     event::Payload,
     network::{
         message::Request,
-        request_tracker::{CandidateRequest, MessageKey},
+        request_tracker::{CandidateRequest, MessageKey, RequestVariant},
     },
     protocol::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, ProofError,
@@ -98,8 +98,8 @@ impl Inner {
     }
 
     async fn send_requests(&self, request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>) {
-        while let Some(PendingRequest { request, .. }) = request_rx.recv().await {
-            self.message_tx.send(Message::Request(request)).ok();
+        while let Some(PendingRequest { payload, .. }) = request_rx.recv().await {
+            self.message_tx.send(Message::Request(payload)).ok();
         }
     }
 
@@ -256,14 +256,14 @@ impl Inner {
             MessageKey::RootNode(writer_id),
             status
                 .request_children()
-                .then_some(
+                .map(|local_block_presence| {
                     CandidateRequest::new(Request::ChildNodes(
                         hash,
                         ResponseDisambiguator::new(block_presence),
                         debug_payload.follow_up(),
                     ))
-                    .follow_up(block_presence),
-                )
+                    .variant(RequestVariant::new(local_block_presence, block_presence))
+                })
                 .into_iter()
                 .collect(),
         );
@@ -280,26 +280,24 @@ impl Inner {
     ) -> Result<()> {
         let hash = nodes.hash();
         let total = nodes.len();
-        let status = writer.save_inner_nodes(nodes).await?;
+        let statuses = writer.save_inner_nodes(nodes).await?;
 
-        tracing::trace!(
-            "Received {}/{} inner nodes",
-            status.new_children.len(),
-            total
-        );
+        tracing::trace!("Received {}/{} inner nodes", statuses.len(), total);
 
         self.request_tracker.success(
             MessageKey::ChildNodes(hash),
-            status
-                .new_children
+            statuses
                 .into_iter()
-                .map(|node| {
+                .map(|status| {
                     CandidateRequest::new(Request::ChildNodes(
-                        node.hash,
-                        ResponseDisambiguator::new(node.summary.block_presence),
+                        status.hash,
+                        ResponseDisambiguator::new(status.remote_block_presence),
                         debug_payload.follow_up(),
                     ))
-                    .follow_up(node.summary.block_presence)
+                    .variant(RequestVariant::new(
+                        status.local_block_presence,
+                        status.remote_block_presence,
+                    ))
                 })
                 .collect(),
         );
@@ -440,7 +438,7 @@ impl Inner {
     async fn request_blocks(&self, block_rx: &mut mpsc::UnboundedReceiver<BlockId>) {
         while let Some(block_id) = block_rx.recv().await {
             self.request_tracker
-                .resume(MessageKey::Block(block_id), MultiBlockPresence::None);
+                .resume(MessageKey::Block(block_id), RequestVariant::default());
         }
     }
 

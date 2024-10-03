@@ -970,7 +970,7 @@ fn redownload_expired_blocks() {
     let (finish_origin_tx, mut finish_origin_rx) = mpsc::channel(1);
     let (finish_cache_tx, mut finish_cache_rx) = mpsc::channel(1);
 
-    let test_content = Arc::new(common::random_bytes(2 * 1024 * 1024));
+    let test_content = Arc::new(common::random_bytes(8 * BLOCK_SIZE - BLOB_HEADER_SIZE));
 
     // Wait until the number of blocks is the `expected`.
     //
@@ -982,7 +982,8 @@ fn redownload_expired_blocks() {
             .with_max_interval(Duration::from_millis(500))
             .with_randomization_factor(0.0)
             .with_multiplier(2.0)
-            .with_max_elapsed_time(Some(Duration::from_secs(60)))
+            // .with_max_elapsed_time(Some(Duration::from_secs(60)))
+            .with_max_elapsed_time(Some(Duration::from_secs(10)))
             .build();
 
         loop {

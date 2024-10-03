@@ -165,12 +165,12 @@ async fn timeout() {
     // Register the request with both clients.
     client_a.success(
         preceding_request_key,
-        vec![CandidateRequest::new(request.clone()).follow_up(MultiBlockPresence::Full)],
+        vec![CandidateRequest::new(request.clone())],
     );
 
     client_b.success(
         preceding_request_key,
-        vec![CandidateRequest::new(request.clone()).follow_up(MultiBlockPresence::Full)],
+        vec![CandidateRequest::new(request.clone())],
     );
 
     time::timeout(Duration::from_millis(1), &mut work)
@@ -179,12 +179,12 @@ async fn timeout() {
 
     // Only the first client gets the request.
     assert_eq!(
-        request_rx_a.try_recv().map(|r| r.request),
+        request_rx_a.try_recv().map(|r| r.payload),
         Ok(request.clone())
     );
 
     assert_eq!(
-        request_rx_b.try_recv().map(|r| r.request),
+        request_rx_b.try_recv().map(|r| r.payload),
         Err(TryRecvError::Empty)
     );
 
@@ -195,7 +195,7 @@ async fn timeout() {
 
     // The first client timeouted so the second client now gets the request.
     assert_eq!(
-        request_rx_b.try_recv().map(|r| r.request),
+        request_rx_b.try_recv().map(|r| r.payload),
         Ok(request.clone())
     );
 }
@@ -219,18 +219,18 @@ async fn drop_uncommitted_client() {
     for client in [&client_a, &client_b] {
         client.success(
             preceding_request_key,
-            vec![CandidateRequest::new(request.clone()).follow_up(MultiBlockPresence::Full)],
+            vec![CandidateRequest::new(request.clone())],
         );
     }
 
     tracker_worker.step();
 
     assert_eq!(
-        request_rx_a.try_recv().map(|r| r.request),
+        request_rx_a.try_recv().map(|r| r.payload),
         Ok(request.clone())
     );
     assert_eq!(
-        request_rx_b.try_recv().map(|r| r.request),
+        request_rx_b.try_recv().map(|r| r.payload),
         Err(TryRecvError::Empty)
     );
 
@@ -239,11 +239,11 @@ async fn drop_uncommitted_client() {
     tracker_worker.step();
 
     assert_eq!(
-        request_rx_a.try_recv().map(|r| r.request),
+        request_rx_a.try_recv().map(|r| r.payload),
         Err(TryRecvError::Empty)
     );
     assert_eq!(
-        request_rx_b.try_recv().map(|r| r.request),
+        request_rx_b.try_recv().map(|r| r.payload),
         Err(TryRecvError::Empty)
     );
 
@@ -253,7 +253,7 @@ async fn drop_uncommitted_client() {
 
     // The request falls back to the other client because although the request was completed, it
     // wasn't committed.
-    assert_eq!(request_rx_b.try_recv().map(|r| r.request), Ok(request));
+    assert_eq!(request_rx_b.try_recv().map(|r| r.payload), Ok(request));
 }
 
 #[tokio::test]
@@ -285,13 +285,13 @@ async fn multiple_responses_to_identical_requests() {
     // followups than the one received previously.
     client.success(
         MessageKey::from(&initial_request),
-        vec![CandidateRequest::new(followup_request.clone()).follow_up(MultiBlockPresence::Full)],
+        vec![CandidateRequest::new(followup_request.clone())],
     );
     worker.step();
 
     // The followup requests are sent even though the
     assert_eq!(
-        request_rx.try_recv().map(|r| r.request),
+        request_rx.try_recv().map(|r| r.payload),
         Ok(followup_request)
     );
 
@@ -319,14 +319,14 @@ async fn suspend_resume() {
     worker.step();
 
     assert_eq!(
-        request_rx.try_recv().map(|r| r.request),
+        request_rx.try_recv().map(|r| r.payload),
         Err(TryRecvError::Empty)
     );
 
-    client.resume(request_key, MultiBlockPresence::None);
+    client.resume(request_key, RequestVariant::default());
     worker.step();
 
-    assert_eq!(request_rx.try_recv().map(|r| r.request), Ok(request));
+    assert_eq!(request_rx.try_recv().map(|r| r.payload), Ok(request));
 }
 
 /// Generate `count + 1` copies of the same snapshot. The first one will have all the blocks

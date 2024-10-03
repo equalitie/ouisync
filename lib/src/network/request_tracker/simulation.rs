@@ -1,6 +1,7 @@
 use super::{
     super::message::{Request, Response, ResponseDisambiguator},
     CandidateRequest, MessageKey, PendingRequest, RequestTracker, RequestTrackerClient,
+    RequestVariant,
 };
 use crate::{
     collections::{HashMap, HashSet},
@@ -25,8 +26,8 @@ pub(super) struct Simulation {
     // All requests sent by live peers. This is used to verify that every request is sent only once
     // unless the peer that sent it died or the request failed. In those cases the request may be
     // sent by another peer. It's also allowed to sent the same request more than once as long as
-    // each one has a different block presence.
-    requests: HashMap<MessageKey, HashSet<MultiBlockPresence>>,
+    // each one has a different variant.
+    requests: HashMap<MessageKey, HashSet<RequestVariant>>,
     snapshot: Snapshot,
 }
 
@@ -67,8 +68,8 @@ impl Simulation {
         let index = rng.gen_range(0..self.peers.len());
         let peer = self.peers.remove(index);
 
-        for (key, block_presence) in peer.requests {
-            cancel_request(&mut self.requests, key, block_presence);
+        for (key, variant) in peer.requests {
+            cancel_request(&mut self.requests, key, variant);
         }
     }
 
@@ -91,20 +92,16 @@ impl Simulation {
 
             match side {
                 Side::Client => {
-                    if let Some(PendingRequest {
-                        request,
-                        block_presence,
-                    }) = peer.client.poll_request()
-                    {
-                        let key = MessageKey::from(&request);
+                    if let Some(PendingRequest { payload, variant }) = peer.client.poll_request() {
+                        let key = MessageKey::from(&payload);
 
                         assert!(
-                            self.requests.entry(key).or_default().insert(block_presence),
-                            "request sent more than once: {request:?} ({block_presence:?})"
+                            self.requests.entry(key).or_default().insert(variant),
+                            "request sent more than once: {payload:?} ({variant:?})"
                         );
 
-                        peer.requests.insert(key, block_presence);
-                        peer.server.handle_request(request);
+                        peer.requests.insert(key, variant);
+                        peer.server.handle_request(payload);
 
                         return true;
                     }
@@ -129,8 +126,8 @@ impl Simulation {
                         };
 
                         if let Some(key) = key {
-                            if let Some(block_presence) = peer.requests.get(&key) {
-                                cancel_request(&mut self.requests, key, *block_presence);
+                            if let Some(variant) = peer.requests.get(&key) {
+                                cancel_request(&mut self.requests, key, *variant);
                             }
                         }
 
@@ -151,12 +148,12 @@ impl Simulation {
 }
 
 fn cancel_request(
-    requests: &mut HashMap<MessageKey, HashSet<MultiBlockPresence>>,
+    requests: &mut HashMap<MessageKey, HashSet<RequestVariant>>,
     key: MessageKey,
-    block_presence: MultiBlockPresence,
+    variant: RequestVariant,
 ) {
     if let Entry::Occupied(mut entry) = requests.entry(key) {
-        entry.get_mut().remove(&block_presence);
+        entry.get_mut().remove(&variant);
 
         if entry.get().is_empty() {
             entry.remove();
@@ -168,7 +165,7 @@ struct TestPeer {
     client: TestClient,
     server: TestServer,
     // All requests sent by this peer.
-    requests: HashMap<MessageKey, MultiBlockPresence>,
+    requests: HashMap<MessageKey, RequestVariant>,
 }
 
 struct TestClient {
@@ -198,7 +195,10 @@ impl TestClient {
                             ResponseDisambiguator::new(block_presence),
                             debug_payload.follow_up(),
                         ))
-                        .follow_up(block_presence),
+                        .variant(RequestVariant::new(
+                            MultiBlockPresence::None,
+                            block_presence,
+                        )),
                     )
                     .into_iter()
                     .collect();
@@ -218,7 +218,10 @@ impl TestClient {
                             ResponseDisambiguator::new(node.summary.block_presence),
                             debug_payload.follow_up(),
                         ))
-                        .follow_up(node.summary.block_presence)
+                        .variant(RequestVariant::new(
+                            MultiBlockPresence::None,
+                            node.summary.block_presence,
+                        ))
                     })
                     .collect();
 

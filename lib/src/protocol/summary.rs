@@ -263,7 +263,7 @@ impl MultiBlockPresence {
         }
     }
 
-    fn checksum(&self) -> &[u8] {
+    pub fn checksum(&self) -> &[u8] {
         match self {
             Self::None => NONE.as_slice(),
             Self::Some(checksum) => checksum.as_slice(),

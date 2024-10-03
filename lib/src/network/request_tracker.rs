@@ -14,6 +14,8 @@ use crate::{
 };
 use std::{
     collections::{hash_map::Entry, VecDeque},
+    fmt,
+    hash::Hasher,
     iter, mem,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -21,6 +23,7 @@ use tokio::{select, sync::mpsc, task};
 use tokio_stream::StreamExt;
 use tokio_util::time::{delay_queue, DelayQueue};
 use tracing::{instrument, Instrument, Span};
+use twox_hash::xxh3::{Hash128, HasherExt};
 
 /// Keeps track of in-flight requests. Falls back on another peer in case the request failed (due to
 /// error response, timeout or disconnection). Evenly distributes the requests between the peers
@@ -102,11 +105,11 @@ impl RequestTrackerClient {
     }
 
     /// Resume suspended request.
-    pub fn resume(&self, request_key: MessageKey, block_presence: MultiBlockPresence) {
+    pub fn resume(&self, request_key: MessageKey, variant: RequestVariant) {
         self.command_tx
             .send(Command::Resume {
                 request_key,
-                block_presence,
+                variant,
             })
             .ok();
     }
@@ -154,27 +157,23 @@ impl RequestTrackerCommitter {
 /// Request that we want to send to the peer.
 #[derive(Clone, Debug)]
 pub(super) struct CandidateRequest {
-    pub request: Request,
-    pub block_presence: MultiBlockPresence,
+    pub payload: Request,
+    pub variant: RequestVariant,
     pub state: InitialRequestState,
 }
 
 impl CandidateRequest {
     /// Create new candiate for the given request.
-    pub fn new(request: Request) -> Self {
+    pub fn new(payload: Request) -> Self {
         Self {
-            request,
-            block_presence: MultiBlockPresence::None,
+            payload,
+            variant: RequestVariant::default(),
             state: InitialRequestState::InFlight,
         }
     }
 
-    /// Set this candidate to a followup request to a response with the given block presence.
-    pub fn follow_up(self, block_presence: MultiBlockPresence) -> Self {
-        Self {
-            block_presence,
-            ..self
-        }
+    pub fn variant(self, variant: RequestVariant) -> Self {
+        Self { variant, ..self }
     }
 
     /// Start this request in suspended state.
@@ -183,6 +182,29 @@ impl CandidateRequest {
             state: InitialRequestState::Suspended,
             ..self
         }
+    }
+}
+
+#[derive(Default, Clone, Copy, Eq, PartialEq, Hash)]
+pub(super) struct RequestVariant([u8; 16]);
+
+impl RequestVariant {
+    pub fn new(
+        local_block_presence: MultiBlockPresence,
+        remote_block_presence: MultiBlockPresence,
+    ) -> Self {
+        let mut hasher = Hash128::default();
+
+        hasher.write(local_block_presence.checksum());
+        hasher.write(remote_block_presence.checksum());
+
+        Self(hasher.finish_ext().to_le_bytes())
+    }
+}
+
+impl fmt::Debug for RequestVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:<8x}", hex_fmt::HexFmt(&self.0))
     }
 }
 
@@ -198,8 +220,8 @@ pub(super) enum InitialRequestState {
 /// mostly useful for diagnostics and testing.
 #[derive(Clone, Debug)]
 pub(super) struct PendingRequest {
-    pub request: Request,
-    pub block_presence: MultiBlockPresence,
+    pub payload: Request,
+    pub variant: RequestVariant,
 }
 
 /// Key identifying a request and its corresponding response.
@@ -302,8 +324,8 @@ impl Worker {
             }
             Command::Resume {
                 request_key,
-                block_presence,
-            } => self.resume(request_key, block_presence),
+                variant,
+            } => self.resume(request_key, variant),
             Command::Commit { client_id } => {
                 self.commit(client_id);
             }
@@ -435,8 +457,8 @@ impl Worker {
     }
 
     #[instrument(skip(self))]
-    fn resume(&mut self, request_key: MessageKey, block_presence: MultiBlockPresence) {
-        let Some(node) = self.requests.lookup_mut(request_key, block_presence) else {
+    fn resume(&mut self, request_key: MessageKey, variant: RequestVariant) {
+        let Some(node) = self.requests.lookup_mut(request_key, variant) else {
             return;
         };
 
@@ -524,8 +546,8 @@ impl Worker {
     ) {
         let node_key = self.requests.get_or_insert(
             PendingRequest {
-                request: request.request,
-                block_presence: request.block_presence,
+                payload: request.payload,
+                variant: request.variant,
             },
             parent_key,
             RequestState::Cancelled,
@@ -548,7 +570,7 @@ impl Worker {
             return;
         };
 
-        let request_key = MessageKey::from(&node.request().request);
+        let request_key = MessageKey::from(&node.request().payload);
 
         if let Entry::Vacant(entry) = client_state.requests.entry(request_key) {
             match node.value_mut() {
@@ -635,7 +657,7 @@ impl Worker {
             RequestState::Committed | RequestState::Cancelled => return,
         };
 
-        let request_key = MessageKey::from(&request.request);
+        let request_key = MessageKey::from(&request.payload);
 
         // Find next waiting client
         if let Some(waiters) = waiters {
@@ -677,7 +699,7 @@ impl Worker {
             return;
         };
 
-        let request_key = MessageKey::from(&node.request().request);
+        let request_key = MessageKey::from(&node.request().payload);
         remove_request_from_clients(&mut self.clients, request_key, node.value());
 
         for parent_key in node.parents() {
@@ -727,7 +749,7 @@ enum Command {
     },
     Resume {
         request_key: MessageKey,
-        block_presence: MultiBlockPresence,
+        variant: RequestVariant,
     },
     Commit {
         client_id: ClientId,
