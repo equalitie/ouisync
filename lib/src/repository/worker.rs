@@ -17,9 +17,6 @@ use tokio::select;
 #[cfg(test)]
 mod tests;
 
-/// Notify the block tracker after marking this many blocks as required.
-const BLOCK_REQUIRE_BATCH_SIZE: u32 = 1024;
-
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
 /// - remove outdated branches and snapshots
@@ -201,6 +198,8 @@ mod scan {
     }
 
     async fn run_once(shared: &Shared) -> Result<()> {
+        shared.vault.block_tracker.clear_required();
+
         let branches = shared.load_branches().await?;
         let mut versions = Vec::with_capacity(branches.len());
 
@@ -279,36 +278,15 @@ mod scan {
         branch: &Branch,
         blob_id: BlobId,
     ) -> Result<()> {
-        let mut blob_block_ids =
-            BlockIds::open(branch.clone(), blob_id)
-                .await
-                .map_err(|error| {
-                    tracing::trace!(?error, "open failed");
-                    error
-                })?;
-        let mut block_number = 0;
-        let mut require_batch = shared.vault.block_tracker.require_batch();
+        let mut blob_block_ids = BlockIds::open(branch.clone(), blob_id).await?;
 
-        while let Some((block_id, block_presence)) =
-            blob_block_ids.try_next().await.map_err(|error| {
-                tracing::trace!(block_number, ?error, "try_next failed");
-                error
-            })?
-        {
+        while let Some((block_id, block_presence)) = blob_block_ids.try_next().await? {
             match block_presence {
                 SingleBlockPresence::Present => (),
                 SingleBlockPresence::Missing | SingleBlockPresence::Expired => {
-                    require_batch.add(block_id);
+                    shared.vault.block_tracker.require(block_id);
                 }
             }
-
-            // Notify the block tracker after processing each batch of blocks (also notify on the
-            // first blocks so that it's requested first).
-            if block_number % BLOCK_REQUIRE_BATCH_SIZE == 0 {
-                require_batch.commit();
-            }
-
-            block_number = block_number.saturating_add(1);
         }
 
         Ok(())

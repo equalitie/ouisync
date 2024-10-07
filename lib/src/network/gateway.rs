@@ -1,20 +1,18 @@
-use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, raw, seen_peers::SeenPeer};
+use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, seen_peers::SeenPeer};
 use crate::sync::atomic_slot::AtomicSlot;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use net::{
-    quic,
-    tcp::{TcpListener, TcpStream},
+    quic, tcp,
+    unified::{Acceptor, Connection},
+    SocketOptions,
 };
 use scoped_task::ScopedJoinHandle;
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
-};
+use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
 use tokio::{
     select,
-    sync::{mpsc, oneshot, watch},
+    sync::{mpsc, watch},
+    task::JoinSet,
     time::{self, Duration},
 };
 use tracing::{field, Instrument, Span};
@@ -22,7 +20,7 @@ use tracing::{field, Instrument, Span};
 /// Established incoming and outgoing connections.
 pub(super) struct Gateway {
     stacks: AtomicSlot<Stacks>,
-    incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+    incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     connectivity_tx: watch::Sender<Connectivity>,
 }
 
@@ -30,7 +28,7 @@ impl Gateway {
     /// Create a new `Gateway` that is initially disabled.
     ///
     /// `incoming_tx` is the sender for the incoming connections.
-    pub fn new(incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>) -> Self {
+    pub fn new(incoming_tx: mpsc::Sender<(Connection, PeerAddr)>) -> Self {
         let stacks = Stacks::unbound();
         let stacks = AtomicSlot::new(stacks);
 
@@ -67,7 +65,7 @@ impl Gateway {
     }
 
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
-    pub async fn bind(
+    pub fn bind(
         &self,
         bind: &StackAddresses,
     ) -> (
@@ -75,7 +73,7 @@ impl Gateway {
         Option<quic::SideChannelMaker>,
     ) {
         let (next, side_channel_maker_v4, side_channel_maker_v6) =
-            Stacks::bind(bind, self.incoming_tx.clone()).await;
+            Stacks::bind(bind, self.incoming_tx.clone());
 
         let prev = self.stacks.swap(next);
         let next = self.stacks.read();
@@ -123,7 +121,7 @@ impl Gateway {
         &self,
         peer: &SeenPeer,
         source: PeerSource,
-    ) -> Option<raw::Stream> {
+    ) -> Option<Connection> {
         if !ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
             tracing::debug!("Invalid peer address - discarding");
             return None;
@@ -228,11 +226,11 @@ impl Gateway {
 #[derive(Debug, Error)]
 pub(super) enum ConnectError {
     #[error("TCP error")]
-    Tcp(std::io::Error),
+    Tcp(tcp::Error),
     #[error("QUIC error")]
     Quic(quic::Error),
-    #[error("No corresponding QUIC connector")]
-    NoSuitableQuicConnector,
+    #[error("No corresponding connector")]
+    NoSuitableConnector,
 }
 
 impl ConnectError {
@@ -263,9 +261,9 @@ impl Stacks {
         }
     }
 
-    async fn bind(
+    fn bind(
         bind: &StackAddresses,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> (
         Self,
         Option<quic::SideChannelMaker>,
@@ -273,7 +271,6 @@ impl Stacks {
     ) {
         let (quic_v4, side_channel_maker_v4) = if let Some(addr) = bind.quic_v4 {
             QuicStack::new(addr, incoming_tx.clone())
-                .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
                 .unwrap_or((None, None))
         } else {
@@ -282,7 +279,6 @@ impl Stacks {
 
         let (quic_v6, side_channel_maker_v6) = if let Some(addr) = bind.quic_v6 {
             QuicStack::new(addr, incoming_tx.clone())
-                .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
                 .unwrap_or((None, None))
         } else {
@@ -290,13 +286,13 @@ impl Stacks {
         };
 
         let tcp_v4 = if let Some(addr) = bind.tcp_v4 {
-            TcpStack::new(addr, incoming_tx.clone()).await
+            TcpStack::new(addr, incoming_tx.clone())
         } else {
             None
         };
 
         let tcp_v6 = if let Some(addr) = bind.tcp_v6 {
-            TcpStack::new(addr, incoming_tx).await
+            TcpStack::new(addr, incoming_tx)
         } else {
             None
         };
@@ -340,24 +336,25 @@ impl Stacks {
         self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
     }
 
-    async fn connect(&self, addr: PeerAddr) -> Result<raw::Stream, ConnectError> {
+    async fn connect(&self, addr: PeerAddr) -> Result<Connection, ConnectError> {
         match addr {
-            PeerAddr::Tcp(addr) => TcpStream::connect(addr)
+            PeerAddr::Tcp(addr) => self
+                .tcp_stack_for(&addr.ip())
+                .ok_or(ConnectError::NoSuitableConnector)?
+                .connector
+                .connect(addr)
                 .await
-                .map(raw::Stream::Tcp)
+                .map(Connection::Tcp)
                 .map_err(ConnectError::Tcp),
-            PeerAddr::Quic(addr) => {
-                let stack = self
-                    .quic_stack_for(&addr.ip())
-                    .ok_or(ConnectError::NoSuitableQuicConnector)?;
 
-                stack
-                    .connector
-                    .connect(addr)
-                    .await
-                    .map(raw::Stream::Quic)
-                    .map_err(ConnectError::Quic)
-            }
+            PeerAddr::Quic(addr) => self
+                .quic_stack_for(&addr.ip())
+                .ok_or(ConnectError::NoSuitableConnector)?
+                .connector
+                .connect(addr)
+                .await
+                .map(Connection::Quic)
+                .map_err(ConnectError::Quic),
         }
     }
 
@@ -414,6 +411,13 @@ impl Stacks {
         Some(task)
     }
 
+    fn tcp_stack_for(&self, ip: &IpAddr) -> Option<&TcpStack> {
+        match ip {
+            IpAddr::V4(_) => self.tcp_v4.as_ref(),
+            IpAddr::V6(_) => self.tcp_v6.as_ref(),
+        }
+    }
+
     fn quic_stack_for(&self, ip: &IpAddr) -> Option<&QuicStack> {
         match ip {
             IpAddr::V4(_) => self.quic_v4.as_ref(),
@@ -440,36 +444,38 @@ struct QuicStack {
 }
 
 impl QuicStack {
-    async fn new(
+    fn new(
         bind_addr: SocketAddr,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<(Self, quic::SideChannelMaker)> {
-        let span = tracing::info_span!("listener", addr = field::Empty);
+        let span = tracing::info_span!("quic", addr = field::Empty);
 
-        let (connector, listener, side_channel_maker) = match quic::configure(bind_addr).await {
-            Ok((connector, listener, side_channel_maker)) => {
-                span.record(
-                    "addr",
-                    field::display(PeerAddr::Quic(*listener.local_addr())),
-                );
-                tracing::info!(parent: &span, "Listener started");
+        let (connector, acceptor, side_channel_maker) =
+            match quic::configure(bind_addr, SocketOptions::default().with_reuse_addr()) {
+                Ok((connector, acceptor, side_channel_maker)) => {
+                    span.record(
+                        "addr",
+                        field::display(PeerAddr::Quic(*acceptor.local_addr())),
+                    );
+                    tracing::info!(parent: &span, "Stack configured");
 
-                (connector, listener, side_channel_maker)
-            }
-            Err(error) => {
-                tracing::warn!(
-                    parent: &span,
-                    bind_addr = %PeerAddr::Quic(bind_addr),
-                    ?error,
-                    "Failed to start listener"
-                );
-                return None;
-            }
-        };
+                    (connector, acceptor, side_channel_maker)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        parent: &span,
+                        bind_addr = %PeerAddr::Quic(bind_addr),
+                        ?error,
+                        "Failed to configure stack"
+                    );
+                    return None;
+                }
+            };
 
-        let listener_local_addr = *listener.local_addr();
-        let listener_task =
-            scoped_task::spawn(run_quic_listener(listener, incoming_tx).instrument(span));
+        let listener_local_addr = *acceptor.local_addr();
+        let listener_task = scoped_task::spawn(
+            run_listener(Acceptor::Quic(acceptor), incoming_tx).instrument(span),
+        );
 
         let hole_puncher = side_channel_maker.make().sender();
 
@@ -492,128 +498,73 @@ impl QuicStack {
 struct TcpStack {
     listener_local_addr: SocketAddr,
     _listener_task: ScopedJoinHandle<()>,
+    connector: tcp::Connector,
 }
 
 impl TcpStack {
-    async fn new(
+    fn new(
         bind_addr: SocketAddr,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<Self> {
-        let span = tracing::info_span!("listener", addr = field::Empty);
+        let span = tracing::info_span!("tcp", addr = field::Empty);
 
-        let listener = match TcpListener::bind(bind_addr).await {
-            Ok(listener) => listener,
-            Err(error) => {
-                tracing::warn!(
-                    parent: &span,
-                    bind_addr = %PeerAddr::Tcp(bind_addr),
-                    ?error,
-                    "Failed to start listener",
-                );
-                return None;
-            }
-        };
+        let (connector, acceptor) =
+            match tcp::configure(bind_addr, SocketOptions::default().with_reuse_addr()) {
+                Ok(stack) => stack,
+                Err(error) => {
+                    tracing::warn!(
+                        parent: &span,
+                        bind_addr = %PeerAddr::Tcp(bind_addr),
+                        ?error,
+                        "Failed to configure stack",
+                    );
+                    return None;
+                }
+            };
 
-        let listener_local_addr = match listener.local_addr() {
-            Ok(addr) => {
-                span.record("addr", field::display(PeerAddr::Tcp(addr)));
-                tracing::info!(parent: &span, "Listener started");
-
-                addr
-            }
-            Err(error) => {
-                tracing::warn!(
-                    parent: &span,
-                    bind_addr = %PeerAddr::Tcp(bind_addr),
-                    ?error,
-                    "Failed to get listener local address",
-                );
-                return None;
-            }
-        };
-
+        let listener_local_addr = *acceptor.local_addr();
         let listener_task =
-            scoped_task::spawn(run_tcp_listener(listener, incoming_tx).instrument(span));
+            scoped_task::spawn(run_listener(Acceptor::Tcp(acceptor), incoming_tx).instrument(span));
 
         Some(Self {
             listener_local_addr,
             _listener_task: listener_task,
+            connector,
         })
     }
 }
 
-async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(raw::Stream, PeerAddr)>) {
+async fn run_listener(listener: Acceptor, tx: mpsc::Sender<(Connection, PeerAddr)>) {
+    let mut tasks = JoinSet::new();
+
     loop {
-        let result = select! {
-            result = listener.accept() => result,
+        let connecting = select! {
+            connecting = listener.accept() => connecting,
             _ = tx.closed() => break,
         };
 
-        match result {
-            Ok((stream, addr)) => {
-                tx.send((raw::Stream::Tcp(stream), PeerAddr::Tcp(addr)))
-                    .await
-                    .ok();
-            }
-            Err(error) => {
-                tracing::error!(?error, "Failed to accept connection");
-                break;
-            }
-        }
-    }
-}
+        match connecting {
+            Ok(connecting) => {
+                let tx = tx.clone();
 
-async fn run_quic_listener(
-    mut listener: quic::Acceptor,
-    tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
-) {
-    // Using `futures_util::stream::FuturesUnordered` may have been a nicer solution but I'm not
-    // sure whether `quic::Acceptor::accept()` is cancel safe.
-    let connectings = Arc::new(Mutex::new(HashMap::new()));
-    let mut next_connecting_id = 0;
-
-    loop {
-        let result = select! {
-            result = listener.accept() => result,
-            _ = tx.closed() => break,
-        };
-
-        match result {
-            Some(connecting) => {
-                // Using this channel to ensure the task is not removed from `connectings` before
-                // it's inserted.
-                let (start_task_tx, start_task_rx) = oneshot::channel();
-
-                let connecting_id = next_connecting_id;
-                next_connecting_id += 1;
+                let addr = connecting.remote_addr();
+                let addr = match listener {
+                    Acceptor::Tcp(_) => PeerAddr::Tcp(addr),
+                    Acceptor::Quic(_) => PeerAddr::Quic(addr),
+                };
 
                 // Spawn so we can start listening for the next connection ASAP.
-                let task = scoped_task::spawn({
-                    let tx = tx.clone();
-                    let connectings = connectings.clone();
-                    async move {
-                        if start_task_rx.await.is_ok() {
-                            match connecting.finish().await {
-                                Ok(socket) => {
-                                    let addr = *socket.remote_address();
-                                    tx.send((raw::Stream::Quic(socket), PeerAddr::Quic(addr)))
-                                        .await
-                                        .ok();
-                                }
-                                Err(error) => {
-                                    tracing::error!(?error, "Failed to accept connection");
-                                }
-                            };
+                tasks.spawn(async move {
+                    match connecting.await {
+                        Ok(connection) => {
+                            tx.send((connection, addr)).await.ok();
                         }
-                        connectings.lock().unwrap().remove(&connecting_id);
+                        Err(error) => tracing::error!(?error, %addr, "Failed to accept connection"),
                     }
                 });
-
-                connectings.lock().unwrap().insert(connecting_id, task);
-                start_task_tx.send(()).unwrap_or(());
             }
-            None => {
-                tracing::error!("Stopped accepting new connections");
+            Err(error) => {
+                tracing::error!(?error, "Stopped accepting new connections");
                 break;
             }
         }

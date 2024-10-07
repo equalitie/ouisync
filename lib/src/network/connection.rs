@@ -7,11 +7,12 @@ use super::{
     stats::{ByteCounters, StatsTracker},
 };
 use crate::{
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     sync::{AwaitDrop, DropAwaitable, WatchSenderExt},
 };
 use serde::Serialize;
 use std::{
+    collections::hash_map::Entry,
     fmt,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -182,22 +183,6 @@ pub(super) struct ConnectionPermit {
 }
 
 impl ConnectionPermit {
-    /// Split the permit into two halves where dropping any of them releases the whole permit.
-    /// This is useful when the connection needs to be split into a reader and a writer Then if any
-    /// of them closes, the whole connection closes. So both the reader and the writer should be
-    /// associated with one half of the permit so that when any of them closes, the permit is
-    /// released.
-    pub fn into_split(self) -> (ConnectionPermitHalf, ConnectionPermitHalf) {
-        (
-            ConnectionPermitHalf(Self {
-                connections: self.connections.clone(),
-                key: self.key,
-                id: self.id,
-            }),
-            ConnectionPermitHalf(self),
-        )
-    }
-
     pub fn mark_as_connecting(&self) {
         self.set_state(PeerState::Connecting);
     }
@@ -253,31 +238,6 @@ impl ConnectionPermit {
             .unwrap_or_default()
     }
 
-    /// Dummy connection permit for tests.
-    #[cfg(test)]
-    pub fn dummy() -> Self {
-        use std::net::Ipv4Addr;
-
-        let key = Key {
-            addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
-            dir: ConnectionDirection::Incoming,
-        };
-        let id = ConnectionId::next();
-        let data = Data {
-            id,
-            state: PeerState::Known,
-            source: PeerSource::UserProvided,
-            stats_tracker: StatsTracker::default(),
-            on_release: DropAwaitable::new(),
-        };
-
-        Self {
-            connections: watch::Sender::new([(key, data)].into()),
-            key,
-            id,
-        }
-    }
-
     fn with<F, R>(&self, f: F) -> Option<R>
     where
         F: FnOnce(&Data) -> R,
@@ -309,24 +269,6 @@ impl Drop for ConnectionPermit {
             entry.remove();
             true
         });
-    }
-}
-
-/// Half of a connection permit. Dropping it drops the whole permit.
-/// See [`ConnectionPermit::split`] for more details.
-pub(super) struct ConnectionPermitHalf(ConnectionPermit);
-
-impl ConnectionPermitHalf {
-    pub fn id(&self) -> ConnectionId {
-        self.0.id
-    }
-
-    pub fn byte_counters(&self) -> Arc<ByteCounters> {
-        self.0.byte_counters()
-    }
-
-    pub fn released(&self) -> AwaitDrop {
-        self.0.released()
     }
 }
 

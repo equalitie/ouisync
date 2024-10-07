@@ -1,5 +1,4 @@
 use super::{InnerNodes, LeafNodes};
-use crate::format::Hex;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     encode::IsNull,
@@ -7,9 +6,9 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{fmt, hash::Hasher};
+use std::fmt;
 use thiserror::Error;
-use twox_hash::xxh3::{Hash128, HasherExt};
+use xxhash_rust::xxh3::Xxh3Default;
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
@@ -78,14 +77,16 @@ impl Summary {
         }
     }
 
-    /// Checks whether the subtree at `self` is outdated compared to the subtree at `other` in
-    /// terms of present blocks. That is, whether `other` has some blocks present that `self` is
-    /// missing.
+    /// Checks whether the subtree at `self` is outdated compared to the subtree at `other` in terms
+    /// of completeness and block presence. That is, `self` is considered outdated if it's
+    /// incomplete (regardless of what `other` is) or if `other` has some blocks present that
+    /// `self` is missing.
     ///
     /// NOTE: This function is NOT antisymetric, that is, `is_outdated(A, B)` does not imply
     /// !is_outdated(B, A)` (and vice-versa).
     pub fn is_outdated(&self, other: &Self) -> bool {
-        self.block_presence.is_outdated(&other.block_presence)
+        self.state == NodeState::Incomplete
+            || self.block_presence.is_outdated(&other.block_presence)
     }
 
     pub fn with_state(self, state: NodeState) -> Self {
@@ -262,7 +263,7 @@ impl MultiBlockPresence {
         }
     }
 
-    fn checksum(&self) -> &[u8] {
+    pub fn checksum(&self) -> &[u8] {
         match self {
             Self::None => NONE.as_slice(),
             Self::Some(checksum) => checksum.as_slice(),
@@ -300,7 +301,7 @@ impl fmt::Debug for MultiBlockPresence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::None => write!(f, "None"),
-            Self::Some(checksum) => write!(f, "Some({:10x})", Hex(checksum)),
+            Self::Some(checksum) => write!(f, "Some({:<8})", hex_fmt::HexFmt(checksum)),
             Self::Full => write!(f, "Full"),
         }
     }
@@ -308,7 +309,7 @@ impl fmt::Debug for MultiBlockPresence {
 
 struct MultiBlockPresenceBuilder {
     state: BuilderState,
-    hasher: Hash128,
+    hasher: Xxh3Default,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -323,12 +324,12 @@ impl MultiBlockPresenceBuilder {
     fn new() -> Self {
         Self {
             state: BuilderState::Init,
-            hasher: Hash128::default(),
+            hasher: Xxh3Default::default(),
         }
     }
 
     fn update(&mut self, p: MultiBlockPresence) {
-        self.hasher.write(p.checksum());
+        self.hasher.update(p.checksum());
 
         self.state = match (self.state, p) {
             (BuilderState::Init, MultiBlockPresence::None) => BuilderState::None,
@@ -348,7 +349,7 @@ impl MultiBlockPresenceBuilder {
         match self.state {
             BuilderState::Init | BuilderState::None => MultiBlockPresence::None,
             BuilderState::Some => {
-                MultiBlockPresence::Some(clamp(self.hasher.finish_ext()).to_le_bytes())
+                MultiBlockPresence::Some(clamp(self.hasher.digest128()).to_le_bytes())
             }
             BuilderState::Full => MultiBlockPresence::Full,
         }

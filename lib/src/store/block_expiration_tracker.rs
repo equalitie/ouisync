@@ -1,7 +1,7 @@
 use super::{block, error::Error, index, leaf_node, root_node};
 use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
-    collections::{hash_map, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     crypto::sign::PublicKey,
     db,
     future::TryStreamExt as _,
@@ -13,7 +13,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use scoped_task::{self, ScopedJoinHandle};
 use sqlx::Row;
 use std::{
-    collections::{btree_map, BTreeMap},
+    collections::{btree_map, hash_map::Entry, BTreeMap},
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -198,7 +198,7 @@ impl Shared {
     fn insert_block(&mut self, block: &BlockId, ts: TimeUpdated) {
         // Asserts and unwraps are OK due to the `Shared` invariants defined above.
         match self.blocks_by_id.entry(*block) {
-            hash_map::Entry::Occupied(mut entry) => {
+            Entry::Occupied(mut entry) => {
                 let old_ts = *entry.get();
                 if old_ts == ts {
                     return;
@@ -223,7 +223,7 @@ impl Shared {
                     .or_default()
                     .insert(*block));
             }
-            hash_map::Entry::Vacant(entry) => {
+            Entry::Vacant(entry) => {
                 assert!(self
                     .blocks_by_expiration
                     .entry(ts)
@@ -395,6 +395,9 @@ async fn set_as_missing_if_expired(
             continue;
         }
 
+        // TODO: Why is this here? For blind replicas requiring blocks is never necessary because
+        // the block tracker produces block ids immediatelly after they become offered by peers.
+        // For non-blind replicas blocks are already required in the `scan` job.
         block_download_tracker.require(*block_id);
 
         for (hash, _state) in index::update_summaries(&mut tx, parent_hashes).await? {
@@ -576,7 +579,7 @@ mod test {
                     match op {
                         Op::Receive(block) => {
                             let mut writer = store.begin_client_write().await.unwrap();
-                            writer.save_block(&block, None).await.unwrap();
+                            writer.save_block(&block).await.unwrap();
                             writer.commit().await.unwrap();
                         }
                         Op::Remove(id) => {

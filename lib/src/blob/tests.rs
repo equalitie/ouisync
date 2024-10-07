@@ -40,17 +40,15 @@ async fn empty_blob() {
     store.close().await.unwrap();
 }
 
-#[proptest]
-fn write_and_read(
+#[proptest(async = "tokio")]
+async fn write_and_read(
     is_root: bool,
     #[strategy(1..3 * BLOCK_SIZE)] blob_len: usize,
     #[strategy(1..=#blob_len)] write_len: usize,
     #[strategy(1..=#blob_len + 1)] read_len: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(write_and_read_case(
-        is_root, blob_len, write_len, read_len, rng_seed,
-    ))
+    write_and_read_case(is_root, blob_len, write_len, read_len, rng_seed).await
 }
 
 async fn write_and_read_case(
@@ -106,66 +104,60 @@ async fn write_and_read_case(
     store.close().await.unwrap();
 }
 
-#[proptest]
-fn len(
+#[proptest(async = "tokio")]
+async fn len(
     #[strategy(0..3 * BLOCK_SIZE)] content_len: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(async {
-        let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
-        let mut tx = store.begin_write().await.unwrap();
-        let mut changeset = Changeset::new();
+    let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
-        let content = random_bytes(rng, content_len);
+    let content = random_bytes(rng, content_len);
 
-        let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-        blob.write_all(&mut tx, &mut changeset, &content[..])
-            .await
-            .unwrap();
-        assert_eq!(blob.len(), content_len as u64);
+    let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
+    blob.write_all(&mut tx, &mut changeset, &content[..])
+        .await
+        .unwrap();
+    assert_eq!(blob.len(), content_len as u64);
 
-        blob.flush(&mut tx, &mut changeset).await.unwrap();
-        changeset
-            .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
-            .await
-            .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
+        .await
+        .unwrap();
 
-        assert_eq!(blob.len(), content_len as u64);
+    assert_eq!(blob.len(), content_len as u64);
 
-        let blob = Blob::open(&mut tx, branch, BlobId::ROOT).await.unwrap();
-        assert_eq!(blob.len(), content_len as u64);
+    let blob = Blob::open(&mut tx, branch, BlobId::ROOT).await.unwrap();
+    assert_eq!(blob.len(), content_len as u64);
 
-        drop(tx);
-        store.close().await.unwrap();
-    })
+    drop(tx);
+    store.close().await.unwrap();
 }
 
-#[proptest]
-fn seek_from_start(
+#[proptest(async = "tokio")]
+async fn seek_from_start(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
     #[strategy(0..=#content_len)] pos: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(seek_from(
-        content_len,
-        SeekFrom::Start(pos as u64),
-        pos,
-        rng_seed,
-    ))
+    seek_from(content_len, SeekFrom::Start(pos as u64), pos, rng_seed).await
 }
 
-#[proptest]
-fn seek_from_end(
+#[proptest(async = "tokio")]
+async fn seek_from_end(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
     #[strategy(0..=#content_len)] pos: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(seek_from(
+    seek_from(
         content_len,
         SeekFrom::End(-((content_len - pos) as i64)),
         pos,
         rng_seed,
-    ))
+    )
+    .await
 }
 
 async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize, rng_seed: u64) {
@@ -196,44 +188,42 @@ async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize,
     store.close().await.unwrap();
 }
 
-#[proptest]
-fn seek_from_current(
+#[proptest(async = "tokio")]
+async fn seek_from_current(
     #[strategy(1..2 * BLOCK_SIZE)] content_len: usize,
     #[strategy(vec(0..#content_len, 1..10))] positions: Vec<usize>,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(async {
-        let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
-        let mut tx = store.begin_write().await.unwrap();
-        let mut changeset = Changeset::new();
+    let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
-        let content = random_bytes(rng, content_len);
+    let content = random_bytes(rng, content_len);
 
-        let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-        blob.write_all(&mut tx, &mut changeset, &content[..])
-            .await
-            .unwrap();
-        blob.flush(&mut tx, &mut changeset).await.unwrap();
-        changeset
-            .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
-            .await
-            .unwrap();
+    let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
+    blob.write_all(&mut tx, &mut changeset, &content[..])
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
+        .await
+        .unwrap();
 
-        blob.seek(SeekFrom::Start(0));
+    blob.seek(SeekFrom::Start(0));
 
-        let mut prev_pos = 0;
-        for pos in positions {
-            blob.seek(SeekFrom::Current(pos as i64 - prev_pos as i64));
-            prev_pos = pos;
-        }
+    let mut prev_pos = 0;
+    for pos in positions {
+        blob.seek(SeekFrom::Current(pos as i64 - prev_pos as i64));
+        prev_pos = pos;
+    }
 
-        let mut read_buffer = vec![0; content.len()];
-        let len = blob.read_all(&mut tx, &mut read_buffer[..]).await.unwrap();
-        assert_eq!(read_buffer[..len], content[prev_pos..]);
+    let mut read_buffer = vec![0; content.len()];
+    let len = blob.read_all(&mut tx, &mut read_buffer[..]).await.unwrap();
+    assert_eq!(read_buffer[..len], content[prev_pos..]);
 
-        drop(tx);
-        store.close().await.unwrap();
-    })
+    drop(tx);
+    store.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -524,21 +514,15 @@ async fn write_reopen_and_read() {
     store.close().await.unwrap();
 }
 
-#[proptest]
-fn fork_and_write(
+#[proptest(async = "tokio")]
+async fn fork_and_write(
     #[strategy(0..2 * BLOCK_SIZE)] src_len: usize,
     #[strategy(0..=#src_len)] seek_pos: usize,
     #[strategy(1..BLOCK_SIZE)] write_len: usize,
     src_locator_is_root: bool,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(fork_and_write_case(
-        src_len,
-        seek_pos,
-        write_len,
-        src_locator_is_root,
-        rng_seed,
-    ))
+    fork_and_write_case(src_len, seek_pos, write_len, src_locator_is_root, rng_seed).await
 }
 
 async fn fork_and_write_case(

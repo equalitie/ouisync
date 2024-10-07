@@ -1,26 +1,31 @@
-use crate::KEEP_ALIVE_INTERVAL;
+use crate::{SocketOptions, KEEP_ALIVE_INTERVAL};
 use bytes::BytesMut;
+use pin_project_lite::pin_project;
+use quinn::{
+    crypto::rustls::QuicClientConfig,
+    rustls::{
+        self,
+        client::danger::{HandshakeSignatureValid, ServerCertVerified},
+        pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
+        DigitallySignedStruct, SignatureScheme,
+    },
+    UdpPoller,
+};
 use std::{
+    fmt,
+    future::{Future, IntoFuture},
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::Arc,
     task::{Context, Poll},
 };
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::{
-        broadcast::{self, error::RecvError},
-        Mutex as AsyncMutex,
-    },
+use tokio::sync::{
+    broadcast::{self, error::RecvError},
+    Mutex as AsyncMutex,
 };
 
 const CERT_DOMAIN: &str = "ouisync.net";
-
-pub type Result<T> = std::result::Result<T, Error>;
 
 //------------------------------------------------------------------------------
 pub struct Connector {
@@ -28,10 +33,12 @@ pub struct Connector {
 }
 
 impl Connector {
-    pub async fn connect(&self, remote_addr: SocketAddr) -> Result<Connection> {
-        let connection = self.endpoint.connect(remote_addr, CERT_DOMAIN)?.await?;
-        let (tx, rx) = connection.open_bi().await?;
-        Ok(Connection::new(rx, tx, connection.remote_address()))
+    pub async fn connect(&self, remote_addr: SocketAddr) -> Result<Connection, Error> {
+        self.endpoint
+            .connect(remote_addr, CERT_DOMAIN)?
+            .await
+            .map(|inner| Connection { inner })
+            .map_err(Into::into)
     }
 
     // forcefully close all connections (any pending operation on any connection will immediatelly
@@ -48,11 +55,12 @@ pub struct Acceptor {
 }
 
 impl Acceptor {
-    pub async fn accept(&mut self) -> Option<Connecting> {
+    pub async fn accept(&self) -> Result<Connecting, Error> {
         self.endpoint
             .accept()
             .await
-            .map(|connecting| Connecting { connecting })
+            .map(|inner| Connecting { inner })
+            .ok_or(Error::EndpointClosed)
     }
 
     pub fn local_addr(&self) -> &SocketAddr {
@@ -61,268 +69,81 @@ impl Acceptor {
 }
 
 pub struct Connecting {
-    connecting: quinn::Connecting,
+    inner: quinn::Incoming,
 }
 
 impl Connecting {
-    pub async fn finish(self) -> Result<Connection> {
-        let connection = self.connecting.await?;
-        let (tx, rx) = connection.accept_bi().await?;
-        Ok(Connection::new(rx, tx, connection.remote_address()))
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.inner.remote_address()
     }
 }
 
-//------------------------------------------------------------------------------
+impl IntoFuture for Connecting {
+    type Output = Result<Connection, Error>;
+    type IntoFuture = ConnectingFuture;
+
+    fn into_future(self) -> Self::IntoFuture {
+        ConnectingFuture {
+            inner: self.inner.into_future(),
+        }
+    }
+}
+
+pub struct ConnectingFuture {
+    inner: quinn::IncomingFuture,
+}
+
+impl Future for ConnectingFuture {
+    type Output = Result<Connection, Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.inner)
+            .poll(cx)
+            .map_ok(|inner| Connection { inner })
+            .map_err(Into::into)
+    }
+}
+
 pub struct Connection {
-    rx: Option<quinn::RecvStream>,
-    tx: Option<quinn::SendStream>,
-    remote_address: SocketAddr,
-    can_finish: bool,
+    inner: quinn::Connection,
 }
 
 impl Connection {
-    pub fn new(rx: quinn::RecvStream, tx: quinn::SendStream, remote_address: SocketAddr) -> Self {
-        Self {
-            rx: Some(rx),
-            tx: Some(tx),
-            remote_address,
-            can_finish: true,
-        }
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.inner.remote_address()
     }
 
-    pub fn remote_address(&self) -> &SocketAddr {
-        &self.remote_address
+    pub async fn incoming(&self) -> Result<(SendStream, RecvStream), Error> {
+        self.inner.accept_bi().await.map_err(Into::into)
     }
 
-    pub fn into_split(mut self) -> (OwnedReadHalf, OwnedWriteHalf) {
-        // Unwrap OK because `self` can't be split more than once and we're not `taking` from `rx`
-        // anywhere else.
-        let rx = self.rx.take().unwrap();
-        let tx = self.tx.take();
-        let can_finish = Arc::new(AtomicBool::new(self.can_finish));
-        (
-            OwnedReadHalf {
-                rx,
-                can_finish: can_finish.clone(),
-            },
-            OwnedWriteHalf { tx, can_finish },
-        )
+    pub async fn outgoing(&self) -> Result<(SendStream, RecvStream), Error> {
+        self.inner.open_bi().await.map_err(Into::into)
     }
 
-    /// Make sure all data is sent, no more data can be sent afterwards.
-    #[cfg(test)]
-    pub async fn finish(&mut self) -> Result<()> {
-        if !self.can_finish {
-            return Err(Error::Write(quinn::WriteError::UnknownStream));
-        }
+    pub fn close(&self) {
+        self.inner.close(0u8.into(), &[]);
+    }
 
-        self.can_finish = false;
-
-        match self.tx.take() {
-            Some(mut tx) => {
-                tx.finish().await?;
-                Ok(())
-            }
-            None => Err(Error::Write(quinn::WriteError::UnknownStream)),
+    pub fn closed(&self) -> impl Future<Output = ()> + 'static {
+        let inner = self.inner.clone();
+        async move {
+            inner.closed().await;
         }
     }
 }
 
-impl AsyncRead for Connection {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match &mut this.rx {
-            Some(rx) => {
-                let poll = Pin::new(rx).poll_read(cx, buf);
-                if let Poll::Ready(r) = &poll {
-                    this.can_finish &= r.is_ok();
-                };
-                poll
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "connection was split",
-            ))),
-        }
-    }
-}
-
-impl AsyncWrite for Connection {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => {
-                let poll = Pin::new(tx).poll_write(cx, buf);
-                if let Poll::Ready(r) = &poll {
-                    this.can_finish &= r.is_ok();
-                }
-                poll
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => {
-                let poll = Pin::new(tx).poll_flush(cx);
-                if let Poll::Ready(r) = &poll {
-                    this.can_finish &= r.is_ok();
-                }
-                poll
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => {
-                this.can_finish = false;
-                Pin::new(tx).poll_shutdown(cx)
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
-    }
-}
-
-impl Drop for Connection {
-    fn drop(&mut self) {
-        if !self.can_finish {
-            return;
-        }
-
-        if let Some(mut tx) = self.tx.take() {
-            tokio::task::spawn(async move { tx.finish().await.unwrap_or(()) });
-        }
-    }
-}
+pub type SendStream = quinn::SendStream;
+pub type RecvStream = quinn::RecvStream;
 
 //------------------------------------------------------------------------------
-pub struct OwnedReadHalf {
-    rx: quinn::RecvStream,
-    can_finish: Arc<AtomicBool>,
-}
-pub struct OwnedWriteHalf {
-    tx: Option<quinn::SendStream>,
-    can_finish: Arc<AtomicBool>,
-}
-
-impl AsyncRead for OwnedReadHalf {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        let poll = Pin::new(&mut this.rx).poll_read(cx, buf);
-        if let Poll::Ready(r) = &poll {
-            if r.is_err() {
-                this.can_finish.store(false, Ordering::SeqCst);
-            }
-        }
-        poll
-    }
-}
-
-impl AsyncWrite for OwnedWriteHalf {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => {
-                let poll = Pin::new(tx).poll_write(cx, buf);
-
-                if let Poll::Ready(r) = &poll {
-                    if r.is_err() {
-                        this.can_finish.store(false, Ordering::SeqCst);
-                    }
-                }
-
-                poll
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => {
-                let poll = Pin::new(tx).poll_flush(cx);
-
-                if let Poll::Ready(r) = &poll {
-                    if r.is_err() {
-                        this.can_finish.store(false, Ordering::SeqCst);
-                    }
-                }
-
-                poll
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match &mut this.tx {
-            Some(tx) => {
-                this.can_finish.store(false, Ordering::SeqCst);
-                Pin::new(tx).poll_shutdown(cx)
-            }
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "already finished",
-            ))),
-        }
-    }
-}
-
-impl Drop for OwnedWriteHalf {
-    fn drop(&mut self) {
-        if !self.can_finish.load(Ordering::SeqCst) {
-            return;
-        }
-
-        if let Some(mut tx) = self.tx.take() {
-            tokio::task::spawn(async move { tx.finish().await.unwrap_or(()) });
-        }
-    }
-}
-
-//------------------------------------------------------------------------------
-pub async fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor, SideChannelMaker)> {
+pub fn configure(
+    bind_addr: SocketAddr,
+    options: SocketOptions,
+) -> Result<(Connector, Acceptor, SideChannelMaker), Error> {
     let server_config = make_server_config()?;
-    let custom_socket = CustomUdpSocket::bind(bind_addr).await?;
-    let side_channel_maker = custom_socket.side_channel_maker();
+    let custom_socket = Arc::new(CustomUdpSocket::bind(bind_addr, options)?);
+    let side_channel_maker = custom_socket.clone().side_channel_maker();
 
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
         quinn::EndpointConfig::default(),
@@ -355,10 +176,8 @@ pub enum Error {
     Connect(#[from] ConnectError),
     #[error("connection error")]
     Connection(#[from] ConnectionError),
-    #[error("write error")]
-    Write(#[from] WriteError),
-    #[error("done accepting error")]
-    DoneAccepting,
+    #[error("endpoint closed")]
+    EndpointClosed,
     #[error("IO error")]
     Io(#[from] std::io::Error),
     #[error("TLS error")]
@@ -369,29 +188,71 @@ pub enum Error {
 // Dummy certificate verifier that treats any certificate as valid. In our P2P system there are no
 // certification authorities. TODO: I think this still makes the TLS encryption provided by QUIC
 // usefull against passive MitM attacks (eavesdropping), but not against the active ones.
-struct SkipServerVerification;
+#[derive(Debug)]
+struct SkipServerVerification(rustls::crypto::CryptoProvider);
 
-impl rustls::client::ServerCertVerifier for SkipServerVerification {
+impl SkipServerVerification {
+    fn new() -> Self {
+        Self(rustls::crypto::ring::default_provider())
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     fn verify_server_cert(
         &self,
-        _end_entity: &rustls::Certificate,
-        _intermediates: &[rustls::Certificate],
-        _server_name: &rustls::ServerName,
-        _scts: &mut dyn Iterator<Item = &[u8]>,
-        _ocsp_response: &[u8],
-        _now: std::time::SystemTime,
-    ) -> std::result::Result<rustls::client::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::ServerCertVerified::assertion())
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
     }
 }
 
 fn make_client_config() -> quinn::ClientConfig {
-    let crypto = rustls::ClientConfig::builder()
-        .with_safe_defaults()
-        .with_custom_certificate_verifier(Arc::new(SkipServerVerification {}))
+    let crypto_config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(SkipServerVerification::new()))
         .with_no_client_auth();
 
-    let mut client_config = quinn::ClientConfig::new(Arc::new(crypto));
+    let mut client_config = quinn::ClientConfig::new(Arc::new(
+        // `expect` should be OK because we made sure we constructed the rustls::ClientConfig in a
+        // compliant way.
+        QuicClientConfig::try_from(crypto_config).expect("failed to create quic client config"),
+    ));
 
     let mut transport_config = quinn::TransportConfig::default();
 
@@ -408,23 +269,19 @@ fn make_client_config() -> quinn::ClientConfig {
     client_config
 }
 
-fn make_server_config() -> Result<quinn::ServerConfig> {
+fn make_server_config() -> Result<quinn::ServerConfig, Error> {
     // Generate a self signed certificate.
     let cert = rcgen::generate_simple_self_signed(vec![CERT_DOMAIN.into()]).unwrap();
-    let cert_der = cert.serialize_der().unwrap();
-    let priv_key = cert.serialize_private_key_der();
-    let priv_key = rustls::PrivateKey(priv_key);
-    let cert_chain = vec![rustls::Certificate(cert_der)];
+    let cert_der = CertificateDer::from(cert.cert);
+    let priv_key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
 
-    let mut server_config = quinn::ServerConfig::with_single_cert(cert_chain, priv_key)?;
+    let mut server_config =
+        quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], priv_key.into())?;
 
-    let mut transport_config = quinn::TransportConfig::default();
-
+    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config
         .max_concurrent_uni_streams(0_u8.into())
         .max_idle_timeout((2 * KEEP_ALIVE_INTERVAL).try_into().ok());
-
-    server_config.transport_config(Arc::new(transport_config));
 
     Ok(server_config)
 }
@@ -451,50 +308,42 @@ struct Packet {
 
 #[derive(Debug)]
 struct CustomUdpSocket {
-    io: Arc<tokio::net::UdpSocket>,
-    quinn_socket_state: quinn::udp::UdpSocketState,
+    io: tokio::net::UdpSocket,
+    state: quinn::udp::UdpSocketState,
     side_channel_tx: broadcast::Sender<Packet>,
 }
 
 impl CustomUdpSocket {
-    async fn bind(addr: SocketAddr) -> io::Result<Self> {
-        let socket = crate::udp::UdpSocket::bind(addr).await?;
+    fn bind(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
+        let socket = crate::udp::UdpSocket::bind_with_options(addr, options)?;
         let socket = socket.into_std()?;
 
-        quinn::udp::UdpSocketState::configure((&socket).into())?;
+        let state = quinn::udp::UdpSocketState::new((&socket).into())?;
 
         Ok(Self {
-            io: Arc::new(tokio::net::UdpSocket::from_std(socket)?),
-            quinn_socket_state: quinn::udp::UdpSocketState::new(),
+            io: tokio::net::UdpSocket::from_std(socket)?,
+            state,
             side_channel_tx: broadcast::channel(MAX_SIDE_CHANNEL_PENDING_PACKETS).0,
         })
     }
 
-    fn side_channel_maker(&self) -> SideChannelMaker {
-        SideChannelMaker {
-            io: self.io.clone(),
-            packet_tx: self.side_channel_tx.clone(),
-        }
+    fn side_channel_maker(self: Arc<Self>) -> SideChannelMaker {
+        SideChannelMaker { socket: self }
     }
 }
 
 impl quinn::AsyncUdpSocket for CustomUdpSocket {
-    fn poll_send(
-        &self,
-        state: &quinn::udp::UdpState,
-        cx: &mut Context,
-        transmits: &[quinn::udp::Transmit],
-    ) -> Poll<io::Result<usize>> {
-        let quinn_socket_state = &self.quinn_socket_state;
-        let io = &*self.io;
-        loop {
-            ready!(io.poll_send_ready(cx))?;
-            if let Ok(res) = io.try_io(Interest::WRITABLE, || {
-                quinn_socket_state.send(io.into(), state, transmits)
-            }) {
-                return Poll::Ready(Ok(res));
-            }
-        }
+    fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn UdpPoller>> {
+        Box::pin(UdpPollHelper::new(move || {
+            let socket = self.clone();
+            async move { socket.io.writable().await }
+        }))
+    }
+
+    fn try_send(&self, transmit: &quinn::udp::Transmit) -> io::Result<()> {
+        self.io.try_io(Interest::WRITABLE, || {
+            self.state.send((&self.io).into(), transmit)
+        })
     }
 
     fn poll_recv(
@@ -506,9 +355,7 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
         loop {
             ready!(self.io.poll_recv_ready(cx))?;
             if let Ok(res) = self.io.try_io(Interest::READABLE, || {
-                let res = self
-                    .quinn_socket_state
-                    .recv((&*self.io).into(), bufs, metas);
+                let res = self.state.recv((&self.io).into(), bufs, metas);
 
                 if let Ok(msg_count) = res {
                     send_to_side_channels(&self.side_channel_tx, bufs, metas, msg_count);
@@ -523,6 +370,18 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
 
     fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
         self.io.local_addr()
+    }
+
+    fn may_fragment(&self) -> bool {
+        self.state.may_fragment()
+    }
+
+    fn max_transmit_segments(&self) -> usize {
+        self.state.max_gso_segments()
+    }
+
+    fn max_receive_segments(&self) -> usize {
+        self.state.gro_segments()
     }
 }
 
@@ -552,39 +411,85 @@ fn send_to_side_channels(
     }
 }
 
+// This is copied verbatim from [quinn]
+// (https://github.com/quinn-rs/quinn/blob/main/quinn/src/runtime.rs) as it's unfortunatelly not
+// exposed from there.
+pin_project! {
+    struct UdpPollHelper<MakeFut, Fut> {
+        make_fut: MakeFut,
+        #[pin]
+        fut: Option<Fut>,
+    }
+}
+
+impl<MakeFut, Fut> UdpPollHelper<MakeFut, Fut> {
+    fn new(make_fut: MakeFut) -> Self {
+        Self {
+            make_fut,
+            fut: None,
+        }
+    }
+}
+
+impl<MakeFut, Fut> UdpPoller for UdpPollHelper<MakeFut, Fut>
+where
+    MakeFut: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = io::Result<()>> + Send + Sync + 'static,
+{
+    fn poll_writable(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        let mut this = self.project();
+
+        if this.fut.is_none() {
+            this.fut.set(Some((this.make_fut)()));
+        }
+
+        let result = this.fut.as_mut().as_pin_mut().unwrap().poll(cx);
+
+        if result.is_ready() {
+            this.fut.set(None);
+        }
+
+        result
+    }
+}
+
+impl<MakeFut, Fut> fmt::Debug for UdpPollHelper<MakeFut, Fut> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UdpPollHelper").finish_non_exhaustive()
+    }
+}
 //------------------------------------------------------------------------------
 
 /// Makes new `SideChannel`s.
 pub struct SideChannelMaker {
-    io: Arc<tokio::net::UdpSocket>,
-    packet_tx: broadcast::Sender<Packet>,
+    socket: Arc<CustomUdpSocket>,
 }
 
 impl SideChannelMaker {
     pub fn make(&self) -> SideChannel {
         SideChannel {
-            io: self.io.clone(),
-            packet_rx: AsyncMutex::new(self.packet_tx.subscribe()),
+            socket: self.socket.clone(),
+            packet_rx: AsyncMutex::new(self.socket.side_channel_tx.subscribe()),
         }
     }
 }
 
 pub struct SideChannel {
-    io: Arc<tokio::net::UdpSocket>,
+    socket: Arc<CustomUdpSocket>,
     packet_rx: AsyncMutex<broadcast::Receiver<Packet>>,
 }
 
 impl SideChannel {
     pub fn sender(&self) -> SideChannelSender {
         SideChannelSender {
-            io: self.io.clone(),
+            socket: self.socket.clone(),
         }
     }
 }
 
 impl DatagramSocket for SideChannel {
     async fn send_to<'a>(&'a self, buf: &'a [u8], target: SocketAddr) -> io::Result<usize> {
-        self.io.send_to(buf, target).await
+        self.socket.io.send_to(buf, target).await
     }
 
     // Note: receiving on side channels will only work when quinn is calling `poll_recv`.  This
@@ -615,7 +520,7 @@ impl DatagramSocket for SideChannel {
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.io.local_addr()
+        self.socket.io.local_addr()
     }
 }
 
@@ -623,12 +528,12 @@ impl DatagramSocket for SideChannel {
 // `broadcast::Receiver` that the `CustomUdpSocket` would need to pass messages to.
 #[derive(Clone)]
 pub struct SideChannelSender {
-    io: Arc<tokio::net::UdpSocket>,
+    socket: Arc<CustomUdpSocket>,
 }
 
 impl SideChannelSender {
     pub async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
-        self.io.send_to(buf, target).await.map(|_| ())
+        self.socket.io.send_to(buf, target).await.map(|_| ())
     }
 }
 
@@ -638,41 +543,12 @@ impl SideChannelSender {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        task,
-    };
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn small_data_exchange() {
-        let (connector, mut acceptor, _) =
-            configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
-
-        let addr = *acceptor.local_addr();
-
-        let message = b"hello world";
-
-        let h1 = task::spawn(async move {
-            let mut conn = acceptor.accept().await.unwrap().finish().await.unwrap();
-            let mut buf = [0; 32];
-            let n = conn.read(&mut buf).await.unwrap();
-            assert_eq!(message, &buf[..n]);
-        });
-
-        let h2 = task::spawn(async move {
-            let mut conn = connector.connect(addr).await.unwrap();
-            conn.write_all(message).await.unwrap();
-            conn.finish().await.unwrap();
-        });
-
-        h1.await.unwrap();
-        h2.await.unwrap();
-    }
+    use tokio::task;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn side_channel() {
-        let (_connector, mut acceptor, side_channel_maker) =
-            configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
+        let (_connector, acceptor, side_channel_maker) =
+            configure((Ipv4Addr::LOCALHOST, 0).into(), Default::default()).unwrap();
         let addr = *acceptor.local_addr();
         let side_channel = side_channel_maker.make();
 

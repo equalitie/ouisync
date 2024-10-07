@@ -1,4 +1,4 @@
-use super::RepositoryMonitor;
+use super::monitor::RepositoryMonitor;
 use crate::{db, device_id::DeviceId, error::Result};
 use metrics::{NoopRecorder, Recorder};
 use state_monitor::{metrics::MetricsRecorder, StateMonitor};

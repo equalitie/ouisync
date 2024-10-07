@@ -16,27 +16,35 @@ use std::{cmp::Ordering, fmt, future};
 /// Status of receiving a root node
 #[derive(PartialEq, Eq, Debug)]
 pub(crate) enum RootNodeStatus {
-    /// The node represents a new snapshot - write it into the store and requests its children.
-    NewSnapshot,
-    /// We already have the node but its block presence indicated the peer potentially has some
-    /// blocks we don't have. Don't write it into the store but do request its children.
-    NewBlocks,
+    /// The incoming node is more up to date than the nodos we already have. Contains info about
+    /// which part of the node is more up to date and the block presence of the latest node we have
+    /// from the same branch as the incoming node.
+    Updated(RootNodeUpdated, MultiBlockPresence),
     /// The node is outdated - discard it.
     Outdated,
 }
 
+#[derive(PartialEq, Eq, Debug)]
+pub(crate) enum RootNodeUpdated {
+    /// The node represents a new snapshot - write it into the store and requests its children.
+    Snapshot,
+    /// The node represents a snapshot we already have but its block presence indicated the peer potentially has some
+    /// blocks we don't have. Don't write it into the store but do request its children.
+    Blocks,
+}
+
 impl RootNodeStatus {
-    pub fn request_children(&self) -> bool {
+    pub fn request_children(&self) -> Option<MultiBlockPresence> {
         match self {
-            Self::NewSnapshot | Self::NewBlocks => true,
-            Self::Outdated => false,
+            Self::Updated(_, block_presence) => Some(*block_presence),
+            Self::Outdated => None,
         }
     }
 
     pub fn write(&self) -> bool {
         match self {
-            Self::NewSnapshot => true,
-            Self::NewBlocks | Self::Outdated => false,
+            Self::Updated(RootNodeUpdated::Snapshot, _) => true,
+            Self::Updated(RootNodeUpdated::Blocks, _) | Self::Outdated => false,
         }
     }
 }
@@ -44,8 +52,8 @@ impl RootNodeStatus {
 impl fmt::Display for RootNodeStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::NewSnapshot => write!(f, "new snapshot"),
-            Self::NewBlocks => write!(f, "new blocks"),
+            Self::Updated(RootNodeUpdated::Snapshot, _) => write!(f, "new snapshot"),
+            Self::Updated(RootNodeUpdated::Blocks, _) => write!(f, "new blocks"),
             Self::Outdated => write!(f, "outdated"),
         }
     }
@@ -552,7 +560,8 @@ pub(super) async fn status(
     new_proof: &Proof,
     new_block_presence: &MultiBlockPresence,
 ) -> Result<RootNodeStatus, Error> {
-    let mut status = RootNodeStatus::NewSnapshot;
+    let mut updated = RootNodeUpdated::Snapshot;
+    let mut block_presence = MultiBlockPresence::None;
 
     let mut old_nodes = load_all_latest(conn);
     while let Some(old_node) = old_nodes.try_next().await? {
@@ -563,7 +572,7 @@ pub(super) async fn status(
             Some(Ordering::Less) => {
                 // The incoming node is outdated compared to at least one existing node - discard
                 // it.
-                status = RootNodeStatus::Outdated;
+                return Ok(RootNodeStatus::Outdated);
             }
             Some(Ordering::Equal) => {
                 if new_proof.hash == old_node.proof.hash {
@@ -577,9 +586,9 @@ pub(super) async fn status(
                         .block_presence
                         .is_outdated(new_block_presence)
                     {
-                        status = RootNodeStatus::NewBlocks;
+                        updated = RootNodeUpdated::Blocks;
                     } else {
-                        status = RootNodeStatus::Outdated;
+                        return Ok(RootNodeStatus::Outdated);
                     }
                 } else {
                     tracing::warn!(
@@ -591,7 +600,7 @@ pub(super) async fn status(
                         "Received root node invalid - broken invariant: same vv but different hash"
                     );
 
-                    status = RootNodeStatus::Outdated;
+                    return Ok(RootNodeStatus::Outdated);
                 }
             }
             Some(Ordering::Greater) => (),
@@ -604,17 +613,17 @@ pub(super) async fn status(
                         "Received root node invalid - broken invariant: concurrency within branch is not allowed"
                     );
 
-                    status = RootNodeStatus::Outdated;
+                    return Ok(RootNodeStatus::Outdated);
                 }
             }
         }
 
-        if matches!(status, RootNodeStatus::Outdated) {
-            break;
+        if old_node.proof.writer_id == new_proof.writer_id {
+            block_presence = old_node.summary.block_presence;
         }
     }
 
-    Ok(status)
+    Ok(RootNodeStatus::Updated(updated, block_presence))
 }
 
 pub(super) async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {
@@ -827,8 +836,8 @@ mod tests {
         use proptest::{arbitrary::any, collection::vec, sample::select, strategy::Strategy};
         use test_strategy::proptest;
 
-        #[proptest]
-        fn proptest(
+        #[proptest(async = "tokio")]
+        async fn proptest(
             write_keys: Keypair,
             #[strategy(root_node_params_strategy())] input: Vec<(
                 SnapshotId,
@@ -837,7 +846,7 @@ mod tests {
                 NodeState,
             )>,
         ) {
-            crate::test_utils::run(case(write_keys, input))
+            case(write_keys, input).await
         }
 
         async fn case(write_keys: Keypair, input: Vec<(SnapshotId, PublicKey, Hash, NodeState)>) {

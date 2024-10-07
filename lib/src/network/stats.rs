@@ -1,4 +1,3 @@
-use super::raw;
 use pin_project_lite::pin_project;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -139,18 +138,6 @@ impl<T> Instrumented<T> {
     pub fn new(inner: T, counters: Arc<ByteCounters>) -> Self {
         Self { inner, counters }
     }
-
-    pub fn as_ref(&self) -> &T {
-        &self.inner
-    }
-
-    pub fn as_mut(&mut self) -> &mut T {
-        &mut self.inner
-    }
-
-    pub fn counters(&self) -> &ByteCounters {
-        &self.counters
-    }
 }
 
 impl<T> AsyncRead for Instrumented<T>
@@ -220,22 +207,6 @@ where
 
     fn is_write_vectored(&self) -> bool {
         self.inner.is_write_vectored()
-    }
-}
-
-impl Instrumented<raw::Stream> {
-    pub fn into_split(
-        self,
-    ) -> (
-        Instrumented<raw::OwnedReadHalf>,
-        Instrumented<raw::OwnedWriteHalf>,
-    ) {
-        let (reader, writer) = self.inner.into_split();
-
-        (
-            Instrumented::new(reader, self.counters.clone()),
-            Instrumented::new(writer, self.counters),
-        )
     }
 }
 

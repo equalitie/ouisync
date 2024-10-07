@@ -50,13 +50,13 @@ macro_rules! define_byte_array_wrapper {
 
         impl std::fmt::Debug for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{:8x}", self)
+                write!(f, "{:<8x}", self)
             }
         }
 
         impl std::fmt::LowerHex for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                crate::format::hex(f, &self.0)
+                hex_fmt::HexFmt(&self.0).fmt(f)
             }
         }
     };
@@ -144,12 +144,12 @@ mod tests {
             format!("{:x}", id),
             "0001020305070b0d1113171d1f25292b2f353b3d4347494f53596165676b6d71"
         );
-        assert_eq!(format!("{:1x}", id), "");
-        assert_eq!(format!("{:2x}", id), "..");
-        assert_eq!(format!("{:3x}", id), "..");
-        assert_eq!(format!("{:4x}", id), "00..");
-        assert_eq!(format!("{:6x}", id), "0001..");
-        assert_eq!(format!("{:8x}", id), "000102..");
+        assert_eq!(format!("{:<1x}", id), ".");
+        assert_eq!(format!("{:<2x}", id), "..");
+        assert_eq!(format!("{:<3x}", id), "0..");
+        assert_eq!(format!("{:<4x}", id), "00..");
+        assert_eq!(format!("{:<6x}", id), "0001..");
+        assert_eq!(format!("{:<8x}", id), "000102..");
 
         assert_eq!(format!("{:?}", id), "000102..");
         assert_eq!(

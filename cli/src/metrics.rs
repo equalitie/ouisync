@@ -3,12 +3,7 @@ use crate::{
     protocol::Error,
     state::State,
 };
-use hyper::{
-    server::{conn::AddrIncoming, Server},
-    service::{make_service_fn, service_fn},
-    Body, Response,
-};
-use hyper_rustls::TlsAcceptor;
+use hyper::{server::conn::http1, service::service_fn, Response};
 use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
 use ouisync_bridge::config::{ConfigError, ConfigKey};
@@ -20,10 +15,17 @@ use std::{
     io,
     net::SocketAddr,
     path::PathBuf,
+    pin::Pin,
     sync::Mutex,
+    task::{Context, Poll},
     time::{Duration, Instant},
 };
-use tokio::task;
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::TcpListener,
+    task::{self, JoinSet},
+};
+use tokio_rustls::TlsAcceptor;
 
 const BIND_METRICS_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("bind_metrics", "Addresses to bind the metrics endpoint to");
@@ -88,34 +90,17 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
 
     let (collect_requester, collect_acceptor) = sync::new(COLLECT_INTERVAL);
 
-    let make_service = make_service_fn(move |_| {
-        let recorder_handle = recorder_handle.clone();
-        let collect_requester = collect_requester.clone();
+    let tcp_listener = TcpListener::bind(&addr).await?;
 
-        async move {
-            Ok::<_, Infallible>(service_fn(move |_| {
-                let recorder_handle = recorder_handle.clone();
-                let collect_requester = collect_requester.clone();
+    match tcp_listener.local_addr() {
+        Ok(addr) => tracing::info!("Metrics server listening on {addr}"),
+        Err(error) => tracing::error!(
+            ?error,
+            "Metrics server failed to retrieve the listening address"
+        ),
+    }
 
-                async move {
-                    collect_requester.request().await;
-                    tracing::trace!("Serving metrics");
-
-                    let content = recorder_handle.render();
-                    let content = Body::from(content);
-
-                    Ok::<_, Infallible>(Response::new(content))
-                }
-            }))
-        }
-    });
-
-    let incoming =
-        AddrIncoming::bind(&addr).map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
-    tracing::info!("Metrics server listening on {}", incoming.local_addr());
-
-    let acceptor = TlsAcceptor::new(state.get_server_config().await?, incoming);
-    let server = Server::builder(acceptor);
+    let tls_acceptor = TlsAcceptor::from(state.get_server_config().await?);
 
     task::spawn(collect(
         collect_acceptor,
@@ -125,8 +110,57 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
     ));
 
     let handle = task::spawn(async move {
-        if let Err(error) = server.serve(make_service).await {
-            tracing::error!(?error, "Metrics server failed");
+        let mut tasks = JoinSet::new();
+
+        loop {
+            let (stream, addr) = match tcp_listener.accept().await {
+                Ok(conn) => conn,
+                Err(error) => {
+                    tracing::error!(?error, "Metrics server failed to accept new connection");
+                    break;
+                }
+            };
+
+            let stream = match tls_acceptor.accept(stream).await {
+                Ok(stream) => stream,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        %addr,
+                        "Metrics server failed to perform TLS handshake"
+                    );
+                    continue;
+                }
+            };
+
+            let recorder_handle = recorder_handle.clone();
+            let collect_requester = collect_requester.clone();
+
+            tasks.spawn(async move {
+                let service = move |_req| {
+                    let recorder_handle = recorder_handle.clone();
+                    let collect_requester = collect_requester.clone();
+
+                    async move {
+                        collect_requester.request().await;
+                        tracing::trace!("Serving metrics");
+
+                        let content = recorder_handle.render();
+
+                        Ok::<_, Infallible>(Response::new(content))
+                    }
+                };
+
+                match http1::Builder::new()
+                    .serve_connection(StreamCompat(stream), service_fn(service))
+                    .await
+                {
+                    Ok(()) => (),
+                    Err(error) => {
+                        tracing::error!(?error, %addr, "Metrics server connection failed")
+                    }
+                }
+            });
         }
     })
     .abort_handle()
@@ -286,5 +320,72 @@ mod sync {
         pub async fn accept(&mut self) -> Option<oneshot::Sender<()>> {
             self.rx.recv().await
         }
+    }
+}
+
+// hyper no longer accepts `tokio::AsyncRead` and `tokio::AsyncWrite` and uses its own traits
+// instead so we now need this compatibility wrapper.
+struct StreamCompat<T>(T);
+
+impl<T> hyper::rt::Read for StreamCompat<T>
+where
+    T: AsyncRead + Unpin,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut buf: hyper::rt::ReadBufCursor<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        unsafe {
+            let mut buf = ReadBuf::uninit(buf.as_mut());
+
+            let n = match Pin::new(&mut self.0).poll_read(cx, &mut buf) {
+                Poll::Ready(Ok(())) => buf.filled().len(),
+                other => return other,
+            };
+
+            buf.advance(n);
+        }
+
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<T> hyper::rt::Write for StreamCompat<T>
+where
+    T: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.0.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        Pin::new(&mut self.0).poll_write_vectored(cx, bufs)
     }
 }

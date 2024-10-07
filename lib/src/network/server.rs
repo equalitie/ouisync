@@ -1,7 +1,7 @@
 use super::{
     constants::{INTEREST_TIMEOUT, MAX_UNCHOKED_DURATION},
     debug_payload::{DebugRequest, DebugResponse},
-    message::{Content, Request, Response, ResponseDisambiguator},
+    message::{Message, Request, Response},
 };
 use crate::{
     crypto::{sign::PublicKey, Hash},
@@ -32,7 +32,7 @@ pub(crate) struct Server {
 impl Server {
     pub fn new(
         vault: Vault,
-        content_tx: mpsc::UnboundedSender<Content>,
+        message_tx: mpsc::UnboundedSender<Message>,
         request_rx: mpsc::Receiver<Request>,
         response_limiter: Arc<Semaphore>,
     ) -> Self {
@@ -42,7 +42,7 @@ impl Server {
             inner: Inner {
                 vault,
                 response_tx,
-                content_tx,
+                message_tx,
                 response_limiter,
             },
             request_rx,
@@ -64,7 +64,7 @@ impl Server {
 struct Inner {
     vault: Vault,
     response_tx: mpsc::Sender<Response>,
-    content_tx: mpsc::UnboundedSender<Content>,
+    message_tx: mpsc::UnboundedSender<Message>,
     response_limiter: Arc<Semaphore>,
 }
 
@@ -92,21 +92,26 @@ impl Inner {
     }
 
     async fn handle_request(&self, request: Request) -> Result<()> {
-        self.vault.monitor.requests_received.increment(1);
+        self.vault.monitor.traffic.requests_received.increment(1);
 
         match request {
-            Request::RootNode(public_key, debug) => self.handle_root_node(public_key, debug).await,
-            Request::ChildNodes(hash, disambiguator, debug) => {
-                self.handle_child_nodes(hash, disambiguator, debug).await
-            }
+            Request::RootNode {
+                writer_id,
+                cookie,
+                debug,
+            } => self.handle_root_node(writer_id, cookie, debug).await,
+            Request::ChildNodes(hash, debug) => self.handle_child_nodes(hash, debug).await,
             Request::Block(block_id, debug) => self.handle_block(block_id, debug).await,
         }
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_root_node(&self, writer_id: PublicKey, debug: DebugRequest) -> Result<()> {
-        let debug = debug.begin_reply();
-
+    async fn handle_root_node(
+        &self,
+        writer_id: PublicKey,
+        cookie: u64,
+        debug: DebugRequest,
+    ) -> Result<()> {
         let root_node = self
             .vault
             .store()
@@ -119,38 +124,40 @@ impl Inner {
             Ok(node) => {
                 tracing::trace!("root node found");
 
-                let response = Response::RootNode(
-                    node.proof.into(),
-                    node.summary.block_presence,
-                    debug.send(),
-                );
+                let response = Response::RootNode {
+                    proof: node.proof.into(),
+                    block_presence: node.summary.block_presence,
+                    cookie,
+                    debug: debug.reply(),
+                };
 
                 self.enqueue_response(response).await;
                 Ok(())
             }
             Err(store::Error::BranchNotFound) => {
                 tracing::trace!("root node not found");
-                self.enqueue_response(Response::RootNodeError(writer_id, debug.send()))
-                    .await;
+                self.enqueue_response(Response::RootNodeError {
+                    writer_id,
+                    cookie,
+                    debug: debug.reply(),
+                })
+                .await;
                 Ok(())
             }
             Err(error) => {
-                self.enqueue_response(Response::RootNodeError(writer_id, debug.send()))
-                    .await;
+                self.enqueue_response(Response::RootNodeError {
+                    writer_id,
+                    cookie,
+                    debug: debug.reply(),
+                })
+                .await;
                 Err(error.into())
             }
         }
     }
 
     #[instrument(skip(self, debug), err(Debug))]
-    async fn handle_child_nodes(
-        &self,
-        parent_hash: Hash,
-        disambiguator: ResponseDisambiguator,
-        debug: DebugRequest,
-    ) -> Result<()> {
-        let debug = debug.begin_reply();
-
+    async fn handle_child_nodes(&self, parent_hash: Hash, debug: DebugRequest) -> Result<()> {
         let mut reader = self.vault.store().acquire_read().await?;
 
         // At most one of these will be non-empty.
@@ -162,27 +169,19 @@ impl Inner {
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
-                self.enqueue_response(Response::InnerNodes(
-                    inner_nodes,
-                    disambiguator,
-                    debug.clone().send(),
-                ))
-                .await;
+                self.enqueue_response(Response::InnerNodes(inner_nodes, debug.reply()))
+                    .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
-                self.enqueue_response(Response::LeafNodes(leaf_nodes, disambiguator, debug.send()))
+                self.enqueue_response(Response::LeafNodes(leaf_nodes, debug.reply()))
                     .await;
             }
         } else {
             tracing::trace!("child nodes not found");
-            self.enqueue_response(Response::ChildNodesError(
-                parent_hash,
-                disambiguator,
-                debug.send(),
-            ))
-            .await;
+            self.enqueue_response(Response::ChildNodesError(parent_hash, debug.reply()))
+                .await;
         }
 
         Ok(())
@@ -190,7 +189,6 @@ impl Inner {
 
     #[instrument(skip(self, debug), err(Debug))]
     async fn handle_block(&self, block_id: BlockId, debug: DebugRequest) -> Result<()> {
-        let debug = debug.begin_reply();
         let mut content = BlockContent::new();
         let result = self
             .vault
@@ -203,18 +201,18 @@ impl Inner {
         match result {
             Ok(nonce) => {
                 tracing::trace!("block found");
-                self.enqueue_response(Response::Block(content, nonce, debug.send()))
+                self.enqueue_response(Response::Block(content, nonce, debug.reply()))
                     .await;
                 Ok(())
             }
             Err(store::Error::BlockNotFound) => {
                 tracing::trace!("block not found");
-                self.enqueue_response(Response::BlockError(block_id, debug.send()))
+                self.enqueue_response(Response::BlockError(block_id, debug.reply()))
                     .await;
                 Ok(())
             }
             Err(error) => {
-                self.enqueue_response(Response::BlockError(block_id, debug.send()))
+                self.enqueue_response(Response::BlockError(block_id, debug.reply()))
                     .await;
                 Err(error.into())
             }
@@ -243,6 +241,7 @@ impl Inner {
         }
     }
 
+    #[instrument(skip(self))]
     async fn handle_branch_changed_event(&self, branch_id: PublicKey) -> Result<()> {
         let root_node = match self.load_root_node(&branch_id).await {
             Ok(node) => node,
@@ -256,12 +255,14 @@ impl Inner {
         self.send_root_node(root_node).await
     }
 
+    #[instrument(skip(self))]
     async fn handle_block_received_event(&self, block_id: BlockId) -> Result<()> {
         self.enqueue_response(Response::BlockOffer(block_id, DebugResponse::unsolicited()))
             .await;
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn handle_unknown_event(&self) -> Result<()> {
         let root_nodes = self.load_root_nodes().await?;
         for root_node in root_nodes {
@@ -290,14 +291,13 @@ impl Inner {
             "send_root_node",
         );
 
-        let response = Response::RootNode(
-            root_node.proof.into(),
-            root_node.summary.block_presence,
-            DebugResponse::unsolicited(),
-        );
+        let response = Response::RootNode {
+            proof: root_node.proof.into(),
+            block_presence: root_node.summary.block_presence,
+            cookie: 0,
+            debug: DebugResponse::unsolicited(),
+        };
 
-        // TODO: maybe this should use different metric counter, to distinguish
-        // solicited/unsolicited responses?
         self.enqueue_response(response).await;
 
         Ok(())
@@ -361,8 +361,8 @@ impl Inner {
     }
 
     fn send_response(&self, response: Response) {
-        if self.content_tx.send(Content::Response(response)).is_ok() {
-            self.vault.monitor.responses_sent.increment(1);
+        if self.message_tx.send(Message::Response(response)).is_ok() {
+            self.vault.monitor.traffic.responses_sent.increment(1);
         }
     }
 }

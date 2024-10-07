@@ -85,26 +85,28 @@ impl Hashable for PublicRuntimeId {
     }
 }
 
-pub async fn exchange<IO>(
+pub async fn exchange<W, R>(
     our_runtime_id: &SecretRuntimeId,
-    io: &mut IO,
+    writer: &mut W,
+    reader: &mut R,
 ) -> io::Result<PublicRuntimeId>
 where
-    IO: AsyncRead + AsyncWrite + Unpin,
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
 {
     let our_challenge: [u8; 32] = OsRng.gen();
 
-    io.write_all(&our_challenge).await?;
-    our_runtime_id.public().write_into(io).await?;
+    writer.write_all(&our_challenge).await?;
+    our_runtime_id.public().write_into(writer).await?;
 
-    let their_challenge = read_bytes::<32, IO>(io).await?;
-    let their_runtime_id = PublicRuntimeId::read_from(io).await?;
+    let their_challenge: [_; 32] = read_bytes(reader).await?;
+    let their_runtime_id = PublicRuntimeId::read_from(reader).await?;
 
     let our_signature = our_runtime_id.keypair.sign(&to_sign(&their_challenge));
 
-    io.write_all(&our_signature.to_bytes()).await?;
+    writer.write_all(&our_signature.to_bytes()).await?;
 
-    let their_signature = read_bytes::<{ Signature::SIZE }, IO>(io).await?;
+    let their_signature: [_; Signature::SIZE] = read_bytes(reader).await?;
     let their_signature = Signature::from(&their_signature);
 
     if !their_runtime_id

@@ -1,6 +1,7 @@
+pub(crate) mod monitor;
+
 mod credentials;
 mod metadata;
-mod monitor;
 mod params;
 mod vault;
 mod worker;
@@ -12,13 +13,13 @@ pub use self::{credentials::Credentials, metadata::Metadata, params::RepositoryP
 
 pub(crate) use self::{
     metadata::{data_version, quota},
-    monitor::RepositoryMonitor,
     vault::Vault,
 };
 
+use self::monitor::RepositoryMonitor;
 use crate::{
     access_control::{Access, AccessChange, AccessKeys, AccessMode, AccessSecrets, LocalSecret},
-    block_tracker::RequestMode,
+    block_tracker::BlockRequestMode,
     branch::{Branch, BranchShared},
     crypto::{sign::PublicKey, PasswordSalt},
     db::{self, DatabaseId},
@@ -959,7 +960,7 @@ impl Repository {
         self.shared
             .vault
             .block_tracker
-            .set_request_mode(request_mode(&credentials.secrets));
+            .set_request_mode(block_request_mode(&credentials.secrets));
 
         *self.shared.credentials.write().unwrap() = credentials;
         *self.worker_handle.lock().unwrap() = Some(spawn_worker(self.shared.clone()));
@@ -983,7 +984,7 @@ impl Shared {
 
         vault
             .block_tracker
-            .set_request_mode(request_mode(&credentials.secrets));
+            .set_request_mode(block_request_mode(&credentials.secrets));
 
         Self {
             vault,
@@ -1075,10 +1076,10 @@ async fn report_sync_progress(vault: Vault) {
     }
 }
 
-fn request_mode(secrets: &AccessSecrets) -> RequestMode {
+fn block_request_mode(secrets: &AccessSecrets) -> BlockRequestMode {
     if secrets.can_read() {
-        RequestMode::Lazy
+        BlockRequestMode::Lazy
     } else {
-        RequestMode::Greedy
+        BlockRequestMode::Greedy
     }
 }

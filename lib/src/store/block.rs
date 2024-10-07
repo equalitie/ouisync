@@ -24,10 +24,7 @@ pub(super) async fn read(
         .bind(id)
         .fetch_optional(conn)
         .await?
-        .ok_or_else(|| {
-            tracing::trace!(?id, "Block not found");
-            Error::BlockNotFound
-        })?;
+        .ok_or(Error::BlockNotFound)?;
 
     let nonce: &[u8] = row.get(0);
     let nonce = BlockNonce::try_from(nonce).map_err(|_| Error::MalformedData)?;

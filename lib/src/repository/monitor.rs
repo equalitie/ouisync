@@ -19,7 +19,57 @@ use tracing::{Instrument, Span};
 
 pub(crate) struct RepositoryMonitor {
     pub info_hash: MonitoredValue<Option<InfoHash>>,
+    pub traffic: TrafficMonitor,
+    pub scan_job: JobMonitor,
+    pub merge_job: JobMonitor,
+    pub prune_job: JobMonitor,
+    pub trash_job: JobMonitor,
 
+    span: Span,
+    node: StateMonitor,
+}
+
+impl RepositoryMonitor {
+    pub fn new<R>(node: StateMonitor, recorder: &R) -> Self
+    where
+        R: Recorder + ?Sized,
+    {
+        let span = tracing::info_span!("repo", message = node.id().name());
+
+        let info_hash = node.make_value("info-hash", None);
+        let traffic = TrafficMonitor::new(recorder);
+        let scan_job = JobMonitor::new(&node, recorder, "scan");
+        let merge_job = JobMonitor::new(&node, recorder, "merge");
+        let prune_job = JobMonitor::new(&node, recorder, "prune");
+        let trash_job = JobMonitor::new(&node, recorder, "trash");
+
+        Self {
+            info_hash,
+            traffic,
+            scan_job,
+            merge_job,
+            prune_job,
+            trash_job,
+            span,
+            node,
+        }
+    }
+
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    pub fn node(&self) -> &StateMonitor {
+        &self.node
+    }
+
+    pub fn name(&self) -> &str {
+        self.node.id().name()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct TrafficMonitor {
     // Total number of index requests sent.
     pub index_requests_sent: Counter,
     // Current number of sent index request for which responses haven't been received yet.
@@ -39,79 +89,81 @@ pub(crate) struct RepositoryMonitor {
     pub responses_sent: Counter,
     // Total number of responses received.
     pub responses_received: Counter,
-
-    pub scan_job: JobMonitor,
-    pub merge_job: JobMonitor,
-    pub prune_job: JobMonitor,
-    pub trash_job: JobMonitor,
-
-    span: Span,
-    node: StateMonitor,
 }
 
-impl RepositoryMonitor {
-    pub fn new<R>(node: StateMonitor, recorder: &R) -> Self
+impl TrafficMonitor {
+    pub fn new<R>(recorder: &R) -> Self
     where
         R: Recorder + ?Sized,
     {
-        let span = tracing::info_span!("repo", message = node.id().name());
-
-        let info_hash = node.make_value("info-hash", None);
-
-        let index_requests_sent = create_counter(recorder, "index requests sent", Unit::Count);
-        let index_requests_inflight =
-            create_gauge(recorder, "index requests inflight", Unit::Count);
-        let block_requests_sent = create_counter(recorder, "block requests sent", Unit::Count);
-        let block_requests_inflight =
-            create_gauge(recorder, "block requests inflight", Unit::Count);
-
-        let requests_received = create_counter(recorder, "requests received", Unit::Count);
-        let request_latency = create_histogram(recorder, "request latency", Unit::Seconds);
-        let request_timeouts = create_counter(recorder, "request timeouts", Unit::Count);
-
-        let responses_sent = create_counter(recorder, "responses sent", Unit::Count);
-        let responses_received = create_counter(recorder, "responses received", Unit::Count);
-
-        let scan_job = JobMonitor::new(&node, recorder, "scan");
-        let merge_job = JobMonitor::new(&node, recorder, "merge");
-        let prune_job = JobMonitor::new(&node, recorder, "prune");
-        let trash_job = JobMonitor::new(&node, recorder, "trash");
-
         Self {
-            info_hash,
-
-            index_requests_sent,
-            index_requests_inflight,
-            block_requests_sent,
-            block_requests_inflight,
-            requests_received,
-            request_latency,
-            request_timeouts,
-
-            responses_sent,
-            responses_received,
-
-            scan_job,
-            merge_job,
-            prune_job,
-            trash_job,
-
-            span,
-            node,
+            index_requests_sent: create_counter(recorder, "index requests sent", Unit::Count),
+            index_requests_inflight: create_gauge(recorder, "index requests inflight", Unit::Count),
+            block_requests_sent: create_counter(recorder, "block requests sent", Unit::Count),
+            block_requests_inflight: create_gauge(recorder, "block requests inflight", Unit::Count),
+            requests_received: create_counter(recorder, "requests received", Unit::Count),
+            request_latency: create_histogram(recorder, "request latency", Unit::Seconds),
+            request_timeouts: create_counter(recorder, "request timeouts", Unit::Count),
+            responses_sent: create_counter(recorder, "responses sent", Unit::Count),
+            responses_received: create_counter(recorder, "responses received", Unit::Count),
         }
     }
 
-    pub fn span(&self) -> &Span {
-        &self.span
-    }
+    pub fn record(&self, event: RequestEvent, kind: RequestKind) {
+        match (event, kind) {
+            (RequestEvent::Send, RequestKind::Index) => {
+                self.index_requests_sent.increment(1);
+                self.index_requests_inflight.increment(1.0);
+            }
+            (RequestEvent::Send, RequestKind::Block) => {
+                self.block_requests_sent.increment(1);
+                self.block_requests_inflight.increment(1.0);
+            }
+            (
+                RequestEvent::Success { .. }
+                | RequestEvent::Failure { .. }
+                | RequestEvent::Timeout
+                | RequestEvent::Cancel,
+                RequestKind::Index,
+            ) => {
+                self.index_requests_inflight.decrement(1.0);
+            }
+            (
+                RequestEvent::Success { .. }
+                | RequestEvent::Failure { .. }
+                | RequestEvent::Timeout
+                | RequestEvent::Cancel,
+                RequestKind::Block,
+            ) => {
+                self.block_requests_inflight.decrement(1.0);
+            }
+        }
 
-    pub fn node(&self) -> &StateMonitor {
-        &self.node
+        match event {
+            RequestEvent::Success { rtt } | RequestEvent::Failure { rtt } => {
+                self.request_latency.record(rtt);
+            }
+            RequestEvent::Timeout => {
+                self.request_timeouts.increment(1);
+            }
+            RequestEvent::Send | RequestEvent::Cancel => (),
+        }
     }
+}
 
-    pub fn name(&self) -> &str {
-        self.node.id().name()
-    }
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+pub(crate) enum RequestKind {
+    Index,
+    Block,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+pub(crate) enum RequestEvent {
+    Send,
+    Success { rtt: Duration },
+    Failure { rtt: Duration },
+    Timeout,
+    Cancel,
 }
 
 pub(crate) struct JobMonitor {

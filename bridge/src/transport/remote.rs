@@ -21,7 +21,11 @@ use tokio::{
     task::JoinSet,
 };
 use tokio_rustls::{
-    rustls::{self, ConnectionCommon},
+    rustls::{
+        self,
+        pki_types::{CertificateDer, PrivateKeyDer},
+        ConnectionCommon,
+    },
     TlsAcceptor,
 };
 use tokio_tungstenite::{
@@ -32,11 +36,10 @@ use tracing::Instrument;
 
 /// Shared config for `RemoteServer`
 pub fn make_server_config(
-    cert_chain: Vec<rustls::Certificate>,
-    key: rustls::PrivateKey,
+    cert_chain: Vec<CertificateDer<'static>>,
+    key: PrivateKeyDer<'static>,
 ) -> io::Result<Arc<rustls::ServerConfig>> {
     let config = rustls::ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
@@ -46,28 +49,25 @@ pub fn make_server_config(
 
 /// Shared config for `RemoteClient`
 pub fn make_client_config(
-    additional_root_certs: &[rustls::Certificate],
+    additional_root_certs: &[CertificateDer<'_>],
 ) -> io::Result<Arc<rustls::ClientConfig>> {
     let mut root_cert_store = rustls::RootCertStore::empty();
 
     // Add default root certificates
-    root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-        rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-            ta.subject,
-            ta.spki,
-            ta.name_constraints,
-        )
-    }));
+    root_cert_store.extend(
+        webpki_roots::TLS_SERVER_ROOTS
+            .iter()
+            .map(|ta| ta.to_owned()),
+    );
 
     // Add custom root certificates (if any)
     for cert in additional_root_certs {
         root_cert_store
-            .add(cert)
+            .add(cert.clone())
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     }
 
     let config = rustls::ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(root_cert_store)
         .with_no_client_auth();
 
@@ -289,6 +289,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
     use tokio::task;
+    use tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer;
 
     #[tokio::test]
     async fn basic() {
@@ -350,10 +351,10 @@ mod tests {
 
     fn make_configs() -> (Arc<rustls::ServerConfig>, Arc<rustls::ClientConfig>) {
         let gen = rcgen::generate_simple_self_signed(["localhost".to_owned()]).unwrap();
-        let cert = rustls::Certificate(gen.serialize_der().unwrap());
-        let key = rustls::PrivateKey(gen.serialize_private_key_der());
+        let cert = CertificateDer::from(gen.cert);
+        let key = PrivatePkcs8KeyDer::from(gen.key_pair.serialize_der());
 
-        let server_config = make_server_config(vec![cert.clone()], key).unwrap();
+        let server_config = make_server_config(vec![cert.clone()], key.into()).unwrap();
         let client_config = make_client_config(&[cert]).unwrap();
 
         (server_config, client_config)

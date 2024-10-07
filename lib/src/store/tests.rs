@@ -304,12 +304,12 @@ async fn fallback() {
         .is_none());
 }
 
-#[proptest]
-fn empty_nodes_are_not_stored(
+#[proptest(async = "tokio")]
+async fn empty_nodes_are_not_stored(
     #[strategy(1usize..32)] leaf_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(empty_nodes_are_not_stored_case(leaf_count, rng_seed))
+    empty_nodes_are_not_stored_case(leaf_count, rng_seed).await
 }
 
 async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
@@ -354,12 +354,12 @@ async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
     }
 }
 
-#[proptest]
-fn prune(
+#[proptest(async = "tokio")]
+async fn prune(
     #[strategy(vec(any::<PruneTestOp>(), 1..32))] ops: Vec<PruneTestOp>,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(prune_case(ops, rng_seed))
+    prune_case(ops, rng_seed).await
 }
 
 #[derive(Arbitrary, Debug)]

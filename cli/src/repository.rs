@@ -15,6 +15,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::{fs, runtime, task};
+use tokio_rustls::rustls;
 use tokio_stream::StreamExt;
 
 // Config keys

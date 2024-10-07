@@ -106,6 +106,10 @@ struct Options {
     #[arg(short = 'F', long)]
     features: Vec<String>,
 
+    /// Build package in release mode
+    #[arg(short, long)]
+    release: bool,
+
     /// Test only this package's library
     #[arg(long)]
     lib: bool,
@@ -134,9 +138,12 @@ fn build(options: &Options) -> Vec<String> {
         .arg("--no-run")
         .arg("--package")
         .arg(&options.package)
-        .arg("--release")
         .arg("--message-format")
         .arg("json");
+
+    if options.release {
+        command.arg("--release");
+    }
 
     for feature in &options.features {
         command.arg("--features").arg(feature);

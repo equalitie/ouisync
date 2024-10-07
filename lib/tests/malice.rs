@@ -3,6 +3,8 @@
 #[macro_use]
 mod common;
 
+use std::time::Duration;
+
 use common::{actor, Env, Proto, DEFAULT_REPO};
 use ouisync::{AccessMode, Error, Repository, StoreError};
 use tokio::sync::mpsc;
@@ -44,6 +46,11 @@ fn block_nonce_tamper() {
     // with her which should succeed.
     env.actor("bob", async move {
         let (network, repo, _reg) = actor::setup().await;
+
+        // Bob first sends the block requests to Mallory but never receives the correct responses.
+        // Those requests first need to timeout before Bob retries them to Alice. By default that
+        // would make this test take too long. Decrease the timeout to make it faster.
+        network.set_request_timeout(Duration::from_secs(5));
 
         let (alice_id, alice_expected_vv) = mallory_to_bob_rx.recv().await.unwrap();
 

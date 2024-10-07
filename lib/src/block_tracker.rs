@@ -2,31 +2,29 @@ use crate::{
     collections::{HashMap, HashSet},
     protocol::BlockId,
 };
-use deadlock::BlockingMutex;
-use std::{collections::hash_map::Entry, sync::Arc};
-use tokio::sync::watch;
+use std::{
+    collections::hash_map::Entry,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+use tokio::{sync::mpsc, task};
+use tracing::{Instrument, Span};
 
-/// Helper for tracking required missing blocks.
+/// Tracks blocks that are offered for requesting from some peers and blocks that are required
+/// locally. If a block is both, a notification is triggered to prompt us to request the block from
+/// the offering peers.
+///
+/// Note the above applies only to read and write replicas. For blind replicas which blocks are
+/// required is not known and so blocks are notified immediately once they've been offered.
 #[derive(Clone)]
 pub(crate) struct BlockTracker {
-    shared: Arc<Shared>,
+    command_tx: mpsc::UnboundedSender<Command>,
 }
 
 impl BlockTracker {
     pub fn new() -> Self {
-        let (notify_tx, _) = watch::channel(());
-
-        Self {
-            shared: Arc::new(Shared {
-                inner: BlockingMutex::new(Inner {
-                    missing_blocks: HashMap::default(),
-                    clients: HashMap::default(),
-                    next_client_id: 0,
-                    request_mode: RequestMode::Greedy,
-                }),
-                notify_tx,
-            }),
-        }
+        let (this, worker) = build();
+        task::spawn(worker.run().instrument(Span::current()));
+        this
     }
 
     /// Set the mode in which blocks are requested:
@@ -34,914 +32,649 @@ impl BlockTracker {
     /// - Lazy:   block is requested when it's both offered and required
     /// - Greedy: block is requested as soon as it's offered.
     ///
-    /// Note: In `Greedy` mode calling `require` (or `require_batch`) is unnecessary.
-    pub fn set_request_mode(&self, mode: RequestMode) {
-        self.shared.inner.lock().unwrap().request_mode = mode;
+    /// Note: In `Greedy` mode calling `require` is unnecessary.
+    pub fn set_request_mode(&self, mode: BlockRequestMode) {
+        self.command_tx.send(Command::SetRequestMode { mode }).ok();
     }
 
-    /// Marks the block with the given id as required.
+    pub fn new_client(&self) -> (BlockTrackerClient, mpsc::UnboundedReceiver<BlockId>) {
+        let (block_tx, block_rx) = mpsc::unbounded_channel();
+        let client_id = ClientId::next();
+
+        self.command_tx
+            .send(Command::InsertClient {
+                client_id,
+                block_tx,
+            })
+            .ok();
+
+        (
+            BlockTrackerClient {
+                client_id,
+                command_tx: self.command_tx.clone(),
+            },
+            block_rx,
+        )
+    }
+
     pub fn require(&self, block_id: BlockId) {
-        if self.shared.inner.lock().unwrap().require(block_id) {
-            self.shared.notify()
-        }
+        self.command_tx
+            .send(Command::InsertRequired { block_id })
+            .ok();
     }
 
-    /// Marks multiple blocks as required.
-    pub fn require_batch(&self) -> RequireBatch<'_> {
-        RequireBatch {
-            shared: &self.shared,
-            notify: false,
-        }
+    pub fn clear_required(&self) {
+        self.command_tx.send(Command::ClearRequired).ok();
+    }
+}
+
+pub(crate) struct BlockTrackerClient {
+    client_id: ClientId,
+    command_tx: mpsc::UnboundedSender<Command>,
+}
+
+impl BlockTrackerClient {
+    /// Marks block as offered by this peer.
+    pub fn offer(&self, block_id: BlockId, state: BlockOfferState) {
+        self.command_tx
+            .send(Command::InsertOffer {
+                client_id: self.client_id,
+                block_id,
+                state,
+            })
+            .ok();
     }
 
-    /// Approve the block request if offered. This is called when `quota` is not `None`, otherwise
-    /// blocks are pre-approved from `TrackerClient::register(block_id, OfferState::Approved)`.
+    /// Marks a block offer as approved. Do this for a block offered (see [Self::offer]) previously
+    /// with a `Complete` or `Incomplete` root node state after that root node has become
+    /// `Approved`.
+    ///
+    /// Note: this marks all offers for the give block as approved, not just the ones from this
+    /// peer.
     pub fn approve(&self, block_id: BlockId) {
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        let Some(missing_block) = inner.missing_blocks.get_mut(&block_id) else {
-            return;
-        };
-
-        let required = match &mut missing_block.state {
-            State::Idle { approved: true, .. } | State::Accepted(_) => return,
-            State::Idle { approved, required } => {
-                *approved = true;
-                *required
-            }
-        };
-
-        // If required and offered, notify the waiting acceptors.
-        if required && !missing_block.offers.is_empty() {
-            self.shared.notify();
-        }
-    }
-
-    pub fn client(&self) -> TrackerClient {
-        let client_id = self.shared.inner.lock().unwrap().insert_client();
-        let notify_rx = self.shared.notify_tx.subscribe();
-
-        TrackerClient {
-            shared: self.shared.clone(),
-            client_id,
-            notify_rx,
-        }
+        self.command_tx
+            .send(Command::ApproveOffers { block_id })
+            .ok();
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum OfferState {
-    Pending,
-    Approved,
+impl Drop for BlockTrackerClient {
+    fn drop(&mut self) {
+        self.command_tx
+            .send(Command::RemoveClient {
+                client_id: self.client_id,
+            })
+            .ok();
+    }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum RequestMode {
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum BlockRequestMode {
     // Request only required blocks
     Lazy,
     // Request all blocks
     Greedy,
 }
 
-pub(crate) struct RequireBatch<'a> {
-    shared: &'a Shared,
-    notify: bool,
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum BlockOfferState {
+    Pending,
+    Approved,
 }
 
-impl RequireBatch<'_> {
-    pub fn add(&mut self, block_id: BlockId) {
-        if self.shared.inner.lock().unwrap().require(block_id) {
-            self.notify = true;
+fn build() -> (BlockTracker, Worker) {
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    (BlockTracker { command_tx }, Worker::new(command_rx))
+}
+
+struct Worker {
+    clients: HashMap<ClientId, ClientState>,
+    required_blocks: HashSet<BlockId>,
+    request_mode: BlockRequestMode,
+    command_rx: mpsc::UnboundedReceiver<Command>,
+}
+
+impl Worker {
+    fn new(command_rx: mpsc::UnboundedReceiver<Command>) -> Self {
+        Self {
+            clients: HashMap::default(),
+            required_blocks: HashSet::default(),
+            request_mode: BlockRequestMode::Greedy,
+            command_rx,
         }
     }
 
-    pub fn commit(&mut self) {
-        if self.notify {
-            self.shared.notify();
-            self.notify = false;
-        }
-    }
-}
-
-impl Drop for RequireBatch<'_> {
-    fn drop(&mut self) {
-        self.commit()
-    }
-}
-
-pub(crate) struct TrackerClient {
-    shared: Arc<Shared>,
-    client_id: ClientId,
-    notify_rx: watch::Receiver<()>,
-}
-
-impl TrackerClient {
-    /// Returns a stream of offers for required blocks.
-    pub fn offers(&self) -> BlockOffers {
-        BlockOffers {
-            shared: self.shared.clone(),
-            client_id: self.client_id,
-            notify_rx: self.notify_rx.clone(),
+    async fn run(mut self) {
+        while let Some(command) = self.command_rx.recv().await {
+            self.handle_command(command);
         }
     }
 
-    /// Registers an offer for a block with the given id.
-    /// Returns `true` if this block was offered for the first time (by any client) or `false` if
-    /// it's already been offered but not yet accepted or cancelled.
-    pub fn register(&self, block_id: BlockId, state: OfferState) -> bool {
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        // unwrap is OK because if `self` exists the `inner.clients` entry must exists as well.
-        if !inner
-            .clients
-            .get_mut(&self.client_id)
-            .unwrap()
-            .insert(block_id)
-        {
-            // Already offered
-            return false;
-        }
-
-        let missing_block = inner
-            .missing_blocks
-            .entry(block_id)
-            .or_insert_with(|| MissingBlock {
-                offers: HashMap::default(),
-                state: State::Idle {
-                    required: false,
-                    approved: false,
-                },
-            });
-
-        missing_block
-            .offers
-            .insert(self.client_id, Offer::Available);
-
-        let mut notify = false;
-
-        match &mut missing_block.state {
-            State::Idle { approved, .. } => {
-                match state {
-                    OfferState::Approved => {
-                        *approved = true;
-                    }
-                    OfferState::Pending => (),
-                }
-
-                if *approved {
-                    notify = true;
-                }
-            }
-            State::Accepted(_) => (),
-        }
-
-        match inner.request_mode {
-            RequestMode::Lazy => (),
-            RequestMode::Greedy => {
-                if inner.require(block_id) {
-                    notify = true;
-                }
-            }
-        }
-
-        if notify {
-            self.shared.notify();
-        }
-
-        true
-    }
-}
-
-impl Drop for TrackerClient {
-    fn drop(&mut self) {
-        if self
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .remove_client(self.client_id)
-        {
-            self.shared.notify();
-        }
-    }
-}
-
-/// Stream of offers for required blocks.
-pub(crate) struct BlockOffers {
-    shared: Arc<Shared>,
-    client_id: ClientId,
-    notify_rx: watch::Receiver<()>,
-}
-
-impl BlockOffers {
-    /// Returns the next offer, waiting for one to appear if necessary.
-    pub async fn next(&mut self) -> BlockOffer {
-        loop {
-            if let Some(offer) = self.try_next() {
-                return offer;
-            }
-
-            // unwrap is ok because the sender exists in self.shared.
-            self.notify_rx.changed().await.unwrap();
-        }
-    }
-
-    /// Returns the next offer or `None` if none exists currently.
-    pub fn try_next(&self) -> Option<BlockOffer> {
-        let block_id = self
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .propose_offer(self.client_id)?;
-
-        Some(BlockOffer {
-            shared: self.shared.clone(),
-            client_id: self.client_id,
-            block_id,
-            complete: false,
-        })
-    }
-}
-
-/// Offer for a required block.
-pub(crate) struct BlockOffer {
-    shared: Arc<Shared>,
-    client_id: ClientId,
-    block_id: BlockId,
-    complete: bool,
-}
-
-impl BlockOffer {
+    /// Process all currently queued commands.
     #[cfg(test)]
-    pub fn block_id(&self) -> &BlockId {
-        &self.block_id
-    }
-
-    /// Accepts the offer. There can be multiple offers for the same block (each from a different
-    /// peer) but only one returns `Some` here. The returned `BlockPromise` is a commitment to send
-    /// the block request through this client.
-    pub fn accept(self) -> Option<BlockPromise> {
-        if self
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .accept_offer(&self.block_id, self.client_id)
-        {
-            Some(BlockPromise(self))
-        } else {
-            None
-        }
-    }
-}
-
-impl Drop for BlockOffer {
-    fn drop(&mut self) {
-        if self.complete {
-            return;
-        }
-
-        if self
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .cancel_offer(&self.block_id, self.client_id)
-        {
-            self.shared.notify();
-        }
-    }
-}
-
-/// Accepted block offer.
-pub(crate) struct BlockPromise(BlockOffer);
-
-impl BlockPromise {
-    pub(crate) fn block_id(&self) -> &BlockId {
-        &self.0.block_id
-    }
-
-    /// Mark the block request as successfully completed.
-    pub fn complete(mut self) {
-        self.0.complete = true;
-        self.0
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .complete(&self.0.block_id);
-    }
-}
-
-struct Shared {
-    inner: BlockingMutex<Inner>,
-    notify_tx: watch::Sender<()>,
-}
-
-impl Shared {
-    fn notify(&self) {
-        self.notify_tx.send(()).unwrap_or(())
-    }
-}
-
-// Invariant: for all `block_id` and `client_id` such that
-//
-//     missing_blocks[block_id].offers.contains_key(client_id)
-//
-// it must hold that
-//
-//     clients[client_id].contains(block_id)
-//
-// and vice-versa.
-struct Inner {
-    missing_blocks: HashMap<BlockId, MissingBlock>,
-    clients: HashMap<ClientId, HashSet<BlockId>>,
-    next_client_id: ClientId,
-    request_mode: RequestMode,
-}
-
-impl Inner {
-    fn insert_client(&mut self) -> ClientId {
-        let client_id = self.next_client_id;
-        self.next_client_id = self
-            .next_client_id
-            .checked_add(1)
-            .expect("too many clients");
-        self.clients.insert(client_id, HashSet::new());
-        client_id
-    }
-
-    fn remove_client(&mut self, client_id: ClientId) -> bool {
-        // unwrap is ok because if `self` exists the `clients` entry must exists as well.
-        let block_ids = self.clients.remove(&client_id).unwrap();
-        let mut notify = false;
-
-        for block_id in block_ids {
-            // unwrap is ok because of the invariant in `Inner`
-            let missing_block = self.missing_blocks.get_mut(&block_id).unwrap();
-
-            missing_block.offers.remove(&client_id);
-
-            if missing_block.unaccept_by(client_id) {
-                notify = true;
-            }
-
-            // TODO: if the block hasn't other offers and isn't required, remove it
-        }
-
-        notify
-    }
-
-    /// Mark the block with the given id as required. Returns true if the block wasn't already
-    /// required and if it has at least one offer. Otherwise returns false.
-    fn require(&mut self, block_id: BlockId) -> bool {
-        let missing_block = self
-            .missing_blocks
-            .entry(block_id)
-            .or_insert_with(|| MissingBlock {
-                offers: HashMap::default(),
-                state: State::Idle {
-                    required: false,
-                    approved: false,
-                },
-            });
-
-        match &mut missing_block.state {
-            State::Idle { required: true, .. } | State::Accepted(_) => false,
-            State::Idle { required, .. } => {
-                *required = true;
-                !missing_block.offers.is_empty()
-            }
+    pub fn step(&mut self) {
+        while let Ok(command) = self.command_rx.try_recv() {
+            self.handle_command(command);
         }
     }
 
-    fn complete(&mut self, block_id: &BlockId) {
-        let Some(missing_block) = self.missing_blocks.remove(block_id) else {
-            return;
-        };
-
-        for (client_id, _) in missing_block.offers {
-            if let Some(block_ids) = self.clients.get_mut(&client_id) {
-                block_ids.remove(block_id);
-            }
+    fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::InsertClient {
+                client_id,
+                block_tx,
+            } => self.insert_client(client_id, block_tx),
+            Command::RemoveClient { client_id } => self.remove_client(client_id),
+            Command::InsertOffer {
+                client_id,
+                block_id,
+                state,
+            } => self.insert_offer(client_id, block_id, state),
+            Command::ApproveOffers { block_id } => self.handle_approve_offers(block_id),
+            Command::SetRequestMode { mode } => self.set_request_mode(mode),
+            Command::InsertRequired { block_id } => self.insert_required(block_id),
+            Command::ClearRequired => self.clear_required(),
         }
     }
 
-    fn propose_offer(&mut self, client_id: ClientId) -> Option<BlockId> {
-        // TODO: OPTIMIZE (but profile first) this linear lookup
-        for block_id in self.clients.get(&client_id).into_iter().flatten() {
-            // unwrap is ok because of the invariant in `Inner`
-            let missing_block = self.missing_blocks.get_mut(block_id).unwrap();
+    fn insert_client(&mut self, client_id: ClientId, block_tx: mpsc::UnboundedSender<BlockId>) {
+        self.clients.insert(client_id, ClientState::new(block_tx));
+    }
 
-            match missing_block.state {
-                State::Idle {
-                    required: true,
-                    approved: true,
-                } => (),
-                State::Idle { .. } | State::Accepted(_) => continue,
-            }
+    fn remove_client(&mut self, client_id: ClientId) {
+        self.clients.remove(&client_id);
+    }
 
-            // unwrap is ok because of the invariant.
-            let offer = missing_block.offers.get_mut(&client_id).unwrap();
-            match offer {
-                Offer::Available => {
-                    *offer = Offer::Proposed;
+    fn set_request_mode(&mut self, mode: BlockRequestMode) {
+        self.request_mode = mode;
+
+        match mode {
+            BlockRequestMode::Greedy => {
+                for client_state in self.clients.values_mut() {
+                    client_state.accept_all_approved();
                 }
-                Offer::Proposed | Offer::Accepted => continue,
+
+                self.required_blocks.clear();
             }
-
-            return Some(*block_id);
+            BlockRequestMode::Lazy => (),
         }
-
-        None
     }
 
-    fn accept_offer(&mut self, block_id: &BlockId, client_id: ClientId) -> bool {
-        let Some(missing_block) = self.missing_blocks.get_mut(block_id) else {
-            return false;
-        };
-
-        match missing_block.state {
-            State::Idle {
-                required: true,
-                approved: true,
-            } => (),
-            State::Idle { .. } | State::Accepted(_) => return false,
+    fn insert_required(&mut self, block_id: BlockId) {
+        if !self.required_blocks.insert(block_id) {
+            // already required
+            return;
         }
 
-        missing_block.state = State::Accepted(client_id);
-        missing_block.offers.insert(client_id, Offer::Accepted);
-
-        true
+        match self.request_mode {
+            BlockRequestMode::Greedy => {
+                for client_state in self.clients.values_mut() {
+                    client_state.accept(block_id);
+                }
+            }
+            BlockRequestMode::Lazy => {
+                for client_state in self.clients.values_mut() {
+                    client_state.accept_if_approved(block_id);
+                }
+            }
+        }
     }
 
-    fn cancel_offer(&mut self, block_id: &BlockId, client_id: ClientId) -> bool {
-        let Some(missing_block) = self.missing_blocks.get_mut(block_id) else {
-            return false;
+    fn clear_required(&mut self) {
+        self.required_blocks.clear();
+    }
+
+    fn insert_offer(&mut self, client_id: ClientId, block_id: BlockId, new_state: BlockOfferState) {
+        let Some(client_state) = self.clients.get_mut(&client_id) else {
+            return;
         };
 
-        let Entry::Occupied(mut entry) = missing_block.offers.entry(client_id) else {
-            return false;
+        match client_state.offers.entry(block_id) {
+            Entry::Occupied(mut entry) => match (entry.get(), new_state) {
+                (BlockOfferState::Pending, BlockOfferState::Approved) => {
+                    if self.request_mode == BlockRequestMode::Greedy
+                        || self.required_blocks.contains(&block_id)
+                    {
+                        entry.remove();
+                        client_state.block_tx.send(block_id).ok();
+                    } else {
+                        entry.insert(BlockOfferState::Approved);
+                    }
+                }
+                (BlockOfferState::Pending, BlockOfferState::Pending)
+                | (BlockOfferState::Approved, BlockOfferState::Pending)
+                | (BlockOfferState::Approved, BlockOfferState::Approved) => (),
+            },
+            Entry::Vacant(entry) => match new_state {
+                BlockOfferState::Pending => {
+                    entry.insert(BlockOfferState::Pending);
+                }
+                BlockOfferState::Approved => {
+                    if self.request_mode == BlockRequestMode::Greedy
+                        || self.required_blocks.contains(&block_id)
+                    {
+                        client_state.block_tx.send(block_id).ok();
+                    } else {
+                        entry.insert(BlockOfferState::Approved);
+                    }
+                }
+            },
+        }
+    }
+
+    fn handle_approve_offers(&mut self, block_id: BlockId) {
+        let accept = matches!(self.request_mode, BlockRequestMode::Greedy)
+            || self.required_blocks.contains(&block_id);
+
+        for client_state in self.clients.values_mut() {
+            if accept {
+                client_state.accept(block_id);
+            } else {
+                client_state.approve(block_id);
+            }
+        }
+    }
+}
+
+struct ClientState {
+    offers: HashMap<BlockId, BlockOfferState>,
+    block_tx: mpsc::UnboundedSender<BlockId>,
+}
+
+impl ClientState {
+    fn new(block_tx: mpsc::UnboundedSender<BlockId>) -> Self {
+        Self {
+            offers: HashMap::default(),
+            block_tx,
+        }
+    }
+
+    fn accept(&mut self, block_id: BlockId) {
+        if self.offers.remove(&block_id).is_some() {
+            self.block_tx.send(block_id).ok();
+        }
+    }
+
+    fn accept_if_approved(&mut self, block_id: BlockId) {
+        let Entry::Occupied(entry) = self.offers.entry(block_id) else {
+            return;
         };
 
         match entry.get() {
-            Offer::Proposed => {
-                entry.insert(Offer::Available);
-            }
-            Offer::Accepted => {
-                // Cancelling an accepted offer means the request either failed or timeouted so it's
-                // safe to remove it. If the peer sends us another leaf node response with the same
-                // block id, we register the offer again.
+            BlockOfferState::Approved => {
                 entry.remove();
-                // unwrap is ok because if the client has been already destroyed then
-                // `missing_block.offers[&self.client_id]` would not exists and this function would
-                // have exited earlier.
-                self.clients.get_mut(&client_id).unwrap().remove(block_id);
+                self.block_tx.send(block_id).ok();
             }
-            Offer::Available => unreachable!(),
+            BlockOfferState::Pending => (),
         }
-
-        missing_block.unaccept_by(client_id)
     }
-}
 
-#[derive(Debug)]
-struct MissingBlock {
-    // Clients that offered this block.
-    offers: HashMap<ClientId, Offer>,
-    state: State,
-}
-
-impl MissingBlock {
-    fn unaccept_by(&mut self, client_id: ClientId) -> bool {
-        match self.state {
-            State::Accepted(other_client_id) if other_client_id == client_id => {
-                self.state = State::Idle {
-                    required: true,
-                    approved: true,
-                };
-                true
+    fn accept_all_approved(&mut self) {
+        self.offers.retain(|block_id, state| match state {
+            BlockOfferState::Approved => {
+                self.block_tx.send(*block_id).ok();
+                false
             }
-            State::Accepted(_) | State::Idle { .. } => false,
+            BlockOfferState::Pending => true,
+        });
+    }
+
+    fn approve(&mut self, block_id: BlockId) {
+        if let Some(state) = self.offers.get_mut(&block_id) {
+            *state = BlockOfferState::Approved;
         }
     }
 }
 
-#[derive(Debug)]
-enum State {
-    Idle { required: bool, approved: bool },
-    Accepted(ClientId),
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+struct ClientId(usize);
+
+impl ClientId {
+    fn next() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
 }
 
-#[derive(Debug)]
-enum Offer {
-    Available,
-    Proposed,
-    Accepted,
+enum Command {
+    InsertClient {
+        client_id: ClientId,
+        block_tx: mpsc::UnboundedSender<BlockId>,
+    },
+    RemoveClient {
+        client_id: ClientId,
+    },
+    InsertOffer {
+        client_id: ClientId,
+        block_id: BlockId,
+        state: BlockOfferState,
+    },
+    ApproveOffers {
+        block_id: BlockId,
+    },
+    SetRequestMode {
+        mode: BlockRequestMode,
+    },
+    InsertRequired {
+        block_id: BlockId,
+    },
+    ClearRequired,
 }
-
-type ClientId = usize;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{collections::HashSet, protocol::Block, test_utils};
-    use futures_util::future;
-    use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use std::{pin::pin, time::Duration};
-    use test_strategy::proptest;
-    use tokio::{select, sync::mpsc, sync::Barrier, task, time};
+    use tokio::sync::mpsc::error::TryRecvError;
 
     #[test]
-    fn lazy() {
-        let tracker = BlockTracker::new();
-        tracker.set_request_mode(RequestMode::Lazy);
+    fn greedy_mode_offer_pending_then_approve() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let client = tracker.client();
+        // Note `Greedy` is the default mode
 
-        // Initially no blocks are returned
-        assert!(client.offers().try_next().is_none());
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
 
-        // Offered but not required blocks are not returned
-        let block0: Block = rand::random();
-        client.register(block0.id, OfferState::Approved);
-        assert!(client.offers().try_next().is_none());
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        // Required but not offered blocks are not returned
-        let block1: Block = rand::random();
-        tracker.require(block1.id);
-        assert!(client.offers().try_next().is_none());
+        client.offer(block_id, BlockOfferState::Pending);
+        worker.step();
 
-        // Required + offered blocks are returned...
-        tracker.require(block0.id);
-        assert_eq!(
-            client
-                .offers()
-                .try_next()
-                .and_then(BlockOffer::accept)
-                .as_ref()
-                .map(BlockPromise::block_id),
-            Some(&block0.id)
-        );
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        // ...but only once.
-        assert!(client.offers().try_next().is_none());
+        client.approve(block_id);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
-    fn greedy() {
-        let tracker = BlockTracker::new();
-        tracker.set_request_mode(RequestMode::Greedy); // greedy is the default, but let's be explicit here
+    fn greedy_mode_offer_approved() {
+        let (tracker, mut worker) = build();
 
-        let client = tracker.client();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        // Initially no blocks are returned
-        assert!(client.offers().try_next().is_none());
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
 
-        // Offered blocks are immediately returned
-        let block0: Block = rand::random();
-        client.register(block0.id, OfferState::Approved);
-        assert_eq!(
-            client
-                .offers()
-                .try_next()
-                .and_then(BlockOffer::accept)
-                .as_ref()
-                .map(BlockPromise::block_id),
-            Some(&block0.id)
-        );
+        client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
 
-        // ...but only once.
-        assert!(client.offers().try_next().is_none());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn concurrent() {
-        let tracker = BlockTracker::new();
-        tracker.set_request_mode(RequestMode::Lazy);
-
-        let block: Block = rand::random();
-        let client = tracker.client();
-        let mut offers = client.offers();
-
-        tracker.require(block.id);
-
-        let (tx, mut rx) = mpsc::channel(1);
-
-        let handle = tokio::task::spawn(async move {
-            let mut next = pin!(offers.next());
-
-            loop {
-                select! {
-                    block_offer = &mut next => {
-                        return *block_offer.block_id();
-                    },
-                    _ = tx.send(()) => {}
-                }
-            }
-        });
-
-        // Make sure the task started.
-        rx.recv().await.unwrap();
-
-        client.register(block.id, OfferState::Approved);
-
-        let offered_block_id = time::timeout(Duration::from_secs(5), handle)
-            .await
-            .expect("timeout")
-            .unwrap();
-
-        assert_eq!(block.id, offered_block_id);
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
     }
 
     #[test]
-    fn fallback_on_cancel_after_accept() {
-        let tracker = BlockTracker::new();
-        tracker.set_request_mode(RequestMode::Lazy);
+    fn greedy_mode_approve_non_existing_offer() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let client0 = tracker.client();
-        let client1 = tracker.client();
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
 
-        let block: Block = rand::random();
+        client.approve(block_id);
+        worker.step();
 
-        tracker.require(block.id);
-        client0.register(block.id, OfferState::Approved);
-        client1.register(block.id, OfferState::Approved);
-
-        let block_promise = client0.offers().try_next().and_then(BlockOffer::accept);
-        assert_eq!(
-            block_promise.as_ref().map(BlockPromise::block_id),
-            Some(&block.id)
-        );
-        assert!(client1.offers().try_next().is_none());
-
-        drop(block_promise);
-
-        assert!(client0.offers().try_next().is_none());
-        assert_eq!(
-            client1
-                .offers()
-                .try_next()
-                .and_then(BlockOffer::accept)
-                .as_ref()
-                .map(BlockPromise::block_id),
-            Some(&block.id)
-        );
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
-    fn fallback_on_client_drop_after_require_before_accept() {
-        let tracker = BlockTracker::new();
-        tracker.set_request_mode(RequestMode::Lazy);
+    fn lazy_mode_offer_pending_then_approve_then_require() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let client0 = tracker.client();
-        let client1 = tracker.client();
+        tracker.set_request_mode(BlockRequestMode::Lazy);
+        worker.step();
 
-        let block: Block = rand::random();
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
 
-        client0.register(block.id, OfferState::Approved);
-        client1.register(block.id, OfferState::Approved);
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        tracker.require(block.id);
+        client.offer(block_id, BlockOfferState::Pending);
+        worker.step();
 
-        drop(client0);
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        assert_eq!(
-            client1
-                .offers()
-                .try_next()
-                .and_then(BlockOffer::accept)
-                .as_ref()
-                .map(BlockPromise::block_id),
-            Some(&block.id)
-        );
+        client.approve(block_id);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
+
+        tracker.require(block_id);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
-    fn fallback_on_client_drop_after_require_after_accept() {
-        let tracker = BlockTracker::new();
-        tracker.set_request_mode(RequestMode::Lazy);
+    fn lazy_mode_offer_pending_then_require_then_approve() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let client0 = tracker.client();
-        let client1 = tracker.client();
+        tracker.set_request_mode(BlockRequestMode::Lazy);
+        worker.step();
 
-        let block: Block = rand::random();
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
 
-        client0.register(block.id, OfferState::Approved);
-        client1.register(block.id, OfferState::Approved);
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        tracker.require(block.id);
+        client.offer(block_id, BlockOfferState::Pending);
+        worker.step();
 
-        let block_promise = client0.offers().try_next().and_then(BlockOffer::accept);
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        assert_eq!(
-            block_promise.as_ref().map(BlockPromise::block_id),
-            Some(&block.id)
-        );
-        assert!(client1.offers().try_next().is_none());
+        tracker.require(block_id);
+        worker.step();
 
-        drop(client0);
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        assert_eq!(
-            client1
-                .offers()
-                .try_next()
-                .and_then(BlockOffer::accept)
-                .as_ref()
-                .map(BlockPromise::block_id),
-            Some(&block.id)
-        );
+        client.approve(block_id);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
-    fn fallback_on_client_drop_before_require() {
-        let tracker = BlockTracker::new();
-        tracker.set_request_mode(RequestMode::Lazy);
+    fn lazy_mode_require_then_offer_pending_then_approve() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let client0 = tracker.client();
-        let client1 = tracker.client();
+        tracker.set_request_mode(BlockRequestMode::Lazy);
+        worker.step();
 
-        let block: Block = rand::random();
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
 
-        client0.register(block.id, OfferState::Approved);
-        client1.register(block.id, OfferState::Approved);
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        drop(client0);
+        tracker.require(block_id);
+        worker.step();
 
-        tracker.require(block.id);
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        assert_eq!(
-            client1
-                .offers()
-                .try_next()
-                .and_then(BlockOffer::accept)
-                .as_ref()
-                .map(BlockPromise::block_id),
-            Some(&block.id)
-        );
+        client.offer(block_id, BlockOfferState::Pending);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
+
+        client.approve(block_id);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
-    fn approve() {
-        let tracker = BlockTracker::new();
-        let client = tracker.client();
+    fn lazy_mode_offer_approved_then_require() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let block: Block = rand::random();
-        client.register(block.id, OfferState::Pending);
-        assert!(client.offers().try_next().is_none());
+        tracker.set_request_mode(BlockRequestMode::Lazy);
+        worker.step();
 
-        tracker.approve(block.id);
-        assert_eq!(
-            client
-                .offers()
-                .try_next()
-                .and_then(BlockOffer::accept)
-                .as_ref()
-                .map(BlockPromise::block_id),
-            Some(&block.id)
-        );
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
+
+        client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
+
+        tracker.require(block_id);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
-    fn multiple_offers_from_different_clients() {
-        let tracker = BlockTracker::new();
+    fn lazy_mode_require_then_offer_approved() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let client0 = tracker.client();
-        let client1 = tracker.client();
+        tracker.set_request_mode(BlockRequestMode::Lazy);
+        worker.step();
 
-        let block: Block = rand::random();
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
 
-        client0.register(block.id, OfferState::Approved);
-        client1.register(block.id, OfferState::Approved);
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        let offer0 = client0.offers().try_next().unwrap();
-        let offer1 = client1.offers().try_next().unwrap();
+        tracker.require(block_id);
+        worker.step();
 
-        assert_eq!(offer0.block_id(), offer1.block_id());
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
 
-        let promise0 = offer0.accept();
-        let promise1 = offer1.accept();
+        client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
 
-        assert!(promise0.is_some());
-        assert!(promise1.is_none());
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
-    fn multiple_offers_from_same_client() {
-        let tracker = BlockTracker::new();
+    fn lazy_mode_approve_non_existing_offer() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let client = tracker.client();
+        tracker.set_request_mode(BlockRequestMode::Lazy);
+        worker.step();
 
-        let block0: Block = rand::random();
-        client.register(block0.id, OfferState::Approved);
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
 
-        let block1: Block = rand::random();
-        client.register(block1.id, OfferState::Approved);
+        tracker.require(block_id);
+        client.approve(block_id);
+        worker.step();
 
-        let offer0 = client.offers().try_next().unwrap();
-        let offer1 = client.offers().try_next().unwrap();
-        let offer2 = client.offers().try_next();
-
-        assert_ne!(offer0.block_id(), offer1.block_id());
-        assert!(offer2.is_none());
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn race() {
-        let num_clients = 10;
+    #[test]
+    fn lazy_mode_offer_then_drop_client_then_require() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let tracker = BlockTracker::new();
-        let clients: Vec<_> = (0..num_clients).map(|_| tracker.client()).collect();
+        tracker.set_request_mode(BlockRequestMode::Lazy);
+        worker.step();
 
-        let block: Block = rand::random();
+        let (client, mut block_rx) = tracker.new_client();
+        worker.step();
 
-        for client in &clients {
-            client.register(block.id, OfferState::Approved);
-        }
+        client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
 
-        // Make sure all clients stay alive until we are done so that any accepted requests are not
-        // released prematurely.
-        let barrier = Arc::new(Barrier::new(clients.len()));
+        drop(client);
+        tracker.require(block_id);
+        worker.step();
 
-        // Run the clients in parallel
-        let handles = clients.into_iter().map(|client| {
-            task::spawn({
-                let barrier = barrier.clone();
-                async move {
-                    let block_promise = client.offers().try_next().and_then(BlockOffer::accept);
-                    let result = block_promise.as_ref().map(BlockPromise::block_id).cloned();
-                    barrier.wait().await;
-                    result
-                }
-            })
-        });
-
-        let block_ids = future::try_join_all(handles).await.unwrap();
-
-        // Exactly one client gets the block id
-        let mut block_ids = block_ids.into_iter().flatten();
-        assert_eq!(block_ids.next(), Some(block.id));
-        assert_eq!(block_ids.next(), None);
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Disconnected));
     }
 
-    #[proptest]
-    fn stress(
-        #[strategy(1usize..100)] num_blocks: usize,
-        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
-    ) {
-        stress_case(num_blocks, rng_seed)
+    #[test]
+    fn switch_lazy_mode_to_greedy_mode() {
+        let (tracker, mut worker) = build();
+        let block_id_0 = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
+        let block_id_1 = BlockId::try_from([1; BlockId::SIZE].as_ref()).unwrap();
+
+        tracker.set_request_mode(BlockRequestMode::Lazy);
+        worker.step();
+
+        let (client, mut block_rx) = tracker.new_client();
+        client.offer(block_id_0, BlockOfferState::Pending);
+        client.offer(block_id_1, BlockOfferState::Approved);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
+
+        tracker.set_request_mode(BlockRequestMode::Greedy);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id_1));
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
-    fn stress_case(num_blocks: usize, rng_seed: u64) {
-        let mut rng = StdRng::seed_from_u64(rng_seed);
+    #[test]
+    fn approve_affects_all_clients() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        let tracker = BlockTracker::new();
-        tracker.set_request_mode(RequestMode::Lazy);
+        let (client_a, mut block_rx_a) = tracker.new_client();
+        let (client_b, mut block_rx_b) = tracker.new_client();
 
-        let client = tracker.client();
+        client_a.offer(block_id, BlockOfferState::Pending);
+        client_b.offer(block_id, BlockOfferState::Pending);
 
-        let block_ids: Vec<BlockId> = (&mut rng).sample_iter(Standard).take(num_blocks).collect();
+        worker.step();
 
-        enum Op {
-            Require,
-            Register,
-        }
+        assert_eq!(block_rx_a.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(block_rx_b.try_recv(), Err(TryRecvError::Empty));
 
-        let mut ops: Vec<_> = block_ids
-            .iter()
-            .map(|block_id| (Op::Require, *block_id))
-            .chain(block_ids.iter().map(|block_id| (Op::Register, *block_id)))
-            .collect();
-        ops.shuffle(&mut rng);
+        client_a.approve(block_id);
+        worker.step();
 
-        for (op, block_id) in ops {
-            match op {
-                Op::Require => {
-                    tracker.require(block_id);
-                }
-                Op::Register => {
-                    client.register(block_id, OfferState::Approved);
-                }
-            }
-        }
+        assert_eq!(block_rx_a.try_recv(), Ok(block_id));
+        assert_eq!(block_rx_b.try_recv(), Ok(block_id));
+    }
 
-        let mut block_promise = HashSet::with_capacity(block_ids.len());
+    #[test]
+    fn clear_required() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
 
-        while let Some(block_id) = client
-            .offers()
-            .try_next()
-            .and_then(BlockOffer::accept)
-            .as_ref()
-            .map(BlockPromise::block_id)
-        {
-            block_promise.insert(*block_id);
-        }
+        tracker.set_request_mode(BlockRequestMode::Lazy);
+        tracker.require(block_id);
+        tracker.clear_required();
+        worker.step();
 
-        assert_eq!(block_promise.len(), block_ids.len());
+        let (client, mut block_rx) = tracker.new_client();
+        client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
 
-        for block_id in &block_ids {
-            assert!(block_promise.contains(block_id));
-        }
+        assert_eq!(block_rx.try_recv(), Err(TryRecvError::Empty));
+    }
+
+    #[test]
+    fn repeated_offer() {
+        let (tracker, mut worker) = build();
+        let block_id = BlockId::try_from([0; BlockId::SIZE].as_ref()).unwrap();
+
+        let (client, mut block_rx) = tracker.new_client();
+        client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
+
+        client.offer(block_id, BlockOfferState::Approved);
+        worker.step();
+
+        assert_eq!(block_rx.try_recv(), Ok(block_id));
     }
 }

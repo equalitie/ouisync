@@ -53,7 +53,7 @@ impl Hashable for LeafNode {
 }
 
 /// Collection that acts as a ordered set of `LeafNode`s
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct LeafNodes(Vec<LeafNode>);
 
 impl LeafNodes {
@@ -158,6 +158,15 @@ impl<'a> IntoIterator for &'a LeafNodes {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut LeafNodes {
+    type Item = &'a mut LeafNode;
+    type IntoIter = slice::IterMut<'a, LeafNode>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
     }
 }
 
