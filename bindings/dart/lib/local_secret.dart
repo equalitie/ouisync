@@ -43,6 +43,9 @@ class LocalPassword implements LocalSecret, SetLocalSecret {
     if (other is! LocalPassword) return false;
     return string == other.string;
   }
+
+  @override
+  int get hashCode => string.hashCode;
 }
 
 class LocalSecretKey implements LocalSecret {
