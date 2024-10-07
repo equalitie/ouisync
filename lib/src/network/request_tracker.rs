@@ -223,7 +223,7 @@ pub(super) enum InitialRequestState {
 ///
 /// It also contains the block presence from the response that triggered this request. This is
 /// mostly useful for diagnostics and testing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub(super) struct PendingRequest {
     pub payload: Request,
     pub variant: RequestVariant,
@@ -602,7 +602,18 @@ impl Worker {
         node_key: GraphKey,
         initial_state: InitialRequestState,
     ) {
-        let Some(node) = self.requests.get_mut(node_key) else {
+        let (request_key, add) = if let Some(node) = self.requests.get(node_key) {
+            let request_key = MessageKey::from(&node.request().payload);
+            let add = match node.value() {
+                RequestState::Suspended { .. }
+                | RequestState::InFlight { .. }
+                | RequestState::Complete { .. }
+                | RequestState::Cancelled => true,
+                RequestState::Committed => false,
+            };
+
+            (request_key, add)
+        } else {
             return;
         };
 
@@ -610,15 +621,42 @@ impl Worker {
             return;
         };
 
-        let request_key = MessageKey::from(&node.request().payload);
+        let (old_key, send) = match client_state.requests.entry(request_key) {
+            // The request is not yet tracked with this client: start tracking it.
+            Entry::Vacant(entry) => {
+                if add {
+                    entry.insert(node_key);
+                }
 
-        if let Entry::Vacant(entry) = client_state.requests.entry(request_key) {
+                (None, true)
+            }
+            // The request with the same variant is already tracked with this client: do nothing.
+            Entry::Occupied(entry) if *entry.get() == node_key => (None, false),
+            // The request with a different variant is already tracked with this client: cancel the
+            // existing request and start trackig the new one.
+            Entry::Occupied(mut entry) => {
+                let old_key = *entry.get();
+
+                if add {
+                    entry.insert(node_key);
+                } else {
+                    entry.remove();
+                }
+
+                (Some(old_key), true)
+            }
+        };
+
+        // unwrap is OK because we already handed the `None` case earlier.
+        let node = self.requests.get_mut(node_key).unwrap();
+        let children: Vec<_> = node.children().collect();
+
+        if send {
             match node.value_mut() {
                 RequestState::Suspended { waiters }
                 | RequestState::InFlight { waiters, .. }
                 | RequestState::Complete { waiters, .. } => {
                     waiters.push_back(client_id);
-                    entry.insert(node_key);
                 }
                 RequestState::Committed => (),
                 RequestState::Cancelled => {
@@ -641,16 +679,16 @@ impl Worker {
                             waiters: [client_id].into(),
                         },
                     };
-
-                    entry.insert(node_key);
                 }
             }
         }
 
+        if let Some(old_key) = old_key {
+            self.cancel_request(client_id, old_key, None);
+        }
+
         // Note: we are using recursion, but the graph is only a few layers deep (currently 5) so
         // there is no danger of stack overflow.
-        let children: Vec<_> = node.children().collect();
-
         for child_key in children {
             self.update_request(client_id, child_key, initial_state);
         }

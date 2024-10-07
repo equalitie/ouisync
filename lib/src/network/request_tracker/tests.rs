@@ -322,6 +322,84 @@ async fn suspend_resume() {
     assert_eq!(request_rx.try_recv().map(|r| r.payload), Ok(request));
 }
 
+mod duplicate_request_with_different_variant_on_the_same_client {
+    use super::*;
+
+    #[tokio::test]
+    async fn in_flight() {
+        case(|_client, _request_key| ());
+    }
+
+    #[tokio::test]
+    async fn complete() {
+        case(|client, request_key| {
+            client.success(request_key, vec![]);
+        });
+    }
+
+    #[tokio::test]
+    async fn committed() {
+        case(|client, request_key| {
+            client.success(request_key, vec![]);
+            client.new_committer().commit();
+        });
+    }
+
+    #[tokio::test]
+    async fn cancelled() {
+        case(|client, request_key| {
+            client.failure(request_key);
+        });
+    }
+
+    fn case<F>(step: F)
+    where
+        F: FnOnce(&RequestTrackerClient, MessageKey),
+    {
+        let mut rng = StdRng::seed_from_u64(0);
+        let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+        let (client, mut request_rx) = tracker.new_client();
+        worker.step();
+
+        let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng), 0);
+
+        let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+        let variant_0 = RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::None);
+        let variant_1 = RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::Full);
+
+        client.success(
+            preceding_request_key,
+            vec![CandidateRequest::new(request.clone()).variant(variant_0)],
+        );
+        worker.step();
+
+        assert_eq!(
+            request_rx.try_recv(),
+            Ok(PendingRequest {
+                payload: request.clone(),
+                variant: variant_0
+            }),
+        );
+
+        step(&client, MessageKey::from(&request));
+        worker.step();
+
+        client.success(
+            preceding_request_key,
+            vec![CandidateRequest::new(request.clone()).variant(variant_1)],
+        );
+        worker.step();
+
+        assert_eq!(
+            request_rx.try_recv(),
+            Ok(PendingRequest {
+                payload: request.clone(),
+                variant: variant_1
+            }),
+        );
+    }
+}
+
 /// Generate `count + 1` copies of the same snapshot. The first one will have all the blocks
 /// present (the "master copy"). The remaining ones will have some blocks missing but in such a
 /// way that every block is present in at least one of the snapshots.

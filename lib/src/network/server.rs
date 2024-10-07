@@ -241,6 +241,7 @@ impl Inner {
         }
     }
 
+    #[instrument(skip(self))]
     async fn handle_branch_changed_event(&self, branch_id: PublicKey) -> Result<()> {
         let root_node = match self.load_root_node(&branch_id).await {
             Ok(node) => node,
@@ -254,12 +255,14 @@ impl Inner {
         self.send_root_node(root_node).await
     }
 
+    #[instrument(skip(self))]
     async fn handle_block_received_event(&self, block_id: BlockId) -> Result<()> {
         self.enqueue_response(Response::BlockOffer(block_id, DebugResponse::unsolicited()))
             .await;
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn handle_unknown_event(&self) -> Result<()> {
         let root_nodes = self.load_root_nodes().await?;
         for root_node in root_nodes {

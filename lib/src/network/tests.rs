@@ -151,7 +151,9 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 
         // Then wait until replica B receives and writes it too.
         for id in snapshot.blocks().keys() {
+            tracing::info!(?id, "waiting for block");
             wait_until_block_exists(&b_vault, id).await;
+            tracing::info!(?id, "block received");
         }
     };
 
@@ -396,7 +398,7 @@ async fn create_repository<R: Rng + CryptoRng>(
 
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public_key());
-    let event_tx = EventSender::new(1);
+    let event_tx = EventSender::new(128);
     let monitor = RepositoryMonitor::new(StateMonitor::make_root(), &NoopRecorder);
     let traffic_monitor = monitor.traffic.clone();
     let state = Vault::new(repository_id, event_tx, db, monitor);
