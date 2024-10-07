@@ -299,7 +299,7 @@ impl Worker {
                 }
                 Some(expired) = self.timer.next() => {
                     let (client_id, request_key) = expired.into_inner();
-                    self.handle_failure(client_id, request_key, FailureReason::Timeout);
+                    self.failure(client_id, request_key, FailureReason::Timeout);
                 }
             }
         }
@@ -335,20 +335,20 @@ impl Worker {
                 self.timeout = timeout;
             }
             Command::HandleInitial { client_id, request } => {
-                self.handle_initial(client_id, request);
+                self.initial(client_id, request);
             }
             Command::HandleSuccess {
                 client_id,
                 request_key,
                 requests,
             } => {
-                self.handle_success(client_id, request_key, requests);
+                self.success(client_id, request_key, requests);
             }
             Command::HandleFailure {
                 client_id,
                 request_key,
             } => {
-                self.handle_failure(client_id, request_key, FailureReason::Response);
+                self.failure(client_id, request_key, FailureReason::Response);
             }
             Command::Resume {
                 request_key,
@@ -385,20 +385,20 @@ impl Worker {
     }
 
     #[instrument(skip(self))]
-    fn handle_initial(&mut self, client_id: ClientId, request: CandidateRequest) {
-        tracing::trace!("handle_initial");
+    fn initial(&mut self, client_id: ClientId, request: CandidateRequest) {
+        tracing::trace!("initial");
 
         self.insert_request(client_id, request, None)
     }
 
     #[instrument(skip(self))]
-    fn handle_success(
+    fn success(
         &mut self,
         client_id: ClientId,
         request_key: MessageKey,
         requests: Vec<CandidateRequest>,
     ) {
-        tracing::trace!("handle_success");
+        tracing::trace!("success");
 
         let node_key = self
             .clients
@@ -474,13 +474,8 @@ impl Worker {
     }
 
     #[instrument(skip(self))]
-    fn handle_failure(
-        &mut self,
-        client_id: ClientId,
-        request_key: MessageKey,
-        reason: FailureReason,
-    ) {
-        tracing::trace!("handle_failure");
+    fn failure(&mut self, client_id: ClientId, request_key: MessageKey, reason: FailureReason) {
+        tracing::trace!("failure");
 
         let Some(client_state) = self.clients.get_mut(&client_id) else {
             return;
