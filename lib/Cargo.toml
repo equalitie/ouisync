@@ -73,7 +73,7 @@ subtle = { version = "2.5.0", default-features = false, features = ["core_hint_b
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
-tokio-util = { workspace = true, features = ["time"] }
+tokio-util = { workspace = true, features = ["time", "codec"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
 turmoil = { workspace = true, optional = true }
