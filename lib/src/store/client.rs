@@ -82,6 +82,7 @@ impl ClientWriter {
         let parent_hash = nodes.hash();
 
         if !index::parent_exists(&mut self.db, &parent_hash).await? {
+            tracing::warn!("parent node not found");
             return Ok(Vec::new());
         }
 
@@ -125,6 +126,7 @@ impl ClientWriter {
         let parent_hash = nodes.hash();
 
         if !index::parent_exists(&mut self.db, &parent_hash).await? {
+            tracing::warn!("parent node not found");
             return Ok(LeafNodesStatus::default());
         }
 

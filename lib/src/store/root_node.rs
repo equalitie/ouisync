@@ -414,13 +414,18 @@ pub(super) async fn remove_older_incomplete(
     // This uses db triggers to delete the whole snapshot.
     sqlx::query(
         "DELETE FROM snapshot_root_nodes
-         WHERE snapshot_id < ? AND writer_id = ? AND state IN (?, ?)",
+         WHERE snapshot_id < ? AND writer_id = ? AND state IN (?, ?)
+         RETURNING hash",
     )
     .bind(node.snapshot_id)
     .bind(&node.proof.writer_id)
     .bind(NodeState::Incomplete)
     .bind(NodeState::Rejected)
-    .execute(tx)
+    .fetch(tx)
+    .try_for_each(|row| {
+        tracing::trace!(hash = ?row.get::<Hash, _>(0), "outdated incomplete snapshot removed");
+        future::ready(Ok(()))
+    })
     .await?;
 
     Ok(())

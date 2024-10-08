@@ -366,14 +366,14 @@ impl Worker {
         client_id: ClientId,
         request_tx: mpsc::UnboundedSender<PendingRequest>,
     ) {
-        tracing::trace!("insert_client");
+        // tracing::trace!("insert_client");
 
         self.clients.insert(client_id, ClientState::new(request_tx));
     }
 
     #[instrument(skip(self))]
     fn remove_client(&mut self, client_id: ClientId) {
-        tracing::trace!("remove_client");
+        // tracing::trace!("remove_client");
 
         let Some(client_state) = self.clients.remove(&client_id) else {
             return;
@@ -386,7 +386,7 @@ impl Worker {
 
     #[instrument(skip(self))]
     fn initial(&mut self, client_id: ClientId, request: CandidateRequest) {
-        tracing::trace!("initial");
+        // tracing::trace!("initial");
 
         self.insert_request(client_id, request, None)
     }
@@ -398,7 +398,7 @@ impl Worker {
         request_key: MessageKey,
         requests: Vec<CandidateRequest>,
     ) {
-        tracing::trace!("success");
+        // tracing::trace!("success");
 
         let node_key = self
             .clients
@@ -475,7 +475,7 @@ impl Worker {
 
     #[instrument(skip(self))]
     fn failure(&mut self, client_id: ClientId, request_key: MessageKey, reason: FailureReason) {
-        tracing::trace!("failure");
+        // tracing::trace!("failure");
 
         let Some(client_state) = self.clients.get_mut(&client_id) else {
             return;
@@ -532,7 +532,7 @@ impl Worker {
 
     #[instrument(skip(self))]
     fn commit(&mut self, client_id: ClientId) {
-        tracing::trace!("commit");
+        // tracing::trace!("commit");
 
         // Collect all requests completed by this client.
         let requests: Vec<_> = self

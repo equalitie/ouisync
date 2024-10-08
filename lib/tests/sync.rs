@@ -707,14 +707,23 @@ fn remote_rename_directory_during_conflict() {
         let repo = actor::create_repo(DEFAULT_REPO).await;
 
         // Create file before linking the repo to ensure we create conflict.
-        repo.create_file("dummy.txt").await.unwrap();
+        repo.create_file("dummy.txt")
+            .instrument(info_span!("create", message = "dummy.txt"))
+            .await
+            .unwrap();
 
         let _reg = network.register(repo.handle()).await;
 
-        repo.create_directory("foo").await.unwrap();
+        repo.create_directory("foo")
+            .instrument(info_span!("create", message = "foo"))
+            .await
+            .unwrap();
         rx.recv().await;
 
-        repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+        repo.move_entry("/", "foo", "/", "bar")
+            .instrument(info_span!("move", src = "foo", dst = "bar"))
+            .await
+            .unwrap();
         rx.recv().await;
     });
 
@@ -726,7 +735,10 @@ fn remote_rename_directory_during_conflict() {
 
         // Create file before linking the repo to ensure we create conflict.
         // This prevents the remote branch from being pruned.
-        repo.create_file("dummy.txt").await.unwrap();
+        repo.create_file("dummy.txt")
+            .instrument(info_span!("create dummy.txt"))
+            .await
+            .unwrap();
 
         let _reg = network.register(repo.handle()).await;
 
@@ -1352,9 +1364,20 @@ fn file_progress() {
 #[instrument(skip(repo))]
 async fn expect_local_directory_exists(repo: &Repository, path: &str) {
     common::eventually(repo, || async {
+        debug!(?path, "opening");
+
         match repo.open_directory(path).await {
             Ok(dir) => dir.has_local_version(),
-            Err(Error::EntryNotFound | Error::Store(StoreError::BlockNotFound)) => false,
+            Err(
+                Error::EntryNotFound
+                | Error::Store(StoreError::BlockNotFound)
+                // The `LocatorNotFound` error can happen because of fallback: The directory exists
+                // in the latest snapshot but some of its blocks are missing. We try to fall back
+                // to the previous snapshot but there the directory doesn't exists so it fails with
+                // `LocatorNotFound`. This is not a failure in this case because we can wait until
+                // the missing blocks are received and try again.
+                | Error::Store(StoreError::LocatorNotFound),
+            ) => false,
             Err(error) => panic!("unexpected error: {error:?}"),
         }
     })

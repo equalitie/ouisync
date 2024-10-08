@@ -99,6 +99,7 @@ impl Inner {
 
     async fn send_requests(&self, request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>) {
         while let Some(PendingRequest { payload, .. }) = request_rx.recv().await {
+            tracing::trace!(?payload, "sending request");
             self.message_tx.send(Message::Request(payload)).ok();
         }
     }
@@ -143,13 +144,16 @@ impl Inner {
                     Response::RootNodeError {
                         writer_id, cookie, ..
                     } => {
+                        tracing::trace!(?writer_id, "Received root node error");
                         self.request_tracker
                             .failure(MessageKey::RootNode(writer_id, cookie));
                     }
                     Response::ChildNodesError(hash, _) => {
+                        tracing::trace!(?hash, "Received child nodes error");
                         self.request_tracker.failure(MessageKey::ChildNodes(hash));
                     }
                     Response::BlockError(block_id, _) => {
+                        tracing::trace!(?block_id, "Received block error");
                         self.request_tracker.failure(MessageKey::Block(block_id));
                     }
                 }

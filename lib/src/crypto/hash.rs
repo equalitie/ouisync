@@ -273,6 +273,18 @@ where
     }
 }
 
+impl<T> Clone for CacheHash<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            owner: self.owner.clone(),
+            hash: self.hash,
+        }
+    }
+}
+
 impl<T> Hashable for CacheHash<T>
 where
     T: Hashable,
