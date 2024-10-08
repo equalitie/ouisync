@@ -99,7 +99,6 @@ impl Inner {
 
     async fn send_requests(&self, request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>) {
         while let Some(PendingRequest { payload, .. }) = request_rx.recv().await {
-            tracing::trace!(?payload, "sending request");
             self.message_tx.send(Message::Request(payload)).ok();
         }
     }
@@ -526,7 +525,7 @@ impl Inner {
                 hash = ?root_node.proof.hash,
                 vv = ?root_node.proof.version_vector,
                 block_presence = ?root_node.summary.block_presence,
-                "Snapshot complete"
+                "Snapshot approved"
             );
         }
     }

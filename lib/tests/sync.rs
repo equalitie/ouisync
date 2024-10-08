@@ -1158,7 +1158,12 @@ fn quota_exceed() {
             common::expect_file_content(&repo, "0.dat", &content0).await;
 
             let size0 = repo.size().await.unwrap();
-            assert!(size0 <= quota);
+            assert!(
+                size0 <= quota,
+                "quota exceeded (size: {}, quota: {})",
+                size0,
+                quota
+            );
 
             info!("read 0.dat");
 
@@ -1183,8 +1188,19 @@ fn quota_exceed() {
 
             // Once the second file is deleted we accept the third file which is within the quota.
             common::expect_file_content(&repo, "2.dat", &content2).await;
-            let size2 = repo.size().await.unwrap();
-            assert!(size2 <= quota);
+
+            // The quota might get temporarily exceeded until the old snapshots are pruned.
+            common::eventually(&repo, || async {
+                let size2 = repo.size().await.unwrap();
+
+                if size2 <= quota {
+                    true
+                } else {
+                    tracing::debug!(size = %size2, %quota, "quota exceeded");
+                    false
+                }
+            })
+            .await;
 
             info!("read 2.dat");
             tx.send(()).await.unwrap();

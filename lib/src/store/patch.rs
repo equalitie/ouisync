@@ -228,7 +228,7 @@ impl Patch {
             RootNodeKind::Draft => (),
         }
 
-        tracing::trace!(
+        tracing::debug!(
             vv = ?root_node.proof.version_vector,
             hash = ?root_node.proof.hash,
             branch_id = ?root_node.proof.writer_id,
