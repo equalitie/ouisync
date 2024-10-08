@@ -3,8 +3,6 @@
 #[macro_use]
 mod common;
 
-use crate::common::wait;
-
 use self::common::{actor, dump, sync_watch, Env, Proto, DEFAULT_REPO};
 use assert_matches::assert_matches;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -16,7 +14,7 @@ use rand::Rng;
 use std::{cmp::Ordering, collections::HashSet, io::SeekFrom, sync::Arc, time::Duration};
 use tokio::{
     sync::{broadcast, mpsc, Barrier},
-    time::{self, sleep},
+    time::sleep,
 };
 use tracing::{instrument, Instrument};
 
@@ -1173,7 +1171,7 @@ fn quota_exceed() {
 
             // Wait for the next snapshot to be rejected
             loop {
-                match wait(&mut rx).await {
+                match common::wait(&mut rx).await {
                     Some(Payload::SnapshotRejected(_)) => break,
                     _ => continue,
                 }
@@ -1196,7 +1194,7 @@ fn quota_exceed() {
                 if size2 <= quota {
                     true
                 } else {
-                    tracing::debug!(size = %size2, %quota, "quota exceeded");
+                    debug!(size = %size2, %quota, "quota exceeded");
                     false
                 }
             })
@@ -1220,16 +1218,18 @@ fn quota_concurrent_writes() {
 
     let barrier = Arc::new(Barrier::new(3));
 
-    for (index, content) in [content0, content1].into_iter().enumerate() {
+    for (index, content) in [content0.clone(), content1.clone()].into_iter().enumerate() {
         let barrier = barrier.clone();
 
         env.actor(&format!("writer-{index}"), async move {
             let (_network, repo, _reg) = actor::setup().await;
 
-            let mut file = repo.create_file(format!("file-{index}.dat")).await.unwrap();
+            let path = format!("file-{index}.dat");
+            let mut file = repo.create_file(&path).await.unwrap();
             common::write_in_chunks(&mut file, &content, 4096).await;
             file.flush().await.unwrap();
 
+            barrier.wait().await;
             barrier.wait().await;
         });
     }
@@ -1249,34 +1249,40 @@ fn quota_concurrent_writes() {
         .unwrap();
         repo.set_quota(Some(quota)).await.unwrap();
 
-        let mut rx = repo.subscribe();
+        // Wait until all the writes are completed so that we receive only one snapshot from each
+        // writer. This simplifies the test.
+        barrier.wait().await;
 
+        let mut rx = repo.subscribe();
         let _reg = network.register(repo.handle()).await;
 
-        // One snapshot is approved and one rejected.
         let mut approved = HashSet::new();
         let mut rejected = HashSet::new();
 
         loop {
-            // HACK: wait 1 second after receiving the last event to ensure the sync has settled.
-            // TODO: Find a better way to do this.
-            match time::timeout(Duration::from_secs(1), wait(&mut rx)).await {
-                Ok(Some(Payload::SnapshotApproved(writer_id))) => {
+            match common::wait(&mut rx).await {
+                Some(Payload::SnapshotApproved(writer_id)) => {
                     approved.insert(writer_id);
                 }
-                Ok(Some(Payload::SnapshotRejected(writer_id))) => {
+                Some(Payload::SnapshotRejected(writer_id)) => {
                     rejected.insert(writer_id);
                 }
-                Ok(_) => (),
-                Err(_) => break,
+                Some(_) | None => continue,
+            }
+
+            if approved.len() + rejected.len() >= 2 {
+                break;
             }
         }
 
-        assert_eq!(approved.len(), 1);
-        assert_eq!(rejected.len(), 1);
+        assert_eq!(approved.len(), 1, "{approved:?}");
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
 
         let size = repo.size().await.unwrap();
-        assert!(size <= quota);
+        assert!(
+            size <= quota,
+            "quota exceeded (size: {size}, quota: {quota})"
+        );
 
         barrier.wait().await;
     });
