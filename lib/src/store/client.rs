@@ -10,6 +10,7 @@ use super::{
     Error,
 };
 use crate::{
+    block_tracker::BlockOfferState,
     collections::HashSet,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
@@ -50,6 +51,13 @@ impl ClientWriter {
             block_id_cache,
             block_id_cache_updates: Vec::new(),
         })
+    }
+
+    pub fn as_reader_mut(&mut self) -> ClientReaderMut<'_> {
+        ClientReaderMut {
+            db: &mut self.db,
+            quota: &self.quota,
+        }
     }
 
     /// Saves received root node into the store.
@@ -156,7 +164,9 @@ impl ClientWriter {
                                 NodeState::Approved
                             };
 
-                            new_block_offers.push((node.block_id, node_state));
+                            if let Some(offer_state) = block_offer_state(node_state) {
+                                new_block_offers.push((node.block_id, offer_state));
+                            }
                         }
                         Some(SingleBlockPresence::Present | SingleBlockPresence::Expired) => (),
                     }
@@ -334,22 +344,34 @@ impl ClientReader {
         Ok(Self { db, quota })
     }
 
-    /// Loads the root node state that should be used for offers for the given block.
-    ///
-    /// NOTE: If quota is enabled, returns the actual root node state. Otherwise returns an assumed
-    /// state that depends only on the block presence, for efficiency.
-    pub async fn load_effective_root_node_state_for_block(
+    pub fn as_mut(&mut self) -> ClientReaderMut<'_> {
+        ClientReaderMut {
+            db: &mut self.db,
+            quota: &self.quota,
+        }
+    }
+}
+
+pub(crate) struct ClientReaderMut<'a> {
+    db: &'a mut db::ReadTransaction,
+    quota: &'a Option<StorageSize>,
+}
+
+impl ClientReaderMut<'_> {
+    /// Loads the state that should be used for offers for the given block.
+    pub async fn load_block_offer_state(
         &mut self,
         block_id: &BlockId,
-    ) -> Result<NodeState, Error> {
+    ) -> Result<Option<BlockOfferState>, Error> {
         if self.quota.is_some() {
-            root_node::load_node_state_of_missing(&mut self.db, block_id).await
+            let node_state = root_node::load_node_state_of_missing(self.db, block_id).await?;
+            Ok(block_offer_state(node_state))
         } else {
-            match leaf_node::load_block_presence(&mut self.db, block_id).await? {
+            match leaf_node::load_block_presence(self.db, block_id).await? {
                 Some(SingleBlockPresence::Missing) | Some(SingleBlockPresence::Expired) => {
-                    Ok(NodeState::Approved)
+                    Ok(Some(BlockOfferState::Approved))
                 }
-                Some(SingleBlockPresence::Present) | None => Ok(NodeState::Rejected),
+                Some(SingleBlockPresence::Present) | None => Ok(None),
             }
         }
     }
@@ -364,7 +386,7 @@ pub(crate) struct InnerNodeStatus {
 #[derive(Default)]
 pub(crate) struct LeafNodesStatus {
     /// New blocks offered by the received nodes together with their root node states.
-    pub new_block_offers: Vec<(BlockId, NodeState)>,
+    pub new_block_offers: Vec<(BlockId, BlockOfferState)>,
 }
 
 pub(crate) struct CommitStatus {
@@ -381,6 +403,14 @@ pub(crate) struct CommitStatus {
 struct FinalizeStatus {
     approved_branches: Vec<PublicKey>,
     rejected_branches: Vec<PublicKey>,
+}
+
+fn block_offer_state(root_node_state: NodeState) -> Option<BlockOfferState> {
+    match root_node_state {
+        NodeState::Approved => Some(BlockOfferState::Approved),
+        NodeState::Complete | NodeState::Incomplete => Some(BlockOfferState::Pending),
+        NodeState::Rejected => None,
+    }
 }
 
 #[cfg(test)]

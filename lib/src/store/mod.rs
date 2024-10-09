@@ -25,7 +25,7 @@ pub use migrations::DATA_VERSION;
 pub(crate) use {
     block_ids::BlockIdsPage,
     changeset::Changeset,
-    client::{ClientReader, ClientWriter},
+    client::{ClientReader, ClientReaderMut, ClientWriter},
 };
 
 #[cfg(test)]
