@@ -411,6 +411,13 @@ mod prune {
 
         // Remove outdated snapshots.
         for node in uptodate {
+            // If the latest snapshot is incomplete, do not prune the older snapshots because they
+            // might overlap with it but the overlapping nodes are not yet referenced from it
+            // because we haven't received all the nodes in between.
+            if node.summary.state == NodeState::Incomplete {
+                continue;
+            }
+
             shared
                 .vault
                 .store()
