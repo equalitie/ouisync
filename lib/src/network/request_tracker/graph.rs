@@ -144,10 +144,6 @@ impl<T> Node<T> {
         &self.request
     }
 
-    pub fn parts_mut(&mut self) -> (&PendingRequest, &mut T) {
-        (&self.request, &mut self.value)
-    }
-
     pub fn parents(&self) -> impl ExactSizeIterator<Item = Key> + '_ {
         self.parents.iter().copied()
     }

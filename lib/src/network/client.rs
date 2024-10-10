@@ -47,6 +47,9 @@ impl Client {
         let (request_tracker, request_rx) = request_tracker.new_client();
         let (block_tracker, block_rx) = vault.block_tracker.new_client();
 
+        // Peers start as choked
+        request_tracker.choke();
+
         let inner = Inner {
             vault,
             request_tracker,
@@ -173,6 +176,14 @@ impl Inner {
                     Response::BlockError(block_id, _) => {
                         tracing::trace!(?block_id, "Received block error");
                         self.request_tracker.failure(MessageKey::Block(block_id));
+                    }
+                    Response::Choke => {
+                        tracing::trace!("Received choke");
+                        self.request_tracker.choke();
+                    }
+                    Response::Unchoke => {
+                        tracing::trace!("Received unchoke");
+                        self.request_tracker.unchoke();
                     }
                 }
 

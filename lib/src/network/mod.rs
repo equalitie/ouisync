@@ -1,3 +1,4 @@
+mod choke;
 mod client;
 mod connection;
 mod connection_monitor;
@@ -38,6 +39,7 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
+use choke::Choker;
 use constants::REQUEST_TIMEOUT;
 pub use net::stun::NatBehavior;
 use request_tracker::RequestTracker;
@@ -45,7 +47,6 @@ use request_tracker::RequestTracker;
 use self::{
     connection::{ConnectionPermit, ConnectionSet, ReserveResult},
     connection_monitor::ConnectionMonitor,
-    constants::MAX_UNCHOKED_COUNT,
     dht_discovery::DhtDiscovery,
     gateway::{Connectivity, Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
@@ -81,7 +82,7 @@ use std::{
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{mpsc, Semaphore},
+    sync::mpsc,
     task::{AbortHandle, JoinSet},
     time::Duration,
 };
@@ -359,8 +360,9 @@ impl Network {
         let request_tracker = RequestTracker::new(handle.vault.monitor.traffic.clone());
         request_tracker.set_timeout(REQUEST_TIMEOUT);
 
-        // TODO: This should be global, not per repo
-        let response_limiter = Arc::new(Semaphore::new(MAX_UNCHOKED_COUNT));
+        // TODO: Should this be global instead of per repo?
+        let choker = Choker::new();
+
         let stats_tracker = StatsTracker::default();
 
         let mut registry = self.inner.registry.lock().unwrap();
@@ -369,7 +371,7 @@ impl Network {
             handle.vault.clone(),
             &pex,
             &request_tracker,
-            &response_limiter,
+            &choker,
             stats_tracker.bytes.clone(),
         );
 
@@ -378,7 +380,7 @@ impl Network {
             dht,
             pex,
             request_tracker,
-            response_limiter,
+            choker,
             stats_tracker,
         });
 
@@ -497,7 +499,7 @@ struct RegistrationHolder {
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexRepository,
     request_tracker: RequestTracker,
-    response_limiter: Arc<Semaphore>,
+    choker: Choker,
     stats_tracker: StatsTracker,
 }
 
@@ -540,7 +542,7 @@ impl Registry {
         repo: Vault,
         pex: &PexRepository,
         request_tracker: &RequestTracker,
-        response_limiter: &Arc<Semaphore>,
+        choker: &Choker,
         byte_counters: Arc<ByteCounters>,
     ) {
         if let Some(peers) = &mut self.peers {
@@ -549,7 +551,7 @@ impl Registry {
                     repo.clone(),
                     pex,
                     request_tracker.clone(),
-                    response_limiter.clone(),
+                    choker.clone(),
                     byte_counters.clone(),
                 )
             }
@@ -939,7 +941,7 @@ impl Inner {
                     holder.vault.clone(),
                     &holder.pex,
                     holder.request_tracker.clone(),
-                    holder.response_limiter.clone(),
+                    holder.choker.clone(),
                     holder.stats_tracker.bytes.clone(),
                 );
             }

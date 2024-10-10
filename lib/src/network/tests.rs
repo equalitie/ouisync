@@ -1,6 +1,6 @@
 use super::{
+    choke::Choker,
     client::Client,
-    constants::MAX_UNCHOKED_COUNT,
     message::{Message, Request, Response},
     request_tracker::RequestTracker,
     server::Server,
@@ -21,14 +21,14 @@ use futures_util::{future, TryStreamExt};
 use metrics::NoopRecorder;
 use rand::prelude::*;
 use state_monitor::StateMonitor;
-use std::{fmt, future::Future, pin::pin, sync::Arc};
+use std::{fmt, future::Future, pin::pin};
 use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::{
     select,
     sync::{
         broadcast::{self, error::RecvError},
-        mpsc, Semaphore,
+        mpsc,
     },
     time::{self, Duration},
 };
@@ -58,12 +58,19 @@ async fn transfer_snapshot_between_two_replicas(
     .await
 }
 
+#[tokio::test]
+async fn debug() {
+    transfer_snapshot_between_two_replicas_case(1, 1, 1, 0).await
+}
+
 async fn transfer_snapshot_between_two_replicas_case(
     leaf_count: usize,
     changeset_count: usize,
     changeset_size: usize,
     rng_seed: u64,
 ) {
+    test_utils::init_log();
+
     assert!(changeset_size > 0);
 
     let mut rng = StdRng::seed_from_u64(rng_seed);
@@ -393,7 +400,7 @@ async fn failed_block_other_peer() {
 async fn create_repository<R: Rng + CryptoRng>(
     rng: &mut R,
     write_keys: &Keypair,
-) -> (TempDir, Vault, RequestTracker, Arc<Semaphore>, PublicKey) {
+) -> (TempDir, Vault, RequestTracker, Choker, PublicKey) {
     let (base_dir, db) = db::create_temp().await.unwrap();
 
     let writer_id = PublicKey::generate(rng);
@@ -403,15 +410,9 @@ async fn create_repository<R: Rng + CryptoRng>(
     let traffic_monitor = monitor.traffic.clone();
     let state = Vault::new(repository_id, event_tx, db, monitor);
     let request_tracker = RequestTracker::new(traffic_monitor);
-    let response_limiter = Arc::new(Semaphore::new(MAX_UNCHOKED_COUNT));
+    let choker = Choker::new();
 
-    (
-        base_dir,
-        state,
-        request_tracker,
-        response_limiter,
-        writer_id,
-    )
+    (base_dir, state, request_tracker, choker, writer_id)
 }
 
 // Enough capacity to prevent deadlocks.
@@ -623,10 +624,10 @@ type ClientData = (
     mpsc::Sender<Response>,
 );
 
-fn create_server(vault: Vault, response_limiter: Arc<Semaphore>) -> ServerData {
+fn create_server(vault: Vault, choker: Choker) -> ServerData {
     let (send_tx, send_rx) = mpsc::unbounded_channel();
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let server = Server::new(vault, send_tx, recv_rx, response_limiter);
+    let server = Server::new(vault, send_tx, recv_rx, choker);
 
     (server, send_rx, recv_tx)
 }

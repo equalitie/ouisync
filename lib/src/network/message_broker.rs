@@ -1,4 +1,5 @@
 use super::{
+    choke::Choker,
     client::Client,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, Role},
     message::{Message, Request, Response},
@@ -26,7 +27,7 @@ use tokio::{
     select,
     sync::{
         mpsc::{self, error::TryRecvError},
-        oneshot, Semaphore,
+        oneshot,
     },
     task,
     time::Duration,
@@ -78,7 +79,7 @@ impl MessageBroker {
         vault: Vault,
         pex_repo: &PexRepository,
         request_tracker: RequestTracker,
-        response_limiter: Arc<Semaphore>,
+        choker: Choker,
         repo_counters: Arc<ByteCounters>,
     ) {
         let monitor = self.monitor.make_child(vault.monitor.name());
@@ -126,7 +127,7 @@ impl MessageBroker {
             dispatcher: self.dispatcher.clone(),
             vault,
             request_tracker,
-            response_limiter,
+            choker,
             pex_tx,
             pex_rx,
             monitor,
@@ -202,7 +203,7 @@ struct Link {
     dispatcher: MessageDispatcher,
     vault: Vault,
     request_tracker: RequestTracker,
-    response_limiter: Arc<Semaphore>,
+    choker: Choker,
     pex_tx: PexSender,
     pex_rx: PexReceiver,
     monitor: StateMonitor,
@@ -260,7 +261,7 @@ impl Link {
                 crypto_sink,
                 &self.vault,
                 &self.request_tracker,
-                self.response_limiter.clone(),
+                self.choker.clone(),
                 &mut self.pex_tx,
                 &mut self.pex_rx,
             )
@@ -296,7 +297,7 @@ async fn run_link(
     sink: EncryptingSink<'_>,
     vault: &Vault,
     request_tracker: &RequestTracker,
-    response_limiter: Arc<Semaphore>,
+    choker: Choker,
     pex_tx: &mut PexSender,
     pex_rx: &mut PexReceiver,
 ) {
@@ -311,7 +312,7 @@ async fn run_link(
 
     select! {
         _ = run_client(vault.clone(), message_tx.clone(), response_rx, request_tracker) => (),
-        _ = run_server(vault.clone(), message_tx.clone(), request_rx, response_limiter) => (),
+        _ = run_server(vault.clone(), message_tx.clone(), request_rx, choker) => (),
         _ = recv_messages(stream, request_tx, response_tx, pex_rx) => (),
         _ = send_messages(message_rx, sink) => (),
         _ = pex_tx.run(message_tx) => (),
@@ -429,9 +430,9 @@ async fn run_server(
     vault: Vault,
     message_tx: mpsc::UnboundedSender<Message>,
     request_rx: mpsc::Receiver<Request>,
-    response_limiter: Arc<Semaphore>,
+    choker: Choker,
 ) {
-    let mut server = Server::new(vault, message_tx, request_rx, response_limiter);
+    let mut server = Server::new(vault, message_tx, request_rx, choker);
 
     let result = server.run().await;
 

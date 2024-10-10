@@ -6,7 +6,6 @@ use crate::{
         Block,
     },
 };
-use assert_matches::assert_matches;
 use metrics::NoopRecorder;
 use rand::{
     distributions::{Bernoulli, Distribution, Standard},
@@ -199,6 +198,8 @@ async fn timeout() {
 
 #[tokio::test]
 async fn drop_uncommitted_client() {
+    crate::test_utils::init_log();
+
     let mut rng = StdRng::seed_from_u64(0);
     let (tracker, mut tracker_worker) = build(TrafficMonitor::new(&NoopRecorder));
 
@@ -219,26 +220,20 @@ async fn drop_uncommitted_client() {
     tracker_worker.step();
 
     assert_eq!(
-        request_rx_a.try_recv().map(|r| r.payload),
-        Ok(request.clone())
+        request_rx_a.try_recv(),
+        Ok(PendingRequest::new(request.clone()))
     );
-    assert_eq!(
-        request_rx_b.try_recv().map(|r| r.payload),
-        Err(TryRecvError::Empty)
-    );
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
 
     // Complete the request by the first client.
     client_a.success(request_key, vec![]);
     tracker_worker.step();
 
     assert_eq!(
-        request_rx_a.try_recv().map(|r| r.payload),
-        Err(TryRecvError::Empty)
+        request_rx_a.try_recv(),
+        Ok(PendingRequest::new(Request::Idle))
     );
-    assert_eq!(
-        request_rx_b.try_recv().map(|r| r.payload),
-        Err(TryRecvError::Empty)
-    );
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
 
     // Drop the first client without commiting.
     drop(client_a);
@@ -246,11 +241,13 @@ async fn drop_uncommitted_client() {
 
     // The request falls back to the other client because although the request was completed, it
     // wasn't committed.
-    assert_eq!(request_rx_b.try_recv().map(|r| r.payload), Ok(request));
+    assert_eq!(request_rx_b.try_recv(), Ok(PendingRequest::new(request)));
 }
 
 #[tokio::test]
 async fn multiple_responses_to_identical_requests() {
+    crate::test_utils::init_log();
+
     let mut rng = StdRng::seed_from_u64(0);
     let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
     let (client, mut request_rx) = tracker.new_client();
@@ -266,11 +263,21 @@ async fn multiple_responses_to_identical_requests() {
     client.initial(CandidateRequest::new(initial_request.clone()));
     worker.step();
 
-    assert_matches!(request_rx.try_recv(), Ok(_));
+    assert_eq!(
+        request_rx.try_recv(),
+        Ok(PendingRequest::new(initial_request.clone()))
+    );
 
     // Receive response to it
     client.success(MessageKey::from(&initial_request), vec![]);
     worker.step();
+
+    // All reqests have been completed so the client is now considered idle.
+    assert_eq!(
+        request_rx.try_recv(),
+        Ok(PendingRequest::new(Request::Idle))
+    );
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
 
     // do not commmit yet
 
@@ -282,11 +289,11 @@ async fn multiple_responses_to_identical_requests() {
     );
     worker.step();
 
-    // The followup requests are sent even though the
     assert_eq!(
-        request_rx.try_recv().map(|r| r.payload),
-        Ok(followup_request)
+        request_rx.try_recv(),
+        Ok(PendingRequest::new(followup_request))
     );
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
 
     // TODO: test these cases as well:
     // - the initial request gets committed, but remains tracked because it has in-flight followups.
@@ -327,35 +334,46 @@ mod duplicate_request_with_different_variant_on_the_same_client {
 
     #[tokio::test]
     async fn in_flight() {
-        case(|_client, _request_key| ());
+        case(|_client, _request_key| (), Err(TryRecvError::Empty));
     }
 
     #[tokio::test]
     async fn complete() {
-        case(|client, request_key| {
-            client.success(request_key, vec![]);
-        });
+        case(
+            |client, request_key| {
+                client.success(request_key, vec![]);
+            },
+            Ok(PendingRequest::new(Request::Idle)),
+        );
     }
 
     #[tokio::test]
     async fn committed() {
-        case(|client, request_key| {
-            client.success(request_key, vec![]);
-            client.new_committer().commit();
-        });
+        case(
+            |client, request_key| {
+                client.success(request_key, vec![]);
+                client.new_committer().commit();
+            },
+            Ok(PendingRequest::new(Request::Idle)),
+        );
     }
 
     #[tokio::test]
     async fn cancelled() {
-        case(|client, request_key| {
-            client.failure(request_key);
-        });
+        case(
+            |client, request_key| {
+                client.failure(request_key);
+            },
+            Ok(PendingRequest::new(Request::Idle)),
+        );
     }
 
-    fn case<F>(step: F)
+    fn case<F>(step: F, expect: Result<PendingRequest, TryRecvError>)
     where
         F: FnOnce(&RequestTrackerClient, MessageKey),
     {
+        crate::test_utils::init_log();
+
         let mut rng = StdRng::seed_from_u64(0);
         let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
         let (client, mut request_rx) = tracker.new_client();
@@ -375,14 +393,13 @@ mod duplicate_request_with_different_variant_on_the_same_client {
 
         assert_eq!(
             request_rx.try_recv(),
-            Ok(PendingRequest {
-                payload: request.clone(),
-                variant: variant_0
-            }),
+            Ok(PendingRequest::new(request.clone()).variant(variant_0)),
         );
 
         step(&client, MessageKey::from(&request));
         worker.step();
+
+        assert_eq!(request_rx.try_recv(), expect);
 
         client.success(
             preceding_request_key,
@@ -392,13 +409,251 @@ mod duplicate_request_with_different_variant_on_the_same_client {
 
         assert_eq!(
             request_rx.try_recv(),
-            Ok(PendingRequest {
-                payload: request.clone(),
-                variant: variant_1
-            }),
+            Ok(PendingRequest::new(request.clone()).variant(variant_1)),
         );
     }
 }
+
+#[tokio::test]
+async fn choke_before_request() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+    let (client_a, mut request_rx_a) = tracker.new_client();
+    let (client_b, mut request_rx_b) = tracker.new_client();
+    worker.step();
+
+    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+
+    client_a.choke();
+    client_a.initial(CandidateRequest::new(request.clone()));
+    client_b.initial(CandidateRequest::new(request.clone()));
+    worker.step();
+
+    // The first client is choked so the request is sent to the second one.
+    assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(
+        request_rx_b.try_recv(),
+        Ok(PendingRequest {
+            payload: request,
+            variant: RequestVariant::default()
+        })
+    );
+}
+
+#[tokio::test]
+async fn choke_after_request() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+    let (client_a, mut request_rx_a) = tracker.new_client();
+    let (client_b, mut request_rx_b) = tracker.new_client();
+    worker.step();
+
+    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+
+    client_a.initial(CandidateRequest::new(request.clone()));
+    client_b.initial(CandidateRequest::new(request.clone()));
+    worker.step();
+
+    assert_eq!(
+        request_rx_a.try_recv(),
+        Ok(PendingRequest {
+            payload: request.clone(),
+            variant: RequestVariant::default()
+        })
+    );
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
+
+    client_a.choke();
+    worker.step();
+
+    assert_eq!(
+        request_rx_b.try_recv(),
+        Ok(PendingRequest {
+            payload: request,
+            variant: RequestVariant::default()
+        })
+    );
+}
+
+#[tokio::test]
+async fn unchoke() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+    let (client, mut request_rx) = tracker.new_client();
+    worker.step();
+
+    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+
+    client.choke();
+    client.initial(CandidateRequest::new(request.clone()));
+    worker.step();
+
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
+
+    client.unchoke();
+    worker.step();
+
+    assert_eq!(
+        request_rx.try_recv(),
+        Ok(PendingRequest {
+            payload: request,
+            variant: RequestVariant::default()
+        })
+    );
+}
+
+#[tokio::test]
+async fn fallback_after_unchoke() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+
+    let (client_a, mut request_rx_a) = tracker.new_client();
+    let (client_b, mut request_rx_b) = tracker.new_client();
+
+    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+
+    client_a.initial(CandidateRequest::new(request.clone()));
+
+    client_b.choke();
+    client_b.initial(CandidateRequest::new(request.clone()));
+
+    worker.step();
+
+    assert_eq!(
+        request_rx_a.try_recv(),
+        Ok(PendingRequest {
+            payload: request.clone(),
+            variant: RequestVariant::default()
+        })
+    );
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
+
+    client_a.failure(MessageKey::from(&request));
+    worker.step();
+
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
+
+    client_b.unchoke();
+    worker.step();
+
+    assert_eq!(
+        request_rx_b.try_recv(),
+        Ok(PendingRequest {
+            payload: request.clone(),
+            variant: RequestVariant::default()
+        })
+    );
+}
+
+#[tokio::test]
+async fn idle_after_success_by_same_client() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+    let (client, mut request_rx) = tracker.new_client();
+    worker.step();
+
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
+
+    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+
+    client.initial(CandidateRequest::new(request.clone()));
+    worker.step();
+
+    assert_eq!(
+        request_rx.try_recv(),
+        Ok(PendingRequest {
+            payload: request.clone(),
+            variant: RequestVariant::default()
+        })
+    );
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
+
+    client.success(MessageKey::from(&request), vec![]);
+    worker.step();
+
+    assert_eq!(
+        request_rx.try_recv(),
+        Ok(PendingRequest {
+            payload: Request::Idle,
+            variant: RequestVariant::default()
+        })
+    );
+}
+
+#[tokio::test]
+async fn idle_after_success_by_other_client() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+    let (client_a, mut request_rx_a) = tracker.new_client();
+    let (client_b, mut request_rx_b) = tracker.new_client();
+    worker.step();
+
+    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+
+    client_a.initial(CandidateRequest::new(request.clone()));
+    client_b.initial(CandidateRequest::new(request.clone()));
+    worker.step();
+
+    assert_eq!(
+        request_rx_a.try_recv(),
+        Ok(PendingRequest {
+            payload: request.clone(),
+            variant: RequestVariant::default()
+        })
+    );
+    assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
+
+    client_a.success(MessageKey::from(&request), vec![]);
+    worker.step();
+
+    // A is the sender so they become idle immediatelly after the request's been completed.
+    assert_eq!(
+        request_rx_a.try_recv(),
+        Ok(PendingRequest::new(Request::Idle))
+    );
+
+    // B is only a waiter so they become idle only after the request's been commited.
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
+
+    client_a.new_committer().commit();
+    worker.step();
+
+    assert_eq!(
+        request_rx_b.try_recv(),
+        Ok(PendingRequest::new(Request::Idle))
+    );
+}
+
+#[tokio::test]
+async fn idle_after_failure() {
+    crate::test_utils::init_log();
+
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+    let (client, mut request_rx) = tracker.new_client();
+
+    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+
+    client.initial(CandidateRequest::new(request.clone()));
+    worker.step();
+
+    assert_eq!(
+        request_rx.try_recv(),
+        Ok(PendingRequest::new(request.clone()))
+    );
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
+
+    client.failure(MessageKey::from(&request));
+    worker.step();
+
+    assert_eq!(
+        request_rx.try_recv(),
+        Ok(PendingRequest::new(Request::Idle))
+    );
+}
+
+// TODO: test idle after failures
 
 /// Generate `count + 1` copies of the same snapshot. The first one will have all the blocks
 /// present (the "master copy"). The remaining ones will have some blocks missing but in such a
