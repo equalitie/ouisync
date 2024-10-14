@@ -47,6 +47,7 @@ dependencies {
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.ui:ui'
     implementation "androidx.activity:activity-compose:1.7.2"
+    implementation "androidx.navigation:navigation-compose:2.8.2"
 
     if (useLocalLib) {
         implementation project(':lib')

@@ -1,12 +1,10 @@
 package org.equalitie.ouisync.example
 
-import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
 import org.equalitie.ouisync.lib.Repository
@@ -17,18 +15,7 @@ import java.io.File
 private val DB_EXTENSION = "ouisyncdb"
 private const val TAG = "ouisync.example"
 
-class AppViewModel(private val configDir: String, private val storeDir: String) : ViewModel() {
-    class Factory(private val context: Context) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            val rootDir = context.getFilesDir()
-            val configDir = "$rootDir/config"
-            val storeDir = "$rootDir/store"
-
-            return AppViewModel(configDir, storeDir) as T
-        }
-    }
-
+class ExampleViewModel(private val configDir: String, private val storeDir: String) : ViewModel() {
     var sessionError by mutableStateOf<String?>(null)
         private set
 

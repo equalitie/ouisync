@@ -1,11 +1,11 @@
 package org.equalitie.ouisync.example
 
 import android.content.Intent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,23 +22,28 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.equalitie.ouisync.lib.Repository
@@ -46,84 +51,123 @@ import org.equalitie.ouisync.lib.Repository
 private const val TAG = "ouisync.example"
 private val PADDING = 8.dp
 
+enum class ExampleScreen(val title: String) {
+    RepositoryList("Repositories"),
+    RepositoryDetail("Repository"),
+}
+
+@Composable
+fun ExampleApp(viewModel: ExampleViewModel) {
+    val navController = rememberNavController()
+
+    NavHost(
+        navController = navController,
+        startDestination = ExampleScreen.RepositoryList.name,
+    ) {
+        composable(route = ExampleScreen.RepositoryList.name) {
+            RepositoryListScreen(
+                viewModel = viewModel,
+                navController = navController,
+            )
+        }
+
+        composable(route = ExampleScreen.RepositoryDetail.name) {
+            RepositoryDetail(
+                viewModel = viewModel,
+                navController = navController,
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun App(viewModel: AppViewModel) {
+fun RepositoryListScreen(
+    viewModel: ExampleViewModel,
+    navController: NavController,
+) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { Snackbar(scope) }
     var adding by remember { mutableStateOf(false) }
 
-    MaterialTheme {
-        Scaffold(
-            floatingActionButton = {
-                if (!adding) {
-                    FloatingActionButton(
-                        onClick = {
-                            adding = true
-                        },
-                    ) {
-                        Icon(Icons.Default.Add, "Add")
-                    }
-                }
-            },
-            bottomBar = { StatusBar(viewModel) },
-            snackbarHost = { SnackbarHost(snackbar.state) },
-            content = { padding ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                        .padding(PADDING),
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Repositories") },
+            )
+        },
+        bottomBar = { StatusBar(viewModel) },
+        floatingActionButton = {
+            if (!adding) {
+                FloatingActionButton(
+                    onClick = {
+                        adding = true
+                    },
                 ) {
-                    viewModel.sessionError?.let {
-                        Text(it)
-                    }
-
-                    RepositoryList(viewModel, snackbar = snackbar)
-
-                    if (adding) {
-                        CreateRepositoryDialog(
-                            viewModel,
-                            snackbar = snackbar,
-                            onDone = { adding = false },
-                        )
-                    }
+                    Icon(Icons.Default.Add, "Add")
                 }
-            },
-        )
-    }
-}
+            }
+        },
+        snackbarHost = { SnackbarHost(snackbar.state) },
+    ) { padding ->
 
-@Composable
-fun StatusBar(viewModel: AppViewModel) {
-    BottomAppBar {
-        if (viewModel.sessionError == null) {
-            Icon(Icons.Default.Check, "OK")
-            Spacer(modifier = Modifier.weight(1f))
-            Text("Protocol version: ${viewModel.protocolVersion}")
-        } else {
-            Icon(Icons.Default.Warning, "Error")
+        RepositoryList(
+            viewModel = viewModel,
+            onRepositoryClicked = {
+                // TODO
+            },
+            onRepositoryDeleted = {
+                snackbar.show("Repository '$it' deleted")
+            },
+            modifier = Modifier.padding(padding),
+        )
+
+        if (adding) {
+            CreateRepositoryDialog(
+                viewModel,
+                onSuccess = {
+                    adding = false
+                    snackbar.show("Repository created")
+                },
+                onFailure = { error ->
+                    adding = false
+                    snackbar.show("Repository creation failed ($error)")
+                },
+                onDismiss = {
+                    adding = false
+                },
+            )
         }
     }
 }
 
 @Composable
-fun RepositoryList(viewModel: AppViewModel, snackbar: Snackbar) {
+fun RepositoryList(
+    viewModel: ExampleViewModel,
+    onRepositoryClicked: (String) -> Unit = {},
+    onRepositoryDeleted: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     val scope = rememberCoroutineScope()
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(PADDING),
+        modifier = modifier,
     ) {
         for (entry in viewModel.repositories) {
             item(key = entry.key) {
                 RepositoryItem(
                     entry.key,
                     entry.value,
-                    onDelete = {
+                    onClicked = {
+                        // ...
+                    },
+                    onDeleteClicked = {
                         scope.launch {
                             viewModel.deleteRepository(entry.key)
-                            snackbar.show("Repository deleted")
                         }
+
+                        onRepositoryDeleted(entry.key)
                     },
                 )
             }
@@ -135,7 +179,8 @@ fun RepositoryList(viewModel: AppViewModel, snackbar: Snackbar) {
 fun RepositoryItem(
     name: String,
     repository: Repository,
-    onDelete: () -> Unit,
+    onClicked: () -> Unit = {},
+    onDeleteClicked: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -154,29 +199,34 @@ fun RepositoryItem(
         context.startActivity(shareIntent)
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.padding(PADDING)) {
-            Text(name, fontWeight = FontWeight.Bold)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(PADDING).fillMaxWidth(),
+    ) {
+        Text(
+            name,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onClicked() }
+        )
 
-            Spacer(Modifier.weight(1f))
+        IconButton(
+            onClick = {
+                scope.launch {
+                    sendShareToken()
+                }
+            },
+        ) {
+            Icon(Icons.Default.Share, "Share")
+        }
 
-            IconButton(
-                onClick = {
-                    scope.launch {
-                        sendShareToken()
-                    }
-                },
-            ) {
-                Icon(Icons.Default.Share, "Share")
-            }
-
-            IconButton(
-                onClick = {
-                    deleting = true
-                },
-            ) {
-                Icon(Icons.Default.Delete, "Delete")
-            }
+        IconButton(
+            onClick = {
+                deleting = true
+            },
+        ) {
+            Icon(Icons.Default.Delete, "Delete")
         }
     }
 
@@ -192,7 +242,7 @@ fun RepositoryItem(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onDelete()
+                        onDeleteClicked()
                         deleting = false
                     },
                 ) {
@@ -211,10 +261,16 @@ fun RepositoryItem(
 }
 
 @Composable
+fun RepositoryDetail(viewModel: ExampleViewModel, navController: NavController) {
+
+}
+
+@Composable
 fun CreateRepositoryDialog(
-    viewModel: AppViewModel,
-    onDone: () -> Unit,
-    snackbar: Snackbar,
+    viewModel: ExampleViewModel,
+    onSuccess: () -> Unit = {},
+    onFailure: (Exception) -> Unit = {},
+    onDismiss: () -> Unit = {},
 ) {
     var scope = rememberCoroutineScope()
 
@@ -254,11 +310,9 @@ fun CreateRepositoryDialog(
                         scope.launch {
                             try {
                                 viewModel.createRepository(name, token)
-                                snackbar.show("Repository created")
+                                onSuccess()
                             } catch (e: Exception) {
-                                snackbar.show("Repository creation failed ($e)")
-                            } finally {
-                                onDone()
+                                onFailure(e)
                             }
                         }
                     }
@@ -268,11 +322,11 @@ fun CreateRepositoryDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = { onDone() }) {
+            TextButton(onClick = { onDismiss() }) {
                 Text("Cancel")
             }
         },
-        onDismissRequest = { onDone() },
+        onDismissRequest = { onDismiss() },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(PADDING)) {
                 TextField(
@@ -295,6 +349,22 @@ fun CreateRepositoryDialog(
             }
         },
     )
+}
+
+@Composable
+fun StatusBar(viewModel: ExampleViewModel) {
+    BottomAppBar {
+        val sessionError = viewModel.sessionError
+
+        if (sessionError == null) {
+            Icon(Icons.Default.Check, "OK")
+            Spacer(modifier = Modifier.weight(1f))
+            Text("Protocol version: ${viewModel.protocolVersion}")
+        } else {
+            Icon(Icons.Default.Warning, "Error")
+            Text(sessionError)
+        }
+    }
 }
 
 class Snackbar(val scope: CoroutineScope) {
