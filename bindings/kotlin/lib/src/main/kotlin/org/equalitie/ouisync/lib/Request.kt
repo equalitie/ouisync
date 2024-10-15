@@ -62,7 +62,7 @@ internal class RepositoryCreate(
                 "path" to path,
                 "read_secret" to readSecret,
                 "write_secret" to writeSecret,
-                "shareToken" to shareToken,
+                "share_token" to shareToken,
             ),
         )
     }
