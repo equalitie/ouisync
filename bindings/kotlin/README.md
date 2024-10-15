@@ -15,7 +15,7 @@ in `build/lib/outputs/aar/lib-release.aar` (or `lib-debug.aar`).
 
 ## Run unit tests
 
-Tun `gradle lib:test`
+Run `gradle lib:test` (See also https://docs.gradle.org/current/userguide/java_testing.html#test_filtering)
 
 ## Example app
 

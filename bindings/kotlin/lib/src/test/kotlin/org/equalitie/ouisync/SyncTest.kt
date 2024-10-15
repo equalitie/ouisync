@@ -1,11 +1,11 @@
 package org.equalitie.ouisync.lib
 
-import java.io.File as JFile
-import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.test.runTest
-import org.junit.Before
 import org.junit.After
+import org.junit.Before
 import org.junit.Test
+import kotlin.io.path.createTempDirectory
+import java.io.File as JFile
 
 class SyncTest {
     lateinit var tempDir: JFile
@@ -34,14 +34,13 @@ class SyncTest {
         tempDir.deleteRecursively()
     }
 
-
     @Test
     fun sync() = runTest {
         val repoA = Repository.create(
             sessionA,
             "$tempDir/a.ouisyncdb",
             readSecret = null,
-            writeSecret = null
+            writeSecret = null,
         )
 
         val token = repoA.createShareToken()
@@ -50,7 +49,7 @@ class SyncTest {
             "$tempDir/b.ouisyncdb",
             readSecret = null,
             writeSecret = null,
-            shareToken = token
+            shareToken = token,
         )
         val events = repoB.subscribe()
 
@@ -76,7 +75,7 @@ class SyncTest {
                     val contentB = fileB.read(0, length).decodeToString()
 
                     if (contentB == contentA) {
-                        break;
+                        break
                     }
                 } finally {
                     fileB.close()

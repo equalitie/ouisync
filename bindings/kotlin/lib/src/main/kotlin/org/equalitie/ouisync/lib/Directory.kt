@@ -29,6 +29,11 @@ data class DirectoryEntry(val name: String, val entryType: EntryType) {
 class Directory private constructor(private val entries: List<DirectoryEntry>) : Collection<DirectoryEntry> {
     companion object {
         /**
+         * Returns an empty directory snapshot.
+         */
+        fun empty() = Directory(listOf())
+
+        /**
          * Creates a new directory at the given path in the repository.
          */
         suspend fun create(repo: Repository, path: String) {

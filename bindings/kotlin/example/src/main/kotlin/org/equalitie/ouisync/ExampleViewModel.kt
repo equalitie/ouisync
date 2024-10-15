@@ -2,6 +2,7 @@ package org.equalitie.ouisync.example
 
 import android.util.Log
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
@@ -19,7 +20,7 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
     var sessionError by mutableStateOf<String?>(null)
         private set
 
-    var protocolVersion by mutableStateOf<Int>(0)
+    var protocolVersion by mutableIntStateOf(0)
         private set
 
     var repositories by mutableStateOf<Map<String, Repository>>(mapOf())
@@ -42,6 +43,16 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
         viewModelScope.launch {
             session?.let {
                 protocolVersion = it.currentProtocolVersion()
+
+                // Bind the network sockets to all interfaces and random ports. Use only the QUIC
+                // protocol and use both IPv4 and IPv6.
+                it.bindNetwork(quicV4 = "0.0.0.0:0", quicV6 = "[::]:0")
+
+                // Enable port forwarding (UPnP) to improve chances of connecting to peers.
+                it.setPortForwardingEnabled(true)
+
+                // Enable Local Disocvery to automatically discover peers on the local network.
+                it.setLocalDiscoveryEnabled(true)
             }
 
             openRepositories()
@@ -103,6 +114,8 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
                         .getName()
                         .substring(0, file.getName().length - DB_EXTENSION.length - 1)
                     val repo = Repository.open(session, file.getPath())
+
+                    repo.setSyncEnabled(true)
 
                     Log.i(TAG, "Opened repository $name")
 

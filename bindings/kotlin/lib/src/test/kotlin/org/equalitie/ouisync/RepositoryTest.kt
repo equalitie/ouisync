@@ -272,7 +272,7 @@ class RepositoryTest {
     fun shareTokenRoundTrip() = runTest {
         val origToken = ShareToken.fromString(
             session,
-            "https://ouisync.net/r#AwAgEZkrt6b9gW47Nb6hGQjsZRGeh9GKp3gTyhZrxfT03SE"
+            "https://ouisync.net/r#AwAgEZkrt6b9gW47Nb6hGQjsZRGeh9GKp3gTyhZrxfT03SE",
         )
         val repo = createRepo(shareToken = origToken)
 
@@ -351,7 +351,7 @@ class RepositoryTest {
             repoPath,
             readSecret = null,
             writeSecret = null,
-            shareToken = shareToken
+            shareToken = shareToken,
         )
 
     private suspend fun <R> withRepo(block: suspend (repo: Repository) -> R): R {
