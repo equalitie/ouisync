@@ -99,6 +99,7 @@ fun RepositoryListScreen(
     viewModel: ExampleViewModel,
     navController: NavController,
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var adding by remember { mutableStateOf(false) }
@@ -125,13 +126,34 @@ fun RepositoryListScreen(
     ) { padding ->
 
         RepositoryList(
-            viewModel = viewModel,
+            repositories = viewModel.repositories,
             onRepositoryClicked = {
                 navController.navigate(route = RepositoryDetailRoute(it))
             },
-            onRepositoryDeleted = {
+            onRepositoryShareClicked = {
+                viewModel.repositories.get(it)?.let {
+                    scope.launch {
+                        val token = it.createShareToken().toString()
+
+                        val sendIntent = Intent().apply {
+                            action = Intent.ACTION_SEND
+                            putExtra(Intent.EXTRA_TEXT, token)
+                            type = "text/plain"
+                        }
+                        val shareIntent = Intent.createChooser(sendIntent, null)
+
+                        context.startActivity(shareIntent)
+                    }
+                }
+            },
+            onRepositoryDeleteClicked = {
                 scope.launch {
-                    snackbar.showSnackbar("Repository '$it' deleted", withDismissAction = true)
+                    viewModel.deleteRepository(it)
+
+                    snackbar.showSnackbar(
+                        "Repository '$it' deleted",
+                        withDismissAction = true,
+                    )
                 }
             },
             modifier = Modifier.padding(padding),
@@ -139,22 +161,28 @@ fun RepositoryListScreen(
 
         if (adding) {
             CreateRepositoryDialog(
-                viewModel,
-                onSuccess = {
+                repositories = viewModel.repositories,
+                onSubmit = { name, token ->
+
                     adding = false
 
                     scope.launch {
-                        snackbar.showSnackbar("Repository created", withDismissAction = true)
-                    }
-                },
-                onFailure = { error ->
-                    adding = false
+                        try {
+                            viewModel.createRepository(name, token)
 
-                    scope.launch {
-                        snackbar.showSnackbar("Repository creation failed ($error)", withDismissAction = true)
+                            snackbar.showSnackbar(
+                                "Repository created",
+                                withDismissAction = true,
+                            )
+                        } catch (e: Exception) {
+                            snackbar.showSnackbar(
+                                "Repository creation failed ($e)",
+                                withDismissAction = true,
+                            )
+                        }
                     }
                 },
-                onDismiss = {
+                onCancel = {
                     adding = false
                 },
             )
@@ -164,32 +192,24 @@ fun RepositoryListScreen(
 
 @Composable
 fun RepositoryList(
-    viewModel: ExampleViewModel,
+    repositories: Map<String, Repository>,
     modifier: Modifier = Modifier,
     onRepositoryClicked: (String) -> Unit = {},
-    onRepositoryDeleted: (String) -> Unit = {},
+    onRepositoryShareClicked: (String) -> Unit = {},
+    onRepositoryDeleteClicked: (String) -> Unit = {},
 ) {
-    val scope = rememberCoroutineScope()
-
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(PADDING),
         modifier = modifier,
     ) {
-        for (entry in viewModel.repositories) {
+        for (entry in repositories) {
             item(key = entry.key) {
                 RepositoryItem(
                     entry.key,
                     entry.value,
-                    onClicked = {
-                        onRepositoryClicked(entry.key)
-                    },
-                    onDeleteClicked = {
-                        scope.launch {
-                            viewModel.deleteRepository(entry.key)
-                        }
-
-                        onRepositoryDeleted(entry.key)
-                    },
+                    onClicked = { onRepositoryClicked(entry.key) },
+                    onShareClicked = { onRepositoryShareClicked(entry.key) },
+                    onDeleteClicked = { onRepositoryDeleteClicked(entry.key) },
                 )
             }
         }
@@ -201,24 +221,10 @@ fun RepositoryItem(
     name: String,
     repository: Repository,
     onClicked: () -> Unit = {},
+    onShareClicked: () -> Unit = {},
     onDeleteClicked: () -> Unit = {},
 ) {
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
     var deleting by remember { mutableStateOf(false) }
-
-    suspend fun sendShareToken() {
-        val token = repository.createShareToken().toString()
-
-        val sendIntent = Intent().apply {
-            action = Intent.ACTION_SEND
-            putExtra(Intent.EXTRA_TEXT, token)
-            type = "text/plain"
-        }
-        val shareIntent = Intent.createChooser(sendIntent, null)
-
-        context.startActivity(shareIntent)
-    }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -234,9 +240,7 @@ fun RepositoryItem(
 
         IconButton(
             onClick = {
-                scope.launch {
-                    sendShareToken()
-                }
+                onShareClicked()
             },
         ) {
             Icon(Icons.Default.Share, "Share")
@@ -252,30 +256,13 @@ fun RepositoryItem(
     }
 
     if (deleting) {
-        AlertDialog(
-            title = {
-                Text("Delete repository")
+        DeleteRepositoryDialog(
+            onSubmit = {
+                onDeleteClicked()
+                deleting = false
             },
-            text = {
-                Text("Are you sure you want to delete this repository?")
-            },
-            onDismissRequest = { deleting = false },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onDeleteClicked()
-                        deleting = false
-                    },
-                ) {
-                    Text("Delete")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { deleting = false },
-                ) {
-                    Text("Cancel")
-                }
+            onCancel = {
+                deleting = false
             },
         )
     }
@@ -375,13 +362,10 @@ fun RepositoryDetail(
 
 @Composable
 fun CreateRepositoryDialog(
-    viewModel: ExampleViewModel,
-    onSuccess: () -> Unit = {},
-    onFailure: (Exception) -> Unit = {},
-    onDismiss: () -> Unit = {},
+    repositories: Map<String, Repository>,
+    onSubmit: (String, String) -> Unit = { _, _ -> },
+    onCancel: () -> Unit = {},
 ) {
-    var scope = rememberCoroutineScope()
-
     var name by remember {
         mutableStateOf("")
     }
@@ -400,7 +384,7 @@ fun CreateRepositoryDialog(
             return false
         }
 
-        if (viewModel.repositories.containsKey(name)) {
+        if (repositories.containsKey(name)) {
             nameError = "Name is already taken"
             return false
         }
@@ -415,14 +399,7 @@ fun CreateRepositoryDialog(
             TextButton(
                 onClick = {
                     if (validate()) {
-                        scope.launch {
-                            try {
-                                viewModel.createRepository(name, token)
-                                onSuccess()
-                            } catch (e: Exception) {
-                                onFailure(e)
-                            }
-                        }
+                        onSubmit(name, token)
                     }
                 },
             ) {
@@ -430,11 +407,11 @@ fun CreateRepositoryDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = { onDismiss() }) {
+            TextButton(onClick = { onCancel() }) {
                 Text("Cancel")
             }
         },
-        onDismissRequest = { onDismiss() },
+        onDismissRequest = { onCancel() },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(PADDING)) {
                 TextField(
@@ -454,6 +431,29 @@ fun CreateRepositoryDialog(
                     value = token,
                     onValueChange = { token = it },
                 )
+            }
+        },
+    )
+}
+
+@Composable
+fun DeleteRepositoryDialog(onSubmit: () -> Unit = {}, onCancel: () -> Unit = {}) {
+    AlertDialog(
+        title = {
+            Text("Delete repository")
+        },
+        text = {
+            Text("Are you sure you want to delete this repository?")
+        },
+        onDismissRequest = onCancel,
+        confirmButton = {
+            TextButton(onClick = onSubmit) {
+                Text("Delete")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text("Cancel")
             }
         },
     )
