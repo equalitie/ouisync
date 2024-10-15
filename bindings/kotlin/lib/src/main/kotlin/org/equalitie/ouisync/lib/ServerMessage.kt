@@ -204,6 +204,7 @@ internal class Notification(val content: Any) : ServerMessage {
         private fun unpackValue(name: String, unpacker: MessageUnpacker): Any {
             when (name) {
                 "network" -> return NetworkEvent.decode(unpacker.unpackByte())
+                "repository" -> return Unit
                 else -> throw InvalidNotification()
             }
         }
