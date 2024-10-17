@@ -32,7 +32,6 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -117,7 +116,6 @@ fun RepositoryListScreen(
     navController: NavController,
 ) {
     val scope = rememberCoroutineScope()
-    val state by viewModel.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     var adding by remember { mutableStateOf(false) }
 
@@ -137,27 +135,33 @@ fun RepositoryListScreen(
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
 
-        RepositoryList(
-            repositories = state.repositories,
-            onRepositoryClicked = { name ->
-                navController.navigate(route = FolderRoute(name))
-            },
-            onRepositoryDeleteConfirmed = { name ->
-                scope.launch {
-                    viewModel.deleteRepository(name)
+        val sessionError = viewModel.sessionError
 
-                    snackbar.showSnackbar(
-                        "Repository '$name' deleted",
-                        withDismissAction = true,
-                    )
-                }
-            },
-            modifier = Modifier.padding(padding),
-        )
+        if (sessionError == null) {
+            RepositoryList(
+                repositories = viewModel.repositories,
+                onRepositoryClicked = { name ->
+                    navController.navigate(route = FolderRoute(name))
+                },
+                onRepositoryDeleteConfirmed = { name ->
+                    scope.launch {
+                        viewModel.deleteRepository(name)
+
+                        snackbar.showSnackbar(
+                            "Repository '$name' deleted",
+                            withDismissAction = true,
+                        )
+                    }
+                },
+                modifier = Modifier.padding(padding),
+            )
+        } else {
+            ErrorBox(sessionError, Modifier.padding(padding))
+        }
 
         if (adding) {
             CreateRepositoryDialog(
-                repositories = state.repositories,
+                repositories = viewModel.repositories,
                 onSubmit = { name, token ->
 
                     adding = false
@@ -259,8 +263,7 @@ fun FolderScreen(
     repositoryName: String,
     path: String,
 ) {
-    val state by viewModel.state.collectAsState()
-    val repo = state.repositories.get(repositoryName)
+    val repo = viewModel.repositories.get(repositoryName)
 
     Scaffold(
         topBar = { TopBar("$repositoryName$path", navController) },
@@ -283,12 +286,10 @@ fun FolderScreen(
                 },
             )
         } else {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.padding(padding),
-            ) {
-                Text("Repository '$repositoryName' not found")
-            }
+            ErrorBox(
+                "Repository '$repositoryName' not found",
+                Modifier.padding(padding),
+            )
         }
     }
 }
@@ -348,8 +349,7 @@ fun FileScreen(
     path: String,
 ) {
     val scope = rememberCoroutineScope()
-    val state by viewModel.state.collectAsState()
-    val repo = state.repositories.get(repositoryName)
+    val repo = viewModel.repositories.get(repositoryName)
 
     Scaffold(
         topBar = { TopBar("$repositoryName$path", navController) },
@@ -358,12 +358,10 @@ fun FileScreen(
         if (repo != null) {
             FileDetail(repo, path, modifier = Modifier.padding(padding))
         } else {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.padding(padding),
-            ) {
-                Text("Repository '$repositoryName' not found")
-            }
+            ErrorBox(
+                "Repository '$repositoryName' not found",
+                Modifier.padding(padding),
+            )
         }
     }
 }
@@ -379,7 +377,7 @@ fun FileDetail(repo: Repository, path: String, modifier: Modifier = Modifier) {
     var hash by remember { mutableStateOf("") }
 
     // Use `LaunchedEffect` to open, sync and read the file. In a real application this kind of
-    // logic woudl probably be moved to the data layer or a ViewModel. We handle it here for
+    // logic would probably be moved to the data layer or a ViewModel. We handle it here for
     // simplicity.
     LaunchedEffect(repo, path) {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -555,6 +553,16 @@ fun TopBar(title: String, navController: NavController? = null) {
             }
         },
     )
+}
+
+@Composable
+fun ErrorBox(error: String, modifier: Modifier = Modifier) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier,
+    ) {
+        Text(error)
+    }
 }
 
 @Composable

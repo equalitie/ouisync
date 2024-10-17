@@ -2,14 +2,10 @@ package org.equalitie.ouisync.example
 
 import android.util.Log
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.getAndUpdate
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.equalitie.ouisync.lib.Repository
 import org.equalitie.ouisync.lib.Session
@@ -19,32 +15,24 @@ import java.io.File
 private val DB_EXTENSION = "ouisyncdb"
 private const val TAG = "ouisync.example"
 
-data class UiState(
-    val sessionError: String? = null,
-    val repositories: Map<String, Repository> = mapOf(),
-)
-
 class ExampleViewModel(private val configDir: String, private val storeDir: String) : ViewModel() {
-    private val _state = MutableStateFlow(UiState())
-    val state: StateFlow<UiState> = _state.asStateFlow()
-
     private var session: Session? = null
+
+    var sessionError by mutableStateOf<String?>(null)
+        private set
+
+    var repositories by mutableStateOf<Map<String, Repository>>(mapOf())
+        private set
 
     init {
         try {
             session = Session.create(configDir)
         } catch (e: Exception) {
             Log.e(TAG, "Session.create failed", e)
-
-            _state.update {
-                it.copy(sessionError = e.toString())
-            }
+            sessionError = e.toString()
         } catch (e: java.lang.Error) {
             Log.e(TAG, "Session.create failed", e)
-
-            _state.update {
-                it.copy(sessionError = e.toString())
-            }
+            sessionError = e.toString()
         }
 
         viewModelScope.launch {
@@ -67,7 +55,7 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
     suspend fun createRepository(name: String, token: String) {
         val session = this.session ?: return
 
-        if (_state.value.repositories.containsKey(name)) {
+        if (repositories.containsKey(name)) {
             Log.e(TAG, "repository named \"$name\" already exists")
             return
         }
@@ -88,17 +76,13 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
 
         repo.setSyncEnabled(true)
 
-        _state.update {
-            it.copy(repositories = it.repositories + (name to repo))
-        }
+        repositories = repositories + (name to repo)
     }
 
     suspend fun deleteRepository(name: String) {
-        val repo = _state.value.repositories.get(name) ?: return
+        val repo = repositories.get(name) ?: return
 
-        _state.update {
-            it.copy(repositories = it.repositories - name)
-        }
+        repositories = repositories - name
 
         repo.close()
 
@@ -129,9 +113,7 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
 
                     Log.i(TAG, "Opened repository $name")
 
-                    _state.update {
-                        it.copy(repositories = it.repositories + (name to repo))
-                    }
+                    repositories = repositories + (name to repo)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to open repository at ${file.getPath()}")
                     continue
@@ -141,12 +123,11 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
     }
 
     override fun onCleared() {
-        val state = _state.getAndUpdate {
-            it.copy(sessionError = null, repositories = mapOf())
-        }
+        val repos = repositories.values
+        repositories = mapOf()
 
         viewModelScope.launch {
-            for (repo in state.repositories.values) {
+            for (repo in repos) {
                 repo.close()
             }
 
