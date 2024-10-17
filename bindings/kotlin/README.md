@@ -1,4 +1,4 @@
-# Ouisync library kotlin bindings
+# Ouisync library Kotlin bindings
 
 This project provides kotlin bindings for the ouisync library in the form of self-contained AAR
 package to be used in android apps.

@@ -52,3 +52,4 @@ tasks.named('clean') {
 }
 
 apply from: "${rootDir}/build-scripts/publish-root.gradle"
+

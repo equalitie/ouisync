@@ -1,10 +1,12 @@
+import org.jetbrains.dokka.gradle.DokkaTask
+
+
 plugins {
     id 'com.android.library'
     id 'kotlin-android'
     id 'org.jetbrains.dokka' version '1.9.0'
     id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.4'
 }
-
 
 Properties localProperties = new Properties()
 
@@ -13,7 +15,16 @@ if (localPropertiesFile.exists()) {
     localProperties.load(localPropertiesFile.newDataInputStream())
 }
 
-def ouisyncVersionName = localProperties.getProperty("versionName")
+// Grab version from the top level Cargo.toml
+def cargoManifest = file("$rootDir/../../Cargo.toml").text
+def versionPattern = /(?m)^version\s*=\s*"(.*)"/
+def rootVersion = (cargoManifest =~ versionPattern)[0][1].trim()
+
+// Use this to distinguish different versions of this bindings that use the same version of the
+// Ouisync library
+def revision = 0
+
+version = "$rootVersion-$revision"
 
 android {
     compileSdkVersion 34
@@ -36,7 +47,7 @@ android {
         targetSdkVersion 34
         minSdkVersion 21
         versionCode 1
-        versionName ouisyncVersionName
+        versionName version
     }
 
     compileOptions {
@@ -139,6 +150,28 @@ tasks.register('cargoBuildUnitTest', Exec) {
     commandLine 'cargo', 'build', '--package', 'ouisync-ffi', '--lib'
 }
 
+tasks.withType(DokkaTask) {
+    dokkaSourceSets {
+        configureEach {
+            includes.from("docs/module.md")
+        }
+    }
+
+    moduleName.set("ouisync")
+
+    def dokkaBaseConfiguration = """
+    {
+        "customAssets":      ["${file("docs/logo-icon.png")}"],
+        "customStyleSheets": ["${file("docs/logo-styles.css")}"],
+        "footerMessage":     "Copyright (c) 2024 <a href=\\\"https://equalit.ie/\\\">eQualitie</a>."
+    }
+    """
+
+    pluginsMapConfiguration.set([
+        "org.jetbrains.dokka.base.DokkaBase": dokkaBaseConfiguration,
+    ])
+}
+
 afterEvaluate {
     android.libraryVariants.each {
         def variant  = it.name.capitalize()
@@ -170,7 +203,6 @@ afterEvaluate {
 
 ext {
     PUBLISH_GROUP_ID = 'ie.equalit.ouinet'
-    PUBLISH_VERSION = "${ouisyncVersionName}"
     PUBLISH_ARTIFACT_ID = "ouisync-omni"
 }
 

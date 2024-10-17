@@ -13,7 +13,6 @@ artifacts {
 }
 
 group = PUBLISH_GROUP_ID
-version = PUBLISH_VERSION
 
 afterEvaluate {
     publishing {
@@ -23,7 +22,6 @@ afterEvaluate {
                 // we'll set up later
                 groupId PUBLISH_GROUP_ID
                 artifactId PUBLISH_ARTIFACT_ID
-                version PUBLISH_VERSION
 
                 // Two artifacts, the `aar` (or `jar`) and the sources
                 artifact androidSourcesJar
