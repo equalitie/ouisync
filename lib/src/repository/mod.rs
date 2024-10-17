@@ -225,8 +225,8 @@ impl Repository {
     /// closed.
     ///
     /// To restore a disabled mode the repo must first be put into that mode using
-    /// [set_credentials] where the `Credentials` must be obtained from `AccessSecrets` with at
-    /// least the mode one wants to restore.
+    /// [Self::set_credentials()] where the `Credentials` must be obtained from `AccessSecrets` with
+    /// at least the mode one wants to restore.
     ///
     /// If `read` or `write` is `None` then no change is made to that mode. If both are `None` then
     /// this function is a no-op.
@@ -320,7 +320,7 @@ impl Repository {
 
     /// Gets the current credentials of this repository.
     ///
-    /// See also [set_credentials].
+    /// See also [Self::set_credentials()].
     pub fn credentials(&self) -> Credentials {
         self.shared.credentials.read().unwrap().clone()
     }
@@ -408,19 +408,19 @@ impl Repository {
     ///
     /// # Move/rename the repo db
     ///
-    /// 1. Obtain the current credentials with [credentials] and keep them locally.
+    /// 1. Obtain the current credentials with [Self::credentials()] and keep them locally.
     /// 2. Close the repo.
     /// 3. Rename the repo database files(s).
     /// 4. Open the repo from its new location in blind mode.
-    /// 5. Restore the credentials from step 1 with [set_credentials].
+    /// 5. Restore the credentials from step 1 with [Self::set_credentials()].
     ///
     /// # Restore access
     ///
     /// 1. Get the `AccessSecrets` the repository was originally created from (e.g., by extracting
     ///    them from the original `ShareToken`).
     /// 2. Construct `Credentials` using this access secrets and a random writer id.
-    /// 3. Restore the credentials with [set_credentials].
-    /// 4. Enable/change the access with [set_access].
+    /// 3. Restore the credentials with [Self::set_credentials()].
+    /// 4. Enable/change the access with [Self::set_access()].
     pub async fn set_credentials(&self, credentials: Credentials) -> Result<()> {
         // Check the credentials are actually for this repository
         let expected_id = {
