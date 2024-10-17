@@ -149,12 +149,17 @@ impl Store {
     }
 
     /// Acquires a `Reader`
-    pub async fn acquire_read(&self) -> Result<Reader, Error> {
-        Ok(Reader {
-            inner: Handle::Connection(self.db.acquire().await?),
-            block_id_cache: self.block_id_cache.clone(),
-            block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
-        })
+    #[track_caller]
+    pub fn acquire_read(&self) -> impl Future<Output = Result<Reader, Error>> + '_ {
+        let conn = self.db.acquire();
+
+        async move {
+            Ok(Reader {
+                inner: Handle::Connection(conn.await?),
+                block_id_cache: self.block_id_cache.clone(),
+                block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
+            })
+        }
     }
 
     /// Begins a `ReadTransaction`

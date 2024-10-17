@@ -74,7 +74,13 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
             shareToken = shareToken,
         )
 
+        // Syncing is initially disabled, need to enable it.
         repo.setSyncEnabled(true)
+
+        // Enable DHT and PEX for discovering peers. These settings are persisted so it's not
+        // necessary to set them again when opening the repository later.
+        repo.setDhtEnabled(true)
+        repo.setPexEnabled(true)
 
         repositories = repositories + (name to repo)
     }
@@ -89,7 +95,8 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
         val baseName = "$name.$DB_EXTENSION"
         val files = File(storeDir).listFiles() ?: arrayOf()
 
-        // A ouisync repository database consist of multiple files. Delete all of them.
+        // A ouisync repository database consist of multiple files having the same prefix. Delete
+        // all of them.
         for (file in files) {
             if (file.getName().startsWith(baseName)) {
                 file.delete()
@@ -109,7 +116,11 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
                         .substring(0, file.getName().length - DB_EXTENSION.length - 1)
                     val repo = Repository.open(session, file.getPath())
 
+                    // Syncing is initially disabled, enable it.
                     repo.setSyncEnabled(true)
+
+                    // NOTE: The DHT and PEX settings are persisted from when the repo was created,
+                    // so it's not necessary to set them again here.
 
                     Log.i(TAG, "Opened repository $name")
 
