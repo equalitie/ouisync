@@ -86,6 +86,19 @@ impl<T: DatagramSocket> StunClient<T> {
         if mapped_addr_1 == local_addr {
             Ok(NatBehavior::EndpointIndependent)
         } else {
+            // RFC 5780, section 7.4, https://datatracker.ietf.org/doc/html/rfc5780#section-7.4
+            //   OTHER-ADDRESS MUST NOT be inserted into a Binding Response unless the
+            //   server has a second IP address.
+            //
+            // But some servers do respond with the alternate IP address same as their own. In
+            // those cases the below mapped_addr_2 would always be equal to mapped_addr_1 and we'd
+            // return Ok(NatBehavior::EndpointIndependent) regardless of what the actual NAT
+            // mapping is.
+
+            if other_addr.ip() == server_addr.ip() {
+                return Err(io::Error::new(io::ErrorKind::Other, "Faulty STUN server"));
+            }
+
             // test II
             let request = make_request(BINDING);
             let dst_addr = SocketAddr::new(other_addr.ip(), server_addr.port());
