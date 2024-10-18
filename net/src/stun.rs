@@ -83,7 +83,7 @@ impl<T: DatagramSocket> StunClient<T> {
         let mapped_addr_1 = get_xor_mapped_address(&response)?;
         let other_addr = get_other_address(&response)?;
 
-        if other_addr == local_addr {
+        if mapped_addr_1 == local_addr {
             Ok(NatBehavior::EndpointIndependent)
         } else {
             // test II
