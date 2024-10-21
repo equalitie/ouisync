@@ -21,4 +21,4 @@ Finally `FileScreen` shows how to open a file, monitor it's sync progress and ho
 content. Similarry to the `FolderScreen`, it also shows how to automatically refresh the screen
 when the file gets updated.
 
-For more andvanced usage, refer to the API docs (TODO: link).
+For more andvanced usage, refer to the [API docs](https://docs.ouisync.net/kotlin/)
