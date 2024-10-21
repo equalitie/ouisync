@@ -19,7 +19,7 @@ API documentation is available at https://docs.ouisync.net/kotlin/.
 
 ## Example app
 
-There is a simple example app in the `example` folder. To build it run
+There is a simple example app in the [example/](example) folder. To build it run
 `gradle example:assembleDebug`, then find the apk in
 `build/example/outputs/apk/debug/example-debug.apk`, install and run it on a device or an emulator.
 
