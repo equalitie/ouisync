@@ -48,7 +48,7 @@ class Directory private constructor(private val entries: List<DirectoryEntry>) :
         }
 
         /**
-         * Removes file at the given path from the repository.
+         * Removes a directory at the given path from the repository.
          */
         suspend fun remove(repo: Repository, path: String, recursive: Boolean = false) {
             repo.client.invoke(DirectoryRemove(repo.handle, path, recursive))

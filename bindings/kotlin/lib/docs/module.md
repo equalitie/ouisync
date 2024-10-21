@@ -2,6 +2,12 @@
 
 ## Quick start
 
+Include ouisync with Gradle by adding the following to your `build.gradle` file:
+
+```
+implementation "ie.equalit.ouinet:ouisync-omni:$ouisyncVersion"
+```
+
 The entry point to Ouisync is the [Session](org.equalitie.ouisync.lib.Session) class. [Create]
 (org.equalitie.ouisync.lib.Session.Companion.create) it near the start of the app and make effort
 to [close](org.equalitie.ouisync.lib.Session.close) it on app shutdown. Afterwards, use the

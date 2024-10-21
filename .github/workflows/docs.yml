@@ -23,6 +23,7 @@ concurrency:
 jobs:
   # Build job
   build:
+    if: github.repository == "equalitie/ouisync" # Only run this in the main repo
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +75,7 @@ jobs:
           mkdir -p _site
           cp -r target/doc _site/rust
           cp -r bindings/kotlin/build/lib/dokka/html _site/kotlin
+          cp doc/index.html _site/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
