@@ -22,7 +22,7 @@ class File private constructor(private val handle: Long, private val client: Cli
         }
 
         /**
-         * Removes file at the given path from the repository.
+         * Removes a file at the given path from the repository.
          */
         suspend fun remove(repo: Repository, path: String) {
             repo.client.invoke(FileRemove(repo.handle, path))
@@ -62,8 +62,12 @@ class File private constructor(private val handle: Long, private val client: Cli
     suspend fun truncate(length: Long) = client.invoke(FileTruncate(handle, length))
 
     /**
-     * Returns the sync progress of this file, that is, what part of this file (in bytes) is
-     * available locally.
+     * Returns the sync progress of this file, that is, the total byte size of all the blocks of
+     * this file that's already been downloaded.
+     *
+     * Note that Ouisync downloads the blocks in random order, so until the file's been completely
+     * downloaded, the already downloaded blocks are not guaranteed to continuous (they might be
+     * gaps).
      */
     suspend fun progress() = client.invoke(FileProgress(handle)) as Long
 }
