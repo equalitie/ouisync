@@ -8,7 +8,7 @@ import kotlinx.coroutines.runBlocking
 /**
  * The entry point to the ouisync library.
  *
- * Example usage:
+ * ## Example usage
  *
  * ```
  * // Create a session and initialize networking:
@@ -108,7 +108,7 @@ class Session private constructor(
     }
 
     /**
-     * Initializes the network according to the stored config. If not config exists, falls back to
+     * Initializes the network according to the stored config. If no config exists, falls back to
      * the given parameters.
      *
      * @param defaultPortForwardingEnabled whether Port Forwarding/UPnP should be enabled by default.
@@ -138,8 +138,10 @@ class Session private constructor(
      *
      * Up to four listeners can be bound, one for each combination of protocol (TCP or QUIC) and IP
      * family (IPv4 or IPv6). Specify the interfaces as "IP:PORT". If IP is IPv6, it needs to be
-     * enclosed in square brackets. It's recommended to use "unspecified" interface and a random
-     * port: IPv4: "0.0.0.0:0", IPv6: "[[::]]:0".
+     * enclosed in square brackets.
+     *
+     * If port is `0`, binds to a random port initially but on subsequent starts tries to use the
+     * same port (unless it's already taken). This can be useful to configuring port forwarding.
      */
     suspend fun bindNetwork(
         quicV4: String? = null,
@@ -188,6 +190,9 @@ class Session private constructor(
      * discovery) but this function is useful in case when the discovery is not available for any
      * reason (e.g. in an isolated network).
      *
+     * Note that peers added with this function are remembered across restarts. To forget a peer,
+     * use [removeUserProvidedPeer].
+     *
      * @param addr address of the peer to connect to, in the "PROTOCOL/IP:PORT" format (PROTOCOL is
      * is "tcp" or "quic"). Example: "quic/192.0.2.0:12345"
      */
@@ -206,6 +211,12 @@ class Session private constructor(
 
     /**
      * Returns info about all known peers (both discovered and explicitly added).
+     *
+     * When the set of known peers changes, a [NetworkEvent.PEER_SET_CHANGE] is
+     * emitted. Calling this function afterwards returns the new peer info.
+     *
+     * @see subscribeToNetworkEvents
+     * @see NetworkEvent
      */
     suspend fun peers(): List<PeerInfo> {
         val list = client.invoke(NetworkKnownPeers()) as List<*>
@@ -224,7 +235,8 @@ class Session private constructor(
     /**
      * Returns the highest protocol version of all known peers. If this is higher than
      * [our version](currentProtocolVersion) it likely means we are using an outdated version of
-     * Ouisync.
+     * Ouisync. When a peer with higher protocol version is found, a
+     * [NetworkEvent.PROTOCOL_VERSION_MISMATCH] is emitted.
      */
     suspend fun highestSeenProtocolVersion(): Int = client.invoke(NetworkHighestSeenProtocolVersion()) as Int
 

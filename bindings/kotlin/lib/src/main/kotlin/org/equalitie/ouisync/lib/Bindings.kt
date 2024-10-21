@@ -7,6 +7,7 @@ import com.sun.jna.Structure
 import com.sun.jna.Structure.FieldOrder
 import com.sun.jna.Callback as JnaCallback
 
+@Suppress("ktlint:standard:function-naming")
 internal interface Bindings : Library {
     companion object {
         val INSTANCE: Bindings by lazy {

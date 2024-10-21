@@ -1,10 +1,12 @@
+import org.jetbrains.dokka.gradle.DokkaTask
+
+
 plugins {
     id 'com.android.library'
     id 'kotlin-android'
     id 'org.jetbrains.dokka' version '1.9.0'
-    id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.3'
+    id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.4'
 }
-
 
 Properties localProperties = new Properties()
 
@@ -13,7 +15,16 @@ if (localPropertiesFile.exists()) {
     localProperties.load(localPropertiesFile.newDataInputStream())
 }
 
-def ouisyncVersionName = localProperties.getProperty("versionName")
+// Grab version from the top level Cargo.toml
+def cargoManifest = file("$rootDir/../../Cargo.toml").text
+def versionPattern = /(?m)^version\s*=\s*"(.*)"/
+def rootVersion = (cargoManifest =~ versionPattern)[0][1].trim()
+
+// Use this to distinguish different versions of this bindings that use the same version of the
+// Ouisync library
+def revision = 0
+
+version = "$rootVersion-$revision"
 
 android {
     compileSdkVersion 34
@@ -36,7 +47,7 @@ android {
         targetSdkVersion 34
         minSdkVersion 21
         versionCode 1
-        versionName ouisyncVersionName
+        versionName version
     }
 
     compileOptions {
@@ -68,11 +79,11 @@ dependencies {
     testImplementation jna
 
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
     implementation 'org.msgpack:msgpack-core:0.9.5'
 
     testImplementation "junit:junit:4.13"
-    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0'
 }
 
 cargo {
@@ -88,12 +99,30 @@ cargo {
 
     extraCargoBuildArguments = ['--package', 'ouisync-ffi']
 
-    // HACK: Recent NDK (since r23) no longer links `libgcc`, which breaks some libraries since
-    // they depended on the symbols from `libclang_rt.builtins-x86_64-android`
-    // (e.g. `__extenddftf2`, ...). To work around it, we link the library explicitly by setting
-    // it through the RUSTFLAGS env variable.
-    // More info: https://github.com/bbqsrc/cargo-ndk/issues/94.
+    def relTargetDir = localProperties.getProperty('rust.cargoTargetDir')
+    def absTargetDir = null
+
+    if (relTargetDir != null) {
+        if ((new File(relTargetDir)).isAbsolute()) {
+            absTargetDir = relTargetDir
+        } else {
+            absTargetDir = "$projectDir/$relTargetDir"
+        }
+    }
+
     exec { spec, toolchain ->
+        // HACK: rust.cargoTargetDir local property is not passed to cargo for some reason
+        // (https://github.com/mozilla/rust-android-gradle?tab=readme-ov-file#targetdirectory).
+        // Force it:
+        if (absTargetDir != null) {
+            spec.environment('CARGO_TARGET_DIR', absTargetDir)
+        }
+
+        // HACK: Recent NDK (since r23) no longer links `libgcc`, which breaks some libraries since
+        // they depended on the symbols from `libclang_rt.builtins-x86_64-android`
+        // (e.g. `__extenddftf2`, ...). To work around it, we link the library explicitly by
+        // setting it through the RUSTFLAGS env variable. More info:
+        // https://github.com/bbqsrc/cargo-ndk/issues/94.
         if (toolchain.target == 'x86_64-linux-android') {
             def clangVersion = '17'
             def libDir = "${android.sdkDirectory}/ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/${clangVersion}/lib/linux"
@@ -119,6 +148,28 @@ tasks.register('cargoBuildUnitTest', Exec) {
     description 'Build the native library for unit tests'
     workingDir "$rootDir/../.."
     commandLine 'cargo', 'build', '--package', 'ouisync-ffi', '--lib'
+}
+
+tasks.withType(DokkaTask) {
+    dokkaSourceSets {
+        configureEach {
+            includes.from("docs/module.md")
+        }
+    }
+
+    moduleName.set("ouisync")
+
+    def dokkaBaseConfiguration = """
+    {
+        "customAssets":      ["${file("docs/logo-icon.png")}"],
+        "customStyleSheets": ["${file("docs/logo-styles.css")}"],
+        "footerMessage":     "Copyright (c) 2024 <a href=\\\"https://equalit.ie/\\\">eQualitie</a>."
+    }
+    """
+
+    pluginsMapConfiguration.set([
+        "org.jetbrains.dokka.base.DokkaBase": dokkaBaseConfiguration,
+    ])
 }
 
 afterEvaluate {
@@ -152,7 +203,6 @@ afterEvaluate {
 
 ext {
     PUBLISH_GROUP_ID = 'ie.equalit.ouinet'
-    PUBLISH_VERSION = "${ouisyncVersionName}"
     PUBLISH_ARTIFACT_ID = "ouisync-omni"
 }
 

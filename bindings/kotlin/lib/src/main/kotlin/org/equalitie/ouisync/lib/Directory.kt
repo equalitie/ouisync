@@ -29,6 +29,11 @@ data class DirectoryEntry(val name: String, val entryType: EntryType) {
 class Directory private constructor(private val entries: List<DirectoryEntry>) : Collection<DirectoryEntry> {
     companion object {
         /**
+         * Returns an empty directory snapshot.
+         */
+        fun empty() = Directory(listOf())
+
+        /**
          * Creates a new directory at the given path in the repository.
          */
         suspend fun create(repo: Repository, path: String) {
@@ -43,7 +48,7 @@ class Directory private constructor(private val entries: List<DirectoryEntry>) :
         }
 
         /**
-         * Removes file at the given path from the repository.
+         * Removes a directory at the given path from the repository.
          */
         suspend fun remove(repo: Repository, path: String, recursive: Boolean = false) {
             repo.client.invoke(DirectoryRemove(repo.handle, path, recursive))

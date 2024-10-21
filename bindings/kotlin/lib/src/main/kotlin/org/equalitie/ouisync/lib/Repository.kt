@@ -7,7 +7,7 @@ import java.security.SecureRandom
  *
  * A Ouisync repository.
  *
- * Example usage:
+ * ## Example usage:
  *
  * ```
  * // Create a new repo:
@@ -16,15 +16,46 @@ import java.security.SecureRandom
  * // or open an existing one:
  * val repo = Repository.open(session, "path/to/the/repo.ouisyncdb")
  *
+ * // Enable syncing with other replicas
+ *
+ * repo.setSyncEnabled(true)
+ *
  * // Access the repository files (see File, Directory) ...
+ *
+ * val file = File.open(repo, "path/to/file")
  *
  * // Close it when done:
  * repo.close()
  * ```
  *
+ * ## Access repository content
+ *
+ * For info about how to access and modify the repository content see [File] and [Directory].
+ *
+ * ## Share repository with peers
+ *
  * To share a repository, create the share token with [createShareToken], send it to the peer
  * (e.g., via a secure instant messenger, encode as QR code and scan, ...), then create a
  * repository on the peer's device with [create], passing the share token to it.
+ *
+ * ## Sync repository with peers
+ *
+ * Enable syncing with [setSyncEnabled]. Afterwards Ouisync will try to automatically find peers to
+ * sync with using various peer discovery methods (Local Discovery, DHT, PEX). Additionally, peers
+ * can be added manually with [Session.addUserProvidedPeer].
+ *
+ * ## Local secrets
+ *
+ * Local secrets protect the repository against unauthorized access on the same device and should
+ * never be shared with anyone (to share the repository with peers, use the *share token*). To
+ * change the local secrets, use [setAccess]. To check whether the repository is read or write
+ * protected, use [requiresLocalSecretForReading] and [requiresLocalSecretForWriting] respectively.
+ *
+ * ## Cache servers
+ *
+ * Cache servers relay traffic between peers who can't directly connect to each other. They also
+ * temporarily cache the repository content in order to allow peers to sync even when they are not
+ * online at the same time. See [createMirror], [deleteMirror] and [mirrorExists] for more details.
  *
  * @see Session
  * @see File
@@ -183,6 +214,10 @@ class Repository private constructor(internal val handle: Long, internal val cli
 
     /**
      * Switches the repository to the given access mode.
+     *
+     * @param accessMode desired access mode to switch to.
+     * @param secret [local secret](setAccess) protecting the desired access mode. Can be `null` if
+     *               no local secret is used.
      */
     suspend fun setAccessMode(
         accessMode: AccessMode,
@@ -206,6 +241,29 @@ class Repository private constructor(internal val handle: Long, internal val cli
     /**
      * Sets, unsets or changes local secrets for accessing the repository or disables the given
      * access mode.
+     *
+     * ## Examples
+     *
+     * To protect both read and write access with the same password:
+     *
+     * ```
+     * val password = LocalPassword("supersecret")
+     * repo.setAccess(read: EnableAccess(password), write: EnableAccess(password))
+     * ```
+     *
+     * To require password only for writing:
+     *
+     * ```
+     * repo.setAccess(read: EnableAccess(null), write: EnableAccess(password))
+     * ```
+     *
+     * To competelly disable write access but leave read access as it was. Warning: this operation
+     * is currently irreversibe.
+     *
+     * ```
+     * repo.setAccess(write: DisableAccess)
+     * ```
+     *
      */
     suspend fun setAccess(read: AccessChange? = null, write: AccessChange? = null) =
         client.invoke(RepositorySetAccess(handle, read, write))
@@ -242,7 +300,8 @@ class Repository private constructor(internal val handle: Long, internal val cli
         client.invoke(RepositorySetPexEnabled(handle, enabled))
 
     /**
-     * Returns the synchronization progress of this repository
+     * Returns the synchronization progress of this repository as the number of bytes already
+     * synced ([Progress.value]) vs the total size of the repository in bytes ([Progress.total]).
      */
     suspend fun syncProgress() = client.invoke(RepositorySyncProgress(handle)) as Progress
 
@@ -250,24 +309,29 @@ class Repository private constructor(internal val handle: Long, internal val cli
      * Create mirror of this repository on the cache server.
      *
      * Cache servers relay traffic between Ouisync peers and also temporarily store data. They are
-     * Requires the repository to be opened in write mode.
      * useful when direct P2P connection fails (e.g. due to restrictive NAT) and also to allow
      * syncing when the peers are not online at the same time (they still need to be online within
      * ~24 hours of each other).
      *
      * Requires the repository to be opened in write mode.
+     *
+     * @param host hostname (or ip address + port) of the cache server.
      */
     suspend fun createMirror(host: String) = client.invoke(RepositoryCreateMirror(handle, host))
 
     /**
-     * Delete mirrors of this repository from the cache server.
+     * Delete mirror of this repository from the cache server.
      *
      * Requires the repository to be opened in write mode.
+     *
+     * @param host hostname (or ip address + port) of the cache server.
      */
     suspend fun deleteMirror(host: String) = client.invoke(RepositoryDeleteMirror(handle, host))
 
     /**
      * Check if this repository is mirrored on the cache server.
+     *
+     * @param host hostname (or ip address + port) of the cache server.
      */
     suspend fun mirrorExists(host: String) = client.invoke(RepositoryMirrorExists(handle, host))
 

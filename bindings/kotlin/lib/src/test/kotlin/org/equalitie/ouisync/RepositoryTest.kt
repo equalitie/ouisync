@@ -269,6 +269,22 @@ class RepositoryTest {
     }
 
     @Test
+    fun shareTokenRoundTrip() = runTest {
+        val origToken = ShareToken.fromString(
+            session,
+            "https://ouisync.net/r#AwAgEZkrt6b9gW47Nb6hGQjsZRGeh9GKp3gTyhZrxfT03SE",
+        )
+        val repo = createRepo(shareToken = origToken)
+
+        try {
+            val actualToken = repo.createShareToken()
+            assertEquals(origToken, actualToken)
+        } finally {
+            repo.close()
+        }
+    }
+
+    @Test
     fun repoWithLocalPasswords() = runTest {
         val tempDir = JFile(createTempDirectory().toString())
         val repoPath = "$tempDir/repo.db"
@@ -329,8 +345,14 @@ class RepositoryTest {
         }
     }
 
-    private suspend fun createRepo(): Repository =
-        Repository.create(session, repoPath, readSecret = null, writeSecret = null)
+    private suspend fun createRepo(shareToken: ShareToken? = null): Repository =
+        Repository.create(
+            session,
+            repoPath,
+            readSecret = null,
+            writeSecret = null,
+            shareToken = shareToken,
+        )
 
     private suspend fun <R> withRepo(block: suspend (repo: Repository) -> R): R {
         val repo = createRepo()
