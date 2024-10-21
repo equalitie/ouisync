@@ -163,7 +163,7 @@ tasks.withType(DokkaTask) {
     {
         "customAssets":      ["${file("docs/logo-icon.png")}"],
         "customStyleSheets": ["${file("docs/logo-styles.css")}"],
-        "footerMessage":     "Copyright (c) 2024 <a href=\\\"https://equalit.ie/\\\">eQualitie</a>."
+        "footerMessage":     "Copyright (c) 2024 <a href=\\\"https://equalit.ie/\\\">eQualitie</a> | <a href=\\\"https://ouisync.net\\\">Ouisync website</a> | <a href=\\\"https://github.com/equalitie/ouisync\\\">Ouisync git repository</a>"
     }
     """
 
