@@ -316,7 +316,7 @@ impl Drop for StateMonitor {
             return;
         }
 
-        entry.remove();
+        entry.shift_remove();
         parent.shared.changed();
     }
 }
@@ -466,7 +466,7 @@ impl<T> Drop for MonitoredValue<T> {
                 let v = e.get_mut();
                 v.refcount -= 1;
                 if v.refcount == 0 {
-                    e.remove();
+                    e.shift_remove();
                     self.monitor.shared.changed();
                 }
             }
