@@ -55,10 +55,7 @@ dependencies {
 
     if (useLocalLib) {
         implementation project(':lib')
-    }
-    else {
-        implementation 'ie.equalit.ouinet:ouisync-omni:0.7.2'
-        implementation 'net.java.dev.jna:jna:5.13.0@aar'
-        implementation 'org.msgpack:msgpack-core:0.9.5'
+    } else {
+        implementation 'ie.equalit.ouinet:ouisync-omni:+'
     }
 }

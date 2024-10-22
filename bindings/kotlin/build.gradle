@@ -15,13 +15,19 @@ buildscript {
 }
 
 plugins {
-    id 'com.diffplug.spotless' version '6.25.0'
-    id("io.github.gradle-nexus.publish-plugin") version "1.1.0"
+    id "com.diffplug.spotless" version "6.25.0"
+    id "io.github.gradle-nexus.publish-plugin" version "2.0.0"
 }
 
 
 allprojects {
     repositories {
+        // maven {
+        //     // Sonatype staging repo. Note this url changes on every publish.
+        //     url "https://s01.oss.sonatype.org/service/local/repositories/ieequalitouinet-1287/content/"
+        // }
+        // mavenLocal()
+
         google()
         mavenCentral()
     }
@@ -51,5 +57,34 @@ tasks.named('clean') {
     }
 }
 
-apply from: "${rootDir}/build-scripts/publish-root.gradle"
+// Grab version from the top level Cargo.toml
+def cargoManifest = file("$rootDir/../../Cargo.toml").text
+def cargoVersionPattern = /(?m)^version\s*=\s*"(.*)"/
+def cargoVersion = (cargoManifest =~ cargoVersionPattern)[0][1].trim()
+
+version = "$cargoVersion-$revision"
+group   = "ie.equalit.ouinet"
+
+// Use system environment variables for signing and publishing
+ext {
+    ossrhUsername = System.getenv('OSSRH_USERNAME')
+    ossrhPassword = System.getenv('OSSRH_PASSWORD')
+    sonatypeStagingProfileId = System.getenv('SONATYPE_STAGING_PROFILE_ID')
+    signingKey = System.getenv('SIGNING_KEY')
+    signingKeyId = System.getenv('SIGNING_KEY_ID')
+    signingPassword = System.getenv('SIGNING_PASSWORD')
+}
+
+// Set up Sonatype repository
+nexusPublishing {
+    repositories {
+        sonatype {
+            stagingProfileId = sonatypeStagingProfileId
+            username = ossrhUsername
+            password = ossrhPassword
+            nexusUrl.set(uri("https://s01.oss.sonatype.org/service/local/"))
+            snapshotRepositoryUrl.set(uri("https://s01.oss.sonatype.org/content/repositories/snapshots/"))
+        }
+    }
+}
 
