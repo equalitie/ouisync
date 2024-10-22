@@ -1,9 +1,5 @@
 use super::{common, LogColor, LogFormat};
-use ndk_sys::{
-    __android_log_print, android_LogPriority as LogPriority,
-    android_LogPriority_ANDROID_LOG_DEBUG as ANDROID_LOG_DEBUG,
-    android_LogPriority_ANDROID_LOG_ERROR as ANDROID_LOG_ERROR,
-};
+use ndk_sys::{__android_log_print, android_LogPriority as LogPriority};
 use os_pipe::PipeWriter;
 use ouisync_tracing_fmt::Formatter;
 use paranoid_android::{AndroidLogMakeWriter, Buffer};
@@ -59,8 +55,8 @@ impl Inner {
             .unwrap_or(());
 
         Ok(Self {
-            _stdout: redirect(io::stdout(), ANDROID_LOG_DEBUG, tag.clone())?,
-            _stderr: redirect(io::stderr(), ANDROID_LOG_ERROR, tag)?,
+            _stdout: redirect(io::stdout(), LogPriority::ANDROID_LOG_DEBUG, tag.clone())?,
+            _stderr: redirect(io::stderr(), LogPriority::ANDROID_LOG_ERROR, tag)?,
         })
     }
 }
@@ -90,7 +86,7 @@ fn redirect<S: AsFd>(
                 }
                 Ok(_) => break, // EOF
                 Err(error) => {
-                    print(ANDROID_LOG_ERROR, &tag, error.to_string());
+                    print(LogPriority::ANDROID_LOG_ERROR, &tag, error.to_string());
                     break;
                 }
             }
@@ -127,7 +123,7 @@ fn print(priority: LogPriority, tag: &CStr, message: String) -> String {
 fn print_cstr(priority: LogPriority, tag: &CStr, message: &CStr) {
     // SAFETY: both pointers point to valid c-style strings.
     unsafe {
-        __android_log_print(priority as c_int, tag.as_ptr(), message.as_ptr());
+        __android_log_print(priority.0 as c_int, tag.as_ptr(), message.as_ptr());
     }
 }
 
