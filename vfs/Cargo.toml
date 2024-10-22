@@ -24,7 +24,7 @@ thiserror = { workspace = true }
 [target.'cfg(any(target_os = "linux"))'.dependencies]
 fuser = "0.14.0"
 libc = "0.2.139"
-bitflags = "2.4.0"
+bitflags = "2.6.0"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 xpc-connection = "0.2.0"

@@ -38,18 +38,16 @@ bytes = { workspace = true }
 camino = { workspace = true }
 chacha20 = "0.9.1"
 chrono = { workspace = true }
-crossbeam-channel = "0.5.8"
 deadlock = { path = "../deadlock" }
 ed25519-dalek = { version = "2.0", features = ["rand_core", "serde"] }
 either = { version = "1.6.1", default-features = false }
 futures-util = { workspace = true }
-generic-array = { version = "0.14.5", features = ["serde"] }
+generic-array = { version = "0.14.7", features = ["serde"] }
 hex = "0.4.3"
 hex_fmt = { workspace = true }
 if-watch = { version = "3.2.0", features = ["tokio"] }
 include_dir = "0.7.3"
 indexmap = "1.9.3"
-lru = "0.11.0"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true, default-features = false, optional = true }
 net = { package = "ouisync-net", path = "../net" }
@@ -92,7 +90,7 @@ ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = { workspace = true }
 rmp-serde = { workspace = true }
 serde_json = { workspace = true }
-serde_test = "1.0.176"
+serde_test = "1.0.177"
 similar-asserts = { workspace = true }
 tempfile = { workspace = true }
 test-strategy = { workspace = true }

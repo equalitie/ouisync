@@ -40,10 +40,10 @@ tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "compat"] }
 tracing = { workspace = true }
-walkdir = "2.3.3"
+walkdir = "2.5.0"
 
 [dev-dependencies]
-anyhow = "1.0.57"
+anyhow = { workspace = true }
 assert_matches = { workspace = true }
 backoff = "0.4.0"
 hex = "0.4.3"
