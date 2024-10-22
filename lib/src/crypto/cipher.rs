@@ -1,7 +1,6 @@
 //! Encryption / Decryption utilities.
 
 use super::{hash::Digest, password::PasswordSalt};
-use argon2::Argon2;
 use chacha20::{
     cipher::{KeyIvInit, StreamCipher},
     ChaCha20,
@@ -84,13 +83,23 @@ impl SecretKey {
 
     /// Derive a secret key from user's password and salt.
     pub fn derive_from_password(user_password: &str, salt: &PasswordSalt) -> Self {
+        use argon2::{Algorithm, Argon2, ParamsBuilder, Version};
+
         let mut result = Self::zero();
-        // Note: we control the output and salt size. And the only other check that this function
-        // does is whether the password isn't too long, but that would have to be more than
-        // 0xffffffff so the `.expect` shouldn't be an issue.
-        Argon2::default()
-            .hash_password_into(user_password.as_ref(), salt.as_ref(), result.as_mut())
-            .expect("failed to hash password");
+
+        Argon2::new(
+            Algorithm::default(),
+            Version::default(),
+            // Using explicit params to preserve the output from v0.4 of argon2. See
+            // https://github.com/equalitie/ouisync/issues/144 for details.
+            ParamsBuilder::new().m_cost(4096).t_cost(3).build().unwrap(),
+        )
+        .hash_password_into(user_password.as_ref(), salt.as_ref(), result.as_mut())
+        // Note: we control the output and salt size. And the only other check that this
+        // function does is whether the password isn't too long, but that would have to be more
+        // than 0xffffffff so the `.expect` shouldn't be an issue.
+        .expect("failed to hash password");
+
         result
     }
 
