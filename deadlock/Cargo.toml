@@ -8,6 +8,5 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-once_cell = { workspace = true }
-tokio     = { workspace = true, features = ["sync"] }
-tracing   = { workspace = true }
+tokio   = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }

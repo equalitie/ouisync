@@ -18,7 +18,7 @@ use std::{
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Weak,
+        Arc, OnceLock, Weak,
     },
     time::SystemTime,
 };
@@ -646,14 +646,14 @@ impl btdht::SocketTrait for Socket {
 
 struct TaskOrResult<T> {
     task: AsyncMutex<Option<ScopedJoinHandle<T>>>,
-    result: once_cell::sync::OnceCell<T>,
+    result: OnceLock<T>,
 }
 
 impl<T> TaskOrResult<T> {
     fn new(task: ScopedJoinHandle<T>) -> Self {
         Self {
             task: AsyncMutex::new(Some(task)),
-            result: once_cell::sync::OnceCell::new(),
+            result: OnceLock::new(),
         }
     }
 

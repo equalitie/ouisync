@@ -5,7 +5,6 @@ mod common;
 
 use common::{dump, sync_watch};
 use futures_util::future;
-use once_cell::sync::Lazy;
 use ouisync::{
     Access, AccessMode, AccessSecrets, Network, PeerAddr, Repository, RepositoryParams,
     DATA_VERSION, DIRECTORY_VERSION, SCHEMA_VERSION,
@@ -24,6 +23,7 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     str,
+    sync::LazyLock,
 };
 use tempfile::TempDir;
 use tokio::{fs, process::Command};
@@ -32,7 +32,7 @@ use tracing::{instrument, Instrument};
 const DB_EXTENSION: &str = "db";
 const DB_DUMP_EXTENSION: &str = "db.dump";
 
-static DUMP: Lazy<dump::Directory> = Lazy::new(|| {
+static DUMP: LazyLock<dump::Directory> = LazyLock::new(|| {
     dump::Directory::new()
         .add("empty.txt", vec![])
         .add("small.txt", b"foo".to_vec())

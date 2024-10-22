@@ -13,7 +13,6 @@ pub(crate) use self::env::*;
 use self::wait_map::WaitMap;
 use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
-use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File,
     Network, Payload, PeerAddr, Registration, Repository, Result, StoreError,
@@ -28,7 +27,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     thread,
 };
 use tokio::{
@@ -50,7 +49,7 @@ pub(crate) const DEFAULT_REPO: &str = "default";
 
 // Timeout for waiting for an event. Can be overwritten using "TEST_EVENT_TIMEOUT" env variable
 // (in seconds).
-pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
+pub(crate) static EVENT_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_secs(
         std::env::var("TEST_EVENT_TIMEOUT")
             .ok()
@@ -59,7 +58,7 @@ pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
     )
 });
 
-pub(crate) static TEST_TIMEOUT: Lazy<Duration> = Lazy::new(|| 4 * *EVENT_TIMEOUT);
+pub(crate) static TEST_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| 4 * *EVENT_TIMEOUT);
 
 #[cfg(not(feature = "simulation"))]
 pub(crate) mod env {

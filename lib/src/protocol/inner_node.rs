@@ -1,8 +1,10 @@
 use super::{Summary, EMPTY_LEAF_HASH};
 use crate::crypto::{Digest, Hash, Hashable};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::collections::{btree_map, BTreeMap};
+use std::{
+    collections::{btree_map, BTreeMap},
+    sync::LazyLock,
+};
 
 /// Number of layers in the tree excluding the layer with root and the layer with leaf nodes.
 pub(crate) const INNER_LAYER_COUNT: usize = 3;
@@ -138,7 +140,7 @@ impl Hashable for InnerNodes {
 }
 
 // Cached hash of an empty InnerNodeMap.
-pub(crate) static EMPTY_INNER_HASH: Lazy<Hash> = Lazy::new(|| InnerNodes::default().hash());
+pub(crate) static EMPTY_INNER_HASH: LazyLock<Hash> = LazyLock::new(|| InnerNodes::default().hash());
 
 pub struct InnerNodesIter<'a>(btree_map::Iter<'a, u8, InnerNode>);
 

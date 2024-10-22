@@ -20,7 +20,6 @@ deadlock = { path = "../deadlock" }
 futures-util = { workspace = true }
 hex = "0.4.3"
 num_enum = { workspace = true }
-once_cell = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }

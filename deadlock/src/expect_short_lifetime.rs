@@ -1,8 +1,8 @@
 use super::timer::{Id, Timer};
-use once_cell::sync::Lazy;
 use std::{
     backtrace::Backtrace,
     panic::Location,
+    sync::LazyLock,
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -57,7 +57,7 @@ impl Context {
 }
 
 static TIMER: Timer<Context> = Timer::new();
-static WATCHING_THREAD: Lazy<JoinHandle<()>> = Lazy::new(|| thread::spawn(watching_thread));
+static WATCHING_THREAD: LazyLock<JoinHandle<()>> = LazyLock::new(|| thread::spawn(watching_thread));
 
 fn schedule(duration: Duration, context: Context) -> Id {
     // Make sure the thread is instantiated.

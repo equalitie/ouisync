@@ -3,9 +3,8 @@ use crate::{
     crypto::{Digest, Hash, Hashable},
     protocol::BlockId,
 };
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::{slice, vec};
+use std::{slice, sync::LazyLock, vec};
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct LeafNode {
@@ -187,4 +186,4 @@ impl Hashable for LeafNodes {
 }
 
 // Cached hash of an empty LeafNodeSet.
-pub(crate) static EMPTY_LEAF_HASH: Lazy<Hash> = Lazy::new(|| LeafNodes::default().hash());
+pub(crate) static EMPTY_LEAF_HASH: LazyLock<Hash> = LazyLock::new(|| LeafNodes::default().hash());

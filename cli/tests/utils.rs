@@ -1,6 +1,5 @@
 use anyhow::{format_err, Error};
 use backoff::{self, ExponentialBackoffBuilder};
-use once_cell::sync::Lazy;
 use rand::Rng;
 use std::{
     cell::Cell,
@@ -9,7 +8,9 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    str, thread,
+    str,
+    sync::LazyLock,
+    thread,
     time::Duration,
 };
 use tempfile::TempDir;
@@ -27,8 +28,8 @@ const CONFIG_DIR: &str = "config";
 const API_SOCKET: &str = "api.sock";
 const DEFAULT_REPO: &str = "test";
 
-static CERT: Lazy<rcgen::CertifiedKey> =
-    Lazy::new(|| rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap());
+static CERT: LazyLock<rcgen::CertifiedKey> =
+    LazyLock::new(|| rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap());
 
 impl Bin {
     /// Start ouisync as server
