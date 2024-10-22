@@ -9,7 +9,7 @@ version.workspace = true
 
 [dependencies]
 deadlock     = { path = "../deadlock" }
-indexmap     = "1.9.3"
+indexmap     = { workspace = true }
 metrics      = { workspace = true }
 metrics-util = { workspace = true, features = ["summary"] }
 serde        = { workspace = true }

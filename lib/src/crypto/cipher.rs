@@ -200,6 +200,7 @@ pub struct SecretKeyLengthError;
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -226,5 +227,101 @@ mod tests {
 
         let deserialized: SecretKey = rmp_serde::from_slice(&serialized).unwrap();
         assert_eq!(deserialized.as_ref(), orig.as_ref());
+    }
+
+    #[test]
+    fn derive_from_password_snapshot() {
+        let test_vectors = [
+            (
+                "jxzBql3QHxENyynvh2SICH9ND",
+                "a2849a63283cbaf0fdbceb1f6479b197",
+                "c7ffa7d05f0898d71839cbd62a00a9616904d795c0372704c22bf76c363b371c",
+            ),
+            (
+                "4oveW4y3uE7KNbT6Yr",
+                "9410973ae328ad92916268128edb4710",
+                "5796c8ff977611fa48009fa690cd4091928c65a5c8587babcd06bdb76f8a4793",
+            ),
+            (
+                "3wQ3KFPW5L4hnaQZQeq",
+                "7d49d2b38763a12b2bbdfa93275aff18",
+                "b358fb33b5aacda99d59cd6b9c1c8e7e2162bea31addc22361220f05781e9736",
+            ),
+            (
+                "DL3NuUTWnjMocBkFMUuP",
+                "8c89c7108fff2095e18ddfef8986b118",
+                "8ebf12a4306b97b4978cac088e80b76a2cf31ae19b3c9c746a53c6d4101ee3be",
+            ),
+            (
+                "9wD4BW85Ji8GjS2XvxC2dLVgpMZGeS",
+                "b2a44461cc0bebb325280ed9130a59bb",
+                "f2847b060d5ffdcd8a1baf0264b12fc7f67e5ea61350defe612f7e9d1a1b29d3",
+            ),
+            (
+                "HFaiwNNJuSULjQlWRSo",
+                "46ece5c682cd598a65eabff63a3572df",
+                "05b17ea51240753a7d7fc707830316017dbf108dda822752ed0a31dd02655ac3",
+            ),
+            (
+                "pA4Zlnc7NQYej1nbQYWERDh1fH",
+                "2e0151573fe9c69df29b830987990985",
+                "186451be15369704049a1237c80306e0a0d6638a97a1e737b59043cc8578d374",
+            ),
+            (
+                "XPrtoJzqdo03fArXYvLCbqxTckLhi",
+                "2b852c5409d6c6813c49d1379cbbc1e9",
+                "77a08ef20a56b62a89c8b66ea6a9a489b863b3fcf06d5a9edf663729ee0ea2cd",
+            ),
+            (
+                "oWeBi4ghF",
+                "277c27b1587751f2af2001be3712ef0d",
+                "16e2b5b01852443672da19b47bacd31e3fb3cda972a9f52440a54ad811f7bcb8",
+            ),
+            (
+                "9FvIzpn7tV0l7lADIsQDbAZ",
+                "f864670399430d1671c31a2431183625",
+                "20ce1c73cfed98a27b8d2b63cb5a06709a92d471188c7398e521c83ea51cb766",
+            ),
+            (
+                "uEqxiIP533EbTK8MK5tEozAsn1nS",
+                "69b52967216f8f3ff5a1fa73e5046315",
+                "40e51fb3f0ecaf38abdcb018bdeb0935a484d9d365a0ce47ce277e72d68ea4ea",
+            ),
+            (
+                "wMybpBIOzN5P",
+                "bca1f48e60bad68798a828d3efd5258a",
+                "833acd5273e323cff011aefd83ff64ac33d72d30d3cdd1b01a03dc16a4a6b1c6",
+            ),
+            (
+                "YQ3Z8mGqp97XGJRV1LT",
+                "b469f80e382214b5f157d1c7d36a2058",
+                "8d1b82de3ed96198378a9a8f9fcffa5203f94e2c344092be4ecc89ccfa7f0173",
+            ),
+            (
+                "otSkYO0uFASqZ",
+                "10b6a29fa50416e276a0e79cbe66534e",
+                "4d3226dc093cbbfa6247c26f317e784f9f3f975fe05b9abb84fd58996e603534",
+            ),
+            (
+                "jWwusg8vdvIQCeC2y9",
+                "956071ee6e80c856f20744a8e5d6ca27",
+                "00eec6c9a868bae430f1f4588b7f2357bf5114fcbb65beb2e65e9e4202c7f75e",
+            ),
+            (
+                "NBNh4UYsHlc",
+                "f61877af4e7f8313ad8234302950b331",
+                "5a5685bf7a635ea8d86967251ebbe029f2782d36f5e0296a9775076002ab34d7",
+            ),
+        ];
+
+        for (password, salt, expected_secret_key) in test_vectors {
+            let salt: [u8; PasswordSalt::SIZE] = hex::decode(salt).unwrap().try_into().unwrap();
+            let salt = PasswordSalt::from(salt);
+
+            let actual_secret_key = SecretKey::derive_from_password(password, &salt);
+            let actual_secret_key = hex::encode(actual_secret_key.as_array());
+
+            assert_eq!(actual_secret_key, expected_secret_key);
+        }
     }
 }
