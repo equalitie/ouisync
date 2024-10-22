@@ -1,5 +1,6 @@
 use super::{AccessMode, AccessSecrets, DecodeError};
 use crate::protocol::RepositoryId;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine};
 use bincode::Options;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -79,7 +80,7 @@ impl FromStr for ShareToken {
 
         let (input, params) = input.split_once('?').unwrap_or((input, ""));
 
-        let input = Zeroizing::new(base64::decode_config(input, base64::URL_SAFE_NO_PAD)?);
+        let input = Zeroizing::new(BASE64.decode(input)?);
         let input = decode_version(&input)?;
 
         let secrets: AccessSecrets = bincode::options().deserialize(input)?;
@@ -122,11 +123,7 @@ impl fmt::Display for ShareToken {
             .serialize_into(&mut buffer, &self.secrets)
             .map_err(|_| fmt::Error)?;
 
-        write!(
-            f,
-            "{}",
-            base64::encode_config(buffer, base64::URL_SAFE_NO_PAD)
-        )?;
+        write!(f, "{}", BASE64.encode(buffer))?;
 
         if !self.name.is_empty() {
             write!(f, "?name={}", urlencoding::encode(&self.name))?
