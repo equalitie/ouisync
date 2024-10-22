@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use state_monitor::StateMonitor;
 use std::{
     fmt, fs, io,
-    panic::{self, PanicInfo},
+    panic::{self, PanicHookInfo},
     path::Path,
     str::FromStr,
 };
@@ -154,7 +154,7 @@ impl fmt::Display for ParseLogColorError {
 
 impl std::error::Error for ParseLogColorError {}
 
-fn log_panic(info: &PanicInfo) {
+fn log_panic(info: &PanicHookInfo) {
     match (
         info.payload()
             .downcast_ref::<&str>()
