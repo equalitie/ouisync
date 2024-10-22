@@ -36,8 +36,8 @@ rust-version = "1.77.1"
 [workspace.dependencies]
 anyhow = "1.0.86"
 assert_matches = "1.5"
-async-trait = "0.1.73"
-btdht = { git = "https://github.com/equalitie/btdht.git", rev = "e7ddf5607b20f0b82cbc3ea6259425c00bd8d16b" }
+async-trait = "0.1.83"
+btdht = { git = "https://github.com/equalitie/btdht.git", rev = "549c62015dffade6e6080f3a746ce551c28f837f" }
 bytes = "1.7.1"
 camino = "1.1.6"
 chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
