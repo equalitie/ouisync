@@ -21,7 +21,7 @@ indexmap = { workspace = true }
 num_enum = { workspace = true }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
-pem = "2.0.1"
+pem = "3.0.4"
 rand = { workspace = true }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
@@ -29,7 +29,7 @@ serde_json = { workspace = true }
 state_monitor = { path = "../state_monitor" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { version = "0.23.1", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.24.0", features = ["rustls-tls-webpki-roots"] }
 tokio-rustls = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
