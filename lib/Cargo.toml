@@ -77,7 +77,7 @@ zeroize = "1.6.0"
 [dev-dependencies]
 assert_matches = { workspace = true }
 clap = { workspace = true }
-criterion = { version = "0.4", features = ["html_reports"] }
+criterion = { workspace = true, features = ["html_reports"] }
 hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"] }
 metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
