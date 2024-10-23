@@ -1,6 +1,5 @@
-rootProject.name = 'ouisync-kotlin'
+rootProject.name = 'ouisync'
 
 include 'lib'
 include 'example'
-include 'build-scripts'
 
