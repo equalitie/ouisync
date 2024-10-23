@@ -38,8 +38,8 @@ winapi = { version = "0.3.9", features = ["ntstatus", "winnt"]  }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
-proptest = "1.0"
-rand = "0.8.5"
+proptest = { workspace = true }
+rand = { workspace = true }
 tempfile = { workspace = true }
-test-strategy = "0.2.1"
+test-strategy = { workspace = true }
 tracing-subscriber = { workspace = true, features = [ "env-filter" ] }

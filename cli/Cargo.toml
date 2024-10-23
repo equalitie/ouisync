@@ -24,7 +24,7 @@ dirs = "5.0.1"
 futures-util = { workspace = true }
 hyper = { version = "1.4.1", features = ["server", "http1"] }
 interprocess = { version = "2.2.1", features = ["tokio"] }
-maxminddb = "0.23.0"
+maxminddb = "0.24.0"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
