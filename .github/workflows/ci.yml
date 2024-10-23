@@ -108,6 +108,12 @@ jobs:
         # the linux version does currently unconditionally depend on fuse.
         run: sudo apt-get install libfuse-dev
 
+      - name: Install NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: "27.2.12479018"
+          local-cache: true
+
       - name: Cache cargo artifacts
         uses: actions/cache@v3
         with:
