@@ -112,6 +112,7 @@ jobs:
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
+          link-to-sdk: true
           local-cache: true
 
       - name: Cache cargo artifacts
