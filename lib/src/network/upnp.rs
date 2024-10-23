@@ -696,7 +696,7 @@ pub async fn discover_device_urls(
     search_target: &SearchTarget,
     timeout: Duration,
 ) -> Result<impl Stream<Item = Result<Uri, rupnp::Error>>, rupnp::Error> {
-    Ok(ssdp_client::search(search_target, timeout, 3)
+    Ok(ssdp_client::search(search_target, timeout, 3, None)
         .await?
         .map_err(rupnp::Error::SSDPError)
         .map(|res| Ok(res?.location().parse()?)))

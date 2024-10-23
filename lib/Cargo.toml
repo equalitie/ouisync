@@ -53,13 +53,13 @@ parse-size = { version = "1.0.0", features = ["std"] }
 pin-project-lite = { workspace = true }
 rand = { workspace = true }
 ref-cast = "1.0.14"
-rupnp = { version = "1.1.0", default-features = false, features = [] }
+rupnp = { version = "2.0.0", default-features = false, features = [] }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 slab = { workspace = true }
 sqlx = { workspace = true }
-ssdp-client = "1.0"
+ssdp-client = "2.0.0"
 state_monitor = { path = "../state_monitor" }
 subtle = { version = "2.5.0", default-features = false, features = ["core_hint_black_box"] }
 thiserror = { workspace = true }
