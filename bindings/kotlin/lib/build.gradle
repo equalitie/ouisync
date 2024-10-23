@@ -22,9 +22,7 @@ group   = rootProject.group
 
 android {
     compileSdkVersion 34
-
-    // At time of writing, this is the LTS version
-    ndkVersion "27.2.12479018"
+    ndkVersion "27.1.12297006"
 
     namespace 'org.equalitie.ouisync.lib'
 

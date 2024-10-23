@@ -108,12 +108,12 @@ jobs:
         # the linux version does currently unconditionally depend on fuse.
         run: sudo apt-get install libfuse-dev
 
-      - name: Install NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r27c
-          link-to-sdk: true
-          local-cache: true
+      # - name: Install NDK
+      #   uses: nttld/setup-ndk@v1
+      #   with:
+      #     ndk-version: r27c
+      #     link-to-sdk: true
+      #     local-cache: true
 
       - name: Cache cargo artifacts
         uses: actions/cache@v3
@@ -125,6 +125,8 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Cache gradle artifacts
         uses: actions/cache@v3
@@ -142,19 +144,19 @@ jobs:
 
       - name: Run spotless
         working-directory: bindings/kotlin
-        run: ./gradlew spotlessCheck
+        run: ./gradlew --stacktrace spotlessCheck
 
       - name: Run lint
         working-directory: bindings/kotlin
-        run: ./gradlew lint
+        run: ./gradlew --stacktrace lint
 
       - name: Run unit tests
         working-directory: bindings/kotlin
-        run: ./gradlew lib:testDebugUnitTest
+        run: ./gradlew --stacktrace lib:testDebugUnitTest
 
       - name: Build the example app
         working-directory: bindings/kotlin
-        run: ./gradlew example:assembleDebug
+        run: ./gradlew --stacktrace example:assembleDebug
 
   check_dart_bindings:
     name: check dart bindings

@@ -36,8 +36,7 @@ android {
     }
 
     compileSdk = 34
-    // At time of writing, this is the LTS version
-    ndkVersion = "27.2.12479018"
+    ndkVersion "27.1.12297006"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
