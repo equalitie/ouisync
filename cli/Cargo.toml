@@ -20,10 +20,10 @@ bytes = "1.4.0"
 camino = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-dirs = "4.0.0"
+dirs = "5.0.1"
 futures-util = { workspace = true }
 hyper = { version = "1.4.1", features = ["server", "http1"] }
-interprocess = { version = "1.2.1", features = ["tokio_support"] }
+interprocess = { version = "2.2.1", features = ["tokio"] }
 maxminddb = "0.23.0"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }

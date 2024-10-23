@@ -5,53 +5,50 @@ use crate::{
     protocol::{Error, Request, Response},
 };
 use interprocess::local_socket::{
-    tokio::{LocalSocketListener, LocalSocketStream},
-    ToLocalSocketName,
+    tokio::{Listener, Stream},
+    traits::tokio::{Listener as _, Stream as _},
+    GenericFilePath, ListenerOptions, ToFsName,
 };
 use ouisync_bridge::{
     protocol::SessionCookie,
     transport::{socket_server_connection, SocketClient},
 };
-use std::{fs, io, path::PathBuf};
-use tokio::task::JoinSet;
-use tokio_util::{
-    codec::{length_delimited::LengthDelimitedCodec, Framed},
-    compat::{Compat, FuturesAsyncReadCompatExt},
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
 };
+use tokio::task::JoinSet;
+use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use tracing::Instrument;
 
 pub(crate) struct LocalServer {
-    listener: LocalSocketListener,
-    path: Option<PathBuf>,
+    listener: Listener,
+    path: PathBuf,
 }
 
 impl LocalServer {
-    pub fn bind<'a>(name: impl ToLocalSocketName<'a> + Clone) -> io::Result<Self> {
-        let orig_name = name.clone();
-        let name = name.to_local_socket_name()?;
+    pub fn bind(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref();
 
-        let listener = LocalSocketListener::bind(orig_name).map_err(|error| {
-            tracing::error!(
-                ?error,
-                "Failed to bind local API server to {}",
-                name.inner().to_string_lossy()
-            );
+        let listener = path
+            .to_fs_name::<GenericFilePath>()
+            .and_then(|name| ListenerOptions::new().name(name).create_tokio())
+            .map_err(|error| {
+                tracing::error!(
+                    ?error,
+                    "Failed to bind local API server to {}",
+                    path.display(),
+                );
 
-            error
-        })?;
+                error
+            })?;
 
-        let path = if name.is_path() {
-            Some(name.inner().into())
-        } else {
-            None
-        };
+        tracing::info!("Local API server listening on {}", path.display());
 
-        tracing::info!(
-            "Local API server listening on {}",
-            name.inner().to_string_lossy()
-        );
-
-        Ok(Self { listener, path })
+        Ok(Self {
+            listener,
+            path: path.to_path_buf(),
+        })
     }
 
     pub async fn run(self, handler: LocalHandler) {
@@ -81,10 +78,8 @@ impl LocalServer {
 
 impl Drop for LocalServer {
     fn drop(&mut self) {
-        if let Some(path) = &self.path {
-            if let Err(error) = fs::remove_file(path) {
-                tracing::error!(?error, ?path, "Failed to remove socket");
-            }
+        if let Err(error) = fs::remove_file(&self.path) {
+            tracing::error!(?error, path = ?self.path, "Failed to remove socket");
         }
     }
 }
@@ -94,8 +89,8 @@ pub(crate) struct LocalClient {
 }
 
 impl LocalClient {
-    pub async fn connect<'a>(name: impl ToLocalSocketName<'a>) -> io::Result<Self> {
-        let socket = LocalSocketStream::connect(name).await?;
+    pub async fn connect(name: impl AsRef<Path>) -> io::Result<Self> {
+        let socket = Stream::connect(name.as_ref().to_fs_name::<GenericFilePath>()?).await?;
         let socket = make_socket(socket);
 
         Ok(Self {
@@ -108,8 +103,8 @@ impl LocalClient {
     }
 }
 
-type Socket = Framed<Compat<LocalSocketStream>, LengthDelimitedCodec>;
+type Socket = Framed<Stream, LengthDelimitedCodec>;
 
-fn make_socket(inner: LocalSocketStream) -> Socket {
-    Framed::new(inner.compat(), LengthDelimitedCodec::new())
+fn make_socket(inner: Stream) -> Socket {
+    Framed::new(inner, LengthDelimitedCodec::new())
 }
