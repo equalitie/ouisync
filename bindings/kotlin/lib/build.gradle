@@ -4,8 +4,10 @@ import org.jetbrains.dokka.gradle.DokkaTask
 plugins {
     id 'com.android.library'
     id 'kotlin-android'
-    id 'org.jetbrains.dokka' version '1.9.0'
-    id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.4'
+    id "maven-publish"
+    id "org.jetbrains.dokka" version '1.9.0'
+    id "org.mozilla.rust-android-gradle.rust-android" version '0.9.4'
+    id "signing"
 }
 
 Properties localProperties = new Properties()
@@ -15,16 +17,8 @@ if (localPropertiesFile.exists()) {
     localProperties.load(localPropertiesFile.newDataInputStream())
 }
 
-// Grab version from the top level Cargo.toml
-def cargoManifest = file("$rootDir/../../Cargo.toml").text
-def versionPattern = /(?m)^version\s*=\s*"(.*)"/
-def rootVersion = (cargoManifest =~ versionPattern)[0][1].trim()
-
-// Use this to distinguish different versions of this bindings that use the same version of the
-// Ouisync library
-def revision = 0
-
-version = "$rootVersion-$revision"
+version = rootProject.version
+group   = rootProject.group
 
 android {
     compileSdkVersion 34
@@ -163,7 +157,7 @@ tasks.withType(DokkaTask) {
     {
         "customAssets":      ["${file("docs/logo-icon.png")}"],
         "customStyleSheets": ["${file("docs/logo-styles.css")}"],
-        "footerMessage":     "Copyright (c) 2024 <a href=\\\"https://equalit.ie/\\\">eQualitie</a>."
+        "footerMessage":     "Copyright (c) 2024 <a href=\\\"https://equalit.ie/\\\">eQualitie</a> | <a href=\\\"https://ouisync.net\\\">Ouisync website</a> | <a href=\\\"https://github.com/equalitie/ouisync\\\">Ouisync git repository</a>"
     }
     """
 
@@ -199,15 +193,54 @@ afterEvaluate {
     tasks.named("dokkaHtml") {
         dependsOn 'generateBindings'
     }
+
+    publishing {
+        publications {
+            release(MavenPublication) {
+                def packageName = "${rootProject.name}-omni"
+
+                from(components.release)
+
+                artifactId packageName
+
+                pom {
+                    name = packageName
+                    description = "Library for secure peer-to-peer file syncing"
+                    url = 'https://github.com/equalitie/ouisync'
+                    licenses {
+                        license {
+                            name = 'MPL-2.0'
+                            url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                        }
+                    }
+                    developers {
+                        developer {
+                            name = 'Ouisync Developers'
+                            email = 'ouisync@equalit.ie'
+                        }
+                    }
+
+                    scm {
+                        connection = 'scm:git:github.com/equalitie/ouisync.git'
+                        developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                        url = 'https://github.com/equalitie/ouisync/tree/master'
+                    }
+                }
+            }
+        }
+    }
 }
 
-ext {
-    PUBLISH_GROUP_ID = 'ie.equalit.ouinet'
-    PUBLISH_ARTIFACT_ID = "ouisync-omni"
+signing {
+    // Only sign when publishing to sonatype, not local
+    required {
+        gradle.taskGraph.hasTask("lib:publishToSonatype")
+    }
+
+    if (signingKey) {
+        useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    }
+
+    sign publishing.publications
 }
 
-tasks.withType(Sign).configureEach {
-    onlyIf { rootProject.gradle.startParameter.taskNames.contains('lib:publishToSonatype') }
-}
-
-apply from: "${rootProject.projectDir}/build-scripts/publish-module.gradle"

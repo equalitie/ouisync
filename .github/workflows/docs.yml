@@ -23,7 +23,8 @@ concurrency:
 jobs:
   # Build job
   build:
-    if: github.repository == "equalitie/ouisync" # Only run this in the main repo
+    # Only run this in the main repo
+    if: github.repository == 'equalitie/ouisync'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

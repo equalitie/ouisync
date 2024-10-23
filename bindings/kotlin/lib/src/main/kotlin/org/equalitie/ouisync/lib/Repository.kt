@@ -457,7 +457,7 @@ sealed class AccessChange {
                     packer.packNil()
                 }
             }
-            is DiableAccess -> {
+            is DisableAccess -> {
                 packer.packString("disabled")
             }
         }
@@ -476,4 +476,4 @@ class EnableAccess(val secret: SetLocalSecret?) : AccessChange()
  *
  * @see [Repository.setAccess]
  */
-class DiableAccess() : AccessChange()
+class DisableAccess() : AccessChange()
