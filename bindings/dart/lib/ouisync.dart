@@ -92,8 +92,8 @@ class Session {
   // native code.
   // [channelName] is the name of the MethodChannel to be used, equally named channel
   // must be created and set up to listen to the commands in the native code.
-  static Future<Session> createChanneled(String channelName) async {
-    final client = ChannelClient(channelName);
+  static Future<Session> createChanneled(String channelName, void Function()? onConnectionReset) async {
+    final client = ChannelClient(channelName, onConnectionReset);
     await client.initialize();
     return Session._(client);
   }

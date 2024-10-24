@@ -5,15 +5,15 @@ import 'message_matcher.dart';
 class ChannelClient extends Client {
   final MethodChannel _channel;
   final _messageMatcher = MessageMatcher();
+  final void Function()? _onConnectionReset;
 
-  ChannelClient(String channelName) : _channel = MethodChannel(channelName) {
+  ChannelClient(String channelName,
+                void Function()? this._onConnectionReset) : _channel = MethodChannel(channelName) {
     _channel.setMethodCallHandler(_handleMethodCall);
   }
 
   Future<void> initialize() async {
-    await _messageMatcher.sendAndAwaitResponse("", {}, (Uint8List message) async {
-      await _channel.invokeMethod("initialize", message);
-    });
+    await _channel.invokeMethod("initialize");
   }
 
   @override
@@ -30,9 +30,19 @@ class ChannelClient extends Client {
   }
 
   Future<dynamic> _handleMethodCall(MethodCall call) async {
-    final args = (call.arguments as List<Object?>).cast<int>();
-    _messageMatcher.handleResponse(Uint8List.fromList(args));
-    return null;
+    switch (call.method) {
+      case "reset":
+        print("😡 Connection to File Provider has been ${call.arguments as String}");
+        _onConnectionReset?.call();
+        break;
+      case "response":
+        final args = (call.arguments as List<Object?>).cast<int>();
+        _messageMatcher.handleResponse(Uint8List.fromList(args));
+        break;
+      default:
+        print("🌵 Received an unrecognized method call from Native: ${call.method}");
+        break;
+    }
   }
 
   @override
