@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:collection';
+import 'package:flutter/services.dart';
 import 'package:msgpack_dart/msgpack_dart.dart';
 
 import '../client.dart';
@@ -99,7 +100,10 @@ class MessageMatcher {
 
   void close() {
     _isClosed = true;
-    // TODO: Complete completers with an error
+    _subscriptions.close();
+    final error = PlatformException(code: "OS04", message: "Library connection reset");
+    _responses.values.forEach((i) => i.completeError(error));
+    _responses.clear();
   }
 
   void _handleResponseSuccess(Completer<Object?> completer, Object? payload) {

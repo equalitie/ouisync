@@ -38,6 +38,11 @@ class Subscriptions {
       // error.
     }
   }
+
+  void close() {
+    _sinks.values.forEach((sink) => sink.close());
+    _sinks.clear();
+  }
 }
 
 class Subscription {
