@@ -42,6 +42,11 @@ tokio-util = { workspace = true, features = ["codec", "compat"] }
 tracing = { workspace = true }
 walkdir = "2.5.0"
 
+# HACK: This is only a transitive dependency of `interprocess` but the version they depend on has a
+# bug. Forcing the fixed version here.
+# TODO: Remove this when we bump `interprocess`.
+async-channel = "2.3.1"
+
 [dev-dependencies]
 anyhow = { workspace = true }
 assert_matches = { workspace = true }

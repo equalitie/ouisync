@@ -96,7 +96,7 @@ macro_rules! derive_sqlx_traits_for_byte_array_wrapper {
             fn encode_by_ref(
                 &self,
                 args: &mut Vec<sqlx::sqlite::SqliteArgumentValue<'q>>,
-            ) -> sqlx::encode::IsNull {
+            ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
                 sqlx::Encode::<sqlx::sqlite::Sqlite>::encode_by_ref(&(*self).as_ref(), args)
             }
         }
