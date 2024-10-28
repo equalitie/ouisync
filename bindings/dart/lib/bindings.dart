@@ -4,6 +4,7 @@
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:path/path.dart';
 import 'package:flutter/foundation.dart' show kReleaseMode;
 
 export 'bindings.g.dart';
@@ -104,48 +105,42 @@ class Bindings {
 DynamicLibrary _defaultLib() {
   final env = Platform.environment;
 
+  // the default library name depends on the operating system
+  late final String name;
+  final base = 'ouisync_ffi';
+  if (Platform.isLinux || Platform.isAndroid) {
+    name = 'lib$base.so';
+  } else if (Platform.isWindows) {
+    name = '$base.dll';
+  } else if (Platform.isIOS || Platform.isMacOS) {
+    name = 'lib$base.dylib' ;
+  } else {
+      throw Exception('unsupported platform ${Platform.operatingSystem}');
+  }
+
+  // full path to loadable library
+  late final String path;
   if (env.containsKey('OUISYNC_LIB')) {
-    return DynamicLibrary.open(env['OUISYNC_LIB']!);
-  }
-
-  final name = 'ouisync_ffi';
-
-  if (env.containsKey('FLUTTER_TEST')) {
-    final profile = kReleaseMode ? 'release' : 'debug';
-    final path = '../../target/$profile';
-
-    if (Platform.isLinux) {
-      return DynamicLibrary.open('$path/lib$name.so');
-    }
-
+    // user provided library path
+    path = env['OUISYNC_LIB']!;
+  } else if (env.containsKey('FLUTTER_TEST')) {
+    // guess the location of flutter's build output
+    final String build;
     if (Platform.isMacOS) {
-      return DynamicLibrary.open('$path/lib$name.dylib');
+      build = join(dirname(Platform.script.toFilePath()), 'ouisync');
+    } else {
+      build = join('..', '..');
     }
-
-    if (Platform.isWindows) {
-      return DynamicLibrary.open('$path/$name.dll');
-    }
-  }
-
-  if (Platform.isAndroid) {
-    return DynamicLibrary.open('lib$name.so');
+    path = join(build, 'target', kReleaseMode ? 'release' : 'debug', name);
+  } else {
+    // assume that the library is available globally by name only
+    path = name;
   }
 
   if (Platform.isIOS) {
+    // TODO: something about this?!
     return DynamicLibrary.process();
+  } else {
+    return DynamicLibrary.open(path);
   }
-
-  if (Platform.isWindows) {
-    return DynamicLibrary.open('$name.dll');
-  }
-
-  if (Platform.isLinux) {
-    return DynamicLibrary.open('lib$name.so');
-  }
-
-  if (Platform.isMacOS) {
-    return DynamicLibrary.open('lib$name.dylib');
-  }
-
-  throw Exception('unsupported platform ${Platform.operatingSystem}');
 }
