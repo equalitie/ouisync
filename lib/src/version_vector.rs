@@ -191,7 +191,10 @@ impl Type<Sqlite> for VersionVector {
 }
 
 impl<'q> Encode<'q, Sqlite> for VersionVector {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+    fn encode_by_ref(
+        &self,
+        args: &mut Vec<SqliteArgumentValue<'q>>,
+    ) -> Result<IsNull, BoxDynError> {
         Encode::<Sqlite>::encode_by_ref(
             &bincode::serialize(self).expect("failed to serialize VersionVector for db"),
             args,

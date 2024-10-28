@@ -232,7 +232,10 @@ impl sqlx::Type<Sqlite> for Signature {
 }
 
 impl<'q> sqlx::Encode<'q, Sqlite> for &'q Signature {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> sqlx::encode::IsNull {
+    fn encode_by_ref(
+        &self,
+        args: &mut Vec<SqliteArgumentValue<'q>>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         // It seems there is no way to avoid the allocation here because sqlx doesn't implement
         // `Encode` for arrays.
         sqlx::Encode::<Sqlite>::encode(self.to_bytes().to_vec(), args)

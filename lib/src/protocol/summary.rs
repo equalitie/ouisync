@@ -7,7 +7,6 @@ use sqlx::{
     Decode, Encode, Sqlite, Type,
 };
 use std::fmt;
-use thiserror::Error;
 use xxhash_rust::xxh3::Xxh3Default;
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
@@ -94,7 +93,7 @@ impl Summary {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize, sqlx::Type)]
 #[repr(u8)]
 pub enum NodeState {
     Incomplete = 0, // Some nodes are missing
@@ -115,32 +114,6 @@ impl NodeState {
             (Self::Approved, Self::Approved) => Self::Approved,
             (Self::Rejected, Self::Rejected) => Self::Rejected,
             (Self::Approved, Self::Rejected) | (Self::Rejected, Self::Approved) => unreachable!(),
-        }
-    }
-}
-
-impl Type<Sqlite> for NodeState {
-    fn type_info() -> SqliteTypeInfo {
-        <u8 as Type<Sqlite>>::type_info()
-    }
-}
-
-impl<'q> Encode<'q, Sqlite> for NodeState {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        Encode::<Sqlite>::encode(*self as u8, args)
-    }
-}
-
-impl<'r> Decode<'r, Sqlite> for NodeState {
-    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        let num = <u8 as Decode<Sqlite>>::decode(value)?;
-
-        match num {
-            0 => Ok(Self::Incomplete),
-            1 => Ok(Self::Complete),
-            2 => Ok(Self::Approved),
-            3 => Ok(Self::Rejected),
-            _ => Err(InvalidValue(num).into()),
         }
     }
 }
@@ -168,16 +141,13 @@ mod test_utils {
     }
 }
 
-#[derive(Debug, Error)]
-#[error("invalid value: {0}")]
-pub(crate) struct InvalidValue(u8);
-
 /// Information about the presence of a single block.
-#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
+#[repr(u8)]
 pub enum SingleBlockPresence {
-    Missing,
-    Present,
-    Expired,
+    Missing = 0,
+    Present = 1,
+    Expired = 2,
 }
 
 impl SingleBlockPresence {
@@ -186,39 +156,6 @@ impl SingleBlockPresence {
             Self::Missing => true,
             Self::Present => false,
             Self::Expired => false,
-        }
-    }
-}
-
-impl Type<Sqlite> for SingleBlockPresence {
-    fn type_info() -> SqliteTypeInfo {
-        <u8 as Type<Sqlite>>::type_info()
-    }
-
-    fn compatible(ty: &SqliteTypeInfo) -> bool {
-        <u8 as Type<Sqlite>>::compatible(ty)
-    }
-}
-
-impl<'q> Encode<'q, Sqlite> for SingleBlockPresence {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        let n = match self {
-            SingleBlockPresence::Missing => 0,
-            SingleBlockPresence::Present => 1,
-            SingleBlockPresence::Expired => 2,
-        };
-
-        Encode::<Sqlite>::encode(n, args)
-    }
-}
-
-impl<'r> Decode<'r, Sqlite> for SingleBlockPresence {
-    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        match <u8 as Decode<'r, Sqlite>>::decode(value)? {
-            0 => Ok(SingleBlockPresence::Missing),
-            1 => Ok(SingleBlockPresence::Present),
-            2 => Ok(SingleBlockPresence::Expired),
-            n => Err(InvalidValue(n).into()),
         }
     }
 }
@@ -279,7 +216,10 @@ impl Type<Sqlite> for MultiBlockPresence {
 }
 
 impl<'q> Encode<'q, Sqlite> for &'q MultiBlockPresence {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+    fn encode_by_ref(
+        &self,
+        args: &mut Vec<SqliteArgumentValue<'q>>,
+    ) -> Result<IsNull, BoxDynError> {
         Encode::<Sqlite>::encode(self.checksum(), args)
     }
 }
