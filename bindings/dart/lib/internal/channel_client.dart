@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/services.dart';
+import '../errors.dart' show mapError;
 import '../client.dart';
 import 'message_matcher.dart';
 
@@ -12,13 +13,15 @@ class ChannelClient extends Client {
 
   ChannelClient(String channelName, [this._onClose]): _channel = MethodChannel(channelName) {
     _channel.setMethodCallHandler(_handleMethodCall);
-    initialized = _channel.invokeMethod("initialize");
+    initialized = _channel.invokeMethod("initialize")
+      .onError((PlatformException err, _) => throw mapError(err));
   }
 
   @override
   Future<T> invoke<T>(String method, [Object? args]) async {
     return await _messageMatcher.sendAndAwaitResponse(method, args, (Uint8List message) async {
-      await _channel.invokeMethod("invoke", message);
+        await _channel.invokeMethod("invoke", message)
+          .onError((PlatformException err, _) => throw mapError(err));
     });
   }
 
@@ -40,7 +43,7 @@ class ChannelClient extends Client {
         _messageMatcher.handleResponse(Uint8List.fromList(args));
         break;
       default:
-        print("🌵 Received an unrecognized method call from Native: ${call.method}");
+        print("🌵 Received an unrecognized method call from host: ${call.method}");
         break;
     }
   }

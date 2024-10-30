@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:msgpack_dart/msgpack_dart.dart';
 
 import '../client.dart';
+import '../errors.dart';
 import '../ouisync.dart' show Error;
 import '../bindings.dart' show ErrorCode;
 
@@ -46,7 +47,7 @@ class MessageMatcher {
           .takeBytes();
         
       if (_isClosed) {
-        throw StateError('session has been closed');
+        throw SessionClosed();
       }
 
       await send(message);
@@ -101,7 +102,7 @@ class MessageMatcher {
   void close() {
     _isClosed = true;
     _subscriptions.close();
-    final error = PlatformException(code: "OS04", message: "Library connection reset");
+    final error = SessionClosed();
     _responses.values.forEach((i) => i.completeError(error));
     _responses.clear();
   }
