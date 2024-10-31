@@ -9,9 +9,9 @@ pub(super) const MAX_UNCHOKED_COUNT: usize = 3;
 /// Maximum duration that a peer remains unchoked.
 pub(super) const MAX_UNCHOKED_DURATION: Duration = Duration::from_secs(30);
 
-/// If we don't receive any message from the peer for this long we consider the peer
-/// as "uninterested". Uninterested peers can be choked even before their unchoke period ends.
-pub(super) const INTEREST_TIMEOUT: Duration = Duration::from_secs(3);
+/// If we don't receive any message from the peer for this long while the peer is unchoked, we
+/// consider the peer as "idle" and we choke them even before their regular unchoke period ends.
+pub(super) const UNCHOKED_IDLE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Max number of responses to process in a singe batch (that is, in a single db write transaction).
 pub(super) const RESPONSE_BATCH_SIZE: usize = 1024;

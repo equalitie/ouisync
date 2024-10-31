@@ -137,6 +137,14 @@ impl TrafficMonitor {
             ) => {
                 self.block_requests_inflight.decrement(1.0);
             }
+            (
+                RequestEvent::Send
+                | RequestEvent::Success { .. }
+                | RequestEvent::Failure { .. }
+                | RequestEvent::Timeout
+                | RequestEvent::Cancel,
+                RequestKind::Other,
+            ) => (),
         }
 
         match event {
@@ -155,6 +163,7 @@ impl TrafficMonitor {
 pub(crate) enum RequestKind {
     Index,
     Block,
+    Other,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]

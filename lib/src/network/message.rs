@@ -26,6 +26,9 @@ pub(crate) enum Request {
     ChildNodes(Hash, DebugRequest),
     /// Request block with the given id.
     Block(BlockId, DebugRequest),
+    /// Hint to the peer that we processed everything they've sent us so far. The peer can use this
+    /// to choke us before our unchoke period passed, if they want.
+    Idle,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -61,6 +64,10 @@ pub(crate) enum Response {
     Block(BlockContent, BlockNonce, DebugResponse),
     /// Send that a Block request failed
     BlockError(BlockId, DebugResponse),
+    /// Notify the peer that we started choking them
+    Choke,
+    /// Notify the peer that we are no longer choking them
+    Unchoke,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
