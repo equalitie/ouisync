@@ -22,6 +22,7 @@ class SessionTest {
         session = Session.create(
             configsPath = "$tempDir/config",
             logPath = "$tempDir/test.log",
+            kind = SessionKind.UNIQUE,
         )
     }
 
