@@ -57,7 +57,7 @@ use std::{
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 // TODO: Consider creating an async `RwLock` in the `deadlock` module and use it here.
 use tokio::sync::RwLock;
@@ -99,27 +99,26 @@ impl Store {
 
     pub async fn set_block_expiration(
         &self,
-        expiration_time: Option<Duration>,
+        expiration: Option<Duration>,
         block_download_tracker: BlockDownloadTracker,
     ) -> Result<(), Error> {
         let mut tracker_lock = self.block_expiration_tracker.write().await;
 
         if let Some(tracker) = &*tracker_lock {
-            if let Some(expiration_time) = expiration_time {
-                tracker.set_expiration_time(expiration_time);
+            if let Some(expiration) = expiration {
+                tracker.set_block_expiration(expiration);
             }
             return Ok(());
         }
 
-        let expiration_time = match expiration_time {
-            Some(expiration_time) => expiration_time,
+        let Some(expiration) = expiration else {
             // Tracker is `None` so we're good.
-            None => return Ok(()),
+            return Ok(());
         };
 
         let tracker = BlockExpirationTracker::enable_expiration(
             self.db.clone(),
-            expiration_time,
+            expiration,
             block_download_tracker,
             self.client_reload_index_tx.clone(),
         )
@@ -136,6 +135,14 @@ impl Store {
             .await
             .as_ref()
             .map(|tracker| tracker.block_expiration())
+    }
+
+    pub async fn last_block_expiration_time(&self) -> Option<SystemTime> {
+        self.block_expiration_tracker
+            .read()
+            .await
+            .as_ref()
+            .and_then(|tracker| tracker.last_block_expiration_time())
     }
 
     #[cfg(test)]

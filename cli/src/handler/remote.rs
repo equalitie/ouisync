@@ -1,5 +1,5 @@
 use crate::{
-    repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
+    repository::{RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
 };
 use async_trait::async_trait;
@@ -81,8 +81,8 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
 
                     let name = make_name(&repository_id);
 
-                    state.repositories.remove(&name);
-                    repository::delete_store(&state.store_dir, &name)
+                    state
+                        .delete_repository(&name)
                         .await
                         .map_err(|error| ServerError::Internal(error.to_string()))?;
 

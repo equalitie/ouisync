@@ -42,7 +42,7 @@ use futures_util::{stream, StreamExt};
 use metrics::{NoopRecorder, Recorder};
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
-use std::{borrow::Cow, io, path::Path, pin::pin, sync::Arc};
+use std::{borrow::Cow, io, path::Path, pin::pin, sync::Arc, time::SystemTime};
 use tokio::{
     fs,
     sync::broadcast::{self, error::RecvError},
@@ -485,6 +485,12 @@ impl Repository {
     /// Get the block expiration duration. `None` means block expiration is not set.
     pub async fn block_expiration(&self) -> Option<Duration> {
         self.shared.vault.block_expiration().await
+    }
+
+    /// Get the time when the last block expired or `None` if there are still some unexpired blocks.
+    /// If block expiration is not enabled, always return `None`.
+    pub async fn last_block_expiration_time(&self) -> Option<SystemTime> {
+        self.shared.vault.last_block_expiration_time().await
     }
 
     /// Get the total size of the data stored in this repository.

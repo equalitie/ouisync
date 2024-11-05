@@ -1,6 +1,6 @@
 use crate::{
     protocol::{Error, ImportMode, QuotaInfo, Request, Response},
-    repository::{self, InvalidRepositoryName, RepositoryHolder, RepositoryName, OPEN_ON_START},
+    repository::{InvalidRepositoryName, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
     DB_EXTENSION,
 };
@@ -150,12 +150,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 Ok(().into())
             }
             Request::Delete { name } => {
-                if let Some(holder) = self.state.repositories.remove(&name) {
-                    holder.repository.close().await?;
-                }
-
-                repository::delete_store(&self.state.store_dir, &name).await?;
-
+                self.state.delete_repository(&name).await?;
                 Ok(().into())
             }
             Request::Open { name, password } => {
@@ -179,6 +174,8 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     .remove(OPEN_ON_START)
                     .await
                     .ok();
+
+                holder.close().await?;
 
                 Ok(().into())
             }
@@ -458,39 +455,71 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     Ok(().into())
                 }
             }
-            Request::BlockExpiration {
+            Request::Expiration {
                 name,
                 default: _,
                 remove,
-                value,
+                block_expiration,
+                repository_expiration,
             } => {
-                let value = value.map(Duration::from_secs);
-                let value = if remove { Some(None) } else { value.map(Some) };
+                let [block_expiration, repository_expiration] =
+                    [block_expiration, repository_expiration].map(|value| {
+                        if remove {
+                            Some(None)
+                        } else {
+                            value.map(Duration::from_secs).map(Some)
+                        }
+                    });
 
                 if let Some(name) = name {
                     let holder = self.state.repositories.find(&name)?;
 
-                    if let Some(value) = value {
+                    if let Some(value) = block_expiration {
                         holder.repository.set_block_expiration(value).await?;
-                        Ok(().into())
-                    } else {
-                        let block_expiration = holder.repository.block_expiration().await;
-                        Ok(Response::BlockExpiration(block_expiration))
                     }
-                } else if let Some(value) = value {
-                    ouisync_bridge::repository::set_default_block_expiration(
-                        &self.state.config,
-                        value,
-                    )
-                    .await?;
-                    Ok(().into())
-                } else {
-                    let block_expiration =
-                        ouisync_bridge::repository::get_default_block_expiration(
-                            &self.state.config,
+
+                    if let Some(value) = repository_expiration {
+                        ouisync_bridge::repository::set_repository_expiration(
+                            &holder.repository,
+                            value,
                         )
                         .await?;
-                    Ok(Response::BlockExpiration(block_expiration))
+                    }
+
+                    Ok(Response::Expiration {
+                        block: holder.repository.block_expiration().await,
+                        repository: ouisync_bridge::repository::get_repository_expiration(
+                            &holder.repository,
+                        )
+                        .await?,
+                    })
+                } else {
+                    if let Some(value) = block_expiration {
+                        ouisync_bridge::repository::set_default_block_expiration(
+                            &self.state.config,
+                            value,
+                        )
+                        .await?;
+                    }
+
+                    if let Some(value) = repository_expiration {
+                        ouisync_bridge::repository::set_default_repository_expiration(
+                            &self.state.config,
+                            value,
+                        )
+                        .await?;
+                    }
+
+                    Ok(Response::Expiration {
+                        block: ouisync_bridge::repository::get_default_block_expiration(
+                            &self.state.config,
+                        )
+                        .await?,
+                        repository: ouisync_bridge::repository::get_default_repository_expiration(
+                            &self.state.config,
+                        )
+                        .await?,
+                    })
                 }
             }
             Request::SetAccess { name, token } => {

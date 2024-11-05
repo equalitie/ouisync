@@ -15,10 +15,10 @@ use ouisync_lib::Network;
 use state_monitor::StateMonitor;
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::Duration,
 };
-use tokio::{sync::OnceCell, time};
+use tokio::{sync::OnceCell, task, time};
 
 pub(crate) struct State {
     pub config: ConfigStore,
@@ -77,6 +77,16 @@ impl State {
         Ok(state)
     }
 
+    /// Starts task to periodically delete expired repositories.
+    pub fn delete_expired_repositories(self: Arc<Self>, poll_interval: Duration) -> Arc<Self> {
+        task::spawn(delete_expired_repositories(
+            Arc::downgrade(&self),
+            poll_interval,
+        ));
+
+        self
+    }
+
     pub async fn close(&self) {
         // Kill RPC servers
         self.rpc_servers.close();
@@ -85,17 +95,12 @@ impl State {
         self.metrics_server.close();
 
         // Close repos
-        let close_repositories = future::join_all(self.repositories.remove_all().into_iter().map(
-            |holder| async move {
-                if let Err(error) = holder.repository.close().await {
-                    tracing::error!(
-                        repo = %holder.name(),
-                        ?error,
-                        "failed to gracefully close repository"
-                    );
-                }
-            },
-        ));
+        let close_repositories = future::join_all(
+            self.repositories
+                .remove_all()
+                .into_iter()
+                .map(|holder| async move { holder.close().await }),
+        );
 
         let shutdown_network = async move {
             time::timeout(Duration::from_secs(1), self.network.shutdown())
@@ -122,6 +127,16 @@ impl State {
             .get_or_try_init(|| make_client_config(self.config.dir()))
             .await
             .cloned()
+    }
+
+    pub async fn delete_repository(&self, name: &str) -> Result<(), Error> {
+        if let Some(holder) = self.repositories.remove(name) {
+            holder.close().await?;
+        }
+
+        repository::delete_store(&self.store_dir, name).await?;
+
+        Ok(())
     }
 }
 
@@ -178,4 +193,56 @@ async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfi
     let additional_root_certs =
         transport::tls::load_certificates_from_dir(&config_dir.join("root_certs")).await?;
     Ok(transport::make_client_config(&additional_root_certs)?)
+}
+
+async fn delete_expired_repositories(state: Weak<State>, poll_interval: Duration) {
+    while let Some(state) = state.upgrade() {
+        let holders = state.repositories.get_all();
+
+        for holder in holders {
+            let last_block_expiration_time =
+                match holder.repository.last_block_expiration_time().await {
+                    Some(time) => time,
+                    None => continue,
+                };
+
+            let expiration =
+                match ouisync_bridge::repository::get_repository_expiration(&holder.repository)
+                    .await
+                {
+                    Ok(Some(duration)) => duration,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        tracing::error!(?error, "failed to get repository expiration");
+                        continue;
+                    }
+                };
+
+            let elapsed = match last_block_expiration_time.elapsed() {
+                Ok(duration) => duration,
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        "failed to compute elapsed time since last block expiration"
+                    );
+                    continue;
+                }
+            };
+
+            if elapsed < expiration {
+                continue;
+            }
+
+            match state.delete_repository(holder.name()).await {
+                Ok(()) => (),
+                Err(error) => {
+                    tracing::error!(?error, "failed to delete expired repository");
+                }
+            }
+        }
+
+        drop(state);
+
+        time::sleep(poll_interval).await;
+    }
 }

@@ -17,8 +17,11 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use tokio::task;
+
+const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 pub(crate) async fn run(
     dirs: Dirs,
@@ -35,7 +38,9 @@ pub(crate) async fn run(
         log_color,
     )?;
 
-    let state = State::init(&dirs, monitor).await?;
+    let state = State::init(&dirs, monitor)
+        .await?
+        .delete_expired_repositories(REPOSITORY_EXPIRATION_POLL_INTERVAL);
     let server = LocalServer::bind(socket.as_path())?;
     let handle = task::spawn(server.run(LocalHandler::new(state.clone())));
 

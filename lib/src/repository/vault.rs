@@ -14,7 +14,10 @@ use crate::{
     store::Store,
 };
 use sqlx::Row;
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 use tracing::Instrument;
 
 #[derive(Clone)]
@@ -100,6 +103,10 @@ impl Vault {
 
     pub async fn block_expiration(&self) -> Option<Duration> {
         self.store.block_expiration().await
+    }
+
+    pub async fn last_block_expiration_time(&self) -> Option<SystemTime> {
+        self.store.last_block_expiration_time().await
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {

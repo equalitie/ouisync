@@ -14,7 +14,7 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 use thiserror::Error;
-use tokio::{fs, runtime, task};
+use tokio::{fs, runtime};
 use tokio_stream::StreamExt;
 
 // Config keys
@@ -181,32 +181,32 @@ impl RepositoryHolder {
     }
 
     pub async fn unmount(&self) {
-        let mount = self.mount.lock().unwrap().take();
-
-        if let Some(Mount {
+        let Some(Mount {
             point,
             depth,
             guard,
-        }) = mount
-        {
-            // Make sure to unmount before attempting to remove the mount point.
-            drop(guard);
+        }) = self.mount.lock().unwrap().take()
+        else {
+            return;
+        };
 
-            if let Err(error) = remove_mount_point(&point, depth).await {
-                tracing::error!(
-                    repo = %self.name,
-                    mount_point = %point.display(),
-                    ?error,
-                    "Failed to remove mount point"
-                );
-            }
+        // Make sure to unmount before attempting to remove the mount point.
+        drop(guard);
 
-            tracing::info!(
+        if let Err(error) = remove_mount_point(&point, depth).await {
+            tracing::error!(
                 repo = %self.name,
                 mount_point = %point.display(),
-                "Repository unmounted"
+                ?error,
+                "Failed to remove mount point"
             );
         }
+
+        tracing::info!(
+            repo = %self.name,
+            mount_point = %point.display(),
+            "Repository unmounted"
+        );
     }
 
     pub fn is_mounted(&self) -> bool {
@@ -239,47 +239,26 @@ impl RepositoryHolder {
         Ok(())
     }
 
+    pub async fn close(&self) -> Result<(), Error> {
+        self.unmount().await;
+
+        self.repository
+            .close()
+            .await
+            .inspect(|_| tracing::info!(name = %self.name, "Repository closed"))
+            .inspect_err(
+                |error| tracing::error!(name = %self.name, ?error, "Failed to close repository"),
+            )?;
+
+        Ok(())
+    }
+
     fn resolve_mount_point(&self, mount_point: String, mount_dir: &Path) -> PathBuf {
         if mount_point.is_empty() {
             mount_dir.join(&self.name)
         } else {
             mount_point.into()
         }
-    }
-}
-
-impl Drop for RepositoryHolder {
-    fn drop(&mut self) {
-        let repository = self.repository.clone();
-        let name = self.name.clone();
-        let mount = self
-            .mount
-            .lock()
-            .unwrap()
-            .take()
-            .map(|mount| (mount.point, mount.depth));
-
-        task::spawn(async move {
-            if let Some((point, depth)) = mount {
-                if let Err(error) = remove_mount_point(&point, depth).await {
-                    tracing::error!(
-                        %name,
-                        mount_point = %point.display(),
-                        ?error,
-                        "Failed to remove mount point"
-                    );
-                }
-            }
-
-            match repository.close().await {
-                Ok(()) => {
-                    tracing::info!(%name, "Repository closed");
-                }
-                Err(error) => {
-                    tracing::error!(%name, ?error, "Failed to close repository");
-                }
-            }
-        });
     }
 }
 
