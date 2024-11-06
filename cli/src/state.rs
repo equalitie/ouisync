@@ -293,11 +293,10 @@ impl State {
         let holders = self.repositories.get_all();
 
         for holder in holders {
-            let last_block_expiration_time =
-                match holder.repository.last_block_expiration_time().await {
-                    Some(time) => time,
-                    None => continue,
-                };
+            let Some(last_block_expiration_time) = holder.repository.last_block_expiration_time()
+            else {
+                continue;
+            };
 
             let expiration = match holder.repository_expiration().await {
                 Ok(Some(duration)) => duration,

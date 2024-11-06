@@ -56,11 +56,9 @@ use std::{
     future::Future,
     ops::{Deref, DerefMut},
     path::Path,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, SystemTime},
 };
-// TODO: Consider creating an async `RwLock` in the `deadlock` module and use it here.
-use tokio::sync::RwLock;
 
 /// Data store
 #[derive(Clone)]
@@ -97,12 +95,12 @@ impl Store {
         misc::check_integrity(self.acquire_read().await?.db()).await
     }
 
-    pub async fn set_block_expiration(
+    pub fn set_block_expiration(
         &self,
         expiration: Option<Duration>,
         block_download_tracker: BlockDownloadTracker,
     ) -> Result<(), Error> {
-        let mut tracker_lock = self.block_expiration_tracker.write().await;
+        let mut tracker_lock = self.block_expiration_tracker.write().unwrap();
 
         if let Some(tracker) = &*tracker_lock {
             if let Some(expiration) = expiration {
@@ -121,33 +119,36 @@ impl Store {
             expiration,
             block_download_tracker,
             self.client_reload_index_tx.clone(),
-        )
-        .await?;
+        )?;
 
         *tracker_lock = Some(Arc::new(tracker));
 
         Ok(())
     }
 
-    pub async fn block_expiration(&self) -> Option<Duration> {
+    pub fn block_expiration(&self) -> Option<Duration> {
         self.block_expiration_tracker
             .read()
-            .await
+            .unwrap()
             .as_ref()
             .map(|tracker| tracker.block_expiration())
     }
 
-    pub async fn last_block_expiration_time(&self) -> Option<SystemTime> {
+    pub fn last_block_expiration_time(&self) -> Option<SystemTime> {
         self.block_expiration_tracker
             .read()
-            .await
+            .unwrap()
             .as_ref()
             .and_then(|tracker| tracker.last_block_expiration_time())
     }
 
     #[cfg(test)]
-    pub async fn block_expiration_tracker(&self) -> Option<Arc<BlockExpirationTracker>> {
-        self.block_expiration_tracker.read().await.as_ref().cloned()
+    pub fn block_expiration_tracker(&self) -> Option<Arc<BlockExpirationTracker>> {
+        self.block_expiration_tracker
+            .read()
+            .unwrap()
+            .as_ref()
+            .cloned()
     }
 
     /// Export the whole repository db to the given file.
@@ -164,7 +165,7 @@ impl Store {
             Ok(Reader {
                 inner: Handle::Connection(conn.await?),
                 block_id_cache: self.block_id_cache.clone(),
-                block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
+                block_expiration_tracker: self.block_expiration_tracker.read().unwrap().clone(),
             })
         }
     }
@@ -179,7 +180,7 @@ impl Store {
                 inner: Reader {
                     inner: Handle::ReadTransaction(tx.await?),
                     block_id_cache: self.block_id_cache.clone(),
-                    block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
+                    block_expiration_tracker: self.block_expiration_tracker.read().unwrap().clone(),
                 },
             })
         }
@@ -199,7 +200,7 @@ impl Store {
                         block_expiration_tracker: self
                             .block_expiration_tracker
                             .read()
-                            .await
+                            .unwrap()
                             .clone(),
                     },
                 },
@@ -218,12 +219,13 @@ impl Store {
     #[track_caller]
     pub fn begin_client_write(&self) -> impl Future<Output = Result<ClientWriter, Error>> + '_ {
         let tx = self.db().begin_write();
+        let block_expiration_tracker = self.block_expiration_tracker.read().unwrap().clone();
 
         async move {
             ClientWriter::begin(
                 tx.await?,
                 self.block_id_cache.clone(),
-                self.block_expiration_tracker.read().await.clone(),
+                block_expiration_tracker,
             )
             .await
         }

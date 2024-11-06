@@ -405,7 +405,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     }
 
                     Ok(Response::Expiration {
-                        block: holder.repository.block_expiration().await,
+                        block: holder.repository.block_expiration(),
                         repository: holder.repository_expiration().await?,
                     })
                 } else {

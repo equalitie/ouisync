@@ -9,7 +9,7 @@ use crate::{
     sync::{broadcast_hash_set, uninitialized_watch},
 };
 use deadlock::BlockingMutex;
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::TryStreamExt;
 use scoped_task::{self, ScopedJoinHandle};
 use sqlx::Row;
 use std::{
@@ -55,7 +55,7 @@ pub(crate) struct BlockExpirationTracker {
 }
 
 impl BlockExpirationTracker {
-    pub(super) async fn enable_expiration(
+    pub(super) fn enable_expiration(
         pool: db::Pool,
         block_expiration: Duration,
         block_download_tracker: BlockDownloadTracker,
@@ -63,30 +63,15 @@ impl BlockExpirationTracker {
     ) -> Result<Self, Error> {
         let now = SystemTime::now();
 
-        let mut shared = Shared {
+        let shared = Shared {
             blocks_by_id: Default::default(),
             blocks_by_expiration: Default::default(),
             last_block_expiration_time: Some(now),
             to_missing_if_expired: Default::default(),
         };
-
-        // TODO: Consider moving this initialization to `run_task` so that this function doesn't
-        // have to be async.
-        let mut tx = pool.begin_read().await?;
-
-        let mut ids =
-            sqlx::query("SELECT block_id FROM snapshot_leaf_nodes WHERE block_presence = ?")
-                .bind(SingleBlockPresence::Present)
-                .fetch(&mut tx)
-                .map_ok(|row| row.get(0));
-
-        while let Some(id) = ids.next().await {
-            shared.insert_block(&id?, now);
-        }
-
-        let (watch_tx, watch_rx) = uninitialized_watch::channel();
         let shared = Arc::new(BlockingMutex::new(shared));
 
+        let (watch_tx, watch_rx) = uninitialized_watch::channel();
         let (block_expiration_tx, block_expiration_rx) = watch::channel(block_expiration);
 
         let _task = scoped_task::spawn({
@@ -304,6 +289,25 @@ async fn run_task(
     block_download_tracker: BlockDownloadTracker,
     client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
 ) -> Result<(), Error> {
+    // First load all blocks
+    let block_ids = {
+        let mut tx = pool.begin_read().await?;
+        sqlx::query("SELECT block_id FROM snapshot_leaf_nodes WHERE block_presence = ?")
+            .bind(SingleBlockPresence::Present)
+            .map(|row| row.get(0))
+            .fetch_all(&mut tx)
+            .await?
+    };
+
+    {
+        let mut shared = shared.lock().unwrap();
+        let now = SystemTime::now();
+
+        for block_id in block_ids {
+            shared.insert_block(&block_id, now);
+        }
+    }
+
     loop {
         let expiration_time = *expiration_time_rx.borrow();
 
@@ -514,7 +518,6 @@ mod test {
             BlockDownloadTracker::new(),
             broadcast_hash_set::channel().0,
         )
-        .await
         .unwrap();
 
         sleep(Duration::from_millis(700)).await;
@@ -549,7 +552,6 @@ mod test {
                 Some(Duration::from_secs(60 * 60 /* one hour */)),
                 BlockDownloadTracker::new(),
             )
-            .await
             .unwrap();
 
         let write_keys = Arc::new(Keypair::random());
@@ -616,7 +618,6 @@ mod test {
         for block in &blocks {
             let is_in_expiration_tracker = store
                 .block_expiration_tracker()
-                .await
                 .unwrap()
                 .has_block(&block.id);
 

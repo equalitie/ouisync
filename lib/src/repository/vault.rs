@@ -18,7 +18,6 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use tracing::Instrument;
 
 #[derive(Clone)]
 pub(crate) struct Vault {
@@ -93,20 +92,20 @@ impl Vault {
         Ok(quota::get(&mut conn).await?)
     }
 
-    pub async fn set_block_expiration(&self, duration: Option<Duration>) -> Result<()> {
+    pub fn set_block_expiration(&self, duration: Option<Duration>) -> Result<()> {
+        let _enter = self.monitor.span().enter();
+
         Ok(self
             .store
-            .set_block_expiration(duration, self.block_tracker.clone())
-            .instrument(self.monitor.span().clone())
-            .await?)
+            .set_block_expiration(duration, self.block_tracker.clone())?)
     }
 
-    pub async fn block_expiration(&self) -> Option<Duration> {
-        self.store.block_expiration().await
+    pub fn block_expiration(&self) -> Option<Duration> {
+        self.store.block_expiration()
     }
 
-    pub async fn last_block_expiration_time(&self) -> Option<SystemTime> {
-        self.store.last_block_expiration_time().await
+    pub fn last_block_expiration_time(&self) -> Option<SystemTime> {
+        self.store.last_block_expiration_time()
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {

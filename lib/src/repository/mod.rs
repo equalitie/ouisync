@@ -178,8 +178,7 @@ impl Repository {
             if let Some(block_expiration) = metadata::block_expiration::get(&mut conn).await? {
                 self.shared
                     .vault
-                    .set_block_expiration(Some(block_expiration))
-                    .await?;
+                    .set_block_expiration(Some(block_expiration))?;
             }
         }
 
@@ -471,26 +470,22 @@ impl Repository {
     /// Set the duration after which blocks start to expire (are deleted) when not used. Use `None`
     /// to disable expiration. Default is `None`.
     pub async fn set_block_expiration(&self, block_expiration: Option<Duration>) -> Result<()> {
-        {
-            let mut tx = self.db().begin_write().await?;
-            metadata::block_expiration::set(&mut tx, block_expiration).await?;
-            tx.commit().await?;
-        }
-        self.shared
-            .vault
-            .set_block_expiration(block_expiration)
-            .await
+        let mut tx = self.db().begin_write().await?;
+        metadata::block_expiration::set(&mut tx, block_expiration).await?;
+        tx.commit().await?;
+
+        self.shared.vault.set_block_expiration(block_expiration)
     }
 
     /// Get the block expiration duration. `None` means block expiration is not set.
-    pub async fn block_expiration(&self) -> Option<Duration> {
-        self.shared.vault.block_expiration().await
+    pub fn block_expiration(&self) -> Option<Duration> {
+        self.shared.vault.block_expiration()
     }
 
     /// Get the time when the last block expired or `None` if there are still some unexpired blocks.
     /// If block expiration is not enabled, always return `None`.
-    pub async fn last_block_expiration_time(&self) -> Option<SystemTime> {
-        self.shared.vault.last_block_expiration_time().await
+    pub fn last_block_expiration_time(&self) -> Option<SystemTime> {
+        self.shared.vault.last_block_expiration_time()
     }
 
     /// Get the total size of the data stored in this repository.
