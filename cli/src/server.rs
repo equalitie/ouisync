@@ -1,7 +1,8 @@
 use crate::{
+    error::Error,
     handler::{local::LocalHandler, remote::RemoteHandler},
     options::Dirs,
-    protocol::Error,
+    protocol::ProtocolError,
     state::State,
     transport::local::LocalServer,
 };
@@ -28,7 +29,7 @@ pub(crate) async fn run(
     socket: PathBuf,
     log_format: LogFormat,
     log_color: LogColor,
-) -> Result<(), Error> {
+) -> Result<(), ProtocolError> {
     let monitor = StateMonitor::make_root();
     let _logger = Logger::new(
         None,
@@ -40,7 +41,7 @@ pub(crate) async fn run(
 
     let state = State::init(&dirs, monitor)
         .await?
-        .delete_expired_repositories(REPOSITORY_EXPIRATION_POLL_INTERVAL);
+        .start_delete_expired_repositories(REPOSITORY_EXPIRATION_POLL_INTERVAL);
     let server = LocalServer::bind(socket.as_path())?;
     let handle = task::spawn(server.run(LocalHandler::new(state.clone())));
 

@@ -1,7 +1,7 @@
 use crate::{
     handler::local::LocalHandler,
     options::Dirs,
-    protocol::{Error, Request, Response},
+    protocol::{ProtocolError, Request, Response},
     state::State,
     transport::{local::LocalClient, native::NativeClient},
 };
@@ -19,7 +19,7 @@ pub(crate) async fn run(
     log_format: LogFormat,
     log_color: LogColor,
     request: Request,
-) -> Result<(), Error> {
+) -> Result<(), ProtocolError> {
     let _logger = Logger::new(None, String::new(), None, log_format, log_color)?;
     let client = connect(&socket, &dirs).await?;
 
@@ -87,7 +87,7 @@ pub(crate) async fn run(
     Ok(())
 }
 
-async fn connect(path: &Path, dirs: &Dirs) -> Result<Client, Error> {
+async fn connect(path: &Path, dirs: &Dirs) -> Result<Client, ProtocolError> {
     match LocalClient::connect(path).await {
         Ok(client) => Ok(Client::Local(client)),
         Err(error) => match error.kind() {
@@ -108,7 +108,7 @@ enum Client {
 }
 
 impl Client {
-    async fn invoke(&self, request: Request) -> Result<Response, Error> {
+    async fn invoke(&self, request: Request) -> Result<Response, ProtocolError> {
         match self {
             Self::Local(client) => client.invoke(request).await,
             Self::Native(client) => client.invoke(request).await,

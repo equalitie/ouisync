@@ -1,6 +1,7 @@
 use crate::{
-    repository::{RepositoryHolder, RepositoryName, OPEN_ON_START},
-    state::State,
+    error::Error,
+    repository::RepositoryHolder,
+    state::{CreateRepositoryMethod, State},
 };
 use async_trait::async_trait;
 use ouisync_bridge::{
@@ -123,39 +124,20 @@ async fn create_repository(
     secrets: AccessSecrets,
 ) -> Result<Option<Arc<RepositoryHolder>>, ServerError> {
     let name = make_name(secrets.id());
-
-    if state.repositories.contains(&name) {
-        return Ok(None);
-    }
-
-    let store_path = state.store_path(name.as_ref());
-
-    let repository = ouisync_bridge::repository::create(
-        store_path,
-        None,
-        None,
-        Some(ShareToken::from(secrets)),
-        &state.config,
-        &state.repositories_monitor,
-    )
-    .await
-    .map_err(|error| ServerError::Internal(error.to_string()))?;
-
-    let holder = RepositoryHolder::new(repository, name, &state.network).await;
-    let holder = Arc::new(holder);
-
-    if !state.repositories.try_insert(holder.clone()) {
-        return Ok(None);
-    }
-
-    tracing::info!(name = %holder.name(), "repository created");
-
-    holder
-        .repository
-        .metadata()
-        .set(OPEN_ON_START, true)
+    let holder = match state
+        .create_repository(
+            CreateRepositoryMethod::Import {
+                share_token: ShareToken::from(secrets).with_name(name),
+            },
+            None,
+            None,
+        )
         .await
-        .ok();
+    {
+        Ok(holder) => holder,
+        Err(Error::RepositoryExists) => return Ok(None),
+        Err(error) => return Err(ServerError::Internal(error.to_string())),
+    };
 
     // NOTE: DHT is disabled to prevent spamming the DHT when there is a lot of repos.
     // This is fine because the clients add the storage servers as user-provided peers.
@@ -168,12 +150,11 @@ async fn create_repository(
 }
 
 // Derive name from the hash of repository id
-fn make_name(id: &RepositoryId) -> RepositoryName {
-    RepositoryName::try_from(insert_separators(
+fn make_name(id: &RepositoryId) -> String {
+    insert_separators(
         &id.salted_hash(b"ouisync server repository name")
             .to_string(),
-    ))
-    .unwrap()
+    )
 }
 
 fn insert_separators(input: &str) -> String {

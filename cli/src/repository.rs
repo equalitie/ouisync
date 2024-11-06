@@ -1,4 +1,4 @@
-use crate::{options::Dirs, protocol::Error, utils, DB_EXTENSION};
+use crate::{error::Error, options::Dirs, utils, DB_EXTENSION};
 use camino::Utf8Path;
 use ouisync_bridge::{config::ConfigStore, protocol::remote::v1, transport::RemoteClient};
 use ouisync_lib::{Network, Registration, Repository};
@@ -12,6 +12,7 @@ use std::{
     ops::{Bound, Deref},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
+    time::Duration,
 };
 use thiserror::Error;
 use tokio::{fs, runtime};
@@ -19,7 +20,8 @@ use tokio_stream::StreamExt;
 
 // Config keys
 pub(crate) const OPEN_ON_START: &str = "open_on_start";
-pub(crate) const MOUNT_POINT: &str = "mount_point";
+const MOUNT_POINT_KEY: &str = "mount_point";
+const EXPIRATION_KEY: &str = "expiration";
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub(crate) struct RepositoryName(Arc<str>);
@@ -31,15 +33,15 @@ impl RepositoryName {
 }
 
 impl TryFrom<String> for RepositoryName {
-    type Error = InvalidRepositoryName;
+    type Error = RepositoryNameInvalid;
 
     fn try_from(input: String) -> Result<Self, Self::Error> {
         if input.trim_start().starts_with('/') {
-            return Err(InvalidRepositoryName);
+            return Err(RepositoryNameInvalid);
         }
 
         if input.contains("..") {
-            return Err(InvalidRepositoryName);
+            return Err(RepositoryNameInvalid);
         }
 
         Ok(Self(input.into_boxed_str().into()))
@@ -79,8 +81,8 @@ impl Deref for RepositoryName {
 }
 
 #[derive(Debug, Error)]
-#[error("invalid repository name")]
-pub(crate) struct InvalidRepositoryName;
+#[error("repository name invalid")]
+pub(crate) struct RepositoryNameInvalid;
 
 pub(crate) struct RepositoryHolder {
     pub repository: Arc<Repository>,
@@ -111,9 +113,9 @@ impl RepositoryHolder {
         let metadata = self.repository.metadata();
 
         if let Some(mount_point) = mount_point {
-            metadata.set(MOUNT_POINT, mount_point).await.ok();
+            metadata.set(MOUNT_POINT_KEY, mount_point).await.ok();
         } else {
-            metadata.remove(MOUNT_POINT).await.ok();
+            metadata.remove(MOUNT_POINT_KEY).await.ok();
         }
     }
 
@@ -121,7 +123,7 @@ impl RepositoryHolder {
         let point: Option<String> = self
             .repository
             .metadata()
-            .get(MOUNT_POINT)
+            .get(MOUNT_POINT_KEY)
             .await
             .ok()
             .flatten();
@@ -219,7 +221,7 @@ impl RepositoryHolder {
             .repository
             .secrets()
             .into_write_secrets()
-            .ok_or_else(|| Error::new("permission denied"))?;
+            .ok_or_else(|| Error::PermissionDenied)?;
 
         let client = RemoteClient::connect(host, config)
             .await
@@ -237,6 +239,31 @@ impl RepositoryHolder {
             .inspect_err(|error| tracing::error!(?error, host, "request failed"))?;
 
         Ok(())
+    }
+
+    pub async fn set_repository_expiration(&self, value: Option<Duration>) -> Result<(), Error> {
+        if let Some(value) = value {
+            self.repository
+                .metadata()
+                .set(
+                    EXPIRATION_KEY,
+                    value.as_millis().try_into().unwrap_or(u64::MAX),
+                )
+                .await?
+        } else {
+            self.repository.metadata().remove(EXPIRATION_KEY).await?
+        }
+
+        Ok(())
+    }
+
+    pub async fn repository_expiration(&self) -> Result<Option<Duration>, Error> {
+        Ok(self
+            .repository
+            .metadata()
+            .get(EXPIRATION_KEY)
+            .await?
+            .map(Duration::from_millis))
     }
 
     pub async fn close(&self) -> Result<(), Error> {

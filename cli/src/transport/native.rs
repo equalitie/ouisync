@@ -4,7 +4,7 @@
 
 use crate::{
     handler::local::LocalHandler,
-    protocol::{Error, Request, Response},
+    protocol::{ProtocolError, Request, Response},
 };
 use ouisync_bridge::{
     protocol::SessionCookie,
@@ -28,7 +28,7 @@ impl NativeClient {
         Self { handler, context }
     }
 
-    pub async fn invoke(&self, request: Request) -> Result<Response, Error> {
+    pub async fn invoke(&self, request: Request) -> Result<Response, ProtocolError> {
         self.handler.handle(request, &self.context).await
     }
 

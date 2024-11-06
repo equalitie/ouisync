@@ -2,7 +2,7 @@
 
 use crate::{
     handler::local::LocalHandler,
-    protocol::{Error, Request, Response},
+    protocol::{ProtocolError, Request, Response},
 };
 use interprocess::local_socket::{
     tokio::{LocalSocketListener, LocalSocketStream},
@@ -90,7 +90,7 @@ impl Drop for LocalServer {
 }
 
 pub(crate) struct LocalClient {
-    inner: SocketClient<Socket, Request, Response, Error>,
+    inner: SocketClient<Socket, Request, Response, ProtocolError>,
 }
 
 impl LocalClient {
@@ -103,7 +103,7 @@ impl LocalClient {
         })
     }
 
-    pub async fn invoke(&self, request: Request) -> Result<Response, Error> {
+    pub async fn invoke(&self, request: Request) -> Result<Response, ProtocolError> {
         self.inner.invoke(request).await
     }
 }

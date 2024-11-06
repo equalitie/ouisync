@@ -440,12 +440,12 @@ impl fmt::Display for Response {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Error {
+pub struct ProtocolError {
     message: String,
     sources: Vec<String>,
 }
 
-impl Error {
+impl ProtocolError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -454,7 +454,7 @@ impl Error {
     }
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             write!(f, "Error: {}", self.message)?;
@@ -477,7 +477,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl<E> From<E> for Error
+impl<E> From<E> for ProtocolError
 where
     E: std::error::Error,
 {

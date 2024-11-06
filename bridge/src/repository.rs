@@ -19,12 +19,6 @@ const DEFAULT_BLOCK_EXPIRATION_MILLIS: ConfigKey<u64> = ConfigKey::new(
     "default_block_expiration",
     "Default time in milliseconds when blocks start to expire if not used",
 );
-const DEFAULT_REPOSITORY_EXPIRATION_MILLIS: ConfigKey<u64> = ConfigKey::new(
-    "default_repository_expiration",
-    "Default time in milliseconds after repository is deleted if all its blocks expired",
-);
-
-const REPOSITORY_EXPIRATION_METADATA_KEY: &str = "expiration";
 
 #[derive(Debug, Error)]
 pub enum OpenError {
@@ -82,9 +76,6 @@ pub async fn create(
 
     let value = get_default_block_expiration(config).await?;
     repository.set_block_expiration(value).await?;
-
-    let value = get_default_repository_expiration(config).await?;
-    set_repository_expiration(&repository, value).await?;
 
     Ok(repository)
 }
@@ -181,67 +172,6 @@ pub async fn get_default_block_expiration(
         Err(ConfigError::NotFound) => Ok(None),
         Err(error) => Err(error),
     }
-}
-
-pub async fn set_default_repository_expiration(
-    config: &ConfigStore,
-    value: Option<Duration>,
-) -> Result<(), ConfigError> {
-    let entry = config.entry(DEFAULT_REPOSITORY_EXPIRATION_MILLIS);
-
-    if let Some(value) = value {
-        entry
-            .set(&value.as_millis().try_into().unwrap_or(u64::MAX))
-            .await?;
-    } else {
-        entry.remove().await?;
-    }
-
-    Ok(())
-}
-
-pub async fn get_default_repository_expiration(
-    config: &ConfigStore,
-) -> Result<Option<Duration>, ConfigError> {
-    let entry = config.entry::<u64>(DEFAULT_REPOSITORY_EXPIRATION_MILLIS);
-
-    match entry.get().await {
-        Ok(millis) => Ok(Some(Duration::from_millis(millis))),
-        Err(ConfigError::NotFound) => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
-pub async fn set_repository_expiration(
-    repository: &Repository,
-    value: Option<Duration>,
-) -> Result<(), ouisync_lib::Error> {
-    if let Some(value) = value {
-        repository
-            .metadata()
-            .set(
-                REPOSITORY_EXPIRATION_METADATA_KEY,
-                value.as_millis().try_into().unwrap_or(u64::MAX),
-            )
-            .await?
-    } else {
-        repository
-            .metadata()
-            .remove(REPOSITORY_EXPIRATION_METADATA_KEY)
-            .await?
-    }
-
-    Ok(())
-}
-
-pub async fn get_repository_expiration(
-    repository: &Repository,
-) -> Result<Option<Duration>, ouisync_lib::Error> {
-    Ok(repository
-        .metadata()
-        .get(REPOSITORY_EXPIRATION_METADATA_KEY)
-        .await?
-        .map(Duration::from_millis))
 }
 
 /// Create mirrored repository on the cache server
