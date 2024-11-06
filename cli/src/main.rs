@@ -1,4 +1,5 @@
 mod client;
+mod error;
 mod geo_ip;
 mod handler;
 mod metrics;

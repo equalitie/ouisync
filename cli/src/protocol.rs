@@ -271,9 +271,10 @@ pub(crate) enum Request {
         /// Ti, Gi, ...) and decimal (k, M, T, G, ...) suffixes.
         value: Option<StorageSize>,
     },
-    /// Get or set block expiration
-    BlockExpiration {
-        /// Name of the repository to get/set the block expiration for
+    /// Get or set block and repository expiration
+    #[command(alias = "expiry")]
+    Expiration {
+        /// Name of the repository to get/set the expiration for
         #[arg(
             short,
             long,
@@ -282,16 +283,20 @@ pub(crate) enum Request {
         )]
         name: Option<String>,
 
-        /// Get/set the default block expiration
+        /// Get/set the default expiration
         #[arg(short, long)]
         default: bool,
 
-        /// Remove the block expiration
+        /// Remove the expiration
         #[arg(short, long, conflicts_with = "value")]
         remove: bool,
 
-        /// Set duration after which blocks are removed if not used (in seconds).
-        value: Option<u64>,
+        /// Time after which blocks expire if not accessed (in seconds)
+        block_expiration: Option<u64>,
+
+        /// Time after which the whole repository is deleted after all its blocks expired
+        /// (in seconds)
+        repository_expiration: Option<u64>,
     },
     /// Set access to a repository corresponding to the share token
     SetAccess {
@@ -324,7 +329,10 @@ pub(crate) enum Response {
     SocketAddrs(Vec<SocketAddr>),
     StorageSize(StorageSize),
     QuotaInfo(QuotaInfo),
-    BlockExpiration(Option<Duration>),
+    Expiration {
+        block: Option<Duration>,
+        repository: Option<Duration>,
+    },
 }
 
 impl From<()> for Response {
@@ -423,18 +431,21 @@ impl fmt::Display for Response {
             }
             Self::StorageSize(value) => write!(f, "{value}"),
             Self::QuotaInfo(info) => write!(f, "{info}"),
-            Self::BlockExpiration(info) => write!(f, "{info:?}"),
+            Self::Expiration { block, repository } => write!(
+                f,
+                "block expiration: {block:?}, repository expiration: {repository:?}"
+            ),
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Error {
+pub struct ProtocolError {
     message: String,
     sources: Vec<String>,
 }
 
-impl Error {
+impl ProtocolError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -443,7 +454,7 @@ impl Error {
     }
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             write!(f, "Error: {}", self.message)?;
@@ -466,7 +477,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl<E> From<E> for Error
+impl<E> From<E> for ProtocolError
 where
     E: std::error::Error,
 {

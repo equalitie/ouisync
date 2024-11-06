@@ -17,7 +17,7 @@ use tracing::instrument;
 const DEFAULT_QUOTA_KEY: ConfigKey<u64> = ConfigKey::new("default_quota", "Default storage quota");
 const DEFAULT_BLOCK_EXPIRATION_MILLIS: ConfigKey<u64> = ConfigKey::new(
     "default_block_expiration",
-    "Default time in seconds when blocks start to expire if not used",
+    "Default time in milliseconds when blocks start to expire if not used",
 );
 
 #[derive(Debug, Error)]
@@ -71,11 +71,11 @@ pub async fn create(
 
     let repository = Repository::create(&params, access).await?;
 
-    let quota = get_default_quota(config).await?;
-    repository.set_quota(quota).await?;
+    let value = get_default_quota(config).await?;
+    repository.set_quota(value).await?;
 
-    let block_expiration = get_default_block_expiration(config).await?;
-    repository.set_block_expiration(block_expiration).await?;
+    let value = get_default_block_expiration(config).await?;
+    repository.set_block_expiration(value).await?;
 
     Ok(repository)
 }

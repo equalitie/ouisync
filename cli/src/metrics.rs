@@ -1,6 +1,6 @@
 use crate::{
+    error::Error,
     geo_ip::{CountryCode, GeoIp},
-    protocol::Error,
     state::State,
 };
 use hyper::{server::conn::http1, service::service_fn, Response};

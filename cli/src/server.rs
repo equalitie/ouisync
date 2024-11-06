@@ -1,7 +1,8 @@
 use crate::{
+    error::Error,
     handler::{local::LocalHandler, remote::RemoteHandler},
     options::Dirs,
-    protocol::Error,
+    protocol::ProtocolError,
     state::State,
     transport::local::LocalServer,
 };
@@ -17,15 +18,18 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use tokio::task;
+
+const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 pub(crate) async fn run(
     dirs: Dirs,
     socket: PathBuf,
     log_format: LogFormat,
     log_color: LogColor,
-) -> Result<(), Error> {
+) -> Result<(), ProtocolError> {
     let monitor = StateMonitor::make_root();
     let _logger = Logger::new(
         None,
@@ -35,7 +39,9 @@ pub(crate) async fn run(
         log_color,
     )?;
 
-    let state = State::init(&dirs, monitor).await?;
+    let state = State::init(&dirs, monitor)
+        .await?
+        .start_delete_expired_repositories(REPOSITORY_EXPIRATION_POLL_INTERVAL);
     let server = LocalServer::bind(socket.as_path())?;
     let handle = task::spawn(server.run(LocalHandler::new(state.clone())));
 
