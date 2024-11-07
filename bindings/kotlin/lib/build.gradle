@@ -21,12 +21,10 @@ version = rootProject.version
 group   = rootProject.group
 
 android {
-    compileSdkVersion 34
-
-    // TODO: The default NDK version should be the lowest possible.
-    ndkVersion = System.getenv("OUISYNC_ANDROID_NDK_VERSION") ?: '26.3.11579264'
-
     namespace 'org.equalitie.ouisync.lib'
+
+    compileSdk = 34
+    ndkVersion = '27.2.12479018'
 
     sourceSets {
         main {
@@ -44,13 +42,8 @@ android {
         versionName version
     }
 
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = '17'
+    kotlin {
+        jvmToolchain(17)
     }
 
     testOptions {
