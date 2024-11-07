@@ -1,6 +1,3 @@
-group = "org.equalitie.ouisync.lib"
-version = "1.0-SNAPSHOT"
-
 buildscript {
     ext.kotlin_version = "2.0.20"
     repositories {
@@ -13,10 +10,15 @@ buildscript {
     }
 
     dependencies {
-        classpath("com.android.tools.build:gradle:8.5.2")
+        classpath("com.android.tools.build:gradle:8.7.2")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
-        classpath("org.mozilla.rust-android-gradle:plugin:0.9.4")
     }
+}
+
+plugins {
+    id "com.android.library"
+    id "kotlin-android"
+    id "org.mozilla.rust-android-gradle.rust-android" version '0.9.4'
 }
 
 allprojects {
@@ -26,9 +28,8 @@ allprojects {
     }
 }
 
-apply plugin: "com.android.library"
-apply plugin: "kotlin-android"
-apply plugin: "org.mozilla.rust-android-gradle.rust-android"
+group = "org.equalitie.ouisync.lib"
+version = "1.0-SNAPSHOT"
 
 android {
     if (project.android.hasProperty("namespace")) {
@@ -36,16 +37,7 @@ android {
     }
 
     compileSdk = 34
-    ndkVersion "27.1.12297006"
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17
-    }
+    ndkVersion = '27.2.12479018'
 
     sourceSets {
         main.java.srcDirs += "src/main/kotlin"
@@ -54,7 +46,11 @@ android {
 
     defaultConfig {
         minSdk = 21
-        targetSdkVersion = 35
+        targetSdkVersion = 34
+    }
+
+    kotlin {
+        jvmToolchain(17)
     }
 
     buildTypes {
@@ -118,28 +114,6 @@ cargo {
     profile = gradle.startParameter.taskNames.any{it.toLowerCase().contains("debug")} ? "debug" : "release"
 
     extraCargoBuildArguments = ['-p', 'ouisync-ffi']
-
-    // HACK: Recent NDK (since r23) no longer links `libgcc`, which breaks some libraries since
-    // they depended on the symbols from `libclang_rt.builtins-x86_64-android`
-    // (e.g. `__extenddftf2`, ...). To work around it, we link the library explicitly by setting
-    // it through the RUSTFLAGS env variable.
-    // More info: https://github.com/bbqsrc/cargo-ndk/issues/94.
-    exec { spec, toolchain ->
-        if (toolchain.target == 'x86_64-linux-android') {
-            def os_toolchain
-            if (System.properties['os.name'].toLowerCase().contains('windows')) {
-                os_toolchain = 'windows-x86_64'
-            } else {
-                os_toolchain = 'linux-x86_64' 
-            }
-
-
-            def clangVersion = '18'
-            def libDir = "${android.sdkDirectory}/ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/${os_toolchain}/lib/clang/${clangVersion}/lib/linux"
-
-            spec.environment('RUSTFLAGS', "-L${libDir} -lstatic=clang_rt.builtins-x86_64-android")
-        }
-    }
 }
 
 preBuild.dependsOn 'cargoBuild'

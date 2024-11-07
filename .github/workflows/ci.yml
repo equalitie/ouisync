@@ -15,13 +15,13 @@ jobs:
         name: [android, linux, windows]
         include:
           - name: android
-            os: ubuntu-latest
+            os: ubuntu-24.04
             cargo-command: cross
             cargo-dir: ~/.cargo
             target: aarch64-linux-android
 
           - name: linux
-            os: ubuntu-latest
+            os: ubuntu-24.04
             cargo-command: cargo
             cargo-dir: ~/.cargo
 
@@ -86,7 +86,7 @@ jobs:
 
   check_kotlin_bindings:
     name: check kotlin bindings
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -160,7 +160,7 @@ jobs:
 
   check_dart_bindings:
     name: check dart bindings
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
