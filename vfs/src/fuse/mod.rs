@@ -47,6 +47,11 @@ pub fn mount(
     repository: Arc<Repository>,
     mount_point: impl AsRef<Path>,
 ) -> Result<MountGuard, io::Error> {
+    // TODO: Would be great if we could use MountOption::AutoUnmount, but the documentation
+    // say it can't be used without MountOption::AllowOther or MountOption::AllowRoot. However
+    // the two latter options require modifications to /etc/fuse.conf. It's not clear to me
+    // whether this is a limitation of fuser or libfuse. Fuser has an open ticket for it here
+    // https://github.com/cberner/fuser/issues/230
     let session = fuser::spawn_mount2(
         VirtualFilesystem::new(runtime_handle, repository),
         mount_point,
@@ -159,7 +164,7 @@ impl fuser::Filesystem for VirtualFilesystem {
         self.inner.forget(inode, lookups)
     }
 
-    fn getattr(&mut self, _req: &Request, inode: Inode, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request, inode: Inode, _fh: Option<u64>, reply: ReplyAttr) {
         let attr = try_request!(self.rt.block_on(self.inner.getattr(inode)), reply);
         reply.attr(&TTL, &attr)
     }
