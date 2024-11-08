@@ -12,7 +12,7 @@ public class OuisyncSession {
     let configsPath: String
     let logsPath: String
 
-    let client: OuisyncClient
+    public let client: OuisyncClient
 
     var nextMessageId: MessageId = 0
     var pendingResponses: [MessageId: CheckedContinuation<Response, any Error>] = [:]

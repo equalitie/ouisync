@@ -51,7 +51,7 @@ public class OuisyncClient {
         })
     }
 
-    func close() async {
+    public func close() async {
         typealias Continuation = CheckedContinuation<Void, Never>
 
         class Context {
