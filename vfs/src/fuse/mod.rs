@@ -159,7 +159,7 @@ impl fuser::Filesystem for VirtualFilesystem {
         self.inner.forget(inode, lookups)
     }
 
-    fn getattr(&mut self, _req: &Request, inode: Inode, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request, inode: Inode, _fh: Option<u64>, reply: ReplyAttr) {
         let attr = try_request!(self.rt.block_on(self.inner.getattr(inode)), reply);
         reply.attr(&TTL, &attr)
     }
