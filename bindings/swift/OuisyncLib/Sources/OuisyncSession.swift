@@ -6,7 +6,6 @@
 
 import Foundation
 import MessagePack
-import OuisyncLibFFI
 
 public class OuisyncSession {
     let configsPath: String

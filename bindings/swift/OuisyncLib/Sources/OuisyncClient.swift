@@ -9,7 +9,7 @@ import Foundation
 import OuisyncLibFFI
 
 public class OuisyncClient {
-    var clientHandle: OuisyncClientHandle
+    var clientHandle: SessionHandle
     let ffi: OuisyncFFI
     public var onReceiveFromBackend: OuisyncOnReceiveFromBackend? = nil
 
@@ -18,7 +18,10 @@ public class OuisyncClient {
         // create the callback, which is in turn needed to create the proper sessionHandle.
         let client = OuisyncClient(0, ffi)
 
-        let callback: FFICallback = { context, dataPointer, size in
+        let logTag = "ouisync-backend"
+        let result = ffi.ffiSessionCreate(ffi.sessionKindShared, configPath, logPath, logTag,
+                                          .init(mutating: OuisyncFFI.toUnretainedPtr(obj: client))) {
+            context, dataPointer, size in
             let client: OuisyncClient = OuisyncFFI.fromUnretainedPtr(ptr: context!)
             guard let onReceive = client.onReceiveFromBackend else {
                 fatalError("OuisyncClient has no onReceive handler set")
@@ -26,18 +29,15 @@ public class OuisyncClient {
             onReceive(Array(UnsafeBufferPointer(start: dataPointer, count: Int(exactly: size)!)))
         }
 
-        let logTag = "ouisync-backend"
-        let result = ffi.ffiSessionCreate(ffi.sessionKindShared, configPath, logPath, logTag, OuisyncFFI.toUnretainedPtr(obj: client), callback);
-
-        if result.errorCode != 0 {
-            throw SessionCreateError("Failed to create session, code:\(result.errorCode), message:\(result.errorMessage!)")
+        if result.error_code != 0 {
+            throw SessionCreateError("Failed to create session, code:\(result.error_code), message:\(result.error_message!)")
         }
 
-        client.clientHandle = result.clientHandle
+        client.clientHandle = result.session
         return client
     }
 
-    fileprivate init(_ clientHandle: OuisyncClientHandle, _ ffi: OuisyncFFI) {
+    fileprivate init(_ clientHandle: SessionHandle, _ ffi: OuisyncFFI) {
         self.clientHandle = clientHandle
         self.ffi = ffi
     }
@@ -46,7 +46,7 @@ public class OuisyncClient {
         let count = data.count;
         data.withUnsafeBufferPointer({ maybePointer in
             if let pointer = maybePointer.baseAddress {
-                ffi.ffiSessionChannelSend(clientHandle, pointer, UInt64(count))
+                ffi.ffiSessionChannelSend(clientHandle, .init(mutating: pointer), UInt64(count))
             }
         })
     }
@@ -55,9 +55,9 @@ public class OuisyncClient {
         typealias Continuation = CheckedContinuation<Void, Never>
 
         class Context {
-            let clientHandle: OuisyncClientHandle
+            let clientHandle: SessionHandle
             let continuation: Continuation
-            init(_ clientHandle: OuisyncClientHandle, _ continuation: Continuation) {
+            init(_ clientHandle: SessionHandle, _ continuation: Continuation) {
                 self.clientHandle = clientHandle
                 self.continuation = continuation
             }
@@ -69,7 +69,7 @@ public class OuisyncClient {
                 let context: Context = OuisyncFFI.fromRetainedPtr(ptr: context!)
                 context.continuation.resume()
             }
-            ffi.ffiSessionClose(clientHandle, context, callback)
+            ffi.ffiSessionClose(clientHandle, .init(mutating: context), callback)
         })
     }
 }
