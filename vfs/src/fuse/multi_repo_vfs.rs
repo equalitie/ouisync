@@ -108,8 +108,8 @@ fn prepare_mountpoint(store_path: &PathBuf, mount_root: &PathBuf) -> Result<Path
                 );
 
                 std::process::Command::new("fusermount")
-                    // Unwrap should be OK given that we're on a POSIX file system.
-                    .args(["-u", mount_point.to_str().unwrap()])
+                    .arg("-u")
+                    .arg(&mount_point)
                     .output()?;
 
                 mount_point.read_dir()?
