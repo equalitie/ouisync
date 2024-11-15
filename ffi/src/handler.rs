@@ -9,7 +9,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::transport::SessionContext;
-use ouisync_lib::{crypto::cipher::SecretKey, PeerAddr};
+use ouisync_lib::{crypto::cipher::SecretKey, Credentials, PeerAddr};
 use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Clone)]
@@ -106,9 +106,18 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::RepositorySetCredentials {
                 repository,
                 credentials,
-            } => repository::set_credentials(&self.state, repository, credentials.into())
-                .await?
-                .into(),
+            } => {
+                let cv: Vec<u8> = credentials.into();
+                repository::set_credentials(&self.state, repository, Credentials::decode(&cv)?)
+                    .await?
+                    .into()
+            }
+            Request::RepositoryResetCredentials { repository, token } => {
+                let new_credentials = Credentials::with_random_writer_id(token.into_secrets());
+                repository::set_credentials(&self.state, repository, new_credentials)
+                    .await?
+                    .into()
+            }
             Request::RepositorySetAccessMode {
                 repository,
                 access_mode,

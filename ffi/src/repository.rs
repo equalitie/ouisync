@@ -195,13 +195,13 @@ pub(crate) fn credentials(state: &State, handle: RepositoryHandle) -> Result<Vec
 pub(crate) async fn set_credentials(
     state: &State,
     handle: RepositoryHandle,
-    credentials: Vec<u8>,
+    credentials: Credentials,
 ) -> Result<(), Error> {
     state
         .repositories
         .get(handle)?
         .repository
-        .set_credentials(Credentials::decode(&credentials)?)
+        .set_credentials(credentials)
         .await?;
 
     Ok(())
