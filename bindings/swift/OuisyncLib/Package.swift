@@ -1,32 +1,39 @@
-// swift-tools-version: 5.8
-// The swift-tools-version declares the minimum version of Swift required to build this package.
-
+// swift-tools-version: 5.9
 import PackageDescription
 
 let package = Package(
     name: "OuisyncLib",
     platforms: [.macOS(.v13), .iOS(.v13), .macCatalyst(.v13)],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
-        .library(
-            name: "OuisyncLib",
-            targets: ["OuisyncLib"]),
+        .library(name: "OuisyncLib",
+                 type: .static,
+                 targets: ["OuisyncLib"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/a2/MessagePack.swift.git", from: "4.0.0")
+        .package(url: "https://github.com/a2/MessagePack.swift.git", from: "4.0.0"),
     ],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
-        .target(
-            name: "OuisyncLib",
-            dependencies: [.product(name:"MessagePack", package: "MessagePack.swift"), "OuisyncLibFFI"]
-        ),
-        .target(name: "OuisyncLibFFI", dependencies: ["OuisyncDyLibBuilder"]),
-        .plugin(name: "OuisyncDyLibBuilder", capability: .buildTool()),
-
-        .testTarget(
-            name: "OuisyncLibTests",
-            dependencies: ["OuisyncLib"]),
+        .target(name: "OuisyncLib",
+                dependencies: [.product(name: "MessagePack",
+                                        package: "MessagePack.swift"),
+                               "FFIBuilder", "OuisyncLibFFI"],
+                path: "Sources"),
+        .testTarget(name: "OuisyncLibTests",
+                    dependencies: ["OuisyncLib"],
+                    path: "Tests"),
+        // FIXME: move this to a separate package / framework
+        .binaryTarget(name: "OuisyncLibFFI",
+                      path: "output/OuisyncLibFFI.xcframework"),
+        .plugin(name: "FFIBuilder",
+                capability: .buildTool(),
+                path: "Plugins/Builder"),
+        .plugin(name: "Update rust dependencies",
+                capability: .command(intent: .custom(verb: "cargo-fetch",
+                                                     description: "Updates rust dependencies"),
+                                     permissions: [
+                .allowNetworkConnections(scope: .all(),
+                                         reason: "Downloads dependencies defined by Cargo.toml"),
+                .writeToPackageDirectory(reason: "These are not the droids you are looking for")]),
+                path: "Plugins/Updater"),
     ]
 )
