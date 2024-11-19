@@ -28,38 +28,15 @@ const DEFAULT_REPOSITORY_EXPIRATION_MILLIS: ConfigKey<u64> = ConfigKey::new(
 use tokio_rustls::rustls;
 
 pub(crate) struct State {
-    pub config: ConfigStore,
     pub store_dir: PathBuf,
     pub mount_dir: PathBuf,
-    pub network: Network,
     pub repositories: RepositoryMap,
     pub repositories_monitor: StateMonitor,
     pub rpc_servers: ServerContainer,
-    pub metrics_server: MetricsServer,
-    pub server_config: OnceCell<Arc<rustls::ServerConfig>>,
-    pub client_config: OnceCell<Arc<rustls::ClientConfig>>,
 }
 
 impl State {
     pub async fn init(dirs: &Dirs, monitor: StateMonitor) -> Result<Arc<Self>, Error> {
-        let config = ConfigStore::new(&dirs.config_dir);
-
-        let network = Network::new(
-            monitor.make_child("Network"),
-            Some(config.dht_contacts_store()),
-            None,
-        );
-
-        network::init(
-            &network,
-            &config,
-            NetworkDefaults {
-                port_forwarding_enabled: false,
-                local_discovery_enabled: false,
-            },
-        )
-        .await;
-
         let repositories_monitor = monitor.make_child("Repositories");
         let repositories =
             repository::find_all(dirs, &network, &config, &repositories_monitor).await;
@@ -72,14 +49,10 @@ impl State {
             repositories,
             repositories_monitor,
             rpc_servers: ServerContainer::new(),
-            metrics_server: MetricsServer::new(),
-            server_config: OnceCell::new(),
-            client_config: OnceCell::new(),
         };
         let state = Arc::new(state);
 
         state.rpc_servers.init(state.clone()).await?;
-        state.metrics_server.init(&state).await?;
 
         Ok(state)
     }
@@ -336,57 +309,6 @@ impl State {
     }
 }
 
-async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfig>, Error> {
-    let cert_path = config_dir.join("cert.pem");
-    let key_path = config_dir.join("key.pem");
-
-    let certs = transport::tls::load_certificates_from_file(&cert_path)
-        .await
-        .inspect_err(|error| {
-            tracing::error!(
-                "failed to load TLS certificate from {}: {}",
-                cert_path.display(),
-                error,
-            )
-        })?;
-
-    if certs.is_empty() {
-        tracing::error!(
-            "failed to load TLS certificate from {}: no certificates found",
-            cert_path.display()
-        );
-
-        return Err(Error::TlsCertificatesNotFound);
-    }
-
-    let keys = transport::tls::load_keys_from_file(&key_path)
-        .await
-        .inspect_err(|error| {
-            tracing::error!(
-                "failed to load TLS key from {}: {}",
-                key_path.display(),
-                error
-            )
-        })?;
-
-    let key = keys.into_iter().next().ok_or_else(|| {
-        tracing::error!(
-            "failed to load TLS key from {}: no keys found",
-            cert_path.display()
-        );
-
-        Error::TlsKeysNotFound
-    })?;
-
-    Ok(transport::make_server_config(certs, key)?)
-}
-
-async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfig>, Error> {
-    // Load custom root certificates (if any)
-    let additional_root_certs =
-        transport::tls::load_certificates_from_dir(&config_dir.join("root_certs")).await?;
-    Ok(transport::make_client_config(&additional_root_certs)?)
-}
 
 #[expect(clippy::large_enum_variant)]
 pub(crate) enum CreateRepositoryMethod {

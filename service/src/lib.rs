@@ -1,33 +1,52 @@
 pub mod protocol;
 pub mod transport;
 
+mod error;
+mod metrics;
+mod state;
+
+pub use error::ServiceError;
+use metrics::MetricsServer;
+pub use state::StateError;
+
 use futures_util::SinkExt;
-use protocol::{DecodeError, Message, Request, Response, ServerError, ServerPayload};
+use protocol::{DecodeError, Message, ProtocolError, Request, Response, ServerPayload};
 use slab::Slab;
-use std::{io, path::PathBuf};
+use state::State;
+use std::path::PathBuf;
 use tokio::select;
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use tracing::instrument;
 use transport::{LocalServer, LocalServerReader, LocalServerWriter, ReadError};
 
 pub struct Service {
+    state: State,
     local_server: LocalServer,
     local_readers: StreamMap<ConnectionId, StreamNotifyClose<LocalServerReader>>,
     local_writers: Slab<LocalServerWriter>,
+    metrics_server: MetricsServer,
 }
 
 impl Service {
-    pub async fn init(local_socket_path: PathBuf, config_dir: PathBuf) -> io::Result<Self> {
+    pub async fn init(
+        local_socket_path: PathBuf,
+        config_dir: PathBuf,
+    ) -> Result<Self, ServiceError> {
+        let state = State::init(&config_dir).await?;
         let local_server = LocalServer::bind(&local_socket_path).await?;
 
+        let metrics_server = MetricsServer::init(&state).await?;
+
         Ok(Self {
+            state,
             local_server,
             local_readers: StreamMap::new(),
             local_writers: Slab::new(),
+            metrics_server,
         })
     }
 
-    pub async fn run(&mut self) -> io::Result<()> {
+    pub async fn run(&mut self) -> Result<(), ServiceError> {
         loop {
             select! {
                 result = self.local_server.accept() => {
@@ -45,7 +64,10 @@ impl Service {
         }
     }
 
-    pub async fn close(&mut self) -> io::Result<()> {
+    pub async fn close(&mut self) -> Result<(), ServiceError> {
+        self.metrics_server.close();
+        self.state.close().await?;
+
         todo!()
     }
 
@@ -85,8 +107,21 @@ impl Service {
         &mut self,
         conn_id: ConnectionId,
         message: Message<Request>,
-    ) -> Result<Response, ServerError> {
-        todo!()
+    ) -> Result<Response, ProtocolError> {
+        match message.payload {
+            Request::RemoteControlBind { addrs: _ } => todo!(),
+            Request::MetricsBind { addr } => {
+                Ok(self.metrics_server.bind(&self.state, addr).await?.into())
+            }
+            Request::RepositoryCreate {
+                name,
+                read_secret,
+                write_secret,
+                share_token,
+            } => {
+                todo!()
+            }
+        }
     }
 
     async fn send_message(&mut self, conn_id: ConnectionId, message: Message<ServerPayload>) {

@@ -1,20 +1,25 @@
+use crate::options::ClientCommand;
 use futures_util::SinkExt;
+use ouisync_lib::{crypto::Password, SetLocalSecret, ShareToken};
 use ouisync_service::{
-    protocol::{Message, MessageId, Request, ServerError, ServerPayload},
-    transport::{self, LocalClientReader, LocalClientWriter},
+    protocol::{Message, MessageId, Notification, ProtocolError, Request, Response, ServerPayload},
+    transport::{self, LocalClientReader, LocalClientWriter, ReadError, WriteError},
 };
 use std::{
     env, io,
     path::{Path, PathBuf},
 };
+use thiserror::Error;
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_stream::StreamExt;
 
-pub(crate) async fn run(socket_path: PathBuf, request: Request) -> Result<(), ServerError> {
+pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
     let (mut reader, mut writer) = connect(&socket_path).await?;
 
-    let request = match request {
-        Request::Create {
+    let request = match command {
+        ClientCommand::RemoteControl { addrs } => Request::RemoteControlBind { addrs },
+        ClientCommand::Metrics { addr } => Request::MetricsBind { addr },
+        ClientCommand::CreateRepository {
             name,
             share_token,
             password,
@@ -22,53 +27,101 @@ pub(crate) async fn run(socket_path: PathBuf, request: Request) -> Result<(), Se
             write_password,
         } => {
             let share_token = get_or_read(share_token, "input share token").await?;
-            let password = get_or_read(password, "input password").await?;
-            let read_password = get_or_read(read_password, "input read password").await?;
-            let write_password = get_or_read(write_password, "input write password").await?;
+            let share_token = share_token
+                .as_deref()
+                .map(str::parse::<ShareToken>)
+                .transpose()
+                .map_err(|error| ProtocolError::new(format!("invalid share token: {error}")))?;
 
-            Request::Create {
+            let password = get_or_read(password, "input password").await?;
+
+            let read_password = get_or_read(read_password, "input read password").await?;
+            let read_secret = read_password
+                .or_else(|| password.as_ref().cloned())
+                .map(Password::from)
+                .map(SetLocalSecret::Password);
+
+            let write_password = get_or_read(write_password, "input write password").await?;
+            let write_secret = write_password
+                .or(password)
+                .map(Password::from)
+                .map(SetLocalSecret::Password);
+
+            let name = name
+                .or_else(|| {
+                    share_token
+                        .as_ref()
+                        .map(|token| token.suggested_name().to_owned())
+                })
+                .ok_or_else(|| ProtocolError::new("name is missing"))?;
+
+            Request::RepositoryCreate {
                 name,
                 share_token,
-                password,
-                read_password,
-                write_password,
+                read_secret,
+                write_secret,
             }
         }
-        Request::Open { name, password } => {
-            let password = get_or_read(password, "input password").await?;
-            Request::Open { name, password }
-        }
-        Request::Share {
-            name,
-            mode,
-            password,
-        } => {
-            let password = get_or_read(password, "input password").await?;
-            Request::Share {
-                name,
-                mode,
-                password,
-            }
-        }
-        Request::Export { name, output } => Request::Export {
-            name,
-            output: to_absolute(output)?,
-        },
-        Request::Import {
-            name,
-            mode,
-            force,
-            input,
-        } => Request::Import {
-            name,
-            mode,
-            force,
-            input: to_absolute(input)?,
-        },
+        ClientCommand::DeleteRepository { name } => {
+            todo!()
+        } // Request::Open { name, password } => {
+          //     let password = get_or_read(password, "input password").await?;
+          //     Request::Open { name, password }
+          // }
+          // Request::Share {
+          //     name,
+          //     mode,
+          //     password,
+          // } => {
+          //     let password = get_or_read(password, "input password").await?;
+          //     Request::Share {
+          //         name,
+          //         mode,
+          //         password,
+          //     }
+          // }
+          // Request::Export { name, output } => Request::Export {
+          //     name,
+          //     output: to_absolute(output)?,
+          // },
+          // Request::Import {
+          //     name,
+          //     mode,
+          //     force,
+          //     input,
+          // } => Request::Import {
+          //     name,
+          //     mode,
+          //     force,
+          //     input: to_absolute(input)?,
+          // },
 
-        _ => request,
+          // _ => request,
     };
 
+    let response = invoke(&mut reader, &mut writer, request).await?;
+    println!("{}", response);
+
+    writer.close().await?;
+
+    Ok(())
+}
+
+async fn connect(
+    socket_path: &Path,
+) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
+    // TODO: if the server is not running, spin it up ourselves
+    match transport::connect(socket_path).await {
+        Ok(client) => Ok(client),
+        Err(error) => Err(ClientError::Connect(error)),
+    }
+}
+
+async fn invoke(
+    reader: &mut LocalClientReader,
+    writer: &mut LocalClientWriter,
+    request: Request,
+) -> Result<Response, ClientError> {
     writer
         .send(Message {
             id: MessageId::next(),
@@ -79,32 +132,21 @@ pub(crate) async fn run(socket_path: PathBuf, request: Request) -> Result<(), Se
     let message = match reader.next().await {
         Some(Ok(message)) => message,
         Some(Err(error)) => return Err(error.into()),
-        None => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
+        None => return Err(ClientError::Disconnected),
     };
 
-    writer.close().await?;
-
     match message.payload {
-        ServerPayload::Success(response) => {
-            println!("{}", response);
-            Ok(())
+        ServerPayload::Success(response) => Ok(response),
+        ServerPayload::Failure(error) => Err(error.into()),
+        ServerPayload::Notification(notification) => {
+            Err(ClientError::UnexpectedNotification(notification))
         }
-        ServerPayload::Failure(error) => Err(error),
-        ServerPayload::Notification(notification) => Err(ServerError::new(format!(
-            "unexpected notification: {:?}",
-            notification
-        ))),
     }
-}
-
-async fn connect(socket_path: &Path) -> io::Result<(LocalClientReader, LocalClientWriter)> {
-    // TODO: if the server is not running, spin it up ourselves
-    transport::connect(socket_path).await
 }
 
 /// If value is `Some("-")`, reads the value from stdin, otherwise returns it unchanged.
 // TODO: support invisible input for passwords, etc.
-async fn get_or_read(value: Option<String>, prompt: &str) -> io::Result<Option<String>> {
+async fn get_or_read(value: Option<String>, prompt: &str) -> Result<Option<String>, ClientError> {
     if value
         .as_ref()
         .map(|value| value.trim() == "-")
@@ -132,5 +174,29 @@ fn to_absolute(path: PathBuf) -> Result<PathBuf, io::Error> {
         Ok(path)
     } else {
         Ok(env::current_dir()?.join(path))
+    }
+}
+
+#[derive(Error, Debug)]
+pub(crate) enum ClientError {
+    #[error("{0}")]
+    Protocol(ProtocolError),
+    #[error("failed to receive response")]
+    Read(#[from] ReadError),
+    #[error("failed to send request")]
+    Write(#[from] WriteError),
+    #[error("failed to connect to server")]
+    Connect(#[source] io::Error),
+    #[error("connection closed by server")]
+    Disconnected,
+    #[error("unexpected notification: {0:?}")]
+    UnexpectedNotification(Notification),
+    #[error("I/O error")]
+    Io(#[from] io::Error),
+}
+
+impl From<ProtocolError> for ClientError {
+    fn from(src: ProtocolError) -> Self {
+        Self::Protocol(src)
     }
 }

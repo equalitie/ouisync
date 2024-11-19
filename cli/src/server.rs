@@ -1,14 +1,16 @@
+use crate::options::ServerCommand;
 use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
-use ouisync_service::{protocol::ServerError, Service};
+use ouisync_service::{Service, ServiceError};
 use std::{io, path::PathBuf};
 use tokio::select;
 
-pub(crate) async fn run(
-    socket: PathBuf,
-    config_dir: PathBuf,
-    log_format: LogFormat,
-    log_color: LogColor,
-) -> Result<(), ServerError> {
+pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), ServiceError> {
+    let ServerCommand::Start {
+        config_dir,
+        log_format,
+        log_color,
+    } = command;
+
     let _logger = Logger::new(
         None,
         String::new(), // log tag, not used here

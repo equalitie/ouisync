@@ -14,7 +14,6 @@ use ouisync_bridge::{
     transport::NotificationSender,
 };
 use scoped_task::ScopedAbortHandle;
-use state_monitor::StateMonitor;
 use std::{
     ffi::c_char,
     io,
@@ -48,17 +47,9 @@ impl Shared {
         log_path: Option<&Path>,
         log_tag: String,
     ) -> Result<Arc<Self>, SessionError> {
-        let root_monitor = StateMonitor::make_root();
-
         // Init logger
-        let logger = Logger::new(
-            log_path,
-            log_tag,
-            Some(root_monitor.clone()),
-            LogFormat::Human,
-            LogColor::Auto,
-        )
-        .map_err(SessionError::InitializeLogger)?;
+        let logger = Logger::new(log_path, log_tag, LogFormat::Human, LogColor::Auto)
+            .map_err(SessionError::InitializeLogger)?;
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()
@@ -67,7 +58,7 @@ impl Shared {
             .map_err(SessionError::InitializeRuntime)?;
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
 
-        let state = Arc::new(State::new(configs_path.to_owned(), root_monitor));
+        let state = Arc::new(State::new(configs_path.to_owned()));
 
         Ok(Arc::new(Self {
             runtime,

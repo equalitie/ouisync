@@ -1,14 +1,12 @@
-/*
-use crate::{
-    error::Error,
-    geo_ip::{CountryCode, GeoIp},
-    state::State,
-};
+mod geo_ip;
+
+use crate::{error::ServiceError, state::State};
+use geo_ip::{CountryCode, GeoIp};
 use hyper::{server::conn::http1, service::service_fn, Response};
 use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
+use ouisync::{PeerInfoCollector, PeerState, PublicRuntimeId};
 use ouisync_bridge::config::{ConfigError, ConfigKey};
-use ouisync_lib::{PeerInfoCollector, PeerState, PublicRuntimeId};
 use scoped_task::ScopedAbortHandle;
 use std::{
     collections::HashMap,
@@ -17,7 +15,6 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     pin::Pin,
-    sync::Mutex,
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -38,17 +35,11 @@ const GEO_IP_PATH: &str = "GeoLite2-Country.mmdb";
 const COLLECT_INTERVAL: Duration = Duration::from_secs(10);
 
 pub(crate) struct MetricsServer {
-    handle: Mutex<Option<ScopedAbortHandle>>,
+    handle: Option<ScopedAbortHandle>,
 }
 
 impl MetricsServer {
-    pub fn new() -> Self {
-        Self {
-            handle: Mutex::new(None),
-        }
-    }
-
-    pub async fn init(&self, state: &State) -> Result<(), Error> {
+    pub async fn init(state: &State) -> Result<Self, ServiceError> {
         let entry = state.config.entry(BIND_METRICS_KEY);
 
         let addr = match entry.get().await {
@@ -57,35 +48,40 @@ impl MetricsServer {
             Err(error) => return Err(error.into()),
         };
 
-        if let Some(addr) = addr {
-            let handle = start(state, addr).await?;
-            *self.handle.lock().unwrap() = Some(handle);
-        }
+        let handle = if let Some(addr) = addr {
+            Some(start(state, addr).await?)
+        } else {
+            None
+        };
 
-        Ok(())
+        Ok(Self { handle })
     }
 
-    pub async fn bind(&self, state: &State, addr: Option<SocketAddr>) -> Result<(), Error> {
+    pub async fn bind(
+        &mut self,
+        state: &State,
+        addr: Option<SocketAddr>,
+    ) -> Result<(), ServiceError> {
         let entry = state.config.entry(BIND_METRICS_KEY);
 
         if let Some(addr) = addr {
             let handle = start(state, addr).await?;
-            *self.handle.lock().unwrap() = Some(handle);
+            self.handle = Some(handle);
             entry.set(&addr).await?;
         } else {
-            self.handle.lock().unwrap().take();
+            self.handle = None;
             entry.remove().await?;
         }
 
         Ok(())
     }
 
-    pub fn close(&self) {
-        self.handle.lock().unwrap().take();
+    pub fn close(&mut self) {
+        self.handle = None;
     }
 }
 
-async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Error> {
+async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, ServiceError> {
     let recorder = PrometheusBuilder::new().build_recorder();
     let recorder_handle = recorder.handle();
 
@@ -101,7 +97,7 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
         ),
     }
 
-    let tls_acceptor = TlsAcceptor::from(state.get_server_config().await?);
+    let tls_acceptor = TlsAcceptor::from(state.remote_server_config().await?);
 
     task::spawn(collect(
         collect_acceptor,
@@ -390,4 +386,3 @@ where
         Pin::new(&mut self.0).poll_write_vectored(cx, bufs)
     }
 }
-*/

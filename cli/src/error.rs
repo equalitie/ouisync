@@ -15,14 +15,8 @@ pub(crate) enum Error {
     RepositoryNotFound,
     #[error("repository name is invalid")]
     RepositoryNameInvalid,
-    #[error("config error")]
-    Config(#[from] ConfigError),
     #[error("I/O error")]
     Io(#[from] io::Error),
-    #[error("TLS certificates not found")]
-    TlsCertificatesNotFound,
-    #[error("TLS keys not found")]
-    TlsKeysNotFound,
     #[error("permission denied")]
     PermissionDenied,
     #[error("server error")]

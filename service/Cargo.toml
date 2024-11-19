@@ -10,23 +10,29 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-bytes          = { workspace = true }
-chrono         = { workspace = true }
-clap           = { workspace = true }
-dirs           = "5.0.1"
-futures-util   = { workspace = true }
-interprocess   = { version = "2.2.1", features = ["tokio"] }
-ouisync        = { path = "../lib" }
-ouisync-bridge = { path = "../bridge" }
-rmp-serde      = { workspace = true }
-serde          = { workspace = true }
-slab           = { workspace = true }
-state_monitor  = { path = "../state_monitor" }
-thiserror      = { workspace = true }
-tokio          = { workspace = true, features = ["signal"] }
-tokio-stream   = { workspace = true }
-tokio-util     = { workspace = true, features = ["codec"] }
-tracing        = { workspace = true }
+bytes                       = { workspace = true }
+chrono                      = { workspace = true }
+clap                        = { workspace = true }
+dirs                        = "5.0.1"
+futures-util                = { workspace = true }
+hyper                       = { version = "1.4.1", features = ["server", "http1"] }
+interprocess                = { version = "2.2.1", features = ["tokio"] }
+maxminddb                   = "0.24.0"
+metrics                     = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+ouisync                     = { path = "../lib" }
+ouisync-bridge              = { path = "../bridge" }
+rmp-serde                   = { workspace = true }
+serde                       = { workspace = true }
+scoped_task                 = { path = "../scoped_task" }
+slab                        = { workspace = true }
+state_monitor               = { path = "../state_monitor" }
+thiserror                   = { workspace = true }
+tokio                       = { workspace = true, features = ["signal"] }
+tokio-rustls                = { workspace = true }
+tokio-stream                = { workspace = true }
+tokio-util                  = { workspace = true, features = ["codec"] }
+tracing                     = { workspace = true }
 
 [dev-dependencies]
-rand           = { workspace = true }
+rand                        = { workspace = true }

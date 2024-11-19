@@ -38,52 +38,12 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
         _context: &SessionContext,
     ) -> Result<Self::Response, Self::Error> {
         match request {
-            Request::Start { .. } => unimplemented!(),
             Request::BindRpc { addrs } => Ok(self
                 .state
                 .rpc_servers
                 .set(self.state.clone(), &addrs)
                 .await?
                 .into()),
-            Request::BindMetrics { addr } => Ok(self
-                .state
-                .metrics_server
-                .bind(&self.state, addr)
-                .await?
-                .into()),
-            Request::Create {
-                name,
-                share_token,
-                password,
-                read_password,
-                write_password,
-            } => {
-                let share_token = share_token
-                    .as_deref()
-                    .map(str::parse::<ShareToken>)
-                    .transpose()
-                    .map_err(|error| ProtocolError::new(format!("invalid share token: {error}")))?;
-
-                let kind = match (share_token, name) {
-                    (Some(share_token), Some(name)) => CreateRepositoryMethod::Import {
-                        share_token: share_token.with_name(name),
-                    },
-                    (Some(share_token), None) => CreateRepositoryMethod::Import { share_token },
-                    (None, Some(name)) => CreateRepositoryMethod::Incept { name },
-                    (None, None) => unreachable!(),
-                };
-
-                let read_password = read_password
-                    .or_else(|| password.as_ref().cloned())
-                    .map(Password::from);
-                let write_password = write_password.or(password).map(Password::from);
-
-                self.state
-                    .create_repository(kind, read_password, write_password)
-                    .await?;
-
-                Ok(().into())
-            }
             Request::Delete { name } => {
                 self.state.delete_repository(&name).await?;
                 Ok(().into())

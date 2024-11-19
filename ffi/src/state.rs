@@ -4,7 +4,7 @@ use crate::{
     registry::{Handle, SharedRegistry},
     repository::Repositories,
 };
-use ouisync_bridge::{config::ConfigStore, transport};
+use ouisync_bridge::{config::ConfigStore, logger, transport};
 use ouisync_lib::Network;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
@@ -29,8 +29,11 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub fn new(configs_path: PathBuf, root_monitor: StateMonitor) -> Self {
+    pub fn new(configs_path: PathBuf) -> Self {
         let config = ConfigStore::new(configs_path);
+        let root_monitor = StateMonitor::make_root();
+
+        logger::create_panic_counter(&root_monitor);
 
         let network = Network::new(
             root_monitor.make_child("Network"),
