@@ -1,0 +1,30 @@
+[package]
+name = "ouisync-service"
+description = "Secure P2P file sharing (service)"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow         = { workspace = true }
+bytes          = { workspace = true }
+clap           = { workspace = true }
+dirs           = "5.0.1"
+futures-util   = { workspace = true }
+interprocess   = { version = "2.2.1", features = ["tokio"] }
+ouisync        = { path = "../lib" }
+ouisync-bridge = { path = "../bridge" }
+rmp-serde      = { workspace = true }
+serde          = { workspace = true }
+slab           = { workspace = true }
+state_monitor  = { path = "../state_monitor" }
+thiserror      = { workspace = true }
+tokio          = { workspace = true, features = ["signal"] }
+tokio-stream   = { workspace = true }
+tokio-util     = { workspace = true, features = ["codec"] }
+tracing        = { workspace = true }
+

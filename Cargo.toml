@@ -9,6 +9,7 @@ members = [
     "net",
     "rand",
     "scoped_task",
+    "service",
     "state_monitor",
     "tracing_fmt",
     "utils/benchtool",
