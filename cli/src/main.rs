@@ -5,16 +5,12 @@ mod options;
 mod repository;
 mod server;
 mod state;
-mod utils;
 
 use clap::Parser;
 use client::ClientError;
 use options::{Command, Options};
-use ouisync_service::{protocol::ProtocolError, ServiceError};
+use ouisync_service::Error as ServerError;
 use std::{fmt, process::ExitCode};
-
-pub(crate) const APP_NAME: &str = "ouisync";
-pub(crate) const DB_EXTENSION: &str = "ouisyncdb";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -40,12 +36,12 @@ async fn main() -> ExitCode {
 
 #[derive(Debug)]
 enum Error {
-    Server(ServiceError),
+    Server(ServerError),
     Client(ClientError),
 }
 
-impl From<ServiceError> for Error {
-    fn from(src: ServiceError) -> Self {
+impl From<ServerError> for Error {
+    fn from(src: ServerError) -> Self {
         Self::Server(src)
     }
 }

@@ -3,13 +3,14 @@ pub mod transport;
 
 mod error;
 mod metrics;
+mod repository;
 mod state;
+mod utils;
 
-pub use error::ServiceError;
-use metrics::MetricsServer;
-pub use state::StateError;
+pub use error::Error;
 
 use futures_util::SinkExt;
+use metrics::MetricsServer;
 use protocol::{DecodeError, Message, ProtocolError, Request, Response, ServerPayload};
 use slab::Slab;
 use state::State;
@@ -28,10 +29,7 @@ pub struct Service {
 }
 
 impl Service {
-    pub async fn init(
-        local_socket_path: PathBuf,
-        config_dir: PathBuf,
-    ) -> Result<Self, ServiceError> {
+    pub async fn init(local_socket_path: PathBuf, config_dir: PathBuf) -> Result<Self, Error> {
         let state = State::init(&config_dir).await?;
         let local_server = LocalServer::bind(&local_socket_path).await?;
 
@@ -46,7 +44,7 @@ impl Service {
         })
     }
 
-    pub async fn run(&mut self) -> Result<(), ServiceError> {
+    pub async fn run(&mut self) -> Result<(), Error> {
         loop {
             select! {
                 result = self.local_server.accept() => {
@@ -64,7 +62,7 @@ impl Service {
         }
     }
 
-    pub async fn close(&mut self) -> Result<(), ServiceError> {
+    pub async fn close(&mut self) -> Result<(), Error> {
         self.metrics_server.close();
         self.state.close().await?;
 
@@ -113,13 +111,31 @@ impl Service {
             Request::MetricsBind { addr } => {
                 Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
+            Request::RepositoryFind(pattern) => Ok(self
+                .state
+                .find_repositories(&pattern)
+                .collect::<Vec<_>>()
+                .into()),
             Request::RepositoryCreate {
                 name,
                 read_secret,
                 write_secret,
                 share_token,
             } => {
-                todo!()
+                let handle = self
+                    .state
+                    .create_repository(name, read_secret, write_secret, share_token)
+                    .await?;
+
+                Ok(vec![handle].into())
+            }
+            Request::RepositoryDelete(handle) => {
+                self.state.delete_repository(handle).await?;
+                Ok(().into())
+            }
+            Request::RepositoryExport { handle, output } => {
+                self.state.export_repository(handle, output).await?;
+                Ok(().into())
             }
         }
     }

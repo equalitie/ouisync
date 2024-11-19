@@ -23,7 +23,6 @@ use tokio_stream::StreamExt;
 // Config keys
 pub(crate) const OPEN_ON_START: &str = "open_on_start";
 const MOUNT_POINT_KEY: &str = "mount_point";
-const EXPIRATION_KEY: &str = "expiration";
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub(crate) struct RepositoryName(Arc<str>);
@@ -243,31 +242,6 @@ impl RepositoryHolder {
         Ok(())
     }
 
-    pub async fn set_repository_expiration(&self, value: Option<Duration>) -> Result<(), Error> {
-        if let Some(value) = value {
-            self.repository
-                .metadata()
-                .set(
-                    EXPIRATION_KEY,
-                    value.as_millis().try_into().unwrap_or(u64::MAX),
-                )
-                .await?
-        } else {
-            self.repository.metadata().remove(EXPIRATION_KEY).await?
-        }
-
-        Ok(())
-    }
-
-    pub async fn repository_expiration(&self) -> Result<Option<Duration>, Error> {
-        Ok(self
-            .repository
-            .metadata()
-            .get(EXPIRATION_KEY)
-            .await?
-            .map(Duration::from_millis))
-    }
-
     pub async fn close(&self) -> Result<(), Error> {
         self.unmount().await;
 
@@ -415,126 +389,8 @@ pub(crate) enum FindError {
     Ambiguous,
 }
 
-// Find repositories that are marked to be opened on startup and open them.
-pub(crate) async fn find_all(
-    dirs: &Dirs,
-    network: &Network,
-    config: &ConfigStore,
-    monitor: &StateMonitor,
-) -> RepositoryMap {
-    let repositories = RepositoryMap::new();
 
-    if !fs::try_exists(&dirs.store_dir).await.unwrap_or(false) {
-        return repositories;
-    }
 
-    let mut walkdir = utils::walk_dir(&dirs.store_dir);
-
-    while let Some(entry) = walkdir.next().await {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                tracing::error!(%error, "Failed to read directory entry");
-                continue;
-            }
-        };
-
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let path = entry.path();
-
-        if path.extension() != Some(OsStr::new(DB_EXTENSION)) {
-            continue;
-        }
-
-        let repository =
-            match ouisync_bridge::repository::open(path.to_path_buf(), None, config, monitor).await
-            {
-                Ok(repository) => repository,
-                Err(error) => {
-                    tracing::error!(?error, ?path, "Failed to open repository");
-                    continue;
-                }
-            };
-
-        let metadata = repository.metadata();
-
-        if !metadata
-            .get(OPEN_ON_START)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(false)
-        {
-            continue;
-        }
-
-        let name = path
-            .strip_prefix(&dirs.store_dir)
-            .unwrap_or(path)
-            .with_extension("")
-            .to_string_lossy()
-            .into_owned()
-            .try_into()
-            // This unwrap should be ok because RepositoryName is only not allowed to start with
-            // "/" or contain "..", none of which can happen here.
-            .unwrap();
-
-        tracing::info!(%name, "Repository opened");
-
-        let holder = RepositoryHolder::new(repository, name, network).await;
-        let holder = Arc::new(holder);
-        holder.mount(&dirs.mount_dir).await.ok();
-
-        assert!(repositories.try_insert(holder));
-    }
-
-    repositories
-}
-
-pub(crate) async fn delete_store(store_dir: &Path, repository_name: &str) -> io::Result<()> {
-    ouisync_lib::delete_repository(store_path(store_dir, repository_name)).await?;
-
-    // Remove ancestors directories up to `store_dir` but only if they are empty.
-    for dir in Utf8Path::new(repository_name).ancestors().skip(1) {
-        let path = store_dir.join(dir);
-
-        if path == store_dir {
-            break;
-        }
-
-        // TODO: When `io::ErrorKind::DirectoryNotEmpty` is stabilized, we should break only on that
-        // error and propagate the rest.
-        if let Err(error) = fs::remove_dir(&path).await {
-            tracing::error!(
-                repo = repository_name,
-                path = %path.display(),
-                ?error,
-                "Failed to remove repository store subdirectory"
-            );
-            break;
-        }
-    }
-
-    Ok(())
-}
-
-pub(crate) fn store_path(store_dir: &Path, repository_name: &str) -> PathBuf {
-    let suffix = Path::new(repository_name);
-    let extension = if let Some(extension) = suffix.extension() {
-        let mut extension = extension.to_owned();
-        extension.push(".");
-        extension.push(DB_EXTENSION);
-
-        Cow::Owned(extension)
-    } else {
-        Cow::Borrowed(DB_EXTENSION.as_ref())
-    };
-
-    store_dir.join(suffix).with_extension(extension)
-}
 
 #[cfg(test)]
 mod tests {

@@ -1,3 +1,4 @@
+use crate::repository::RepositoryHandle;
 use chrono::{DateTime, SecondsFormat, Utc};
 use ouisync::{PeerAddr, PeerInfo, PeerSource, PeerState, StorageSize};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,8 @@ pub enum Response {
     Bool(bool),
     String(String),
     Strings(Vec<String>),
+    Repository(RepositoryHandle),
+    Repositories(Vec<RepositoryHandle>),
     PeerInfo(Vec<PeerInfo>),
     PeerAddrs(Vec<PeerAddr>),
     SocketAddrs(Vec<SocketAddr>),
@@ -54,6 +57,18 @@ impl From<Vec<String>> for Response {
     }
 }
 
+impl From<RepositoryHandle> for Response {
+    fn from(value: RepositoryHandle) -> Self {
+        Self::Repository(value)
+    }
+}
+
+impl From<Vec<RepositoryHandle>> for Response {
+    fn from(value: Vec<RepositoryHandle>) -> Self {
+        Self::Repositories(value)
+    }
+}
+
 impl From<Vec<PeerInfo>> for Response {
     fn from(value: Vec<PeerInfo>) -> Self {
         Self::PeerInfo(value)
@@ -91,6 +106,14 @@ impl fmt::Display for Response {
             Self::Bool(value) => write!(f, "{value}"),
             Self::String(value) => write!(f, "{value}"),
             Self::Strings(value) => {
+                for item in value {
+                    writeln!(f, "{item}")?;
+                }
+
+                Ok(())
+            }
+            Self::Repository(value) => write!(f, "{value}"),
+            Self::Repositories(value) => {
                 for item in value {
                     writeln!(f, "{item}")?;
                 }

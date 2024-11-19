@@ -2,7 +2,10 @@ use crate::options::ClientCommand;
 use futures_util::SinkExt;
 use ouisync_lib::{crypto::Password, SetLocalSecret, ShareToken};
 use ouisync_service::{
-    protocol::{Message, MessageId, Notification, ProtocolError, Request, Response, ServerPayload},
+    protocol::{
+        Message, MessageId, Pattern, ProtocolError, RepositoryHandle, Request, Response,
+        ServerPayload,
+    },
     transport::{self, LocalClientReader, LocalClientWriter, ReadError, WriteError},
 };
 use std::{
@@ -14,7 +17,7 @@ use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_stream::StreamExt;
 
 pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
-    let (mut reader, mut writer) = connect(&socket_path).await?;
+    let mut client = LocalClient::connect(&socket_path).await?;
 
     let request = match command {
         ClientCommand::RemoteControl { addrs } => Request::RemoteControlBind { addrs },
@@ -63,12 +66,13 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
             }
         }
         ClientCommand::DeleteRepository { name } => {
-            todo!()
-        } // Request::Open { name, password } => {
-          //     let password = get_or_read(password, "input password").await?;
-          //     Request::Open { name, password }
-          // }
-          // Request::Share {
+            let handle = client.find_repository(name).await?;
+            Request::RepositoryDelete(handle)
+        }
+        ClientCommand::ExportRepository { name, output } => {
+            let handle = client.find_repository(name).await?;
+            Request::RepositoryExport { handle, output }
+        } // Request::Share {
           //     name,
           //     mode,
           //     password,
@@ -99,48 +103,65 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
           // _ => request,
     };
 
-    let response = invoke(&mut reader, &mut writer, request).await?;
+    let response = client.invoke(request).await?;
     println!("{}", response);
 
-    writer.close().await?;
+    client.close().await?;
 
     Ok(())
 }
 
-async fn connect(
-    socket_path: &Path,
-) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
-    // TODO: if the server is not running, spin it up ourselves
-    match transport::connect(socket_path).await {
-        Ok(client) => Ok(client),
-        Err(error) => Err(ClientError::Connect(error)),
-    }
+struct LocalClient {
+    reader: LocalClientReader,
+    writer: LocalClientWriter,
 }
 
-async fn invoke(
-    reader: &mut LocalClientReader,
-    writer: &mut LocalClientWriter,
-    request: Request,
-) -> Result<Response, ClientError> {
-    writer
-        .send(Message {
-            id: MessageId::next(),
-            payload: request,
-        })
-        .await?;
-
-    let message = match reader.next().await {
-        Some(Ok(message)) => message,
-        Some(Err(error)) => return Err(error.into()),
-        None => return Err(ClientError::Disconnected),
-    };
-
-    match message.payload {
-        ServerPayload::Success(response) => Ok(response),
-        ServerPayload::Failure(error) => Err(error.into()),
-        ServerPayload::Notification(notification) => {
-            Err(ClientError::UnexpectedNotification(notification))
+impl LocalClient {
+    async fn connect(socket_path: &Path) -> Result<Self, ClientError> {
+        // TODO: if the server is not running, spin it up ourselves
+        match transport::connect(socket_path).await {
+            Ok((reader, writer)) => Ok(Self { reader, writer }),
+            Err(error) => Err(ClientError::Connect(error)),
         }
+    }
+
+    async fn invoke(&mut self, request: Request) -> Result<Response, ClientError> {
+        self.writer
+            .send(Message {
+                id: MessageId::next(),
+                payload: request,
+            })
+            .await?;
+
+        let message = match self.reader.next().await {
+            Some(Ok(message)) => message,
+            Some(Err(error)) => return Err(error.into()),
+            None => return Err(ClientError::Disconnected),
+        };
+
+        match message.payload {
+            ServerPayload::Success(response) => Ok(response),
+            ServerPayload::Failure(error) => Err(error.into()),
+            ServerPayload::Notification(_) => Err(ClientError::UnexpectedNotification),
+        }
+    }
+
+    async fn find_repository(&mut self, pattern: String) -> Result<RepositoryHandle, ClientError> {
+        let response = self
+            .invoke(Request::RepositoryFind(Pattern::from(pattern)))
+            .await?;
+
+        match response {
+            Response::Repositories(handles) if handles.len() == 1 => Ok(handles[0]),
+            Response::Repository(handle) => Ok(handle),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    async fn close(&mut self) -> Result<(), ClientError> {
+        self.writer.close().await?;
+
+        Ok(())
     }
 }
 
@@ -189,8 +210,10 @@ pub(crate) enum ClientError {
     Connect(#[source] io::Error),
     #[error("connection closed by server")]
     Disconnected,
-    #[error("unexpected notification: {0:?}")]
-    UnexpectedNotification(Notification),
+    #[error("unexpected response")]
+    UnexpectedResponse,
+    #[error("unexpected notification")]
+    UnexpectedNotification,
     #[error("I/O error")]
     Io(#[from] io::Error),
 }

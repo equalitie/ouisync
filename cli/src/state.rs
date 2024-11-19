@@ -21,10 +21,6 @@ use std::{
 };
 use tokio::{sync::OnceCell, task, time};
 
-const DEFAULT_REPOSITORY_EXPIRATION_MILLIS: ConfigKey<u64> = ConfigKey::new(
-    "default_repository_expiration",
-    "Default time in milliseconds after repository is deleted if all its blocks expired",
-);
 use tokio_rustls::rustls;
 
 pub(crate) struct State {
@@ -154,97 +150,6 @@ impl State {
         Ok(())
     }
 
-    pub async fn create_repository(
-        &self,
-        method: CreateRepositoryMethod,
-        read_password: Option<Password>,
-        write_password: Option<Password>,
-    ) -> Result<Arc<RepositoryHolder>, Error> {
-        let (name, share_token) = match method {
-            CreateRepositoryMethod::Incept { name } => (name, None),
-            CreateRepositoryMethod::Import { share_token } => {
-                (share_token.suggested_name().to_owned(), Some(share_token))
-            }
-        };
-
-        if self.repositories.contains(&name) {
-            Err(Error::RepositoryExists)?;
-        }
-
-        let name = RepositoryName::try_from(name)?;
-
-        let store_path = self.store_path(name.as_ref());
-
-        let repository = ouisync_bridge::repository::create(
-            store_path,
-            read_password.map(SetLocalSecret::Password),
-            write_password.map(SetLocalSecret::Password),
-            share_token,
-            &self.config,
-            &self.repositories_monitor,
-        )
-        .await?;
-
-        let holder = RepositoryHolder::new(repository, name.clone(), &self.network).await;
-        let holder = Arc::new(holder);
-
-        if !self.repositories.try_insert(holder.clone()) {
-            Err(Error::RepositoryExists)?;
-        }
-
-        holder
-            .repository
-            .metadata()
-            .set(OPEN_ON_START, true)
-            .await
-            .ok();
-
-        let value = self.default_repository_expiration().await?;
-        holder.set_repository_expiration(value).await?;
-
-        tracing::info!(%name, "repository created");
-
-        Ok(holder)
-    }
-
-    pub async fn delete_repository(&self, name: &str) -> Result<(), Error> {
-        if let Some(holder) = self.repositories.remove(name) {
-            holder.close().await?;
-        }
-
-        repository::delete_store(&self.store_dir, name).await?;
-
-        Ok(())
-    }
-
-    pub async fn set_default_repository_expiration(
-        &self,
-        value: Option<Duration>,
-    ) -> Result<(), Error> {
-        let entry = self.config.entry(DEFAULT_REPOSITORY_EXPIRATION_MILLIS);
-
-        if let Some(value) = value {
-            entry
-                .set(&value.as_millis().try_into().unwrap_or(u64::MAX))
-                .await?;
-        } else {
-            entry.remove().await?;
-        }
-
-        Ok(())
-    }
-
-    pub async fn default_repository_expiration(&self) -> Result<Option<Duration>, Error> {
-        let entry = self
-            .config
-            .entry::<u64>(DEFAULT_REPOSITORY_EXPIRATION_MILLIS);
-
-        match entry.get().await {
-            Ok(millis) => Ok(Some(Duration::from_millis(millis))),
-            Err(ouisync_bridge::config::ConfigError::NotFound) => Ok(None),
-            Err(error) => Err(error.into()),
-        }
-    }
 
     /// Starts task to periodically delete expired repositories.
     pub fn start_delete_expired_repositories(

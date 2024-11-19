@@ -44,34 +44,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 .set(self.state.clone(), &addrs)
                 .await?
                 .into()),
-            Request::Delete { name } => {
-                self.state.delete_repository(&name).await?;
-                Ok(().into())
-            }
-            Request::Open { name, password } => {
-                let name = RepositoryName::try_from(name)?;
-                let password = password.map(Password::from);
-
-                self.state.open_repository(name, password).await?;
-
-                Ok(().into())
-            }
-            Request::Close { name } => {
-                self.state.close_repository(&name).await?;
-                Ok(().into())
-            }
-            Request::Export { name, output } => {
-                let holder = self.state.repositories.find(&name)?;
-                let output = if output.extension().is_some() {
-                    output
-                } else {
-                    output.with_extension(DB_EXTENSION)
-                };
-
-                holder.repository.export(&output).await?;
-
-                Ok(output.to_string_lossy().into_owned().into())
-            }
             Request::Import {
                 name,
                 mode,

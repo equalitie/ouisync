@@ -1,11 +1,10 @@
-use crate::APP_NAME;
 use clap::{Parser, Subcommand};
 use ouisync_bridge::logger::{LogColor, LogFormat};
 use ouisync_service::protocol::ImportMode;
 use std::{env, net::SocketAddr, path::PathBuf};
 
 #[derive(Parser, Debug)]
-#[command(name = APP_NAME, version, about)]
+#[command(name = "ouisync", version, about)]
 pub(crate) struct Options {
     /// Local socket (unix domain socket or windows named pipe) to connect to (if client) or to
     /// bind to (if server)
@@ -98,37 +97,22 @@ pub(crate) enum ClientCommand {
         /// Name of the repository to delete
         name: String,
     },
-    /*
-
-    /// Open a repository
-    Open {
-        #[arg(short, long)]
-        name: String,
-
-        /// Local password
-        #[arg(short = 'P', long)]
-        password: Option<String>,
-    },
-    /// Close a repository
-    Close {
-        #[arg(short, long)]
-        name: String,
-    },
     /// Export a repository to a file
     ///
     /// Note currently this strips write access and removes local password (if any) from the
     /// exported repository. So if the repository is currently opened in write mode or read mode,
     /// it's exported in read mode. If it's in blind mode it's also exported in blind mode. This
     /// limitation might be lifted in the future.
-    Export {
+    #[command(visible_alias = "export")]
+    ExportRepository {
         /// Name of the repository to export
-        #[arg(short, long)]
         name: String,
 
         /// File to export the repository to
         #[arg(value_name = "PATH")]
         output: PathBuf,
     },
+    /*
     /// Import a repository from a file
     Import {
         /// Name for the repository. Default is the filename the repository is imported from.
@@ -355,7 +339,7 @@ fn default_config_dir() -> PathBuf {
         .unwrap_or_else(|| {
             dirs::config_dir()
                 .expect("config dir not defined")
-                .join(APP_NAME)
+                .join("ouisync")
         })
 }
 
@@ -374,7 +358,7 @@ mod platform {
         dirs::runtime_dir()
             .or_else(dirs::cache_dir)
             .expect("neither runtime dir nor cache dir defined")
-            .join(APP_NAME)
+            .join("ouisync")
             .with_extension("sock")
     }
 

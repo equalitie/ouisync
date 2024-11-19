@@ -7,12 +7,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub(crate) enum Error {
-    #[error("repository error")]
-    Repository(#[from] ouisync_lib::Error),
-    #[error("repository already exists")]
-    RepositoryExists,
-    #[error("repository not found")]
-    RepositoryNotFound,
     #[error("repository name is invalid")]
     RepositoryNameInvalid,
     #[error("I/O error")]

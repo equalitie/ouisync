@@ -1,25 +1,34 @@
+use crate::repository::RepositoryHandle;
 use ouisync::{crypto::Password, AccessMode, PeerAddr, SetLocalSecret, ShareToken, StorageSize};
 use serde::{Deserialize, Serialize};
-use std::{convert::Infallible, net::SocketAddr, path::PathBuf};
+use std::net::SocketAddr;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[expect(clippy::large_enum_variant)]
 pub enum Request {
     /// Enable/disable remote control endpoint
-    RemoteControlBind { addrs: Vec<SocketAddr> },
+    RemoteControlBind {
+        addrs: Vec<SocketAddr>,
+    },
     /// Enable/disable metrics collection endpoint
-    MetricsBind { addr: Option<SocketAddr> },
+    MetricsBind {
+        addr: Option<SocketAddr>,
+    },
+    RepositoryFind(Pattern),
     RepositoryCreate {
         name: String,
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
         share_token: Option<ShareToken>,
     },
-    /*
     /// Delete a repository
-    DeleteRepository {
-        name: String,
+    RepositoryDelete(RepositoryHandle),
+    /// Export repository to a file
+    RepositoryExport {
+        handle: RepositoryHandle,
+        output: String,
     },
+    /*
     Open {
         name: String,
         password: Option<String>,
@@ -210,6 +219,32 @@ pub enum Request {
         addr: Option<SocketAddr>,
     },
     */
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Pattern {
+    Exact(String),
+    Prefix(String),
+}
+
+impl Pattern {
+    pub fn term(&self) -> &str {
+        match self {
+            Self::Exact(term) => term,
+            Self::Prefix(term) => term,
+        }
+    }
+}
+
+impl From<String> for Pattern {
+    fn from(mut s: String) -> Self {
+        if let Some(prefix) = s.strip_suffix('*') {
+            s.truncate(prefix.len());
+            Self::Prefix(s)
+        } else {
+            Self::Exact(s)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

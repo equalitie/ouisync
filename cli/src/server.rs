@@ -1,10 +1,10 @@
 use crate::options::ServerCommand;
 use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
-use ouisync_service::{Service, ServiceError};
+use ouisync_service::{Error, Service};
 use std::{io, path::PathBuf};
 use tokio::select;
 
-pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), ServiceError> {
+pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), Error> {
     let ServerCommand::Start {
         config_dir,
         log_format,
@@ -26,11 +26,6 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), S
     };
 
     service.close().await?;
-
-    // const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
-    // let state = State::init(&dirs)
-    //     .await?
-    //     .start_delete_expired_repositories(REPOSITORY_EXPIRATION_POLL_INTERVAL);
 
     Ok(())
 }

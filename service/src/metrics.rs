@@ -1,6 +1,6 @@
 mod geo_ip;
 
-use crate::{error::ServiceError, state::State};
+use crate::{error::Error, state::State};
 use geo_ip::{CountryCode, GeoIp};
 use hyper::{server::conn::http1, service::service_fn, Response};
 use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
@@ -39,7 +39,7 @@ pub(crate) struct MetricsServer {
 }
 
 impl MetricsServer {
-    pub async fn init(state: &State) -> Result<Self, ServiceError> {
+    pub async fn init(state: &State) -> Result<Self, Error> {
         let entry = state.config.entry(BIND_METRICS_KEY);
 
         let addr = match entry.get().await {
@@ -57,11 +57,7 @@ impl MetricsServer {
         Ok(Self { handle })
     }
 
-    pub async fn bind(
-        &mut self,
-        state: &State,
-        addr: Option<SocketAddr>,
-    ) -> Result<(), ServiceError> {
+    pub async fn bind(&mut self, state: &State, addr: Option<SocketAddr>) -> Result<(), Error> {
         let entry = state.config.entry(BIND_METRICS_KEY);
 
         if let Some(addr) = addr {
@@ -81,7 +77,7 @@ impl MetricsServer {
     }
 }
 
-async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, ServiceError> {
+async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Error> {
     let recorder = PrometheusBuilder::new().build_recorder();
     let recorder_handle = recorder.handle();
 
