@@ -1,3 +1,4 @@
+/*
 use crate::repository::RepositoryNameInvalid;
 use ouisync_bridge::{config::ConfigError, protocol::remote::ServerError, repository::OpenError};
 use ouisync_lib::StoreError;
@@ -48,3 +49,4 @@ impl From<StoreError> for Error {
         Self::Repository(error.into())
     }
 }
+*/

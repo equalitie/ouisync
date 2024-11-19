@@ -1,27 +1,17 @@
-use crate::{
-    handler::local::LocalHandler,
-    options::Dirs,
-    protocol::{ProtocolError, Request, Response},
-    state::State,
-    transport::{local::LocalClient, native::NativeClient},
+use futures_util::SinkExt;
+use ouisync_service::{
+    protocol::{Message, MessageId, Request, ServerError, ServerPayload},
+    transport::{self, LocalClientReader, LocalClientWriter},
 };
-use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
-use state_monitor::StateMonitor;
 use std::{
     env, io,
     path::{Path, PathBuf},
 };
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio_stream::StreamExt;
 
-pub(crate) async fn run(
-    dirs: Dirs,
-    socket: PathBuf,
-    log_format: LogFormat,
-    log_color: LogColor,
-    request: Request,
-) -> Result<(), ProtocolError> {
-    let _logger = Logger::new(None, String::new(), None, log_format, log_color)?;
-    let client = connect(&socket, &dirs).await?;
+pub(crate) async fn run(socket_path: PathBuf, request: Request) -> Result<(), ServerError> {
+    let (mut reader, mut writer) = connect(&socket_path).await?;
 
     let request = match request {
         Request::Create {
@@ -79,53 +69,42 @@ pub(crate) async fn run(
         _ => request,
     };
 
-    let response = client.invoke(request).await?;
-    println!("{response}");
+    writer
+        .send(Message {
+            id: MessageId::next(),
+            payload: request,
+        })
+        .await?;
 
-    client.close().await;
+    let message = match reader.next().await {
+        Some(Ok(message)) => message,
+        Some(Err(error)) => return Err(error.into()),
+        None => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
+    };
 
-    Ok(())
-}
+    writer.close().await?;
 
-async fn connect(path: &Path, dirs: &Dirs) -> Result<Client, ProtocolError> {
-    match LocalClient::connect(path).await {
-        Ok(client) => Ok(Client::Local(client)),
-        Err(error) => match error.kind() {
-            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
-                let state = State::init(dirs, StateMonitor::make_root()).await?;
-                let handler = LocalHandler::new(state);
-
-                Ok(Client::Native(NativeClient::new(handler)))
-            }
-            _ => Err(error.into()),
-        },
-    }
-}
-
-enum Client {
-    Local(LocalClient),
-    Native(NativeClient),
-}
-
-impl Client {
-    async fn invoke(&self, request: Request) -> Result<Response, ProtocolError> {
-        match self {
-            Self::Local(client) => client.invoke(request).await,
-            Self::Native(client) => client.invoke(request).await,
+    match message.payload {
+        ServerPayload::Success(response) => {
+            println!("{}", response);
+            Ok(())
         }
+        ServerPayload::Failure(error) => Err(error),
+        ServerPayload::Notification(notification) => Err(ServerError::new(format!(
+            "unexpected notification: {:?}",
+            notification
+        ))),
     }
+}
 
-    async fn close(&self) {
-        match self {
-            Self::Native(client) => client.close().await,
-            Self::Local(_) => (),
-        }
-    }
+async fn connect(socket_path: &Path) -> io::Result<(LocalClientReader, LocalClientWriter)> {
+    // TODO: if the server is not running, spin it up ourselves
+    transport::connect(socket_path).await
 }
 
 /// If value is `Some("-")`, reads the value from stdin, otherwise returns it unchanged.
 // TODO: support invisible input for passwords, etc.
-async fn get_or_read(value: Option<String>, prompt: &str) -> Result<Option<String>, io::Error> {
+async fn get_or_read(value: Option<String>, prompt: &str) -> io::Result<Option<String>> {
     if value
         .as_ref()
         .map(|value| value.trim() == "-")

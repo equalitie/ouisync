@@ -10,8 +10,8 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-anyhow         = { workspace = true }
 bytes          = { workspace = true }
+chrono         = { workspace = true }
 clap           = { workspace = true }
 dirs           = "5.0.1"
 futures-util   = { workspace = true }
@@ -28,3 +28,5 @@ tokio-stream   = { workspace = true }
 tokio-util     = { workspace = true, features = ["codec"] }
 tracing        = { workspace = true }
 
+[dev-dependencies]
+rand           = { workspace = true }

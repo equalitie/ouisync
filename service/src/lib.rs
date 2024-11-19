@@ -1,6 +1,5 @@
 pub mod protocol;
-
-mod transport;
+pub mod transport;
 
 use futures_util::SinkExt;
 use protocol::{DecodeError, Message, Request, Response, ServerError, ServerPayload};
@@ -19,7 +18,7 @@ pub struct Service {
 
 impl Service {
     pub async fn init(local_socket_path: PathBuf, config_dir: PathBuf) -> io::Result<Self> {
-        let local_server = LocalServer::bind(local_socket_path).await?;
+        let local_server = LocalServer::bind(&local_socket_path).await?;
 
         Ok(Self {
             local_server,

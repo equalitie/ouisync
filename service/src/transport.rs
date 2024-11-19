@@ -2,7 +2,7 @@ use crate::protocol::{DecodeError, EncodeError, Message, Request};
 use bytes::{buf::Writer, Buf, BufMut, BytesMut};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use interprocess::local_socket::{
-    tokio::{Listener, RecvHalf, SendHalf},
+    tokio::{Listener, RecvHalf, SendHalf, Stream as Socket},
     traits::tokio::{Listener as _, Stream as _},
     GenericFilePath, ListenerOptions, ToFsName,
 };
@@ -10,7 +10,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::{
     io,
     marker::PhantomData,
-    path::PathBuf,
+    path::Path,
     pin::Pin,
     task::{ready, Context, Poll},
 };
@@ -24,7 +24,7 @@ pub(crate) struct LocalServer {
 }
 
 impl LocalServer {
-    pub async fn bind(socket_path: PathBuf) -> io::Result<Self> {
+    pub async fn bind(socket_path: &Path) -> io::Result<Self> {
         let listener = socket_path
             .to_fs_name::<GenericFilePath>()
             .and_then(|name| {
@@ -41,27 +41,41 @@ impl LocalServer {
         let stream = self.listener.accept().await?;
         let (reader, writer) = stream.split();
 
-        let reader = LocalReader {
-            reader: FramedRead::new(reader, LengthDelimitedCodec::new()),
-            _type: PhantomData,
-        };
-
-        let writer = LocalWriter {
-            writer: FramedWrite::new(writer, LengthDelimitedCodec::new()),
-            buffer: BytesMut::new().writer(),
-            _type: PhantomData,
-        };
+        let reader = LocalReader::new(reader);
+        let writer = LocalWriter::new(writer);
 
         Ok((reader, writer))
     }
 }
 
+pub async fn connect(socket_path: &Path) -> io::Result<(LocalClientReader, LocalClientWriter)> {
+    let socket = Socket::connect(socket_path.to_fs_name::<GenericFilePath>()?).await?;
+    let (reader, writer) = socket.split();
+
+    let reader = LocalReader::new(reader);
+    let writer = LocalWriter::new(writer);
+
+    Ok((reader, writer))
+}
+
 pub(crate) type LocalServerReader = LocalReader<Request>;
 pub(crate) type LocalServerWriter = LocalWriter<ServerPayload>;
 
-pub(crate) struct LocalReader<T> {
+pub type LocalClientReader = LocalReader<ServerPayload>;
+pub type LocalClientWriter = LocalWriter<Request>;
+
+pub struct LocalReader<T> {
     reader: FramedRead<RecvHalf, LengthDelimitedCodec>,
     _type: PhantomData<fn() -> T>,
+}
+
+impl<T> LocalReader<T> {
+    fn new(inner: RecvHalf) -> Self {
+        Self {
+            reader: FramedRead::new(inner, LengthDelimitedCodec::new()),
+            _type: PhantomData,
+        }
+    }
 }
 
 impl<T> Stream for LocalReader<T>
@@ -81,10 +95,20 @@ where
     }
 }
 
-pub(crate) struct LocalWriter<T> {
+pub struct LocalWriter<T> {
     writer: FramedWrite<SendHalf, LengthDelimitedCodec>,
     buffer: Writer<BytesMut>,
     _type: PhantomData<fn(&T)>,
+}
+
+impl<T> LocalWriter<T> {
+    fn new(inner: SendHalf) -> Self {
+        Self {
+            writer: FramedWrite::new(inner, LengthDelimitedCodec::new()),
+            buffer: BytesMut::new().writer(),
+            _type: PhantomData,
+        }
+    }
 }
 
 impl<T> Sink<Message<T>> for LocalWriter<T>
@@ -117,7 +141,7 @@ where
 }
 
 #[derive(Error, Debug)]
-pub(crate) enum ReadError {
+pub enum ReadError {
     #[error("failed to receive message")]
     Receive(#[from] io::Error),
     #[error("failed to decode message")]
@@ -125,7 +149,7 @@ pub(crate) enum ReadError {
 }
 
 #[derive(Error, Debug)]
-pub(crate) enum WriteError {
+pub enum WriteError {
     #[error("failed to send message")]
     Send(#[from] io::Error),
     #[error("failed to encode message")]

@@ -29,6 +29,7 @@ metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
+ouisync-service = { path = "../service" }
 ouisync-vfs = { path = "../vfs" }
 rand = { workspace = true }
 scoped_task = { path = "../scoped_task" }

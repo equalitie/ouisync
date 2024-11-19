@@ -1,3 +1,4 @@
+/*
 use crate::{
     error::Error,
     repository::RepositoryHolder,
@@ -180,7 +181,6 @@ fn insert_separators(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::options::Dirs;
     use assert_matches::assert_matches;
     use ouisync_bridge::transport::{
         make_client_config, make_server_config, RemoteClient, RemoteServer,
@@ -470,3 +470,4 @@ mod tests {
         (temp_dir, state, server_addr, client_config)
     }
 }
+*/

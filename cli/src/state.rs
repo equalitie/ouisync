@@ -1,3 +1,4 @@
+/*
 use crate::{
     error::Error,
     metrics::MetricsServer,
@@ -597,3 +598,4 @@ mod tests {
             .unwrap()
     }
 }
+*/

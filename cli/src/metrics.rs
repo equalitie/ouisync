@@ -1,3 +1,4 @@
+/*
 use crate::{
     error::Error,
     geo_ip::{CountryCode, GeoIp},
@@ -389,3 +390,4 @@ where
         Pin::new(&mut self.0).poll_write_vectored(cx, bufs)
     }
 }
+*/

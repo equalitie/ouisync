@@ -1,3 +1,4 @@
+/*
 use crate::{
     protocol::{ImportMode, ProtocolError, QuotaInfo, Request, Response},
     repository::{RepositoryName, RepositoryNameInvalid},
@@ -442,3 +443,4 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
         }
     }
 }
+*/

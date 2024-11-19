@@ -1,54 +1,34 @@
-use crate::{
-    error::Error,
-    handler::{local::LocalHandler, remote::RemoteHandler},
-    options::Dirs,
-    protocol::ProtocolError,
-    state::State,
-    transport::local::LocalServer,
-};
-use ouisync_bridge::{
-    config::{ConfigError, ConfigKey},
-    logger::{LogColor, LogFormat, Logger},
-    transport::RemoteServer,
-};
-use scoped_task::ScopedAbortHandle;
-use state_monitor::StateMonitor;
-use std::{
-    io,
-    net::SocketAddr,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-use tokio::task;
-
-const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
+use ouisync_service::{protocol::ServerError, Service};
+use std::{io, path::PathBuf};
+use tokio::select;
 
 pub(crate) async fn run(
-    dirs: Dirs,
     socket: PathBuf,
+    config_dir: PathBuf,
     log_format: LogFormat,
     log_color: LogColor,
-) -> Result<(), ProtocolError> {
-    let monitor = StateMonitor::make_root();
+) -> Result<(), ServerError> {
     let _logger = Logger::new(
         None,
         String::new(), // log tag, not used here
-        Some(monitor.clone()),
         log_format,
         log_color,
     )?;
 
-    let state = State::init(&dirs, monitor)
-        .await?
-        .start_delete_expired_repositories(REPOSITORY_EXPIRATION_POLL_INTERVAL);
-    let server = LocalServer::bind(socket.as_path())?;
-    let handle = task::spawn(server.run(LocalHandler::new(state.clone())));
+    let mut service = Service::init(socket, config_dir).await?;
 
-    terminated().await?;
+    select! {
+        result = service.run() => result?,
+        result = terminated() => result?,
+    };
 
-    handle.abort();
-    state.close().await;
+    service.close().await?;
+
+    // const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+    // let state = State::init(&dirs)
+    //     .await?
+    //     .start_delete_expired_repositories(REPOSITORY_EXPIRATION_POLL_INTERVAL);
 
     Ok(())
 }
@@ -78,6 +58,7 @@ async fn terminated() -> io::Result<()> {
     tokio::signal::ctrl_c().await
 }
 
+/*
 const BIND_RPC_KEY: ConfigKey<Vec<SocketAddr>> =
     ConfigKey::new("bind_rpc", "Addresses to bind the remote API to");
 
@@ -153,3 +134,4 @@ async fn start(
 
     Ok((handles, local_addrs))
 }
+*/

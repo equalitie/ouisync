@@ -29,7 +29,6 @@ impl Logger {
     pub fn new(
         path: Option<&Path>,
         tag: String,
-        root_monitor: Option<StateMonitor>,
         format: LogFormat,
         color: LogColor,
     ) -> Result<Self, io::Error> {
@@ -39,25 +38,12 @@ impl Logger {
 
         let inner = Inner::new(path, tag, format, color)?;
 
-        // Panic hook
+        // Log panics
         let default_panic_hook = panic::take_hook();
-
-        if let Some(root_monitor) = root_monitor {
-            let panic_counter = root_monitor
-                .make_child("Session")
-                .make_value("panic_counter", 0u32);
-
-            panic::set_hook(Box::new(move |panic_info| {
-                *panic_counter.get() += 1;
-                log_panic(panic_info);
-                default_panic_hook(panic_info);
-            }));
-        } else {
-            panic::set_hook(Box::new(move |panic_info| {
-                log_panic(panic_info);
-                default_panic_hook(panic_info);
-            }));
-        }
+        panic::set_hook(Box::new(move |panic_info| {
+            log_panic(panic_info);
+            default_panic_hook(panic_info);
+        }));
 
         Ok(Self { _inner: inner })
     }
@@ -153,6 +139,18 @@ impl fmt::Display for ParseLogColorError {
 }
 
 impl std::error::Error for ParseLogColorError {}
+
+pub fn create_panic_counter(parent_monitor: &StateMonitor) {
+    let default_panic_hook = panic::take_hook();
+    let panic_counter = parent_monitor
+        .make_child("Session")
+        .make_value("panic_counter", 0u32);
+
+    panic::set_hook(Box::new(move |panic_info| {
+        *panic_counter.get() += 1;
+        default_panic_hook(panic_info);
+    }));
+}
 
 fn log_panic(info: &PanicHookInfo) {
     match (

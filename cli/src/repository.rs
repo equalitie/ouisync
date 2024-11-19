@@ -1,3 +1,4 @@
+/*
 use crate::{error::Error, options::Dirs, utils, DB_EXTENSION};
 use camino::Utf8Path;
 use ouisync_bridge::{config::ConfigStore, protocol::remote::v1, transport::RemoteClient};
@@ -559,3 +560,4 @@ mod tests {
         );
     }
 }
+*/
