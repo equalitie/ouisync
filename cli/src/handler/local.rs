@@ -44,48 +44,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 .set(self.state.clone(), &addrs)
                 .await?
                 .into()),
-            Request::Share {
-                name,
-                mode,
-                password,
-            } => {
-                let holder = self.state.repositories.find(&name)?;
-                let token = ouisync_bridge::repository::create_share_token(
-                    &holder.repository,
-                    password.map(Password::from).map(LocalSecret::Password),
-                    mode,
-                    Some(name),
-                )
-                .await?;
-
-                Ok(token.into())
-            }
-            Request::Mount { name, path, all: _ } => {
-                if let Some(name) = name {
-                    let holder = self.state.repositories.find(&name)?;
-
-                    let mount_point = if let Some(path) = &path {
-                        path.to_str()
-                            .ok_or_else(|| ProtocolError::new("invalid mount point"))?
-                    } else {
-                        ""
-                    };
-
-                    holder.set_mount_point(Some(mount_point)).await;
-                    holder.mount(&self.state.mount_dir).await?;
-                } else {
-                    for holder in self.state.repositories.get_all() {
-                        if holder.is_mounted() {
-                            continue;
-                        }
-
-                        holder.set_mount_point(Some("")).await;
-                        holder.mount(&self.state.mount_dir).await?;
-                    }
-                }
-
-                Ok(().into())
-            }
             Request::Unmount { name, all: _ } => {
                 if let Some(name) = name {
                     if let Ok(holder) = self.state.repositories.find(&name) {

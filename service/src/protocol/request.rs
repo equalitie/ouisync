@@ -1,16 +1,28 @@
 use crate::repository::RepositoryHandle;
-use ouisync::{crypto::Password, AccessMode, PeerAddr, SetLocalSecret, ShareToken, StorageSize};
+use ouisync::{
+    crypto::Password, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
+};
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr};
 use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[expect(clippy::large_enum_variant)]
 pub enum Request {
     /// Enable/disable remote control endpoint
-    RemoteControlBind { addrs: Vec<SocketAddr> },
+    RemoteControlBind {
+        addrs: Vec<SocketAddr>,
+    },
     /// Enable/disable metrics collection endpoint
-    MetricsBind { addr: Option<SocketAddr> },
+    MetricsBind {
+        addr: Option<SocketAddr>,
+    },
+    StoreDirSet(PathBuf),
+    StoreDirGet,
+    MountDirSet(PathBuf),
+    MountDirGet,
+    /// List all repositories
+    RepositoriesList,
     /// Find repository by name. Returns the repository that matches the name exactly or
     /// unambiguously by prefix.
     RepositoryFind(String),
@@ -33,6 +45,13 @@ pub enum Request {
         name: Option<String>,
         mode: ImportMode,
         force: bool,
+    },
+    /// Mount repository
+    RepositoryMount(RepositoryHandle),
+    RepositoryShare {
+        handle: RepositoryHandle,
+        secret: Option<LocalSecret>,
+        mode: AccessMode,
     },
     /*
     Open {
@@ -68,28 +87,6 @@ pub enum Request {
 
         /// File to import the repository from
         input: PathBuf,
-    },
-    /// Print share token for a repository
-    Share {
-        /// Name of the repository to share
-        name: String,
-
-        /// Access mode of the token ("blind", "read" or "write")
-        mode: AccessMode,
-
-        /// Local password
-        password: Option<String>,
-    },
-    /// Mount repository
-    Mount {
-        /// Name of the repository to mount
-        name: Option<String>,
-
-        /// Mount all open and currently unmounted repositories
-        all: bool,
-
-        /// Path to mount the repository at
-        path: Option<PathBuf>,
     },
     /// Unmount repository
     Unmount {
@@ -235,6 +232,31 @@ pub enum ImportMode {
     HardLink,
 }
 
+impl FromStr for ImportMode {
+    type Err = InvalidImportMode;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim_start().chars().next() {
+            Some('c') | Some('C') => Ok(Self::Copy),
+            Some('m') | Some('M') => Ok(Self::Move),
+            Some('s') | Some('S') => Ok(Self::SoftLink),
+            Some('h') | Some('H') => Ok(Self::HardLink),
+            _ => Err(InvalidImportMode),
+        }
+    }
+}
+
+impl fmt::Display for ImportMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Copy => write!(f, "copy"),
+            Self::Move => write!(f, "move"),
+            Self::SoftLink => write!(f, "softlink"),
+            Self::HardLink => write!(f, "hardlink"),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 #[error("invalid import mode")]
 pub struct InvalidImportMode;
@@ -253,7 +275,6 @@ pub(crate) enum Request {
     },
     RepositoryClose(RepositoryHandle),
     RepositorySubscribe(RepositoryHandle),
-    ListRepositories,
     ListRepositoriesSubscribe,
     RepositoryIsSyncEnabled(RepositoryHandle),
     RepositorySetSyncEnabled {
@@ -304,12 +325,6 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         enabled: bool,
     },
-    RepositoryCreateShareToken {
-        repository: RepositoryHandle,
-        secret: Option<LocalSecret>,
-        access_mode: AccessMode,
-        name: Option<String>,
-    },
     RepositorySyncProgress(RepositoryHandle),
     RepositoryCreateMirror {
         repository: RepositoryHandle,
@@ -332,7 +347,6 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         edits: Vec<MetadataEdit>,
     },
-    RepositoryMount(RepositoryHandle),
     RepositoryUnmount(RepositoryHandle),
     RepositoryStats(RepositoryHandle),
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),

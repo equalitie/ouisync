@@ -4,15 +4,17 @@ use crate::{
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     utils,
 };
-use ouisync::{Network, SetLocalSecret, ShareToken};
+use ouisync::{AccessMode, LocalSecret, Network, SetLocalSecret, ShareToken};
 use ouisync_bridge::{
     config::{ConfigKey, ConfigStore},
     network::{self, NetworkDefaults},
     transport::tls,
 };
+use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use state_monitor::StateMonitor;
 use std::{
     borrow::Cow,
+    collections::BTreeMap,
     ffi::OsStr,
     path::{Path, PathBuf},
     sync::Arc,
@@ -25,6 +27,8 @@ use tokio_stream::StreamExt;
 const STORE_DIR_KEY: ConfigKey<PathBuf> =
     ConfigKey::new("store_dir", "Repository storage directory");
 
+const MOUNT_DIR_KEY: ConfigKey<PathBuf> = ConfigKey::new("mount_dir", "Repository mount directory");
+
 const DEFAULT_REPOSITORY_EXPIRATION_KEY: ConfigKey<u64> = ConfigKey::new(
     "default_repository_expiration",
     "Default time in milliseconds after repository is deleted if all its blocks expired",
@@ -36,6 +40,8 @@ pub(crate) struct State {
     pub config: ConfigStore,
     pub network: Network,
     store_dir: Option<PathBuf>,
+    mount_dir: Option<PathBuf>,
+    mounter: Option<MultiRepoVFS>,
     repos: RepositorySet,
     repos_monitor: StateMonitor,
     remote_server_config: OnceCell<Arc<rustls::ServerConfig>>,
@@ -70,6 +76,13 @@ impl State {
             .inspect_err(|error| tracing::warn!(?error, "failed to get store dir from config"))
             .ok();
 
+        let mount_dir = config
+            .entry(MOUNT_DIR_KEY)
+            .get()
+            .await
+            .inspect_err(|error| tracing::warn!(?error, "failed to get mount dir from config"))
+            .ok();
+
         let repos_monitor = monitor.make_child("Repositories");
 
         // TODO:
@@ -82,6 +95,8 @@ impl State {
             config,
             network,
             store_dir,
+            mount_dir,
+            mounter: None,
             repos_monitor,
             repos: RepositorySet::new(),
             remote_server_config: OnceCell::new(),
@@ -99,13 +114,37 @@ impl State {
 
     pub async fn set_store_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
         self.config.entry(STORE_DIR_KEY).set(&dir).await?;
-        self.store_dir = Some(dir.clone());
+        self.store_dir = Some(dir);
+        Ok(())
+    }
+
+    pub fn mount_dir(&self) -> Option<&Path> {
+        self.mount_dir.as_deref()
+    }
+
+    pub async fn set_mount_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
+        if Some(&dir) == self.mount_dir.as_ref() {
+            return Ok(());
+        }
+
+        self.config.entry(MOUNT_DIR_KEY).set(&dir).await?;
+        self.mount_dir = Some(dir);
+
+        // TODO: remount all
+
         Ok(())
     }
 
     pub fn find_repository(&self, name: &str) -> Result<RepositoryHandle, FindError> {
         let (handle, _) = self.repos.find(name)?;
         Ok(handle)
+    }
+
+    pub fn list_repositories(&self) -> BTreeMap<String, RepositoryHandle> {
+        self.repos
+            .iter()
+            .map(|(handle, holder)| (holder.name().to_owned(), handle))
+            .collect()
     }
 
     pub async fn create_repository(
@@ -254,6 +293,45 @@ impl State {
         }
 
         self.open_repository(&store_path).await
+    }
+
+    pub async fn share_repository(
+        &self,
+        handle: RepositoryHandle,
+        secret: Option<LocalSecret>,
+        mode: AccessMode,
+    ) -> Result<String, Error> {
+        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let token = ouisync_bridge::repository::create_share_token(
+            holder.repository(),
+            secret,
+            mode,
+            Some(holder.name().to_owned()),
+        )
+        .await?;
+
+        Ok(token)
+    }
+
+    pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
+        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let store_path = self.store_path(holder.name())?;
+
+        let mounter = match &self.mounter {
+            Some(mounter) => mounter,
+            None => {
+                let mount_dir = self.mount_dir().ok_or(Error::MountDirUnspecified)?;
+                let new_mounter = MultiRepoVFS::create(mount_dir).await?;
+                self.mounter.insert(new_mounter)
+            }
+        };
+
+        if let Some(mount_point) = mounter.mounted_at(&store_path) {
+            // Already mounted
+            Ok(mount_point)
+        } else {
+            Ok(mounter.insert(store_path, holder.repository().clone())?)
+        }
     }
 
     pub async fn set_default_repository_expiration(

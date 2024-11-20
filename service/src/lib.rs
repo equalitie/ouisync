@@ -111,6 +111,25 @@ impl Service {
             Request::MetricsBind { addr } => {
                 Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
+            Request::StoreDirSet(path) => {
+                self.state.set_store_dir(path).await?;
+                Ok(().into())
+            }
+            Request::StoreDirGet => Ok(self
+                .state
+                .store_dir()
+                .ok_or(Error::StoreDirUnspecified)?
+                .into()),
+            Request::MountDirSet(path) => {
+                self.state.set_mount_dir(path).await?;
+                Ok(().into())
+            }
+            Request::MountDirGet => Ok(self
+                .state
+                .mount_dir()
+                .ok_or(Error::MountDirUnspecified)?
+                .into()),
+            Request::RepositoriesList => Ok(self.state.list_repositories().into()),
             Request::RepositoryFind(name) => Ok(self.state.find_repository(&name)?.into()),
             Request::RepositoryCreate {
                 name,
@@ -145,6 +164,18 @@ impl Service {
                     .await?;
                 Ok(handle.into())
             }
+            Request::RepositoryMount(handle) => {
+                Ok(self.state.mount_repository(handle).await?.into())
+            }
+            Request::RepositoryShare {
+                handle,
+                secret,
+                mode,
+            } => Ok(self
+                .state
+                .share_repository(handle, secret, mode)
+                .await?
+                .into()),
         }
     }
 

@@ -24,67 +24,6 @@ use tokio_stream::StreamExt;
 pub(crate) const OPEN_ON_START: &str = "open_on_start";
 const MOUNT_POINT_KEY: &str = "mount_point";
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub(crate) struct RepositoryName(Arc<str>);
-
-impl RepositoryName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for RepositoryName {
-    type Error = RepositoryNameInvalid;
-
-    fn try_from(input: String) -> Result<Self, Self::Error> {
-        if input.trim_start().starts_with('/') {
-            return Err(RepositoryNameInvalid);
-        }
-
-        if input.contains("..") {
-            return Err(RepositoryNameInvalid);
-        }
-
-        Ok(Self(input.into_boxed_str().into()))
-    }
-}
-
-impl fmt::Display for RepositoryName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl AsRef<str> for RepositoryName {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl AsRef<Path> for RepositoryName {
-    fn as_ref(&self) -> &Path {
-        self.as_str().as_ref()
-    }
-}
-
-impl Borrow<str> for RepositoryName {
-    fn borrow(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl Deref for RepositoryName {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_str()
-    }
-}
-
-#[derive(Debug, Error)]
-#[error("repository name invalid")]
-pub(crate) struct RepositoryNameInvalid;
-
 pub(crate) struct RepositoryHolder {
     pub repository: Arc<Repository>,
     pub registration: Registration,
@@ -319,71 +258,6 @@ async fn remove_mount_point(path: &Path, depth: u32) -> io::Result<()> {
 
     Ok(())
 }
-
-#[derive(Default)]
-pub(crate) struct RepositoryMap {
-    inner: RwLock<BTreeMap<RepositoryName, Arc<RepositoryHolder>>>,
-}
-
-impl RepositoryMap {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Inserts the holder unless already exists. Returns whether the holder was inserted.
-    pub fn try_insert(&self, holder: Arc<RepositoryHolder>) -> bool {
-        match self.inner.write().unwrap().entry(holder.name.clone()) {
-            Entry::Vacant(entry) => {
-                entry.insert(holder);
-                true
-            }
-            Entry::Occupied(_) => false,
-        }
-    }
-
-    pub fn remove(&self, name: &str) -> Option<Arc<RepositoryHolder>> {
-        self.inner.write().unwrap().remove(name)
-    }
-
-    pub fn remove_all(&self) -> Vec<Arc<RepositoryHolder>> {
-        let inner = mem::take(&mut *self.inner.write().unwrap());
-        inner.into_values().collect()
-    }
-
-    #[allow(unused)]
-    pub fn get(&self, name: &str) -> Option<Arc<RepositoryHolder>> {
-        self.inner.read().unwrap().get(name).cloned()
-    }
-
-    // Find entry whose name starts with the given prefix. Fails if no such entry exists or if more
-    // than one such entry exists.
-    pub fn find(&self, prefix: &str) -> Result<Arc<RepositoryHolder>, FindError> {
-        let inner = self.inner.read().unwrap();
-
-        let mut entries = inner
-            .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
-            .filter(|(key, _)| key.starts_with(prefix));
-
-        let (_, holder) = entries.next().ok_or(FindError::NotFound)?;
-        if entries.next().is_none() {
-            Ok(holder.clone())
-        } else {
-            Err(FindError::Ambiguous)
-        }
-    }
-
-    pub fn get_all(&self) -> Vec<Arc<RepositoryHolder>> {
-        self.inner.read().unwrap().values().cloned().collect()
-    }
-
-    pub fn contains(&self, name: &str) -> bool {
-        self.inner.read().unwrap().contains_key(name)
-    }
-}
-
-
-
-
 
 #[cfg(test)]
 mod tests {

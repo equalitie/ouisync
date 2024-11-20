@@ -1,4 +1,5 @@
 use ouisync_bridge::{config::ConfigError, repository::OpenError};
+use ouisync_vfs::MountError;
 use std::io;
 use thiserror::Error;
 
@@ -8,6 +9,10 @@ pub enum Error {
     Config(#[from] ConfigError),
     #[error("I/O error")]
     Io(#[from] io::Error),
+    #[error("mount error")]
+    Mount(#[from] MountError),
+    #[error("mount dir not specified")]
+    MountDirUnspecified,
     #[error("operation not supported")]
     OperationNotSupported,
     #[error("repository error")]

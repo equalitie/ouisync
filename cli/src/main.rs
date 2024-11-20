@@ -1,5 +1,6 @@
 mod client;
 mod error;
+mod format;
 mod handler;
 mod options;
 mod repository;

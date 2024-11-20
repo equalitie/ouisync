@@ -6,6 +6,7 @@ use std::{
     collections::{btree_map::Entry, BTreeMap},
     fmt,
     ops::Bound,
+    sync::Arc,
     time::Duration,
 };
 use thiserror::Error;
@@ -83,6 +84,14 @@ impl RepositorySet {
         Ok((handle, holder))
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (RepositoryHandle, &RepositoryHolder)> {
+        self.index.values().copied().filter_map(|handle| {
+            self.repos
+                .get(handle)
+                .map(|holder| (RepositoryHandle(handle), holder))
+        })
+    }
+
     fn find_handle(&self, prefix: &str) -> Result<RepositoryHandle, FindError> {
         let mut iter = self
             .index
@@ -116,7 +125,7 @@ impl fmt::Display for RepositoryHandle {
 
 pub(crate) struct RepositoryHolder {
     name: String,
-    repo: Repository,
+    repo: Arc<Repository>,
     registration: Option<Registration>,
 }
 
@@ -124,7 +133,7 @@ impl RepositoryHolder {
     pub fn new(name: String, repo: Repository) -> Self {
         Self {
             name,
-            repo,
+            repo: Arc::new(repo),
             registration: None,
         }
     }
@@ -133,7 +142,7 @@ impl RepositoryHolder {
         &self.name
     }
 
-    pub fn repository(&self) -> &Repository {
+    pub fn repository(&self) -> &Arc<Repository> {
         &self.repo
     }
 

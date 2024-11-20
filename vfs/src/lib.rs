@@ -32,7 +32,6 @@ use std::{
     future::Future,
     io,
     path::{Path, PathBuf},
-    pin::Pin,
     sync::Arc,
 };
 use thiserror::Error;
@@ -40,13 +39,18 @@ use thiserror::Error;
 pub trait MultiRepoMount {
     fn create(
         mount_point: impl AsRef<Path>,
-    ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>> + Send>>
+    ) -> impl Future<Output = Result<Self, MountError>> + Send
     where
         Self: Sized;
 
-    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<(), io::Error>;
+    /// Mounts the given repo and returns its mount point.
+    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<PathBuf, io::Error>;
 
+    /// Mounts the repo with the given store path.
     fn remove(&self, store_path: &Path) -> Result<(), io::Error>;
+
+    /// If the repo is mounted, returns its mount point. Otherwise return `None`.
+    fn mounted_at(&self, store_path: &Path) -> Option<PathBuf>;
 }
 
 #[derive(Debug, Error)]

@@ -8,7 +8,6 @@ use std::{
     future::{self, Future},
     io,
     path::{Path, PathBuf},
-    pin::Pin,
     sync::{Arc, Mutex},
 };
 use tokio::runtime::Handle as RuntimeHandle;
@@ -22,32 +21,42 @@ pub struct MultiRepoVFS {
 impl MultiRepoMount for MultiRepoVFS {
     fn create(
         mount_root: impl AsRef<Path>,
-    ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>> + Send>> {
-        Box::pin(future::ready(Ok(Self {
+    ) -> impl Future<Output = Result<Self, MountError>> + Send {
+        future::ready(Ok(Self {
             runtime_handle: RuntimeHandle::current(),
             mount_root: mount_root.as_ref().to_path_buf(),
             repositories: Mutex::new(HashMap::default()),
-        })))
+        }))
     }
 
-    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<(), io::Error> {
+    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<PathBuf, io::Error> {
         let mount_point = prepare_mountpoint(&store_path, &self.mount_root)?;
-
         let mount_guard = super::mount(self.runtime_handle.clone(), repo, &mount_point)?;
 
         let mount = Mount {
-            point: mount_point,
+            point: mount_point.clone(),
             guard: Some(mount_guard),
         };
 
         self.repositories.lock().unwrap().insert(store_path, mount);
 
-        Ok(())
+        Ok(mount_point)
     }
 
     fn remove(&self, store_path: &Path) -> Result<(), io::Error> {
         self.repositories.lock().unwrap().remove(store_path);
         Ok(())
+    }
+
+    fn mounted_at(&self, store_path: &Path) -> Option<PathBuf> {
+        Some(
+            self.repositories
+                .lock()
+                .unwrap()
+                .get(store_path)?
+                .point
+                .clone(),
+        )
     }
 }
 

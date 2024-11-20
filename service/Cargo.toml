@@ -11,7 +11,6 @@ version.workspace = true
 
 [dependencies]
 bytes                       = { workspace = true }
-chrono                      = { workspace = true }
 clap                        = { workspace = true }
 futures-util                = { workspace = true }
 hyper                       = { version = "1.4.1", features = ["server", "http1"] }
@@ -21,6 +20,7 @@ metrics                     = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 ouisync                     = { path = "../lib" }
 ouisync-bridge              = { path = "../bridge" }
+ouisync-vfs                 = { path = "../vfs" }
 rmp-serde                   = { workspace = true }
 serde                       = { workspace = true }
 scoped_task                 = { path = "../scoped_task" }

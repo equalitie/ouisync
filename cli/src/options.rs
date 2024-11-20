@@ -1,6 +1,7 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
+use ouisync::AccessMode;
 use ouisync_bridge::logger::{LogColor, LogFormat};
-use ouisync_service::protocol::ImportMode as ServiceImportMode;
+use ouisync_service::protocol::ImportMode;
 use std::{env, net::SocketAddr, path::PathBuf};
 
 #[derive(Parser, Debug)]
@@ -50,27 +51,9 @@ pub(crate) enum ServerCommand {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum ClientCommand {
-    /// Bind the remote API to the specified addresses.
-    ///
-    /// Overwrites any previously specified addresses.
-    RemoteControl {
-        /// Addresses to bind to. IP is a IPv4 or IPv6 address and PORT is a port number. If IP is
-        /// 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to a random port. If empty
-        /// disables the remote API.
-        #[arg(value_name = "IP:PORT")]
-        addrs: Vec<SocketAddr>,
-    },
-    /// Bind the metrics collection endpoint to the specified address.
-    Metrics {
-        /// Address to bind the metrics endpoint to. If specified, metrics collection is enabled
-        /// and the collected metrics are served from this endpoint. If not specified, metrics
-        /// collection is disabled.
-        #[arg(value_name = "IP:PORT")]
-        addr: Option<SocketAddr>,
-    },
     /// Create a new repository
-    #[command(visible_aliases = ["create", "mk"])]
-    CreateRepository {
+    #[command(visible_aliases = ["mk"])]
+    Create {
         /// Name of the repository
         #[arg(short, long, required_unless_present = "share_token")]
         name: Option<String>,
@@ -93,7 +76,7 @@ pub(crate) enum ClientCommand {
     },
     /// Delete a repository
     #[command(visible_alias = "rm")]
-    DeleteRepository {
+    Delete {
         /// Name of the repository to delete
         name: String,
     },
@@ -103,8 +86,7 @@ pub(crate) enum ClientCommand {
     /// exported repository. So if the repository is currently opened in write mode or read mode,
     /// it's exported in read mode. If it's in blind mode it's also exported in blind mode. This
     /// limitation might be lifted in the future.
-    #[command(visible_alias = "export")]
-    ExportRepository {
+    Export {
         /// Name of the repository to export
         name: String,
 
@@ -113,7 +95,7 @@ pub(crate) enum ClientCommand {
         output: PathBuf,
     },
     /// Import a repository from a file
-    ImportRepository {
+    Import {
         /// File to import the repository from
         #[arg(value_name = "PATH")]
         input: PathBuf,
@@ -121,19 +103,45 @@ pub(crate) enum ClientCommand {
         /// Name for the repository. Default is the filename the repository is imported from.
         name: Option<String>,
 
-        /// How to import the repository
-        #[arg(short, long, value_enum, default_value_t = ImportMode::Copy)]
+        /// How to import the repository ("copy", "move", "softlink" or "hardlink")
+        #[arg(short, long, default_value_t = ImportMode::Copy)]
         mode: ImportMode,
 
         /// Overwrite the destination if it exists
         #[arg(short, long)]
         force: bool,
     },
-    /*
-    /// Print share token for a repository
+    /// List all repositories
+    #[command(visible_alias = "ls", alias = "list-repos")]
+    ListRepositories,
+    /// Bind the metrics collection endpoint to the specified address.
+    Metrics {
+        /// Address to bind the metrics endpoint to. If specified, metrics collection is enabled
+        /// and the collected metrics are served from this endpoint. If not specified, metrics
+        /// collection is disabled.
+        #[arg(value_name = "IP:PORT")]
+        addr: Option<SocketAddr>,
+    },
+    /// Mount repository
+    Mount {
+        /// Name of the repository to mount. If omitted, mounts all repositories.
+        name: Option<String>,
+    },
+    /// Get or set the mount directory
+    MountDir { path: Option<PathBuf> },
+    /// Bind the remote API to the specified addresses.
+    ///
+    /// Overwrites any previously specified addresses.
+    RemoteControl {
+        /// Addresses to bind to. IP is a IPv4 or IPv6 address and PORT is a port number. If IP is
+        /// 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to a random port. If empty
+        /// disables the remote API.
+        #[arg(value_name = "IP:PORT")]
+        addrs: Vec<SocketAddr>,
+    },
+    /// Print the share token of a repository
     Share {
         /// Name of the repository to share
-        #[arg(short, long)]
         name: String,
 
         /// Access mode of the token ("blind", "read" or "write")
@@ -144,20 +152,9 @@ pub(crate) enum ClientCommand {
         #[arg(short = 'P', long)]
         password: Option<String>,
     },
-    /// Mount repository
-    Mount {
-        /// Name of the repository to mount
-        #[arg(short, long, required_unless_present = "all", conflicts_with = "all")]
-        name: Option<String>,
-
-        /// Mount all open and currently unmounted repositories
-        #[arg(short, long)]
-        all: bool,
-
-        /// Path to mount the repository at
-        #[arg(short, long, conflicts_with = "all")]
-        path: Option<PathBuf>,
-    },
+    /// Get or set the store directory
+    StoreDir { path: Option<PathBuf> },
+    /*
     /// Unmount repository
     #[command(alias = "umount")]
     Unmount {
@@ -179,9 +176,6 @@ pub(crate) enum ClientCommand {
         #[arg(short = 'H', long)]
         host: String,
     },
-    /// List open repositories
-    #[command(visible_alias = "ls", alias = "list-repos")]
-    ListRepositories,
     /// Bind the sync protocol to the specified addresses
     Bind {
         /// Addresses to bind to. PROTO is one of "quic" or "tcp", IP is a IPv4 or IPv6 address and
@@ -329,27 +323,6 @@ pub(crate) enum ClientCommand {
     },
 
     */
-}
-
-// This is the same as `ImportMove` from the `ouisync-service` library but we need to copy it here
-// to work around the orphan rule.
-#[derive(Clone, Copy, ValueEnum, Debug)]
-pub enum ImportMode {
-    Copy,
-    Move,
-    SoftLink,
-    HardLink,
-}
-
-impl From<ImportMode> for ServiceImportMode {
-    fn from(value: ImportMode) -> Self {
-        match value {
-            ImportMode::Copy => ServiceImportMode::Copy,
-            ImportMode::Move => ServiceImportMode::Move,
-            ImportMode::SoftLink => ServiceImportMode::SoftLink,
-            ImportMode::HardLink => ServiceImportMode::HardLink,
-        }
-    }
 }
 
 /// Path to the config directory.

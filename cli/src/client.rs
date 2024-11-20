@@ -1,6 +1,6 @@
-use crate::options::ClientCommand;
+use crate::{format::print_response, options::ClientCommand};
 use futures_util::SinkExt;
-use ouisync_lib::{crypto::Password, SetLocalSecret, ShareToken};
+use ouisync::{crypto::Password, LocalSecret, SetLocalSecret, ShareToken};
 use ouisync_service::{
     protocol::{
         Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ServerPayload,
@@ -18,10 +18,8 @@ use tokio_stream::StreamExt;
 pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
     let mut client = LocalClient::connect(&socket_path).await?;
 
-    let request = match command {
-        ClientCommand::RemoteControl { addrs } => Request::RemoteControlBind { addrs },
-        ClientCommand::Metrics { addr } => Request::MetricsBind { addr },
-        ClientCommand::CreateRepository {
+    let response = match command {
+        ClientCommand::Create {
             name,
             share_token,
             password,
@@ -57,64 +55,100 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 })
                 .ok_or_else(|| ProtocolError::new("name is missing"))?;
 
-            Request::RepositoryCreate {
-                name,
-                share_token,
-                read_secret,
-                write_secret,
-            }
+            client
+                .invoke(Request::RepositoryCreate {
+                    name,
+                    share_token,
+                    read_secret,
+                    write_secret,
+                })
+                .await?
         }
-        ClientCommand::DeleteRepository { name } => {
+        ClientCommand::Delete { name } => {
             let handle = client.find_repository(name).await?;
-            Request::RepositoryDelete(handle)
+            client.invoke(Request::RepositoryDelete(handle)).await?
         }
-        ClientCommand::ExportRepository { name, output } => {
+        ClientCommand::Export { name, output } => {
             let handle = client.find_repository(name).await?;
-            Request::RepositoryExport { handle, output }
+            client
+                .invoke(Request::RepositoryExport {
+                    handle,
+                    output: to_absolute(output)?,
+                })
+                .await?
         }
-        ClientCommand::ImportRepository {
+        ClientCommand::Import {
             input,
             name,
             mode,
             force,
-        } => Request::RepositoryImport {
-            input,
-            name,
-            mode: mode.into(),
-            force,
-        }, // Request::Share {
-           //     name,
-           //     mode,
-           //     password,
-           // } => {
-           //     let password = get_or_read(password, "input password").await?;
-           //     Request::Share {
-           //         name,
-           //         mode,
-           //         password,
-           //     }
-           // }
-           // Request::Export { name, output } => Request::Export {
-           //     name,
-           //     output: to_absolute(output)?,
-           // },
-           // Request::Import {
-           //     name,
-           //     mode,
-           //     force,
-           //     input,
-           // } => Request::Import {
-           //     name,
-           //     mode,
-           //     force,
-           //     input: to_absolute(input)?,
-           // },
+        } => {
+            client
+                .invoke(Request::RepositoryImport {
+                    input: to_absolute(input)?,
+                    name,
+                    mode,
+                    force,
+                })
+                .await?
+        }
+        ClientCommand::ListRepositories => client.invoke(Request::RepositoriesList).await?,
+        ClientCommand::Metrics { addr } => client.invoke(Request::MetricsBind { addr }).await?,
+        ClientCommand::Mount { name } => {
+            if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+                client.invoke(Request::RepositoryMount(handle)).await?
+            } else {
+                let handles = client.list_repositories().await?;
 
-           // _ => request,
+                for handle in handles {
+                    client.invoke(Request::RepositoryMount(handle)).await?;
+                }
+
+                Response::None
+            }
+        }
+        ClientCommand::MountDir { path } => {
+            let request = if let Some(path) = path {
+                Request::MountDirSet(path)
+            } else {
+                Request::MountDirGet
+            };
+
+            client.invoke(request).await?
+        }
+        ClientCommand::RemoteControl { addrs } => {
+            client.invoke(Request::RemoteControlBind { addrs }).await?
+        }
+        ClientCommand::Share {
+            name,
+            mode,
+            password,
+        } => {
+            let handle = client.find_repository(name).await?;
+            let password = get_or_read(password, "input password").await?;
+            let secret = password.map(Password::from).map(LocalSecret::Password);
+
+            client
+                .invoke(Request::RepositoryShare {
+                    handle,
+                    mode,
+                    secret,
+                })
+                .await?
+        }
+        ClientCommand::StoreDir { path } => {
+            let request = if let Some(path) = path {
+                Request::StoreDirSet(path)
+            } else {
+                Request::StoreDirGet
+            };
+
+            client.invoke(request).await?
+        }
     };
 
-    let response = client.invoke(request).await?;
-    println!("{}", response);
+    print_response(&response);
 
     client.close().await?;
 
@@ -161,6 +195,15 @@ impl LocalClient {
 
         match response {
             Response::Repository(handle) => Ok(handle),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    async fn list_repositories(&mut self) -> Result<Vec<RepositoryHandle>, ClientError> {
+        let response = self.invoke(Request::RepositoriesList).await?;
+
+        match response {
+            Response::Repositories(map) => Ok(map.into_values().collect()),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }

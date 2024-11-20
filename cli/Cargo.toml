@@ -27,8 +27,8 @@ interprocess = { version = "2.2.1", features = ["tokio"] }
 maxminddb = "0.24.0"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+ouisync = { path = "../lib" }
 ouisync-bridge = { path = "../bridge" }
-ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-service = { path = "../service" }
 ouisync-vfs = { path = "../vfs" }
 rand = { workspace = true }
