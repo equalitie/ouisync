@@ -44,13 +44,13 @@ pub trait MultiRepoMount {
         Self: Sized;
 
     /// Mounts the given repo and returns its mount point.
-    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<PathBuf, io::Error>;
+    fn insert(&self, repo_name: String, repo: Arc<Repository>) -> Result<PathBuf, io::Error>;
 
-    /// Mounts the repo with the given store path.
-    fn remove(&self, store_path: &Path) -> Result<(), io::Error>;
+    /// Unmounts the given repo.
+    fn remove(&self, repo_name: &str) -> Result<(), io::Error>;
 
     /// If the repo is mounted, returns its mount point. Otherwise return `None`.
-    fn mounted_at(&self, store_path: &Path) -> Option<PathBuf>;
+    fn mount_point(&self, name: &str) -> Option<PathBuf>;
 }
 
 #[derive(Debug, Error)]

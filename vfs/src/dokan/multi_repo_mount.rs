@@ -12,7 +12,6 @@ use std::{
     collections::{hash_map, HashMap},
     future::Future,
     path::{Path, PathBuf},
-    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc, Arc,
@@ -24,25 +23,12 @@ use tokio::runtime::Handle as RuntimeHandle;
 use widestring::{U16CStr, U16CString, U16Str};
 use winapi::{shared::ntstatus::*, um::winnt};
 
-struct RepoMap {
-    // Invariant that must hold: if there exists a key in `name_to_repo`, then there must exist a
-    // exactly one entry in `path_to_name` with the same value.
-    name_to_repo: HashMap<U16CString, Arc<VirtualFilesystem>>,
-    path_to_name: HashMap<PathBuf, U16CString>,
-}
-
-impl RepoMap {
-    fn new() -> Self {
-        Self {
-            name_to_repo: Default::default(),
-            path_to_name: Default::default(),
-        }
-    }
-}
+type RepoMap = HashMap<U16CString, Arc<VirtualFilesystem>>;
 
 pub struct MultiRepoVFS {
     entry_id_generator: Arc<EntryIdGenerator>,
     runtime_handle: RuntimeHandle,
+    mount_point: PathBuf,
     repos: Arc<BlockingRwLock<RepoMap>>,
     unmount_tx: mpsc::SyncSender<()>,
     // It's `Option` so we can move it out of there in `Drop::drop`.
@@ -52,22 +38,21 @@ pub struct MultiRepoVFS {
 impl MultiRepoMount for MultiRepoVFS {
     fn create(
         mount_point: impl AsRef<Path>,
-    ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>> + Send>> {
-        let mount_point = U16CString::from_os_str(mount_point.as_ref().as_os_str());
-
-        Box::pin(async move {
-            let options = MountOptions {
-                single_thread: false,
-                flags: super::default_mount_flags(),
-                ..Default::default()
-            };
-
-            let mount_point = match mount_point {
+    ) -> impl Future<Output = Result<Self, MountError>> + Send {
+        async {
+            let mount_point = mount_point.as_ref().to_owned();
+            let mount_point_u16c = match U16CString::from_os_str(mount_point.as_ref().as_os_str()) {
                 Ok(mount_point) => mount_point,
                 Err(error) => {
                     tracing::error!("Failed to convert mount point to U16CString: {error:?}");
                     return Err(MountError::InvalidMountPoint);
                 }
+            };
+
+            let options = MountOptions {
+                single_thread: false,
+                flags: super::default_mount_flags(),
+                ..Default::default()
             };
 
             let (on_mount_tx, on_mount_rx) = tokio::sync::oneshot::channel();
@@ -90,7 +75,7 @@ impl MultiRepoMount for MultiRepoVFS {
                         debug_type: DebugType::None,
                     };
 
-                    let mut mounter = FileSystemMounter::new(&handler, &mount_point, &options);
+                    let mut mounter = FileSystemMounter::new(&handler, &mount_point_u16c, &options);
 
                     let file_system = match mounter.mount() {
                         Ok(file_system) => file_system,
@@ -108,7 +93,7 @@ impl MultiRepoMount for MultiRepoVFS {
                     unmount_rx.recv().unwrap_or(());
 
                     // If we don't do this then dropping `file_system` will block.
-                    if !unmount(&mount_point) {
+                    if !unmount(&mount_point_u16c) {
                         tracing::warn!("Failed to unmount {mount_point:?}");
                     }
 
@@ -126,95 +111,62 @@ impl MultiRepoMount for MultiRepoVFS {
             Ok(Self {
                 entry_id_generator,
                 runtime_handle: RuntimeHandle::current(),
+                mount_point,
                 repos,
                 unmount_tx,
                 join_handle: Some(join_handle),
             })
-        })
+        }
     }
 
-    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<(), io::Error> {
-        let name = match store_path.file_stem() {
-            Some(name) => name,
-            None => {
-                return Err(io::Error::new(
-                    // InvalidFilename would have been better, but it's unstable.
-                    io::ErrorKind::InvalidInput,
-                    format!("Not a valid repository file name {:?}", store_path),
-                ));
-            }
-        };
-
-        let name = match U16CString::from_os_str(name) {
+    fn insert(&self, name: String, repo: Arc<Repository>) -> Result<PathBuf, io::Error> {
+        let mount_point = self.mount_point.join(&name);
+        let name = match U16CString::from_str(name) {
             Ok(name) => name,
             Err(_) => {
                 return Err(io::Error::new(
                     // InvalidFilename would have been better, but it's unstable.
                     io::ErrorKind::InvalidInput,
-                    format!("Filename contains nulls {:?}", name),
+                    format!("repository name contains nulls {:?}", name),
                 ));
             }
         };
 
-        let mut repos_lock = self.repos.write().unwrap();
+        let mut repos = self.repos.write().unwrap();
 
-        let RepoMap {
-            name_to_repo,
-            path_to_name,
-        } = &mut *repos_lock;
-
-        let path_to_name_entry = match path_to_name.entry(store_path.clone()) {
-            hash_map::Entry::Vacant(entry) => entry,
-            hash_map::Entry::Occupied(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    format!("Repository {store_path:?} already added"),
-                ))
-            }
-        };
-
-        match name_to_repo.entry(name.clone()) {
-            hash_map::Entry::Vacant(name_to_repo_entry) => {
-                let repo = Arc::new(VirtualFilesystem::new(
+        match repos.entry(name) {
+            hash_map::Entry::Vacant(entry) => {
+                entry.insert(Arc::new(VirtualFilesystem::new(
                     self.runtime_handle.clone(),
                     self.entry_id_generator.clone(),
                     repo,
-                ));
-                name_to_repo_entry.insert(repo);
-                path_to_name_entry.insert(name);
+                )));
             }
-            hash_map::Entry::Occupied(entry) =>
-            // TODO: We could use an alternative name such as "<name> (2)".
-            {
+            hash_map::Entry::Occupied(_) => {
                 return Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
-                    format!(
-                        "Repository with the name {:?} already exists",
-                        entry.key().to_string_lossy()
-                    ),
+                    format!("repository {name:?} already mounted"),
                 ))
             }
+        };
+
+        Ok(mount_point)
+    }
+
+    fn remove(&self, name: &str) -> Result<(), io::Error> {
+        if let Ok(name) = U16CString::from_str(name) {
+            self.repos.write().unwrap().remove(&name);
         }
 
         Ok(())
     }
 
-    fn remove(&self, store_path: &Path) -> Result<(), io::Error> {
-        let mut repos_lock = self.repos.write().unwrap();
-        let RepoMap {
-            name_to_repo,
-            path_to_name,
-        } = &mut *repos_lock;
-
-        let name = path_to_name.get(store_path).ok_or(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("Repository {store_path:?} not found"),
-        ))?;
-
-        name_to_repo.remove(name);
-        path_to_name.remove(store_path);
-
-        Ok(())
+    fn mount_point(&self, name: &str) -> Option<PathBuf> {
+        self.repos
+            .read()
+            .unwrap()
+            .contains(name)
+            .then(|| self.mount_point.join(name))
     }
 }
 
@@ -254,7 +206,7 @@ impl Handler {
 
         let repos = self.repos.read().unwrap();
 
-        match repos.name_to_repo.get(&repo_name) {
+        match repos.get(&repo_name) {
             Some(repo) => Ok((Some(repo.clone()), path)),
             None => Err(STATUS_OBJECT_NAME_NOT_FOUND),
         }
@@ -501,9 +453,9 @@ impl Handler {
                 vfs.find_files_with_pattern(&file_name, pattern, fill_find_data, info, handle)
             }
             MultiRepoEntryHandle::RepoList => {
-                let repos_lock = self.repos.read().unwrap();
+                let repos = self.repos.read().unwrap();
 
-                for (repo_name, vfs) in repos_lock.name_to_repo.iter() {
+                for (repo_name, vfs) in repos.iter() {
                     if !vfs.repo.access_mode().can_read() {
                         continue;
                     }

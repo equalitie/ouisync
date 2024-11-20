@@ -315,7 +315,6 @@ impl State {
 
     pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
         let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
-        let store_path = self.store_path(holder.name())?;
 
         let mounter = match &self.mounter {
             Some(mounter) => mounter,
@@ -326,11 +325,11 @@ impl State {
             }
         };
 
-        if let Some(mount_point) = mounter.mounted_at(&store_path) {
+        if let Some(mount_point) = mounter.mount_point(holder.name()) {
             // Already mounted
             Ok(mount_point)
         } else {
-            Ok(mounter.insert(store_path, holder.repository().clone())?)
+            Ok(mounter.insert(holder.name().to_owned(), holder.repository().clone())?)
         }
     }
 
@@ -340,9 +339,7 @@ impl State {
         };
 
         let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
-        let store_path = self.store_path(holder.name())?;
-
-        mounter.remove(&store_path)?;
+        mounter.remove(holder.name())?;
 
         Ok(())
     }

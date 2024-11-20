@@ -3,7 +3,6 @@ use crate::{MountError, MultiRepoMount};
 use ouisync_lib::Repository;
 use std::{
     collections::HashMap,
-    ffi::OsStr,
     fs,
     future::{self, Future},
     io,
@@ -15,7 +14,7 @@ use tokio::runtime::Handle as RuntimeHandle;
 pub struct MultiRepoVFS {
     runtime_handle: RuntimeHandle,
     mount_root: PathBuf,
-    repositories: Mutex<HashMap<PathBuf, Mount>>,
+    repositories: Mutex<HashMap<String, Mount>>,
 }
 
 impl MultiRepoMount for MultiRepoVFS {
@@ -29,8 +28,8 @@ impl MultiRepoMount for MultiRepoVFS {
         }))
     }
 
-    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<PathBuf, io::Error> {
-        let mount_point = prepare_mountpoint(&store_path, &self.mount_root)?;
+    fn insert(&self, repo_name: String, repo: Arc<Repository>) -> Result<PathBuf, io::Error> {
+        let mount_point = prepare_mountpoint(&repo_name, &self.mount_root)?;
         let mount_guard = super::mount(self.runtime_handle.clone(), repo, &mount_point)?;
 
         let mount = Mount {
@@ -38,22 +37,22 @@ impl MultiRepoMount for MultiRepoVFS {
             guard: Some(mount_guard),
         };
 
-        self.repositories.lock().unwrap().insert(store_path, mount);
+        self.repositories.lock().unwrap().insert(repo_name, mount);
 
         Ok(mount_point)
     }
 
-    fn remove(&self, store_path: &Path) -> Result<(), io::Error> {
-        self.repositories.lock().unwrap().remove(store_path);
+    fn remove(&self, repo_name: &str) -> Result<(), io::Error> {
+        self.repositories.lock().unwrap().remove(repo_name);
         Ok(())
     }
 
-    fn mounted_at(&self, store_path: &Path) -> Option<PathBuf> {
+    fn mount_point(&self, repo_name: &str) -> Option<PathBuf> {
         Some(
             self.repositories
                 .lock()
                 .unwrap()
-                .get(store_path)?
+                .get(repo_name)?
                 .point
                 .clone(),
         )
@@ -76,20 +75,9 @@ impl Drop for Mount {
     }
 }
 
-fn extract_mount_point(store_path: &Path) -> Result<&OsStr, io::Error> {
-    store_path.file_stem().ok_or_else(|| {
-        io::Error::new(
-            // InvalidFilename would have been better, but it's unstable.
-            io::ErrorKind::InvalidInput,
-            format!("invalid repository path: {:?}", store_path),
-        )
-    })
-}
-
 // TODO: should this be async?
-fn prepare_mountpoint(store_path: &Path, mount_root: &Path) -> Result<PathBuf, io::Error> {
-    let mount_point = extract_mount_point(store_path)?;
-    let mount_point = mount_root.join(mount_point);
+fn prepare_mountpoint(repo_name: &str, mount_root: &Path) -> Result<PathBuf, io::Error> {
+    let mount_point = mount_root.join(repo_name);
 
     let create_dir_error = match fs::create_dir_all(&mount_point) {
         Ok(()) => return Ok(mount_point),
