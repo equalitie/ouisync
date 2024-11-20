@@ -3,8 +3,10 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use ouisync::{PeerAddr, PeerInfo, PeerSource, PeerState, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fmt,
     net::SocketAddr,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 
@@ -12,19 +14,20 @@ use std::{
 pub enum Response {
     None,
     Bool(bool),
-    String(String),
-    Strings(Vec<String>),
-    Repository(RepositoryHandle),
-    Repositories(Vec<RepositoryHandle>),
-    PeerInfo(Vec<PeerInfo>),
-    PeerAddrs(Vec<PeerAddr>),
-    SocketAddrs(Vec<SocketAddr>),
-    StorageSize(StorageSize),
-    QuotaInfo(QuotaInfo),
     Expiration {
         block: Option<Duration>,
         repository: Option<Duration>,
     },
+    Path(PathBuf),
+    PeerAddrs(Vec<PeerAddr>),
+    PeerInfo(Vec<PeerInfo>),
+    QuotaInfo(QuotaInfo),
+    Repository(RepositoryHandle),
+    Repositories(BTreeMap<String, RepositoryHandle>),
+    SocketAddrs(Vec<SocketAddr>),
+    StorageSize(StorageSize),
+    String(String),
+    Strings(Vec<String>),
 }
 
 impl From<()> for Response {
@@ -36,6 +39,18 @@ impl From<()> for Response {
 impl From<bool> for Response {
     fn from(value: bool) -> Self {
         Self::Bool(value)
+    }
+}
+
+impl From<PathBuf> for Response {
+    fn from(value: PathBuf) -> Self {
+        Self::Path(value)
+    }
+}
+
+impl<'a> From<&'a Path> for Response {
+    fn from(value: &'a Path) -> Self {
+        Self::Path(value.to_owned())
     }
 }
 
@@ -63,8 +78,8 @@ impl From<RepositoryHandle> for Response {
     }
 }
 
-impl From<Vec<RepositoryHandle>> for Response {
-    fn from(value: Vec<RepositoryHandle>) -> Self {
+impl From<BTreeMap<String, RepositoryHandle>> for Response {
+    fn from(value: BTreeMap<String, RepositoryHandle>) -> Self {
         Self::Repositories(value)
     }
 }
@@ -114,12 +129,13 @@ impl fmt::Display for Response {
             }
             Self::Repository(value) => write!(f, "{value}"),
             Self::Repositories(value) => {
-                for item in value {
-                    writeln!(f, "{item}")?;
+                for (name, handle) in value {
+                    writeln!(f, "{name}: {handle}")?;
                 }
 
                 Ok(())
             }
+            Self::Path(value) => write!(f, "{}", value.display()),
             Self::PeerInfo(value) => {
                 for peer in value {
                     writeln!(f, "{}", PeerInfoDisplay(peer))?;

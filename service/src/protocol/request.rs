@@ -1,20 +1,19 @@
 use crate::repository::RepositoryHandle;
 use ouisync::{crypto::Password, AccessMode, PeerAddr, SetLocalSecret, ShareToken, StorageSize};
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::PathBuf, str::FromStr};
+use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[expect(clippy::large_enum_variant)]
 pub enum Request {
     /// Enable/disable remote control endpoint
-    RemoteControlBind {
-        addrs: Vec<SocketAddr>,
-    },
+    RemoteControlBind { addrs: Vec<SocketAddr> },
     /// Enable/disable metrics collection endpoint
-    MetricsBind {
-        addr: Option<SocketAddr>,
-    },
-    RepositoryFind(Pattern),
+    MetricsBind { addr: Option<SocketAddr> },
+    /// Find repository by name. Returns the repository that matches the name exactly or
+    /// unambiguously by prefix.
+    RepositoryFind(String),
     RepositoryCreate {
         name: String,
         read_secret: Option<SetLocalSecret>,
@@ -26,7 +25,14 @@ pub enum Request {
     /// Export repository to a file
     RepositoryExport {
         handle: RepositoryHandle,
-        output: String,
+        output: PathBuf,
+    },
+    /// Import a repository from a file
+    RepositoryImport {
+        input: PathBuf,
+        name: Option<String>,
+        mode: ImportMode,
+        force: bool,
     },
     /*
     Open {
@@ -221,32 +227,6 @@ pub enum Request {
     */
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Pattern {
-    Exact(String),
-    Prefix(String),
-}
-
-impl Pattern {
-    pub fn term(&self) -> &str {
-        match self {
-            Self::Exact(term) => term,
-            Self::Prefix(term) => term,
-        }
-    }
-}
-
-impl From<String> for Pattern {
-    fn from(mut s: String) -> Self {
-        if let Some(prefix) = s.strip_suffix('*') {
-            s.truncate(prefix.len());
-            Self::Prefix(s)
-        } else {
-            Self::Exact(s)
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum ImportMode {
     Copy,
@@ -254,6 +234,10 @@ pub enum ImportMode {
     SoftLink,
     HardLink,
 }
+
+#[derive(Error, Debug)]
+#[error("invalid import mode")]
+pub struct InvalidImportMode;
 
 /*
 

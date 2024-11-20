@@ -1,7 +1,7 @@
 use crate::{
     error::Error,
-    protocol::Pattern,
-    repository::{RepositoryHandle, RepositoryHolder, RepositorySet},
+    protocol::ImportMode,
+    repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     utils,
 };
 use ouisync::{Network, SetLocalSecret, ShareToken};
@@ -72,27 +72,25 @@ impl State {
 
         let repos_monitor = monitor.make_child("Repositories");
 
-        let repos = if let Some(dir) = &store_dir {
-            find_repositories(dir, &config, &network, &repos_monitor).await
-        } else {
-            RepositorySet::new()
-        };
-
         // TODO:
         // const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
         // let state = State::init(&dirs)
         //     .await?
         //     .start_delete_expired_repositories(REPOSITORY_EXPIRATION_POLL_INTERVAL);
 
-        Ok(Self {
+        let mut state = Self {
             config,
             network,
             store_dir,
             repos_monitor,
-            repos,
+            repos: RepositorySet::new(),
             remote_server_config: OnceCell::new(),
             remote_client_config: OnceCell::new(),
-        })
+        };
+
+        state.load_repositories().await;
+
+        Ok(state)
     }
 
     pub fn store_dir(&self) -> Option<&Path> {
@@ -105,11 +103,9 @@ impl State {
         Ok(())
     }
 
-    pub fn find_repositories<'a>(
-        &'a self,
-        pattern: &'a Pattern,
-    ) -> impl Iterator<Item = RepositoryHandle> + 'a {
-        self.repos.find(pattern)
+    pub fn find_repository(&self, name: &str) -> Result<RepositoryHandle, FindError> {
+        let (handle, _) = self.repos.find(name)?;
+        Ok(handle)
     }
 
     pub async fn create_repository(
@@ -119,12 +115,7 @@ impl State {
         write_secret: Option<SetLocalSecret>,
         share_token: Option<ShareToken>,
     ) -> Result<RepositoryHandle, Error> {
-        if self
-            .repos
-            .find(&Pattern::Exact(name.clone()))
-            .next()
-            .is_some()
-        {
+        if self.repos.find(&name).is_ok() {
             Err(Error::RepositoryExists)?;
         }
 
@@ -195,20 +186,74 @@ impl State {
     pub async fn export_repository(
         &self,
         handle: RepositoryHandle,
-        output: String,
-    ) -> Result<String, Error> {
+        output_path: PathBuf,
+    ) -> Result<PathBuf, Error> {
         let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
 
-        let output = PathBuf::from(output);
-        let output = if output.extension().is_some() {
-            output
+        let output_path = if output_path.extension().is_some() {
+            output_path
         } else {
-            output.with_extension(REPOSITORY_FILE_EXTENSION)
+            output_path.with_extension(REPOSITORY_FILE_EXTENSION)
         };
 
-        holder.repository().export(&output).await?;
+        holder.repository().export(&output_path).await?;
 
-        Ok(output.to_string_lossy().into_owned().into())
+        Ok(output_path)
+    }
+
+    pub async fn import_repository(
+        &mut self,
+        input_path: PathBuf,
+        name: Option<String>,
+        mode: ImportMode,
+        force: bool,
+    ) -> Result<RepositoryHandle, Error> {
+        let name = if let Some(name) = name {
+            name
+        } else {
+            input_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let store_path = self.store_path(&name)?;
+
+        if fs::try_exists(&store_path).await? {
+            if force {
+                if let Ok((handle, _)) = self.repos.find(&name) {
+                    if let Some(mut holder) = self.repos.remove(handle) {
+                        holder.close().await?;
+                    }
+                }
+            } else {
+                return Err(Error::RepositoryExists);
+            }
+        }
+
+        match mode {
+            ImportMode::Copy => {
+                fs::copy(input_path, &store_path).await?;
+            }
+            ImportMode::Move => {
+                fs::rename(input_path, &store_path).await?;
+            }
+            ImportMode::SoftLink => {
+                #[cfg(unix)]
+                fs::symlink(input_path, &store_path).await?;
+
+                #[cfg(windows)]
+                fs::symlink_file(input_path, &store_path).await?;
+
+                #[cfg(not(any(unix, windows)))]
+                return Err(Error::OperationNotSupported);
+            }
+            ImportMode::HardLink => {
+                fs::hard_link(input_path, &store_path).await?;
+            }
+        }
+
+        self.open_repository(&store_path).await
     }
 
     pub async fn set_default_repository_expiration(
@@ -256,6 +301,80 @@ impl State {
         todo!()
     }
 
+    // Find all repositories in the store dir and open them.
+    async fn load_repositories(&mut self) {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            tracing::error!("store dir isn't specified");
+            return;
+        };
+
+        if !fs::try_exists(store_dir).await.unwrap_or(false) {
+            tracing::error!("store dir doesn't exist");
+            return;
+        }
+
+        let mut walkdir = utils::walk_dir(store_dir);
+
+        while let Some(entry) = walkdir.next().await {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    tracing::error!(?error, "failed to read directory entry");
+                    continue;
+                }
+            };
+
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+
+            if path.extension() != Some(OsStr::new(REPOSITORY_FILE_EXTENSION)) {
+                continue;
+            }
+
+            match self.open_repository(path).await {
+                Ok(_) => (),
+                Err(error) => {
+                    tracing::error!(?error, ?path, "failed to open repository");
+                    continue;
+                }
+            }
+        }
+    }
+
+    async fn open_repository(&mut self, path: &Path) -> Result<RepositoryHandle, Error> {
+        let repo = ouisync_bridge::repository::open(
+            path.to_path_buf(),
+            None,
+            &self.config,
+            &self.repos_monitor,
+        )
+        .await?;
+
+        let name = self
+            .store_dir
+            .as_deref()
+            .and_then(|store_dir| path.strip_prefix(store_dir).ok())
+            .unwrap_or(path)
+            .with_extension("")
+            .to_string_lossy()
+            .into_owned();
+
+        tracing::info!(name, "repository opened");
+
+        let registration = self.network.register(repo.handle()).await;
+
+        let mut holder = RepositoryHolder::new(name, repo);
+        holder.enable_sync(registration);
+
+        // TODO: mount
+        //     holder.mount(&dirs.mount_dir).await.ok();
+
+        self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
+    }
+
     fn store_path(&self, repo_name: &str) -> Result<PathBuf, Error> {
         let store_dir = self
             .store_dir
@@ -275,81 +394,6 @@ impl State {
 
         Ok(store_dir.join(suffix).with_extension(extension))
     }
-}
-
-// Find repositories that are marked to be opened on startup and open them.
-pub(crate) async fn find_repositories(
-    store_dir: &Path,
-    config: &ConfigStore,
-    network: &Network,
-    monitor: &StateMonitor,
-) -> RepositorySet {
-    let mut repositories = RepositorySet::new();
-
-    if !fs::try_exists(store_dir).await.unwrap_or(false) {
-        tracing::error!("store dir doesn't exist");
-        return repositories;
-    }
-
-    let mut walkdir = utils::walk_dir(store_dir);
-
-    while let Some(entry) = walkdir.next().await {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                tracing::error!(?error, "failed to read directory entry");
-                continue;
-            }
-        };
-
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let path = entry.path();
-
-        if path.extension() != Some(OsStr::new(REPOSITORY_FILE_EXTENSION)) {
-            continue;
-        }
-
-        let repo = match ouisync_bridge::repository::open(path.to_path_buf(), None, config, monitor)
-            .await
-        {
-            Ok(repo) => repo,
-            Err(error) => {
-                tracing::error!(?error, ?path, "failed to open repository");
-                continue;
-            }
-        };
-
-        let name = path
-            .strip_prefix(store_dir)
-            .unwrap_or(path)
-            .with_extension("")
-            .to_string_lossy()
-            .into_owned();
-
-        tracing::info!(%name, "Repository opened");
-
-        let registration = network.register(repo.handle()).await;
-
-        let mut holder = RepositoryHolder::new(name, repo);
-        holder.enable_sync(registration);
-
-        // TODO: mount
-        //     holder.mount(&dirs.mount_dir).await.ok();
-
-        let (_, old) = repositories.insert(holder);
-
-        if let Some(old) = old {
-            panic!(
-                "multiple repositories with the same name found: \"{}\"",
-                old.name()
-            );
-        }
-    }
-
-    repositories
 }
 
 async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfig>, Error> {

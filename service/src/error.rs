@@ -8,6 +8,8 @@ pub enum Error {
     Config(#[from] ConfigError),
     #[error("I/O error")]
     Io(#[from] io::Error),
+    #[error("operation not supported")]
+    OperationNotSupported,
     #[error("repository error")]
     Repository(#[from] ouisync::Error),
     #[error("repository already exists")]

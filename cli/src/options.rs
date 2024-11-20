@@ -1,6 +1,6 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use ouisync_bridge::logger::{LogColor, LogFormat};
-use ouisync_service::protocol::ImportMode;
+use ouisync_service::protocol::ImportMode as ServiceImportMode;
 use std::{env, net::SocketAddr, path::PathBuf};
 
 #[derive(Parser, Debug)]
@@ -112,11 +112,13 @@ pub(crate) enum ClientCommand {
         #[arg(value_name = "PATH")]
         output: PathBuf,
     },
-    /*
     /// Import a repository from a file
-    Import {
+    ImportRepository {
+        /// File to import the repository from
+        #[arg(value_name = "PATH")]
+        input: PathBuf,
+
         /// Name for the repository. Default is the filename the repository is imported from.
-        #[arg(short, long)]
         name: Option<String>,
 
         /// How to import the repository
@@ -126,11 +128,8 @@ pub(crate) enum ClientCommand {
         /// Overwrite the destination if it exists
         #[arg(short, long)]
         force: bool,
-
-        /// File to import the repository from
-        #[arg(value_name = "PATH")]
-        input: PathBuf,
     },
+    /*
     /// Print share token for a repository
     Share {
         /// Name of the repository to share
@@ -330,6 +329,27 @@ pub(crate) enum ClientCommand {
     },
 
     */
+}
+
+// This is the same as `ImportMove` from the `ouisync-service` library but we need to copy it here
+// to work around the orphan rule.
+#[derive(Clone, Copy, ValueEnum, Debug)]
+pub enum ImportMode {
+    Copy,
+    Move,
+    SoftLink,
+    HardLink,
+}
+
+impl From<ImportMode> for ServiceImportMode {
+    fn from(value: ImportMode) -> Self {
+        match value {
+            ImportMode::Copy => ServiceImportMode::Copy,
+            ImportMode::Move => ServiceImportMode::Move,
+            ImportMode::SoftLink => ServiceImportMode::SoftLink,
+            ImportMode::HardLink => ServiceImportMode::HardLink,
+        }
+    }
 }
 
 /// Path to the config directory.

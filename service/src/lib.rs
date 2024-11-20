@@ -111,11 +111,7 @@ impl Service {
             Request::MetricsBind { addr } => {
                 Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
-            Request::RepositoryFind(pattern) => Ok(self
-                .state
-                .find_repositories(&pattern)
-                .collect::<Vec<_>>()
-                .into()),
+            Request::RepositoryFind(name) => Ok(self.state.find_repository(&name)?.into()),
             Request::RepositoryCreate {
                 name,
                 read_secret,
@@ -127,15 +123,27 @@ impl Service {
                     .create_repository(name, read_secret, write_secret, share_token)
                     .await?;
 
-                Ok(vec![handle].into())
+                Ok(handle.into())
             }
             Request::RepositoryDelete(handle) => {
                 self.state.delete_repository(handle).await?;
                 Ok(().into())
             }
             Request::RepositoryExport { handle, output } => {
-                self.state.export_repository(handle, output).await?;
-                Ok(().into())
+                let output = self.state.export_repository(handle, output).await?;
+                Ok(output.into())
+            }
+            Request::RepositoryImport {
+                input,
+                name,
+                mode,
+                force,
+            } => {
+                let handle = self
+                    .state
+                    .import_repository(input, name, mode, force)
+                    .await?;
+                Ok(handle.into())
             }
         }
     }

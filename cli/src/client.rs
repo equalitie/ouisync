@@ -3,8 +3,7 @@ use futures_util::SinkExt;
 use ouisync_lib::{crypto::Password, SetLocalSecret, ShareToken};
 use ouisync_service::{
     protocol::{
-        Message, MessageId, Pattern, ProtocolError, RepositoryHandle, Request, Response,
-        ServerPayload,
+        Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ServerPayload,
     },
     transport::{self, LocalClientReader, LocalClientWriter, ReadError, WriteError},
 };
@@ -72,35 +71,46 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         ClientCommand::ExportRepository { name, output } => {
             let handle = client.find_repository(name).await?;
             Request::RepositoryExport { handle, output }
-        } // Request::Share {
-          //     name,
-          //     mode,
-          //     password,
-          // } => {
-          //     let password = get_or_read(password, "input password").await?;
-          //     Request::Share {
-          //         name,
-          //         mode,
-          //         password,
-          //     }
-          // }
-          // Request::Export { name, output } => Request::Export {
-          //     name,
-          //     output: to_absolute(output)?,
-          // },
-          // Request::Import {
-          //     name,
-          //     mode,
-          //     force,
-          //     input,
-          // } => Request::Import {
-          //     name,
-          //     mode,
-          //     force,
-          //     input: to_absolute(input)?,
-          // },
+        }
+        ClientCommand::ImportRepository {
+            input,
+            name,
+            mode,
+            force,
+        } => Request::RepositoryImport {
+            input,
+            name,
+            mode: mode.into(),
+            force,
+        }, // Request::Share {
+           //     name,
+           //     mode,
+           //     password,
+           // } => {
+           //     let password = get_or_read(password, "input password").await?;
+           //     Request::Share {
+           //         name,
+           //         mode,
+           //         password,
+           //     }
+           // }
+           // Request::Export { name, output } => Request::Export {
+           //     name,
+           //     output: to_absolute(output)?,
+           // },
+           // Request::Import {
+           //     name,
+           //     mode,
+           //     force,
+           //     input,
+           // } => Request::Import {
+           //     name,
+           //     mode,
+           //     force,
+           //     input: to_absolute(input)?,
+           // },
 
-          // _ => request,
+           // _ => request,
     };
 
     let response = client.invoke(request).await?;
@@ -146,13 +156,10 @@ impl LocalClient {
         }
     }
 
-    async fn find_repository(&mut self, pattern: String) -> Result<RepositoryHandle, ClientError> {
-        let response = self
-            .invoke(Request::RepositoryFind(Pattern::from(pattern)))
-            .await?;
+    async fn find_repository(&mut self, name: String) -> Result<RepositoryHandle, ClientError> {
+        let response = self.invoke(Request::RepositoryFind(name)).await?;
 
         match response {
-            Response::Repositories(handles) if handles.len() == 1 => Ok(handles[0]),
             Response::Repository(handle) => Ok(handle),
             _ => Err(ClientError::UnexpectedResponse),
         }

@@ -381,13 +381,6 @@ impl RepositoryMap {
     }
 }
 
-#[derive(Debug, Error)]
-pub(crate) enum FindError {
-    #[error("repository not found")]
-    NotFound,
-    #[error("repository name is ambiguous")]
-    Ambiguous,
-}
 
 
 

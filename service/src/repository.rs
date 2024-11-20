@@ -1,4 +1,4 @@
-use crate::{error::Error, protocol::Pattern};
+use crate::error::Error;
 use ouisync::{Registration, Repository};
 use serde::{Deserialize, Serialize};
 use slab::Slab;
@@ -8,6 +8,7 @@ use std::{
     ops::Bound,
     time::Duration,
 };
+use thiserror::Error;
 
 const EXPIRATION_KEY: &str = "expiration";
 
@@ -65,14 +66,41 @@ impl RepositorySet {
         self.repos.get_mut(handle.0)
     }
 
-    pub fn find<'a>(&'a self, pattern: &'a Pattern) -> impl Iterator<Item = RepositoryHandle> + 'a {
-        self.index
-            .range::<str, _>((Bound::Included(pattern.term()), Bound::Unbounded))
-            .take_while(move |(name, _)| match pattern {
-                Pattern::Prefix(pattern) => name.starts_with(pattern),
-                Pattern::Exact(pattern) => name.as_str() == pattern,
-            })
-            .map(|(_, handle)| RepositoryHandle(*handle))
+    pub fn find(&self, prefix: &str) -> Result<(RepositoryHandle, &RepositoryHolder), FindError> {
+        let handle = self.find_handle(prefix)?;
+        let holder = self.get(handle).ok_or(FindError::NotFound)?;
+
+        Ok((handle, holder))
+    }
+
+    pub fn find_mut(
+        &mut self,
+        prefix: &str,
+    ) -> Result<(RepositoryHandle, &mut RepositoryHolder), FindError> {
+        let handle = self.find_handle(prefix)?;
+        let holder = self.get_mut(handle).ok_or(FindError::NotFound)?;
+
+        Ok((handle, holder))
+    }
+
+    fn find_handle(&self, prefix: &str) -> Result<RepositoryHandle, FindError> {
+        let mut iter = self
+            .index
+            .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
+            .take_while(|(name, _)| name.starts_with(prefix));
+
+        let (name, &handle) = iter.next().ok_or(FindError::NotFound)?;
+
+        if name.len() == prefix.len() {
+            // Exact match
+            Ok(RepositoryHandle(handle))
+        } else if iter.next().is_none() {
+            // Unambiguous prefix match
+            Ok(RepositoryHandle(handle))
+        } else {
+            // Ambiguous prefix match
+            Err(FindError::Ambiguous)
+        }
     }
 }
 
@@ -148,6 +176,14 @@ impl RepositoryHolder {
 
         Ok(())
     }
+}
+
+#[derive(Error, Debug)]
+pub(crate) enum FindError {
+    #[error("repository not found")]
+    NotFound,
+    #[error("repository name is ambiguous")]
+    Ambiguous,
 }
 
 // #[cfg(test)]

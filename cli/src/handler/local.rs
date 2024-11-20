@@ -44,65 +44,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 .set(self.state.clone(), &addrs)
                 .await?
                 .into()),
-            Request::Import {
-                name,
-                mode,
-                force,
-                input,
-            } => {
-                let name = if let Some(name) = name {
-                    name
-                } else {
-                    input
-                        .file_stem()
-                        .ok_or(RepositoryNameInvalid)?
-                        .to_str()
-                        .ok_or(RepositoryNameInvalid)?
-                        .to_owned()
-                };
-                let name = RepositoryName::try_from(name)?;
-                let store_path = self.state.store_path(&name);
-
-                if fs::try_exists(&store_path).await? {
-                    if force {
-                        if let Some(holder) = self.state.repositories.remove(&name) {
-                            holder.repository.close().await?;
-                        }
-                    } else {
-                        return Err(ProtocolError::new(
-                            "repository already exists (use --force to overwrite)",
-                        ));
-                    }
-                }
-
-                match mode {
-                    ImportMode::Copy => {
-                        fs::copy(input, store_path).await?;
-                    }
-                    ImportMode::Move => {
-                        fs::rename(input, store_path).await?;
-                    }
-                    ImportMode::SoftLink => {
-                        #[cfg(unix)]
-                        fs::symlink(input, store_path).await?;
-
-                        #[cfg(windows)]
-                        fs::symlink_file(input, store_path).await?;
-
-                        #[cfg(not(any(unix, windows)))]
-                        return Err(ProtocolError::new(
-                            "symlinks not supported on this platform",
-                        ));
-                    }
-                    ImportMode::HardLink => {
-                        fs::hard_link(input, store_path).await?;
-                    }
-                }
-
-                self.state.open_repository(name, None).await?;
-
-                Ok(().into())
-            }
             Request::Share {
                 name,
                 mode,
