@@ -9,4 +9,4 @@ pub use error::ProtocolError;
 pub use message::{DecodeError, EncodeError, Message, MessageId};
 pub use payload::{Notification, ServerPayload};
 pub use request::{ImportMode, Request};
-pub use response::{QuotaInfo, Response};
+pub use response::{QuotaInfo, Response, UnexpectedResponse};

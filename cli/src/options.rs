@@ -1,5 +1,8 @@
-use clap::{Parser, Subcommand};
-use ouisync::AccessMode;
+use clap::{
+    builder::{ArgPredicate, BoolishValueParser},
+    Parser, Subcommand,
+};
+use ouisync::{AccessMode, PeerAddr};
 use ouisync_bridge::logger::{LogColor, LogFormat};
 use ouisync_service::protocol::ImportMode;
 use std::{env, net::SocketAddr, path::PathBuf};
@@ -51,6 +54,22 @@ pub(crate) enum ServerCommand {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum ClientCommand {
+    /// Manually add peers.
+    AddPeers {
+        #[arg(required = true, value_name = "PROTO/IP:PORT")]
+        addrs: Vec<PeerAddr>,
+    },
+    /// Listen on the specified addresses. Replaces all current listeners. If no addresses are
+    /// specified, stops all current listeners.
+    Bind {
+        /// Addresses to listen on. PROTO is one of "quic" or "tcp", IP is a IPv4 or IPv6 address
+        /// and PORT is a port number. If IP is 0.0.0.0 or [::] binds to all interfaces. If PORT is
+        /// 0, binds to a random port.
+        ///
+        /// Examples: quic/0.0.0.0:0, quic/[::]:0, tcp/192.168.0.100:55555
+        #[arg(value_name = "PROTO/IP:PORT")]
+        addrs: Vec<PeerAddr>,
+    },
     /// Create a new repository
     #[command(visible_aliases = ["mk"])]
     Create {
@@ -79,6 +98,15 @@ pub(crate) enum ClientCommand {
     Delete {
         /// Name of the repository to delete
         name: String,
+    },
+    /// Enable or disable DHT
+    Dht {
+        // Name of the repository to enable/disable DHT for
+        name: String,
+
+        /// Whether to enable or disable. If omitted, prints the current state.
+        #[arg(value_parser = BoolishValueParser::new())]
+        enabled: Option<bool>,
     },
     /// Export a repository to a file
     ///
@@ -111,9 +139,23 @@ pub(crate) enum ClientCommand {
         #[arg(short, long)]
         force: bool,
     },
+    /// List addresses and ports we are listening on
+    ListBinds,
+    /// List all known peers.
+    ///
+    /// Prints one peer per line, each line consists of the following space-separated fields: ip,
+    /// port, protocol, source, state, runtime id, active since, bytes sent, bytes received, last
+    /// received at.
+    ListPeers,
     /// List all repositories
     #[command(visible_alias = "ls", alias = "list-repos")]
     ListRepositories,
+    /// Enable or disable local discovery
+    LocalDiscovery {
+        /// Whether to enable or disable. If omitted, prints the current state.
+        #[arg(value_parser = BoolishValueParser::new())]
+        enabled: Option<bool>,
+    },
     /// Bind the metrics collection endpoint to the specified address.
     Metrics {
         /// Address to bind the metrics endpoint to. If specified, metrics collection is enabled
@@ -129,6 +171,47 @@ pub(crate) enum ClientCommand {
     },
     /// Get or set the mount directory
     MountDir { path: Option<PathBuf> },
+    /// Configure Peer Exchange (PEX)
+    Pex {
+        /// Name of the repository to enable/disable PEX for.
+        name: Option<String>,
+
+        /// Enable/disable PEX for the specified repository. If omitted, prints the current state.
+        #[arg(
+            requires_if(ArgPredicate::IsPresent, "name"),
+            value_parser = BoolishValueParser::new(),
+        )]
+        enabled: Option<bool>,
+
+        /// Globally enable/disable sending contacts over PEX. If all of name, send, recv are
+        /// omitted, prints the current state.
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["name", "enabled"],
+            value_parser = BoolishValueParser::new(),
+            value_name = "ENABLED"
+        )]
+        send: Option<bool>,
+
+        /// Globally enable/disable receiving contacts over PEX. If all of name, send, recv are
+        /// omitted, prints the current state.
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["name", "enabled"],
+            value_parser = BoolishValueParser::new(),
+            value_name = "ENABLED"
+        )]
+        recv: Option<bool>,
+    },
+    /// Enable or disable port forwarding
+    #[command(visible_alias = "upnp")]
+    PortForwarding {
+        /// Whether to enable or disable. If omitted, prints the current state.
+        #[arg(value_parser = BoolishValueParser::new())]
+        enabled: Option<bool>,
+    },
     /// Bind the remote API to the specified addresses.
     ///
     /// Overwrites any previously specified addresses.
@@ -138,6 +221,11 @@ pub(crate) enum ClientCommand {
         /// disables the remote API.
         #[arg(value_name = "IP:PORT")]
         addrs: Vec<SocketAddr>,
+    },
+    /// Remove manually added peers.
+    RemovePeers {
+        #[arg(required = true, value_name = "PROTO/IP:PORT")]
+        addrs: Vec<PeerAddr>,
     },
     /// Print the share token of a repository
     Share {
@@ -170,91 +258,6 @@ pub(crate) enum ClientCommand {
         /// Domain name or network address of the server to host the mirror
         #[arg(short = 'H', long)]
         host: String,
-    },
-    /// Bind the sync protocol to the specified addresses
-    Bind {
-        /// Addresses to bind to. PROTO is one of "quic" or "tcp", IP is a IPv4 or IPv6 address and
-        /// PORT is a port number. If IP is 0.0.0.0 or [::] binds to all interfaces. If PORT is 0
-        /// binds to a random port.
-        ///
-        /// Examples: quic/0.0.0.0:0, quic/[::]:0, tcp/192.168.0.100:55555
-        #[arg(value_name = "PROTO/IP:PORT")]
-        addrs: Vec<PeerAddr>,
-    },
-    /// List addresses and ports we are listening on
-    ListBinds,
-    /// Enable or disable local discovery
-    LocalDiscovery {
-        /// Whether to enable or disable. If omitted, prints the current state.
-        #[arg(value_parser = BoolishValueParser::new())]
-        enabled: Option<bool>,
-    },
-    /// Enable or disable port forwarding
-    #[command(visible_alias = "upnp")]
-    PortForwarding {
-        /// Whether to enable or disable. If omitted, prints the current state.
-        #[arg(value_parser = BoolishValueParser::new())]
-        enabled: Option<bool>,
-    },
-    /// Manually add peers.
-    AddPeers {
-        #[arg(required = true, value_name = "PROTO/IP:PORT")]
-        addrs: Vec<PeerAddr>,
-    },
-    /// Remove manually added peers.
-    RemovePeers {
-        #[arg(required = true, value_name = "PROTO/IP:PORT")]
-        addrs: Vec<PeerAddr>,
-    },
-    /// List all known peers.
-    ///
-    /// Prints one peer per line, each line consists of the following space-separated fields: ip,
-    /// port, protocol, source, state, runtime id, active since, bytes sent, bytes received, last
-    /// received at.
-    ListPeers,
-    /// Enable or disable DHT
-    Dht {
-        #[arg(short = 'n', long)]
-        name: String,
-
-        /// Whether to enable or disable. If omitted, prints the current state.
-        #[arg(value_parser = BoolishValueParser::new())]
-        enabled: Option<bool>,
-    },
-    /// Configure Peer Exchange (PEX)
-    Pex {
-        /// Name of the repository to enable/disable PEX for.
-        #[arg(short = 'n', long)]
-        name: Option<String>,
-
-        /// Globally enable/disable sending contacts over PEX. If all of name, send, recv are
-        /// omitted, prints the current state.
-        #[arg(
-            short,
-            long,
-            conflicts_with_all = ["name", "enabled"],
-            value_parser = BoolishValueParser::new(),
-            value_name = "ENABLED"
-        )]
-        send: Option<bool>,
-
-        /// Globally enable/disable receiving contacts over PEX. If all of name, send, recv are
-        /// omitted, prints the current state.
-        #[arg(
-            short,
-            long,
-            conflicts_with_all = ["name", "enabled"],
-            value_parser = BoolishValueParser::new(),
-            value_name = "ENABLED"
-        )]
-        recv: Option<bool>,
-
-        /// Enable/disable PEX for the specified repository. If omitted, prints the current state.
-        #[arg(
-            requires_if(ArgPredicate::IsPresent, "name"),
-            value_parser = BoolishValueParser::new(),
-        )]
-        enabled: Option<bool>,
     },
     /// Get or set storage quota
     Quota {

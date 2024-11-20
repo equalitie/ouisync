@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Response {
@@ -34,9 +35,31 @@ impl From<()> for Response {
     }
 }
 
+impl TryFrom<Response> for () {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::None => Ok(()),
+            _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
 impl From<bool> for Response {
     fn from(value: bool) -> Self {
         Self::Bool(value)
+    }
+}
+
+impl TryFrom<Response> for bool {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::Bool(value) => Ok(value),
+            _ => Err(UnexpectedResponse),
+        }
     }
 }
 
@@ -111,6 +134,10 @@ impl From<QuotaInfo> for Response {
         Self::QuotaInfo(value)
     }
 }
+
+#[derive(Error, Debug)]
+#[error("unexpected response")]
+pub struct UnexpectedResponse;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QuotaInfo {

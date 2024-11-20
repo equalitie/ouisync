@@ -52,62 +52,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 Ok(().into())
             }
-            Request::Bind { addrs } => {
-                network::bind(&self.state.network, &self.state.config, &addrs).await;
-                Ok(().into())
-            }
-            Request::ListBinds => Ok(self.state.network.listener_local_addrs().into()),
-            Request::LocalDiscovery { enabled } => {
-                if let Some(enabled) = enabled {
-                    network::set_local_discovery_enabled(
-                        &self.state.network,
-                        &self.state.config,
-                        enabled,
-                    )
-                    .await;
-                    Ok(().into())
-                } else {
-                    Ok(self.state.network.is_local_discovery_enabled().into())
-                }
-            }
-            Request::PortForwarding { enabled } => {
-                if let Some(enabled) = enabled {
-                    network::set_port_forwarding_enabled(
-                        &self.state.network,
-                        &self.state.config,
-                        enabled,
-                    )
-                    .await;
-                    Ok(().into())
-                } else {
-                    Ok(self.state.network.is_port_forwarding_enabled().into())
-                }
-            }
-            Request::AddPeers { addrs } => {
-                network::add_user_provided_peers(&self.state.network, &self.state.config, &addrs)
-                    .await;
-                Ok(().into())
-            }
-            Request::RemovePeers { addrs } => {
-                network::remove_user_provided_peers(
-                    &self.state.network,
-                    &self.state.config,
-                    &addrs,
-                )
-                .await;
-                Ok(().into())
-            }
-            Request::ListPeers => Ok(self.state.network.peer_info_collector().collect().into()),
-            Request::Dht { name, enabled } => {
-                let holder = self.state.repositories.find(&name)?;
-
-                if let Some(enabled) = enabled {
-                    holder.registration.set_dht_enabled(enabled).await;
-                    Ok(().into())
-                } else {
-                    Ok(holder.registration.is_dht_enabled().into())
-                }
-            }
             Request::Pex {
                 name,
                 enabled,

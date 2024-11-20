@@ -146,6 +146,10 @@ impl RepositoryHolder {
         &self.repo
     }
 
+    pub fn registration(&self) -> Option<&Registration> {
+        self.registration.as_ref()
+    }
+
     pub fn enable_sync(&mut self, registration: Registration) {
         self.registration = Some(registration);
     }

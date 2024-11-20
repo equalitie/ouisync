@@ -4,7 +4,7 @@ use crate::{
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     utils,
 };
-use ouisync::{AccessMode, LocalSecret, Network, SetLocalSecret, ShareToken};
+use ouisync::{AccessMode, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken};
 use ouisync_bridge::{
     config::{ConfigKey, ConfigStore},
     network::{self, NetworkDefaults},
@@ -106,6 +106,33 @@ impl State {
         state.load_repositories().await;
 
         Ok(state)
+    }
+
+    pub async fn bind_network(&self, addrs: Vec<PeerAddr>) {
+        network::bind(&self.network, &self.config, &addrs).await
+    }
+
+    pub async fn add_user_provided_peers(&self, addrs: Vec<PeerAddr>) {
+        ouisync_bridge::network::add_user_provided_peers(&self.network, &self.config, &addrs).await
+    }
+
+    pub async fn remove_user_provided_peers(&self, addrs: Vec<PeerAddr>) {
+        ouisync_bridge::network::remove_user_provided_peers(&self.network, &self.config, &addrs)
+            .await
+    }
+
+    pub async fn user_provided_peers(&self) -> Vec<PeerAddr> {
+        ouisync_bridge::network::user_provided_peers(&self.config).await
+    }
+
+    pub async fn set_local_discovery_enabled(&self, enabled: bool) {
+        ouisync_bridge::network::set_local_discovery_enabled(&self.network, &self.config, enabled)
+            .await;
+    }
+
+    pub async fn set_port_forwarding_enabled(&self, enabled: bool) {
+        ouisync_bridge::network::set_port_forwarding_enabled(&self.network, &self.config, enabled)
+            .await
     }
 
     pub fn store_dir(&self) -> Option<&Path> {
@@ -342,6 +369,64 @@ impl State {
         mounter.remove(holder.name())?;
 
         Ok(())
+    }
+
+    pub fn is_repository_dht_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::RepositoryNotFound)?
+            .registration()
+            .ok_or(Error::RepositorySyncDisabled)?
+            .is_dht_enabled())
+    }
+
+    pub async fn set_repository_dht_enabled(
+        &self,
+        handle: RepositoryHandle,
+        enabled: bool,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(handle)
+            .ok_or(Error::RepositoryNotFound)?
+            .registration()
+            .ok_or(Error::RepositorySyncDisabled)?
+            .set_dht_enabled(enabled)
+            .await;
+        Ok(())
+    }
+
+    pub fn is_repository_pex_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::RepositoryNotFound)?
+            .registration()
+            .ok_or(Error::RepositorySyncDisabled)?
+            .is_pex_enabled())
+    }
+
+    pub async fn set_repository_pex_enabled(
+        &self,
+        handle: RepositoryHandle,
+        enabled: bool,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(handle)
+            .ok_or(Error::RepositoryNotFound)?
+            .registration()
+            .ok_or(Error::RepositorySyncDisabled)?
+            .set_pex_enabled(enabled)
+            .await;
+        Ok(())
+    }
+
+    pub async fn set_pex_send_enabled(&self, enabled: bool) {
+        ouisync_bridge::network::set_pex_send_enabled(&self.network, &self.config, enabled).await
+    }
+
+    pub async fn set_pex_recv_enabled(&self, enabled: bool) {
+        ouisync_bridge::network::set_pex_recv_enabled(&self.network, &self.config, enabled).await
     }
 
     pub async fn set_default_repository_expiration(

@@ -21,6 +21,8 @@ pub enum Error {
     RepositoryExists,
     #[error("repository not found")]
     RepositoryNotFound,
+    #[error("repository sync is disabled")]
+    RepositorySyncDisabled,
     #[error("store dir not specified")]
     StoreDirUnspecified,
     #[error("store error")]

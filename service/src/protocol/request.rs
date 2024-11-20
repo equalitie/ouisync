@@ -9,6 +9,20 @@ use thiserror::Error;
 #[derive(Debug, Serialize, Deserialize)]
 #[expect(clippy::large_enum_variant)]
 pub enum Request {
+    NetworkAddUserProvidedPeers(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
+    NetworkRemoveUserProvidedPeers(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
+    NetworkBind(Vec<PeerAddr>),
+    NetworkGetListenerAddrs,
+    NetworkGetPeers,
+    NetworkGetUserProvidedPeers,
+    NetworkIsLocalDiscoveryEnabled,
+    NetworkIsPexRecvEnabled,
+    NetworkIsPexSendEnabled,
+    NetworkIsPortForwardingEnabled,
+    NetworkSetLocalDiscoveryEnabled(bool),
+    NetworkSetPexRecvEnabled(bool),
+    NetworkSetPexSendEnabled(bool),
+    NetworkSetPortForwardingEnabled(bool),
     /// Enable/disable remote control endpoint
     RemoteControlBind {
         addrs: Vec<SocketAddr>,
@@ -17,15 +31,11 @@ pub enum Request {
     MetricsBind {
         addr: Option<SocketAddr>,
     },
-    StoreDirSet(PathBuf),
-    StoreDirGet,
-    MountDirSet(PathBuf),
-    MountDirGet,
-    /// List all repositories
+    RepositoriesGetStoreDir,
+    RepositoriesGetMountDir,
     RepositoriesList,
-    /// Find repository by name. Returns the repository that matches the name exactly or
-    /// unambiguously by prefix.
-    RepositoryFind(String),
+    RepositoriesSetMountDir(PathBuf),
+    RepositoriesSetStoreDir(PathBuf),
     RepositoryCreate {
         name: String,
         read_secret: Option<SetLocalSecret>,
@@ -39,6 +49,9 @@ pub enum Request {
         handle: RepositoryHandle,
         output: PathBuf,
     },
+    /// Find repository by name. Returns the repository that matches the name exactly or
+    /// unambiguously by prefix.
+    RepositoryFind(String),
     /// Import a repository from a file
     RepositoryImport {
         input: PathBuf,
@@ -46,6 +59,8 @@ pub enum Request {
         mode: ImportMode,
         force: bool,
     },
+    RepositoryIsDhtEnabled(RepositoryHandle),
+    RepositoryIsPexEnabled(RepositoryHandle),
     /// Mount repository
     RepositoryMount(RepositoryHandle),
     RepositoryShare {
@@ -55,6 +70,14 @@ pub enum Request {
     },
     /// Unmount repository
     RepositoryUnmount(RepositoryHandle),
+    RepositorySetDhtEnabled {
+        handle: RepositoryHandle,
+        enabled: bool,
+    },
+    RepositorySetPexEnabled {
+        handle: RepositoryHandle,
+        enabled: bool,
+    },
     /*
     Open {
         name: String,
@@ -97,66 +120,6 @@ pub enum Request {
 
         /// Domain name or network address of the server to host the mirror
         host: String,
-    },
-    /// List open repositories
-    ListRepositories,
-    /// Bind the sync protocol to the specified addresses
-    Bind {
-        /// Addresses to bind to. PROTO is one of "quic" or "tcp", IP is a IPv4 or IPv6 address and
-        /// PORT is a port number. If IP is 0.0.0.0 or [::] binds to all interfaces. If PORT is 0
-        /// binds to a random port.
-        ///
-        /// Examples: quic/0.0.0.0:0, quic/[::]:0, tcp/192.168.0.100:55555
-        addrs: Vec<PeerAddr>,
-    },
-    /// List addresses and ports we are listening on
-    ListBinds,
-    /// Enable or disable local discovery
-    LocalDiscovery {
-        /// Whether to enable or disable. If omitted, prints the current state.
-        enabled: Option<bool>,
-    },
-    /// Enable or disable port forwarding
-    PortForwarding {
-        /// Whether to enable or disable. If omitted, prints the current state.
-        enabled: Option<bool>,
-    },
-    /// Manually add peers.
-    AddPeers {
-        addrs: Vec<PeerAddr>,
-    },
-    /// Remove manually added peers.
-    RemovePeers {
-        addrs: Vec<PeerAddr>,
-    },
-    /// List all known peers.
-    ///
-    /// Prints one peer per line, each line consists of the following space-separated fields: ip,
-    /// port, protocol, source, state, runtime id, active since, bytes sent, bytes received, last
-    /// received at.
-    ListPeers,
-    /// Enable or disable DHT
-    Dht {
-        name: String,
-
-        /// Whether to enable or disable. If omitted, prints the current state.
-        enabled: Option<bool>,
-    },
-    /// Configure Peer Exchange (PEX)
-    Pex {
-        /// Name of the repository to enable/disable PEX for.
-        name: Option<String>,
-
-        /// Globally enable/disable sending contacts over PEX. If all of name, send, recv are
-        /// omitted, prints the current state.
-        send: Option<bool>,
-
-        /// Globally enable/disable receiving contacts over PEX. If all of name, send, recv are
-        /// omitted, prints the current state.
-        recv: Option<bool>,
-
-        /// Enable/disable PEX for the specified repository. If omitted, prints the current state.
-        enabled: Option<bool>,
     },
     /// Get or set storage quota
     Quota {
@@ -208,52 +171,8 @@ pub enum Request {
         /// disables the remote API.
         addrs: Vec<SocketAddr>,
     },
-    /// Bind the metrics endpoint to the specified address.
-    Metrics {
-        /// Address to bind the metrics endpoint to. If specified, metrics collection is enabled
-        /// and the collected metrics are served from this endpoint. If not specified, metrics
-        /// collection is disabled.
-        addr: Option<SocketAddr>,
-    },
     */
 }
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub enum ImportMode {
-    Copy,
-    Move,
-    SoftLink,
-    HardLink,
-}
-
-impl FromStr for ImportMode {
-    type Err = InvalidImportMode;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim_start().chars().next() {
-            Some('c') | Some('C') => Ok(Self::Copy),
-            Some('m') | Some('M') => Ok(Self::Move),
-            Some('s') | Some('S') => Ok(Self::SoftLink),
-            Some('h') | Some('H') => Ok(Self::HardLink),
-            _ => Err(InvalidImportMode),
-        }
-    }
-}
-
-impl fmt::Display for ImportMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Copy => write!(f, "copy"),
-            Self::Move => write!(f, "move"),
-            Self::SoftLink => write!(f, "softlink"),
-            Self::HardLink => write!(f, "hardlink"),
-        }
-    }
-}
-
-#[derive(Error, Debug)]
-#[error("invalid import mode")]
-pub struct InvalidImportMode;
 
 /*
 
@@ -308,16 +227,6 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         src: Utf8PathBuf,
         dst: Utf8PathBuf,
-    },
-    RepositoryIsDhtEnabled(RepositoryHandle),
-    RepositorySetDhtEnabled {
-        repository: RepositoryHandle,
-        enabled: bool,
-    },
-    RepositoryIsPexEnabled(RepositoryHandle),
-    RepositorySetPexEnabled {
-        repository: RepositoryHandle,
-        enabled: bool,
     },
     RepositorySyncProgress(RepositoryHandle),
     RepositoryCreateMirror {
@@ -404,31 +313,9 @@ pub(crate) enum Request {
     FileClose(FileHandle),
     NetworkInit(NetworkDefaults),
     NetworkSubscribe,
-    NetworkBind {
-        #[serde(with = "as_option_str", default)]
-        quic_v4: Option<SocketAddrV4>,
-        #[serde(with = "as_option_str", default)]
-        quic_v6: Option<SocketAddrV6>,
-        #[serde(with = "as_option_str", default)]
-        tcp_v4: Option<SocketAddrV4>,
-        #[serde(with = "as_option_str", default)]
-        tcp_v6: Option<SocketAddrV6>,
-    },
-    NetworkTcpListenerLocalAddrV4,
-    NetworkTcpListenerLocalAddrV6,
-    NetworkQuicListenerLocalAddrV4,
-    NetworkQuicListenerLocalAddrV6,
-    NetworkAddUserProvidedPeer(#[serde(with = "as_str")] PeerAddr),
-    NetworkRemoveUserProvidedPeer(#[serde(with = "as_str")] PeerAddr),
-    NetworkUserProvidedPeers,
-    NetworkKnownPeers,
     NetworkThisRuntimeId,
     NetworkCurrentProtocolVersion,
     NetworkHighestSeenProtocolVersion,
-    NetworkIsPortForwardingEnabled,
-    NetworkSetPortForwardingEnabled(bool),
-    NetworkIsLocalDiscoveryEnabled,
-    NetworkSetLocalDiscoveryEnabled(bool),
     NetworkExternalAddrV4,
     NetworkExternalAddrV6,
     NetworkNatBehavior,
@@ -446,3 +333,117 @@ pub(crate) enum Request {
     GetWritePasswordSalt(RepositoryHandle),
 }
 */
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum ImportMode {
+    Copy,
+    Move,
+    SoftLink,
+    HardLink,
+}
+
+impl FromStr for ImportMode {
+    type Err = InvalidImportMode;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim_start().chars().next() {
+            Some('c') | Some('C') => Ok(Self::Copy),
+            Some('m') | Some('M') => Ok(Self::Move),
+            Some('s') | Some('S') => Ok(Self::SoftLink),
+            Some('h') | Some('H') => Ok(Self::HardLink),
+            _ => Err(InvalidImportMode),
+        }
+    }
+}
+
+impl fmt::Display for ImportMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Copy => write!(f, "copy"),
+            Self::Move => write!(f, "move"),
+            Self::SoftLink => write!(f, "softlink"),
+            Self::HardLink => write!(f, "hardlink"),
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+#[error("invalid import mode")]
+pub struct InvalidImportMode;
+
+pub mod as_str {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::{fmt, str::FromStr};
+
+    pub fn deserialize<'de, D, T>(d: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        let s = <&str>::deserialize(d)?;
+        let v = s.parse().map_err(serde::de::Error::custom)?;
+        Ok(v)
+    }
+
+    pub fn serialize<T, S>(value: &T, s: S) -> Result<S::Ok, S::Error>
+    where
+        T: fmt::Display,
+        S: Serializer,
+    {
+        value.to_string().serialize(s)
+    }
+}
+
+pub mod as_vec_str {
+    use serde::{de, ser::SerializeSeq, Deserializer, Serializer};
+    use std::{fmt, marker::PhantomData, str::FromStr};
+
+    pub fn deserialize<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        struct Visitor<T>(PhantomData<T>);
+
+        impl<'de, T> de::Visitor<'de> for Visitor<T>
+        where
+            T: FromStr,
+            T::Err: fmt::Display,
+        {
+            type Value = Vec<T>;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "sequence of strings")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+
+                while let Some(item) = seq.next_element::<&str>()? {
+                    out.push(item.parse().map_err(<A::Error as de::Error>::custom)?);
+                }
+
+                Ok(out)
+            }
+        }
+
+        d.deserialize_seq(Visitor(PhantomData))
+    }
+
+    pub fn serialize<T, S>(value: &[T], s: S) -> Result<S::Ok, S::Error>
+    where
+        T: fmt::Display,
+        S: Serializer,
+    {
+        let mut s = s.serialize_seq(Some(value.len()))?;
+        for item in value {
+            s.serialize_element(&item.to_string())?;
+        }
+        s.end()
+    }
+}

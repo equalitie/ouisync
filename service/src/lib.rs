@@ -107,30 +107,74 @@ impl Service {
         message: Message<Request>,
     ) -> Result<Response, ProtocolError> {
         match message.payload {
-            Request::RemoteControlBind { addrs: _ } => todo!(),
+            Request::NetworkAddUserProvidedPeers(addrs) => {
+                self.state.add_user_provided_peers(addrs).await;
+                Ok(().into())
+            }
+            Request::NetworkBind(addrs) => {
+                self.state.bind_network(addrs).await;
+                Ok(().into())
+            }
+            Request::NetworkGetListenerAddrs => {
+                Ok(self.state.network.listener_local_addrs().into())
+            }
+            Request::NetworkGetPeers => {
+                Ok(self.state.network.peer_info_collector().collect().into())
+            }
+            Request::NetworkGetUserProvidedPeers => {
+                Ok(self.state.user_provided_peers().await.into())
+            }
+            Request::NetworkIsLocalDiscoveryEnabled => {
+                Ok(self.state.network.is_local_discovery_enabled().into())
+            }
+            Request::NetworkIsPexRecvEnabled => Ok(self.state.network.is_pex_recv_enabled().into()),
+            Request::NetworkIsPexSendEnabled => Ok(self.state.network.is_pex_send_enabled().into()),
+            Request::NetworkIsPortForwardingEnabled => {
+                Ok(self.state.network.is_port_forwarding_enabled().into())
+            }
+            Request::NetworkRemoveUserProvidedPeers(addrs) => {
+                self.state.remove_user_provided_peers(addrs).await;
+                Ok(().into())
+            }
+            Request::NetworkSetLocalDiscoveryEnabled(enabled) => {
+                self.state.set_local_discovery_enabled(enabled).await;
+                Ok(().into())
+            }
+            Request::NetworkSetPexRecvEnabled(enabled) => {
+                self.state.set_pex_recv_enabled(enabled).await;
+                Ok(().into())
+            }
+            Request::NetworkSetPexSendEnabled(enabled) => {
+                self.state.set_pex_send_enabled(enabled).await;
+                Ok(().into())
+            }
+            Request::NetworkSetPortForwardingEnabled(enabled) => {
+                self.state.set_port_forwarding_enabled(enabled).await;
+                Ok(().into())
+            }
             Request::MetricsBind { addr } => {
                 Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
-            Request::StoreDirSet(path) => {
-                self.state.set_store_dir(path).await?;
-                Ok(().into())
-            }
-            Request::StoreDirGet => Ok(self
-                .state
-                .store_dir()
-                .ok_or(Error::StoreDirUnspecified)?
-                .into()),
-            Request::MountDirSet(path) => {
-                self.state.set_mount_dir(path).await?;
-                Ok(().into())
-            }
-            Request::MountDirGet => Ok(self
+            Request::RemoteControlBind { addrs: _ } => todo!(),
+            Request::RepositoriesGetMountDir => Ok(self
                 .state
                 .mount_dir()
                 .ok_or(Error::MountDirUnspecified)?
                 .into()),
+            Request::RepositoriesGetStoreDir => Ok(self
+                .state
+                .store_dir()
+                .ok_or(Error::StoreDirUnspecified)?
+                .into()),
             Request::RepositoriesList => Ok(self.state.list_repositories().into()),
-            Request::RepositoryFind(name) => Ok(self.state.find_repository(&name)?.into()),
+            Request::RepositoriesSetMountDir(path) => {
+                self.state.set_mount_dir(path).await?;
+                Ok(().into())
+            }
+            Request::RepositoriesSetStoreDir(path) => {
+                self.state.set_store_dir(path).await?;
+                Ok(().into())
+            }
             Request::RepositoryCreate {
                 name,
                 read_secret,
@@ -152,6 +196,7 @@ impl Service {
                 let output = self.state.export_repository(handle, output).await?;
                 Ok(output.into())
             }
+            Request::RepositoryFind(name) => Ok(self.state.find_repository(&name)?.into()),
             Request::RepositoryImport {
                 input,
                 name,
@@ -164,8 +209,26 @@ impl Service {
                     .await?;
                 Ok(handle.into())
             }
+            Request::RepositoryIsDhtEnabled(handle) => {
+                Ok(self.state.is_repository_dht_enabled(handle)?.into())
+            }
+            Request::RepositoryIsPexEnabled(handle) => {
+                Ok(self.state.is_repository_pex_enabled(handle)?.into())
+            }
             Request::RepositoryMount(handle) => {
                 Ok(self.state.mount_repository(handle).await?.into())
+            }
+            Request::RepositorySetDhtEnabled { handle, enabled } => {
+                self.state
+                    .set_repository_dht_enabled(handle, enabled)
+                    .await?;
+                Ok(().into())
+            }
+            Request::RepositorySetPexEnabled { handle, enabled } => {
+                self.state
+                    .set_repository_pex_enabled(handle, enabled)
+                    .await?;
+                Ok(().into())
             }
             Request::RepositoryShare {
                 handle,

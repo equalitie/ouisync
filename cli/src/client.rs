@@ -4,6 +4,7 @@ use ouisync::{crypto::Password, LocalSecret, SetLocalSecret, ShareToken};
 use ouisync_service::{
     protocol::{
         Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ServerPayload,
+        UnexpectedResponse,
     },
     transport::{self, LocalClientReader, LocalClientWriter, ReadError, WriteError},
 };
@@ -19,6 +20,12 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
     let mut client = LocalClient::connect(&socket_path).await?;
 
     let response = match command {
+        ClientCommand::AddPeers { addrs } => {
+            client
+                .invoke(Request::NetworkAddUserProvidedPeers(addrs))
+                .await?
+        }
+        ClientCommand::Bind { addrs } => client.invoke(Request::NetworkBind(addrs)).await?,
         ClientCommand::Create {
             name,
             share_token,
@@ -68,6 +75,19 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
             let handle = client.find_repository(name).await?;
             client.invoke(Request::RepositoryDelete(handle)).await?
         }
+        ClientCommand::Dht { name, enabled } => {
+            let handle = client.find_repository(name).await?;
+
+            if let Some(enabled) = enabled {
+                client
+                    .invoke(Request::RepositorySetDhtEnabled { handle, enabled })
+                    .await?
+            } else {
+                client
+                    .invoke(Request::RepositoryIsDhtEnabled(handle))
+                    .await?
+            }
+        }
         ClientCommand::Export { name, output } => {
             let handle = client.find_repository(name).await?;
             client
@@ -92,7 +112,20 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 })
                 .await?
         }
+        ClientCommand::ListBinds => client.invoke(Request::NetworkGetListenerAddrs).await?,
+        ClientCommand::ListPeers => client.invoke(Request::NetworkGetPeers).await?,
         ClientCommand::ListRepositories => client.invoke(Request::RepositoriesList).await?,
+        ClientCommand::LocalDiscovery { enabled } => {
+            if let Some(enabled) = enabled {
+                client
+                    .invoke(Request::NetworkSetLocalDiscoveryEnabled(enabled))
+                    .await?
+            } else {
+                client
+                    .invoke(Request::NetworkIsLocalDiscoveryEnabled)
+                    .await?
+            }
+        }
         ClientCommand::Metrics { addr } => client.invoke(Request::MetricsBind { addr }).await?,
         ClientCommand::Mount { name } => {
             if let Some(name) = name {
@@ -110,15 +143,78 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::MountDir { path } => {
             let request = if let Some(path) = path {
-                Request::MountDirSet(path)
+                Request::RepositoriesSetMountDir(path)
             } else {
-                Request::MountDirGet
+                Request::RepositoriesGetMountDir
             };
 
             client.invoke(request).await?
         }
+        ClientCommand::Pex {
+            name,
+            enabled,
+            send,
+            recv,
+        } => {
+            if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+
+                if let Some(enabled) = enabled {
+                    client
+                        .invoke(Request::RepositorySetPexEnabled { handle, enabled })
+                        .await?
+                } else {
+                    client
+                        .invoke(Request::RepositoryIsPexEnabled(handle))
+                        .await?
+                }
+            } else if send.is_some() || recv.is_some() {
+                if let Some(send) = send {
+                    let () = client
+                        .invoke(Request::NetworkSetPexSendEnabled(send))
+                        .await?
+                        .try_into()?;
+                }
+
+                if let Some(recv) = recv {
+                    let () = client
+                        .invoke(Request::NetworkSetPexRecvEnabled(recv))
+                        .await?
+                        .try_into()?;
+                }
+
+                Response::None
+            } else {
+                let send: bool = client
+                    .invoke(Request::NetworkIsPexSendEnabled)
+                    .await?
+                    .try_into()?;
+                let recv: bool = client
+                    .invoke(Request::NetworkIsPexRecvEnabled)
+                    .await?
+                    .try_into()?;
+
+                Response::String(format!("send: {send} recv: {recv}",))
+            }
+        }
+        ClientCommand::PortForwarding { enabled } => {
+            if let Some(enabled) = enabled {
+                client
+                    .invoke(Request::NetworkSetPortForwardingEnabled(enabled))
+                    .await?
+            } else {
+                client
+                    .invoke(Request::NetworkIsPortForwardingEnabled)
+                    .await?
+            }
+        }
         ClientCommand::RemoteControl { addrs } => {
             client.invoke(Request::RemoteControlBind { addrs }).await?
+        }
+        ClientCommand::RemovePeers { addrs } => {
+            client
+                .invoke(Request::NetworkRemoveUserProvidedPeers(addrs))
+                .await?
         }
         ClientCommand::Share {
             name,
@@ -139,9 +235,9 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::StoreDir { path } => {
             let request = if let Some(path) = path {
-                Request::StoreDirSet(path)
+                Request::RepositoriesSetStoreDir(path)
             } else {
-                Request::StoreDirGet
+                Request::RepositoriesGetStoreDir
             };
 
             client.invoke(request).await?
@@ -285,5 +381,11 @@ pub(crate) enum ClientError {
 impl From<ProtocolError> for ClientError {
     fn from(src: ProtocolError) -> Self {
         Self::Protocol(src)
+    }
+}
+
+impl From<UnexpectedResponse> for ClientError {
+    fn from(_: UnexpectedResponse) -> Self {
+        Self::UnexpectedResponse
     }
 }
