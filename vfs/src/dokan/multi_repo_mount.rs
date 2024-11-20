@@ -41,7 +41,7 @@ impl MultiRepoMount for MultiRepoVFS {
     ) -> impl Future<Output = Result<Self, MountError>> + Send {
         async {
             let mount_point = mount_point.as_ref().to_owned();
-            let mount_point_u16c = match U16CString::from_os_str(mount_point.as_ref().as_os_str()) {
+            let mount_point_u16c = match U16CString::from_os_str(mount_point.as_os_str()) {
                 Ok(mount_point) => mount_point,
                 Err(error) => {
                     tracing::error!("Failed to convert mount point to U16CString: {error:?}");
@@ -121,7 +121,7 @@ impl MultiRepoMount for MultiRepoVFS {
 
     fn insert(&self, name: String, repo: Arc<Repository>) -> Result<PathBuf, io::Error> {
         let mount_point = self.mount_point.join(&name);
-        let name = match U16CString::from_str(name) {
+        let name = match U16CString::from_str(&name) {
             Ok(name) => name,
             Err(_) => {
                 return Err(io::Error::new(
@@ -141,16 +141,14 @@ impl MultiRepoMount for MultiRepoVFS {
                     self.entry_id_generator.clone(),
                     repo,
                 )));
-            }
-            hash_map::Entry::Occupied(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    format!("repository {name:?} already mounted"),
-                ))
-            }
-        };
 
-        Ok(mount_point)
+                Ok(mount_point)
+            }
+            hash_map::Entry::Occupied(entry) => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("repository {:?} already mounted", entry.key()),
+            )),
+        }
     }
 
     fn remove(&self, name: &str) -> Result<(), io::Error> {
@@ -165,7 +163,7 @@ impl MultiRepoMount for MultiRepoVFS {
         self.repos
             .read()
             .unwrap()
-            .contains(name)
+            .contains_key(name)
             .then(|| self.mount_point.join(name))
     }
 }
@@ -419,9 +417,9 @@ impl Handler {
                 vfs.find_files(&file_name, fill_find_data, info, handle)
             }
             MultiRepoEntryHandle::RepoList => {
-                let repos_lock = self.repos.read().unwrap();
+                let repos = self.repos.read().unwrap();
 
-                for repo_name in repos_lock.name_to_repo.keys() {
+                for repo_name in repos.keys() {
                     fill_find_data(&FindData {
                         attributes: winnt::FILE_ATTRIBUTE_DIRECTORY,
                         // TODO
