@@ -53,6 +53,8 @@ pub enum Request {
         secret: Option<LocalSecret>,
         mode: AccessMode,
     },
+    /// Unmount repository
+    RepositoryUnmount(RepositoryHandle),
     /*
     Open {
         name: String,
@@ -87,14 +89,6 @@ pub enum Request {
 
         /// File to import the repository from
         input: PathBuf,
-    },
-    /// Unmount repository
-    Unmount {
-        /// Name of the repository to unmount
-        name: Option<String>,
-
-        /// Unmount all currently mounted repositories
-        all: bool,
     },
     /// Mirror repository
     Mirror {
@@ -347,7 +341,6 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         edits: Vec<MetadataEdit>,
     },
-    RepositoryUnmount(RepositoryHandle),
     RepositoryStats(RepositoryHandle),
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),

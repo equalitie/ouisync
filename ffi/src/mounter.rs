@@ -48,7 +48,10 @@ impl Mounter {
         let result = inner
             .multi_repo_vfs
             .as_ref()
-            .map(|vfs| vfs.insert(store_path.to_owned(), repository.clone()))
+            .map(|vfs| {
+                vfs.insert(store_path.to_owned(), repository.clone())
+                    .map(|_| ())
+            })
             .unwrap_or(Ok(()))
             .map_err(|error| {
                 tracing::error!("Failed to mount repository {:?}: {error:?}", store_path);

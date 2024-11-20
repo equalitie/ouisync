@@ -124,7 +124,7 @@ pub(crate) enum ClientCommand {
     },
     /// Mount repository
     Mount {
-        /// Name of the repository to mount. If omitted, mounts all repositories.
+        /// Name of the repository to mount. If unspecified, mounts all repositories.
         name: Option<String>,
     },
     /// Get or set the mount directory
@@ -154,18 +154,13 @@ pub(crate) enum ClientCommand {
     },
     /// Get or set the store directory
     StoreDir { path: Option<PathBuf> },
-    /*
     /// Unmount repository
     #[command(alias = "umount")]
     Unmount {
-        /// Name of the repository to unmount
-        #[arg(short, long, required_unless_present = "all", conflicts_with = "all")]
+        /// Name of the repository to unmount. If unspecified, unmounts all repositories.
         name: Option<String>,
-
-        /// Unmount all currently mounted repositories
-        #[arg(short, long)]
-        all: bool,
     },
+    /*
     /// Mirror repository
     Mirror {
         /// Name of the repository to mirror

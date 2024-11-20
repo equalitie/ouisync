@@ -44,21 +44,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 .set(self.state.clone(), &addrs)
                 .await?
                 .into()),
-            Request::Unmount { name, all: _ } => {
-                if let Some(name) = name {
-                    if let Ok(holder) = self.state.repositories.find(&name) {
-                        holder.set_mount_point(None).await;
-                        holder.unmount().await;
-                    }
-                } else {
-                    for holder in self.state.repositories.get_all() {
-                        holder.set_mount_point(None).await;
-                        holder.unmount().await;
-                    }
-                }
-
-                Ok(().into())
-            }
             Request::Mirror { name, host } => {
                 let holder = self.state.repositories.find(&name)?;
                 let config = self.state.get_client_config().await?;
@@ -66,16 +51,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 holder.mirror(&host, config).await?;
 
                 Ok(().into())
-            }
-            Request::ListRepositories => {
-                let names: Vec<_> = self
-                    .state
-                    .repositories
-                    .get_all()
-                    .into_iter()
-                    .map(|holder| holder.name().to_string())
-                    .collect();
-                Ok(names.into())
             }
             Request::Bind { addrs } => {
                 network::bind(&self.state.network, &self.state.config, &addrs).await;

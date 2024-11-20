@@ -146,6 +146,20 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
 
             client.invoke(request).await?
         }
+        ClientCommand::Unmount { name } => {
+            if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+                client.invoke(Request::RepositoryUnmount(handle)).await?
+            } else {
+                let handles = client.list_repositories().await?;
+
+                for handle in handles {
+                    client.invoke(Request::RepositoryUnmount(handle)).await?;
+                }
+
+                Response::None
+            }
+        }
     };
 
     print_response(&response);

@@ -176,6 +176,10 @@ impl Service {
                 .share_repository(handle, secret, mode)
                 .await?
                 .into()),
+            Request::RepositoryUnmount(handle) => {
+                self.state.unmount_repository(handle).await?;
+                Ok(().into())
+            }
         }
     }
 

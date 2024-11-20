@@ -334,6 +334,19 @@ impl State {
         }
     }
 
+    pub async fn unmount_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
+        let Some(mounter) = self.mounter.as_ref() else {
+            return Ok(());
+        };
+
+        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let store_path = self.store_path(holder.name())?;
+
+        mounter.remove(&store_path)?;
+
+        Ok(())
+    }
+
     pub async fn set_default_repository_expiration(
         &self,
         value: Option<Duration>,
