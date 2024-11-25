@@ -35,13 +35,13 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::Create {
             name,
-            share_token,
+            token,
             password,
             read_password,
             write_password,
         } => {
-            let share_token = get_or_read(share_token, "input share token").await?;
-            let share_token = share_token
+            let token = get_or_read(token, "input token").await?;
+            let token = token
                 .as_deref()
                 .map(str::parse::<ShareToken>)
                 .transpose()
@@ -63,7 +63,7 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
 
             let name = name
                 .or_else(|| {
-                    share_token
+                    token
                         .as_ref()
                         .map(|token| token.suggested_name().to_owned())
                 })
@@ -72,7 +72,7 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
             let () = client
                 .invoke(Request::RepositoryCreate {
                     name,
-                    share_token,
+                    token,
                     read_secret,
                     write_secret,
                 })
@@ -379,6 +379,9 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
             let () = client
                 .invoke(Request::NetworkRemoveUserProvidedPeers(addrs))
                 .await?;
+        }
+        ClientCommand::ResetAccess { name, token } => {
+            let handle = client.find_repository(name).await?;
         }
         ClientCommand::Share {
             name,

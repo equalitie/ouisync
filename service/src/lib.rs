@@ -171,11 +171,11 @@ impl Service {
                 name,
                 read_secret,
                 write_secret,
-                share_token,
+                token,
             } => {
                 let handle = self
                     .state
-                    .create_repository(name, read_secret, write_secret, share_token)
+                    .create_repository(name, read_secret, write_secret, token)
                     .await?;
 
                 Ok(handle.into())
@@ -236,6 +236,10 @@ impl Service {
             Request::RepositoryList => Ok(self.state.list_repositories().into()),
             Request::RepositoryMount(handle) => {
                 Ok(self.state.mount_repository(handle).await?.into())
+            }
+            Request::RepositoryResetAccess { handle, token } => {
+                self.state.reset_repository_access(handle, token).await?;
+                Ok(().into())
             }
             Request::RepositorySetBlockExpiration { handle, value } => {
                 self.state.set_block_expiration(handle, value).await?;

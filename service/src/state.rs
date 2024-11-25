@@ -5,7 +5,8 @@ use crate::{
     utils,
 };
 use ouisync::{
-    AccessMode, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
+    AccessMode, Credentials, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken,
+    StorageSize,
 };
 use ouisync_bridge::{
     config::{ConfigKey, ConfigStore},
@@ -334,6 +335,22 @@ impl State {
         .await?;
 
         Ok(token)
+    }
+
+    pub async fn reset_repository_access(
+        &self,
+        handle: RepositoryHandle,
+        token: ShareToken,
+    ) -> Result<(), Error> {
+        let new_credentials = Credentials::with_random_writer_id(token.into_secrets());
+        self.repos
+            .get(handle)
+            .ok_or(Error::RepositoryNotFound)?
+            .repository()
+            .set_credentials(new_credentials)
+            .await?;
+
+        Ok(())
     }
 
     pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {

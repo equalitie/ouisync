@@ -52,15 +52,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 Ok(().into())
             }
-            Request::SetAccess { name, token } => {
-                use std::str::FromStr;
-
-                let holder = self.state.repositories.find(&name)?;
-                let token = ShareToken::from_str(&token)?;
-                let new_credentials = Credentials::with_random_writer_id(token.into_secrets());
-                holder.repository.set_credentials(new_credentials).await?;
-                Ok(().into())
-            }
         }
     }
 }

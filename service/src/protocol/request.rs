@@ -36,7 +36,7 @@ pub enum Request {
         name: String,
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
-        share_token: Option<ShareToken>,
+        token: Option<ShareToken>,
     },
     /// Delete a repository
     RepositoryDelete(RepositoryHandle),
@@ -66,8 +66,11 @@ pub enum Request {
     RepositoryIsDhtEnabled(RepositoryHandle),
     RepositoryIsPexEnabled(RepositoryHandle),
     RepositoryList,
-    /// Mount repository
     RepositoryMount(RepositoryHandle),
+    RepositoryResetAccess {
+        handle: RepositoryHandle,
+        token: ShareToken,
+    },
     RepositorySetBlockExpiration {
         handle: RepositoryHandle,
         value: Option<Duration>,
@@ -113,33 +116,6 @@ pub enum Request {
     Close {
         name: String,
     },
-    /// Export a repository to a file
-    ///
-    /// Note currently this strips write access and removes local password (if any) from the
-    /// exported repository. So if the repository is currently opened in write mode or read mode,
-    /// it's exported in read mode. If it's in blind mode it's also exported in blind mode. This
-    /// limitation might be lifted in the future.
-    Export {
-        /// Name of the repository to export
-        name: String,
-
-        /// File to export the repository to
-        output: PathBuf,
-    },
-    /// Import a repository from a file
-    Import {
-        /// Name for the repository. Default is the filename the repository is imported from.
-        name: Option<String>,
-
-        /// How to import the repository
-        mode: ImportMode,
-
-        /// Overwrite the destination if it exists
-        force: bool,
-
-        /// File to import the repository from
-        input: PathBuf,
-    },
     /// Mirror repository
     Mirror {
         /// Name of the repository to mirror
@@ -147,32 +123,6 @@ pub enum Request {
 
         /// Domain name or network address of the server to host the mirror
         host: String,
-    },
-    /// Get or set block and repository expiration
-    Expiration {
-        /// Name of the repository to get/set the expiration for
-        name: Option<String>,
-
-        /// Get/set the default expiration
-        default: bool,
-
-        /// Remove the expiration
-        remove: bool,
-
-        /// Time after which blocks expire if not accessed (in seconds)
-        block_expiration: Option<u64>,
-
-        /// Time after which the whole repository is deleted after all its blocks expired
-        /// (in seconds)
-        repository_expiration: Option<u64>,
-    },
-    /// Set access to a repository corresponding to the share token
-    SetAccess {
-        /// Name of the repository which access shall be changed
-        name: String,
-
-        /// Repository token
-        token: String,
     },
     /// Bind the remote API to the specified addresses.
     ///

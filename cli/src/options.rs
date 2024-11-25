@@ -74,12 +74,12 @@ pub(crate) enum ClientCommand {
     #[command(visible_aliases = ["mk"])]
     Create {
         /// Name of the repository
-        #[arg(short, long, required_unless_present = "share_token")]
+        #[arg(required_unless_present = "token")]
         name: Option<String>,
 
-        /// Share token
+        /// Repository token
         #[arg(short, long)]
-        share_token: Option<String>,
+        token: Option<String>,
 
         /// Local read and write password
         #[arg(short = 'P', long, conflicts_with_all = ["read_password", "write_password"])]
@@ -261,6 +261,15 @@ pub(crate) enum ClientCommand {
         #[arg(required = true, value_name = "PROTO/IP:PORT")]
         addrs: Vec<PeerAddr>,
     },
+    /// Reset access to a repository.
+    ResetAccess {
+        /// Name of the repository whose access shall be changed
+        name: String,
+
+        /// Repository token
+        #[arg(short, long)]
+        token: String,
+    },
     /// Print the share token of a repository
     Share {
         /// Name of the repository to share
@@ -292,16 +301,6 @@ pub(crate) enum ClientCommand {
         /// Domain name or network address of the server to host the mirror
         #[arg(short = 'H', long)]
         host: String,
-    },
-    /// Set access to a repository corresponding to the share token
-    SetAccess {
-        /// Name of the repository which access shall be changed
-        #[arg(short, long)]
-        name: String,
-
-        /// Repository token
-        #[arg(short, long)]
-        token: String,
     },
 
     */
