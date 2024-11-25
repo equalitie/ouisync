@@ -20,15 +20,15 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
-use transport::{LocalServer, LocalServerReader, LocalServerWriter, ReadError};
+use transport::{local::LocalServer, ReadError, ServerReader, ServerWriter};
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 pub struct Service {
     state: State,
     local_server: LocalServer,
-    local_readers: StreamMap<ConnectionId, StreamNotifyClose<LocalServerReader>>,
-    local_writers: Slab<LocalServerWriter>,
+    readers: StreamMap<ConnectionId, StreamNotifyClose<ServerReader>>,
+    writers: Slab<ServerWriter>,
     metrics_server: MetricsServer,
 }
 
@@ -47,8 +47,8 @@ impl Service {
         Ok(Self {
             state,
             local_server,
-            local_readers: StreamMap::new(),
-            local_writers: Slab::new(),
+            readers: StreamMap::new(),
+            writers: Slab::new(),
             metrics_server,
         })
     }
@@ -61,13 +61,16 @@ impl Service {
             select! {
                 result = self.local_server.accept() => {
                     let (reader, writer) = result?;
-                    self.insert_local_connection(reader, writer);
+                    self.insert_connection(
+                        ServerReader::Local(reader),
+                        ServerWriter::Local(writer)
+                    );
                 }
-                Some((conn_id, message)) = self.local_readers.next() => {
+                Some((conn_id, message)) = self.readers.next() => {
                     if let Some(message) = message {
                         self.handle_message(conn_id, message).await
                     } else {
-                        self.remove_local_connection(conn_id)
+                        self.remove_connection(conn_id)
                     }
                 }
                 _ = repo_expiration_interval.tick() => {
@@ -80,9 +83,9 @@ impl Service {
     pub async fn close(&mut self) {
         self.metrics_server.close();
 
-        self.local_readers.clear();
+        self.readers.clear();
 
-        for mut writer in self.local_writers.drain() {
+        for mut writer in self.writers.drain() {
             if let Err(error) = writer.close().await {
                 tracing::warn!(?error, "failed to close local connection");
             }
@@ -106,11 +109,11 @@ impl Service {
             }
             Err(ReadError::Receive(error)) => {
                 tracing::error!(?error, "failed to receive message");
-                self.remove_local_connection(conn_id);
+                self.remove_connection(conn_id);
             }
             Err(ReadError::Decode(DecodeError::Id)) => {
                 tracing::error!("failed to decode message id");
-                self.remove_local_connection(conn_id);
+                self.remove_connection(conn_id);
             }
             Err(ReadError::Decode(DecodeError::Payload(id, error))) => {
                 tracing::warn!(?error, ?id, "failed to decode message payload");
@@ -310,7 +313,7 @@ impl Service {
     }
 
     async fn send_message(&mut self, conn_id: ConnectionId, message: Message<ServerPayload>) {
-        let Some(writer) = self.local_writers.get_mut(conn_id) else {
+        let Some(writer) = self.writers.get_mut(conn_id) else {
             tracing::error!("connection not found");
             return;
         };
@@ -321,20 +324,19 @@ impl Service {
             Ok(()) => (),
             Err(error) => {
                 tracing::error!(?error, "failed to send message");
-                self.remove_local_connection(conn_id);
+                self.remove_connection(conn_id);
             }
         }
     }
 
-    fn insert_local_connection(&mut self, reader: LocalServerReader, writer: LocalServerWriter) {
-        let conn_id = self.local_writers.insert(writer);
-        self.local_readers
-            .insert(conn_id, StreamNotifyClose::new(reader));
+    fn insert_connection(&mut self, reader: ServerReader, writer: ServerWriter) {
+        let conn_id = self.writers.insert(writer);
+        self.readers.insert(conn_id, StreamNotifyClose::new(reader));
     }
 
-    fn remove_local_connection(&mut self, conn_id: ConnectionId) {
-        self.local_readers.remove(&conn_id);
-        self.local_writers.try_remove(conn_id);
+    fn remove_connection(&mut self, conn_id: ConnectionId) {
+        self.readers.remove(&conn_id);
+        self.writers.try_remove(conn_id);
     }
 }
 

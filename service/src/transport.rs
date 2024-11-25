@@ -1,156 +1,61 @@
-use crate::protocol::{DecodeError, EncodeError, Message, Request};
-use bytes::BytesMut;
-use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use interprocess::local_socket::{
-    tokio::{Listener, RecvHalf, SendHalf, Stream as Socket},
-    traits::tokio::{Listener as _, Stream as _},
-    GenericFilePath, ListenerOptions, ToFsName,
-};
-use serde::{de::DeserializeOwned, Serialize};
+mod common;
+pub mod local;
+pub mod remote;
+
+pub use self::common::{ReadError, WriteError};
+
 use std::{
-    io,
-    marker::PhantomData,
-    path::Path,
     pin::Pin,
-    task::{ready, Context, Poll},
+    task::{Context, Poll},
 };
-use thiserror::Error;
-use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-use crate::protocol::ServerPayload;
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 
-pub(crate) struct LocalServer {
-    listener: Listener,
+use self::local::{LocalServerReader, LocalServerWriter};
+use crate::protocol::{Message, Request, ServerPayload};
+
+pub(crate) enum ServerReader {
+    Local(LocalServerReader),
 }
 
-impl LocalServer {
-    pub async fn bind(socket_path: &Path) -> io::Result<Self> {
-        let listener = socket_path
-            .to_fs_name::<GenericFilePath>()
-            .and_then(|name| {
-                ListenerOptions::new()
-                    .name(name)
-                    .reclaim_name(true)
-                    .create_tokio()
-            })?;
-
-        Ok(Self { listener })
-    }
-
-    pub async fn accept(&self) -> io::Result<(LocalServerReader, LocalServerWriter)> {
-        let stream = self.listener.accept().await?;
-        let (reader, writer) = stream.split();
-
-        let reader = LocalReader::new(reader);
-        let writer = LocalWriter::new(writer);
-
-        Ok((reader, writer))
-    }
-}
-
-pub async fn connect(socket_path: &Path) -> io::Result<(LocalClientReader, LocalClientWriter)> {
-    let socket = Socket::connect(socket_path.to_fs_name::<GenericFilePath>()?).await?;
-    let (reader, writer) = socket.split();
-
-    let reader = LocalReader::new(reader);
-    let writer = LocalWriter::new(writer);
-
-    Ok((reader, writer))
-}
-
-pub(crate) type LocalServerReader = LocalReader<Request>;
-pub(crate) type LocalServerWriter = LocalWriter<ServerPayload>;
-
-pub type LocalClientReader = LocalReader<ServerPayload>;
-pub type LocalClientWriter = LocalWriter<Request>;
-
-pub struct LocalReader<T> {
-    reader: FramedRead<RecvHalf, LengthDelimitedCodec>,
-    _type: PhantomData<fn() -> T>,
-}
-
-impl<T> LocalReader<T> {
-    fn new(inner: RecvHalf) -> Self {
-        Self {
-            reader: FramedRead::new(inner, LengthDelimitedCodec::new()),
-            _type: PhantomData,
-        }
-    }
-}
-
-impl<T> Stream for LocalReader<T>
-where
-    T: DeserializeOwned,
-{
-    type Item = Result<Message<T>, ReadError>;
+impl Stream for ServerReader {
+    type Item = Result<Message<Request>, ReadError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let buffer = match ready!(self.get_mut().reader.poll_next_unpin(cx)) {
-            Some(Ok(buffer)) => buffer,
-            Some(Err(error)) => return Poll::Ready(Some(Err(error.into()))),
-            None => return Poll::Ready(None),
-        };
-
-        Poll::Ready(Some(Ok(Message::decode(&mut buffer.freeze())?)))
-    }
-}
-
-pub struct LocalWriter<T> {
-    writer: FramedWrite<SendHalf, LengthDelimitedCodec>,
-    buffer: BytesMut,
-    _type: PhantomData<fn(T)>,
-}
-
-impl<T> LocalWriter<T> {
-    fn new(inner: SendHalf) -> Self {
-        Self {
-            writer: FramedWrite::new(inner, LengthDelimitedCodec::new()),
-            buffer: BytesMut::new(),
-            _type: PhantomData,
+        match self.get_mut() {
+            Self::Local(reader) => reader.poll_next_unpin(cx),
         }
     }
 }
 
-impl<T> Sink<Message<T>> for LocalWriter<T>
-where
-    T: Serialize,
-{
+pub(crate) enum ServerWriter {
+    Local(LocalServerWriter),
+}
+
+impl Sink<Message<ServerPayload>> for ServerWriter {
     type Error = WriteError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(ready!(self.get_mut().writer.poll_ready_unpin(cx))?))
+        match self.get_mut() {
+            Self::Local(writer) => writer.poll_ready_unpin(cx),
+        }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(ready!(self.get_mut().writer.poll_flush_unpin(cx))?))
+        match self.get_mut() {
+            Self::Local(writer) => writer.poll_flush_unpin(cx),
+        }
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(ready!(self.get_mut().writer.poll_close_unpin(cx))?))
+        match self.get_mut() {
+            Self::Local(writer) => writer.poll_close_unpin(cx),
+        }
     }
 
-    fn start_send(self: Pin<&mut Self>, item: Message<T>) -> Result<(), Self::Error> {
-        let this = self.get_mut();
-
-        item.encode(&mut this.buffer)?;
-        this.writer.start_send_unpin(this.buffer.split().freeze())?;
-
-        Ok(())
+    fn start_send(self: Pin<&mut Self>, item: Message<ServerPayload>) -> Result<(), Self::Error> {
+        match self.get_mut() {
+            Self::Local(writer) => writer.start_send_unpin(item),
+        }
     }
-}
-
-#[derive(Error, Debug)]
-pub enum ReadError {
-    #[error("failed to receive message")]
-    Receive(#[from] io::Error),
-    #[error("failed to decode message")]
-    Decode(#[from] DecodeError),
-}
-
-#[derive(Error, Debug)]
-pub enum WriteError {
-    #[error("failed to send message")]
-    Send(#[from] io::Error),
-    #[error("failed to encode message")]
-    Encode(#[from] EncodeError),
 }

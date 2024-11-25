@@ -9,7 +9,10 @@ use ouisync_service::{
         Message, MessageId, ProtocolError, QuotaInfo, RepositoryHandle, Request, Response,
         ServerPayload, UnexpectedResponse,
     },
-    transport::{self, LocalClientReader, LocalClientWriter, ReadError, WriteError},
+    transport::{
+        local::{self, LocalClientReader, LocalClientWriter},
+        ReadError, WriteError,
+    },
 };
 use std::{
     collections::BTreeMap,
@@ -469,7 +472,7 @@ struct LocalClient {
 impl LocalClient {
     async fn connect(socket_path: &Path) -> Result<Self, ClientError> {
         // TODO: if the server is not running, spin it up ourselves
-        match transport::connect(socket_path).await {
+        match local::connect(socket_path).await {
             Ok((reader, writer)) => Ok(Self { reader, writer }),
             Err(error) => Err(ClientError::Connect(error)),
         }
