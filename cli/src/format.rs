@@ -1,49 +1,12 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use ouisync::{PeerAddr, PeerInfo, PeerSource, PeerState};
-use ouisync_service::protocol::{QuotaInfo, Response};
-use std::{fmt, time::SystemTime};
+use ouisync_service::protocol::QuotaInfo;
+use std::{
+    fmt,
+    time::{Duration, SystemTime},
+};
 
-pub(crate) fn print_response(response: &Response) {
-    match response {
-        Response::None => (),
-        Response::Bool(value) => println!("{value}"),
-        Response::String(value) => println!("{value}"),
-        Response::Strings(value) => {
-            for item in value {
-                println!("{item}");
-            }
-        }
-        Response::Repository(value) => println!("{value}"),
-        Response::Repositories(value) => {
-            for name in value.keys() {
-                println!("{name}");
-            }
-        }
-        Response::Path(value) => println!("{}", value.display()),
-        Response::PeerInfo(value) => {
-            for peer in value {
-                println!("{}", PeerInfoDisplay(peer));
-            }
-        }
-        Response::PeerAddrs(addrs) => {
-            for addr in addrs {
-                println!("{}", PeerAddrDisplay(addr));
-            }
-        }
-        Response::SocketAddrs(value) => {
-            for addr in value {
-                println!("{addr}");
-            }
-        }
-        Response::StorageSize(value) => println!("{value}"),
-        Response::QuotaInfo(info) => println!("{}", QuotaInfoDisplay(info)),
-        Response::Expiration { block, repository } => {
-            println!("block expiration: {block:?}, repository expiration: {repository:?}")
-        }
-    }
-}
-
-struct QuotaInfoDisplay<'a>(&'a QuotaInfo);
+pub(crate) struct QuotaInfoDisplay<'a>(pub &'a QuotaInfo);
 
 impl fmt::Display for QuotaInfoDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -94,7 +57,7 @@ fn percent(num: u64, den: u64) -> f64 {
     }
 }
 
-struct PeerAddrDisplay<'a>(&'a PeerAddr);
+pub(crate) struct PeerAddrDisplay<'a>(pub &'a PeerAddr);
 
 impl fmt::Display for PeerAddrDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -111,7 +74,7 @@ impl fmt::Display for PeerAddrDisplay<'_> {
     }
 }
 
-struct PeerInfoDisplay<'a>(&'a PeerInfo);
+pub(crate) struct PeerInfoDisplay<'a>(pub &'a PeerInfo);
 
 impl fmt::Display for PeerInfoDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -152,6 +115,18 @@ impl fmt::Display for PeerInfoDisplay<'_> {
 fn format_time(time: SystemTime) -> String {
     DateTime::<Utc>::from(time).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
+
+pub(crate) struct OptionSecondsDisplay(pub Option<Duration>);
+
+impl fmt::Display for OptionSecondsDisplay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(duration) => write!(f, "{} s", duration.as_secs()),
+            None => write!(f, "none"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

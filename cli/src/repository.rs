@@ -92,68 +92,6 @@ impl RepositoryHolder {
         Ok(())
     }
 
-    fn resolve_mount_point(&self, mount_point: String, mount_dir: &Path) -> PathBuf {
-        if mount_point.is_empty() {
-            mount_dir.join(&self.name)
-        } else {
-            mount_point.into()
-        }
-    }
-}
-
-struct Mount {
-    point: PathBuf,
-    // Number of trailing path components of `point` that were created by us. This is used to
-    // delete only the directories we created on unmount.
-    depth: u32,
-    guard: MountGuard,
-}
-
-/// Create the mount point directory and returns the number of trailing path components that were
-/// actually created. For example, if `path` is "/foo/bar/baz" and "/foo" already exists but not
-/// "/foo/bar" then it returns 2 (because it created "/foo/bar" and "/foo/bar/baz").
-async fn create_mount_point(path: &Path) -> io::Result<u32> {
-    let depth = {
-        let mut depth = 0;
-        let mut path = path;
-
-        loop {
-            if fs::try_exists(path).await? {
-                break;
-            }
-
-            if let Some(parent) = path.parent() {
-                path = parent;
-                depth += 1;
-            } else {
-                break;
-            }
-        }
-
-        depth
-    };
-
-    fs::create_dir_all(path).await?;
-
-    Ok(depth)
-}
-
-/// Remove the last `depth` components from `path`. For example, if `path` is "/foo/bar/baz" and
-/// `depth` is 2, it removes "/foo/bar/baz" and then "/foo/bar" but not "/foo".
-async fn remove_mount_point(path: &Path, depth: u32) -> io::Result<()> {
-    let mut path = path;
-
-    for _ in 0..depth {
-        fs::remove_dir(path).await?;
-
-        if let Some(parent) = path.parent() {
-            path = parent;
-        } else {
-            break;
-        }
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

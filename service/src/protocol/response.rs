@@ -13,10 +13,7 @@ use thiserror::Error;
 pub enum Response {
     None,
     Bool(bool),
-    Expiration {
-        block: Option<Duration>,
-        repository: Option<Duration>,
-    },
+    Duration(Duration),
     Path(PathBuf),
     PeerAddrs(Vec<PeerAddr>),
     PeerInfo(Vec<PeerInfo>),
@@ -27,6 +24,27 @@ pub enum Response {
     StorageSize(StorageSize),
     String(String),
     Strings(Vec<String>),
+}
+
+macro_rules! impl_response_conversion {
+    ($variant:ident ( $ty:ty )) => {
+        impl From<$ty> for Response {
+            fn from(value: $ty) -> Self {
+                Self::$variant(value)
+            }
+        }
+
+        impl TryFrom<Response> for $ty {
+            type Error = UnexpectedResponse;
+
+            fn try_from(response: Response) -> Result<Self, Self::Error> {
+                match response {
+                    Response::$variant(value) => Ok(value),
+                    _ => Err(UnexpectedResponse),
+                }
+            }
+        }
+    };
 }
 
 impl From<()> for Response {
@@ -58,26 +76,15 @@ where
     }
 }
 
-impl From<bool> for Response {
-    fn from(value: bool) -> Self {
-        Self::Bool(value)
-    }
-}
-
-impl TryFrom<Response> for bool {
+impl TryFrom<Response> for Option<Duration> {
     type Error = UnexpectedResponse;
 
-    fn try_from(response: Response) -> Result<Self, Self::Error> {
-        match response {
-            Response::Bool(value) => Ok(value),
+    fn try_from(value: Response) -> Result<Self, Self::Error> {
+        match value {
+            Response::Duration(value) => Ok(Some(value)),
+            Response::None => Ok(None),
             _ => Err(UnexpectedResponse),
         }
-    }
-}
-
-impl From<PathBuf> for Response {
-    fn from(value: PathBuf) -> Self {
-        Self::Path(value)
     }
 }
 
@@ -87,76 +94,24 @@ impl<'a> From<&'a Path> for Response {
     }
 }
 
-impl From<String> for Response {
-    fn from(value: String) -> Self {
-        Self::String(value)
-    }
-}
-
 impl<'a> From<&'a str> for Response {
     fn from(value: &'a str) -> Self {
         Self::String(value.to_owned())
     }
 }
 
-impl From<Vec<String>> for Response {
-    fn from(value: Vec<String>) -> Self {
-        Self::Strings(value)
-    }
-}
-
-impl From<RepositoryHandle> for Response {
-    fn from(value: RepositoryHandle) -> Self {
-        Self::Repository(value)
-    }
-}
-
-impl TryFrom<Response> for RepositoryHandle {
-    type Error = UnexpectedResponse;
-
-    fn try_from(response: Response) -> Result<Self, Self::Error> {
-        match response {
-            Response::Repository(handle) => Ok(handle),
-            _ => Err(UnexpectedResponse),
-        }
-    }
-}
-
-impl From<BTreeMap<String, RepositoryHandle>> for Response {
-    fn from(value: BTreeMap<String, RepositoryHandle>) -> Self {
-        Self::Repositories(value)
-    }
-}
-
-impl From<Vec<PeerInfo>> for Response {
-    fn from(value: Vec<PeerInfo>) -> Self {
-        Self::PeerInfo(value)
-    }
-}
-
-impl From<Vec<PeerAddr>> for Response {
-    fn from(value: Vec<PeerAddr>) -> Self {
-        Self::PeerAddrs(value)
-    }
-}
-
-impl From<Vec<SocketAddr>> for Response {
-    fn from(value: Vec<SocketAddr>) -> Self {
-        Self::SocketAddrs(value)
-    }
-}
-
-impl From<StorageSize> for Response {
-    fn from(value: StorageSize) -> Self {
-        Self::StorageSize(value)
-    }
-}
-
-impl From<QuotaInfo> for Response {
-    fn from(value: QuotaInfo) -> Self {
-        Self::QuotaInfo(value)
-    }
-}
+impl_response_conversion!(Bool(bool));
+impl_response_conversion!(Duration(Duration));
+impl_response_conversion!(Path(PathBuf));
+impl_response_conversion!(String(String));
+impl_response_conversion!(Strings(Vec<String>));
+impl_response_conversion!(Repository(RepositoryHandle));
+impl_response_conversion!(Repositories(BTreeMap<String, RepositoryHandle>));
+impl_response_conversion!(PeerInfo(Vec<PeerInfo>));
+impl_response_conversion!(PeerAddrs(Vec<PeerAddr>));
+impl_response_conversion!(SocketAddrs(Vec<SocketAddr>));
+impl_response_conversion!(StorageSize(StorageSize));
+impl_response_conversion!(QuotaInfo(QuotaInfo));
 
 #[derive(Error, Debug)]
 #[error("unexpected response")]

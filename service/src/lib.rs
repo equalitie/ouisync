@@ -14,11 +14,16 @@ use metrics::MetricsServer;
 use protocol::{DecodeError, Message, ProtocolError, Request, Response, ServerPayload};
 use slab::Slab;
 use state::State;
-use std::path::PathBuf;
-use tokio::select;
+use std::{path::PathBuf, time::Duration};
+use tokio::{
+    select,
+    time::{self, MissedTickBehavior},
+};
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use tracing::instrument;
 use transport::{LocalServer, LocalServerReader, LocalServerWriter, ReadError};
+
+const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 pub struct Service {
     state: State,
@@ -45,6 +50,9 @@ impl Service {
     }
 
     pub async fn run(&mut self) -> Result<(), Error> {
+        let mut repo_expiration_interval = time::interval(REPOSITORY_EXPIRATION_POLL_INTERVAL);
+        repo_expiration_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
         loop {
             select! {
                 result = self.local_server.accept() => {
@@ -57,6 +65,9 @@ impl Service {
                     } else {
                         self.remove_local_connection(conn_id)
                     }
+                }
+                _ = repo_expiration_interval.tick() => {
+                    self.state.delete_expired_repositories().await;
                 }
             }
         }
@@ -156,19 +167,6 @@ impl Service {
                 Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
             Request::RemoteControlBind { addrs: _ } => todo!(),
-            Request::RepositoryGetMountDir => Ok(self
-                .state
-                .mount_dir()
-                .ok_or(Error::MountDirUnspecified)?
-                .into()),
-            Request::RepositoryGetQuota(handle) => {
-                Ok(self.state.repository_quota(handle).await?.into())
-            }
-            Request::RepositoryGetStoreDir => Ok(self
-                .state
-                .store_dir()
-                .ok_or(Error::StoreDirUnspecified)?
-                .into()),
             Request::RepositoryCreate {
                 name,
                 read_secret,
@@ -191,6 +189,31 @@ impl Service {
                 Ok(output.into())
             }
             Request::RepositoryFind(name) => Ok(self.state.find_repository(&name)?.into()),
+            Request::RepositoryGetBlockExpiration(handle) => {
+                Ok(self.state.block_expiration(handle)?.into())
+            }
+            Request::RepositoryGetDefaultBlockExpiration => {
+                Ok(self.state.default_block_expiration().await?.into())
+            }
+            Request::RepositoryGetDefaultRepositoryExpiration => {
+                Ok(self.state.default_repository_expiration().await?.into())
+            }
+            Request::RepositoryGetMountDir => Ok(self
+                .state
+                .mount_dir()
+                .ok_or(Error::MountDirUnspecified)?
+                .into()),
+            Request::RepositoryGetQuota(handle) => {
+                Ok(self.state.repository_quota(handle).await?.into())
+            }
+            Request::RepositoryGetRepositoryExpiration(handle) => {
+                Ok(self.state.repository_expiration(handle).await?.into())
+            }
+            Request::RepositoryGetStoreDir => Ok(self
+                .state
+                .store_dir()
+                .ok_or(Error::StoreDirUnspecified)?
+                .into()),
             Request::RepositoryGetDefaultQuota => Ok(self.state.default_quota().await?.into()),
             Request::RepositoryImport {
                 input,
@@ -214,6 +237,18 @@ impl Service {
             Request::RepositoryMount(handle) => {
                 Ok(self.state.mount_repository(handle).await?.into())
             }
+            Request::RepositorySetBlockExpiration { handle, value } => {
+                self.state.set_block_expiration(handle, value).await?;
+                Ok(().into())
+            }
+            Request::RepositorySetDefaultBlockExpiration { value } => {
+                self.state.set_default_block_expiration(value).await?;
+                Ok(().into())
+            }
+            Request::RepositorySetDefaultRepositoryExpiration { value } => {
+                self.state.set_default_repository_expiration(value).await?;
+                Ok(().into())
+            }
             Request::RepositorySetDefaultQuota { quota } => {
                 self.state.set_default_quota(quota).await?;
                 Ok(().into())
@@ -236,6 +271,10 @@ impl Service {
             }
             Request::RepositorySetQuota { handle, quota } => {
                 self.state.set_repository_quota(handle, quota).await?;
+                Ok(().into())
+            }
+            Request::RepositorySetRepositoryExpiration { handle, value } => {
+                self.state.set_repository_expiration(handle, value).await?;
                 Ok(().into())
             }
             Request::RepositorySetStoreDir(path) => {

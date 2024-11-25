@@ -1,16 +1,21 @@
-use crate::{format::print_response, options::ClientCommand};
+use crate::{
+    format::{OptionSecondsDisplay, PeerAddrDisplay, PeerInfoDisplay, QuotaInfoDisplay},
+    options::ClientCommand,
+};
 use futures_util::SinkExt;
-use ouisync::{crypto::Password, LocalSecret, SetLocalSecret, ShareToken};
+use ouisync::{crypto::Password, LocalSecret, PeerAddr, PeerInfo, SetLocalSecret, ShareToken};
 use ouisync_service::{
     protocol::{
-        Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ServerPayload,
-        UnexpectedResponse,
+        Message, MessageId, ProtocolError, QuotaInfo, RepositoryHandle, Request, Response,
+        ServerPayload, UnexpectedResponse,
     },
     transport::{self, LocalClientReader, LocalClientWriter, ReadError, WriteError},
 };
 use std::{
+    collections::BTreeMap,
     env, io,
     path::{Path, PathBuf},
+    time::Duration,
 };
 use thiserror::Error;
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -19,13 +24,15 @@ use tokio_stream::StreamExt;
 pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
     let mut client = LocalClient::connect(&socket_path).await?;
 
-    let response = match command {
+    match command {
         ClientCommand::AddPeers { addrs } => {
-            client
+            let () = client
                 .invoke(Request::NetworkAddUserProvidedPeers(addrs))
-                .await?
+                .await?;
         }
-        ClientCommand::Bind { addrs } => client.invoke(Request::NetworkBind(addrs)).await?,
+        ClientCommand::Bind { addrs } => {
+            let () = client.invoke(Request::NetworkBind(addrs)).await?;
+        }
         ClientCommand::Create {
             name,
             share_token,
@@ -62,40 +69,140 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 })
                 .ok_or_else(|| ProtocolError::new("name is missing"))?;
 
-            client
+            let () = client
                 .invoke(Request::RepositoryCreate {
                     name,
                     share_token,
                     read_secret,
                     write_secret,
                 })
-                .await?
+                .await?;
         }
         ClientCommand::Delete { name } => {
             let handle = client.find_repository(name).await?;
-            client.invoke(Request::RepositoryDelete(handle)).await?
+            let () = client.invoke(Request::RepositoryDelete(handle)).await?;
         }
         ClientCommand::Dht { name, enabled } => {
             let handle = client.find_repository(name).await?;
 
             if let Some(enabled) = enabled {
-                client
+                let () = client
                     .invoke(Request::RepositorySetDhtEnabled { handle, enabled })
-                    .await?
+                    .await?;
             } else {
-                client
+                let value: bool = client
                     .invoke(Request::RepositoryIsDhtEnabled(handle))
-                    .await?
+                    .await?;
+
+                println!("{value}");
+            }
+        }
+        ClientCommand::Expiration {
+            name,
+            remove,
+            block,
+            repository,
+        } => {
+            if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+
+                if remove {
+                    let () = client
+                        .invoke(Request::RepositorySetBlockExpiration {
+                            handle,
+                            value: None,
+                        })
+                        .await?;
+
+                    let () = client
+                        .invoke(Request::RepositorySetRepositoryExpiration {
+                            handle,
+                            value: None,
+                        })
+                        .await?;
+                } else {
+                    if let Some(expiration) = block {
+                        let () = client
+                            .invoke(Request::RepositorySetBlockExpiration {
+                                handle,
+                                value: Some(Duration::from_secs(expiration)),
+                            })
+                            .await?;
+                    }
+
+                    if let Some(expiration) = repository {
+                        let () = client
+                            .invoke(Request::RepositorySetRepositoryExpiration {
+                                handle,
+                                value: Some(Duration::from_secs(expiration)),
+                            })
+                            .await?;
+                    }
+                }
+
+                let block: Option<Duration> = client
+                    .invoke(Request::RepositoryGetBlockExpiration(handle))
+                    .await?;
+                let repository: Option<Duration> = client
+                    .invoke(Request::RepositoryGetRepositoryExpiration(handle))
+                    .await?;
+
+                println!("block expiration:      {}", OptionSecondsDisplay(block));
+                println!(
+                    "repository expiration: {}",
+                    OptionSecondsDisplay(repository)
+                );
+            } else {
+                if remove {
+                    let () = client
+                        .invoke(Request::RepositorySetDefaultBlockExpiration { value: None })
+                        .await?;
+
+                    let () = client
+                        .invoke(Request::RepositorySetDefaultRepositoryExpiration { value: None })
+                        .await?;
+                } else {
+                    if let Some(expiration) = block {
+                        let () = client
+                            .invoke(Request::RepositorySetDefaultBlockExpiration {
+                                value: Some(Duration::from_secs(expiration)),
+                            })
+                            .await?;
+                    }
+
+                    if let Some(expiration) = repository {
+                        let () = client
+                            .invoke(Request::RepositorySetDefaultRepositoryExpiration {
+                                value: Some(Duration::from_secs(expiration)),
+                            })
+                            .await?;
+                    }
+                }
+
+                let block = client
+                    .invoke(Request::RepositoryGetDefaultBlockExpiration)
+                    .await?;
+                let repository = client
+                    .invoke(Request::RepositoryGetDefaultRepositoryExpiration)
+                    .await?;
+
+                println!("block expiration:      {}", OptionSecondsDisplay(block));
+                println!(
+                    "repository expiration: {}",
+                    OptionSecondsDisplay(repository)
+                );
             }
         }
         ClientCommand::Export { name, output } => {
             let handle = client.find_repository(name).await?;
-            client
+            let path: PathBuf = client
                 .invoke(Request::RepositoryExport {
                     handle,
                     output: to_absolute(output)?,
                 })
-                .await?
+                .await?;
+
+            println!("{}", path.display());
         }
         ClientCommand::Import {
             input,
@@ -103,52 +210,75 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
             mode,
             force,
         } => {
-            client
+            let _: RepositoryHandle = client
                 .invoke(Request::RepositoryImport {
                     input: to_absolute(input)?,
                     name,
                     mode,
                     force,
                 })
-                .await?
+                .await?;
         }
-        ClientCommand::ListBinds => client.invoke(Request::NetworkGetListenerAddrs).await?,
-        ClientCommand::ListPeers => client.invoke(Request::NetworkGetPeers).await?,
-        ClientCommand::ListRepositories => client.invoke(Request::RepositoryList).await?,
-        ClientCommand::LocalDiscovery { enabled } => {
-            if let Some(enabled) = enabled {
-                client
-                    .invoke(Request::NetworkSetLocalDiscoveryEnabled(enabled))
-                    .await?
-            } else {
-                client
-                    .invoke(Request::NetworkIsLocalDiscoveryEnabled)
-                    .await?
+        ClientCommand::ListBinds => {
+            let addrs: Vec<PeerAddr> = client.invoke(Request::NetworkGetListenerAddrs).await?;
+
+            for addr in addrs {
+                println!("{}", PeerAddrDisplay(&addr));
             }
         }
-        ClientCommand::Metrics { addr } => client.invoke(Request::MetricsBind { addr }).await?,
+        ClientCommand::ListPeers => {
+            let infos: Vec<PeerInfo> = client.invoke(Request::NetworkGetPeers).await?;
+
+            for info in infos {
+                println!("{}", PeerInfoDisplay(&info));
+            }
+        }
+        ClientCommand::ListRepositories => {
+            let repos: BTreeMap<String, RepositoryHandle> =
+                client.invoke(Request::RepositoryList).await?;
+
+            for name in repos.keys() {
+                println!("{name}");
+            }
+        }
+        ClientCommand::LocalDiscovery { enabled } => {
+            if let Some(enabled) = enabled {
+                let () = client
+                    .invoke(Request::NetworkSetLocalDiscoveryEnabled(enabled))
+                    .await?;
+            } else {
+                let value: bool = client
+                    .invoke(Request::NetworkIsLocalDiscoveryEnabled)
+                    .await?;
+
+                println!("{value}");
+            }
+        }
+        ClientCommand::Metrics { addr } => {
+            let () = client.invoke(Request::MetricsBind { addr }).await?;
+        }
         ClientCommand::Mount { name } => {
             if let Some(name) = name {
                 let handle = client.find_repository(name).await?;
-                client.invoke(Request::RepositoryMount(handle)).await?
+                let path: PathBuf = client.invoke(Request::RepositoryMount(handle)).await?;
+
+                println!("{}", path.display());
             } else {
                 let handles = client.list_repositories().await?;
 
                 for handle in handles {
-                    client.invoke(Request::RepositoryMount(handle)).await?;
+                    let _: PathBuf = client.invoke(Request::RepositoryMount(handle)).await?;
                 }
-
-                Response::None
             }
         }
         ClientCommand::MountDir { path } => {
-            let request = if let Some(path) = path {
-                Request::RepositorySetMountDir(path)
+            if let Some(path) = path {
+                let () = client.invoke(Request::RepositorySetMountDir(path)).await?;
             } else {
-                Request::RepositoryGetMountDir
-            };
+                let path: PathBuf = client.invoke(Request::RepositoryGetMountDir).await?;
 
-            client.invoke(request).await?
+                println!("{}", path.display());
+            }
         }
         ClientCommand::Pex {
             name,
@@ -160,52 +290,46 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 let handle = client.find_repository(name).await?;
 
                 if let Some(enabled) = enabled {
-                    client
+                    let () = client
                         .invoke(Request::RepositorySetPexEnabled { handle, enabled })
-                        .await?
+                        .await?;
                 } else {
-                    client
+                    let value: bool = client
                         .invoke(Request::RepositoryIsPexEnabled(handle))
-                        .await?
+                        .await?;
+
+                    println!("{value}");
                 }
             } else if send.is_some() || recv.is_some() {
                 if let Some(send) = send {
                     let () = client
                         .invoke(Request::NetworkSetPexSendEnabled(send))
-                        .await?
-                        .try_into()?;
+                        .await?;
                 }
 
                 if let Some(recv) = recv {
                     let () = client
                         .invoke(Request::NetworkSetPexRecvEnabled(recv))
-                        .await?
-                        .try_into()?;
+                        .await?;
                 }
-
-                Response::None
             } else {
-                let send: bool = client
-                    .invoke(Request::NetworkIsPexSendEnabled)
-                    .await?
-                    .try_into()?;
-                let recv: bool = client
-                    .invoke(Request::NetworkIsPexRecvEnabled)
-                    .await?
-                    .try_into()?;
+                let send: bool = client.invoke(Request::NetworkIsPexSendEnabled).await?;
+                let recv: bool = client.invoke(Request::NetworkIsPexRecvEnabled).await?;
 
-                Response::String(format!("send: {send} recv: {recv}",))
+                println!("send: {send} recv: {recv}");
             }
         }
         ClientCommand::PortForwarding { enabled } => {
             if let Some(enabled) = enabled {
-                client
+                let () = client
                     .invoke(Request::NetworkSetPortForwardingEnabled(enabled))
-                    .await?
+                    .await?;
             } else {
-                client
+                let value: bool = client
                     .invoke(Request::NetworkIsPortForwardingEnabled)
-                    .await?
+                    .await?;
+
+                println!("{value}");
             }
         }
         ClientCommand::Quota {
@@ -213,39 +337,48 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
             remove,
             value,
         } => {
-            let request = if let Some(name) = name {
+            if let Some(name) = name {
                 let handle = client.find_repository(name).await?;
 
                 if remove {
-                    Request::RepositorySetQuota {
-                        handle,
-                        quota: None,
-                    }
+                    let () = client
+                        .invoke(Request::RepositorySetQuota {
+                            handle,
+                            quota: None,
+                        })
+                        .await?;
                 } else if let Some(value) = value {
-                    Request::RepositorySetQuota {
-                        handle,
-                        quota: Some(value),
-                    }
+                    let () = client
+                        .invoke(Request::RepositorySetQuota {
+                            handle,
+                            quota: Some(value),
+                        })
+                        .await?;
                 } else {
-                    Request::RepositoryGetQuota(handle)
+                    let value: QuotaInfo =
+                        client.invoke(Request::RepositoryGetQuota(handle)).await?;
+                    println!("{}", QuotaInfoDisplay(&value));
                 }
             } else if remove {
-                Request::RepositorySetDefaultQuota { quota: None }
+                let () = client
+                    .invoke(Request::RepositorySetDefaultQuota { quota: None })
+                    .await?;
             } else if let Some(value) = value {
-                Request::RepositorySetDefaultQuota { quota: Some(value) }
+                let () = client
+                    .invoke(Request::RepositorySetDefaultQuota { quota: Some(value) })
+                    .await?;
             } else {
-                Request::RepositoryGetDefaultQuota
-            };
-
-            client.invoke(request).await?
+                let value: QuotaInfo = client.invoke(Request::RepositoryGetDefaultQuota).await?;
+                println!("{}", QuotaInfoDisplay(&value));
+            }
         }
         ClientCommand::RemoteControl { addrs } => {
-            client.invoke(Request::RemoteControlBind { addrs }).await?
+            let () = client.invoke(Request::RemoteControlBind { addrs }).await?;
         }
         ClientCommand::RemovePeers { addrs } => {
-            client
+            let () = client
                 .invoke(Request::NetworkRemoveUserProvidedPeers(addrs))
-                .await?
+                .await?;
         }
         ClientCommand::Share {
             name,
@@ -256,40 +389,37 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
             let password = get_or_read(password, "input password").await?;
             let secret = password.map(Password::from).map(LocalSecret::Password);
 
-            client
+            let value: String = client
                 .invoke(Request::RepositoryShare {
                     handle,
                     mode,
                     secret,
                 })
-                .await?
+                .await?;
+
+            println!("{value}");
         }
         ClientCommand::StoreDir { path } => {
-            let request = if let Some(path) = path {
-                Request::RepositorySetStoreDir(path)
+            if let Some(path) = path {
+                let () = client.invoke(Request::RepositorySetStoreDir(path)).await?;
             } else {
-                Request::RepositoryGetStoreDir
-            };
-
-            client.invoke(request).await?
+                let path: PathBuf = client.invoke(Request::RepositoryGetStoreDir).await?;
+                println!("{}", path.display());
+            }
         }
         ClientCommand::Unmount { name } => {
             if let Some(name) = name {
                 let handle = client.find_repository(name).await?;
-                client.invoke(Request::RepositoryUnmount(handle)).await?
+                let () = client.invoke(Request::RepositoryUnmount(handle)).await?;
             } else {
                 let handles = client.list_repositories().await?;
 
                 for handle in handles {
-                    client.invoke(Request::RepositoryUnmount(handle)).await?;
+                    let () = client.invoke(Request::RepositoryUnmount(handle)).await?;
                 }
-
-                Response::None
             }
         }
     };
-
-    print_response(&response);
 
     client.close().await?;
 
@@ -310,7 +440,10 @@ impl LocalClient {
         }
     }
 
-    async fn invoke(&mut self, request: Request) -> Result<Response, ClientError> {
+    async fn invoke<T>(&mut self, request: Request) -> Result<T, ClientError>
+    where
+        T: TryFrom<Response, Error = UnexpectedResponse>,
+    {
         self.writer
             .send(Message {
                 id: MessageId::next(),
@@ -325,24 +458,20 @@ impl LocalClient {
         };
 
         match message.payload {
-            ServerPayload::Success(response) => Ok(response),
+            ServerPayload::Success(response) => Ok(response.try_into()?),
             ServerPayload::Failure(error) => Err(error.into()),
             ServerPayload::Notification(_) => Err(ClientError::UnexpectedNotification),
         }
     }
 
     async fn find_repository(&mut self, name: String) -> Result<RepositoryHandle, ClientError> {
-        Ok(self
-            .invoke(Request::RepositoryFind(name))
-            .await?
-            .try_into()?)
+        self.invoke(Request::RepositoryFind(name)).await
     }
 
     async fn list_repositories(&mut self) -> Result<Vec<RepositoryHandle>, ClientError> {
-        match self.invoke(Request::RepositoryList).await? {
-            Response::Repositories(map) => Ok(map.into_values().collect()),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        let repos: BTreeMap<String, RepositoryHandle> =
+            self.invoke(Request::RepositoryList).await?;
+        Ok(repos.into_values().collect())
     }
 
     async fn close(&mut self) -> Result<(), ClientError> {

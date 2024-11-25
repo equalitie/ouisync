@@ -108,6 +108,26 @@ pub(crate) enum ClientCommand {
         #[arg(value_parser = BoolishValueParser::new())]
         enabled: Option<bool>,
     },
+    /// Get or set block and repository expiration
+    #[command(alias = "expiry")]
+    Expiration {
+        /// Name of the repository to get/set the expiration for. If not specified, get/set the
+        /// default expiration.
+        name: Option<String>,
+
+        /// Remove both the block and repository expiration.
+        #[arg(short = 'R', long, conflicts_with_all = ["block", "repository"])]
+        remove: bool,
+
+        /// Time after which blocks expire if not accessed (in seconds)
+        #[arg(short, long)]
+        block: Option<u64>,
+
+        /// Time after which the whole repository is deleted after all its blocks expired
+        /// (in seconds)
+        #[arg(short, long)]
+        repository: Option<u64>,
+    },
     /// Export a repository to a file
     ///
     /// Note currently this strips write access and removes local password (if any) from the
@@ -216,11 +236,10 @@ pub(crate) enum ClientCommand {
     Quota {
         /// Name of the repository to get/set the quota for. If not specified, get/set the default
         /// quota.
-        #[arg(required_unless_present = "default", conflicts_with = "default")]
         name: Option<String>,
 
         /// Remove the quota
-        #[arg(short, long, conflicts_with = "value")]
+        #[arg(short = 'R', long, conflicts_with = "value")]
         remove: bool,
 
         /// Quota to set, in bytes. If not specified, prints the current quota. Support binary
@@ -273,33 +292,6 @@ pub(crate) enum ClientCommand {
         /// Domain name or network address of the server to host the mirror
         #[arg(short = 'H', long)]
         host: String,
-    },
-    /// Get or set block and repository expiration
-    #[command(alias = "expiry")]
-    Expiration {
-        /// Name of the repository to get/set the expiration for
-        #[arg(
-            short,
-            long,
-            required_unless_present = "default",
-            conflicts_with = "default"
-        )]
-        name: Option<String>,
-
-        /// Get/set the default expiration
-        #[arg(short, long)]
-        default: bool,
-
-        /// Remove the expiration
-        #[arg(short, long, conflicts_with = "value")]
-        remove: bool,
-
-        /// Time after which blocks expire if not accessed (in seconds)
-        block_expiration: Option<u64>,
-
-        /// Time after which the whole repository is deleted after all its blocks expired
-        /// (in seconds)
-        repository_expiration: Option<u64>,
     },
     /// Set access to a repository corresponding to the share token
     SetAccess {

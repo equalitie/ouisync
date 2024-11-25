@@ -3,14 +3,17 @@ use ouisync::{
     crypto::Password, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
 };
 use serde::{Deserialize, Serialize};
-use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[expect(clippy::large_enum_variant)]
 pub enum Request {
+    /// Enable/disable metrics collection endpoint
+    MetricsBind {
+        addr: Option<SocketAddr>,
+    },
     NetworkAddUserProvidedPeers(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
-    NetworkRemoveUserProvidedPeers(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
     NetworkBind(Vec<PeerAddr>),
     NetworkGetListenerAddrs,
     NetworkGetPeers,
@@ -19,6 +22,7 @@ pub enum Request {
     NetworkIsPexRecvEnabled,
     NetworkIsPexSendEnabled,
     NetworkIsPortForwardingEnabled,
+    NetworkRemoveUserProvidedPeers(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
     NetworkSetLocalDiscoveryEnabled(bool),
     NetworkSetPexRecvEnabled(bool),
     NetworkSetPexSendEnabled(bool),
@@ -27,18 +31,7 @@ pub enum Request {
     RemoteControlBind {
         addrs: Vec<SocketAddr>,
     },
-    /// Enable/disable metrics collection endpoint
-    MetricsBind {
-        addr: Option<SocketAddr>,
-    },
 
-    RepositoryGetDefaultQuota,
-    RepositoryGetMountDir,
-    RepositoryGetQuota(RepositoryHandle),
-    RepositoryGetStoreDir,
-    RepositoryList,
-    RepositorySetMountDir(PathBuf),
-    RepositorySetStoreDir(PathBuf),
     RepositoryCreate {
         name: String,
         read_secret: Option<SetLocalSecret>,
@@ -55,6 +48,14 @@ pub enum Request {
     /// Find repository by name. Returns the repository that matches the name exactly or
     /// unambiguously by prefix.
     RepositoryFind(String),
+    RepositoryGetBlockExpiration(RepositoryHandle),
+    RepositoryGetDefaultBlockExpiration,
+    RepositoryGetDefaultQuota,
+    RepositoryGetDefaultRepositoryExpiration,
+    RepositoryGetMountDir,
+    RepositoryGetQuota(RepositoryHandle),
+    RepositoryGetRepositoryExpiration(RepositoryHandle),
+    RepositoryGetStoreDir,
     /// Import a repository from a file
     RepositoryImport {
         input: PathBuf,
@@ -64,23 +65,40 @@ pub enum Request {
     },
     RepositoryIsDhtEnabled(RepositoryHandle),
     RepositoryIsPexEnabled(RepositoryHandle),
+    RepositoryList,
     /// Mount repository
     RepositoryMount(RepositoryHandle),
+    RepositorySetBlockExpiration {
+        handle: RepositoryHandle,
+        value: Option<Duration>,
+    },
+    RepositorySetDefaultBlockExpiration {
+        value: Option<Duration>,
+    },
     RepositorySetDefaultQuota {
         quota: Option<StorageSize>,
     },
-    RepositorySetQuota {
-        handle: RepositoryHandle,
-        quota: Option<StorageSize>,
+    RepositorySetDefaultRepositoryExpiration {
+        value: Option<Duration>,
     },
     RepositorySetDhtEnabled {
         handle: RepositoryHandle,
         enabled: bool,
     },
+    RepositorySetMountDir(PathBuf),
     RepositorySetPexEnabled {
         handle: RepositoryHandle,
         enabled: bool,
     },
+    RepositorySetQuota {
+        handle: RepositoryHandle,
+        quota: Option<StorageSize>,
+    },
+    RepositorySetRepositoryExpiration {
+        handle: RepositoryHandle,
+        value: Option<Duration>,
+    },
+    RepositorySetStoreDir(PathBuf),
     RepositoryShare {
         handle: RepositoryHandle,
         secret: Option<LocalSecret>,
