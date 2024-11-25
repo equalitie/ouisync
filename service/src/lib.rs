@@ -34,8 +34,13 @@ pub struct Service {
 }
 
 impl Service {
-    pub async fn init(local_socket_path: PathBuf, config_dir: PathBuf) -> Result<Self, Error> {
-        let state = State::init(&config_dir).await?;
+    pub async fn init(
+        local_socket_path: PathBuf,
+        config_dir: PathBuf,
+        default_store_dir: PathBuf,
+        default_mount_dir: PathBuf,
+    ) -> Result<Self, Error> {
+        let state = State::init(config_dir, default_store_dir, default_mount_dir).await?;
         let local_server = LocalServer::bind(&local_socket_path).await?;
 
         let metrics_server = MetricsServer::init(&state).await?;
@@ -198,22 +203,14 @@ impl Service {
             Request::RepositoryGetDefaultRepositoryExpiration => {
                 Ok(self.state.default_repository_expiration().await?.into())
             }
-            Request::RepositoryGetMountDir => Ok(self
-                .state
-                .mount_dir()
-                .ok_or(Error::MountDirUnspecified)?
-                .into()),
+            Request::RepositoryGetMountDir => Ok(self.state.mount_dir().into()),
             Request::RepositoryGetQuota(handle) => {
                 Ok(self.state.repository_quota(handle).await?.into())
             }
             Request::RepositoryGetRepositoryExpiration(handle) => {
                 Ok(self.state.repository_expiration(handle).await?.into())
             }
-            Request::RepositoryGetStoreDir => Ok(self
-                .state
-                .store_dir()
-                .ok_or(Error::StoreDirUnspecified)?
-                .into()),
+            Request::RepositoryGetStoreDir => Ok(self.state.store_dir().into()),
             Request::RepositoryGetDefaultQuota => Ok(self.state.default_quota().await?.into()),
             Request::RepositoryImport {
                 input,

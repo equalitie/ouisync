@@ -7,7 +7,6 @@ use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
-#[expect(clippy::large_enum_variant)]
 pub enum Request {
     /// Enable/disable metrics collection endpoint
     MetricsBind {

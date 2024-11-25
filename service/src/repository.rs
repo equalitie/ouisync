@@ -92,6 +92,11 @@ impl RepositorySet {
         })
     }
 
+    pub fn drain(&mut self) -> impl Iterator<Item = RepositoryHolder> + '_ {
+        self.index.clear();
+        self.repos.drain()
+    }
+
     fn find_handle(&self, prefix: &str) -> Result<RepositoryHandle, FindError> {
         let mut iter = self
             .index

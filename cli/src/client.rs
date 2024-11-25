@@ -382,6 +382,11 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::ResetAccess { name, token } => {
             let handle = client.find_repository(name).await?;
+            let token = token.parse().map_err(|_| ClientError::InvalidToken)?;
+
+            let () = client
+                .invoke(Request::RepositoryResetAccess { handle, token })
+                .await?;
         }
         ClientCommand::Share {
             name,
@@ -529,6 +534,8 @@ pub(crate) enum ClientError {
     Connect(#[source] io::Error),
     #[error("connection closed by server")]
     Disconnected,
+    #[error("invalid repository token")]
+    InvalidToken,
     #[error("unexpected notification")]
     UnexpectedNotification,
     #[error("unexpected response")]

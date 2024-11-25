@@ -1,3 +1,4 @@
+use crate::defaults;
 use clap::{
     builder::{ArgPredicate, BoolishValueParser},
     Parser, Subcommand,
@@ -5,7 +6,7 @@ use clap::{
 use ouisync::{AccessMode, PeerAddr, StorageSize};
 use ouisync_bridge::logger::{LogColor, LogFormat};
 use ouisync_service::protocol::ImportMode;
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(name = "ouisync", version, about)]
@@ -14,7 +15,7 @@ pub(crate) struct Options {
     /// bind to (if server)
     ///
     /// Can be also specified with env variable OUISYNC_SOCKET.
-    #[arg(short, long, default_value_os_t = default_socket(), value_name = "PATH")]
+    #[arg(short, long, default_value_os_t = defaults::socket(), value_name = "PATH")]
     pub socket: PathBuf,
 
     #[command(subcommand)]
@@ -36,7 +37,7 @@ pub(crate) enum ServerCommand {
         /// Config directory
         ///
         /// Can be also specified with env variable OUISYNC_CONFIG_DIR.
-        #[arg(long, default_value_os_t = default_config_dir(), value_name = "PATH")]
+        #[arg(long, default_value_os_t = defaults::config_dir(), value_name = "PATH")]
         config_dir: PathBuf,
 
         /// Log format ("human" or "json")
@@ -304,40 +305,4 @@ pub(crate) enum ClientCommand {
     },
 
     */
-}
-
-/// Path to the config directory.
-fn default_config_dir() -> PathBuf {
-    env::var_os("OUISYNC_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::config_dir()
-                .expect("config dir not defined")
-                .join("ouisync")
-        })
-}
-
-fn default_socket() -> PathBuf {
-    env::var_os("OUISYNC_SOCKET")
-        .map(PathBuf::from)
-        .unwrap_or_else(platform::default_socket)
-}
-
-mod platform {
-    use super::*;
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) fn default_socket() -> PathBuf {
-        // FIXME: when running as root, we should use `/run`
-        dirs::runtime_dir()
-            .or_else(dirs::cache_dir)
-            .expect("neither runtime dir nor cache dir defined")
-            .join("ouisync")
-            .with_extension("sock")
-    }
-
-    #[cfg(target_os = "windows")]
-    pub(super) fn default_socket() -> PathBuf {
-        format!(r"\\.\pipe\{APP_NAME}").into()
-    }
 }

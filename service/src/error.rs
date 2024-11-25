@@ -11,8 +11,6 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error("mount error")]
     Mount(#[from] MountError),
-    #[error("mount dir not specified")]
-    MountDirUnspecified,
     #[error("operation not supported")]
     OperationNotSupported,
     #[error("repository error")]
@@ -23,8 +21,6 @@ pub enum Error {
     RepositoryNotFound,
     #[error("repository sync is disabled")]
     RepositorySyncDisabled,
-    #[error("store dir not specified")]
-    StoreDirUnspecified,
     #[error("store error")]
     Store(#[from] ouisync::StoreError),
     #[error("TLS certificates not found")]

@@ -9,7 +9,7 @@ use ouisync::{
     StorageSize,
 };
 use ouisync_bridge::{
-    config::{ConfigKey, ConfigStore},
+    config::{ConfigError, ConfigKey, ConfigStore},
     network::{self, NetworkDefaults},
     transport::tls,
 };
@@ -37,14 +37,16 @@ const DEFAULT_REPOSITORY_EXPIRATION_KEY: ConfigKey<u64> = ConfigKey::new(
     "Default time in milliseconds after repository is deleted if all its blocks expired",
 );
 
+const AUTOMOUNT_KEY: &str = "automount";
+
 const REPOSITORY_FILE_EXTENSION: &str = "ouisyncdb";
 
 pub(crate) struct State {
     pub config: ConfigStore,
     pub network: Network,
-    store_dir: Option<PathBuf>,
-    mount_dir: Option<PathBuf>,
-    mounter: Option<MultiRepoVFS>,
+    store_dir: PathBuf,
+    mount_dir: PathBuf,
+    mounter: MultiRepoVFS,
     repos: RepositorySet,
     repos_monitor: StateMonitor,
     remote_server_config: OnceCell<Arc<rustls::ServerConfig>>,
@@ -52,7 +54,11 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn init(config_dir: &Path) -> Result<Self, Error> {
+    pub async fn init(
+        config_dir: PathBuf,
+        default_store_dir: PathBuf,
+        default_mount_dir: PathBuf,
+    ) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
         let monitor = StateMonitor::make_root();
 
@@ -72,19 +78,19 @@ impl State {
         )
         .await;
 
-        let store_dir = config
-            .entry(STORE_DIR_KEY)
-            .get()
-            .await
-            .inspect_err(|error| tracing::warn!(?error, "failed to get store dir from config"))
-            .ok();
+        let store_dir = match config.entry(STORE_DIR_KEY).get().await {
+            Ok(dir) => dir,
+            Err(ConfigError::NotFound) => default_store_dir,
+            Err(error) => return Err(error.into()),
+        };
 
-        let mount_dir = config
-            .entry(MOUNT_DIR_KEY)
-            .get()
-            .await
-            .inspect_err(|error| tracing::warn!(?error, "failed to get mount dir from config"))
-            .ok();
+        let mount_dir = match config.entry(MOUNT_DIR_KEY).get().await {
+            Ok(dir) => dir,
+            Err(ConfigError::NotFound) => default_mount_dir,
+            Err(error) => return Err(error.into()),
+        };
+
+        let mounter = MultiRepoVFS::create(&mount_dir).await?;
 
         let repos_monitor = monitor.make_child("Repositories");
 
@@ -93,7 +99,7 @@ impl State {
             network,
             store_dir,
             mount_dir,
-            mounter: None,
+            mounter,
             repos_monitor,
             repos: RepositorySet::new(),
             remote_server_config: OnceCell::new(),
@@ -132,29 +138,50 @@ impl State {
             .await
     }
 
-    pub fn store_dir(&self) -> Option<&Path> {
-        self.store_dir.as_deref()
+    pub fn store_dir(&self) -> &Path {
+        &self.store_dir
     }
 
     pub async fn set_store_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
+        if dir == self.store_dir {
+            return Ok(());
+        }
+
         self.config.entry(STORE_DIR_KEY).set(&dir).await?;
-        self.store_dir = Some(dir);
+        self.store_dir = dir;
+
+        // Close repos from the previous store dir and load repos from the new dir.
+        for mut holder in self.repos.drain() {
+            self.mounter.remove(holder.name())?;
+            holder.close().await?;
+        }
+
+        self.load_repositories().await;
+
         Ok(())
     }
 
-    pub fn mount_dir(&self) -> Option<&Path> {
-        self.mount_dir.as_deref()
+    pub fn mount_dir(&self) -> &Path {
+        &self.mount_dir
     }
 
     pub async fn set_mount_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
-        if Some(&dir) == self.mount_dir.as_ref() {
+        if dir == self.mount_dir {
             return Ok(());
         }
 
         self.config.entry(MOUNT_DIR_KEY).set(&dir).await?;
-        self.mount_dir = Some(dir);
+        self.mount_dir = dir;
+        self.mounter = MultiRepoVFS::create(&self.mount_dir).await?;
 
-        // TODO: remount all
+        // Remount all mounted repos
+        for (_, holder) in self.repos.iter() {
+            if self.mounter.mount_point(holder.name()).is_some() {
+                self.mounter.remove(holder.name())?;
+                self.mounter
+                    .insert(holder.name().to_owned(), holder.repository().clone())?;
+            }
+        }
 
         Ok(())
     }
@@ -182,7 +209,7 @@ impl State {
             Err(Error::RepositoryExists)?;
         }
 
-        let store_path = self.store_path(name.as_ref())?;
+        let store_path = self.store_path(name.as_ref());
 
         let repository = ouisync_bridge::repository::create(
             store_path,
@@ -218,13 +245,13 @@ impl State {
 
         holder.close().await?;
 
-        let store_path = self.store_path(holder.name())?;
+        let store_path = self.store_path(holder.name());
 
         ouisync::delete_repository(&store_path).await?;
 
         // Remove ancestors directories up to `store_dir` but only if they are empty.
         for path in store_path.ancestors().skip(1) {
-            if Some(path) == self.store_dir.as_deref() {
+            if *path == self.store_dir {
                 break;
             }
 
@@ -280,7 +307,7 @@ impl State {
                 .to_string_lossy()
                 .into_owned()
         };
-        let store_path = self.store_path(&name)?;
+        let store_path = self.store_path(&name);
 
         if fs::try_exists(&store_path).await? {
             if force {
@@ -356,30 +383,29 @@ impl State {
     pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
         let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
 
-        let mounter = match &self.mounter {
-            Some(mounter) => mounter,
-            None => {
-                let mount_dir = self.mount_dir().ok_or(Error::MountDirUnspecified)?;
-                let new_mounter = MultiRepoVFS::create(mount_dir).await?;
-                self.mounter.insert(new_mounter)
-            }
-        };
-
-        if let Some(mount_point) = mounter.mount_point(holder.name()) {
+        if let Some(mount_point) = self.mounter.mount_point(holder.name()) {
             // Already mounted
             Ok(mount_point)
         } else {
-            Ok(mounter.insert(holder.name().to_owned(), holder.repository().clone())?)
+            let mount_point = self
+                .mounter
+                .insert(holder.name().to_owned(), holder.repository().clone())?;
+
+            holder
+                .repository()
+                .metadata()
+                .set(AUTOMOUNT_KEY, true)
+                .await?;
+
+            Ok(mount_point)
         }
     }
 
     pub async fn unmount_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
-        let Some(mounter) = self.mounter.as_ref() else {
-            return Ok(());
-        };
-
         let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
-        mounter.remove(holder.name())?;
+        self.mounter.remove(holder.name())?;
+
+        holder.repository().metadata().remove(AUTOMOUNT_KEY).await?;
 
         Ok(())
     }
@@ -623,17 +649,12 @@ impl State {
 
     // Find all repositories in the store dir and open them.
     async fn load_repositories(&mut self) {
-        let Some(store_dir) = self.store_dir.as_deref() else {
-            tracing::error!("store dir isn't specified");
-            return;
-        };
-
-        if !fs::try_exists(store_dir).await.unwrap_or(false) {
+        if !fs::try_exists(&self.store_dir).await.unwrap_or(false) {
             tracing::error!("store dir doesn't exist");
             return;
         }
 
-        let mut walkdir = utils::walk_dir(store_dir);
+        let mut walkdir = utils::walk_dir(&self.store_dir);
 
         while let Some(entry) = walkdir.next().await {
             let entry = match entry {
@@ -673,10 +694,8 @@ impl State {
         )
         .await?;
 
-        let name = self
-            .store_dir
-            .as_deref()
-            .and_then(|store_dir| path.strip_prefix(store_dir).ok())
+        let name = path
+            .strip_prefix(&self.store_dir)
             .unwrap_or(path)
             .with_extension("")
             .to_string_lossy()
@@ -689,18 +708,23 @@ impl State {
         let mut holder = RepositoryHolder::new(name, repo);
         holder.enable_sync(registration);
 
+        if holder
+            .repository()
+            .metadata()
+            .get(AUTOMOUNT_KEY)
+            .await?
+            .unwrap_or(false)
+        {
+            todo!()
+        }
+
         // TODO: mount
         //     holder.mount(&dirs.mount_dir).await.ok();
 
         self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
     }
 
-    fn store_path(&self, repo_name: &str) -> Result<PathBuf, Error> {
-        let store_dir = self
-            .store_dir
-            .as_deref()
-            .ok_or(Error::StoreDirUnspecified)?;
-
+    fn store_path(&self, repo_name: &str) -> PathBuf {
         let suffix = Path::new(repo_name);
         let extension = if let Some(extension) = suffix.extension() {
             let mut extension = extension.to_owned();
@@ -712,7 +736,7 @@ impl State {
             Cow::Borrowed(REPOSITORY_FILE_EXTENSION.as_ref())
         };
 
-        Ok(store_dir.join(suffix).with_extension(extension))
+        self.store_dir.join(suffix).with_extension(extension)
     }
 }
 

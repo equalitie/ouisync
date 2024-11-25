@@ -1,4 +1,4 @@
-use crate::options::ServerCommand;
+use crate::{defaults, options::ServerCommand};
 use ouisync_bridge::logger::Logger;
 use ouisync_service::{Error, Service};
 use std::{io, path::PathBuf};
@@ -18,7 +18,13 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
         log_color,
     )?;
 
-    let mut service = Service::init(socket, config_dir).await?;
+    let mut service = Service::init(
+        socket,
+        config_dir,
+        defaults::store_dir(),
+        defaults::mount_dir(),
+    )
+    .await?;
 
     select! {
         result = service.run() => result?,
