@@ -46,6 +46,18 @@ impl TryFrom<Response> for () {
     }
 }
 
+impl<T> From<Option<T>> for Response
+where
+    Self: From<T>,
+{
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(value) => Self::from(value),
+            None => Self::None,
+        }
+    }
+}
+
 impl From<bool> for Response {
     fn from(value: bool) -> Self {
         Self::Bool(value)
@@ -96,6 +108,17 @@ impl From<Vec<String>> for Response {
 impl From<RepositoryHandle> for Response {
     fn from(value: RepositoryHandle) -> Self {
         Self::Repository(value)
+    }
+}
+
+impl TryFrom<Response> for RepositoryHandle {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::Repository(handle) => Ok(handle),
+            _ => Err(UnexpectedResponse),
+        }
     }
 }
 

@@ -31,11 +31,14 @@ pub enum Request {
     MetricsBind {
         addr: Option<SocketAddr>,
     },
-    RepositoriesGetStoreDir,
-    RepositoriesGetMountDir,
-    RepositoriesList,
-    RepositoriesSetMountDir(PathBuf),
-    RepositoriesSetStoreDir(PathBuf),
+
+    RepositoryGetDefaultQuota,
+    RepositoryGetMountDir,
+    RepositoryGetQuota(RepositoryHandle),
+    RepositoryGetStoreDir,
+    RepositoryList,
+    RepositorySetMountDir(PathBuf),
+    RepositorySetStoreDir(PathBuf),
     RepositoryCreate {
         name: String,
         read_secret: Option<SetLocalSecret>,
@@ -63,13 +66,13 @@ pub enum Request {
     RepositoryIsPexEnabled(RepositoryHandle),
     /// Mount repository
     RepositoryMount(RepositoryHandle),
-    RepositoryShare {
-        handle: RepositoryHandle,
-        secret: Option<LocalSecret>,
-        mode: AccessMode,
+    RepositorySetDefaultQuota {
+        quota: Option<StorageSize>,
     },
-    /// Unmount repository
-    RepositoryUnmount(RepositoryHandle),
+    RepositorySetQuota {
+        handle: RepositoryHandle,
+        quota: Option<StorageSize>,
+    },
     RepositorySetDhtEnabled {
         handle: RepositoryHandle,
         enabled: bool,
@@ -78,6 +81,12 @@ pub enum Request {
         handle: RepositoryHandle,
         enabled: bool,
     },
+    RepositoryShare {
+        handle: RepositoryHandle,
+        secret: Option<LocalSecret>,
+        mode: AccessMode,
+    },
+    RepositoryUnmount(RepositoryHandle),
     /*
     Open {
         name: String,
@@ -120,21 +129,6 @@ pub enum Request {
 
         /// Domain name or network address of the server to host the mirror
         host: String,
-    },
-    /// Get or set storage quota
-    Quota {
-        /// Name of the repository to get/set the quota for
-        name: Option<String>,
-
-        /// Get/set the default quota
-        default: bool,
-
-        /// Remove the quota
-        remove: bool,
-
-        /// Quota to set, in bytes. If omitted, prints the current quota. Support binary (ki, Mi,
-        /// Ti, Gi, ...) and decimal (k, M, T, G, ...) suffixes.
-        value: Option<StorageSize>,
     },
     /// Get or set block and repository expiration
     Expiration {

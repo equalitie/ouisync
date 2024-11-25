@@ -114,7 +114,7 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::ListBinds => client.invoke(Request::NetworkGetListenerAddrs).await?,
         ClientCommand::ListPeers => client.invoke(Request::NetworkGetPeers).await?,
-        ClientCommand::ListRepositories => client.invoke(Request::RepositoriesList).await?,
+        ClientCommand::ListRepositories => client.invoke(Request::RepositoryList).await?,
         ClientCommand::LocalDiscovery { enabled } => {
             if let Some(enabled) = enabled {
                 client
@@ -143,9 +143,9 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::MountDir { path } => {
             let request = if let Some(path) = path {
-                Request::RepositoriesSetMountDir(path)
+                Request::RepositorySetMountDir(path)
             } else {
-                Request::RepositoriesGetMountDir
+                Request::RepositoryGetMountDir
             };
 
             client.invoke(request).await?
@@ -208,6 +208,37 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                     .await?
             }
         }
+        ClientCommand::Quota {
+            name,
+            remove,
+            value,
+        } => {
+            let request = if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+
+                if remove {
+                    Request::RepositorySetQuota {
+                        handle,
+                        quota: None,
+                    }
+                } else if let Some(value) = value {
+                    Request::RepositorySetQuota {
+                        handle,
+                        quota: Some(value),
+                    }
+                } else {
+                    Request::RepositoryGetQuota(handle)
+                }
+            } else if remove {
+                Request::RepositorySetDefaultQuota { quota: None }
+            } else if let Some(value) = value {
+                Request::RepositorySetDefaultQuota { quota: Some(value) }
+            } else {
+                Request::RepositoryGetDefaultQuota
+            };
+
+            client.invoke(request).await?
+        }
         ClientCommand::RemoteControl { addrs } => {
             client.invoke(Request::RemoteControlBind { addrs }).await?
         }
@@ -235,9 +266,9 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::StoreDir { path } => {
             let request = if let Some(path) = path {
-                Request::RepositoriesSetStoreDir(path)
+                Request::RepositorySetStoreDir(path)
             } else {
-                Request::RepositoriesGetStoreDir
+                Request::RepositoryGetStoreDir
             };
 
             client.invoke(request).await?
@@ -301,18 +332,14 @@ impl LocalClient {
     }
 
     async fn find_repository(&mut self, name: String) -> Result<RepositoryHandle, ClientError> {
-        let response = self.invoke(Request::RepositoryFind(name)).await?;
-
-        match response {
-            Response::Repository(handle) => Ok(handle),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        Ok(self
+            .invoke(Request::RepositoryFind(name))
+            .await?
+            .try_into()?)
     }
 
     async fn list_repositories(&mut self) -> Result<Vec<RepositoryHandle>, ClientError> {
-        let response = self.invoke(Request::RepositoriesList).await?;
-
-        match response {
+        match self.invoke(Request::RepositoryList).await? {
             Response::Repositories(map) => Ok(map.into_values().collect()),
             _ => Err(ClientError::UnexpectedResponse),
         }
@@ -370,10 +397,10 @@ pub(crate) enum ClientError {
     Connect(#[source] io::Error),
     #[error("connection closed by server")]
     Disconnected,
-    #[error("unexpected response")]
-    UnexpectedResponse,
     #[error("unexpected notification")]
     UnexpectedNotification,
+    #[error("unexpected response")]
+    UnexpectedResponse,
     #[error("I/O error")]
     Io(#[from] io::Error),
 }

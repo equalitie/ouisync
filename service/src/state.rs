@@ -1,10 +1,12 @@
 use crate::{
     error::Error,
-    protocol::ImportMode,
+    protocol::{ImportMode, QuotaInfo},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     utils,
 };
-use ouisync::{AccessMode, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken};
+use ouisync::{
+    AccessMode, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
+};
 use ouisync_bridge::{
     config::{ConfigKey, ConfigStore},
     network::{self, NetworkDefaults},
@@ -427,6 +429,38 @@ impl State {
 
     pub async fn set_pex_recv_enabled(&self, enabled: bool) {
         ouisync_bridge::network::set_pex_recv_enabled(&self.network, &self.config, enabled).await
+    }
+
+    pub async fn repository_quota(&self, handle: RepositoryHandle) -> Result<QuotaInfo, Error> {
+        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let quota = holder.repository().quota().await?;
+        let size = holder.repository().size().await?;
+
+        Ok(QuotaInfo { quota, size })
+    }
+
+    pub async fn set_repository_quota(
+        &self,
+        handle: RepositoryHandle,
+        quota: Option<StorageSize>,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(handle)
+            .ok_or(Error::RepositoryNotFound)?
+            .repository()
+            .set_quota(quota)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn default_quota(&self) -> Result<Option<StorageSize>, Error> {
+        Ok(ouisync_bridge::repository::get_default_quota(&self.config).await?)
+    }
+
+    pub async fn set_default_quota(&self, value: Option<StorageSize>) -> Result<(), Error> {
+        ouisync_bridge::repository::set_default_quota(&self.config, value).await?;
+        Ok(())
     }
 
     pub async fn set_default_repository_expiration(

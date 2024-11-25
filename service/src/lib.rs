@@ -156,25 +156,19 @@ impl Service {
                 Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
             Request::RemoteControlBind { addrs: _ } => todo!(),
-            Request::RepositoriesGetMountDir => Ok(self
+            Request::RepositoryGetMountDir => Ok(self
                 .state
                 .mount_dir()
                 .ok_or(Error::MountDirUnspecified)?
                 .into()),
-            Request::RepositoriesGetStoreDir => Ok(self
+            Request::RepositoryGetQuota(handle) => {
+                Ok(self.state.repository_quota(handle).await?.into())
+            }
+            Request::RepositoryGetStoreDir => Ok(self
                 .state
                 .store_dir()
                 .ok_or(Error::StoreDirUnspecified)?
                 .into()),
-            Request::RepositoriesList => Ok(self.state.list_repositories().into()),
-            Request::RepositoriesSetMountDir(path) => {
-                self.state.set_mount_dir(path).await?;
-                Ok(().into())
-            }
-            Request::RepositoriesSetStoreDir(path) => {
-                self.state.set_store_dir(path).await?;
-                Ok(().into())
-            }
             Request::RepositoryCreate {
                 name,
                 read_secret,
@@ -197,6 +191,7 @@ impl Service {
                 Ok(output.into())
             }
             Request::RepositoryFind(name) => Ok(self.state.find_repository(&name)?.into()),
+            Request::RepositoryGetDefaultQuota => Ok(self.state.default_quota().await?.into()),
             Request::RepositoryImport {
                 input,
                 name,
@@ -215,8 +210,13 @@ impl Service {
             Request::RepositoryIsPexEnabled(handle) => {
                 Ok(self.state.is_repository_pex_enabled(handle)?.into())
             }
+            Request::RepositoryList => Ok(self.state.list_repositories().into()),
             Request::RepositoryMount(handle) => {
                 Ok(self.state.mount_repository(handle).await?.into())
+            }
+            Request::RepositorySetDefaultQuota { quota } => {
+                self.state.set_default_quota(quota).await?;
+                Ok(().into())
             }
             Request::RepositorySetDhtEnabled { handle, enabled } => {
                 self.state
@@ -224,10 +224,22 @@ impl Service {
                     .await?;
                 Ok(().into())
             }
+            Request::RepositorySetMountDir(path) => {
+                self.state.set_mount_dir(path).await?;
+                Ok(().into())
+            }
             Request::RepositorySetPexEnabled { handle, enabled } => {
                 self.state
                     .set_repository_pex_enabled(handle, enabled)
                     .await?;
+                Ok(().into())
+            }
+            Request::RepositorySetQuota { handle, quota } => {
+                self.state.set_repository_quota(handle, quota).await?;
+                Ok(().into())
+            }
+            Request::RepositorySetStoreDir(path) => {
+                self.state.set_store_dir(path).await?;
                 Ok(().into())
             }
             Request::RepositoryShare {

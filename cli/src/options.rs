@@ -2,7 +2,7 @@ use clap::{
     builder::{ArgPredicate, BoolishValueParser},
     Parser, Subcommand,
 };
-use ouisync::{AccessMode, PeerAddr};
+use ouisync::{AccessMode, PeerAddr, StorageSize};
 use ouisync_bridge::logger::{LogColor, LogFormat};
 use ouisync_service::protocol::ImportMode;
 use std::{env, net::SocketAddr, path::PathBuf};
@@ -212,6 +212,21 @@ pub(crate) enum ClientCommand {
         #[arg(value_parser = BoolishValueParser::new())]
         enabled: Option<bool>,
     },
+    /// Get or set storage quota
+    Quota {
+        /// Name of the repository to get/set the quota for. If not specified, get/set the default
+        /// quota.
+        #[arg(required_unless_present = "default", conflicts_with = "default")]
+        name: Option<String>,
+
+        /// Remove the quota
+        #[arg(short, long, conflicts_with = "value")]
+        remove: bool,
+
+        /// Quota to set, in bytes. If not specified, prints the current quota. Support binary
+        /// (ki, Mi, Ti, Gi, ...) and decimal (k, M, T, G, ...) suffixes.
+        value: Option<StorageSize>,
+    },
     /// Bind the remote API to the specified addresses.
     ///
     /// Overwrites any previously specified addresses.
@@ -258,29 +273,6 @@ pub(crate) enum ClientCommand {
         /// Domain name or network address of the server to host the mirror
         #[arg(short = 'H', long)]
         host: String,
-    },
-    /// Get or set storage quota
-    Quota {
-        /// Name of the repository to get/set the quota for
-        #[arg(
-            short,
-            long,
-            required_unless_present = "default",
-            conflicts_with = "default"
-        )]
-        name: Option<String>,
-
-        /// Get/set the default quota
-        #[arg(short, long)]
-        default: bool,
-
-        /// Remove the quota
-        #[arg(short, long, conflicts_with = "value")]
-        remove: bool,
-
-        /// Quota to set, in bytes. If omitted, prints the current quota. Support binary (ki, Mi,
-        /// Ti, Gi, ...) and decimal (k, M, T, G, ...) suffixes.
-        value: Option<StorageSize>,
     },
     /// Get or set block and repository expiration
     #[command(alias = "expiry")]
