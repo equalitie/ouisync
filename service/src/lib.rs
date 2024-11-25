@@ -132,6 +132,10 @@ impl Service {
         tracing::trace!(?message, "received");
 
         match message.payload {
+            Request::MetricsBind(addr) => {
+                Ok(self.metrics_server.bind(&self.state, addr).await?.into())
+            }
+            Request::MetricsGetListenerAddr => todo!(),
             Request::NetworkAddUserProvidedPeers(addrs) => {
                 self.state.add_user_provided_peers(addrs).await;
                 Ok(().into())
@@ -176,9 +180,6 @@ impl Service {
             Request::NetworkSetPortForwardingEnabled(enabled) => {
                 self.state.set_port_forwarding_enabled(enabled).await;
                 Ok(().into())
-            }
-            Request::MetricsBind { addr } => {
-                Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
             Request::RemoteControlBind(_addr) => todo!(),
             Request::RemoteControlGetListenerAddr => todo!(),

@@ -189,8 +189,7 @@ fn relay() {
 
     // "relay" node
     let r = Bin::start();
-    r.bind();
-    let r_port = r.get_port();
+    let r_port = r.bind();
     r.create(None);
     let share_token = r.share();
 
@@ -347,8 +346,7 @@ fn check_concurrent_versions(file_path: &Path, expected_contents: &[&[u8]]) -> R
 fn cache_server() {
     // the cache server
     let r = Bin::start();
-    r.bind();
-    let r_sync_port = r.get_port();
+    let r_sync_port = r.bind();
     let r_remote_control_port = r.enable_remote_control();
 
     let a = Bin::start();
@@ -388,8 +386,7 @@ fn cache_server() {
 
 fn setup() -> (Bin, Bin) {
     let a = Bin::start();
-    a.bind();
-    let a_port = a.get_port();
+    let a_port = a.bind();
     a.create(None);
     a.mount();
     let share_token = a.share();

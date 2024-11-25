@@ -8,10 +8,8 @@ use thiserror::Error;
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Request {
-    /// Enable/disable metrics collection endpoint
-    MetricsBind {
-        addr: Option<SocketAddr>,
-    },
+    MetricsBind(Option<SocketAddr>),
+    MetricsGetListenerAddr,
     NetworkAddUserProvidedPeers(#[serde(with = "as_strs")] Vec<PeerAddr>),
     NetworkBind(Vec<PeerAddr>),
     NetworkGetListenerAddrs,

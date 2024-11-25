@@ -60,16 +60,19 @@ pub(crate) enum ClientCommand {
         #[arg(required = true, value_name = "PROTO/IP:PORT")]
         addrs: Vec<PeerAddr>,
     },
-    /// Listen on the specified addresses. Replaces all current listeners. If no addresses are
-    /// specified, stops all current listeners.
+    /// Configure network listeners.
     Bind {
         /// Addresses to listen on. PROTO is one of "quic" or "tcp", IP is a IPv4 or IPv6 address
         /// and PORT is a port number. If IP is 0.0.0.0 or [::] binds to all interfaces. If PORT is
-        /// 0, binds to a random port.
+        /// 0, binds to a random port. If unspecified, prints the current listeners.
         ///
         /// Examples: quic/0.0.0.0:0, quic/[::]:0, tcp/192.168.0.100:55555
         #[arg(value_name = "PROTO/IP:PORT")]
         addrs: Vec<PeerAddr>,
+
+        /// Disable all listeners.
+        #[arg(short, long, conflicts_with = "addrs")]
+        disable: bool,
     },
     /// Create a new repository
     #[command(visible_aliases = ["mk"])]
@@ -160,8 +163,6 @@ pub(crate) enum ClientCommand {
         #[arg(short, long)]
         force: bool,
     },
-    /// List addresses and ports we are listening on
-    ListBinds,
     /// List all known peers.
     ///
     /// Prints one peer per line, each line consists of the following space-separated fields: ip,
@@ -177,13 +178,15 @@ pub(crate) enum ClientCommand {
         #[arg(value_parser = BoolishValueParser::new())]
         enabled: Option<bool>,
     },
-    /// Enable or disable metrics collection.
+    /// Configure endpoint for metrics collection.
     Metrics {
-        /// Address to bind the metrics endpoint to. If specified, metrics collection is enabled and
-        /// the collected metrics are served from this endpoint. If not specified, metrics
-        /// collection is disabled.
+        /// Address to bind the metrics endpoint to. If not specified, prints the current endpoint.
         #[arg(value_name = "IP:PORT")]
         addr: Option<SocketAddr>,
+
+        /// Disable metrics collection.
+        #[arg(short, long, conflicts_with = "addr")]
+        disable: bool,
     },
     /// Mount repository
     Mount {

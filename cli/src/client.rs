@@ -31,8 +31,18 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 .invoke(Request::NetworkAddUserProvidedPeers(addrs))
                 .await?;
         }
-        ClientCommand::Bind { addrs } => {
-            let () = client.invoke(Request::NetworkBind(addrs)).await?;
+        ClientCommand::Bind { addrs, disable } => {
+            if disable {
+                let () = client.invoke(Request::NetworkBind(vec![])).await?;
+            } else if !addrs.is_empty() {
+                let () = client.invoke(Request::NetworkBind(addrs)).await?;
+            }
+
+            let addrs: Vec<PeerAddr> = client.invoke(Request::NetworkGetListenerAddrs).await?;
+
+            for addr in addrs {
+                println!("{}", PeerAddrDisplay(&addr));
+            }
         }
         ClientCommand::Create {
             name,
@@ -220,13 +230,6 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 })
                 .await?;
         }
-        ClientCommand::ListBinds => {
-            let addrs: Vec<PeerAddr> = client.invoke(Request::NetworkGetListenerAddrs).await?;
-
-            for addr in addrs {
-                println!("{}", PeerAddrDisplay(&addr));
-            }
-        }
         ClientCommand::ListPeers => {
             let infos: Vec<PeerInfo> = client.invoke(Request::NetworkGetPeers).await?;
 
@@ -255,8 +258,18 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 println!("{value}");
             }
         }
-        ClientCommand::Metrics { addr } => {
-            let () = client.invoke(Request::MetricsBind { addr }).await?;
+        ClientCommand::Metrics { addr, disable } => {
+            if disable {
+                let () = client.invoke(Request::MetricsBind(None)).await?;
+            } else if let Some(addr) = addr {
+                let () = client.invoke(Request::MetricsBind(Some(addr))).await?;
+            }
+
+            let addr: Option<SocketAddr> = client.invoke(Request::MetricsGetListenerAddr).await?;
+
+            if let Some(addr) = addr {
+                println!("{addr}");
+            }
         }
         ClientCommand::Mount { name } => {
             if let Some(name) = name {

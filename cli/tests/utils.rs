@@ -8,7 +8,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    str,
+    str::{self},
     sync::LazyLock,
     thread,
     time::Duration,
@@ -85,32 +85,16 @@ impl Bin {
     }
 
     #[track_caller]
-    pub fn bind(&self) {
-        expect_output(
+    pub fn bind(&self) -> u16 {
+        process_output(
             &self.id,
-            "",
             self.client_command()
                 .arg("bind")
                 .arg(format!("tcp/{}:0", Ipv4Addr::LOCALHOST))
                 .output()
                 .unwrap(),
+            |line| line.split(' ').nth(1)?.parse().ok(),
         )
-    }
-
-    #[track_caller]
-    pub fn get_port(&self) -> u16 {
-        str::from_utf8(
-            &self
-                .client_command()
-                .arg("list-binds")
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .lines()
-        .find_map(|line| line.split(' ').nth(1)?.parse().ok())
-        .unwrap()
     }
 
     #[track_caller]
@@ -144,22 +128,17 @@ impl Bin {
     /// Create a share token for the repository
     #[track_caller]
     pub fn share(&self) -> String {
-        str::from_utf8(
-            &self
-                .client_command()
+        process_output(
+            &self.id,
+            self.client_command()
                 .arg("share")
                 .arg(DEFAULT_REPO)
                 .arg("--mode")
                 .arg("write")
                 .output()
-                .unwrap()
-                .stdout,
+                .unwrap(),
+            |line| Some(line.to_owned()),
         )
-        .unwrap()
-        .lines()
-        .next()
-        .unwrap()
-        .to_owned()
     }
 
     #[track_caller]
@@ -316,6 +295,22 @@ fn expect_output(id: &Id, expected: &str, output: Output) {
     }
 
     assert_eq!(str::from_utf8(&output.stdout).map(str::trim), Ok(expected));
+}
+
+#[track_caller]
+fn process_output<F, R>(id: &Id, output: Output, f: F) -> R
+where
+    F: FnMut(&str) -> Option<R>,
+{
+    if !output.status.success() {
+        fail(id, output);
+    }
+
+    str::from_utf8(&output.stdout)
+        .unwrap()
+        .lines()
+        .find_map(f)
+        .unwrap()
 }
 
 #[track_caller]
