@@ -20,7 +20,6 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
-use tracing::instrument;
 use transport::{LocalServer, LocalServerReader, LocalServerWriter, ReadError};
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -78,14 +77,20 @@ impl Service {
         }
     }
 
-    pub async fn close(&mut self) -> Result<(), Error> {
+    pub async fn close(&mut self) {
         self.metrics_server.close();
-        self.state.close().await?;
 
-        todo!()
+        self.local_readers.clear();
+
+        for mut writer in self.local_writers.drain() {
+            if let Err(error) = writer.close().await {
+                tracing::warn!(?error, "failed to close local connection");
+            }
+        }
+
+        self.state.close().await;
     }
 
-    #[instrument(skip(self))]
     async fn handle_message(
         &mut self,
         conn_id: ConnectionId,
@@ -103,11 +108,13 @@ impl Service {
                 tracing::error!(?error, "failed to receive message");
                 self.remove_local_connection(conn_id);
             }
-            Err(ReadError::Decode(DecodeError::Id(error))) => {
-                tracing::error!(?error, "failed to decode message id");
+            Err(ReadError::Decode(DecodeError::Id)) => {
+                tracing::error!("failed to decode message id");
                 self.remove_local_connection(conn_id);
             }
             Err(ReadError::Decode(DecodeError::Payload(id, error))) => {
+                tracing::warn!(?error, ?id, "failed to decode message payload");
+
                 let message = Message {
                     id,
                     payload: ServerPayload::Failure(error.into()),
@@ -122,6 +129,8 @@ impl Service {
         conn_id: ConnectionId,
         message: Message<Request>,
     ) -> Result<Response, ProtocolError> {
+        tracing::trace!(?message, "received");
+
         match message.payload {
             Request::NetworkAddUserProvidedPeers(addrs) => {
                 self.state.add_user_provided_peers(addrs).await;
@@ -171,7 +180,8 @@ impl Service {
             Request::MetricsBind { addr } => {
                 Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
-            Request::RemoteControlBind { addrs: _ } => todo!(),
+            Request::RemoteControlBind(_addr) => todo!(),
+            Request::RemoteControlGetListenerAddr => todo!(),
             Request::RepositoryCreate {
                 name,
                 read_secret,
@@ -303,6 +313,8 @@ impl Service {
             tracing::error!("connection not found");
             return;
         };
+
+        tracing::trace!(?message, "sending");
 
         match writer.send(message).await {
             Ok(()) => (),

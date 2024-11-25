@@ -177,10 +177,10 @@ pub(crate) enum ClientCommand {
         #[arg(value_parser = BoolishValueParser::new())]
         enabled: Option<bool>,
     },
-    /// Bind the metrics collection endpoint to the specified address.
+    /// Enable or disable metrics collection.
     Metrics {
-        /// Address to bind the metrics endpoint to. If specified, metrics collection is enabled
-        /// and the collected metrics are served from this endpoint. If not specified, metrics
+        /// Address to bind the metrics endpoint to. If specified, metrics collection is enabled and
+        /// the collected metrics are served from this endpoint. If not specified, metrics
         /// collection is disabled.
         #[arg(value_name = "IP:PORT")]
         addr: Option<SocketAddr>,
@@ -247,15 +247,17 @@ pub(crate) enum ClientCommand {
         /// (ki, Mi, Ti, Gi, ...) and decimal (k, M, T, G, ...) suffixes.
         value: Option<StorageSize>,
     },
-    /// Bind the remote API to the specified addresses.
-    ///
-    /// Overwrites any previously specified addresses.
+    /// Configure remote control.
     RemoteControl {
-        /// Addresses to bind to. IP is a IPv4 or IPv6 address and PORT is a port number. If IP is
-        /// 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to a random port. If empty
-        /// disables the remote API.
+        /// Address to bind the remote control endpoint to. IP is a IPv4 or IPv6 address and PORT is
+        /// a port number. If IP is 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to
+        /// a random port. If unspecified, prints the current remote control endpoint.
         #[arg(value_name = "IP:PORT")]
-        addrs: Vec<SocketAddr>,
+        addr: Option<SocketAddr>,
+
+        /// Disable remote control.
+        #[arg(short, long, conflicts_with = "addr")]
+        disable: bool,
     },
     /// Remove manually added peers.
     RemovePeers {

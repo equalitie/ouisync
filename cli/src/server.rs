@@ -31,7 +31,7 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
         result = terminated() => result?,
     };
 
-    service.close().await?;
+    service.close().await;
 
     Ok(())
 }

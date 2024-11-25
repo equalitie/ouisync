@@ -1,5 +1,5 @@
 use crate::protocol::{DecodeError, EncodeError, Message, Request};
-use bytes::{buf::Writer, Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use interprocess::local_socket::{
     tokio::{Listener, RecvHalf, SendHalf, Stream as Socket},
@@ -91,21 +91,21 @@ where
             None => return Poll::Ready(None),
         };
 
-        Poll::Ready(Some(Ok(Message::decode(&mut buffer.reader())?)))
+        Poll::Ready(Some(Ok(Message::decode(&mut buffer.freeze())?)))
     }
 }
 
 pub struct LocalWriter<T> {
     writer: FramedWrite<SendHalf, LengthDelimitedCodec>,
-    buffer: Writer<BytesMut>,
-    _type: PhantomData<fn(&T)>,
+    buffer: BytesMut,
+    _type: PhantomData<fn(T)>,
 }
 
 impl<T> LocalWriter<T> {
     fn new(inner: SendHalf) -> Self {
         Self {
             writer: FramedWrite::new(inner, LengthDelimitedCodec::new()),
-            buffer: BytesMut::new().writer(),
+            buffer: BytesMut::new(),
             _type: PhantomData,
         }
     }
@@ -133,8 +133,7 @@ where
         let this = self.get_mut();
 
         item.encode(&mut this.buffer)?;
-        this.writer
-            .start_send_unpin(this.buffer.get_mut().split().freeze())?;
+        this.writer.start_send_unpin(this.buffer.split().freeze())?;
 
         Ok(())
     }

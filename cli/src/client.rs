@@ -14,6 +14,7 @@ use ouisync_service::{
 use std::{
     collections::BTreeMap,
     env, io,
+    net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -69,7 +70,7 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 })
                 .ok_or_else(|| ProtocolError::new("name is missing"))?;
 
-            let () = client
+            let _: RepositoryHandle = client
                 .invoke(Request::RepositoryCreate {
                     name,
                     token,
@@ -372,8 +373,21 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 println!("{}", QuotaInfoDisplay(&value));
             }
         }
-        ClientCommand::RemoteControl { addrs } => {
-            let () = client.invoke(Request::RemoteControlBind { addrs }).await?;
+        ClientCommand::RemoteControl { addr, disable } => {
+            if disable {
+                let () = client.invoke(Request::RemoteControlBind(None)).await?;
+            } else if let Some(addr) = addr {
+                let () = client
+                    .invoke(Request::RemoteControlBind(Some(addr)))
+                    .await?;
+            }
+
+            let addr: Option<SocketAddr> =
+                client.invoke(Request::RemoteControlGetListenerAddr).await?;
+
+            if let Some(addr) = addr {
+                println!("{}", addr);
+            }
         }
         ClientCommand::RemovePeers { addrs } => {
             let () = client
@@ -397,7 +411,7 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
             let password = get_or_read(password, "input password").await?;
             let secret = password.map(Password::from).map(LocalSecret::Password);
 
-            let value: String = client
+            let value: ShareToken = client
                 .invoke(Request::RepositoryShare {
                     handle,
                     mode,

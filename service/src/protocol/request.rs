@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Request {
     /// Enable/disable metrics collection endpoint
     MetricsBind {
         addr: Option<SocketAddr>,
     },
-    NetworkAddUserProvidedPeers(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
+    NetworkAddUserProvidedPeers(#[serde(with = "as_strs")] Vec<PeerAddr>),
     NetworkBind(Vec<PeerAddr>),
     NetworkGetListenerAddrs,
     NetworkGetPeers,
@@ -21,16 +21,13 @@ pub enum Request {
     NetworkIsPexRecvEnabled,
     NetworkIsPexSendEnabled,
     NetworkIsPortForwardingEnabled,
-    NetworkRemoveUserProvidedPeers(#[serde(with = "as_vec_str")] Vec<PeerAddr>),
+    NetworkRemoveUserProvidedPeers(#[serde(with = "as_strs")] Vec<PeerAddr>),
     NetworkSetLocalDiscoveryEnabled(bool),
     NetworkSetPexRecvEnabled(bool),
     NetworkSetPexSendEnabled(bool),
     NetworkSetPortForwardingEnabled(bool),
-    /// Enable/disable remote control endpoint
-    RemoteControlBind {
-        addrs: Vec<SocketAddr>,
-    },
-
+    RemoteControlBind(Option<SocketAddr>),
+    RemoteControlGetListenerAddr,
     RepositoryCreate {
         name: String,
         read_secret: Option<SetLocalSecret>,
@@ -295,7 +292,7 @@ pub(crate) enum Request {
 }
 */
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ImportMode {
     Copy,
     Move,
@@ -356,7 +353,7 @@ pub mod as_str {
     }
 }
 
-pub mod as_vec_str {
+pub mod as_strs {
     use serde::{de, ser::SerializeSeq, Deserializer, Serializer};
     use std::{fmt, marker::PhantomData, str::FromStr};
 
@@ -401,10 +398,85 @@ pub mod as_vec_str {
         T: fmt::Display,
         S: Serializer,
     {
+        use std::fmt::Write;
+
+        let mut buffer = String::new();
         let mut s = s.serialize_seq(Some(value.len()))?;
+
         for item in value {
-            s.serialize_element(&item.to_string())?;
+            write!(&mut buffer, "{}", item).expect("failed to format item");
+            s.serialize_element(&buffer)?;
+            buffer.clear();
         }
         s.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ouisync::{AccessSecrets, WriteSecrets};
+    use rand::{rngs::StdRng, SeedableRng};
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn serialize_roundtrip() {
+        let mut rng = StdRng::seed_from_u64(0);
+        let secrets = AccessSecrets::Write(WriteSecrets::generate(&mut rng));
+
+        let test_vectors = [
+            (
+                Request::NetworkAddUserProvidedPeers(vec![]),
+                "81bb4e6574776f726b4164645573657250726f7669646564506565727390",
+            ),
+            (
+                Request::NetworkAddUserProvidedPeers(vec![PeerAddr::Quic(SocketAddr::from((
+                    Ipv4Addr::LOCALHOST,
+                    12345,
+                )))]),
+                "81bb4e6574776f726b4164645573657250726f7669646564506565727391b4717569632f3132372e\
+                 302e302e313a3132333435",
+            ),
+            (
+                Request::NetworkBind(vec![PeerAddr::Quic(SocketAddr::from((
+                    Ipv4Addr::UNSPECIFIED,
+                    12345,
+                )))]),
+                "81ab4e6574776f726b42696e649181a47175696381a25634929400000000cd3039",
+            ),
+            (
+                Request::NetworkGetListenerAddrs,
+                "b74e6574776f726b4765744c697374656e65724164647273",
+            ),
+            (
+                Request::RepositoryCreate {
+                    name: "foo".to_owned(),
+                    read_secret: None,
+                    write_secret: None,
+                    token: None,
+                },
+                "81b05265706f7369746f727943726561746594a3666f6fc0c0c0",
+            ),
+            (
+                Request::RepositoryCreate {
+                    name: "foo".to_owned(),
+                    read_secret: None,
+                    write_secret: None,
+                    token: Some(ShareToken::from(secrets)),
+                },
+                "81b05265706f7369746f727943726561746594a3666f6fc0c0d94568747470733a2f2f6f75697379\
+                 6e632e6e65742f722341774967663238737a62495f4b7274376153654f6c4877427868594b4d6338\
+                 43775a30473050626c71783132693555",
+            ),
+        ];
+
+        for (request, expected_encoded) in test_vectors {
+            let encoded = rmp_serde::to_vec(&request).unwrap();
+            assert_eq!(hex::encode(&encoded), expected_encoded);
+
+            let decoded: Request = rmp_serde::from_slice(&encoded).unwrap();
+
+            assert_eq!(decoded, request);
+        }
     }
 }

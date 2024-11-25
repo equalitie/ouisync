@@ -151,11 +151,7 @@ impl State {
         self.store_dir = dir;
 
         // Close repos from the previous store dir and load repos from the new dir.
-        for mut holder in self.repos.drain() {
-            self.mounter.remove(holder.name())?;
-            holder.close().await?;
-        }
-
+        self.close_repositories().await;
         self.load_repositories().await;
 
         Ok(())
@@ -351,7 +347,7 @@ impl State {
         handle: RepositoryHandle,
         secret: Option<LocalSecret>,
         mode: AccessMode,
-    ) -> Result<String, Error> {
+    ) -> Result<ShareToken, Error> {
         let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
         let token = ouisync_bridge::repository::create_share_token(
             holder.repository(),
@@ -643,8 +639,9 @@ impl State {
             .cloned()
     }
 
-    pub async fn close(&mut self) -> Result<(), Error> {
-        todo!()
+    pub async fn close(&mut self) {
+        self.network.shutdown().await;
+        self.close_repositories().await;
     }
 
     // Find all repositories in the store dir and open them.
@@ -681,6 +678,18 @@ impl State {
                     tracing::error!(?error, ?path, "failed to open repository");
                     continue;
                 }
+            }
+        }
+    }
+
+    async fn close_repositories(&mut self) {
+        for mut holder in self.repos.drain() {
+            if let Err(error) = self.mounter.remove(holder.name()) {
+                tracing::warn!(?error, repo = holder.name(), "failed to unmount repository",);
+            }
+
+            if let Err(error) = holder.close().await {
+                tracing::warn!(?error, repo = holder.name(), "failed to close repository");
             }
         }
     }

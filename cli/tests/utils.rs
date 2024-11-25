@@ -54,13 +54,11 @@ impl Bin {
         fs::write(config_dir.join("root_certs").join("localhost.pem"), &cert).unwrap();
 
         let mut command = Command::new(COMMAND);
-        command
-            .arg("--store-dir")
-            .arg(base_dir.path().join("store"));
-        command.arg("--config-dir").arg(&config_dir);
-        command.arg("--mount-dir").arg(&mount_dir);
         command.arg("--socket").arg(&socket_path);
         command.arg("start");
+        command.arg("--config-dir").arg(&config_dir);
+        command.env("OUISYNC_STORE_DIR", base_dir.path().join("store"));
+        command.env("OUISYNC_MOUNT_DIR", &mount_dir);
 
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -135,9 +133,9 @@ impl Bin {
         command.arg("create");
 
         if let Some(share_token) = share_token {
-            command.arg("--share-token").arg(share_token);
+            command.arg("--token").arg(share_token);
         } else {
-            command.arg("--name").arg(DEFAULT_REPO);
+            command.arg(DEFAULT_REPO);
         }
 
         expect_output(&self.id, "", command.output().unwrap());
@@ -150,7 +148,6 @@ impl Bin {
             &self
                 .client_command()
                 .arg("share")
-                .arg("--name")
                 .arg(DEFAULT_REPO)
                 .arg("--mode")
                 .arg("write")
@@ -170,20 +167,16 @@ impl Bin {
         expect_output(
             &self.id,
             "",
-            self.client_command()
-                .arg("mount")
-                .arg("--all")
-                .output()
-                .unwrap(),
+            self.client_command().arg("mount").output().unwrap(),
         )
     }
 
     #[track_caller]
-    pub fn bind_rpc(&self) -> u16 {
+    pub fn enable_remote_control(&self) -> u16 {
         let addr: SocketAddr = str::from_utf8(
             &self
                 .client_command()
-                .arg("bind-rpc")
+                .arg("remote-control")
                 .arg(format!("{}:0", Ipv4Addr::LOCALHOST))
                 .output()
                 .unwrap()
@@ -200,15 +193,13 @@ impl Bin {
     }
 
     #[track_caller]
-    pub fn mirror(&self, host: &str) {
+    pub fn enable_cache_server(&self, host: &str) {
         expect_output(
             &self.id,
             "",
             self.client_command()
-                .arg("mirror")
-                .arg("--name")
+                .arg("cache-server")
                 .arg(DEFAULT_REPO)
-                .arg("--host")
                 .arg(host)
                 .output()
                 .unwrap(),

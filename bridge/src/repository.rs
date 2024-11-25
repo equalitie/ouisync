@@ -103,7 +103,7 @@ pub async fn create_share_token(
     local_secret: Option<LocalSecret>,
     access_mode: AccessMode,
     name: Option<String>,
-) -> Result<String, ouisync_lib::Error> {
+) -> Result<ShareToken, ouisync_lib::Error> {
     let access_secrets = if let Some(local_secret) = local_secret {
         repository.unlock_secrets(local_secret).await?
     } else {
@@ -117,7 +117,7 @@ pub async fn create_share_token(
         share_token
     };
 
-    Ok(share_token.to_string())
+    Ok(share_token)
 }
 
 pub async fn set_default_quota(

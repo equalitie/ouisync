@@ -118,7 +118,7 @@ impl RepositorySet {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
 #[serde(transparent)]
 pub struct RepositoryHandle(usize);
 

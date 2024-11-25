@@ -1,6 +1,7 @@
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    io,
+    mem,
     sync::atomic::{AtomicU64, Ordering},
 };
 use thiserror::Error;
@@ -25,15 +26,10 @@ impl<T> Message<T>
 where
     T: Serialize,
 {
-    pub fn encode<W>(&self, writer: &mut W) -> Result<(), EncodeError>
-    where
-        W: io::Write,
-    {
-        writer
-            .write_all(&self.id.0.to_be_bytes())
-            .map_err(EncodeError::Id)?;
-
-        rmp_serde::encode::write(writer, &self.payload).map_err(EncodeError::Payload)?;
+    pub fn encode(&self, buffer: &mut BytesMut) -> Result<(), EncodeError> {
+        buffer.put_u64(self.id.0);
+        rmp_serde::encode::write(&mut buffer.writer(), &self.payload)
+            .map_err(EncodeError::Payload)?;
 
         Ok(())
     }
@@ -43,16 +39,15 @@ impl<T> Message<T>
 where
     T: DeserializeOwned,
 {
-    pub fn decode<R>(reader: &mut R) -> Result<Self, DecodeError>
-    where
-        R: io::Read,
-    {
-        let mut buffer = [0; 8];
-        reader.read_exact(&mut buffer).map_err(DecodeError::Id)?;
-        let id = MessageId(u64::from_be_bytes(buffer));
+    pub fn decode(buffer: &mut Bytes) -> Result<Self, DecodeError> {
+        if buffer.remaining() < mem::size_of::<u64>() {
+            return Err(DecodeError::Id);
+        }
+
+        let id = MessageId(buffer.get_u64());
 
         let payload =
-            rmp_serde::from_read(reader).map_err(|error| DecodeError::Payload(id, error))?;
+            rmp_serde::from_slice(buffer).map_err(|error| DecodeError::Payload(id, error))?;
 
         Ok(Self { id, payload })
     }
@@ -60,8 +55,6 @@ where
 
 #[derive(Error, Debug)]
 pub enum EncodeError {
-    #[error("failed to encode message id")]
-    Id(#[source] io::Error),
     #[error("failed to encode message payload")]
     Payload(#[source] rmp_serde::encode::Error),
 }
@@ -69,7 +62,7 @@ pub enum EncodeError {
 #[derive(Error, Debug)]
 pub enum DecodeError {
     #[error("failed to decode message id")]
-    Id(#[source] io::Error),
+    Id,
     #[error("failed to decode message payload")]
     Payload(MessageId, #[source] rmp_serde::decode::Error),
 }
