@@ -1,15 +1,8 @@
 use crate::{defaults, options::ServerCommand};
-use ouisync::PeerAddr;
 use ouisync_bridge::logger::Logger;
 use ouisync_service::{Defaults, Error, Service};
-use std::{
-    io,
-    net::{Ipv4Addr, Ipv6Addr},
-    path::PathBuf,
-};
+use std::{io, path::PathBuf};
 use tokio::select;
-
-const DEFAULT_PORT: u16 = 20209;
 
 pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), Error> {
     let ServerCommand::Start {
@@ -33,10 +26,7 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
             mount_dir: defaults::mount_dir(),
             local_discovery_enabled: false,
             port_forwarding_enabled: false,
-            bind: vec![
-                PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, DEFAULT_PORT).into()),
-                PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, DEFAULT_PORT).into()),
-            ],
+            bind: vec![],
         },
     )
     .await?;
@@ -75,81 +65,3 @@ async fn terminated() -> io::Result<()> {
 async fn terminated() -> io::Result<()> {
     tokio::signal::ctrl_c().await
 }
-
-/*
-const BIND_RPC_KEY: ConfigKey<Vec<SocketAddr>> =
-    ConfigKey::new("bind_rpc", "Addresses to bind the remote API to");
-
-#[derive(Default)]
-pub(crate) struct ServerContainer {
-    handles: Mutex<Vec<ScopedAbortHandle>>,
-}
-
-impl ServerContainer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub async fn init(&self, state: Arc<State>) -> Result<(), Error> {
-        let entry = state.config.entry(BIND_RPC_KEY);
-        let addrs = match entry.get().await {
-            Ok(addrs) => addrs,
-            Err(ConfigError::NotFound) => Vec::new(),
-            Err(error) => return Err(error.into()),
-        };
-
-        let (handles, _) = start(state, &addrs).await?;
-        *self.handles.lock().unwrap() = handles;
-
-        Ok(())
-    }
-
-    pub async fn set(
-        &self,
-        state: Arc<State>,
-        addrs: &[SocketAddr],
-    ) -> Result<Vec<SocketAddr>, Error> {
-        let entry = state.config.entry(BIND_RPC_KEY);
-
-        let (handles, addrs) = start(state, addrs).await?;
-        *self.handles.lock().unwrap() = handles;
-        entry.set(&addrs).await?;
-        Ok(addrs)
-    }
-
-    pub fn close(&self) {
-        self.handles.lock().unwrap().clear();
-    }
-}
-
-async fn start(
-    state: Arc<State>,
-    addrs: &[SocketAddr],
-) -> Result<(Vec<ScopedAbortHandle>, Vec<SocketAddr>), Error> {
-    let mut handles = Vec::with_capacity(addrs.len());
-    let mut local_addrs = Vec::with_capacity(addrs.len());
-
-    // Avoid loading the TLS config if not needed
-    if addrs.is_empty() {
-        return Ok((handles, local_addrs));
-    }
-
-    let config = state.get_server_config().await?;
-
-    for addr in addrs {
-        let Ok(server) = RemoteServer::bind(*addr, config.clone()).await else {
-            continue;
-        };
-
-        local_addrs.push(server.local_addr());
-
-        handles.push(
-            task::spawn(server.run(RemoteHandler::new(state.clone())))
-                .abort_handle()
-                .into(),
-        );
-    }
-
-    Ok((handles, local_addrs))
-}
-*/

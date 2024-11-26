@@ -38,12 +38,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
         _context: &SessionContext,
     ) -> Result<Self::Response, Self::Error> {
         match request {
-            Request::BindRpc { addrs } => Ok(self
-                .state
-                .rpc_servers
-                .set(self.state.clone(), &addrs)
-                .await?
-                .into()),
             Request::Mirror { name, host } => {
                 let holder = self.state.repositories.find(&name)?;
                 let config = self.state.get_client_config().await?;

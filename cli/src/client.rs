@@ -1,6 +1,6 @@
 use crate::{
     format::{OptionSecondsDisplay, PeerAddrDisplay, PeerInfoDisplay, QuotaInfoDisplay},
-    options::ClientCommand,
+    options::{ClientCommand, MirrorCommand},
 };
 use futures_util::SinkExt;
 use ouisync::{crypto::Password, LocalSecret, PeerAddr, PeerInfo, SetLocalSecret, ShareToken};
@@ -89,6 +89,8 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                     token,
                     read_secret,
                     write_secret,
+                    dht: false,
+                    pex: false,
                 })
                 .await?;
         }
@@ -272,6 +274,33 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
 
             if let Some(addr) = addr {
                 println!("{addr}");
+            }
+        }
+        ClientCommand::Mirror {
+            command,
+            name,
+            host,
+        } => {
+            let handle = client.find_repository(name).await?;
+
+            match command {
+                MirrorCommand::Create => {
+                    let () = client
+                        .invoke(Request::RepositoryCreateMirror { handle, host })
+                        .await?;
+                }
+                MirrorCommand::Delete => {
+                    let () = client
+                        .invoke(Request::RepositoryDeleteMirror { handle, host })
+                        .await?;
+                }
+                MirrorCommand::Exists => {
+                    let value: bool = client
+                        .invoke(Request::RepositoryMirrorExists { handle, host })
+                        .await?;
+
+                    println!("{value}");
+                }
             }
         }
         ClientCommand::Mount { name } => {

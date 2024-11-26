@@ -1,3 +1,4 @@
+use crate::transport::{AcceptError, BindError};
 use ouisync_bridge::{config::ConfigError, repository::OpenError};
 use ouisync_vfs::MountError;
 use std::io;
@@ -27,6 +28,10 @@ pub enum Error {
     TlsCertificatesNotFound,
     #[error("TLS keys not found")]
     TlsKeysNotFound,
+    #[error("server bind error")]
+    Bind(#[from] BindError),
+    #[error("server accept error")]
+    Accept(#[from] AcceptError),
 }
 
 impl From<OpenError> for Error {

@@ -200,6 +200,8 @@ impl State {
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
         share_token: Option<ShareToken>,
+        enable_dht: bool,
+        enable_pex: bool,
     ) -> Result<RepositoryHandle, Error> {
         if self.repos.find(&name).is_ok() {
             Err(Error::RepositoryExists)?;
@@ -218,6 +220,9 @@ impl State {
         .await?;
 
         let registration = self.network.register(repository.handle()).await;
+        registration.set_dht_enabled(enable_dht).await;
+        registration.set_pex_enabled(enable_pex).await;
+
         let mut holder = RepositoryHolder::new(name.clone(), repository);
         holder.enable_sync(registration);
 
@@ -461,6 +466,30 @@ impl State {
 
     pub async fn set_pex_recv_enabled(&self, enabled: bool) {
         ouisync_bridge::network::set_pex_recv_enabled(&self.network, &self.config, enabled).await
+    }
+
+    pub async fn create_repository_mirror(
+        &self,
+        _handle: RepositoryHandle,
+        _host: String,
+    ) -> Result<(), Error> {
+        todo!()
+    }
+
+    pub async fn delete_repository_mirror(
+        &self,
+        _handle: RepositoryHandle,
+        _host: String,
+    ) -> Result<(), Error> {
+        todo!()
+    }
+
+    pub async fn repository_mirror_exists(
+        &self,
+        _handle: RepositoryHandle,
+        _host: String,
+    ) -> Result<bool, Error> {
+        todo!()
     }
 
     pub async fn repository_quota(&self, handle: RepositoryHandle) -> Result<QuotaInfo, Error> {

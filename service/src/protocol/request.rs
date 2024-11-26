@@ -29,9 +29,24 @@ pub enum Request {
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
         token: Option<ShareToken>,
+        dht: bool,
+        pex: bool,
+    },
+    RepositoryCreateMirror {
+        handle: RepositoryHandle,
+        host: String,
     },
     /// Delete a repository
     RepositoryDelete(RepositoryHandle),
+    /// Delete a repository with the given name (name matching is the same as in `RepositoryFind).
+    RepositoryDeleteByName(String),
+    RepositoryDeleteMirror {
+        handle: RepositoryHandle,
+        host: String,
+    },
+    /// Check whether repository with the given name exists (name matching is the same as in
+    /// `RepositoryFind).
+    RepositoryExists(String),
     /// Export repository to a file
     RepositoryExport {
         handle: RepositoryHandle,
@@ -58,6 +73,10 @@ pub enum Request {
     RepositoryIsDhtEnabled(RepositoryHandle),
     RepositoryIsPexEnabled(RepositoryHandle),
     RepositoryList,
+    RepositoryMirrorExists {
+        handle: RepositoryHandle,
+        host: String,
+    },
     RepositoryMount(RepositoryHandle),
     RepositoryResetAccess {
         handle: RepositoryHandle,
@@ -183,18 +202,6 @@ pub(crate) enum Request {
         dst: Utf8PathBuf,
     },
     RepositorySyncProgress(RepositoryHandle),
-    RepositoryCreateMirror {
-        repository: RepositoryHandle,
-        host: String,
-    },
-    RepositoryDeleteMirror {
-        repository: RepositoryHandle,
-        host: String,
-    },
-    RepositoryMirrorExists {
-        repository: RepositoryHandle,
-        host: String,
-    },
     RepositoryMountAll(PathBuf),
     RepositoryGetMetadata {
         repository: RepositoryHandle,
@@ -450,6 +457,8 @@ mod tests {
                     read_secret: None,
                     write_secret: None,
                     token: None,
+                    dht: false,
+                    pex: false,
                 },
                 "81b05265706f7369746f727943726561746594a3666f6fc0c0c0",
             ),
@@ -459,6 +468,8 @@ mod tests {
                     read_secret: None,
                     write_secret: None,
                     token: Some(ShareToken::from(secrets)),
+                    dht: false,
+                    pex: false,
                 },
                 "81b05265706f7369746f727943726561746594a3666f6fc0c0d94568747470733a2f2f6f75697379\
                  6e632e6e65742f722341774967663238737a62495f4b7274376153654f6c4877427868594b4d6338\

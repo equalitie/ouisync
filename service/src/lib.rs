@@ -12,18 +12,26 @@ pub use error::Error;
 use futures_util::SinkExt;
 use metrics::MetricsServer;
 use ouisync::PeerAddr;
+use ouisync_bridge::config::{ConfigError, ConfigKey};
 use protocol::{DecodeError, Message, ProtocolError, Request, Response, ServerPayload};
 use slab::Slab;
 use state::State;
-use std::{path::PathBuf, time::Duration};
+use std::{future, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::{
     select,
     time::{self, MissedTickBehavior},
 };
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
-use transport::{local::LocalServer, ReadError, ServerReader, ServerWriter};
+use transport::{
+    local::LocalServer,
+    remote::{RemoteServer, RemoteServerReader, RemoteServerWriter},
+    AcceptError, ReadError, ServerReader, ServerWriter,
+};
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
+    ConfigKey::new("remote_control", "Remote control endpoint address");
 
 pub struct Defaults {
     pub store_dir: PathBuf,
@@ -36,6 +44,7 @@ pub struct Defaults {
 pub struct Service {
     state: State,
     local_server: LocalServer,
+    remote_server: Option<RemoteServer>,
     readers: StreamMap<ConnectionId, StreamNotifyClose<ServerReader>>,
     writers: Slab<ServerWriter>,
     metrics_server: MetricsServer,
@@ -50,11 +59,18 @@ impl Service {
         let state = State::init(config_dir, defaults).await?;
         let local_server = LocalServer::bind(&local_socket_path).await?;
 
+        let remote_server = match state.config.entry(REMOTE_CONTROL_KEY).get().await {
+            Ok(addr) => Some(RemoteServer::bind(addr, state.remote_server_config().await?).await?),
+            Err(ConfigError::NotFound) => None,
+            Err(error) => return Err(error.into()),
+        };
+
         let metrics_server = MetricsServer::init(&state).await?;
 
         Ok(Self {
             state,
             local_server,
+            remote_server,
             readers: StreamMap::new(),
             writers: Slab::new(),
             metrics_server,
@@ -73,6 +89,10 @@ impl Service {
                         ServerReader::Local(reader),
                         ServerWriter::Local(writer)
                     );
+                }
+                result = maybe_accept(self.remote_server.as_ref()) => {
+                    let (reader, writer) = result?;
+                    self.insert_connection(ServerReader::Remote(reader), ServerWriter::Remote(writer));
                 }
                 Some((conn_id, message)) = self.readers.next() => {
                     if let Some(message) = message {
@@ -126,11 +146,26 @@ impl Service {
             Err(ReadError::Decode(DecodeError::Payload(id, error))) => {
                 tracing::warn!(?error, ?id, "failed to decode message payload");
 
-                let message = Message {
-                    id,
-                    payload: ServerPayload::Failure(error.into()),
-                };
-                self.send_message(conn_id, message).await;
+                self.send_message(
+                    conn_id,
+                    Message {
+                        id,
+                        payload: ServerPayload::Failure(error.into()),
+                    },
+                )
+                .await;
+            }
+            Err(ReadError::Validate(id, error)) => {
+                tracing::warn!(?error, ?id, "failed to validate message");
+
+                self.send_message(
+                    conn_id,
+                    Message {
+                        id,
+                        payload: ServerPayload::Failure(error.into()),
+                    },
+                )
+                .await;
             }
         }
     }
@@ -192,23 +227,49 @@ impl Service {
                 self.state.set_port_forwarding_enabled(enabled).await;
                 Ok(().into())
             }
-            Request::RemoteControlBind(_addr) => todo!(),
-            Request::RemoteControlGetListenerAddr => todo!(),
+            Request::RemoteControlBind(addr) => {
+                self.bind_remote_control(addr).await?;
+                Ok(().into())
+            }
+            Request::RemoteControlGetListenerAddr => Ok(self
+                .remote_server
+                .as_ref()
+                .map(|server| server.local_addr())
+                .into()),
             Request::RepositoryCreate {
                 name,
                 read_secret,
                 write_secret,
                 token,
+                dht,
+                pex,
             } => {
                 let handle = self
                     .state
-                    .create_repository(name, read_secret, write_secret, token)
+                    .create_repository(name, read_secret, write_secret, token, dht, pex)
                     .await?;
 
                 Ok(handle.into())
             }
+            Request::RepositoryCreateMirror { handle, host } => {
+                self.state.create_repository_mirror(handle, host).await?;
+                Ok(().into())
+            }
             Request::RepositoryDelete(handle) => {
                 self.state.delete_repository(handle).await?;
+                Ok(().into())
+            }
+            Request::RepositoryDeleteByName(name) => {
+                let handle = self.state.find_repository(&name)?;
+                self.state.delete_repository(handle).await?;
+                Ok(().into())
+            }
+            Request::RepositoryDeleteMirror { handle, host } => {
+                self.state.delete_repository_mirror(handle, host).await?;
+                Ok(().into())
+            }
+            Request::RepositoryExists(name) => {
+                self.state.find_repository(&name)?;
                 Ok(().into())
             }
             Request::RepositoryExport { handle, output } => {
@@ -253,6 +314,11 @@ impl Service {
                 Ok(self.state.is_repository_pex_enabled(handle)?.into())
             }
             Request::RepositoryList => Ok(self.state.list_repositories().into()),
+            Request::RepositoryMirrorExists { handle, host } => Ok(self
+                .state
+                .repository_mirror_exists(handle, host)
+                .await?
+                .into()),
             Request::RepositoryMount(handle) => {
                 Ok(self.state.mount_repository(handle).await?.into())
             }
@@ -346,6 +412,27 @@ impl Service {
         self.readers.remove(&conn_id);
         self.writers.try_remove(conn_id);
     }
+
+    async fn bind_remote_control(&mut self, addr: Option<SocketAddr>) -> Result<(), Error> {
+        if let Some(addr) = addr {
+            self.remote_server =
+                Some(RemoteServer::bind(addr, self.state.remote_server_config().await?).await?);
+        } else {
+            self.remote_server = None;
+        }
+
+        Ok(())
+    }
 }
 
 type ConnectionId = usize;
+
+async fn maybe_accept(
+    server: Option<&RemoteServer>,
+) -> Result<(RemoteServerReader, RemoteServerWriter), AcceptError> {
+    if let Some(server) = server {
+        server.accept().await
+    } else {
+        future::pending().await
+    }
+}

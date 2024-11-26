@@ -1,7 +1,7 @@
 use crate::defaults;
 use clap::{
     builder::{ArgPredicate, BoolishValueParser},
-    Parser, Subcommand,
+    Parser, Subcommand, ValueEnum,
 };
 use ouisync::{AccessMode, PeerAddr, StorageSize};
 use ouisync_bridge::logger::{LogColor, LogFormat};
@@ -75,7 +75,7 @@ pub(crate) enum ClientCommand {
         disable: bool,
     },
     /// Create a new repository
-    #[command(visible_aliases = ["mk"])]
+    #[command(visible_alias = "mk")]
     Create {
         /// Name of the repository
         #[arg(required_unless_present = "token")]
@@ -188,6 +188,16 @@ pub(crate) enum ClientCommand {
         #[arg(short, long, conflicts_with = "addr")]
         disable: bool,
     },
+    /// Configure repository mirror
+    Mirror {
+        command: MirrorCommand,
+
+        /// Name of the repository to mirror
+        name: String,
+
+        /// Domain name or network address of the server hosting the repository mirror.
+        host: String,
+    },
     /// Mount repository
     Mount {
         /// Name of the repository to mount. If unspecified, mounts all repositories.
@@ -297,17 +307,14 @@ pub(crate) enum ClientCommand {
         /// Name of the repository to unmount. If unspecified, unmounts all repositories.
         name: Option<String>,
     },
-    /*
-    /// Mirror repository
-    Mirror {
-        /// Name of the repository to mirror
-        #[arg(short, long)]
-        name: String,
+}
 
-        /// Domain name or network address of the server to host the mirror
-        #[arg(short = 'H', long)]
-        host: String,
-    },
-
-    */
+#[derive(Clone, Debug, ValueEnum)]
+pub(crate) enum MirrorCommand {
+    /// Create repository mirror on the specified server.
+    Create,
+    /// Delete repository mirror from the specified server.
+    Delete,
+    /// Check whether the repository is mirrored on the specified server.
+    Exists,
 }

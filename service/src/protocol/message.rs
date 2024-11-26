@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     mem,
@@ -26,7 +26,7 @@ impl<T> Message<T>
 where
     T: Serialize,
 {
-    pub fn encode(&self, buffer: &mut BytesMut) -> Result<(), EncodeError> {
+    pub fn encode(&self, buffer: &mut impl BufMut) -> Result<(), EncodeError> {
         buffer.put_u64(self.id.0);
         rmp_serde::encode::write(&mut buffer.writer(), &self.payload)
             .map_err(EncodeError::Payload)?;
@@ -39,15 +39,23 @@ impl<T> Message<T>
 where
     T: DeserializeOwned,
 {
-    pub fn decode(buffer: &mut Bytes) -> Result<Self, DecodeError> {
+    pub fn decode(buffer: &mut impl Buf) -> Result<Self, DecodeError> {
         if buffer.remaining() < mem::size_of::<u64>() {
             return Err(DecodeError::Id);
         }
 
         let id = MessageId(buffer.get_u64());
+        let slice = buffer.chunk();
+
+        assert!(
+            slice.len() >= buffer.remaining(),
+            "non-continuous buffers not supported"
+        );
 
         let payload =
-            rmp_serde::from_slice(buffer).map_err(|error| DecodeError::Payload(id, error))?;
+            rmp_serde::from_slice(slice).map_err(|error| DecodeError::Payload(id, error))?;
+
+        buffer.advance(slice.len());
 
         Ok(Self { id, payload })
     }

@@ -343,7 +343,7 @@ fn check_concurrent_versions(file_path: &Path, expected_contents: &[&[u8]]) -> R
 // This test is similar to the `relay` test but using a "cache server" for the relay node instead
 // of a regular peer.
 #[test]
-fn cache_server() {
+fn mirror() {
     // the cache server
     let r = Bin::start();
     let r_sync_port = r.bind();
@@ -362,7 +362,7 @@ fn cache_server() {
     b.create(Some(&share_token));
     b.mount();
 
-    a.enable_cache_server(&format!("localhost:{r_remote_control_port}"));
+    a.mirror(&format!("localhost:{r_remote_control_port}"));
 
     let file_name = "test.dat";
     let size = 1024;

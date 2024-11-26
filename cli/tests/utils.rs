@@ -172,12 +172,13 @@ impl Bin {
     }
 
     #[track_caller]
-    pub fn enable_cache_server(&self, host: &str) {
+    pub fn mirror(&self, host: &str) {
         expect_output(
             &self.id,
             "",
             self.client_command()
-                .arg("cache-server")
+                .arg("mirror")
+                .arg("create")
                 .arg(DEFAULT_REPO)
                 .arg(host)
                 .output()
