@@ -28,7 +28,7 @@ type RepoMap = HashMap<U16CString, Arc<VirtualFilesystem>>;
 pub struct MultiRepoVFS {
     entry_id_generator: Arc<EntryIdGenerator>,
     runtime_handle: RuntimeHandle,
-    mount_point: PathBuf,
+    mount_root: PathBuf,
     repos: Arc<BlockingRwLock<RepoMap>>,
     unmount_tx: mpsc::SyncSender<()>,
     // It's `Option` so we can move it out of there in `Drop::drop`.
@@ -37,12 +37,12 @@ pub struct MultiRepoVFS {
 
 impl MultiRepoMount for MultiRepoVFS {
     fn create(
-        mount_point: impl AsRef<Path>,
+        mount_root: impl AsRef<Path>,
     ) -> impl Future<Output = Result<Self, MountError>> + Send {
         async {
-            let mount_point = mount_point.as_ref().to_owned();
-            let mount_point_u16c = match U16CString::from_os_str(mount_point.as_os_str()) {
-                Ok(mount_point) => mount_point,
+            let mount_root = mount_root.as_ref().to_owned();
+            let mount_root_u16c = match U16CString::from_os_str(mount_root.as_os_str()) {
+                Ok(mount_root) => mount_root,
                 Err(error) => {
                     tracing::error!("Failed to convert mount point to U16CString: {error:?}");
                     return Err(MountError::InvalidMountPoint);
@@ -75,7 +75,7 @@ impl MultiRepoMount for MultiRepoVFS {
                         debug_type: DebugType::None,
                     };
 
-                    let mut mounter = FileSystemMounter::new(&handler, &mount_point_u16c, &options);
+                    let mut mounter = FileSystemMounter::new(&handler, &mount_root_u16c, &options);
 
                     let file_system = match mounter.mount() {
                         Ok(file_system) => file_system,
@@ -111,12 +111,16 @@ impl MultiRepoMount for MultiRepoVFS {
             Ok(Self {
                 entry_id_generator,
                 runtime_handle: RuntimeHandle::current(),
-                mount_point,
+                mount_root,
                 repos,
                 unmount_tx,
                 join_handle: Some(join_handle),
             })
         }
+    }
+
+    fn mount_root(&self) -> &Path {
+        &self.mount_root
     }
 
     fn insert(&self, name: String, repo: Arc<Repository>) -> Result<PathBuf, io::Error> {

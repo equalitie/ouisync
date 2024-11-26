@@ -11,6 +11,7 @@ pub use error::Error;
 
 use futures_util::SinkExt;
 use metrics::MetricsServer;
+use ouisync::PeerAddr;
 use protocol::{DecodeError, Message, ProtocolError, Request, Response, ServerPayload};
 use slab::Slab;
 use state::State;
@@ -24,6 +25,14 @@ use transport::{local::LocalServer, ReadError, ServerReader, ServerWriter};
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
+pub struct Defaults {
+    pub store_dir: PathBuf,
+    pub mount_dir: PathBuf,
+    pub bind: Vec<PeerAddr>,
+    pub local_discovery_enabled: bool,
+    pub port_forwarding_enabled: bool,
+}
+
 pub struct Service {
     state: State,
     local_server: LocalServer,
@@ -36,10 +45,9 @@ impl Service {
     pub async fn init(
         local_socket_path: PathBuf,
         config_dir: PathBuf,
-        default_store_dir: PathBuf,
-        default_mount_dir: PathBuf,
+        defaults: Defaults,
     ) -> Result<Self, Error> {
-        let state = State::init(config_dir, default_store_dir, default_mount_dir).await?;
+        let state = State::init(config_dir, defaults).await?;
         let local_server = LocalServer::bind(&local_socket_path).await?;
 
         let metrics_server = MetricsServer::init(&state).await?;
@@ -129,7 +137,7 @@ impl Service {
 
     async fn dispatch_message(
         &mut self,
-        conn_id: ConnectionId,
+        _conn_id: ConnectionId,
         message: Message<Request>,
     ) -> Result<Response, ProtocolError> {
         tracing::trace!(?message, "received");

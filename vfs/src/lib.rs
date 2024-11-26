@@ -38,7 +38,7 @@ use thiserror::Error;
 
 pub trait MultiRepoMount {
     fn create(
-        mount_point: impl AsRef<Path>,
+        mount_root: impl AsRef<Path>,
     ) -> impl Future<Output = Result<Self, MountError>> + Send
     where
         Self: Sized;
@@ -51,6 +51,8 @@ pub trait MultiRepoMount {
 
     /// If the repo is mounted, returns its mount point. Otherwise return `None`.
     fn mount_point(&self, name: &str) -> Option<PathBuf>;
+
+    fn mount_root(&self) -> &Path;
 }
 
 #[derive(Debug, Error)]

@@ -1,7 +1,5 @@
 use crate::repository::RepositoryHandle;
-use ouisync::{
-    crypto::Password, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
-};
+use ouisync::{AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;

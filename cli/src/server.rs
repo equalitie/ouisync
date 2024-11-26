@@ -1,8 +1,15 @@
 use crate::{defaults, options::ServerCommand};
+use ouisync::PeerAddr;
 use ouisync_bridge::logger::Logger;
-use ouisync_service::{Error, Service};
-use std::{io, path::PathBuf};
+use ouisync_service::{Defaults, Error, Service};
+use std::{
+    io,
+    net::{Ipv4Addr, Ipv6Addr},
+    path::PathBuf,
+};
 use tokio::select;
+
+const DEFAULT_PORT: u16 = 20209;
 
 pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), Error> {
     let ServerCommand::Start {
@@ -21,8 +28,16 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
     let mut service = Service::init(
         socket,
         config_dir,
-        defaults::store_dir(),
-        defaults::mount_dir(),
+        Defaults {
+            store_dir: defaults::store_dir(),
+            mount_dir: defaults::mount_dir(),
+            local_discovery_enabled: false,
+            port_forwarding_enabled: false,
+            bind: vec![
+                PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, DEFAULT_PORT).into()),
+                PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, DEFAULT_PORT).into()),
+            ],
+        },
     )
     .await?;
 

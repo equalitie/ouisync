@@ -125,7 +125,9 @@ async fn ensure_vacant_entry(
 pub(crate) async fn close(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
     if let Some(holder) = state.repositories.remove(handle) {
         holder.repository.close().await?;
-        state.mounter.unmount(&holder.store_path)?;
+        state
+            .mounter
+            .unmount(&holder.store_path.as_os_str().to_string_lossy())?;
     }
 
     Ok(())
@@ -142,7 +144,10 @@ pub async fn close_all_repositories(state: &State) {
                 holder.store_path
             );
         }
-        if let Err(error) = state.mounter.unmount(&holder.store_path) {
+        if let Err(error) = state
+            .mounter
+            .unmount(&holder.store_path.as_os_str().to_string_lossy())
+        {
             tracing::warn!(
                 "Failed to unmount repository \"{:?}\": {error:?}",
                 holder.store_path
@@ -268,12 +273,17 @@ pub(crate) fn get_name(state: &State, handle: RepositoryHandle) -> Result<OsStri
 
 pub(crate) fn mount(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
     let holder = state.repositories.get(handle)?;
-    state.mounter.mount(&holder.store_path, &holder.repository)
+    state.mounter.mount(
+        &holder.store_path.as_os_str().to_string_lossy(),
+        &holder.repository,
+    )
 }
 
 pub(crate) fn unmount(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
     let holder = state.repositories.get(handle)?;
-    state.mounter.unmount(&holder.store_path)
+    state
+        .mounter
+        .unmount(&holder.store_path.as_os_str().to_string_lossy())
 }
 
 /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
@@ -444,7 +454,7 @@ pub(crate) async fn create_share_token(
     let holder = state.repositories.get(repository)?;
     let token =
         repository::create_share_token(&holder.repository, local_secret, access_mode, name).await?;
-    Ok(token)
+    Ok(token.to_string())
 }
 
 /// Returns the syncing progress.

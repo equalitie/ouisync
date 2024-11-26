@@ -47,13 +47,14 @@ const PEX_KEY: ConfigKey<PexConfig> = ConfigKey::new("pex", "Peer exchange confi
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NetworkDefaults {
+    pub bind: Vec<PeerAddr>,
     pub port_forwarding_enabled: bool,
     pub local_discovery_enabled: bool,
 }
 
 /// Initialize the network according to the config.
 pub async fn init(network: &Network, config: &ConfigStore, defaults: NetworkDefaults) {
-    let bind_addrs = config.entry(BIND_KEY).get().await.unwrap_or_default();
+    let bind_addrs = config.entry(BIND_KEY).get().await.unwrap_or(defaults.bind);
     bind_with_reuse_ports(network, config, &bind_addrs).await;
 
     let enabled = config

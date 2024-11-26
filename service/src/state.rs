@@ -2,7 +2,7 @@ use crate::{
     error::Error,
     protocol::{ImportMode, QuotaInfo},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
-    utils,
+    utils, Defaults,
 };
 use ouisync::{
     AccessMode, Credentials, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken,
@@ -45,7 +45,6 @@ pub(crate) struct State {
     pub config: ConfigStore,
     pub network: Network,
     store_dir: PathBuf,
-    mount_dir: PathBuf,
     mounter: MultiRepoVFS,
     repos: RepositorySet,
     repos_monitor: StateMonitor,
@@ -54,11 +53,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn init(
-        config_dir: PathBuf,
-        default_store_dir: PathBuf,
-        default_mount_dir: PathBuf,
-    ) -> Result<Self, Error> {
+    pub async fn init(config_dir: PathBuf, defaults: Defaults) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
         let monitor = StateMonitor::make_root();
 
@@ -72,25 +67,26 @@ impl State {
             &network,
             &config,
             NetworkDefaults {
-                port_forwarding_enabled: false,
-                local_discovery_enabled: false,
+                port_forwarding_enabled: defaults.port_forwarding_enabled,
+                local_discovery_enabled: defaults.local_discovery_enabled,
+                bind: defaults.bind,
             },
         )
         .await;
 
         let store_dir = match config.entry(STORE_DIR_KEY).get().await {
             Ok(dir) => dir,
-            Err(ConfigError::NotFound) => default_store_dir,
+            Err(ConfigError::NotFound) => defaults.store_dir,
             Err(error) => return Err(error.into()),
         };
 
         let mount_dir = match config.entry(MOUNT_DIR_KEY).get().await {
             Ok(dir) => dir,
-            Err(ConfigError::NotFound) => default_mount_dir,
+            Err(ConfigError::NotFound) => defaults.mount_dir,
             Err(error) => return Err(error.into()),
         };
 
-        let mounter = MultiRepoVFS::create(&mount_dir).await?;
+        let mounter = MultiRepoVFS::create(mount_dir).await?;
 
         let repos_monitor = monitor.make_child("Repositories");
 
@@ -98,7 +94,6 @@ impl State {
             config,
             network,
             store_dir,
-            mount_dir,
             mounter,
             repos_monitor,
             repos: RepositorySet::new(),
@@ -158,21 +153,26 @@ impl State {
     }
 
     pub fn mount_dir(&self) -> &Path {
-        &self.mount_dir
+        self.mounter.mount_root()
     }
 
     pub async fn set_mount_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
-        if dir == self.mount_dir {
+        if dir == self.mounter.mount_root() {
             return Ok(());
         }
 
         self.config.entry(MOUNT_DIR_KEY).set(&dir).await?;
-        self.mount_dir = dir;
-        self.mounter = MultiRepoVFS::create(&self.mount_dir).await?;
+        self.mounter = MultiRepoVFS::create(dir).await?;
 
         // Remount all mounted repos
         for (_, holder) in self.repos.iter() {
-            if self.mounter.mount_point(holder.name()).is_some() {
+            if holder
+                .repository()
+                .metadata()
+                .get(AUTOMOUNT_KEY)
+                .await?
+                .unwrap_or(false)
+            {
                 self.mounter.remove(holder.name())?;
                 self.mounter
                     .insert(holder.name().to_owned(), holder.repository().clone())?;
@@ -379,29 +379,28 @@ impl State {
     pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
         let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
 
+        holder
+            .repository()
+            .metadata()
+            .set(AUTOMOUNT_KEY, true)
+            .await?;
+
         if let Some(mount_point) = self.mounter.mount_point(holder.name()) {
             // Already mounted
             Ok(mount_point)
         } else {
-            let mount_point = self
+            Ok(self
                 .mounter
-                .insert(holder.name().to_owned(), holder.repository().clone())?;
-
-            holder
-                .repository()
-                .metadata()
-                .set(AUTOMOUNT_KEY, true)
-                .await?;
-
-            Ok(mount_point)
+                .insert(holder.name().to_owned(), holder.repository().clone())?)
         }
     }
 
     pub async fn unmount_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
         let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
-        self.mounter.remove(holder.name())?;
 
         holder.repository().metadata().remove(AUTOMOUNT_KEY).await?;
+
+        self.mounter.remove(holder.name())?;
 
         Ok(())
     }
@@ -632,6 +631,7 @@ impl State {
             .cloned()
     }
 
+    #[expect(dead_code)]
     pub async fn remote_client_config(&self) -> Result<Arc<rustls::ClientConfig>, Error> {
         self.remote_client_config
             .get_or_try_init(|| make_client_config(self.config.dir()))
@@ -710,8 +710,6 @@ impl State {
             .to_string_lossy()
             .into_owned();
 
-        tracing::info!(name, "repository opened");
-
         let registration = self.network.register(repo.handle()).await;
 
         let mut holder = RepositoryHolder::new(name, repo);
@@ -724,11 +722,9 @@ impl State {
             .await?
             .unwrap_or(false)
         {
-            todo!()
+            self.mounter
+                .insert(holder.name().to_owned(), holder.repository().clone())?;
         }
-
-        // TODO: mount
-        //     holder.mount(&dirs.mount_dir).await.ok();
 
         self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
     }

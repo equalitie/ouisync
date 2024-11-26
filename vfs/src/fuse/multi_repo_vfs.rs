@@ -28,6 +28,11 @@ impl MultiRepoMount for MultiRepoVFS {
         }))
     }
 
+    fn mount_root(&self) -> &Path {
+        &self.mount_root
+    }
+
+    // TODO: make this idempotent (return Ok if already mounted)
     fn insert(&self, repo_name: String, repo: Arc<Repository>) -> Result<PathBuf, io::Error> {
         let mount_point = prepare_mountpoint(&repo_name, &self.mount_root)?;
         let mount_guard = super::mount(self.runtime_handle.clone(), repo, &mount_point)?;

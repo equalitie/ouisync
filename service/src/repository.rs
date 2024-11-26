@@ -26,21 +26,6 @@ impl RepositorySet {
         }
     }
 
-    pub fn insert(
-        &mut self,
-        holder: RepositoryHolder,
-    ) -> (RepositoryHandle, Option<RepositoryHolder>) {
-        let name = holder.name.clone();
-        let handle = self.repos.insert(holder);
-
-        let old_holder = self
-            .index
-            .insert(name, handle)
-            .and_then(|old_handle| self.repos.try_remove(old_handle));
-
-        (RepositoryHandle(handle), old_holder)
-    }
-
     pub fn try_insert(&mut self, holder: RepositoryHolder) -> Option<RepositoryHandle> {
         match self.index.entry(holder.name().to_owned()) {
             Entry::Vacant(entry) => {
@@ -74,6 +59,7 @@ impl RepositorySet {
         Ok((handle, holder))
     }
 
+    #[expect(dead_code)]
     pub fn find_mut(
         &mut self,
         prefix: &str,
@@ -159,6 +145,7 @@ impl RepositoryHolder {
         self.registration = Some(registration);
     }
 
+    #[expect(dead_code)]
     pub fn disable_sync(&mut self) {
         self.registration = None;
     }
