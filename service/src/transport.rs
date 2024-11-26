@@ -71,18 +71,6 @@ impl Sink<Message<ServerPayload>> for ServerWriter {
 }
 
 #[derive(Error, Debug)]
-pub enum BindError {
-    #[error("I/O error")]
-    Io(#[from] io::Error),
-}
-
-#[derive(Error, Debug)]
-pub enum AcceptError {
-    #[error("I/O error")]
-    Io(#[from] io::Error),
-}
-
-#[derive(Error, Debug)]
 pub enum ReadError {
     #[error("failed to receive message")]
     Receive(#[from] TransportError),

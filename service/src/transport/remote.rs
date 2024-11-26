@@ -1,110 +1,61 @@
+mod client;
+mod protocol;
+mod server;
+
+pub use client::{RemoteClient, RemoteClientError};
+pub(crate) use server::{RemoteServer, RemoteServerReader, RemoteServerWriter};
+
 use std::{
     io::Cursor,
-    iter,
-    net::SocketAddr,
+    marker::PhantomData,
     pin::Pin,
-    sync::Arc,
     task::{ready, Context, Poll},
 };
 
-use futures_util::{
-    stream::{SplitSink, SplitStream},
-    Sink, SinkExt, Stream, StreamExt,
-};
-use ouisync::{crypto::sign::Signature, AccessSecrets, RepositoryId, ShareToken};
-use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::{
-    rustls::{self, ConnectionCommon},
-    server::TlsStream,
-    TlsAcceptor,
-};
-use tokio_tungstenite::{tungstenite as ws, WebSocketStream};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use serde::{de::DeserializeOwned, Serialize};
+use tokio_rustls::rustls::ConnectionCommon;
+use tokio_tungstenite::tungstenite as ws;
 
-use crate::protocol::{Message, MessageId, Request, ServerPayload};
+use crate::protocol::Message;
 
-use super::{AcceptError, BindError, ReadError, ValidateError, WriteError};
+use super::{ReadError, WriteError};
 
-pub(crate) struct RemoteServer {
-    tcp_listener: TcpListener,
-    tls_acceptor: TlsAcceptor,
-    local_addr: SocketAddr,
+fn extract_session_cookie<Data>(connection: &ConnectionCommon<Data>) -> [u8; 32] {
+    // unwrap is OK as the function fails only if called before TLS handshake or if the output
+    // length is zero, none of which is the case here.
+    connection
+        .export_keying_material([0; 32], b"ouisync session cookie", None)
+        .unwrap()
 }
 
-impl RemoteServer {
-    pub async fn bind(
-        addr: SocketAddr,
-        config: Arc<rustls::ServerConfig>,
-    ) -> Result<Self, BindError> {
-        let tcp_listener = TcpListener::bind(addr).await?;
-        let local_addr = tcp_listener.local_addr()?;
+struct RemoteSocket<T, S> {
+    inner: S,
+    _type: PhantomData<fn(T) -> T>,
+}
 
-        tracing::info!("remote server listening on {}", local_addr);
-
-        Ok(Self {
-            tcp_listener,
-            tls_acceptor: TlsAcceptor::from(config),
-            local_addr,
-        })
-    }
-
-    pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr
-    }
-
-    pub async fn accept(&self) -> Result<(RemoteServerReader, RemoteServerWriter), AcceptError> {
-        loop {
-            let (stream, addr) = self.tcp_listener.accept().await?;
-
-            // Upgrade to TLS
-            let stream = match self.tls_acceptor.accept(stream).await {
-                Ok(stream) => stream,
-                Err(error) => {
-                    tracing::error!(?error, "failed to upgrade to tls");
-                    continue;
-                }
-            };
-
-            let session_cookie = extract_session_cookie(stream.get_ref().1);
-
-            // Upgrade to websocket
-            let stream = match tokio_tungstenite::accept_async(stream).await {
-                Ok(stream) => stream,
-                Err(error) => {
-                    tracing::error!(?error, "failed to upgrade to websocket");
-                    continue;
-                }
-            };
-
-            tracing::info!(?addr, "accepted remote client");
-
-            let (writer, reader) = stream.split();
-            let reader = RemoteServerReader {
-                reader,
-                session_cookie,
-            };
-            let writer = RemoteServerWriter { writer };
-
-            return Ok((reader, writer));
+impl<T, S> RemoteSocket<T, S> {
+    fn new(inner: S) -> Self {
+        Self {
+            inner,
+            _type: PhantomData,
         }
     }
 }
 
-pub(crate) struct RemoteServerReader {
-    reader: SplitStream<WebSocketStream<TlsStream<TcpStream>>>,
+impl<T, S> Stream for RemoteSocket<T, S>
+where
+    T: DeserializeOwned,
+    S: Stream<Item = Result<ws::Message, ws::Error>> + Unpin,
+{
+    type Item = Result<Message<T>, ReadError>;
 
-    // Opaque, non-sensitive value unique to a particular client session and accessible to both the
-    // client and the server. It's useful for constructing zero-knowledge proofs: the client can
-    // sign this cookie with a private key and send the signature to the server in order to prove
-    // the possession of the private key without revealing it. The cookie is unique per session
-    // which makes this proof resistant to replay attacks.
-    session_cookie: [u8; 32],
-}
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
 
-impl RemoteServerReader {
-    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Vec<u8>, ReadError>>> {
-        loop {
-            match ready!(self.reader.poll_next_unpin(cx)) {
-                Some(Ok(ws::Message::Binary(payload))) => return Poll::Ready(Some(Ok(payload))),
+        let message = loop {
+            match ready!(this.inner.poll_next_unpin(cx)) {
+                Some(Ok(ws::Message::Binary(payload))) => break payload,
                 Some(Ok(ws::Message::Close(_))) => continue,
                 Some(Ok(
                     message @ (ws::Message::Text(_)
@@ -120,251 +71,386 @@ impl RemoteServerReader {
                 }
                 None => return Poll::Ready(None),
             }
-        }
-    }
-
-    fn preprocess_message(
-        &self,
-        message: Message<protocol::Request>,
-    ) -> Result<Message<Request>, ReadError> {
-        let payload = match message.payload {
-            // TODO: disable v0 eventually
-            protocol::Request::V0(request) => {
-                tracing::warn!("deprecated API version: v0");
-
-                match request {
-                    protocol::v0::Request::Mirror { share_token } => {
-                        make_repository_create_request(*share_token.id())
-                    }
-                }
-            }
-            protocol::Request::V1(request) => match request {
-                protocol::v1::Request::Create {
-                    repository_id,
-                    proof,
-                } => {
-                    self.verify_proof(message.id, &repository_id, &proof)?;
-                    make_repository_create_request(repository_id)
-                }
-                protocol::v1::Request::Delete {
-                    repository_id,
-                    proof,
-                } => {
-                    self.verify_proof(message.id, &repository_id, &proof)?;
-                    Request::RepositoryDeleteByName(make_repository_name(&repository_id))
-                }
-                protocol::v1::Request::Exists { repository_id } => {
-                    Request::RepositoryExists(make_repository_name(&repository_id))
-                }
-            },
         };
 
-        Ok(Message {
-            id: message.id,
-            payload,
-        })
-    }
+        let message = Message::decode(&mut Cursor::new(message))?;
 
-    fn verify_proof(
-        &self,
-        message_id: MessageId,
-        repository_id: &RepositoryId,
-        proof: &Signature,
-    ) -> Result<(), ReadError> {
-        if repository_id
-            .write_public_key()
-            .verify(&self.session_cookie, proof)
-        {
-            Ok(())
-        } else {
-            tracing::debug!("invalid proof");
-            Err(ReadError::Validate(
-                message_id,
-                ValidateError::PermissionDenied,
-            ))
-        }
+        Poll::Ready(Some(Ok(message)))
     }
 }
 
-impl Stream for RemoteServerReader {
-    type Item = Result<Message<Request>, ReadError>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        let message = match ready!(this.poll_recv(cx)) {
-            Some(Ok(message)) => message,
-            Some(Err(error)) => return Poll::Ready(Some(Err(error))),
-            None => return Poll::Ready(None),
-        };
-        let message: Message<protocol::Request> = Message::decode(&mut Cursor::new(message))?;
-
-        Poll::Ready(Some(this.preprocess_message(message)))
-    }
-}
-
-pub(crate) struct RemoteServerWriter {
-    writer: SplitSink<WebSocketStream<TlsStream<TcpStream>>, ws::Message>,
-}
-
-impl Sink<Message<ServerPayload>> for RemoteServerWriter {
+impl<T, S> Sink<Message<T>> for RemoteSocket<T, S>
+where
+    T: Serialize,
+    S: Sink<ws::Message, Error = ws::Error> + Unpin,
+{
     type Error = WriteError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(ready!(self.get_mut().writer.poll_ready_unpin(cx)).map_err(into_send_error))
+        Poll::Ready(ready!(self.get_mut().inner.poll_ready_unpin(cx)).map_err(into_write_error))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(ready!(self.get_mut().writer.poll_flush_unpin(cx)).map_err(into_send_error))
+        Poll::Ready(ready!(self.get_mut().inner.poll_flush_unpin(cx)).map_err(into_write_error))
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(ready!(self.get_mut().writer.poll_close_unpin(cx)).map_err(into_send_error))
+        Poll::Ready(ready!(self.get_mut().inner.poll_close_unpin(cx)).map_err(into_write_error))
     }
 
-    fn start_send(
-        self: Pin<&mut Self>,
-        message: Message<ServerPayload>,
-    ) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, message: Message<T>) -> Result<(), Self::Error> {
         let this = self.get_mut();
 
         let mut buffer = Vec::new();
         message.encode(&mut buffer)?;
 
-        this.writer
+        this.inner
             .start_send_unpin(ws::Message::Binary(buffer))
-            .map_err(into_send_error)
+            .map_err(into_write_error)
     }
 }
 
-fn extract_session_cookie<Data>(connection: &ConnectionCommon<Data>) -> [u8; 32] {
-    // unwrap is OK as the function fails only if called before TLS handshake or if the output
-    // length is zero, none of which is the case here.
-    connection
-        .export_keying_material([0; 32], b"ouisync session cookie", None)
-        .unwrap()
-}
-
-fn into_send_error(src: ws::Error) -> WriteError {
+fn into_write_error(src: ws::Error) -> WriteError {
     WriteError::Send(src.into())
-}
-
-mod protocol {
-    use serde::{Deserialize, Serialize};
-
-    pub(super) mod v0 {
-        use super::*;
-        use ouisync::ShareToken;
-
-        #[derive(Debug, Serialize, Deserialize)]
-        pub enum Request {
-            Mirror { share_token: ShareToken },
-        }
-    }
-
-    pub(super) mod v1 {
-        use super::*;
-        use ouisync::{crypto::sign::Signature, RepositoryId};
-
-        #[derive(Debug, Serialize, Deserialize)]
-        pub enum Request {
-            /// Create a blind replica of the repository on the remote server
-            Create {
-                repository_id: RepositoryId,
-                /// Zero-knowledge proof that the client has write access to the repository.
-                /// Computed by signing `SessionCookie` with the repo write key.
-                proof: Signature,
-            },
-            /// Delete the repository from the remote server
-            Delete {
-                repository_id: RepositoryId,
-                /// Zero-knowledge proof that the client has write access to the repository.
-                /// Computed by signing `SessionCookie` with the repo write key.
-                proof: Signature,
-            },
-            /// Check that the repository exists on the remote server.
-            Exists { repository_id: RepositoryId },
-        }
-    }
-
-    // NOTE: using untagged to support old clients that don't support versioning.
-    #[derive(Debug, Serialize, Deserialize)]
-    #[serde(untagged)]
-    pub(super) enum Request {
-        V0(v0::Request),
-        V1(v1::Request),
-    }
-
-    impl From<v0::Request> for Request {
-        fn from(v0: v0::Request) -> Self {
-            Self::V0(v0)
-        }
-    }
-
-    impl From<v1::Request> for Request {
-        fn from(v1: v1::Request) -> Self {
-            Self::V1(v1)
-        }
-    }
-}
-
-fn make_repository_name(id: &RepositoryId) -> String {
-    insert_separators(&id.salted_hash(b"ouisync repository name").to_string())
-}
-
-fn make_repository_create_request(id: RepositoryId) -> Request {
-    Request::RepositoryCreate {
-        name: make_repository_name(&id),
-        read_secret: None,
-        write_secret: None,
-        token: Some(ShareToken::from(AccessSecrets::Blind { id })),
-        // NOTE: DHT is disabled to prevent spamming the DHT when there is a lot of repos.
-        // This is fine because the clients add the storage servers as user-provided peers.
-        // TODO: After we address https://github.com/equalitie/ouisync/issues/128 we should
-        // consider enabling it again.
-        dht: false,
-        pex: true,
-    }
-}
-
-fn insert_separators(input: &str) -> String {
-    let chunk_count = 4;
-    let chunk_len = 2;
-    let sep = '/';
-
-    let (head, tail) = input.split_at(chunk_count * chunk_len);
-
-    head.chars()
-        .enumerate()
-        .flat_map(|(i, c)| {
-            (i > 0 && i < chunk_count * chunk_len && i % chunk_len == 0)
-                .then_some(sep)
-                .into_iter()
-                .chain(iter::once(c))
-        })
-        .chain(iter::once(sep))
-        .chain(tail.chars())
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{net::Ipv4Addr, slice};
 
-    #[test]
-    fn insert_separators_test() {
-        let input = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    use crate::{
+        test_utils::{self, ServiceRunner},
+        transport::remote::RemoteClient,
+        Defaults, Service,
+    };
+    use ouisync::WriteSecrets;
+    use tempfile::TempDir;
+    use tokio::fs;
 
-        let expected_output = format!(
-            "{}/{}/{}/{}/{}",
-            &input[0..2],
-            &input[2..4],
-            &input[4..6],
-            &input[6..8],
-            &input[8..],
-        );
-        let actual_output = insert_separators(input);
+    #[tokio::test]
+    async fn create_ok() {
+        test_utils::init_log();
 
-        assert_eq!(actual_output, expected_output);
+        let temp_dir = TempDir::new().unwrap();
+        let socket_path = temp_dir.path().join("sock");
+        let config_dir = temp_dir.path().join("config");
+
+        let gen = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let cert = gen.cert.der();
+
+        fs::create_dir_all(&config_dir).await.unwrap();
+        fs::write(config_dir.join("cert.pem"), gen.cert.pem())
+            .await
+            .unwrap();
+        fs::write(config_dir.join("key.pem"), gen.key_pair.serialize_pem())
+            .await
+            .unwrap();
+
+        let client_config =
+            ouisync_bridge::transport::make_client_config(slice::from_ref(cert)).unwrap();
+
+        let mut service = Service::init(
+            socket_path.clone(),
+            config_dir,
+            Defaults {
+                store_dir: temp_dir.path().join("store"),
+                mount_dir: temp_dir.path().join("mnt"),
+                bind: vec![],
+                local_discovery_enabled: false,
+                port_forwarding_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let port = service
+            .bind_remote_control(Some((Ipv4Addr::LOCALHOST, 0).into()))
+            .await
+            .unwrap();
+
+        let runner = ServiceRunner::start(service);
+
+        let mut remote_client = RemoteClient::connect(&format!("localhost:{port}"), client_config)
+            .await
+            .unwrap();
+
+        let secrets = WriteSecrets::random();
+        remote_client.create_mirror(&secrets).await.unwrap();
+
+        runner.stop().await.close().await;
     }
+
+    /*
+    use super::*;
+    use assert_matches::assert_matches;
+    use ouisync::{crypto::sign::Keypair, AccessMode, WriteSecrets};
+    use ouisync_bridge::transport::{
+        make_client_config, make_server_config, RemoteClient, RemoteServer,
+    };
+    use state_monitor::StateMonitor;
+    use std::net::Ipv4Addr;
+    use tokio::task;
+    use tokio_rustls::rustls::{
+        pki_types::{CertificateDer, PrivatePkcs8KeyDer},
+        ClientConfig,
+    };
+
+    #[tokio::test]
+    async fn create_ok() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
+
+        assert_matches!(
+            client
+                .invoke(v1::Request::Create {
+                    repository_id: secrets.id,
+                    proof,
+                })
+                .await,
+            Ok(())
+        );
+
+        let repo = state
+            .repositories
+            .get_all()
+            .into_iter()
+            .find(|repo| repo.repository.secrets().id() == &secrets.id)
+            .unwrap();
+
+        assert_eq!(repo.repository.access_mode(), AccessMode::Blind);
+    }
+
+    #[tokio::test]
+    async fn create_is_idempotent() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+
+        let holder = create_repository(&state, AccessSecrets::Write(secrets.clone()))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Add some content to the repo so we can verify that it's not overwritten on repeated
+        // creations.
+        let mut file = holder.repository.create_file("test.txt").await.unwrap();
+        file.write(b"hello world").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
+
+        // Create is idempotent so this still returns `Ok`.
+        assert_matches!(
+            client
+                .invoke(v1::Request::Create {
+                    repository_id: secrets.id,
+                    proof,
+                })
+                .await,
+            Ok(())
+        );
+
+        assert_eq!(
+            holder
+                .repository
+                .open_file("test.txt")
+                .await
+                .unwrap()
+                .read_to_end()
+                .await
+                .unwrap(),
+            b"hello world"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_invalid_proof() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let repository_id = WriteSecrets::random().id;
+        let invalid_write_keys = Keypair::random();
+        let invalid_proof = invalid_write_keys.sign(client.session_cookie().as_ref());
+
+        assert_matches!(
+            client
+                .invoke(v1::Request::Create {
+                    repository_id,
+                    proof: invalid_proof
+                })
+                .await,
+            Err(ServerError::PermissionDenied)
+        );
+
+        assert!(state.repositories.get_all().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_present() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+
+        create_repository(&state, AccessSecrets::Blind { id: secrets.id })
+            .await
+            .unwrap()
+            .unwrap();
+
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
+
+        assert_matches!(
+            client
+                .invoke(v1::Request::Delete {
+                    repository_id: secrets.id,
+                    proof
+                })
+                .await,
+            Ok(())
+        );
+
+        assert!(state.repositories.get_all().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_missing() {
+        let (_temp_dir, _state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
+
+        // Delete is idempotent so this still returns `Ok`
+        assert_matches!(
+            client
+                .invoke(v1::Request::Delete {
+                    repository_id: secrets.id,
+                    proof
+                })
+                .await,
+            Ok(())
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_invalid_proof() {
+        let (_temp_dir, state, client) = setup().await;
+
+        let secrets = WriteSecrets::random();
+
+        create_repository(&state, AccessSecrets::Blind { id: secrets.id })
+            .await
+            .unwrap()
+            .unwrap();
+
+        let invalid_write_keys = Keypair::random();
+        let invalid_proof = invalid_write_keys.sign(client.session_cookie().as_ref());
+
+        assert_matches!(
+            client
+                .invoke(v1::Request::Delete {
+                    repository_id: secrets.id,
+                    proof: invalid_proof,
+                })
+                .await,
+            Err(ServerError::PermissionDenied)
+        );
+
+        assert!(state.repositories.get_all().into_iter().any(|holder| holder
+            .repository
+            .secrets()
+            .id()
+            == &secrets.id));
+    }
+
+    #[tokio::test]
+    async fn exists_present() {
+        let (_temp_dir, state, client) = setup().await;
+        let repository_id = WriteSecrets::random().id;
+
+        create_repository(&state, AccessSecrets::Blind { id: repository_id })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_matches!(
+            client.invoke(v1::Request::Exists { repository_id }).await,
+            Ok(())
+        );
+    }
+
+    #[tokio::test]
+    async fn exists_missing() {
+        let (_temp_dir, _state, client) = setup().await;
+        let repository_id = WriteSecrets::random().id;
+
+        assert_matches!(
+            client.invoke(v1::Request::Exists { repository_id }).await,
+            Err(ServerError::NotFound)
+        );
+    }
+
+    #[tokio::test]
+    async fn proof_replay_attack() {
+        let (_temp_dir, _state, server_addr, client_config) = setup_server().await;
+
+        let client0 = RemoteClient::connect(&server_addr, client_config.clone())
+            .await
+            .unwrap();
+        let client1 = RemoteClient::connect(&server_addr, client_config.clone())
+            .await
+            .unwrap();
+
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(client0.session_cookie().as_ref());
+
+        // Attempt to invoke the request using a proof leaked from another client.
+        assert_matches!(
+            client1
+                .invoke(v1::Request::Create {
+                    repository_id: secrets.id,
+                    proof
+                })
+                .await,
+            Err(ServerError::PermissionDenied)
+        );
+    }
+
+    async fn setup() -> (TempDir, Arc<State>, RemoteClient) {
+        let (temp_dir, state, server_addr, client_config) = setup_server().await;
+
+        let client = RemoteClient::connect(&server_addr, client_config)
+            .await
+            .unwrap();
+
+        (temp_dir, state, client)
+    }
+
+    async fn setup_server() -> (TempDir, Arc<State>, String, Arc<ClientConfig>) {
+        let temp_dir = TempDir::new().unwrap();
+        let dirs = Dirs {
+            config_dir: temp_dir.path().join("config"),
+            store_dir: temp_dir.path().join("store"),
+            mount_dir: temp_dir.path().join("mount"),
+        };
+
+        let gen = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let cert = CertificateDer::from(gen.cert);
+        let private_key = PrivatePkcs8KeyDer::from(gen.key_pair.serialize_der());
+
+        let server_config = make_server_config(vec![cert.clone()], private_key.into()).unwrap();
+        let client_config = make_client_config(&[cert]).unwrap();
+
+        let state = State::init(&dirs, StateMonitor::make_root()).await.unwrap();
+
+        let server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into(), server_config)
+            .await
+            .unwrap();
+        let server_addr = format!("localhost:{}", server.local_addr().port());
+
+        task::spawn(server.run(RemoteHandler::new(state.clone())));
+
+        (temp_dir, state, server_addr, client_config)
+    }
+    */
 }

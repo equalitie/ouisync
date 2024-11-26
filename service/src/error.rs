@@ -1,4 +1,4 @@
-use crate::transport::{AcceptError, BindError};
+use crate::transport::remote::RemoteClientError;
 use ouisync_bridge::{config::ConfigError, repository::OpenError};
 use ouisync_vfs::MountError;
 use std::io;
@@ -8,12 +8,15 @@ use thiserror::Error;
 pub enum Error {
     #[error("config error")]
     Config(#[from] ConfigError),
+    // TODO: remove this variant. Use more specific errors.
     #[error("I/O error")]
     Io(#[from] io::Error),
     #[error("mount error")]
     Mount(#[from] MountError),
     #[error("operation not supported")]
     OperationNotSupported,
+    #[error("permission denied")]
+    PermissionDenied,
     #[error("repository error")]
     Repository(#[from] ouisync::Error),
     #[error("repository already exists")]
@@ -28,10 +31,12 @@ pub enum Error {
     TlsCertificatesNotFound,
     #[error("TLS keys not found")]
     TlsKeysNotFound,
-    #[error("server bind error")]
-    Bind(#[from] BindError),
-    #[error("server accept error")]
-    Accept(#[from] AcceptError),
+    #[error("failed to bind server")]
+    Bind(#[source] io::Error),
+    #[error("failed to accept client connection")]
+    Accept(#[source] io::Error),
+    #[error("failed to invoke remote request")]
+    RemoteClient(#[from] RemoteClientError),
 }
 
 impl From<OpenError> for Error {

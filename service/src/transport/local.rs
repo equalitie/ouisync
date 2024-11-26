@@ -1,4 +1,4 @@
-use super::{AcceptError, BindError, ReadError, WriteError};
+use super::{ReadError, WriteError};
 use crate::protocol::{Message, Request};
 use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
@@ -24,7 +24,7 @@ pub(crate) struct LocalServer {
 }
 
 impl LocalServer {
-    pub async fn bind(socket_path: &Path) -> Result<Self, BindError> {
+    pub async fn bind(socket_path: &Path) -> io::Result<Self> {
         let listener = socket_path
             .to_fs_name::<GenericFilePath>()
             .and_then(|name| {
@@ -37,7 +37,7 @@ impl LocalServer {
         Ok(Self { listener })
     }
 
-    pub async fn accept(&self) -> Result<(LocalServerReader, LocalServerWriter), AcceptError> {
+    pub async fn accept(&self) -> io::Result<(LocalServerReader, LocalServerWriter)> {
         let stream = self.listener.accept().await?;
         let (reader, writer) = stream.split();
 
@@ -143,4 +143,70 @@ where
 
 fn into_send_error(src: io::Error) -> WriteError {
     WriteError::Send(src.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use futures_util::SinkExt;
+    use tempfile::TempDir;
+    use tokio_stream::StreamExt;
+
+    use crate::{
+        protocol::{Message, MessageId, Request, ServerPayload},
+        test_utils::{self, ServiceRunner},
+        transport, Defaults, Service,
+    };
+
+    #[tokio::test]
+    async fn sanity_check() {
+        test_utils::init_log();
+
+        let temp_dir = TempDir::new().unwrap();
+        let socket_path = temp_dir.path().join("sock");
+        let store_dir = temp_dir.path().join("store");
+
+        let service = Service::init(
+            socket_path.clone(),
+            temp_dir.path().join("config"),
+            Defaults {
+                store_dir: store_dir.clone(),
+                mount_dir: temp_dir.path().join("mnt"),
+                bind: vec![],
+                local_discovery_enabled: false,
+                port_forwarding_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let runner = ServiceRunner::start(service);
+
+        let (mut client_reader, mut client_writer) =
+            transport::local::connect(&socket_path).await.unwrap();
+
+        let message_id = MessageId::next();
+        client_writer
+            .send(Message {
+                id: message_id,
+                payload: Request::RepositoryGetStoreDir,
+            })
+            .await
+            .unwrap();
+
+        let message = client_reader.next().await.unwrap().unwrap();
+        assert_eq!(message.id, message_id);
+
+        let response = match message.payload {
+            ServerPayload::Success(r) => r,
+            ServerPayload::Failure(e) => panic!("unexpected failure: {e:?}"),
+            ServerPayload::Notification(n) => panic!("unexpected notification: {n:?}"),
+        };
+
+        let value: PathBuf = response.try_into().unwrap();
+        assert_eq!(value, store_dir);
+
+        runner.stop().await.close().await;
+    }
 }

@@ -2,6 +2,7 @@ use crate::{
     error::Error,
     protocol::{ImportMode, QuotaInfo},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
+    transport::remote::RemoteClient,
     utils, Defaults,
 };
 use ouisync::{
@@ -470,26 +471,61 @@ impl State {
 
     pub async fn create_repository_mirror(
         &self,
-        _handle: RepositoryHandle,
-        _host: String,
+        handle: RepositoryHandle,
+        host: String,
     ) -> Result<(), Error> {
-        todo!()
+        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let secrets = holder
+            .repository()
+            .secrets()
+            .into_write_secrets()
+            .ok_or(Error::PermissionDenied)?;
+
+        let mut client = self.connect_remote_client(&host).await?;
+
+        let result = client.create_mirror(&secrets).await;
+        client.close().await;
+        result?;
+
+        Ok(())
     }
 
     pub async fn delete_repository_mirror(
         &self,
-        _handle: RepositoryHandle,
-        _host: String,
+        handle: RepositoryHandle,
+        host: String,
     ) -> Result<(), Error> {
-        todo!()
+        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let secrets = holder
+            .repository()
+            .secrets()
+            .into_write_secrets()
+            .ok_or(Error::PermissionDenied)?;
+
+        let mut client = self.connect_remote_client(&host).await?;
+
+        let result = client.delete_mirror(&secrets).await;
+        client.close().await;
+        result?;
+
+        Ok(())
     }
 
     pub async fn repository_mirror_exists(
         &self,
-        _handle: RepositoryHandle,
-        _host: String,
+        handle: RepositoryHandle,
+        host: String,
     ) -> Result<bool, Error> {
-        todo!()
+        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+
+        let mut client = self.connect_remote_client(&host).await?;
+
+        let result = client
+            .mirror_exists(holder.repository().secrets().id())
+            .await;
+        client.close().await;
+
+        Ok(result?)
     }
 
     pub async fn repository_quota(&self, handle: RepositoryHandle) -> Result<QuotaInfo, Error> {
@@ -660,7 +696,6 @@ impl State {
             .cloned()
     }
 
-    #[expect(dead_code)]
     pub async fn remote_client_config(&self) -> Result<Arc<rustls::ClientConfig>, Error> {
         self.remote_client_config
             .get_or_try_init(|| make_client_config(self.config.dir()))
@@ -772,6 +807,10 @@ impl State {
 
         self.store_dir.join(suffix).with_extension(extension)
     }
+
+    async fn connect_remote_client(&self, host: &str) -> Result<RemoteClient, Error> {
+        Ok(RemoteClient::connect(host, self.remote_client_config().await?).await?)
+    }
 }
 
 async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfig>, Error> {
@@ -780,12 +819,14 @@ async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfi
 
     let certs = tls::load_certificates_from_file(&cert_path)
         .await
-        .inspect_err(|error| {
+        .map_err(|error| {
             tracing::error!(
                 "failed to load TLS certificate from {}: {}",
                 cert_path.display(),
                 error,
-            )
+            );
+
+            Error::TlsCertificatesNotFound
         })?;
 
     if certs.is_empty() {
@@ -797,15 +838,15 @@ async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfi
         return Err(Error::TlsCertificatesNotFound);
     }
 
-    let keys = tls::load_keys_from_file(&key_path)
-        .await
-        .inspect_err(|error| {
-            tracing::error!(
-                "failed to load TLS key from {}: {}",
-                key_path.display(),
-                error
-            )
-        })?;
+    let keys = tls::load_keys_from_file(&key_path).await.map_err(|error| {
+        tracing::error!(
+            "failed to load TLS key from {}: {}",
+            key_path.display(),
+            error
+        );
+
+        Error::TlsKeysNotFound
+    })?;
 
     let key = keys.into_iter().next().ok_or_else(|| {
         tracing::error!(
@@ -830,12 +871,41 @@ async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfi
 
 #[cfg(test)]
 mod tests {
-    /*
     use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn store_path_sanity_check() {
+        let temp_dir = TempDir::new().unwrap();
+        let store_dir = temp_dir.path().join("store");
+        let state = State::init(
+            temp_dir.path().join("config"),
+            Defaults {
+                store_dir: store_dir.clone(),
+                mount_dir: temp_dir.path().join("mount"),
+                bind: vec![],
+                local_discovery_enabled: false,
+                port_forwarding_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state.store_path("foo"), store_dir.join("foo.ouisyncdb"));
+        assert_eq!(
+            state.store_path("foo/bar"),
+            store_dir.join("foo/bar.ouisyncdb")
+        );
+        assert_eq!(
+            state.store_path("foo/bar.baz"),
+            store_dir.join("foo/bar.baz.ouisyncdb")
+        );
+    }
+
+    /*
     use futures_util::TryStreamExt;
     use ouisync::{Access, AccessSecrets, PeerAddr, Repository, RepositoryParams, WriteSecrets};
     use std::net::Ipv4Addr;
-    use tempfile::TempDir;
     use tokio::fs;
     use tokio_stream::wrappers::ReadDirStream;
     use tracing::Instrument;

@@ -2,7 +2,6 @@ mod client;
 mod defaults;
 mod error;
 mod format;
-mod handler;
 mod options;
 mod repository;
 mod server;

@@ -127,23 +127,6 @@ pub enum Request {
     Close {
         name: String,
     },
-    /// Mirror repository
-    Mirror {
-        /// Name of the repository to mirror
-        name: String,
-
-        /// Domain name or network address of the server to host the mirror
-        host: String,
-    },
-    /// Bind the remote API to the specified addresses.
-    ///
-    /// Overwrites any previously specified addresses.
-    RemoteControl {
-        /// Addresses to bind to. IP is a IPv4 or IPv6 address and PORT is a port number. If IP is
-        /// 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to a random port. If empty
-        /// disables the remote API.
-        addrs: Vec<SocketAddr>,
-    },
     */
 }
 

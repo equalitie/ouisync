@@ -52,32 +52,6 @@ impl RepositoryHolder {
         self.mount.lock().unwrap().is_some()
     }
 
-    /// Create a mirror of the repository on the given remote host.
-    pub async fn mirror(&self, host: &str, config: Arc<rustls::ClientConfig>) -> Result<(), Error> {
-        let secrets = self
-            .repository
-            .secrets()
-            .into_write_secrets()
-            .ok_or_else(|| Error::PermissionDenied)?;
-
-        let client = RemoteClient::connect(host, config)
-            .await
-            .inspect_err(|error| tracing::error!(?error, host, "connection failed"))?;
-
-        let proof = secrets.write_keys.sign(client.session_cookie().as_ref());
-        let request = v1::Request::Create {
-            repository_id: secrets.id,
-            proof,
-        };
-
-        client
-            .invoke(request)
-            .await
-            .inspect_err(|error| tracing::error!(?error, host, "request failed"))?;
-
-        Ok(())
-    }
-
     pub async fn close(&self) -> Result<(), Error> {
         self.unmount().await;
 
@@ -94,28 +68,4 @@ impl RepositoryHolder {
 
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn store_path_sanity_check() {
-        let store_dir = Path::new("/home/alice/ouisync/store");
-
-        assert_eq!(
-            store_path(store_dir, "foo"),
-            Path::new("/home/alice/ouisync/store/foo.ouisyncdb")
-        );
-
-        assert_eq!(
-            store_path(store_dir, "foo/bar"),
-            Path::new("/home/alice/ouisync/store/foo/bar.ouisyncdb")
-        );
-
-        assert_eq!(
-            store_path(store_dir, "foo/bar.baz"),
-            Path::new("/home/alice/ouisync/store/foo/bar.baz.ouisyncdb")
-        );
-    }
-}
 */

@@ -6,7 +6,7 @@ use std::{
 };
 use thiserror::Error;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub struct MessageId(u64);
 
 impl MessageId {

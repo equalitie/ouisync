@@ -7,6 +7,9 @@ mod repository;
 mod state;
 mod utils;
 
+#[cfg(test)]
+mod test_utils;
+
 pub use error::Error;
 
 use futures_util::SinkExt;
@@ -16,7 +19,7 @@ use ouisync_bridge::config::{ConfigError, ConfigKey};
 use protocol::{DecodeError, Message, ProtocolError, Request, Response, ServerPayload};
 use slab::Slab;
 use state::State;
-use std::{future, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{future, io, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::{
     select,
     time::{self, MissedTickBehavior},
@@ -25,7 +28,7 @@ use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use transport::{
     local::LocalServer,
     remote::{RemoteServer, RemoteServerReader, RemoteServerWriter},
-    AcceptError, ReadError, ServerReader, ServerWriter,
+    ReadError, ServerReader, ServerWriter,
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -57,7 +60,9 @@ impl Service {
         defaults: Defaults,
     ) -> Result<Self, Error> {
         let state = State::init(config_dir, defaults).await?;
-        let local_server = LocalServer::bind(&local_socket_path).await?;
+        let local_server = LocalServer::bind(&local_socket_path)
+            .await
+            .map_err(Error::Bind)?;
 
         let remote_server = match state.config.entry(REMOTE_CONTROL_KEY).get().await {
             Ok(addr) => Some(RemoteServer::bind(addr, state.remote_server_config().await?).await?),
@@ -84,14 +89,14 @@ impl Service {
         loop {
             select! {
                 result = self.local_server.accept() => {
-                    let (reader, writer) = result?;
+                    let (reader, writer) = result.map_err(Error::Accept)?;
                     self.insert_connection(
                         ServerReader::Local(reader),
                         ServerWriter::Local(writer)
                     );
                 }
-                result = maybe_accept(self.remote_server.as_ref()) => {
-                    let (reader, writer) = result?;
+                result = maybe_accept(self.remote_server.as_mut()) => {
+                    let (reader, writer) = result.map_err(Error::Accept)?;
                     self.insert_connection(ServerReader::Remote(reader), ServerWriter::Remote(writer));
                 }
                 Some((conn_id, message)) = self.readers.next() => {
@@ -120,6 +125,30 @@ impl Service {
         }
 
         self.state.close().await;
+    }
+
+    #[expect(dead_code)]
+    pub(crate) fn state(&self) -> &State {
+        &self.state
+    }
+
+    pub(crate) async fn bind_remote_control(
+        &mut self,
+        addr: Option<SocketAddr>,
+    ) -> Result<u16, Error> {
+        if let Some(addr) = addr {
+            let config = self.state.remote_server_config().await?;
+            let remote_server = RemoteServer::bind(addr, config).await?;
+            let port = remote_server.local_addr().port();
+
+            self.remote_server = Some(remote_server);
+
+            Ok(port)
+        } else {
+            self.remote_server = None;
+
+            Ok(0)
+        }
     }
 
     async fn handle_message(
@@ -412,24 +441,13 @@ impl Service {
         self.readers.remove(&conn_id);
         self.writers.try_remove(conn_id);
     }
-
-    async fn bind_remote_control(&mut self, addr: Option<SocketAddr>) -> Result<(), Error> {
-        if let Some(addr) = addr {
-            self.remote_server =
-                Some(RemoteServer::bind(addr, self.state.remote_server_config().await?).await?);
-        } else {
-            self.remote_server = None;
-        }
-
-        Ok(())
-    }
 }
 
 type ConnectionId = usize;
 
 async fn maybe_accept(
-    server: Option<&RemoteServer>,
-) -> Result<(RemoteServerReader, RemoteServerWriter), AcceptError> {
+    server: Option<&mut RemoteServer>,
+) -> io::Result<(RemoteServerReader, RemoteServerWriter)> {
     if let Some(server) = server {
         server.accept().await
     } else {
