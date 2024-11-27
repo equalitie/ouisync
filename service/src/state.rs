@@ -878,10 +878,18 @@ async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfi
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
+    use crate::test_utils;
+
     use super::*;
     use assert_matches::assert_matches;
-    use ouisync::{AccessSecrets, WriteSecrets};
+    use futures_util::TryStreamExt;
+    use ouisync::{Access, AccessSecrets, Repository, RepositoryParams, WriteSecrets};
     use tempfile::TempDir;
+    use tokio::time;
+    use tokio_stream::wrappers::ReadDirStream;
+    use tracing::Instrument;
 
     #[tokio::test]
     async fn store_path_sanity_check() {
@@ -948,102 +956,61 @@ mod tests {
         );
     }
 
-    async fn setup() -> (TempDir, State) {
-        let temp_dir = TempDir::new().unwrap();
-        let state = State::init(
-            temp_dir.path().join("config"),
-            Defaults {
-                store_dir: temp_dir.path().join("store"),
-                mount_dir: temp_dir.path().join("mount"),
-                bind: vec![],
-                local_discovery_enabled: false,
-                port_forwarding_enabled: false,
-            },
-        )
-        .await
-        .unwrap();
-
-        (temp_dir, state)
-    }
-
-    /*
-    use futures_util::TryStreamExt;
-    use ouisync::{Access, AccessSecrets, PeerAddr, Repository, RepositoryParams, WriteSecrets};
-    use std::net::Ipv4Addr;
-    use tokio::fs;
-    use tokio_stream::wrappers::ReadDirStream;
-    use tracing::Instrument;
+    // TODO: test import repo with non-unique id
 
     #[tokio::test]
     async fn expire_empty_repository() {
-        init_log();
+        test_utils::init_log();
 
-        let base_dir = TempDir::new().unwrap();
+        let (_temp_dir, mut state) = setup().await;
+
         let secrets = WriteSecrets::random();
 
-        let state = State::init(
-            &Dirs {
-                config_dir: base_dir.path().join("config"),
-                store_dir: base_dir.path().join("store"),
-                mount_dir: base_dir.path().join("mount"),
-            },
-            StateMonitor::make_root(),
-        )
-        .await
-        .unwrap();
-
         let name = "foo";
-        let holder = state
+        let handle = state
             .create_repository(
-                CreateRepositoryMethod::Import {
-                    share_token: ShareToken::from(AccessSecrets::Blind { id: secrets.id })
-                        .with_name(name),
-                },
+                name.to_owned(),
                 None,
                 None,
+                Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
+                false,
+                false,
             )
             .await
             .unwrap();
 
         // Repository expiration requires block expiration to be enabled as well.
-        holder
-            .repository
-            .set_block_expiration(Some(Duration::from_millis(100)))
+        state
+            .set_block_expiration(handle, Some(Duration::from_millis(100)))
             .await
             .unwrap();
 
-        holder
-            .set_repository_expiration(Some(Duration::from_millis(100)))
+        state
+            .set_repository_expiration(handle, Some(Duration::from_millis(100)))
             .await
             .unwrap();
-
-        drop(holder);
 
         time::sleep(Duration::from_secs(1)).await;
 
         state.delete_expired_repositories().await;
 
-        assert!(!state.repositories.contains(name));
-        assert_eq!(
-            read_dir(base_dir.path().join("store")).await,
-            Vec::<PathBuf>::new()
-        );
+        assert_eq!(state.find_repository(name), Err(FindError::NotFound));
+        assert_eq!(read_dir(state.store_dir()).await, Vec::<PathBuf>::new());
     }
 
     #[tokio::test]
     async fn expire_synced_repository() {
-        init_log();
+        test_utils::init_log();
 
-        let base_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
 
         let secrets = WriteSecrets::random();
-        let monitor = StateMonitor::make_root();
 
         let (remote_network, _remote_repo, _remote_reg) = async {
-            let monitor = monitor.make_child("remote");
+            let monitor = StateMonitor::make_root();
 
             let repo = Repository::create(
-                &RepositoryParams::new(base_dir.path().join("remote/repo.ouisyncdb"))
+                &RepositoryParams::new(temp_dir.path().join("remote/repo.ouisyncdb"))
                     .with_parent_monitor(monitor.clone()),
                 Access::WriteUnlocked {
                     secrets: secrets.clone(),
@@ -1075,43 +1042,42 @@ mod tests {
             .next()
             .unwrap();
 
-        let local_state = State::init(
-            &Dirs {
-                config_dir: base_dir.path().join("local/config"),
-                store_dir: base_dir.path().join("local/store"),
-                mount_dir: base_dir.path().join("local/mount"),
+        let mut local_state = State::init(
+            temp_dir.path().join("local/config"),
+            Defaults {
+                store_dir: temp_dir.path().join("local/store"),
+                mount_dir: temp_dir.path().join("local/mount"),
+                bind: vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())],
+                local_discovery_enabled: false,
+                port_forwarding_enabled: false,
             },
-            monitor.make_child("local"),
         )
         .instrument(tracing::info_span!("local"))
         .await
         .unwrap();
 
-        local_state
-            .network
-            .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
-            .await;
         local_state.network.add_user_provided_peer(&remote_addr);
 
         let name = "foo";
-        let holder = local_state
+        let handle = local_state
             .create_repository(
-                CreateRepositoryMethod::Import {
-                    share_token: ShareToken::from(AccessSecrets::Blind { id: secrets.id })
-                        .with_name(name),
-                },
+                name.to_owned(),
                 None,
                 None,
+                Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
+                false,
+                false,
             )
             .await
             .unwrap();
+        let local_repo = local_state.repos.get(handle).unwrap().repository();
 
         // Wait until synced
-        let mut rx = holder.repository.subscribe();
+        let mut rx = local_repo.subscribe();
 
         time::timeout(Duration::from_secs(30), async {
             loop {
-                let progress = holder.repository.sync_progress().await.unwrap();
+                let progress = local_repo.sync_progress().await.unwrap();
 
                 if progress.total > 0 && progress.value == progress.total {
                     break;
@@ -1124,37 +1090,42 @@ mod tests {
         .unwrap();
 
         // Enable expiration
-        holder
-            .repository
-            .set_block_expiration(Some(Duration::from_millis(100)))
+        local_state
+            .set_block_expiration(handle, Some(Duration::from_millis(100)))
             .await
             .unwrap();
-        holder
-            .set_repository_expiration(Some(Duration::from_millis(100)))
+        local_state
+            .set_repository_expiration(handle, Some(Duration::from_millis(100)))
             .await
             .unwrap();
-
-        drop(holder);
 
         time::sleep(Duration::from_secs(1)).await;
 
         local_state.delete_expired_repositories().await;
 
-        assert!(!local_state.repositories.contains(name));
+        assert_eq!(local_state.find_repository(name), Err(FindError::NotFound));
         assert_eq!(
-            read_dir(base_dir.path().join("local/store")).await,
-            Vec::<PathBuf>::new()
+            read_dir(local_state.store_dir()).await,
+            Vec::<PathBuf>::new(),
         );
     }
 
-    fn init_log() {
-        tracing_subscriber::fmt()
-            .pretty()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .with_target(false)
-            .with_test_writer()
-            .try_init()
-            .ok();
+    async fn setup() -> (TempDir, State) {
+        let temp_dir = TempDir::new().unwrap();
+        let state = State::init(
+            temp_dir.path().join("config"),
+            Defaults {
+                store_dir: temp_dir.path().join("store"),
+                mount_dir: temp_dir.path().join("mount"),
+                bind: vec![],
+                local_discovery_enabled: false,
+                port_forwarding_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        (temp_dir, state)
     }
 
     async fn read_dir(path: impl AsRef<Path>) -> Vec<PathBuf> {
@@ -1164,5 +1135,4 @@ mod tests {
             .await
             .unwrap()
     }
-    */
 }

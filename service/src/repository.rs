@@ -194,7 +194,7 @@ impl RepositoryHolder {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Eq, PartialEq, Debug)]
 pub(crate) enum FindError {
     #[error("repository not found")]
     NotFound,
