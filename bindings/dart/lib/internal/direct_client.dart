@@ -20,7 +20,9 @@ class DirectClient extends Client {
   final MessageMatcher _messageMatcher = MessageMatcher();
   final Bindings _bindings;
 
-  DirectClient(this._handle, ReceivePort port, this._bindings) : _stream = port.cast<Uint8List>(), super() {
+  DirectClient(this._handle, ReceivePort port, this._bindings)
+      : _stream = port.cast<Uint8List>(),
+        super() {
     unawaited(_receive());
   }
 
@@ -28,15 +30,9 @@ class DirectClient extends Client {
 
   @override
   Future<T> invoke<T>(String method, [Object? args]) async {
-    // NOTE: Async is used for sender because that's what the MessageMatcher
-    // expects, and the MessageMatcher expects it because sending over
-    // ChannelClient is async.  In fact, the rust implementation uses an
-    // umbounded buffer inside the `session_channel_send`, so it might be
-    // better to convert that into a bounded buffer and make the
-    // `session_channel_send` async as well.
-    return await _messageMatcher.sendAndAwaitResponse(method, args, (Uint8List message) async {
-        _send(message);
-    });
+    final (message, response) = _messageMatcher.send(method, args);
+    _send(message);
+    return await response;
   }
 
   @override
@@ -74,29 +70,33 @@ class DirectClient extends Client {
 
   Future<void> _receive() async {
     await for (final bytes in _stream) {
-      _messageMatcher.handleResponse(bytes);
+      _messageMatcher.receive(bytes);
     }
   }
 
   Future<void> copyToRawFd(int fileHandle, int fd) {
-      return _invokeNativeAsync(
-        (port) => _bindings.file_copy_to_raw_fd(
-          handle,
-          fileHandle,
-          fd,
-          NativeApi.postCObject,
-          port,
-        ),
-      );
+    return _invokeNativeAsync(
+      (port) => _bindings.file_copy_to_raw_fd(
+        handle,
+        fileHandle,
+        fd,
+        NativeApi.postCObject,
+        port,
+      ),
+    );
   }
 
   @override
-  Subscriptions subscriptions() => _messageMatcher.subscriptions();
+  void subscribe(int id, StreamSink<Object?> sink) =>
+      _messageMatcher.subscribe(id, sink);
+
+  @override
+  void unsubscribe(int id) => _messageMatcher.unsubscribe(id);
 
   void _send(Uint8List data) {
     // TODO: is there a way to do this without having to allocate whole new buffer?
     var buffer = malloc<Uint8>(data.length);
-  
+
     try {
       buffer.asTypedList(data.length).setAll(0, data);
       _bindings.session_channel_send(_handle, buffer, data.length);
@@ -104,7 +104,6 @@ class DirectClient extends Client {
       malloc.free(buffer);
     }
   }
-
 }
 
 // Helper to invoke a native async function.

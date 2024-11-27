@@ -11,18 +11,22 @@ class ChannelClient extends Client {
   late final Future<void> initialized;
   final void Function()? _onClose;
 
-  ChannelClient(String channelName, [this._onClose]): _channel = MethodChannel(channelName) {
+  ChannelClient(String channelName, [this._onClose])
+      : _channel = MethodChannel(channelName) {
     _channel.setMethodCallHandler(_handleMethodCall);
-    initialized = _channel.invokeMethod("initialize")
-      .onError((PlatformException err, _) => throw mapError(err));
+    initialized = _channel
+        .invokeMethod("initialize")
+        .onError((PlatformException err, _) => throw mapError(err));
   }
 
   @override
   Future<T> invoke<T>(String method, [Object? args]) async {
-    return await _messageMatcher.sendAndAwaitResponse(method, args, (Uint8List message) async {
-        await _channel.invokeMethod("invoke", message)
-          .onError((PlatformException err, _) => throw mapError(err));
-    });
+    final (message, response) = _messageMatcher.send(method, args);
+    await _channel
+        .invokeMethod("invoke", message)
+        .onError((PlatformException err, _) => throw mapError(err));
+
+    return await response;
   }
 
   @override
@@ -40,14 +44,19 @@ class ChannelClient extends Client {
         break;
       case "response":
         final args = (call.arguments as List<Object?>).cast<int>();
-        _messageMatcher.handleResponse(Uint8List.fromList(args));
+        _messageMatcher.receive(Uint8List.fromList(args));
         break;
       default:
-        print("🌵 Received an unrecognized method call from host: ${call.method}");
+        print(
+            "🌵 Received an unrecognized method call from host: ${call.method}");
         break;
     }
   }
 
   @override
-  Subscriptions subscriptions() => _messageMatcher.subscriptions();
+  void subscribe(int id, StreamSink<Object?> sink) =>
+      _messageMatcher.subscribe(id, sink);
+
+  @override
+  void unsubscribe(int id) => _messageMatcher.unsubscribe(id);
 }

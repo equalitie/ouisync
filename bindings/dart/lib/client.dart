@@ -1,50 +1,13 @@
 import 'dart:async';
-import 'dart:collection';
 
 export 'internal/direct_client.dart';
-
 export 'internal/channel_client.dart';
 
 abstract class Client {
-    Future<T> invoke<T>(String method, [Object? args]);
-    Future<void> close();
-    Subscriptions subscriptions();
-}
-
-class Subscriptions {
-  final _sinks = HashMap<int, StreamSink<Object?>>();
-
-  void handle(int subscriptionId, Object? payload) {
-    final sink = _sinks[subscriptionId];
-
-    if (sink == null) {
-      print('unsolicited notification');
-      return;
-    }
-
-    try {
-      if (payload is String) {
-        sink.add(null);
-      } else if (payload is Map && payload.length == 1) {
-        sink.add(payload.entries.single.value);
-      } else {
-        final error = Exception('invalid notification');
-        sink.addError(error);
-      }
-    } catch (error) {
-      // We can get here if the `_controller` has been `close`d but the
-      // `_controller.onCancel` has not yet been executed (that's where the
-      // `Subscription` is removed from `_subscriptions`). We just ignore that
-      // error.
-    }
-  }
-
-  void close() {
-    for (var sink in _sinks.values) {
-      sink.close();
-    }
-    _sinks.clear();
-  }
+  Future<T> invoke<T>(String method, [Object? args]);
+  void subscribe(int id, StreamSink<Object?> sink);
+  void unsubscribe(int id);
+  Future<void> close();
 }
 
 class Subscription {
@@ -115,7 +78,7 @@ class Subscription {
         return;
       }
 
-      _client.subscriptions()._sinks[_id] = _controller.sink;
+      _client.subscribe(_id, _controller.sink);
     } catch (e) {
       print('failed to subscribe to $_name: $e');
     }
@@ -126,7 +89,7 @@ class Subscription {
       return;
     }
 
-    _client.subscriptions()._sinks.remove(_id);
+    _client.unsubscribe(_id);
 
     try {
       await _client.invoke('unsubscribe', _id);
@@ -143,4 +106,3 @@ enum _SubscriptionState {
   subscribing,
   unsubscribing,
 }
-

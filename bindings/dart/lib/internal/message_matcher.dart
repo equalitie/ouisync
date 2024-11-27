@@ -3,7 +3,6 @@ import 'dart:typed_data';
 import 'dart:collection';
 import 'package:msgpack_dart/msgpack_dart.dart';
 
-import '../client.dart';
 import '../errors.dart';
 import '../ouisync.dart' show Error;
 import '../bindings.dart' show ErrorCode;
@@ -14,13 +13,17 @@ typedef Sender = Future<void> Function(Uint8List);
 class MessageMatcher {
   var _nextMessageId = 0;
   final _responses = HashMap<int, Completer<Object?>>();
-  final _subscriptions = Subscriptions();
+  final _sinks = HashMap<int, StreamSink<Object?>>();
   bool _isClosed = false;
 
-  Subscriptions subscriptions() => _subscriptions;
+  (Uint8List, Future<T>) send<T>(
+    String method,
+    Object? args,
+  ) {
+    if (_isClosed) {
+      throw SessionClosed();
+    }
 
-  // Throws if the response is an error or if sending the message fails.
-  Future<T> sendAndAwaitResponse<T>(String method, Object? args, Sender send) async {
     final id = _nextMessageId++;
     final completer = Completer();
 
@@ -31,33 +34,23 @@ class MessageMatcher {
     // DEBUG
     //print('send: id: $id, request: $request');
 
-    try {
-      // Message format:
-      //
-      // +-------------------------------------+-------------------------------------------+
-      // | id (big endian 64 bit unsigned int) | request (messagepack encoded byte string) |
-      // +-------------------------------------+-------------------------------------------+
-      //
-      // This allows the server to decode the id even if the request is malformed so it can send
-      // error response back.
-      final message = (BytesBuilder()
-            ..add((ByteData(8)..setUint64(0, id)).buffer.asUint8List())
-            ..add(serialize(request)))
-          .takeBytes();
-        
-      if (_isClosed) {
-        throw SessionClosed();
-      }
+    // Message format:
+    //
+    // +-------------------------------------+-------------------------------------------+
+    // | id (big endian 64 bit unsigned int) | request (messagepack encoded byte string) |
+    // +-------------------------------------+-------------------------------------------+
+    //
+    // This allows the server to decode the id even if the request is malformed so it can send
+    // error response back.
+    final message = (BytesBuilder()
+          ..add((ByteData(8)..setUint64(0, id)).buffer.asUint8List())
+          ..add(serialize(request)))
+        .takeBytes();
 
-      await send(message);
-
-      return await completer.future as T;
-    } finally {
-      _responses.remove(id);
-    }
+    return (message, completer.future.then((value) => value as T));
   }
 
-  void handleResponse(Uint8List bytes) {
+  void receive(Uint8List bytes) {
     if (bytes.length < 8) {
       return;
     }
@@ -89,7 +82,7 @@ class MessageMatcher {
         _handleResponseFailure(responseCompleter, message['failure']);
       }
     } else if (isNotification) {
-      _subscriptions.handle(id, message['notification']);
+      _handleNotification(id, message['notification']);
     } else {
       final responseCompleter = _responses.remove(id);
       if (responseCompleter != null) {
@@ -98,13 +91,29 @@ class MessageMatcher {
     }
   }
 
+  void subscribe(int subscriptionId, StreamSink<Object?> sink) {
+    _sinks[subscriptionId] = sink;
+  }
+
+  void unsubscribe(int subscriptionId) {
+    _sinks.remove(subscriptionId);
+  }
+
   void close() {
     _isClosed = true;
-    _subscriptions.close();
-    final error = SessionClosed();
-    for (var i in _responses.values) {
-      i.completeError(error);
+
+    for (final sink in _sinks.values) {
+      sink.close();
     }
+
+    _sinks.clear();
+
+    final error = SessionClosed();
+
+    for (final completer in _responses.values) {
+      completer.completeError(error);
+    }
+
     _responses.clear();
   }
 
@@ -142,5 +151,30 @@ class MessageMatcher {
   void _handleInvalidResponse(Completer<Object?> completer) {
     final error = Exception('invalid response');
     completer.completeError(error);
+  }
+
+  void _handleNotification(int subscriptionId, Object? payload) {
+    final sink = _sinks[subscriptionId];
+
+    if (sink == null) {
+      print('unsolicited notification');
+      return;
+    }
+
+    try {
+      if (payload is String) {
+        sink.add(null);
+      } else if (payload is Map && payload.length == 1) {
+        sink.add(payload.entries.single.value);
+      } else {
+        final error = Exception('invalid notification');
+        sink.addError(error);
+      }
+    } catch (error) {
+      // We can get here if the `_controller` has been `close`d but the
+      // `_controller.onCancel` has not yet been executed (that's where the
+      // `Subscription` is removed from `_subscriptions`). We just ignore that
+      // error.
+    }
   }
 }
