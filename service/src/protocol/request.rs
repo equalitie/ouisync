@@ -44,9 +44,6 @@ pub enum Request {
         handle: RepositoryHandle,
         host: String,
     },
-    /// Check whether repository with the given name exists (name matching is the same as in
-    /// `RepositoryFind).
-    RepositoryExists(String),
     /// Export repository to a file
     RepositoryExport {
         handle: RepositoryHandle,
@@ -443,7 +440,7 @@ mod tests {
                     dht: false,
                     pex: false,
                 },
-                "81b05265706f7369746f727943726561746594a3666f6fc0c0c0",
+                "81b05265706f7369746f727943726561746596a3666f6fc0c0c0c2c2",
             ),
             (
                 Request::RepositoryCreate {
@@ -454,15 +451,15 @@ mod tests {
                     dht: false,
                     pex: false,
                 },
-                "81b05265706f7369746f727943726561746594a3666f6fc0c0d94568747470733a2f2f6f75697379\
+                "81b05265706f7369746f727943726561746596a3666f6fc0c0d94568747470733a2f2f6f75697379\
                  6e632e6e65742f722341774967663238737a62495f4b7274376153654f6c4877427868594b4d6338\
-                 43775a30473050626c71783132693555",
+                 43775a30473050626c71783132693555c2c2",
             ),
         ];
 
         for (request, expected_encoded) in test_vectors {
             let encoded = rmp_serde::to_vec(&request).unwrap();
-            assert_eq!(hex::encode(&encoded), expected_encoded);
+            assert_eq!(hex::encode(&encoded), expected_encoded, "{:?}", request);
 
             let decoded: Request = rmp_serde::from_slice(&encoded).unwrap();
 

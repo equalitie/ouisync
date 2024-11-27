@@ -184,7 +184,7 @@ impl State {
     }
 
     pub fn find_repository(&self, name: &str) -> Result<RepositoryHandle, FindError> {
-        let (handle, _) = self.repos.find(name)?;
+        let (handle, _) = self.repos.find_by_name(name)?;
         Ok(handle)
     }
 
@@ -204,8 +204,14 @@ impl State {
         enable_dht: bool,
         enable_pex: bool,
     ) -> Result<RepositoryHandle, Error> {
-        if self.repos.find(&name).is_ok() {
+        if self.repos.find_by_name(&name).is_ok() {
             Err(Error::RepositoryExists)?;
+        }
+
+        if let Some(token) = &share_token {
+            if self.repos.find_by_id(token.id()).is_some() {
+                Err(Error::RepositoryExists)?;
+            }
         }
 
         let store_path = self.store_path(name.as_ref());
@@ -230,10 +236,9 @@ impl State {
         let value = self.default_repository_expiration().await?;
         holder.set_repository_expiration(value).await?;
 
-        let handle = self
-            .repos
-            .try_insert(holder)
-            .ok_or(Error::RepositoryExists)?;
+        // unwrap is ok because we already checked that the repo doesn't exist earlier and we have
+        // exclusive access to this state.
+        let handle = self.repos.try_insert(holder).unwrap();
 
         tracing::info!(name, "repository created");
 
@@ -313,7 +318,7 @@ impl State {
 
         if fs::try_exists(&store_path).await? {
             if force {
-                if let Ok((handle, _)) = self.repos.find(&name) {
+                if let Ok((handle, _)) = self.repos.find_by_name(&name) {
                     if let Some(mut holder) = self.repos.remove(handle) {
                         holder.close().await?;
                     }
@@ -322,6 +327,8 @@ impl State {
                 return Err(Error::RepositoryExists);
             }
         }
+
+        // TODO: check if repo with same id exists
 
         match mode {
             ImportMode::Copy => {
@@ -872,24 +879,14 @@ async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
+    use ouisync::{AccessSecrets, WriteSecrets};
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn store_path_sanity_check() {
-        let temp_dir = TempDir::new().unwrap();
-        let store_dir = temp_dir.path().join("store");
-        let state = State::init(
-            temp_dir.path().join("config"),
-            Defaults {
-                store_dir: store_dir.clone(),
-                mount_dir: temp_dir.path().join("mount"),
-                bind: vec![],
-                local_discovery_enabled: false,
-                port_forwarding_enabled: false,
-            },
-        )
-        .await
-        .unwrap();
+        let (_temp_dir, state) = setup().await;
+        let store_dir = state.store_dir();
 
         assert_eq!(state.store_path("foo"), store_dir.join("foo.ouisyncdb"));
         assert_eq!(
@@ -900,6 +897,73 @@ mod tests {
             state.store_path("foo/bar.baz"),
             store_dir.join("foo/bar.baz.ouisyncdb")
         );
+    }
+
+    #[tokio::test]
+    async fn non_unique_repository_name() {
+        let (_temp_dir, mut state) = setup().await;
+        let name = "test";
+
+        assert_matches!(
+            state
+                .create_repository(name.to_owned(), None, None, None, false, false)
+                .await,
+            Ok(_)
+        );
+
+        assert_matches!(
+            state
+                .create_repository(name.to_owned(), None, None, None, false, false)
+                .await,
+            Err(Error::RepositoryExists)
+        );
+    }
+
+    #[tokio::test]
+    async fn non_unique_repository_id() {
+        let (_temp_dir, mut state) = setup().await;
+
+        let token = ShareToken::from(AccessSecrets::Write(WriteSecrets::random()));
+
+        assert_matches!(
+            state
+                .create_repository(
+                    "foo".to_owned(),
+                    None,
+                    None,
+                    Some(token.clone()),
+                    false,
+                    false
+                )
+                .await,
+            Ok(_)
+        );
+
+        // different name but same token
+        assert_matches!(
+            state
+                .create_repository("bar".to_owned(), None, None, Some(token), false, false)
+                .await,
+            Err(Error::RepositoryExists)
+        );
+    }
+
+    async fn setup() -> (TempDir, State) {
+        let temp_dir = TempDir::new().unwrap();
+        let state = State::init(
+            temp_dir.path().join("config"),
+            Defaults {
+                store_dir: temp_dir.path().join("store"),
+                mount_dir: temp_dir.path().join("mount"),
+                bind: vec![],
+                local_discovery_enabled: false,
+                port_forwarding_enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        (temp_dir, state)
     }
 
     /*

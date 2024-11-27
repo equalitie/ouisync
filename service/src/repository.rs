@@ -1,5 +1,5 @@
 use crate::error::Error;
-use ouisync::{Registration, Repository};
+use ouisync::{Registration, Repository, RepositoryId};
 use serde::{Deserialize, Serialize};
 use slab::Slab;
 use std::{
@@ -52,22 +52,33 @@ impl RepositorySet {
         self.repos.get_mut(handle.0)
     }
 
-    pub fn find(&self, prefix: &str) -> Result<(RepositoryHandle, &RepositoryHolder), FindError> {
-        let handle = self.find_handle(prefix)?;
+    pub fn find_by_name(
+        &self,
+        prefix: &str,
+    ) -> Result<(RepositoryHandle, &RepositoryHolder), FindError> {
+        let handle = self.find_handle_by_name(prefix)?;
         let holder = self.get(handle).ok_or(FindError::NotFound)?;
 
         Ok((handle, holder))
     }
 
     #[expect(dead_code)]
-    pub fn find_mut(
+    pub fn find_by_name_mut(
         &mut self,
         prefix: &str,
     ) -> Result<(RepositoryHandle, &mut RepositoryHolder), FindError> {
-        let handle = self.find_handle(prefix)?;
+        let handle = self.find_handle_by_name(prefix)?;
         let holder = self.get_mut(handle).ok_or(FindError::NotFound)?;
 
         Ok((handle, holder))
+    }
+
+    pub fn find_by_id(&self, id: &RepositoryId) -> Option<(RepositoryHandle, &RepositoryHolder)> {
+        // TODO: add repo_id -> repo_handle index to optimize this lookup
+        self.repos
+            .iter()
+            .find(|(_, holder)| holder.repository().secrets().id() == id)
+            .map(|(handle, holder)| (RepositoryHandle(handle), holder))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (RepositoryHandle, &RepositoryHolder)> {
@@ -83,7 +94,7 @@ impl RepositorySet {
         self.repos.drain()
     }
 
-    fn find_handle(&self, prefix: &str) -> Result<RepositoryHandle, FindError> {
+    fn find_handle_by_name(&self, prefix: &str) -> Result<RepositoryHandle, FindError> {
         let mut iter = self
             .index
             .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))

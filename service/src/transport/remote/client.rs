@@ -71,35 +71,66 @@ impl RemoteClient {
 
     pub async fn create_mirror(&mut self, secrets: &WriteSecrets) -> Result<(), RemoteClientError> {
         let proof = self.make_proof(secrets);
-        let _: RepositoryHandle = self
+        match self
             .invoke(protocol::v1::Request::Create {
                 repository_id: secrets.id,
                 proof,
             })
-            .await?
-            .try_into()?;
-
-        Ok(())
+            .await
+        {
+            Ok(response) => {
+                let _: RepositoryHandle = response.try_into()?;
+                Ok(())
+            }
+            Err(RemoteClientError::Response(error))
+                if error.message() == "repository already exists" =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn delete_mirror(&mut self, secrets: &WriteSecrets) -> Result<(), RemoteClientError> {
         let proof = self.make_proof(secrets);
-        let () = self
+        match self
             .invoke(protocol::v1::Request::Delete {
                 repository_id: secrets.id,
                 proof,
             })
-            .await?
-            .try_into()?;
-
-        Ok(())
+            .await
+        {
+            Ok(response) => {
+                let () = response.try_into()?;
+                Ok(())
+            }
+            // TODO: check error code, not message
+            Err(RemoteClientError::Response(error))
+                if error.message() == "repository not found" =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn mirror_exists(&mut self, id: &RepositoryId) -> Result<bool, RemoteClientError> {
-        Ok(self
+        match self
             .invoke(protocol::v1::Request::Exists { repository_id: *id })
-            .await?
-            .try_into()?)
+            .await
+        {
+            Ok(response) => {
+                let _: RepositoryHandle = response.try_into()?;
+                Ok(true)
+            }
+            // TODO: check error code, not message
+            Err(RemoteClientError::Response(error))
+                if error.message() == "repository not found" =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn close(&mut self) {
@@ -170,5 +201,45 @@ impl From<ProtocolError> for RemoteClientError {
 impl From<UnexpectedResponse> for RemoteClientError {
     fn from(_: UnexpectedResponse) -> Self {
         Self::UnexpectedResponse
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::setup_service;
+    use super::*;
+    use crate::test_utils::ServiceRunner;
+    use assert_matches::assert_matches;
+
+    #[tokio::test]
+    async fn proof_replay_attack() {
+        let (_temp_dir, service, server_addr, client_config) = setup_service().await;
+
+        let client0 = RemoteClient::connect(&server_addr, client_config.clone())
+            .await
+            .unwrap();
+        let mut client1 = RemoteClient::connect(&server_addr, client_config)
+            .await
+            .unwrap();
+
+        let secrets = WriteSecrets::random();
+        let proof = secrets.write_keys.sign(&client0.session_cookie);
+
+        // Attempt to invoke the request using a proof leaked from another client.
+        let runner = ServiceRunner::start(service);
+        let error = assert_matches!(
+            client1
+                .invoke(protocol::v1::Request::Create {
+                    repository_id: secrets.id,
+                    proof
+                })
+                .await,
+            Err(RemoteClientError::Response(error)) => error
+        );
+
+        // TODO: check code, not message
+        assert_eq!(error.message(), "permission denied");
+
+        runner.stop().await.close().await;
     }
 }

@@ -127,11 +127,6 @@ impl Service {
         self.state.close().await;
     }
 
-    #[expect(dead_code)]
-    pub(crate) fn state(&self) -> &State {
-        &self.state
-    }
-
     pub(crate) async fn bind_remote_control(
         &mut self,
         addr: Option<SocketAddr>,
@@ -149,6 +144,17 @@ impl Service {
 
             Ok(0)
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state(&self) -> &State {
+        &self.state
+    }
+
+    #[cfg(test)]
+    #[expect(dead_code)]
+    pub(crate) fn state_mut(&mut self) -> &mut State {
+        &mut self.state
     }
 
     async fn handle_message(
@@ -295,10 +301,6 @@ impl Service {
             }
             Request::RepositoryDeleteMirror { handle, host } => {
                 self.state.delete_repository_mirror(handle, host).await?;
-                Ok(().into())
-            }
-            Request::RepositoryExists(name) => {
-                self.state.find_repository(&name)?;
                 Ok(().into())
             }
             Request::RepositoryExport { handle, output } => {

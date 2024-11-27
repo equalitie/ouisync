@@ -16,6 +16,14 @@ impl ProtocolError {
             sources: Vec::new(),
         }
     }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn sources(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.sources.iter().map(|s| s.as_str())
+    }
 }
 
 impl fmt::Display for ProtocolError {

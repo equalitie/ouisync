@@ -36,6 +36,7 @@ tracing                     = { workspace = true }
 walkdir                     = "2.5.0"
 
 [dev-dependencies]
+assert_matches              = { workspace = true }
 hex                         = "0.4.3"
 rand                        = { workspace = true }
 rcgen                       = { workspace = true, features = ["pem"] }
