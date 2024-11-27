@@ -1,11 +1,8 @@
 mod client;
 mod defaults;
-mod error;
 mod format;
 mod options;
-mod repository;
 mod server;
-mod state;
 
 use clap::Parser;
 use client::ClientError;
