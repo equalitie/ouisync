@@ -1,4 +1,4 @@
-use crate::{defaults, options::ServerCommand};
+use crate::options::ServerCommand;
 use ouisync_bridge::logger::Logger;
 use ouisync_service::{Defaults, Error, Service};
 use std::{io, path::PathBuf};
@@ -7,6 +7,8 @@ use tokio::select;
 pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), Error> {
     let ServerCommand::Start {
         config_dir,
+        default_store_dir,
+        default_mount_dir,
         log_format,
         log_color,
     } = command;
@@ -22,11 +24,11 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
         socket,
         config_dir,
         Defaults {
-            store_dir: defaults::store_dir(),
-            mount_dir: defaults::mount_dir(),
+            store_dir: default_store_dir,
+            mount_dir: default_mount_dir,
+            bind: vec![],
             local_discovery_enabled: false,
             port_forwarding_enabled: false,
-            bind: vec![],
         },
     )
     .await?;
