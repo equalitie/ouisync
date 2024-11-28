@@ -10,8 +10,8 @@ void main() {
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
-    session = Session.create(
-      kind: SessionKind.unique,
+    session = await Session.create(
+      socketPath: '${temp.path}/sock',
       configPath: '${temp.path}/config',
     );
   });
@@ -200,7 +200,7 @@ void main() {
           'test.foo': (oldValue: 'foo value 1', newValue: 'foo value 3'),
         }),
         throwsA(
-          isA<Error>().having(
+          isA<OuisyncException>().having(
             (e) => e.code,
             'code',
             equals(ErrorCode.entryChanged),

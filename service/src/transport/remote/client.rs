@@ -11,9 +11,8 @@ use tokio_rustls::rustls;
 use tokio_tungstenite::{tungstenite as ws, Connector, MaybeTlsStream, WebSocketStream};
 
 use crate::{
-    error_code::ErrorCode,
     protocol::{
-        Message, MessageId, ProtocolError, RepositoryHandle, Response, ServerPayload,
+        ErrorCode, Message, MessageId, ProtocolError, RepositoryHandle, Response, ServerPayload,
         UnexpectedResponse,
     },
     transport::ClientError,

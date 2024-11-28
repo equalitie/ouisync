@@ -1,8 +1,8 @@
+pub mod ffi;
 pub mod protocol;
 pub mod transport;
 
 mod error;
-mod error_code;
 mod metrics;
 mod repository;
 mod state;
@@ -12,7 +12,6 @@ mod utils;
 mod test_utils;
 
 pub use error::Error;
-pub use error_code::ErrorCode;
 
 use futures_util::SinkExt;
 use metrics::MetricsServer;
@@ -53,9 +52,13 @@ impl Service {
         default_store_dir: PathBuf,
     ) -> Result<Self, Error> {
         let state = State::init(config_dir, default_store_dir).await?;
-        let local_server = LocalServer::bind(&local_socket_path)
-            .await
-            .map_err(Error::Bind)?;
+        let local_server =
+            LocalServer::bind(&local_socket_path)
+                .await
+                .map_err(|error| match error.kind() {
+                    io::ErrorKind::AddrInUse => Error::ServiceAlreadyRunning,
+                    _ => Error::Bind(error),
+                })?;
 
         let remote_server = match state.config.entry(REMOTE_CONTROL_KEY).get().await {
             Ok(addr) => Some(
@@ -222,6 +225,9 @@ impl Service {
             Request::NetworkBind(addrs) => {
                 self.state.bind_network(addrs).await;
                 Ok(().into())
+            }
+            Request::NetworkCurrentProtocolVersion => {
+                Ok(self.state.network.current_protocol_version().into())
             }
             Request::NetworkGetListenerAddrs => {
                 Ok(self.state.network.listener_local_addrs().into())
@@ -452,5 +458,40 @@ async fn maybe_accept(
         server.accept().await
     } else {
         future::pending().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert_matches::assert_matches;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn already_running() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let socket_path = temp_dir.path().join("sock");
+        let mut service0 = Service::init(
+            socket_path.clone(),
+            temp_dir.path().join("config0"),
+            temp_dir.path().join("store0"),
+        )
+        .await
+        .unwrap();
+
+        assert_matches!(
+            Service::init(
+                socket_path,
+                temp_dir.path().join("config0"),
+                temp_dir.path().join("store0")
+            )
+            .await
+            .map(|_| ()),
+            Err(Error::ServiceAlreadyRunning)
+        );
+
+        service0.close().await;
     }
 }

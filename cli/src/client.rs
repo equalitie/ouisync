@@ -6,14 +6,13 @@ use futures_util::SinkExt;
 use ouisync::{crypto::Password, LocalSecret, PeerAddr, PeerInfo, SetLocalSecret, ShareToken};
 use ouisync_service::{
     protocol::{
-        Message, MessageId, ProtocolError, QuotaInfo, RepositoryHandle, Request, Response,
-        ServerPayload, UnexpectedResponse,
+        ErrorCode, Message, MessageId, ProtocolError, QuotaInfo, RepositoryHandle, Request,
+        Response, ServerPayload, UnexpectedResponse,
     },
     transport::{
         local::{self, LocalClientReader, LocalClientWriter},
         ClientError,
     },
-    ErrorCode,
 };
 use std::{
     collections::BTreeMap,

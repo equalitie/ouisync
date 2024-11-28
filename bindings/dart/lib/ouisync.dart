@@ -1,16 +1,16 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:ffi';
-import 'dart:isolate';
+import 'dart:io' as io;
 import 'dart:typed_data';
 import 'dart:math';
 
-import 'package:ffi/ffi.dart';
 import 'package:hex/hex.dart';
 
 import 'bindings.dart';
 import 'client.dart';
+import 'exception.dart';
+import 'server.dart';
 import 'state_monitor.dart';
 
 export 'bindings.dart'
@@ -21,8 +21,8 @@ export 'bindings.dart'
         LogLevel,
         NetworkEvent,
         PeerSource,
-        PeerStateKind,
-        SessionKind;
+        PeerStateKind;
+export 'exception.dart';
 
 part 'local_secret.dart';
 
@@ -47,41 +47,40 @@ class Session {
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
   /// doesn't exists, it will be created.
   /// [logPath] is a path to the log file. If null, logs will be printed to standard output.
-  static Session create({
-    SessionKind kind = SessionKind.shared,
+  static Future<Session> create({
+    required String socketPath,
     required String configPath,
     String? logPath,
     String logTag = defaultLogTag,
-  }) {
-    if (debugTrace) {
-      print("Session.open $configPath");
-    }
+  }) async {
+    // TODO: temp hack
+    final storeDir = await io.Directory.systemTemp.createTemp('ouisync');
 
-    final recvPort = ReceivePort();
+    // Start the server. If another server is already listening on the same socket, wait forever so
+    // that the client future definitely completes first.
+    final serverFuture = runServer(
+      socketPath: socketPath,
+      configPath: configPath,
+      storePath: storeDir.path,
+    ).then(
+      (_) {
+        throw OuisyncException(
+          ErrorCode.other,
+          'server unexpectedly terminated',
+        );
+      },
+      onError: (error) => switch (error) {
+        ServiceAlreadyRunning => Future.any([]), // wait forewer
+        _ => throw error,
+      },
+    );
 
-    bindings ??= Bindings.loadDefault();
+    // Create a client and connect it to the server.
+    final clientFuture = SocketClient.connect(socketPath);
 
-    final result = _withPoolSync((pool) => bindings!.session_create(
-          kind.encode(),
-          pool.toNativeUtf8(configPath),
-          logPath != null ? pool.toNativeUtf8(logPath) : nullptr,
-          pool.toNativeUtf8(logTag),
-          NativeApi.postCObject,
-          recvPort.sendPort.nativePort,
-        ));
-
-    final errorCode = ErrorCode.decode(result.error_code);
-
-    int handle;
-
-    if (errorCode == ErrorCode.ok) {
-      handle = result.session;
-    } else {
-      final errorMessage = result.error_message.cast<Utf8>().intoDartString();
-      throw Error(errorCode, errorMessage);
-    }
-
-    final client = DirectClient(handle, recvPort, bindings!);
+    // Run both the server and the client futures concurrently. Because the server future never
+    // returns, this will either return a new client or throw.
+    final client = await Future.any([clientFuture, serverFuture]);
 
     return Session._(client);
   }
@@ -216,31 +215,9 @@ class Session {
       }).then((bytes) => LocalSecretKey(bytes));
 
   /// Try to gracefully close connections to peers then close the session.
-  ///
-  /// Note that this function is idempotent with itself as well as with the
-  /// `closeSync` function.
   Future<void> close() async {
     await _networkSubscription.close();
     await _client.close();
-  }
-
-  /// Try to gracefully close connections to peers then close the session.
-  /// Async functions don't work reliably when the dart engine is being
-  /// shutdown (on app exit). In those situations the network needs to be shut
-  /// down using a blocking call.
-  ///
-  /// This function closes the session only if the client used is the DirectClient.
-  /// Otherwise it throws.
-  ///
-  /// Note that this function is idempotent with itself as well as with the
-  /// `close` function.
-  void closeSync() {
-    final client = _client;
-    if (client is DirectClient) {
-      client.closeSync();
-    } else {
-      throw "closeSync is currently only implemented for DirectClient";
-    }
   }
 }
 
@@ -326,11 +303,11 @@ class NetworkStats {
 class Repository {
   final Client _client;
   final int _handle;
-  final String? _store;
+  final String _name;
   final Subscription _subscription;
 
-  Repository._(this._client, this._handle, this._store)
-      : _subscription = Subscription(_client, "repository", _handle);
+  Repository._(this._client, this._handle, this._name)
+      : _subscription = Subscription(_client, 'repository', _handle);
 
   /// Creates a new repository and set access to it based on the following table:
   ///
@@ -345,54 +322,38 @@ class Repository {
   /// any             |  any             |  write         |  read with one secret, write with (possibly same) one
   static Future<Repository> create(
     Session session, {
-    required String store,
+    required String name,
     required SetLocalSecret? readSecret,
     required SetLocalSecret? writeSecret,
     ShareToken? shareToken,
   }) async {
-    if (debugTrace) {
-      print("Repository.create $store");
-    }
-
     final handle = await session._client.invoke<int>(
       'repository_create',
       {
-        'path': store,
+        'name': name,
         'read_secret': readSecret?.encode(),
         'write_secret': writeSecret?.encode(),
-        'share_token': shareToken?.toString()
+        'share_token': shareToken?.toString(),
+        'dht': false,
+        'pex': false,
       },
     );
 
-    return Repository._(session._client, handle, store);
+    return Repository._(session._client, handle, name);
   }
 
-  /// Opens an existing repository. If the same repository is opened again, a new handle pointing
-  /// to the same underlying repository is returned.
-  ///
-  /// See also [close].
-  static Future<Repository> open(
+  /// Finds existing repository by name.
+  static Future<Repository> find(
     Session session, {
-    required String store,
-    LocalSecret? secret,
+    required String name,
   }) async {
-    if (debugTrace) {
-      print("Repository.open $store");
-    }
-
-    final handle = await session._client.invoke<int>('repository_open', {
-      'path': store,
-      'secret': secret?.encode(),
-    });
-
-    return Repository._(session._client, handle, store);
+    final handle = await session._client.invoke<int>('repository_find', name);
+    return Repository._(session._client, handle, name);
   }
 
-  /// Closes the repository. All outstanding handles become invalid. Invoking any operation on a
-  /// repository after it's been closed results in an error being thrown.
+  /// Closes this repository handle.
   Future<void> close() async {
     await _subscription.close();
-    await _client.invoke('repository_close', _handle);
   }
 
   /// Checks whether syncing with other replicas is enabled.
@@ -542,14 +503,9 @@ class Repository {
       .invoke<List<Object?>>('repository_sync_progress', _handle)
       .then(Progress.decode);
 
-  StateMonitor? get stateMonitor {
-    final store = _store;
-    return store != null
-        ? StateMonitor.getRoot(_client)
-            .child(MonitorId.expectUnique("Repositories"))
-            .child(MonitorId.expectUnique(store))
-        : null;
-  }
+  StateMonitor? get stateMonitor => StateMonitor.getRoot(_client)
+      .child(MonitorId.expectUnique("Repositories"))
+      .child(MonitorId.expectUnique(_name));
 
   Future<String> get infoHash =>
       _client.invoke<String>("repository_info_hash", _handle);
@@ -933,95 +889,4 @@ class File {
   }
 
   Future<int> get progress => _client.invoke<int>('file_progress', _handle);
-
-  /// Copy the contents of the file into the provided raw file descriptor.
-  /// TODO: Right now this function only works when using the DirectClient,
-  /// otherwise throws.
-  Future<void> copyToRawFd(int fd) async {
-    if (debugTrace) {
-      print("File.copyToRawFd");
-    }
-
-    final client = _client;
-
-    if (client is DirectClient) {
-      await client.copyToRawFd(_handle, fd);
-    } else {
-      throw "copyToRawFd is currently implemented only for DirectClient";
-    }
-  }
-}
-
-/// Print log message
-void logPrint(LogLevel level, String scope, String message) =>
-    _withPoolSync((pool) => bindings!.log_print(
-          level.encode(),
-          pool.toNativeUtf8(scope),
-          pool.toNativeUtf8(message),
-        ));
-
-/// The exception type throws from this library.
-class Error implements Exception {
-  final String message;
-  final ErrorCode code;
-
-  Error(this.code, this.message);
-
-  @override
-  String toString() => message;
-}
-
-// Private helpers to simplify working with the native API:
-
-// Call the sync function passing it a [_Pool] which will be released when the function returns.
-T _withPoolSync<T>(T Function(_Pool) fun) {
-  final pool = _Pool();
-
-  try {
-    return fun(pool);
-  } finally {
-    pool.release();
-  }
-}
-
-// Allocator that tracks all allocations and frees them all at the same time.
-class _Pool implements Allocator {
-  List<Pointer<NativeType>> ptrs = [];
-
-  @override
-  Pointer<T> allocate<T extends NativeType>(int byteCount, {int? alignment}) {
-    final ptr = malloc.allocate<T>(byteCount, alignment: alignment);
-    ptrs.add(ptr);
-    return ptr;
-  }
-
-  @override
-  void free(Pointer<NativeType> ptr) {
-    // free on [release]
-  }
-
-  void release() {
-    for (var ptr in ptrs) {
-      malloc.free(ptr);
-    }
-  }
-
-  // Convenience function to convert a dart string to a C-style nul-terminated utf-8 encoded
-  // string pointer. The pointer is allocated using this pool.
-  Pointer<Char> toNativeUtf8(String str) =>
-      str.toNativeUtf8(allocator: this).cast<Char>();
-}
-
-extension Utf8Pointer on Pointer<Utf8> {
-  // Similar to [toDartString] but also deallocates the original pointer.
-  String intoDartString() {
-    final string = toDartString();
-    freeString(this);
-    return string;
-  }
-}
-
-// Free a pointer that was allocated by the native side.
-void freeString(Pointer<Utf8> ptr) {
-  bindings!.free_string(ptr.cast<Char>());
 }

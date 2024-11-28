@@ -56,20 +56,28 @@ pub enum ErrorCode {
     DirectoryNotEmpty = 2048 + 4,
     /// File or directory is busy
     ResourceBusy = 2048 + 5,
+    /// Entry has been changed and no longer matches the expected value
+    EntryChanged = 2048 + 6,
 
     // # Service errors
-    /// TLS certificated not found
-    TlsCertificatesNotFound = 4096 + 1,
-    /// TLS certificates failed to load
-    TlsCertificatesInvalid = 4096 + 2,
-    /// TLS keys not found
-    TlsKeysNotFound = 4096 + 3,
-    /// Failed to create TLS config
-    TlsConfig = 4096 + 4,
+    /// Failed to initialize runtime
+    InitializeRuntime = 4096 + 1,
+    /// Failed to initialize logger
+    InitializeLogger = 4096 + 2,
     /// Failed to read from or write into the config file
-    Config = 4096 + 5,
+    Config = 4096 + 3,
+    /// TLS certificated not found
+    TlsCertificatesNotFound = 4096 + 4,
+    /// TLS certificates failed to load
+    TlsCertificatesInvalid = 4096 + 5,
+    /// TLS keys not found
+    TlsKeysNotFound = 4096 + 6,
+    /// Failed to create TLS config
+    TlsConfig = 4096 + 7,
     /// Failed to create mounter
-    CreateMounter = 4096 + 6,
+    CreateMounter = 4096 + 8,
+    /// Another instance of the service is already running
+    ServiceAlreadyRunning = 4096 + 9,
 
     /// Unspecified error
     Other = 65535,
@@ -84,6 +92,9 @@ impl ToErrorCode for Error {
         match self {
             Self::Config(_) => ErrorCode::Config,
             Self::CreateMounter(_) => ErrorCode::CreateMounter,
+            Self::InitializeLogger(_) => ErrorCode::InitializeLogger,
+            Self::InitializeRuntime(_) => ErrorCode::InitializeRuntime,
+            Self::InvalidUtf8 => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,
             Self::OperationNotSupported => ErrorCode::Unsupported,
             Self::PermissionDenied => ErrorCode::PermissionDenied,
@@ -96,6 +107,7 @@ impl ToErrorCode for Error {
             Self::TlsCertificatesInvalid(_) => ErrorCode::TlsCertificatesInvalid,
             Self::TlsConfig(_) => ErrorCode::TlsConfig,
             Self::TlsKeysNotFound => ErrorCode::TlsKeysNotFound,
+            Self::ServiceAlreadyRunning => ErrorCode::ServiceAlreadyRunning,
             Self::Bind(_) => ErrorCode::ListenerBind,
             Self::Accept(_) => ErrorCode::ListenerAccept,
             Self::Client(error) => error.to_error_code(),
@@ -175,5 +187,17 @@ impl ToErrorCode for ouisync::Error {
 impl ToErrorCode for rmp_serde::decode::Error {
     fn to_error_code(&self) -> ErrorCode {
         ErrorCode::InvalidData
+    }
+}
+
+impl<T, E> ToErrorCode for Result<T, E>
+where
+    E: ToErrorCode,
+{
+    fn to_error_code(&self) -> ErrorCode {
+        match self {
+            Ok(_) => ErrorCode::Ok,
+            Err(error) => error.to_error_code(),
+        }
     }
 }

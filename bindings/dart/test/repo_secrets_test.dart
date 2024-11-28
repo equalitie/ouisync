@@ -12,8 +12,8 @@ void main() {
 
     repoPath = '${temp.path}/repo.db';
 
-    session = Session.create(
-      kind: SessionKind.unique,
+    session = await Session.create(
+      socketPath: '${temp.path}/sock',
       configPath: '${temp.path}/config',
     );
   });

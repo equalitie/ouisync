@@ -17,8 +17,8 @@ void main() {
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
-    session = Session.create(
-      kind: SessionKind.unique,
+    session = await Session.create(
+      socketPath: '${temp.path}/sock',
       configPath: '${temp.path}/device_id.conf',
     );
     repository = await Repository.create(

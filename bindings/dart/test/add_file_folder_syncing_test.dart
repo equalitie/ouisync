@@ -25,12 +25,16 @@ void main() {
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
-    session = Session.create(
-      kind: SessionKind.unique,
+    session = await Session.create(
+      socketPath: '${temp.path}/sock',
       configPath: '${temp.path}/device_id.conf',
     );
-    repository = await Repository.create(session,
-        store: '${temp.path}/repo.db', readSecret: null, writeSecret: null);
+    repository = await Repository.create(
+      session,
+      name: 'foo',
+      readSecret: null,
+      writeSecret: null,
+    );
 
     currentPath = '/';
 

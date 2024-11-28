@@ -5,11 +5,13 @@ use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Request {
     MetricsBind(Option<SocketAddr>),
     MetricsGetListenerAddr,
     NetworkAddUserProvidedPeers(#[serde(with = "as_strs")] Vec<PeerAddr>),
     NetworkBind(Vec<PeerAddr>),
+    NetworkCurrentProtocolVersion,
     NetworkGetListenerAddrs,
     NetworkGetPeers,
     NetworkGetUserProvidedPeers,
@@ -255,7 +257,6 @@ pub(crate) enum Request {
     NetworkInit(NetworkDefaults),
     NetworkSubscribe,
     NetworkThisRuntimeId,
-    NetworkCurrentProtocolVersion,
     NetworkHighestSeenProtocolVersion,
     NetworkExternalAddrV4,
     NetworkExternalAddrV6,

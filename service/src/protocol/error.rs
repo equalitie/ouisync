@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt, iter};
 
-use crate::error_code::{ErrorCode, ToErrorCode};
+use super::error_code::{ErrorCode, ToErrorCode};
 
 /// Error response from the server
 #[derive(Debug, Serialize, Deserialize)]

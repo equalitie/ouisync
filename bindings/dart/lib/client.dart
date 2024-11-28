@@ -2,6 +2,7 @@ import 'dart:async';
 
 export 'internal/direct_client.dart';
 export 'internal/channel_client.dart';
+export 'internal/socket_client.dart';
 
 abstract class Client {
   Future<T> invoke<T>(String method, [Object? args]);

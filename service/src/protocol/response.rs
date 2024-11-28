@@ -10,6 +10,7 @@ use std::{
 use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[expect(clippy::large_enum_variant)]
 pub enum Response {
     None,
@@ -25,6 +26,7 @@ pub enum Response {
     SocketAddr(SocketAddr),
     SocketAddrs(Vec<SocketAddr>),
     StorageSize(StorageSize),
+    U32(u32),
 }
 
 macro_rules! impl_response_conversion {
@@ -107,6 +109,7 @@ impl_response_conversion!(SocketAddr(SocketAddr));
 impl_response_conversion!(SocketAddrs(Vec<SocketAddr>));
 impl_response_conversion!(StorageSize(StorageSize));
 impl_response_conversion!(QuotaInfo(QuotaInfo));
+impl_response_conversion!(U32(u32));
 
 #[derive(Error, Debug)]
 #[error("unexpected response")]

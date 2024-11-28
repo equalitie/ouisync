@@ -11,12 +11,12 @@ void main() {
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
-    session1 = Session.create(
-      kind: SessionKind.unique,
+    session1 = await Session.create(
+      socketPath: '${temp.path}/1/sock',
       configPath: '${temp.path}/1/config',
     );
-    session2 = Session.create(
-      kind: SessionKind.unique,
+    session2 = await Session.create(
+      socketPath: '${temp.path}/2/sock',
       configPath: '${temp.path}/2/config',
     );
 

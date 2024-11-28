@@ -1,7 +1,7 @@
 use crate::transport::ClientError;
 use ouisync_bridge::{config::ConfigError, repository::OpenError};
 use ouisync_vfs::MountError;
-use std::io;
+use std::{io, str::Utf8Error};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -10,6 +10,12 @@ pub enum Error {
     Config(#[from] ConfigError),
     #[error("failed to create mounter")]
     CreateMounter(#[from] MountError),
+    #[error("failed to initialize logger")]
+    InitializeLogger(#[source] io::Error),
+    #[error("failed to initialize runtime")]
+    InitializeRuntime(#[source] io::Error),
+    #[error("argument is not valid utf-8 encoded string")]
+    InvalidUtf8,
     #[error("I/O error")]
     Io(#[from] io::Error),
     #[error("operation not supported")]
@@ -34,6 +40,8 @@ pub enum Error {
     TlsKeysNotFound,
     #[error("failed to create TLS config")]
     TlsConfig(#[source] tokio_rustls::rustls::Error),
+    #[error("service is already running")]
+    ServiceAlreadyRunning,
     #[error("failed to bind server")]
     Bind(#[source] io::Error),
     #[error("failed to accept client connection")]
@@ -48,5 +56,11 @@ impl From<OpenError> for Error {
             OpenError::Repository(error) => Self::Repository(error),
             OpenError::Config(error) => Self::Config(error),
         }
+    }
+}
+
+impl From<Utf8Error> for Error {
+    fn from(_: Utf8Error) -> Self {
+        Self::InvalidUtf8
     }
 }

@@ -10,8 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = Options::parse();
 
     let source_files = [
-        "bridge/src/protocol/mod.rs",
-        "ffi/src/lib.rs",
+        "service/src/protocol.rs",
         "lib/src/access_control/access_mode.rs",
         "lib/src/directory/entry_type.rs",
         "lib/src/network/peer_source.rs",

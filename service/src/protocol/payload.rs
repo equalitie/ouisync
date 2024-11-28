@@ -1,5 +1,5 @@
 use super::{ProtocolError, Response};
-use ouisync_bridge::protocol::NetworkEvent;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,4 +25,18 @@ pub enum Notification {
     Repository,
     Network(NetworkEvent),
     StateMonitor,
+}
+
+/// Network notification event.
+#[derive(
+    Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize, TryFromPrimitive, IntoPrimitive,
+)]
+#[repr(u8)]
+#[serde(into = "u8", try_from = "u8")]
+pub enum NetworkEvent {
+    /// A peer has appeared with higher protocol version than us. Probably means we are using
+    /// outdated library. This event can be used to notify the user that they should update the app.
+    ProtocolVersionMismatch = 0,
+    /// The set of known peers has changed (e.g., a new peer has been discovered)
+    PeerSetChange = 1,
 }

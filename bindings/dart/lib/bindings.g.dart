@@ -47,48 +47,66 @@ enum EntryType {
 
 enum ErrorCode {
   ok,
-  store,
   permissionDenied,
-  malformedData,
-  entryExists,
-  entryNotFound,
-  ambiguousEntry,
+  invalidInput,
+  invalidData,
+  alreadyExists,
+  notFound,
+  ambiguous,
+  unsupported,
+  connectionRefused,
+  connectionAborted,
+  transportError,
+  listenerBind,
+  listenerAccept,
+  storeError,
+  isDirectory,
+  notDirectory,
   directoryNotEmpty,
-  operationNotSupported,
-  config,
-  invalidArgument,
-  malformedMessage,
-  storageVersionMismatch,
-  connectionLost,
-  invalidHandle,
+  resourceBusy,
   entryChanged,
-  vfsInvalidMountPoint,
-  vfsDriverInstall,
-  vfsBackend,
+  initializeRuntime,
+  initializeLogger,
+  config,
+  tlsCertificatesNotFound,
+  tlsCertificatesInvalid,
+  tlsKeysNotFound,
+  tlsConfig,
+  createMounter,
+  serviceAlreadyRunning,
   other,
   ;
 
   static ErrorCode decode(int n) {
     switch (n) {
       case 0: return ErrorCode.ok;
-      case 1: return ErrorCode.store;
-      case 2: return ErrorCode.permissionDenied;
-      case 3: return ErrorCode.malformedData;
-      case 4: return ErrorCode.entryExists;
-      case 5: return ErrorCode.entryNotFound;
-      case 6: return ErrorCode.ambiguousEntry;
-      case 7: return ErrorCode.directoryNotEmpty;
-      case 8: return ErrorCode.operationNotSupported;
-      case 10: return ErrorCode.config;
-      case 11: return ErrorCode.invalidArgument;
-      case 12: return ErrorCode.malformedMessage;
-      case 13: return ErrorCode.storageVersionMismatch;
-      case 14: return ErrorCode.connectionLost;
-      case 15: return ErrorCode.invalidHandle;
-      case 16: return ErrorCode.entryChanged;
-      case 2048: return ErrorCode.vfsInvalidMountPoint;
-      case 2049: return ErrorCode.vfsDriverInstall;
-      case 2050: return ErrorCode.vfsBackend;
+      case 1: return ErrorCode.permissionDenied;
+      case 2: return ErrorCode.invalidInput;
+      case 3: return ErrorCode.invalidData;
+      case 4: return ErrorCode.alreadyExists;
+      case 5: return ErrorCode.notFound;
+      case 6: return ErrorCode.ambiguous;
+      case 8: return ErrorCode.unsupported;
+      case 1025: return ErrorCode.connectionRefused;
+      case 1026: return ErrorCode.connectionAborted;
+      case 1027: return ErrorCode.transportError;
+      case 1028: return ErrorCode.listenerBind;
+      case 1029: return ErrorCode.listenerAccept;
+      case 2049: return ErrorCode.storeError;
+      case 2050: return ErrorCode.isDirectory;
+      case 2051: return ErrorCode.notDirectory;
+      case 2052: return ErrorCode.directoryNotEmpty;
+      case 2053: return ErrorCode.resourceBusy;
+      case 2054: return ErrorCode.entryChanged;
+      case 4097: return ErrorCode.initializeRuntime;
+      case 4098: return ErrorCode.initializeLogger;
+      case 4099: return ErrorCode.config;
+      case 4100: return ErrorCode.tlsCertificatesNotFound;
+      case 4101: return ErrorCode.tlsCertificatesInvalid;
+      case 4102: return ErrorCode.tlsKeysNotFound;
+      case 4103: return ErrorCode.tlsConfig;
+      case 4104: return ErrorCode.createMounter;
+      case 4105: return ErrorCode.serviceAlreadyRunning;
       case 65535: return ErrorCode.other;
       default: throw ArgumentError('invalid value: $n');
     }
@@ -97,24 +115,33 @@ enum ErrorCode {
   int encode() {
     switch (this) {
       case ErrorCode.ok: return 0;
-      case ErrorCode.store: return 1;
-      case ErrorCode.permissionDenied: return 2;
-      case ErrorCode.malformedData: return 3;
-      case ErrorCode.entryExists: return 4;
-      case ErrorCode.entryNotFound: return 5;
-      case ErrorCode.ambiguousEntry: return 6;
-      case ErrorCode.directoryNotEmpty: return 7;
-      case ErrorCode.operationNotSupported: return 8;
-      case ErrorCode.config: return 10;
-      case ErrorCode.invalidArgument: return 11;
-      case ErrorCode.malformedMessage: return 12;
-      case ErrorCode.storageVersionMismatch: return 13;
-      case ErrorCode.connectionLost: return 14;
-      case ErrorCode.invalidHandle: return 15;
-      case ErrorCode.entryChanged: return 16;
-      case ErrorCode.vfsInvalidMountPoint: return 2048;
-      case ErrorCode.vfsDriverInstall: return 2049;
-      case ErrorCode.vfsBackend: return 2050;
+      case ErrorCode.permissionDenied: return 1;
+      case ErrorCode.invalidInput: return 2;
+      case ErrorCode.invalidData: return 3;
+      case ErrorCode.alreadyExists: return 4;
+      case ErrorCode.notFound: return 5;
+      case ErrorCode.ambiguous: return 6;
+      case ErrorCode.unsupported: return 8;
+      case ErrorCode.connectionRefused: return 1025;
+      case ErrorCode.connectionAborted: return 1026;
+      case ErrorCode.transportError: return 1027;
+      case ErrorCode.listenerBind: return 1028;
+      case ErrorCode.listenerAccept: return 1029;
+      case ErrorCode.storeError: return 2049;
+      case ErrorCode.isDirectory: return 2050;
+      case ErrorCode.notDirectory: return 2051;
+      case ErrorCode.directoryNotEmpty: return 2052;
+      case ErrorCode.resourceBusy: return 2053;
+      case ErrorCode.entryChanged: return 2054;
+      case ErrorCode.initializeRuntime: return 4097;
+      case ErrorCode.initializeLogger: return 4098;
+      case ErrorCode.config: return 4099;
+      case ErrorCode.tlsCertificatesNotFound: return 4100;
+      case ErrorCode.tlsCertificatesInvalid: return 4101;
+      case ErrorCode.tlsKeysNotFound: return 4102;
+      case ErrorCode.tlsConfig: return 4103;
+      case ErrorCode.createMounter: return 4104;
+      case ErrorCode.serviceAlreadyRunning: return 4105;
       case ErrorCode.other: return 65535;
     }
   }
@@ -228,28 +255,6 @@ enum PeerStateKind {
       case PeerStateKind.connecting: return 1;
       case PeerStateKind.handshaking: return 2;
       case PeerStateKind.active: return 3;
-    }
-  }
-
-}
-
-enum SessionKind {
-  shared,
-  unique,
-  ;
-
-  static SessionKind decode(int n) {
-    switch (n) {
-      case 0: return SessionKind.shared;
-      case 1: return SessionKind.unique;
-      default: throw ArgumentError('invalid value: $n');
-    }
-  }
-
-  int encode() {
-    switch (this) {
-      case SessionKind.shared: return 0;
-      case SessionKind.unique: return 1;
     }
   }
 

@@ -9,97 +9,44 @@ import 'package:flutter/foundation.dart' show kReleaseMode;
 
 export 'bindings.g.dart';
 
-Bindings? bindings;
+typedef ouisync_start = Uint16 Function(
+  Pointer<Char>,
+  Pointer<Char>,
+  Pointer<Char>,
+);
+typedef Start = int Function(Pointer<Char>, Pointer<Char>, Pointer<Char>);
 
-typedef PostCObject = Int8 Function(Int64, Pointer<Dart_CObject>);
+typedef ouisync_log_init = Uint16 Function(
+  Pointer<Char>,
+  Pointer<Char>,
+);
+typedef LogInit = int Function(Pointer<Char>, Pointer<Char>);
 
-typedef _session_create_c = SessionCreateResult Function(
+typedef ouisync_log_print = Void Function(
   Uint8,
   Pointer<Char>,
   Pointer<Char>,
-  Pointer<Char>,
-  Pointer<NativeFunction<PostCObject>>,
-  Int64,
 );
-typedef session_create_dart = SessionCreateResult Function(
-  int,
-  Pointer<Char>,
-  Pointer<Char>,
-  Pointer<Char>,
-  Pointer<NativeFunction<PostCObject>>,
-  int,
-);
-
-typedef _session_channel_send_c = Void Function(Uint64, Pointer<Uint8>, Uint64);
-typedef session_channel_send_dart = void Function(int, Pointer<Uint8>, int);
-
-typedef _session_close_c = Void Function(
-    Uint64, Pointer<NativeFunction<PostCObject>>, Int64);
-typedef session_close_dart = void Function(
-    int, Pointer<NativeFunction<PostCObject>>, int);
-
-typedef _session_close_blocking_c = Void Function(Uint64);
-typedef session_close_blocking_dart = void Function(int);
-
-typedef _file_copy_to_raw_fd_c = Void Function(
-    Uint64, Uint64, Int, Pointer<NativeFunction<PostCObject>>, Int64);
-typedef file_copy_to_raw_fd_dart = void Function(
-    int, int, int, Pointer<NativeFunction<PostCObject>>, int);
-
-typedef _log_print_c = Void Function(Uint8, Pointer<Char>, Pointer<Char>);
-typedef log_print_dart = void Function(int, Pointer<Char>, Pointer<Char>);
-
-typedef _free_string_c = Void Function(Pointer<Char>);
-typedef free_string_dart = void Function(Pointer<Char>);
-
-final class SessionCreateResult extends Struct {
-  @Uint64()
-  external int session;
-
-  @Uint16()
-  external int error_code;
-
-  external Pointer<Char> error_message;
-}
+typedef LogPrint = void Function(int, Pointer<Char>, Pointer<Char>);
 
 class Bindings {
   Bindings(DynamicLibrary library)
-      : session_create = library
-            .lookup<NativeFunction<_session_create_c>>('session_create_dart')
+      : start = library
+            .lookup<NativeFunction<ouisync_start>>('ouisync_start')
             .asFunction(),
-        session_channel_send = library
-            .lookup<NativeFunction<_session_channel_send_c>>(
-                'session_channel_send')
-            .asFunction(),
-        session_close = library
-            .lookup<NativeFunction<_session_close_c>>('session_close_dart')
-            .asFunction(),
-        session_close_blocking = library
-            .lookup<NativeFunction<_session_close_blocking_c>>(
-                'session_close_blocking')
-            .asFunction(),
-        file_copy_to_raw_fd = library
-            .lookup<NativeFunction<_file_copy_to_raw_fd_c>>(
-                'file_copy_to_raw_fd_dart')
+        log_init = library
+            .lookup<NativeFunction<ouisync_log_init>>('ouisync_log_init')
             .asFunction(),
         log_print = library
-            .lookup<NativeFunction<_log_print_c>>('log_print')
-            .asFunction(),
-        free_string = library
-            .lookup<NativeFunction<_free_string_c>>('free_string')
+            .lookup<NativeFunction<ouisync_log_print>>('ouisync_log_print')
             .asFunction();
 
-  static Bindings loadDefault() {
-    return Bindings(_defaultLib());
-  }
+  /// Bidings instance that uses the default library.
+  static Bindings instance = Bindings(_defaultLib());
 
-  final session_create_dart session_create;
-  final session_channel_send_dart session_channel_send;
-  final session_close_dart session_close;
-  final session_close_blocking_dart session_close_blocking;
-  final file_copy_to_raw_fd_dart file_copy_to_raw_fd;
-  final log_print_dart log_print;
-  final free_string_dart free_string;
+  final Start start;
+  final LogInit log_init;
+  final LogPrint log_print;
 }
 
 DynamicLibrary _defaultLib() {
@@ -107,15 +54,15 @@ DynamicLibrary _defaultLib() {
 
   // the default library name depends on the operating system
   late final String name;
-  final base = 'ouisync_ffi';
+  final base = 'ouisync_service';
   if (Platform.isLinux || Platform.isAndroid) {
     name = 'lib$base.so';
   } else if (Platform.isWindows) {
     name = '$base.dll';
   } else if (Platform.isIOS || Platform.isMacOS) {
-    name = 'lib$base.dylib' ;
+    name = 'lib$base.dylib';
   } else {
-      throw Exception('unsupported platform ${Platform.operatingSystem}');
+    throw Exception('unsupported platform ${Platform.operatingSystem}');
   }
 
   // full path to loadable library

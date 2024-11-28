@@ -1,3 +1,4 @@
+/*
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -131,3 +132,4 @@ Future<void> _invokeNativeAsync(void Function(int) fun) async {
     recvPort.close();
   }
 }
+*/

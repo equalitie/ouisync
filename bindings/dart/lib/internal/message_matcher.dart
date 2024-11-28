@@ -4,8 +4,7 @@ import 'dart:collection';
 import 'package:msgpack_dart/msgpack_dart.dart';
 
 import '../errors.dart';
-import '../ouisync.dart' show Error;
-import '../bindings.dart' show ErrorCode;
+import '../ouisync.dart' show OuisyncException, ErrorCode;
 
 typedef Sender = Future<void> Function(Uint8List);
 
@@ -144,7 +143,7 @@ class MessageMatcher {
       return;
     }
 
-    final error = Error(ErrorCode.decode(code), message);
+    final error = OuisyncException(ErrorCode.decode(code), message);
     completer.completeError(error);
   }
 
