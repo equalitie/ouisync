@@ -406,7 +406,7 @@ impl State {
             .await?;
 
         let Some(mounter) = &self.mounter else {
-            return Err(Error::MountingDisabled);
+            return Err(Error::OperationNotSupported);
         };
 
         if let Some(mount_point) = mounter.mount_point(holder.name()) {
@@ -878,16 +878,16 @@ async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfi
         Error::TlsKeysNotFound
     })?;
 
-    Ok(ouisync_bridge::transport::make_server_config(certs, key)?)
+    ouisync_bridge::transport::make_server_config(certs, key).map_err(Error::TlsConfig)
 }
 
 async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfig>, Error> {
     // Load custom root certificates (if any)
-    let additional_root_certs =
-        tls::load_certificates_from_dir(&config_dir.join("root_certs")).await?;
-    Ok(ouisync_bridge::transport::make_client_config(
-        &additional_root_certs,
-    )?)
+    let additional_root_certs = tls::load_certificates_from_dir(&config_dir.join("root_certs"))
+        .await
+        .map_err(Error::TlsCertificatesInvalid)?;
+
+    ouisync_bridge::transport::make_client_config(&additional_root_certs).map_err(Error::TlsConfig)
 }
 
 #[cfg(test)]

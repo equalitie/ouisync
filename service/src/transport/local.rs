@@ -1,4 +1,4 @@
-use super::{ReadError, WriteError};
+use super::{ClientError, ReadError, WriteError};
 use crate::protocol::{Message, Request};
 use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
@@ -48,8 +48,17 @@ impl LocalServer {
     }
 }
 
-pub async fn connect(socket_path: &Path) -> io::Result<(LocalClientReader, LocalClientWriter)> {
-    let socket = Socket::connect(socket_path.to_fs_name::<GenericFilePath>()?).await?;
+pub async fn connect(
+    socket_path: &Path,
+) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
+    let socket = Socket::connect(
+        socket_path
+            .to_fs_name::<GenericFilePath>()
+            .map_err(|_| ClientError::InvalidSocketAddr)?,
+    )
+    .await
+    .map_err(ClientError::Connect)?;
+
     let (reader, writer) = socket.split();
 
     let reader = LocalReader::new(reader);

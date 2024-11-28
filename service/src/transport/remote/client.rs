@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, io, sync::Arc};
 
 use ouisync::{crypto::sign::Signature, RepositoryId, WriteSecrets};
 
@@ -6,17 +6,17 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt, TryStreamExt,
 };
-use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_rustls::rustls;
 use tokio_tungstenite::{tungstenite as ws, Connector, MaybeTlsStream, WebSocketStream};
 
 use crate::{
+    error_code::ErrorCode,
     protocol::{
         Message, MessageId, ProtocolError, RepositoryHandle, Response, ServerPayload,
         UnexpectedResponse,
     },
-    transport::{ReadError, WriteError},
+    transport::ClientError,
 };
 
 use super::{extract_session_cookie, protocol, RemoteSocket};
@@ -34,7 +34,7 @@ impl RemoteClient {
     pub async fn connect(
         host: &str,
         config: Arc<rustls::ClientConfig>,
-    ) -> Result<Self, RemoteClientError> {
+    ) -> Result<Self, ClientError> {
         let host = if host.contains("://") {
             Cow::Borrowed(host)
         } else {
@@ -47,7 +47,8 @@ impl RemoteClient {
             false,
             Some(Connector::Rustls(config)),
         )
-        .await?;
+        .await
+        .map_err(|error| ClientError::Connect(io::Error::other(error)))?;
 
         let session_cookie = match stream.get_ref() {
             MaybeTlsStream::Rustls(stream) => extract_session_cookie(stream.get_ref().1),
@@ -69,7 +70,7 @@ impl RemoteClient {
         })
     }
 
-    pub async fn create_mirror(&mut self, secrets: &WriteSecrets) -> Result<(), RemoteClientError> {
+    pub async fn create_mirror(&mut self, secrets: &WriteSecrets) -> Result<(), ClientError> {
         let proof = self.make_proof(secrets);
         match self
             .invoke(protocol::v1::Request::Create {
@@ -82,16 +83,12 @@ impl RemoteClient {
                 let _: RepositoryHandle = response.try_into()?;
                 Ok(())
             }
-            Err(RemoteClientError::Response(error))
-                if error.message() == "repository already exists" =>
-            {
-                Ok(())
-            }
+            Err(ClientError::Response(error)) if error.code() == ErrorCode::AlreadyExists => Ok(()),
             Err(error) => Err(error),
         }
     }
 
-    pub async fn delete_mirror(&mut self, secrets: &WriteSecrets) -> Result<(), RemoteClientError> {
+    pub async fn delete_mirror(&mut self, secrets: &WriteSecrets) -> Result<(), ClientError> {
         let proof = self.make_proof(secrets);
         match self
             .invoke(protocol::v1::Request::Delete {
@@ -104,17 +101,12 @@ impl RemoteClient {
                 let () = response.try_into()?;
                 Ok(())
             }
-            // TODO: check error code, not message
-            Err(RemoteClientError::Response(error))
-                if error.message() == "repository not found" =>
-            {
-                Ok(())
-            }
+            Err(ClientError::Response(error)) if error.code() == ErrorCode::NotFound => Ok(()),
             Err(error) => Err(error),
         }
     }
 
-    pub async fn mirror_exists(&mut self, id: &RepositoryId) -> Result<bool, RemoteClientError> {
+    pub async fn mirror_exists(&mut self, id: &RepositoryId) -> Result<bool, ClientError> {
         match self
             .invoke(protocol::v1::Request::Exists { repository_id: *id })
             .await
@@ -123,12 +115,7 @@ impl RemoteClient {
                 let _: RepositoryHandle = response.try_into()?;
                 Ok(true)
             }
-            // TODO: check error code, not message
-            Err(RemoteClientError::Response(error))
-                if error.message() == "repository not found" =>
-            {
-                Ok(false)
-            }
+            Err(ClientError::Response(error)) if error.code() == ErrorCode::NotFound => Ok(false),
             Err(error) => Err(error),
         }
     }
@@ -143,10 +130,7 @@ impl RemoteClient {
         secrets.write_keys.sign(&self.session_cookie)
     }
 
-    async fn invoke(
-        &mut self,
-        request: protocol::v1::Request,
-    ) -> Result<Response, RemoteClientError> {
+    async fn invoke(&mut self, request: protocol::v1::Request) -> Result<Response, ClientError> {
         let message_id = MessageId::next();
 
         self.writer
@@ -160,45 +144,29 @@ impl RemoteClient {
             .reader
             .try_next()
             .await?
-            .ok_or(RemoteClientError::Disconnected)?;
+            .ok_or(ClientError::Disconnected)?;
 
         if message.id != message_id {
-            return Err(RemoteClientError::UnexpectedResponse);
+            return Err(ClientError::UnexpectedResponse);
         }
 
         let response = match message.payload {
             ServerPayload::Success(response) => response,
-            ServerPayload::Failure(error) => return Err(RemoteClientError::Response(error)),
-            ServerPayload::Notification(_) => return Err(RemoteClientError::UnexpectedResponse),
+            ServerPayload::Failure(error) => return Err(ClientError::Response(error)),
+            ServerPayload::Notification(_) => return Err(ClientError::UnexpectedResponse),
         };
 
         Ok(response)
     }
 }
 
-#[derive(Error, Debug)]
-pub enum RemoteClientError {
-    #[error("connection closed by server")]
-    Disconnected,
-    #[error("failed to receive response")]
-    Read(#[from] ReadError),
-    #[error("server responded with error")]
-    Response(ProtocolError),
-    #[error("unexpected response")]
-    UnexpectedResponse,
-    #[error("websocket error")]
-    WebSocket(#[from] ws::Error),
-    #[error("failed to send request")]
-    Write(#[from] WriteError),
-}
-
-impl From<ProtocolError> for RemoteClientError {
+impl From<ProtocolError> for ClientError {
     fn from(src: ProtocolError) -> Self {
         Self::Response(src)
     }
 }
 
-impl From<UnexpectedResponse> for RemoteClientError {
+impl From<UnexpectedResponse> for ClientError {
     fn from(_: UnexpectedResponse) -> Self {
         Self::UnexpectedResponse
     }
@@ -234,7 +202,7 @@ mod tests {
                     proof
                 })
                 .await,
-            Err(RemoteClientError::Response(error)) => error
+            Err(ClientError::Response(error)) => error
         );
 
         // TODO: check code, not message

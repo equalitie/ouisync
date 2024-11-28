@@ -5,9 +5,8 @@ mod options;
 mod server;
 
 use clap::Parser;
-use client::ClientError;
 use options::{Command, Options};
-use ouisync_service::Error as ServerError;
+use ouisync_service::{transport::ClientError, Error as ServerError};
 use std::{fmt, process::ExitCode};
 
 #[tokio::main]

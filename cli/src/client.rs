@@ -11,8 +11,9 @@ use ouisync_service::{
     },
     transport::{
         local::{self, LocalClientReader, LocalClientWriter},
-        ReadError, WriteError,
+        ClientError,
     },
+    ErrorCode,
 };
 use std::{
     collections::BTreeMap,
@@ -21,7 +22,6 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use thiserror::Error;
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_stream::StreamExt;
 
@@ -59,7 +59,12 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 .as_deref()
                 .map(str::parse::<ShareToken>)
                 .transpose()
-                .map_err(|error| ProtocolError::new(format!("invalid share token: {error}")))?;
+                .map_err(|error| {
+                    ProtocolError::new(
+                        ErrorCode::InvalidInput,
+                        format!("invalid share token: {error}"),
+                    )
+                })?;
 
             let password = get_or_read(password, "input password").await?;
 
@@ -81,7 +86,7 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                         .as_ref()
                         .map(|token| token.suggested_name().to_owned())
                 })
-                .ok_or_else(|| ProtocolError::new("name is missing"))?;
+                .ok_or_else(|| ProtocolError::new(ErrorCode::InvalidInput, "name is missing"))?;
 
             let _: RepositoryHandle = client
                 .invoke(Request::RepositoryCreate {
@@ -441,7 +446,7 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::ResetAccess { name, token } => {
             let handle = client.find_repository(name).await?;
-            let token = token.parse().map_err(|_| ClientError::InvalidToken)?;
+            let token = token.parse().map_err(|_| ClientError::InvalidArgument)?;
 
             let () = client
                 .invoke(Request::RepositoryResetAccess { handle, token })
@@ -501,10 +506,8 @@ struct LocalClient {
 impl LocalClient {
     async fn connect(socket_path: &Path) -> Result<Self, ClientError> {
         // TODO: if the server is not running, spin it up ourselves
-        match local::connect(socket_path).await {
-            Ok((reader, writer)) => Ok(Self { reader, writer }),
-            Err(error) => Err(ClientError::Connect(error)),
-        }
+        let (reader, writer) = local::connect(socket_path).await?;
+        Ok(Self { reader, writer })
     }
 
     async fn invoke<T>(&mut self, request: Request) -> Result<T, ClientError>
@@ -527,7 +530,7 @@ impl LocalClient {
         match message.payload {
             ServerPayload::Success(response) => Ok(response.try_into()?),
             ServerPayload::Failure(error) => Err(error.into()),
-            ServerPayload::Notification(_) => Err(ClientError::UnexpectedNotification),
+            ServerPayload::Notification(_) => Err(ClientError::UnexpectedResponse),
         }
     }
 
@@ -578,39 +581,5 @@ fn to_absolute(path: PathBuf) -> Result<PathBuf, io::Error> {
         Ok(path)
     } else {
         Ok(env::current_dir()?.join(path))
-    }
-}
-
-#[derive(Error, Debug)]
-pub(crate) enum ClientError {
-    #[error("{0}")]
-    Protocol(ProtocolError),
-    #[error("failed to receive response")]
-    Read(#[from] ReadError),
-    #[error("failed to send request")]
-    Write(#[from] WriteError),
-    #[error("failed to connect to server")]
-    Connect(#[source] io::Error),
-    #[error("connection closed by server")]
-    Disconnected,
-    #[error("invalid repository token")]
-    InvalidToken,
-    #[error("unexpected notification")]
-    UnexpectedNotification,
-    #[error("unexpected response")]
-    UnexpectedResponse,
-    #[error("I/O error")]
-    Io(#[from] io::Error),
-}
-
-impl From<ProtocolError> for ClientError {
-    fn from(src: ProtocolError) -> Self {
-        Self::Protocol(src)
-    }
-}
-
-impl From<UnexpectedResponse> for ClientError {
-    fn from(_: UnexpectedResponse) -> Self {
-        Self::UnexpectedResponse
     }
 }

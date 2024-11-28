@@ -15,7 +15,9 @@ use self::{
     local::{LocalServerReader, LocalServerWriter},
     remote::{RemoteServerReader, RemoteServerWriter},
 };
-use crate::protocol::{DecodeError, EncodeError, Message, MessageId, Request, ServerPayload};
+use crate::protocol::{
+    DecodeError, EncodeError, Message, MessageId, ProtocolError, Request, ServerPayload,
+};
 
 pub(crate) enum ServerReader {
     Local(LocalServerReader),
@@ -100,4 +102,26 @@ pub enum TransportError {
 pub enum ValidateError {
     #[error("permission denied")]
     PermissionDenied,
+}
+
+#[derive(Error, Debug)]
+pub enum ClientError {
+    #[error("failed to connect")]
+    Connect(#[source] io::Error),
+    #[error("connection closed by server")]
+    Disconnected,
+    #[error("socket address is invalid")]
+    InvalidSocketAddr,
+    #[error("request argument is invalid")]
+    InvalidArgument,
+    #[error("I/O error")]
+    Io(#[from] io::Error),
+    #[error("failed to receive response")]
+    Read(#[from] ReadError),
+    #[error("server responded with error")]
+    Response(ProtocolError),
+    #[error("unexpected response")]
+    UnexpectedResponse,
+    #[error("failed to send request")]
+    Write(#[from] WriteError),
 }

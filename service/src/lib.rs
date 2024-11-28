@@ -2,6 +2,7 @@ pub mod protocol;
 pub mod transport;
 
 mod error;
+mod error_code;
 mod metrics;
 mod repository;
 mod state;
@@ -11,6 +12,7 @@ mod utils;
 mod test_utils;
 
 pub use error::Error;
+pub use error_code::ErrorCode;
 
 use futures_util::SinkExt;
 use metrics::MetricsServer;
@@ -56,7 +58,11 @@ impl Service {
             .map_err(Error::Bind)?;
 
         let remote_server = match state.config.entry(REMOTE_CONTROL_KEY).get().await {
-            Ok(addr) => Some(RemoteServer::bind(addr, state.remote_server_config().await?).await?),
+            Ok(addr) => Some(
+                RemoteServer::bind(addr, state.remote_server_config().await?)
+                    .await
+                    .map_err(Error::Bind)?,
+            ),
             Err(ConfigError::NotFound) => None,
             Err(error) => return Err(error.into()),
         };
@@ -124,7 +130,9 @@ impl Service {
     ) -> Result<u16, Error> {
         if let Some(addr) = addr {
             let config = self.state.remote_server_config().await?;
-            let remote_server = RemoteServer::bind(addr, config).await?;
+            let remote_server = RemoteServer::bind(addr, config)
+                .await
+                .map_err(Error::Bind)?;
             let port = remote_server.local_addr().port();
 
             self.remote_server = Some(remote_server);

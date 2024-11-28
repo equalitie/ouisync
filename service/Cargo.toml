@@ -18,6 +18,7 @@ interprocess                = { version = "2.2.1", features = ["tokio"] }
 maxminddb                   = "0.24.0"
 metrics                     = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+num_enum                    = { workspace = true }
 ouisync                     = { path = "../lib" }
 ouisync-bridge              = { path = "../bridge" }
 ouisync-vfs                 = { path = "../vfs" }

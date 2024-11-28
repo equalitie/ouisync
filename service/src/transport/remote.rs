@@ -2,7 +2,7 @@ mod client;
 mod protocol;
 mod server;
 
-pub use client::{RemoteClient, RemoteClientError};
+pub use client::RemoteClient;
 pub(crate) use server::{RemoteServer, RemoteServerReader, RemoteServerWriter};
 
 use std::{

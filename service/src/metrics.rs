@@ -83,7 +83,7 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
 
     let (collect_requester, collect_acceptor) = sync::new(COLLECT_INTERVAL);
 
-    let tcp_listener = TcpListener::bind(&addr).await?;
+    let tcp_listener = TcpListener::bind(&addr).await.map_err(Error::Bind)?;
 
     match tcp_listener.local_addr() {
         Ok(addr) => tracing::info!("Metrics server listening on {addr}"),

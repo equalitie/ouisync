@@ -1,20 +1,27 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt, iter};
 
+use crate::error_code::{ErrorCode, ToErrorCode};
+
 /// Error response from the server
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProtocolError {
-    // TODO: error code
+    code: ErrorCode,
     message: String,
     sources: Vec<String>,
 }
 
 impl ProtocolError {
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
+            code,
             message: message.into(),
             sources: Vec::new(),
         }
+    }
+
+    pub fn code(&self) -> ErrorCode {
+        self.code
     }
 
     pub fn message(&self) -> &str {
@@ -29,7 +36,7 @@ impl ProtocolError {
 impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
-            write!(f, "Error: {}", self.message)?;
+            write!(f, "Error [{}]: {}", u16::from(self.code), self.message)?;
 
             if !self.sources.is_empty() {
                 writeln!(f)?;
@@ -51,14 +58,19 @@ impl fmt::Display for ProtocolError {
 
 impl<E> From<E> for ProtocolError
 where
-    E: std::error::Error,
+    E: std::error::Error + ToErrorCode,
 {
     fn from(src: E) -> Self {
+        let code = src.to_error_code();
         let message = src.to_string();
         let sources = iter::successors(src.source(), |error| error.source())
             .map(|error| error.to_string())
             .collect();
 
-        Self { message, sources }
+        Self {
+            code,
+            message,
+            sources,
+        }
     }
 }

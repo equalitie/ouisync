@@ -98,5 +98,5 @@ async fn make_remote_client_config(config_dir: &Path) -> io::Result<Arc<rustls::
     // Load custom root certificates (if any)
     let additional_root_certs =
         transport::tls::load_certificates_from_dir(&config_dir.join("root_certs")).await?;
-    transport::make_client_config(&additional_root_certs)
+    transport::make_client_config(&additional_root_certs).map_err(io::Error::other)
 }

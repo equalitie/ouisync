@@ -1,4 +1,4 @@
-use crate::transport::remote::RemoteClientError;
+use crate::transport::ClientError;
 use ouisync_bridge::{config::ConfigError, repository::OpenError};
 use ouisync_vfs::MountError;
 use std::io;
@@ -8,13 +8,10 @@ use thiserror::Error;
 pub enum Error {
     #[error("config error")]
     Config(#[from] ConfigError),
-    // TODO: remove this variant. Use more specific errors.
+    #[error("failed to create mounter")]
+    CreateMounter(#[from] MountError),
     #[error("I/O error")]
     Io(#[from] io::Error),
-    #[error("mount error")]
-    Mount(#[from] MountError),
-    #[error("mounting is disabled")]
-    MountingDisabled,
     #[error("operation not supported")]
     OperationNotSupported,
     #[error("permission denied")]
@@ -31,14 +28,18 @@ pub enum Error {
     Store(#[from] ouisync::StoreError),
     #[error("TLS certificates not found")]
     TlsCertificatesNotFound,
+    #[error("TLS certificates failed to load")]
+    TlsCertificatesInvalid(#[source] io::Error),
     #[error("TLS keys not found")]
     TlsKeysNotFound,
+    #[error("failed to create TLS config")]
+    TlsConfig(#[source] tokio_rustls::rustls::Error),
     #[error("failed to bind server")]
     Bind(#[source] io::Error),
     #[error("failed to accept client connection")]
     Accept(#[source] io::Error),
-    #[error("failed to invoke remote request")]
-    RemoteClient(#[from] RemoteClientError),
+    #[error("client request failed")]
+    Client(#[from] ClientError),
 }
 
 impl From<OpenError> for Error {
