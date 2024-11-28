@@ -46,12 +46,6 @@ pub(crate) enum ServerCommand {
         #[arg(long, default_value_os_t = defaults::store_dir(), value_name = "PATH")]
         default_store_dir: PathBuf,
 
-        /// Default mount directory
-        ///
-        /// Used only if not configured. Can be also specified with env variable OUISYNC_MOUNT_DIR.
-        #[arg(long, default_value_os_t = defaults::mount_dir(), value_name = "PATH")]
-        default_mount_dir: PathBuf,
-
         /// Log format ("human" or "json")
         #[arg(long, default_value_t = LogFormat::Human)]
         log_format: LogFormat,

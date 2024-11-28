@@ -30,16 +30,6 @@ pub(crate) fn store_dir() -> PathBuf {
         })
 }
 
-pub(crate) fn mount_dir() -> PathBuf {
-    env::var_os("OUISYNC_MOUNT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .expect("home dir not defined")
-                .join(APP_NAME)
-        })
-}
-
 mod platform {
     use super::*;
 

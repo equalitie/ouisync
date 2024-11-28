@@ -13,6 +13,8 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error("mount error")]
     Mount(#[from] MountError),
+    #[error("mounting is disabled")]
+    MountingDisabled,
     #[error("operation not supported")]
     OperationNotSupported,
     #[error("permission denied")]

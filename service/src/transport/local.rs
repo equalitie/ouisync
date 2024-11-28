@@ -171,7 +171,6 @@ mod tests {
             socket_path.clone(),
             temp_dir.path().join("config"),
             store_dir.clone(),
-            temp_dir.path().join("mnt"),
         )
         .await
         .unwrap();

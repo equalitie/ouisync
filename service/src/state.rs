@@ -48,7 +48,7 @@ pub(crate) struct State {
     pub config: ConfigStore,
     pub network: Network,
     store_dir: PathBuf,
-    mounter: MultiRepoVFS,
+    mounter: Option<MultiRepoVFS>,
     repos: RepositorySet,
     repos_monitor: StateMonitor,
     remote_server_config: OnceCell<Arc<rustls::ServerConfig>>,
@@ -56,11 +56,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn init(
-        config_dir: PathBuf,
-        default_store_dir: PathBuf,
-        default_mount_dir: PathBuf,
-    ) -> Result<Self, Error> {
+    pub async fn init(config_dir: PathBuf, default_store_dir: PathBuf) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
         let monitor = StateMonitor::make_root();
 
@@ -91,12 +87,16 @@ impl State {
         };
 
         let mount_dir = match config.entry(MOUNT_DIR_KEY).get().await {
-            Ok(dir) => dir,
-            Err(ConfigError::NotFound) => default_mount_dir,
+            Ok(dir) => Some(dir),
+            Err(ConfigError::NotFound) => None,
             Err(error) => return Err(error.into()),
         };
 
-        let mounter = MultiRepoVFS::create(mount_dir).await?;
+        let mounter = if let Some(mount_dir) = mount_dir {
+            Some(MultiRepoVFS::create(mount_dir).await?)
+        } else {
+            None
+        };
 
         let repos_monitor = monitor.make_child("Repositories");
 
@@ -162,17 +162,17 @@ impl State {
         Ok(())
     }
 
-    pub fn mount_dir(&self) -> &Path {
-        self.mounter.mount_root()
+    pub fn mount_dir(&self) -> Option<&Path> {
+        self.mounter.as_ref().map(|m| m.mount_root())
     }
 
     pub async fn set_mount_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
-        if dir == self.mounter.mount_root() {
+        if Some(dir.as_path()) == self.mount_dir() {
             return Ok(());
         }
 
         self.config.entry(MOUNT_DIR_KEY).set(&dir).await?;
-        self.mounter = MultiRepoVFS::create(dir).await?;
+        let mounter = self.mounter.insert(MultiRepoVFS::create(dir).await?);
 
         // Remount all mounted repos
         for (_, holder) in self.repos.iter() {
@@ -183,9 +183,7 @@ impl State {
                 .await?
                 .unwrap_or(false)
             {
-                self.mounter.remove(holder.name())?;
-                self.mounter
-                    .insert(holder.name().to_owned(), holder.repository().clone())?;
+                mounter.insert(holder.name().to_owned(), holder.repository().clone())?;
             }
         }
 
@@ -407,13 +405,15 @@ impl State {
             .set(AUTOMOUNT_KEY, true)
             .await?;
 
-        if let Some(mount_point) = self.mounter.mount_point(holder.name()) {
+        let Some(mounter) = &self.mounter else {
+            return Err(Error::MountingDisabled);
+        };
+
+        if let Some(mount_point) = mounter.mount_point(holder.name()) {
             // Already mounted
             Ok(mount_point)
         } else {
-            Ok(self
-                .mounter
-                .insert(holder.name().to_owned(), holder.repository().clone())?)
+            Ok(mounter.insert(holder.name().to_owned(), holder.repository().clone())?)
         }
     }
 
@@ -422,7 +422,9 @@ impl State {
 
         holder.repository().metadata().remove(AUTOMOUNT_KEY).await?;
 
-        self.mounter.remove(holder.name())?;
+        if let Some(mounter) = &self.mounter {
+            mounter.remove(holder.name())?;
+        }
 
         Ok(())
     }
@@ -764,8 +766,10 @@ impl State {
 
     async fn close_repositories(&mut self) {
         for mut holder in self.repos.drain() {
-            if let Err(error) = self.mounter.remove(holder.name()) {
-                tracing::warn!(?error, repo = holder.name(), "failed to unmount repository",);
+            if let Some(mounter) = &self.mounter {
+                if let Err(error) = mounter.remove(holder.name()) {
+                    tracing::warn!(?error, repo = holder.name(), "failed to unmount repository",);
+                }
             }
 
             if let Err(error) = holder.close().await {
@@ -795,15 +799,16 @@ impl State {
         let mut holder = RepositoryHolder::new(name, repo);
         holder.enable_sync(registration);
 
-        if holder
-            .repository()
-            .metadata()
-            .get(AUTOMOUNT_KEY)
-            .await?
-            .unwrap_or(false)
-        {
-            self.mounter
-                .insert(holder.name().to_owned(), holder.repository().clone())?;
+        if let Some(mounter) = &self.mounter {
+            if holder
+                .repository()
+                .metadata()
+                .get(AUTOMOUNT_KEY)
+                .await?
+                .unwrap_or(false)
+            {
+                mounter.insert(holder.name().to_owned(), holder.repository().clone())?;
+            }
         }
 
         self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
@@ -1054,7 +1059,6 @@ mod tests {
         let mut local_state = State::init(
             temp_dir.path().join("local/config"),
             temp_dir.path().join("local/store"),
-            temp_dir.path().join("local/mount"),
         )
         .instrument(tracing::info_span!("local"))
         .await
@@ -1124,7 +1128,6 @@ mod tests {
         let state = State::init(
             temp_dir.path().join("config"),
             temp_dir.path().join("store"),
-            temp_dir.path().join("mount"),
         )
         .await
         .unwrap();

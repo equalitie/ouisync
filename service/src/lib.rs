@@ -49,9 +49,8 @@ impl Service {
         local_socket_path: PathBuf,
         config_dir: PathBuf,
         default_store_dir: PathBuf,
-        default_mount_dir: PathBuf,
     ) -> Result<Self, Error> {
-        let state = State::init(config_dir, default_store_dir, default_mount_dir).await?;
+        let state = State::init(config_dir, default_store_dir).await?;
         let local_server = LocalServer::bind(&local_socket_path)
             .await
             .map_err(Error::Bind)?;

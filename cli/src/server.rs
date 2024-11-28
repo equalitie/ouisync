@@ -8,7 +8,6 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
     let ServerCommand::Start {
         config_dir,
         default_store_dir,
-        default_mount_dir,
         log_format,
         log_color,
     } = command;
@@ -20,8 +19,7 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
         log_color,
     )?;
 
-    let mut service =
-        Service::init(socket, config_dir, default_store_dir, default_mount_dir).await?;
+    let mut service = Service::init(socket, config_dir, default_store_dir).await?;
 
     select! {
         result = service.run() => result?,

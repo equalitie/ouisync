@@ -57,8 +57,9 @@ impl Bin {
         command.arg("--socket").arg(&socket_path);
         command.arg("start");
         command.arg("--config-dir").arg(&config_dir);
-        command.env("OUISYNC_STORE_DIR", base_dir.path().join("store"));
-        command.env("OUISYNC_MOUNT_DIR", &mount_dir);
+        command
+            .arg("--default-store-dir")
+            .arg(base_dir.path().join("store"));
 
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -73,11 +74,23 @@ impl Bin {
 
         wait_for_file_exists(&socket_path);
 
-        Self {
+        let bin = Self {
             id,
             base_dir,
             process,
-        }
+        };
+
+        expect_output(
+            &bin.id,
+            "",
+            bin.client_command()
+                .arg("mount-dir")
+                .arg(mount_dir)
+                .output()
+                .unwrap(),
+        );
+
+        bin
     }
 
     pub fn root(&self) -> PathBuf {
@@ -199,8 +212,7 @@ impl Bin {
         let mut command = Command::new(COMMAND);
         command
             .arg("--socket")
-            .arg(self.base_dir.path().join(API_SOCKET))
-            .env("RUST_LOG", "off");
+            .arg(self.base_dir.path().join(API_SOCKET));
         command
     }
 }
