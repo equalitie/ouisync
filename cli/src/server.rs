@@ -1,6 +1,6 @@
 use crate::options::ServerCommand;
 use ouisync_bridge::logger::Logger;
-use ouisync_service::{Defaults, Error, Service};
+use ouisync_service::{Error, Service};
 use std::{io, path::PathBuf};
 use tokio::select;
 
@@ -20,18 +20,8 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
         log_color,
     )?;
 
-    let mut service = Service::init(
-        socket,
-        config_dir,
-        Defaults {
-            store_dir: default_store_dir,
-            mount_dir: default_mount_dir,
-            bind: vec![],
-            local_discovery_enabled: false,
-            port_forwarding_enabled: false,
-        },
-    )
-    .await?;
+    let mut service =
+        Service::init(socket, config_dir, default_store_dir, default_mount_dir).await?;
 
     select! {
         result = service.run() => result?,

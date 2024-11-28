@@ -156,7 +156,7 @@ mod tests {
     use crate::{
         protocol::{Message, MessageId, Request, ServerPayload},
         test_utils::{self, ServiceRunner},
-        transport, Defaults, Service,
+        transport, Service,
     };
 
     #[tokio::test]
@@ -170,13 +170,8 @@ mod tests {
         let service = Service::init(
             socket_path.clone(),
             temp_dir.path().join("config"),
-            Defaults {
-                store_dir: store_dir.clone(),
-                mount_dir: temp_dir.path().join("mnt"),
-                bind: vec![],
-                local_discovery_enabled: false,
-                port_forwarding_enabled: false,
-            },
+            store_dir.clone(),
+            temp_dir.path().join("mnt"),
         )
         .await
         .unwrap();

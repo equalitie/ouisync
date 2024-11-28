@@ -3,7 +3,7 @@ use crate::{
     protocol::{ImportMode, QuotaInfo},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     transport::remote::RemoteClient,
-    utils, Defaults,
+    utils,
 };
 use ouisync::{
     AccessMode, Credentials, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken,
@@ -20,6 +20,7 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     ffi::OsStr,
+    net::{Ipv4Addr, Ipv6Addr},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -41,6 +42,7 @@ const DEFAULT_REPOSITORY_EXPIRATION_KEY: ConfigKey<u64> = ConfigKey::new(
 const AUTOMOUNT_KEY: &str = "automount";
 
 const REPOSITORY_FILE_EXTENSION: &str = "ouisyncdb";
+const DEFAULT_PORT: u16 = 20209;
 
 pub(crate) struct State {
     pub config: ConfigStore,
@@ -54,7 +56,11 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn init(config_dir: PathBuf, defaults: Defaults) -> Result<Self, Error> {
+    pub async fn init(
+        config_dir: PathBuf,
+        default_store_dir: PathBuf,
+        default_mount_dir: PathBuf,
+    ) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
         let monitor = StateMonitor::make_root();
 
@@ -68,22 +74,25 @@ impl State {
             &network,
             &config,
             NetworkDefaults {
-                port_forwarding_enabled: defaults.port_forwarding_enabled,
-                local_discovery_enabled: defaults.local_discovery_enabled,
-                bind: defaults.bind,
+                port_forwarding_enabled: true,
+                local_discovery_enabled: true,
+                bind: vec![
+                    PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, DEFAULT_PORT).into()),
+                    PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, DEFAULT_PORT).into()),
+                ],
             },
         )
         .await;
 
         let store_dir = match config.entry(STORE_DIR_KEY).get().await {
             Ok(dir) => dir,
-            Err(ConfigError::NotFound) => defaults.store_dir,
+            Err(ConfigError::NotFound) => default_store_dir,
             Err(error) => return Err(error.into()),
         };
 
         let mount_dir = match config.entry(MOUNT_DIR_KEY).get().await {
             Ok(dir) => dir,
-            Err(ConfigError::NotFound) => defaults.mount_dir,
+            Err(ConfigError::NotFound) => default_mount_dir,
             Err(error) => return Err(error.into()),
         };
 
@@ -1044,18 +1053,18 @@ mod tests {
 
         let mut local_state = State::init(
             temp_dir.path().join("local/config"),
-            Defaults {
-                store_dir: temp_dir.path().join("local/store"),
-                mount_dir: temp_dir.path().join("local/mount"),
-                bind: vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())],
-                local_discovery_enabled: false,
-                port_forwarding_enabled: false,
-            },
+            temp_dir.path().join("local/store"),
+            temp_dir.path().join("local/mount"),
         )
         .instrument(tracing::info_span!("local"))
         .await
         .unwrap();
 
+        local_state.set_port_forwarding_enabled(false).await;
+        local_state.set_local_discovery_enabled(false).await;
+        local_state
+            .bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+            .await;
         local_state.network.add_user_provided_peer(&remote_addr);
 
         let name = "foo";
@@ -1114,16 +1123,15 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let state = State::init(
             temp_dir.path().join("config"),
-            Defaults {
-                store_dir: temp_dir.path().join("store"),
-                mount_dir: temp_dir.path().join("mount"),
-                bind: vec![],
-                local_discovery_enabled: false,
-                port_forwarding_enabled: false,
-            },
+            temp_dir.path().join("store"),
+            temp_dir.path().join("mount"),
         )
         .await
         .unwrap();
+
+        state.bind_network(vec![]).await;
+        state.set_port_forwarding_enabled(false).await;
+        state.set_local_discovery_enabled(false).await;
 
         (temp_dir, state)
     }

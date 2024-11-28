@@ -127,7 +127,7 @@ mod tests {
 
     use crate::{
         test_utils::{self, ServiceRunner},
-        Defaults, Service,
+        Service,
     };
 
     #[tokio::test]
@@ -258,16 +258,15 @@ mod tests {
         let mut service = Service::init(
             socket_path.clone(),
             config_dir,
-            Defaults {
-                store_dir: temp_dir.path().join("store"),
-                mount_dir: temp_dir.path().join("mnt"),
-                bind: vec![],
-                local_discovery_enabled: false,
-                port_forwarding_enabled: false,
-            },
+            temp_dir.path().join("store"),
+            temp_dir.path().join("mnt"),
         )
         .await
         .unwrap();
+
+        service.state_mut().bind_network(vec![]).await;
+        service.state_mut().set_port_forwarding_enabled(false).await;
+        service.state_mut().set_local_discovery_enabled(false).await;
 
         let remote_port = service
             .bind_remote_control(Some((Ipv4Addr::LOCALHOST, 0).into()))

@@ -14,7 +14,6 @@ pub use error::Error;
 
 use futures_util::SinkExt;
 use metrics::MetricsServer;
-use ouisync::PeerAddr;
 use ouisync_bridge::config::{ConfigError, ConfigKey};
 use protocol::{DecodeError, Message, ProtocolError, Request, Response, ServerPayload};
 use slab::Slab;
@@ -36,14 +35,6 @@ const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 6
 const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("remote_control", "Remote control endpoint address");
 
-pub struct Defaults {
-    pub store_dir: PathBuf,
-    pub mount_dir: PathBuf,
-    pub bind: Vec<PeerAddr>,
-    pub local_discovery_enabled: bool,
-    pub port_forwarding_enabled: bool,
-}
-
 pub struct Service {
     state: State,
     local_server: LocalServer,
@@ -57,9 +48,10 @@ impl Service {
     pub async fn init(
         local_socket_path: PathBuf,
         config_dir: PathBuf,
-        defaults: Defaults,
+        default_store_dir: PathBuf,
+        default_mount_dir: PathBuf,
     ) -> Result<Self, Error> {
-        let state = State::init(config_dir, defaults).await?;
+        let state = State::init(config_dir, default_store_dir, default_mount_dir).await?;
         let local_server = LocalServer::bind(&local_socket_path)
             .await
             .map_err(Error::Bind)?;
@@ -152,7 +144,6 @@ impl Service {
     }
 
     #[cfg(test)]
-    #[expect(dead_code)]
     pub(crate) fn state_mut(&mut self) -> &mut State {
         &mut self.state
     }
