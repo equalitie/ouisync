@@ -59,9 +59,7 @@ class Session {
 
     final recvPort = ReceivePort();
 
-    if (bindings == null) {
-      bindings = Bindings.loadDefault();
-    }
+    bindings ??= Bindings.loadDefault();
 
     final result = _withPoolSync((pool) => bindings!.session_create(
           kind.encode(),

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:collection';
-import 'package:flutter/services.dart';
 import 'package:msgpack_dart/msgpack_dart.dart';
 
 import '../client.dart';
@@ -103,7 +102,9 @@ class MessageMatcher {
     _isClosed = true;
     _subscriptions.close();
     final error = SessionClosed();
-    _responses.values.forEach((i) => i.completeError(error));
+    for (var i in _responses.values) {
+      i.completeError(error);
+    }
     _responses.clear();
   }
 
