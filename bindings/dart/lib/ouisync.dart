@@ -59,9 +59,7 @@ class Session {
 
     final recvPort = ReceivePort();
 
-    if (bindings == null) {
-      bindings = Bindings.loadDefault();
-    }
+    bindings ??= Bindings.loadDefault();
 
     final result = _withPoolSync((pool) => bindings!.session_create(
           kind.encode(),
@@ -92,7 +90,8 @@ class Session {
   // native code.
   // [channelName] is the name of the MethodChannel to be used, equally named channel
   // must be created and set up to listen to the commands in the native code.
-  static Future<Session> createChanneled(String channelName, [void Function()? onClose]) async {
+  static Future<Session> createChanneled(String channelName,
+      [void Function()? onClose]) async {
     final client = ChannelClient(channelName, onClose);
     await client.initialized;
     return Session._(client);
@@ -238,9 +237,9 @@ class Session {
   void closeSync() {
     final client = _client;
     if (client is DirectClient) {
-        client.closeSync();
+      client.closeSync();
     } else {
-        throw "closeSync is currently only implemented for DirectClient";
+      throw "closeSync is currently only implemented for DirectClient";
     }
   }
 }
@@ -429,6 +428,15 @@ class Repository {
       _client.invoke<void>('repository_set_credentials', {
         'repository': _handle,
         'credentials': credentials,
+      });
+
+  /// Like `setCredentials` but use the `ShareToken` and reset any values
+  /// encrypted with local secrets to random values. Currently that is only the
+  /// writer ID.
+  Future<void> resetCredentials(ShareToken token) =>
+      _client.invoke<void>('repository_reset_credentials', {
+        'repository': _handle,
+        'token': token.toString(),
       });
 
   Future<AccessMode> get accessMode {
@@ -937,9 +945,9 @@ class File {
     final client = _client;
 
     if (client is DirectClient) {
-        await client.copyToRawFd(_handle, fd);
+      await client.copyToRawFd(_handle, fd);
     } else {
-        throw "copyToRawFd is currently implemented only for DirectClient";
+      throw "copyToRawFd is currently implemented only for DirectClient";
     }
   }
 }
