@@ -10,7 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [lib]
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
 bytes                       = { workspace = true }
