@@ -91,6 +91,7 @@ pub enum Request {
     },
     RepositoryIsDhtEnabled(RepositoryHandle),
     RepositoryIsPexEnabled(RepositoryHandle),
+    RepositoryIsSyncEnabled(RepositoryHandle),
     RepositoryList,
     RepositoryMirrorExists {
         repository: RepositoryHandle,
@@ -132,6 +133,10 @@ pub enum Request {
         value: Option<Duration>,
     },
     RepositorySetStoreDir(PathBuf),
+    RepositorySetSyncEnabled {
+        repository: RepositoryHandle,
+        enabled: bool,
+    },
     RepositoryShare {
         repository: RepositoryHandle,
         secret: Option<LocalSecret>,
@@ -182,11 +187,6 @@ pub(crate) enum Request {
     },
     RepositoryClose(RepositoryHandle),
     ListRepositoriesSubscribe,
-    RepositoryIsSyncEnabled(RepositoryHandle),
-    RepositorySetSyncEnabled {
-        repository: RepositoryHandle,
-        enabled: bool,
-    },
     RepositoryRequiresLocalSecretForReading(RepositoryHandle),
     RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
     RepositorySetAccess {

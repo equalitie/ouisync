@@ -163,7 +163,6 @@ impl RepositoryHolder {
         self.registration = Some(registration);
     }
 
-    #[expect(dead_code)]
     pub fn disable_sync(&mut self) {
         self.registration = None;
     }

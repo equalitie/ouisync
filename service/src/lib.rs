@@ -393,6 +393,9 @@ impl Service {
             Request::RepositoryIsPexEnabled(repository) => {
                 Ok(self.state.is_repository_pex_enabled(repository)?.into())
             }
+            Request::RepositoryIsSyncEnabled(repository) => {
+                Ok(self.state.is_repository_sync_enabled(repository)?.into())
+            }
             Request::RepositoryList => Ok(self.state.list_repositories().into()),
             Request::RepositoryMirrorExists { repository, host } => Ok(self
                 .state
@@ -458,6 +461,15 @@ impl Service {
             }
             Request::RepositorySetStoreDir(path) => {
                 self.state.set_store_dir(path).await?;
+                Ok(().into())
+            }
+            Request::RepositorySetSyncEnabled {
+                repository,
+                enabled,
+            } => {
+                self.state
+                    .set_repository_sync_enabled(repository, enabled)
+                    .await?;
                 Ok(().into())
             }
             Request::RepositoryShare {

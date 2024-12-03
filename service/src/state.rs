@@ -448,6 +448,36 @@ impl State {
             .subscribe())
     }
 
+    pub fn is_repository_sync_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidHandle)?
+            .registration()
+            .is_some())
+    }
+
+    pub async fn set_repository_sync_enabled(
+        &mut self,
+        handle: RepositoryHandle,
+        enabled: bool,
+    ) -> Result<(), Error> {
+        let holder = self.repos.get_mut(handle).ok_or(Error::InvalidHandle)?;
+
+        match (enabled, holder.registration().is_some()) {
+            (true, false) => {
+                let registration = self.network.register(holder.repository().handle()).await;
+                holder.enable_sync(registration);
+            }
+            (false, true) => {
+                holder.disable_sync();
+            }
+            (true, true) | (false, false) => (),
+        }
+
+        Ok(())
+    }
+
     pub fn is_repository_dht_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
         Ok(self
             .repos
