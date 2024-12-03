@@ -14,7 +14,7 @@ class LengthDelimitedCodec extends StreamTransformerBase<Uint8List, Uint8List> {
 }
 
 /// Encode message into length-delimited frame
-Uint8List encode(Uint8List message) => (BytesBuilder()
+Uint8List encodeLengthDelimited(Uint8List message) => (BytesBuilder()
       ..add(Uint8List(4)
         ..buffer.asByteData().setUint32(0, message.length, Endian.big))
       ..add(message))

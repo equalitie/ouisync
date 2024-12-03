@@ -1,6 +1,4 @@
-import 'client.dart' show Client, Subscription;
-
-export 'client.dart' show Subscription;
+import 'client.dart' show Client;
 
 // Version is incremented every time the monitor or any of it's values or
 // children changes.
@@ -108,8 +106,9 @@ class StateMonitor {
   StateMonitor child(MonitorId childId) =>
       StateMonitor._(_client, [..._path, childId]);
 
-  Subscription subscribe() =>
-      Subscription(_client, "state_monitor", _path.map((id) => id.toString()));
+  Stream<void> subscribe() => _client
+      .subscribe('state_monitor', _path.map((id) => id.toString()))
+      .cast<void>();
 
   @override
   String toString() => "StateMonitor($_path)";

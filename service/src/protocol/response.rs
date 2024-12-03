@@ -10,6 +10,24 @@ use std::{
 };
 use thiserror::Error;
 
+use super::ProtocolError;
+
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerPayload {
+    Success(Response),
+    Failure(ProtocolError),
+}
+
+impl From<Result<Response, ProtocolError>> for ServerPayload {
+    fn from(result: Result<Response, ProtocolError>) -> Self {
+        match result {
+            Ok(response) => Self::Success(response),
+            Err(error) => Self::Failure(error),
+        }
+    }
+}
+
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[expect(clippy::large_enum_variant)]

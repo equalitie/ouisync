@@ -179,26 +179,23 @@ enum LogLevel {
 
 }
 
-enum Notification {
+enum NetworkEvent {
   protocolVersionMismatch,
   peerSetChange,
-  repositoryContentChange,
   ;
 
-  static Notification decode(int n) {
+  static NetworkEvent decode(int n) {
     switch (n) {
-      case 0: return Notification.protocolVersionMismatch;
-      case 1: return Notification.peerSetChange;
-      case 2: return Notification.repositoryContentChange;
+      case 0: return NetworkEvent.protocolVersionMismatch;
+      case 1: return NetworkEvent.peerSetChange;
       default: throw ArgumentError('invalid value: $n');
     }
   }
 
   int encode() {
     switch (this) {
-      case Notification.protocolVersionMismatch: return 0;
-      case Notification.peerSetChange: return 1;
-      case Notification.repositoryContentChange: return 2;
+      case NetworkEvent.protocolVersionMismatch: return 0;
+      case NetworkEvent.peerSetChange: return 1;
     }
   }
 

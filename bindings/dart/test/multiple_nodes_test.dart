@@ -22,7 +22,7 @@ void main() {
 
     repo1 = await Repository.create(
       session1,
-      store: '${temp.path}/1/repo.db',
+      name: 'repo1',
       readSecret: null,
       writeSecret: null,
     );
@@ -31,7 +31,7 @@ void main() {
 
     repo2 = await Repository.create(
       session2,
-      store: '${temp.path}/2/repo.db',
+      name: 'repo2',
       shareToken: token,
       readSecret: null,
       writeSecret: null,
@@ -43,8 +43,6 @@ void main() {
   });
 
   tearDown(() async {
-    await repo2.close();
-    await repo1.close();
     await session2.close();
     await session1.close();
     await temp.delete(recursive: true);

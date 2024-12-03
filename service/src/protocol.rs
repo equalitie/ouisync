@@ -11,6 +11,6 @@ pub use error_code::ErrorCode;
 pub use log::LogLevel;
 pub use message::{DecodeError, EncodeError, Message, MessageId};
 pub use request::{ImportMode, Request};
-pub use response::{NetworkEvent, QuotaInfo, Response, UnexpectedResponse};
+pub use response::{NetworkEvent, QuotaInfo, Response, ServerPayload, UnexpectedResponse};
 
 pub(crate) use error_code::ToErrorCode;

@@ -1,5 +1,5 @@
 use super::{ClientError, ReadError, WriteError};
-use crate::protocol::{Message, ProtocolError, Request, Response};
+use crate::protocol::{Message, Request, ServerPayload};
 use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use interprocess::local_socket::{
@@ -66,9 +66,9 @@ pub async fn connect(
 }
 
 pub(crate) type LocalServerReader = LocalReader<Request>;
-pub(crate) type LocalServerWriter = LocalWriter<Result<Response, ProtocolError>>;
+pub(crate) type LocalServerWriter = LocalWriter<ServerPayload>;
 
-pub type LocalClientReader = LocalReader<Result<Response, ProtocolError>>;
+pub type LocalClientReader = LocalReader<ServerPayload>;
 pub type LocalClientWriter = LocalWriter<Request>;
 
 pub struct LocalReader<T> {
@@ -160,7 +160,7 @@ mod tests {
     use tokio_stream::StreamExt;
 
     use crate::{
-        protocol::{Message, MessageId, Request, Response},
+        protocol::{Message, MessageId, Request, Response, ServerPayload},
         test_utils::{self, ServiceRunner},
         transport, Service,
     };
@@ -197,7 +197,7 @@ mod tests {
 
         let message = client_reader.next().await.unwrap().unwrap();
         assert_eq!(message.id, message_id);
-        let value = assert_matches!(message.payload, Ok(Response::Path(value)) => value);
+        let value = assert_matches!(message.payload, ServerPayload::Success(Response::Path(value)) => value);
         assert_eq!(value, store_dir);
 
         runner.stop().await.close().await;
@@ -242,7 +242,7 @@ mod tests {
 
         let message = client_reader.next().await.unwrap().unwrap();
         assert_eq!(message.id, subscribe_message_id);
-        assert_matches!(message.payload, Ok(Response::None));
+        assert_matches!(message.payload, ServerPayload::Success(Response::None));
 
         let service = runner.stop().await;
 
@@ -254,7 +254,10 @@ mod tests {
 
         let message = client_reader.next().await.unwrap().unwrap();
         assert_eq!(message.id, subscribe_message_id);
-        assert_matches!(message.payload, Ok(Response::RepositoryEvent));
+        assert_matches!(
+            message.payload,
+            ServerPayload::Success(Response::RepositoryEvent)
+        );
 
         // Unsubscribe
         let unsubscribe_message_id = MessageId::next();
@@ -271,10 +274,13 @@ mod tests {
         loop {
             let message = client_reader.next().await.unwrap().unwrap();
             if message.id == unsubscribe_message_id {
-                assert_matches!(message.payload, Ok(Response::None));
+                assert_matches!(message.payload, ServerPayload::Success(Response::None));
                 break;
             } else if message.id == subscribe_message_id {
-                assert_matches!(message.payload, Ok(Response::RepositoryEvent));
+                assert_matches!(
+                    message.payload,
+                    ServerPayload::Success(Response::RepositoryEvent)
+                );
                 continue;
             } else {
                 panic!(

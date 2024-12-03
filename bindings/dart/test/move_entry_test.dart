@@ -23,14 +23,13 @@ void main() {
     );
     repository = await Repository.create(
       session,
-      store: '${temp.path}/repo.db',
+      name: 'repo',
       readSecret: null,
       writeSecret: null,
     );
   });
 
   tearDown(() async {
-    await repository.close();
     await session.close();
     await temp.delete(recursive: true);
   });

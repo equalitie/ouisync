@@ -1,3 +1,4 @@
+/* TODO: do we still need this?
 import 'dart:async';
 
 import 'package:flutter/services.dart';
@@ -60,3 +61,4 @@ class ChannelClient extends Client {
   @override
   void unsubscribe(int id) => _messageMatcher.unsubscribe(id);
 }
+*/

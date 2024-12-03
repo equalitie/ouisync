@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:ouisync/ouisync.dart';
+import 'package:ouisync/server.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -25,6 +26,9 @@ void main() {
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
+
+    logInit();
+
     session = await Session.create(
       socketPath: '${temp.path}/sock',
       configPath: '${temp.path}/device_id.conf',
@@ -46,7 +50,6 @@ void main() {
 
   tearDown(() async {
     await subscription.cancel();
-    await repository.close();
     await session.close();
     await temp.delete(recursive: true);
   });

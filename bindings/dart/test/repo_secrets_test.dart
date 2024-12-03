@@ -5,12 +5,10 @@ import 'package:ouisync/ouisync.dart';
 void main() {
   late io.Directory temp;
   late Session session;
-  late String repoPath;
+  final repoName = 'repo';
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
-
-    repoPath = '${temp.path}/repo.db';
 
     session = await Session.create(
       socketPath: '${temp.path}/sock',
@@ -28,7 +26,7 @@ void main() {
     {
       final repo = await Repository.create(
         session,
-        store: repoPath,
+        name: repoName,
         readSecret: readSecret,
         writeSecret: writeSecret,
       );
@@ -39,7 +37,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        store: repoPath,
+        name: repoName,
         secret: readSecret.key,
       );
 
@@ -50,7 +48,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        store: repoPath,
+        name: repoName,
         secret: writeSecret.key,
       );
 
@@ -74,7 +72,7 @@ void main() {
 
       final repo = await Repository.create(
         session,
-        store: repoPath,
+        name: repoName,
         readSecret: LocalSecretKeyAndSalt(readKey, readSalt),
         writeSecret: LocalSecretKeyAndSalt(writeKey, writeSalt),
       );
@@ -85,7 +83,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        store: repoPath,
+        name: repoName,
         secret: readPassword,
       );
 
@@ -96,7 +94,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        store: repoPath,
+        name: repoName,
         secret: writePassword,
       );
 

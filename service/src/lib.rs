@@ -17,7 +17,7 @@ pub use error::Error;
 use futures_util::SinkExt;
 use metrics::MetricsServer;
 use ouisync_bridge::config::{ConfigError, ConfigKey};
-use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response};
+use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response, ServerPayload};
 use slab::Slab;
 use state::State;
 use std::{convert::Infallible, future, io, net::SocketAddr, path::PathBuf, time::Duration};
@@ -121,7 +121,7 @@ impl Service {
                         conn_id,
                         Message {
                             id: message_id,
-                            payload: Ok(response)
+                            payload: ServerPayload::Success(response)
                         },
                     ).await;
                 }
@@ -186,7 +186,10 @@ impl Service {
             Ok(message) => {
                 let id = message.id;
                 let payload = self.dispatch_message(conn_id, message).await;
-                let message = Message { id, payload };
+                let message = Message {
+                    id,
+                    payload: payload.into(),
+                };
 
                 self.send_message(conn_id, message).await;
             }
@@ -205,7 +208,7 @@ impl Service {
                     conn_id,
                     Message {
                         id,
-                        payload: Err(error.into()),
+                        payload: ServerPayload::Failure(error.into()),
                     },
                 )
                 .await;
@@ -217,7 +220,7 @@ impl Service {
                     conn_id,
                     Message {
                         id,
-                        payload: Err(error.into()),
+                        payload: ServerPayload::Failure(error.into()),
                     },
                 )
                 .await;
@@ -450,11 +453,7 @@ impl Service {
         }
     }
 
-    async fn send_message(
-        &mut self,
-        conn_id: ConnectionId,
-        message: Message<Result<Response, ProtocolError>>,
-    ) {
+    async fn send_message(&mut self, conn_id: ConnectionId, message: Message<ServerPayload>) {
         let Some(writer) = self.writers.get_mut(conn_id) else {
             tracing::error!("connection not found");
             return;

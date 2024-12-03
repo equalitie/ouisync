@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:ouisync/internal/length_delimited.dart';
+import 'package:ouisync/internal/length_delimited_codec.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -47,7 +47,7 @@ Future<void> _testCase(
   // Encode all messages into one big buffer.
   final builder = BytesBuilder();
   for (final message in messages) {
-    builder.add(encode(message));
+    builder.add(encodeLengthDelimited(message));
   }
   final buffer = builder.takeBytes();
 

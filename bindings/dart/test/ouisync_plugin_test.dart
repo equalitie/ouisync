@@ -22,21 +22,17 @@ void main() {
   });
 
   group('repository', () {
-    late String store;
+    late String name;
     late Repository repo;
 
     setUp(() async {
-      store = '${temp.path}/repo.db';
+      name = 'repo';
       repo = await Repository.create(
         session,
-        store: store,
+        name: name,
         readSecret: null,
         writeSecret: null,
       );
-    });
-
-    tearDown(() async {
-      await repo.close();
     });
 
     test('file write and read', () async {
@@ -94,8 +90,9 @@ void main() {
       final cred = await repo.credentials;
       await repo.close();
 
+      final dstName = 'repo-new';
       final src = '${temp.path}/repo.db';
-      final dst = '${temp.path}/repo-new.db';
+      final dst = '${temp.path}/$dstName.db';
 
       for (final ext in ['', '-wal', '-shm']) {
         final file = io.File('$src$ext');
@@ -105,7 +102,7 @@ void main() {
         }
       }
 
-      repo = await Repository.open(session, store: dst);
+      repo = await Repository.open(session, name: dstName);
       await repo.setCredentials(cred);
 
       {
@@ -122,7 +119,7 @@ void main() {
 
       repo = await Repository.open(
         session,
-        store: store,
+        name: name,
         secret: null,
       );
 
@@ -153,14 +150,14 @@ void main() {
       await repo.close();
       repo = await Repository.open(
         session,
-        store: store,
+        name: name,
       );
       expect(await repo.accessMode, equals(AccessMode.blind));
 
       await repo.close();
       repo = await Repository.open(
         session,
-        store: store,
+        name: name,
         secret: LocalPassword('read_pass'),
       );
       expect(await repo.accessMode, equals(AccessMode.read));
@@ -168,7 +165,7 @@ void main() {
       await repo.close();
       repo = await Repository.open(
         session,
-        store: store,
+        name: name,
         secret: LocalPassword('write_pass'),
       );
       expect(await repo.accessMode, equals(AccessMode.write));
@@ -224,11 +221,7 @@ void main() {
     expect(node, isNull);
 
     // This is to assert that no exception is thrown
-    final monitorSubscription = monitor.subscribe();
-    final streamSubscription = monitorSubscription.stream.listen((_) {});
-
-    await streamSubscription.cancel();
-    await monitorSubscription.close();
+    monitor.subscribe().listen((_) {});
   });
 
   test('user provided peers', () async {

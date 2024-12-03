@@ -37,11 +37,9 @@ const defaultLogTag = 'flutter-ouisync';
 /// and closed at the end. There can be only one session at the time.
 class Session {
   final Client _client;
-  final Subscription _networkSubscription;
   String? _mountPoint;
 
-  Session._(this._client)
-      : _networkSubscription = Subscription(_client, "network", null);
+  Session._(this._client);
 
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
@@ -85,6 +83,8 @@ class Session {
     return Session._(client);
   }
 
+  /* TODO: do we still need this?
+
   // Creates a new session which forwards calls to Ouisync backend running in the
   // native code.
   // [channelName] is the name of the MethodChannel to be used, equally named channel
@@ -95,6 +95,7 @@ class Session {
     await client.initialized;
     return Session._(client);
   }
+  */
 
   String? get mountPoint => _mountPoint;
 
@@ -132,8 +133,9 @@ class Session {
     });
   }
 
-  Stream<NetworkEvent> get networkEvents =>
-      _networkSubscription.stream.map((raw) => NetworkEvent.decode(raw as int));
+  Stream<NetworkEvent> get networkEvents => _client
+      .subscribe('network', null)
+      .map((raw) => NetworkEvent.decode(raw as int));
 
   Future<void> addUserProvidedPeer(String addr) =>
       _client.invoke<void>('network_add_user_provided_peer', addr);
@@ -216,7 +218,6 @@ class Session {
 
   /// Try to gracefully close connections to peers then close the session.
   Future<void> close() async {
-    await _networkSubscription.close();
     await _client.close();
   }
 }
@@ -304,10 +305,8 @@ class Repository {
   final Client _client;
   final int _handle;
   final String _name;
-  final Subscription _subscription;
 
-  Repository._(this._client, this._handle, this._name)
-      : _subscription = Subscription(_client, 'repository', _handle);
+  Repository._(this._client, this._handle, this._name);
 
   /// Creates a new repository and set access to it based on the following table:
   ///
@@ -342,18 +341,27 @@ class Repository {
     return Repository._(session._client, handle, name);
   }
 
-  /// Finds existing repository by name.
-  static Future<Repository> find(
+  /// Opens an existing repository. If the same repository is opened again, a new handle pointing
+  /// to the same underlying repository is returned.
+  ///
+  /// See also [close].
+  static Future<Repository> open(
     Session session, {
     required String name,
+    LocalSecret? secret,
   }) async {
-    final handle = await session._client.invoke<int>('repository_find', name);
+    final handle = await session._client.invoke<int>('repository_open', {
+      'name': name,
+      'secret': secret?.encode(),
+    });
+
     return Repository._(session._client, handle, name);
   }
 
-  /// Closes this repository handle.
+  /// Closes the repository. All outstanding handles become invalid. Invoking any operation on a
+  /// repository after it's been closed results in an error being thrown.
   Future<void> close() async {
-    await _subscription.close();
+    await _client.invoke('repository_close', _handle);
   }
 
   /// Checks whether syncing with other replicas is enabled.
@@ -450,7 +458,8 @@ class Repository {
     });
   }
 
-  Stream<void> get events => _subscription.stream.cast<void>();
+  Stream<void> get events =>
+      _client.subscribe('repository', _handle).cast<void>();
 
   Future<bool> get isDhtEnabled async {
     if (debugTrace) {

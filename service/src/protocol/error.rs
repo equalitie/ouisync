@@ -4,7 +4,7 @@ use std::{fmt, iter};
 use super::error_code::{ErrorCode, ToErrorCode};
 
 /// Error response from the server
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct ProtocolError {
     code: ErrorCode,
     message: String,

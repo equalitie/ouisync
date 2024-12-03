@@ -12,12 +12,17 @@ class OuisyncException implements Exception {
   }
 
   factory OuisyncException(ErrorCode code, [String? message]) => switch (code) {
+        ErrorCode.invalidData => InvalidData(message),
         ErrorCode.serviceAlreadyRunning => ServiceAlreadyRunning(message),
         _ => OuisyncException._(code, message),
       };
 
   @override
   String toString() => message;
+}
+
+class InvalidData extends OuisyncException {
+  InvalidData([String? message]) : super._(ErrorCode.invalidData, message);
 }
 
 class ServiceAlreadyRunning extends OuisyncException {
