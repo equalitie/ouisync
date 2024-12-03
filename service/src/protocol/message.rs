@@ -1,12 +1,13 @@
 use bytes::{Buf, BufMut};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     mem,
     sync::atomic::{AtomicU64, Ordering},
 };
 use thiserror::Error;
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct MessageId(u64);
 
 impl MessageId {

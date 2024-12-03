@@ -1,5 +1,5 @@
 use super::{ClientError, ReadError, WriteError};
-use crate::protocol::{Message, Request};
+use crate::protocol::{Message, ProtocolError, Request, Response};
 use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use interprocess::local_socket::{
@@ -16,8 +16,6 @@ use std::{
     task::{ready, Context, Poll},
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-
-use crate::protocol::ServerPayload;
 
 pub(crate) struct LocalServer {
     listener: Listener,
@@ -68,9 +66,9 @@ pub async fn connect(
 }
 
 pub(crate) type LocalServerReader = LocalReader<Request>;
-pub(crate) type LocalServerWriter = LocalWriter<ServerPayload>;
+pub(crate) type LocalServerWriter = LocalWriter<Result<Response, ProtocolError>>;
 
-pub type LocalClientReader = LocalReader<ServerPayload>;
+pub type LocalClientReader = LocalReader<Result<Response, ProtocolError>>;
 pub type LocalClientWriter = LocalWriter<Request>;
 
 pub struct LocalReader<T> {
@@ -156,14 +154,13 @@ fn into_send_error(src: io::Error) -> WriteError {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
+    use assert_matches::assert_matches;
     use futures_util::SinkExt;
     use tempfile::TempDir;
     use tokio_stream::StreamExt;
 
     use crate::{
-        protocol::{Message, MessageId, Request, ServerPayload},
+        protocol::{Message, MessageId, Request, Response},
         test_utils::{self, ServiceRunner},
         transport, Service,
     };
@@ -200,15 +197,116 @@ mod tests {
 
         let message = client_reader.next().await.unwrap().unwrap();
         assert_eq!(message.id, message_id);
-
-        let response = match message.payload {
-            ServerPayload::Success(r) => r,
-            ServerPayload::Failure(e) => panic!("unexpected failure: {e:?}"),
-            ServerPayload::Notification(n) => panic!("unexpected notification: {n:?}"),
-        };
-
-        let value: PathBuf = response.try_into().unwrap();
+        let value = assert_matches!(message.payload, Ok(Response::Path(value)) => value);
         assert_eq!(value, store_dir);
+
+        runner.stop().await.close().await;
+    }
+
+    #[tokio::test]
+    async fn notifications() {
+        test_utils::init_log();
+
+        let temp_dir = TempDir::new().unwrap();
+        let socket_path = temp_dir.path().join("sock");
+        let store_dir = temp_dir.path().join("store");
+
+        let mut service = Service::init(
+            socket_path.clone(),
+            temp_dir.path().join("config"),
+            store_dir.clone(),
+        )
+        .await
+        .unwrap();
+
+        let repo_handle = service
+            .state_mut()
+            .create_repository("foo".to_string(), None, None, None, false, false)
+            .await
+            .unwrap();
+
+        let runner = ServiceRunner::start(service);
+
+        let (mut client_reader, mut client_writer) =
+            transport::local::connect(&socket_path).await.unwrap();
+
+        // Subscribe to repository event notifications
+        let subscribe_message_id = MessageId::next();
+        client_writer
+            .send(Message {
+                id: subscribe_message_id,
+                payload: Request::RepositorySubscribe(repo_handle),
+            })
+            .await
+            .unwrap();
+
+        let message = client_reader.next().await.unwrap().unwrap();
+        assert_eq!(message.id, subscribe_message_id);
+        assert_matches!(message.payload, Ok(Response::None));
+
+        let service = runner.stop().await;
+
+        // Modify the repo to trigger a notification
+        let repo = service.state().get_repository(repo_handle).unwrap();
+        repo.create_file("a.txt").await.unwrap();
+
+        let runner = ServiceRunner::start(service);
+
+        let message = client_reader.next().await.unwrap().unwrap();
+        assert_eq!(message.id, subscribe_message_id);
+        assert_matches!(message.payload, Ok(Response::RepositoryEvent));
+
+        // Unsubscribe
+        let unsubscribe_message_id = MessageId::next();
+        client_writer
+            .send(Message {
+                id: unsubscribe_message_id,
+                payload: Request::Unsubscribe(subscribe_message_id),
+            })
+            .await
+            .unwrap();
+
+        // There could have been further notification events sent before the unsubscribe, ignore
+        // them.
+        loop {
+            let message = client_reader.next().await.unwrap().unwrap();
+            if message.id == unsubscribe_message_id {
+                assert_matches!(message.payload, Ok(Response::None));
+                break;
+            } else if message.id == subscribe_message_id {
+                assert_matches!(message.payload, Ok(Response::RepositoryEvent));
+                continue;
+            } else {
+                panic!(
+                    "unexpected message id: {:?}, expecting {:?} or {:?}",
+                    message.id, subscribe_message_id, unsubscribe_message_id
+                );
+            }
+        }
+
+        let service = runner.stop().await;
+
+        // Modify the repo to trigger another notification. Because we've unsubscribed, we should
+        // not receive this one.
+        let repo = service.state().get_repository(repo_handle).unwrap();
+        repo.create_file("b.txt").await.unwrap();
+
+        let runner = ServiceRunner::start(service);
+
+        // Send some message whose id is different than what the subscription had. Then when we
+        // receive a response with that id we know the subscription has been cancelled before,
+        // otherwise we would have received the notification first.
+        let other_message_id = MessageId::next();
+        client_writer
+            .send(Message {
+                id: other_message_id,
+                payload: Request::RepositoryGetStoreDir,
+            })
+            .await
+            .unwrap();
+
+        let message = client_reader.next().await.unwrap().unwrap();
+        assert_eq!(message.id, other_message_id);
 
         runner.stop().await.close().await;
     }

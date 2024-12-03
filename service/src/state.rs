@@ -6,7 +6,7 @@ use crate::{
     utils,
 };
 use ouisync::{
-    AccessMode, Credentials, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken,
+    AccessMode, Credentials, Event, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken,
     StorageSize,
 };
 use ouisync_bridge::{
@@ -25,7 +25,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::{fs, sync::OnceCell};
+use tokio::{
+    fs,
+    sync::{broadcast, OnceCell},
+};
 use tokio_rustls::rustls;
 use tokio_stream::StreamExt;
 
@@ -429,6 +432,18 @@ impl State {
         Ok(())
     }
 
+    pub fn subscribe_to_repository(
+        &self,
+        handle: RepositoryHandle,
+    ) -> Result<broadcast::Receiver<Event>, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::RepositoryNotFound)?
+            .repository()
+            .subscribe())
+    }
+
     pub fn is_repository_dht_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
         Ok(self
             .repos
@@ -724,6 +739,14 @@ impl State {
     pub async fn close(&mut self) {
         self.network.shutdown().await;
         self.close_repositories().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_repository(
+        &self,
+        handle: RepositoryHandle,
+    ) -> Option<&Arc<ouisync::Repository>> {
+        self.repos.get(handle).map(|holder| holder.repository())
     }
 
     // Find all repositories in the store dir and open them.

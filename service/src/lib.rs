@@ -6,6 +6,7 @@ mod error;
 mod metrics;
 mod repository;
 mod state;
+mod subscription;
 mod utils;
 
 #[cfg(test)]
@@ -16,10 +17,11 @@ pub use error::Error;
 use futures_util::SinkExt;
 use metrics::MetricsServer;
 use ouisync_bridge::config::{ConfigError, ConfigKey};
-use protocol::{DecodeError, Message, ProtocolError, Request, Response, ServerPayload};
+use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response};
 use slab::Slab;
 use state::State;
-use std::{future, io, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{convert::Infallible, future, io, net::SocketAddr, path::PathBuf, time::Duration};
+use subscription::SubscriptionStream;
 use tokio::{
     select,
     time::{self, MissedTickBehavior},
@@ -42,6 +44,7 @@ pub struct Service {
     remote_server: Option<RemoteServer>,
     readers: StreamMap<ConnectionId, StreamNotifyClose<ServerReader>>,
     writers: Slab<ServerWriter>,
+    subscriptions: StreamMap<SubscriptionId, SubscriptionStream>,
     metrics_server: MetricsServer,
 }
 
@@ -78,11 +81,18 @@ impl Service {
             remote_server,
             readers: StreamMap::new(),
             writers: Slab::new(),
+            subscriptions: StreamMap::new(),
             metrics_server,
         })
     }
 
-    pub async fn run(&mut self) -> Result<(), Error> {
+    /// Runs the service. The future returned from this function never completes (unless it errors)
+    /// but it's safe to cancel.
+    //
+    // Note we are using `Infallible` for the `Ok` variant which reads a bit weird but it just means
+    // the function never returns `Ok`. When `!` (the "never" type) is stabilized we should use
+    // that instead.
+    pub async fn run(&mut self) -> Result<Infallible, Error> {
         let mut repo_expiration_interval = time::interval(REPOSITORY_EXPIRATION_POLL_INTERVAL);
         repo_expiration_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
@@ -105,6 +115,15 @@ impl Service {
                     } else {
                         self.remove_connection(conn_id)
                     }
+                }
+                Some(((conn_id, message_id), response)) = self.subscriptions.next() => {
+                    self.send_message(
+                        conn_id,
+                        Message {
+                            id: message_id,
+                            payload: Ok(response)
+                        },
+                    ).await;
                 }
                 _ = repo_expiration_interval.tick() => {
                     self.state.delete_expired_repositories().await;
@@ -166,7 +185,7 @@ impl Service {
         match message {
             Ok(message) => {
                 let id = message.id;
-                let payload = self.dispatch_message(conn_id, message).await.into();
+                let payload = self.dispatch_message(conn_id, message).await;
                 let message = Message { id, payload };
 
                 self.send_message(conn_id, message).await;
@@ -186,7 +205,7 @@ impl Service {
                     conn_id,
                     Message {
                         id,
-                        payload: ServerPayload::Failure(error.into()),
+                        payload: Err(error.into()),
                     },
                 )
                 .await;
@@ -198,7 +217,7 @@ impl Service {
                     conn_id,
                     Message {
                         id,
-                        payload: ServerPayload::Failure(error.into()),
+                        payload: Err(error.into()),
                     },
                 )
                 .await;
@@ -208,7 +227,7 @@ impl Service {
 
     async fn dispatch_message(
         &mut self,
-        _conn_id: ConnectionId,
+        conn_id: ConnectionId,
         message: Message<Request>,
     ) -> Result<Response, ProtocolError> {
         tracing::trace!(?message, "received");
@@ -414,14 +433,28 @@ impl Service {
                 .share_repository(handle, secret, mode)
                 .await?
                 .into()),
+            Request::RepositorySubscribe(handle) => {
+                let rx = self.state.subscribe_to_repository(handle)?;
+                self.subscriptions
+                    .insert((conn_id, message.id), SubscriptionStream::repository(rx));
+                Ok(().into())
+            }
             Request::RepositoryUnmount(handle) => {
                 self.state.unmount_repository(handle).await?;
+                Ok(().into())
+            }
+            Request::Unsubscribe(id) => {
+                self.subscriptions.remove(&(conn_id, id));
                 Ok(().into())
             }
         }
     }
 
-    async fn send_message(&mut self, conn_id: ConnectionId, message: Message<ServerPayload>) {
+    async fn send_message(
+        &mut self,
+        conn_id: ConnectionId,
+        message: Message<Result<Response, ProtocolError>>,
+    ) {
         let Some(writer) = self.writers.get_mut(conn_id) else {
             tracing::error!("connection not found");
             return;
@@ -446,10 +479,22 @@ impl Service {
     fn remove_connection(&mut self, conn_id: ConnectionId) {
         self.readers.remove(&conn_id);
         self.writers.try_remove(conn_id);
+
+        // Remove subscriptions
+        let sub_ids: Vec<_> = self
+            .subscriptions
+            .keys()
+            .filter(|(sub_conn_id, _)| *sub_conn_id == conn_id)
+            .copied()
+            .collect();
+        for sub_id in sub_ids {
+            self.subscriptions.remove(&sub_id);
+        }
     }
 }
 
 type ConnectionId = usize;
+type SubscriptionId = (ConnectionId, MessageId);
 
 async fn maybe_accept(
     server: Option<&mut RemoteServer>,

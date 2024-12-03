@@ -23,11 +23,13 @@ use tokio_tungstenite::{tungstenite as ws, WebSocketStream};
 use tracing::{Instrument, Span};
 
 use crate::{
-    protocol::{Message, MessageId, Request, ServerPayload},
+    protocol::{Message, MessageId, ProtocolError, Request, Response},
     transport::{ReadError, ValidateError, WriteError},
 };
 
 use super::{extract_session_cookie, protocol, RemoteSocket};
+
+type ServerPayload = Result<Response, ProtocolError>;
 
 pub(crate) struct RemoteServer {
     rx: mpsc::Receiver<(RemoteServerReader, RemoteServerWriter)>,
@@ -238,7 +240,7 @@ impl RemoteServerWriter {
     }
 }
 
-impl Sink<Message<ServerPayload>> for RemoteServerWriter {
+impl Sink<Message<Result<Response, ProtocolError>>> for RemoteServerWriter {
     type Error = WriteError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -255,7 +257,7 @@ impl Sink<Message<ServerPayload>> for RemoteServerWriter {
 
     fn start_send(
         self: Pin<&mut Self>,
-        message: Message<ServerPayload>,
+        message: Message<Result<Response, ProtocolError>>,
     ) -> Result<(), Self::Error> {
         self.get_mut().socket.start_send_unpin(message)
     }

@@ -119,6 +119,13 @@ impl RepositorySet {
 #[serde(transparent)]
 pub struct RepositoryHandle(usize);
 
+impl RepositoryHandle {
+    #[cfg(test)]
+    pub(crate) fn from_raw(raw: usize) -> Self {
+        Self(raw)
+    }
+}
+
 impl fmt::Display for RepositoryHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)

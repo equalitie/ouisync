@@ -7,7 +7,7 @@ use ouisync::{crypto::Password, LocalSecret, PeerAddr, PeerInfo, SetLocalSecret,
 use ouisync_service::{
     protocol::{
         ErrorCode, Message, MessageId, ProtocolError, QuotaInfo, RepositoryHandle, Request,
-        Response, ServerPayload, UnexpectedResponse,
+        Response, UnexpectedResponse,
     },
     transport::{
         local::{self, LocalClientReader, LocalClientWriter},
@@ -504,7 +504,6 @@ struct LocalClient {
 
 impl LocalClient {
     async fn connect(socket_path: &Path) -> Result<Self, ClientError> {
-        // TODO: if the server is not running, spin it up ourselves
         let (reader, writer) = local::connect(socket_path).await?;
         Ok(Self { reader, writer })
     }
@@ -527,9 +526,8 @@ impl LocalClient {
         };
 
         match message.payload {
-            ServerPayload::Success(response) => Ok(response.try_into()?),
-            ServerPayload::Failure(error) => Err(error.into()),
-            ServerPayload::Notification(_) => Err(ClientError::UnexpectedResponse),
+            Ok(response) => Ok(response.try_into()?),
+            Err(error) => Err(error.into()),
         }
     }
 

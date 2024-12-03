@@ -23,7 +23,6 @@ impl ServiceRunner {
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
         let task = task::spawn(async move {
             match Abortable::new(service.run(), abort_registration).await {
-                Ok(Ok(())) => (),
                 Ok(Err(error)) => panic!("unexpected error: {error:?}"),
                 Err(_) => (),
             }

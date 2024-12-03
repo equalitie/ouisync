@@ -16,7 +16,7 @@ use self::{
     remote::{RemoteServerReader, RemoteServerWriter},
 };
 use crate::protocol::{
-    DecodeError, EncodeError, Message, MessageId, ProtocolError, Request, ServerPayload,
+    DecodeError, EncodeError, Message, MessageId, ProtocolError, Request, Response,
 };
 
 pub(crate) enum ServerReader {
@@ -40,7 +40,7 @@ pub(crate) enum ServerWriter {
     Remote(RemoteServerWriter),
 }
 
-impl Sink<Message<ServerPayload>> for ServerWriter {
+impl Sink<Message<Result<Response, ProtocolError>>> for ServerWriter {
     type Error = WriteError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -64,7 +64,10 @@ impl Sink<Message<ServerPayload>> for ServerWriter {
         }
     }
 
-    fn start_send(self: Pin<&mut Self>, item: Message<ServerPayload>) -> Result<(), Self::Error> {
+    fn start_send(
+        self: Pin<&mut Self>,
+        item: Message<Result<Response, ProtocolError>>,
+    ) -> Result<(), Self::Error> {
         match self.get_mut() {
             Self::Local(writer) => writer.start_send_unpin(item),
             Self::Remote(writer) => writer.start_send_unpin(item),

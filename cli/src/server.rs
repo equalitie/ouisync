@@ -22,7 +22,9 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
     let mut service = Service::init(socket, config_dir, default_store_dir).await?;
 
     select! {
-        result = service.run() => result?,
+        result = service.run() => match result {
+            Err(error) => Err(error)?
+        },
         result = terminated() => result?,
     };
 

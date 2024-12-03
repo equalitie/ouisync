@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
 
+use super::MessageId;
+
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Request {
@@ -117,16 +119,11 @@ pub enum Request {
         secret: Option<LocalSecret>,
         mode: AccessMode,
     },
+    RepositorySubscribe(RepositoryHandle),
     RepositoryUnmount(RepositoryHandle),
-    /*
-    Open {
-        name: String,
-        password: Option<String>,
-    },
-    Close {
-        name: String,
-    },
-    */
+    /// Cancel a subscription identified by the given message id. The message id should be the same
+    /// that was used for sending the corresponding subscribe request.
+    Unsubscribe(MessageId),
 }
 
 /*
@@ -142,7 +139,6 @@ pub(crate) enum Request {
         secret: Option<LocalSecret>,
     },
     RepositoryClose(RepositoryHandle),
-    RepositorySubscribe(RepositoryHandle),
     ListRepositoriesSubscribe,
     RepositoryIsSyncEnabled(RepositoryHandle),
     RepositorySetSyncEnabled {
@@ -265,7 +261,6 @@ pub(crate) enum Request {
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
-    Unsubscribe(TaskHandle),
     GenerateSaltForSecretKey,
     DeriveSecretKey {
         password: String,
@@ -404,33 +399,33 @@ mod tests {
     use std::net::Ipv4Addr;
 
     #[test]
-    fn serialize_roundtrip() {
+    fn serialize() {
         let mut rng = StdRng::seed_from_u64(0);
         let secrets = AccessSecrets::Write(WriteSecrets::generate(&mut rng));
 
         let test_vectors = [
             (
                 Request::NetworkAddUserProvidedPeers(vec![]),
-                "81bb4e6574776f726b4164645573657250726f7669646564506565727390",
+                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f706565727390",
             ),
             (
                 Request::NetworkAddUserProvidedPeers(vec![PeerAddr::Quic(SocketAddr::from((
                     Ipv4Addr::LOCALHOST,
                     12345,
                 )))]),
-                "81bb4e6574776f726b4164645573657250726f7669646564506565727391b4717569632f3132372e\
-                 302e302e313a3132333435",
+                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f706565727391b4717569632f\
+                 3132372e302e302e313a3132333435",
             ),
             (
                 Request::NetworkBind(vec![PeerAddr::Quic(SocketAddr::from((
                     Ipv4Addr::UNSPECIFIED,
                     12345,
                 )))]),
-                "81ab4e6574776f726b42696e649181a47175696381a25634929400000000cd3039",
+                "81ac6e6574776f726b5f62696e649181a47175696381a25634929400000000cd3039",
             ),
             (
                 Request::NetworkGetListenerAddrs,
-                "b74e6574776f726b4765744c697374656e65724164647273",
+                "ba6e6574776f726b5f6765745f6c697374656e65725f6164647273",
             ),
             (
                 Request::RepositoryCreate {
@@ -441,7 +436,7 @@ mod tests {
                     dht: false,
                     pex: false,
                 },
-                "81b05265706f7369746f727943726561746596a3666f6fc0c0c0c2c2",
+                "81b17265706f7369746f72795f63726561746596a3666f6fc0c0c0c2c2",
             ),
             (
                 Request::RepositoryCreate {
@@ -452,9 +447,9 @@ mod tests {
                     dht: false,
                     pex: false,
                 },
-                "81b05265706f7369746f727943726561746596a3666f6fc0c0d94568747470733a2f2f6f75697379\
-                 6e632e6e65742f722341774967663238737a62495f4b7274376153654f6c4877427868594b4d6338\
-                 43775a30473050626c71783132693555c2c2",
+                "81b17265706f7369746f72795f63726561746596a3666f6fc0c0d94568747470733a2f2f6f756973\
+                 796e632e6e65742f722341774967663238737a62495f4b7274376153654f6c4877427868594b4d63\
+                 3843775a30473050626c71783132693555c2c2",
             ),
         ];
 
