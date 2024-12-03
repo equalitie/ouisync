@@ -697,18 +697,12 @@ class Directory with IterableMixin<DirEntry> {
 
   Directory._(this.entries);
 
-  /// Opens a directory of [repo] at [path].
+  /// Reads the directory of [repo] at [path].
   ///
   /// Throws if [path] doesn't exist or is not a directory.
-  ///
-  /// Note: don't forget to [close] it when no longer needed.
-  static Future<Directory> open(Repository repo, String path) async {
-    if (debugTrace) {
-      print("Directory.open $path");
-    }
-
+  static Future<Directory> read(Repository repo, String path) async {
     final rawEntries = await repo._client.invoke<List<Object?>>(
-      'directory_open',
+      'directory_read',
       {
         'repository': repo._handle,
         'path': path,
@@ -723,10 +717,6 @@ class Directory with IterableMixin<DirEntry> {
   ///
   /// Throws if [path] already exists of if the parent of [path] doesn't exists.
   static Future<void> create(Repository repo, String path) {
-    if (debugTrace) {
-      print("Directory.create $path");
-    }
-
     return repo._client.invoke<void>('directory_create', {
       'repository': repo._handle,
       'path': path,
@@ -741,10 +731,6 @@ class Directory with IterableMixin<DirEntry> {
     String path, {
     bool recursive = false,
   }) {
-    if (debugTrace) {
-      print("Directory.remove $path");
-    }
-
     return repo._client.invoke<void>('directory_remove', {
       'repository': repo._handle,
       'path': path,

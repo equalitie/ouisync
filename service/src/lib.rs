@@ -3,6 +3,7 @@ pub mod protocol;
 pub mod transport;
 
 mod error;
+mod file;
 mod metrics;
 mod repository;
 mod state;
@@ -236,6 +237,24 @@ impl Service {
         tracing::trace!(?message, "received");
 
         match message.payload {
+            Request::DirectoryCreate { repository, path } => {
+                self.state.create_directory(repository, path).await?;
+                Ok(().into())
+            }
+            Request::DirectoryRead { repository, path } => {
+                Ok(self.state.read_directory(repository, path).await?.into())
+            }
+            Request::FileClose(file) => {
+                self.state.close_file(file).await?;
+                Ok(().into())
+            }
+            Request::FileCreate { repository, path } => {
+                Ok(self.state.create_file(repository, path).await?.into())
+            }
+            Request::FileWrite { file, offset, data } => {
+                self.state.write_to_file(file, offset, data.into()).await?;
+                Ok(().into())
+            }
             Request::MetricsBind(addr) => {
                 Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
@@ -312,8 +331,10 @@ impl Service {
 
                 Ok(handle.into())
             }
-            Request::RepositoryCreateMirror { handle, host } => {
-                self.state.create_repository_mirror(handle, host).await?;
+            Request::RepositoryCreateMirror { repository, host } => {
+                self.state
+                    .create_repository_mirror(repository, host)
+                    .await?;
                 Ok(().into())
             }
             Request::RepositoryDelete(handle) => {
@@ -325,17 +346,19 @@ impl Service {
                 self.state.delete_repository(handle).await?;
                 Ok(().into())
             }
-            Request::RepositoryDeleteMirror { handle, host } => {
-                self.state.delete_repository_mirror(handle, host).await?;
+            Request::RepositoryDeleteMirror { repository, host } => {
+                self.state
+                    .delete_repository_mirror(repository, host)
+                    .await?;
                 Ok(().into())
             }
-            Request::RepositoryExport { handle, output } => {
-                let output = self.state.export_repository(handle, output).await?;
+            Request::RepositoryExport { repository, output } => {
+                let output = self.state.export_repository(repository, output).await?;
                 Ok(output.into())
             }
             Request::RepositoryFind(name) => Ok(self.state.find_repository(&name)?.into()),
-            Request::RepositoryGetBlockExpiration(handle) => {
-                Ok(self.state.block_expiration(handle)?.into())
+            Request::RepositoryGetBlockExpiration(repository) => {
+                Ok(self.state.block_expiration(repository)?.into())
             }
             Request::RepositoryGetDefaultBlockExpiration => {
                 Ok(self.state.default_block_expiration().await?.into())
@@ -344,11 +367,11 @@ impl Service {
                 Ok(self.state.default_repository_expiration().await?.into())
             }
             Request::RepositoryGetMountDir => Ok(self.state.mount_dir().into()),
-            Request::RepositoryGetQuota(handle) => {
-                Ok(self.state.repository_quota(handle).await?.into())
+            Request::RepositoryGetQuota(repository) => {
+                Ok(self.state.repository_quota(repository).await?.into())
             }
-            Request::RepositoryGetRepositoryExpiration(handle) => {
-                Ok(self.state.repository_expiration(handle).await?.into())
+            Request::RepositoryGetRepositoryExpiration(repository) => {
+                Ok(self.state.repository_expiration(repository).await?.into())
             }
             Request::RepositoryGetStoreDir => Ok(self.state.store_dir().into()),
             Request::RepositoryGetDefaultQuota => Ok(self.state.default_quota().await?.into()),
@@ -364,27 +387,29 @@ impl Service {
                     .await?;
                 Ok(handle.into())
             }
-            Request::RepositoryIsDhtEnabled(handle) => {
-                Ok(self.state.is_repository_dht_enabled(handle)?.into())
+            Request::RepositoryIsDhtEnabled(repository) => {
+                Ok(self.state.is_repository_dht_enabled(repository)?.into())
             }
-            Request::RepositoryIsPexEnabled(handle) => {
-                Ok(self.state.is_repository_pex_enabled(handle)?.into())
+            Request::RepositoryIsPexEnabled(repository) => {
+                Ok(self.state.is_repository_pex_enabled(repository)?.into())
             }
             Request::RepositoryList => Ok(self.state.list_repositories().into()),
-            Request::RepositoryMirrorExists { handle, host } => Ok(self
+            Request::RepositoryMirrorExists { repository, host } => Ok(self
                 .state
-                .repository_mirror_exists(handle, host)
+                .repository_mirror_exists(repository, host)
                 .await?
                 .into()),
-            Request::RepositoryMount(handle) => {
-                Ok(self.state.mount_repository(handle).await?.into())
+            Request::RepositoryMount(repository) => {
+                Ok(self.state.mount_repository(repository).await?.into())
             }
-            Request::RepositoryResetAccess { handle, token } => {
-                self.state.reset_repository_access(handle, token).await?;
+            Request::RepositoryResetAccess { repository, token } => {
+                self.state
+                    .reset_repository_access(repository, token)
+                    .await?;
                 Ok(().into())
             }
-            Request::RepositorySetBlockExpiration { handle, value } => {
-                self.state.set_block_expiration(handle, value).await?;
+            Request::RepositorySetBlockExpiration { repository, value } => {
+                self.state.set_block_expiration(repository, value).await?;
                 Ok(().into())
             }
             Request::RepositorySetDefaultBlockExpiration { value } => {
@@ -399,9 +424,12 @@ impl Service {
                 self.state.set_default_quota(quota).await?;
                 Ok(().into())
             }
-            Request::RepositorySetDhtEnabled { handle, enabled } => {
+            Request::RepositorySetDhtEnabled {
+                repository,
+                enabled,
+            } => {
                 self.state
-                    .set_repository_dht_enabled(handle, enabled)
+                    .set_repository_dht_enabled(repository, enabled)
                     .await?;
                 Ok(().into())
             }
@@ -409,18 +437,23 @@ impl Service {
                 self.state.set_mount_dir(path).await?;
                 Ok(().into())
             }
-            Request::RepositorySetPexEnabled { handle, enabled } => {
+            Request::RepositorySetPexEnabled {
+                repository,
+                enabled,
+            } => {
                 self.state
-                    .set_repository_pex_enabled(handle, enabled)
+                    .set_repository_pex_enabled(repository, enabled)
                     .await?;
                 Ok(().into())
             }
-            Request::RepositorySetQuota { handle, quota } => {
-                self.state.set_repository_quota(handle, quota).await?;
+            Request::RepositorySetQuota { repository, quota } => {
+                self.state.set_repository_quota(repository, quota).await?;
                 Ok(().into())
             }
-            Request::RepositorySetRepositoryExpiration { handle, value } => {
-                self.state.set_repository_expiration(handle, value).await?;
+            Request::RepositorySetRepositoryExpiration { repository, value } => {
+                self.state
+                    .set_repository_expiration(repository, value)
+                    .await?;
                 Ok(().into())
             }
             Request::RepositorySetStoreDir(path) => {
@@ -428,22 +461,22 @@ impl Service {
                 Ok(().into())
             }
             Request::RepositoryShare {
-                handle,
+                repository,
                 secret,
                 mode,
             } => Ok(self
                 .state
-                .share_repository(handle, secret, mode)
+                .share_repository(repository, secret, mode)
                 .await?
                 .into()),
-            Request::RepositorySubscribe(handle) => {
-                let rx = self.state.subscribe_to_repository(handle)?;
+            Request::RepositorySubscribe(repository) => {
+                let rx = self.state.subscribe_to_repository(repository)?;
                 self.subscriptions
                     .insert((conn_id, message.id), SubscriptionStream::repository(rx));
                 Ok(().into())
             }
-            Request::RepositoryUnmount(handle) => {
-                self.state.unmount_repository(handle).await?;
+            Request::RepositoryUnmount(repository) => {
+                self.state.unmount_repository(repository).await?;
                 Ok(().into())
             }
             Request::Unsubscribe(id) => {

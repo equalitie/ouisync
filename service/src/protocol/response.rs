@@ -1,6 +1,6 @@
-use crate::repository::RepositoryHandle;
+use crate::{file::FileHandle, repository::RepositoryHandle};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use ouisync::{PeerAddr, PeerInfo, ShareToken, StorageSize};
+use ouisync::{EntryType, PeerAddr, PeerInfo, ShareToken, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -34,7 +34,9 @@ impl From<Result<Response, ProtocolError>> for ServerPayload {
 pub enum Response {
     None,
     Bool(bool),
+    Directory(Vec<DirectoryEntry>),
     Duration(Duration),
+    File(FileHandle),
     NetworkEvent(NetworkEvent),
     Path(PathBuf),
     PeerAddrs(Vec<PeerAddr>),
@@ -119,7 +121,9 @@ impl<'a> From<&'a Path> for Response {
 }
 
 impl_response_conversion!(Bool(bool));
+impl_response_conversion!(Directory(Vec<DirectoryEntry>));
 impl_response_conversion!(Duration(Duration));
+impl_response_conversion!(File(FileHandle));
 impl_response_conversion!(NetworkEvent(NetworkEvent));
 impl_response_conversion!(Path(PathBuf));
 impl_response_conversion!(Repository(RepositoryHandle));
@@ -136,6 +140,12 @@ impl_response_conversion!(U32(u32));
 #[derive(Error, Debug)]
 #[error("unexpected response")]
 pub struct UnexpectedResponse;
+
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub entry_type: EntryType,
+}
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct QuotaInfo {

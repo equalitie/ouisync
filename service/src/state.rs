@@ -1,6 +1,7 @@
 use crate::{
     error::Error,
-    protocol::{ImportMode, QuotaInfo},
+    file::{FileHandle, FileHolder, FileSet},
+    protocol::{DirectoryEntry, ImportMode, QuotaInfo},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     transport::remote::RemoteClient,
     utils,
@@ -20,6 +21,7 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     ffi::OsStr,
+    io::SeekFrom,
     net::{Ipv4Addr, Ipv6Addr},
     path::{Path, PathBuf},
     sync::Arc,
@@ -53,6 +55,7 @@ pub(crate) struct State {
     store_dir: PathBuf,
     mounter: Option<MultiRepoVFS>,
     repos: RepositorySet,
+    files: FileSet,
     repos_monitor: StateMonitor,
     remote_server_config: OnceCell<Arc<rustls::ServerConfig>>,
     remote_client_config: OnceCell<Arc<rustls::ClientConfig>>,
@@ -110,6 +113,7 @@ impl State {
             mounter,
             repos_monitor,
             repos: RepositorySet::new(),
+            files: FileSet::new(),
             remote_server_config: OnceCell::new(),
             remote_client_config: OnceCell::new(),
         };
@@ -295,7 +299,7 @@ impl State {
         handle: RepositoryHandle,
         output_path: PathBuf,
     ) -> Result<PathBuf, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
 
         let output_path = if output_path.extension().is_some() {
             output_path
@@ -371,7 +375,7 @@ impl State {
         secret: Option<LocalSecret>,
         mode: AccessMode,
     ) -> Result<ShareToken, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
         let token = ouisync_bridge::repository::create_share_token(
             holder.repository(),
             secret,
@@ -391,7 +395,7 @@ impl State {
         let new_credentials = Credentials::with_random_writer_id(token.into_secrets());
         self.repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .repository()
             .set_credentials(new_credentials)
             .await?;
@@ -400,7 +404,7 @@ impl State {
     }
 
     pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
 
         holder
             .repository()
@@ -421,7 +425,7 @@ impl State {
     }
 
     pub async fn unmount_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
 
         holder.repository().metadata().remove(AUTOMOUNT_KEY).await?;
 
@@ -439,7 +443,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .repository()
             .subscribe())
     }
@@ -448,7 +452,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .registration()
             .ok_or(Error::RepositorySyncDisabled)?
             .is_dht_enabled())
@@ -461,7 +465,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .registration()
             .ok_or(Error::RepositorySyncDisabled)?
             .set_dht_enabled(enabled)
@@ -473,7 +477,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .registration()
             .ok_or(Error::RepositorySyncDisabled)?
             .is_pex_enabled())
@@ -486,7 +490,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .registration()
             .ok_or(Error::RepositorySyncDisabled)?
             .set_pex_enabled(enabled)
@@ -507,7 +511,7 @@ impl State {
         handle: RepositoryHandle,
         host: String,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
         let secrets = holder
             .repository()
             .secrets()
@@ -528,7 +532,7 @@ impl State {
         handle: RepositoryHandle,
         host: String,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
         let secrets = holder
             .repository()
             .secrets()
@@ -549,7 +553,7 @@ impl State {
         handle: RepositoryHandle,
         host: String,
     ) -> Result<bool, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
 
         let mut client = self.connect_remote_client(&host).await?;
 
@@ -562,7 +566,7 @@ impl State {
     }
 
     pub async fn repository_quota(&self, handle: RepositoryHandle) -> Result<QuotaInfo, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::RepositoryNotFound)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
         let quota = holder.repository().quota().await?;
         let size = holder.repository().size().await?;
 
@@ -576,7 +580,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .repository()
             .set_quota(quota)
             .await?;
@@ -600,7 +604,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .set_repository_expiration(value)
             .await?;
         Ok(())
@@ -612,7 +616,7 @@ impl State {
     ) -> Result<Option<Duration>, Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .repository_expiration()
             .await
     }
@@ -651,7 +655,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .repository()
             .set_block_expiration(value)
             .await?;
@@ -662,7 +666,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::RepositoryNotFound)?
+            .ok_or(Error::InvalidHandle)?
             .repository()
             .block_expiration())
     }
@@ -720,6 +724,88 @@ impl State {
                 }
             }
         }
+    }
+
+    pub async fn create_directory(
+        &self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(repo)
+            .ok_or(Error::InvalidHandle)?
+            .repository()
+            .create_directory(path)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn read_directory(
+        &self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<Vec<DirectoryEntry>, Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidHandle)?
+            .repository();
+
+        let dir = repo.open_directory(path).await?;
+        let entries = dir
+            .entries()
+            .map(|entry| DirectoryEntry {
+                name: entry.unique_name().into_owned(),
+                entry_type: entry.entry_type(),
+            })
+            .collect();
+
+        Ok(entries)
+    }
+
+    pub async fn create_file(
+        &mut self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<FileHandle, Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidHandle)?
+            .repository();
+        let local_branch = repo.local_branch()?;
+
+        let file = repo.create_file(&path).await?;
+        let holder = FileHolder { file, local_branch };
+        let handle = self.files.insert(holder);
+
+        Ok(handle)
+    }
+
+    pub async fn write_to_file(
+        &mut self,
+        file: FileHandle,
+        offset: u64,
+        data: Vec<u8>,
+    ) -> Result<(), Error> {
+        let holder = self.files.get_mut(file).ok_or(Error::InvalidHandle)?;
+
+        holder.file.seek(SeekFrom::Start(offset));
+        holder.file.fork(holder.local_branch.clone()).await?;
+
+        // TODO: consider using just `write` and returning the number of bytes written
+        holder.file.write_all(&data).await?;
+
+        Ok(())
+    }
+
+    pub async fn close_file(&mut self, handle: FileHandle) -> Result<(), Error> {
+        if let Some(mut holder) = self.files.remove(handle) {
+            holder.file.flush().await?
+        }
+
+        Ok(())
     }
 
     pub async fn remote_server_config(&self) -> Result<Arc<rustls::ServerConfig>, Error> {

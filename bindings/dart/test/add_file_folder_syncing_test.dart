@@ -20,7 +20,7 @@ void main() {
   final file1Content = 'Lorem ipsum dolor sit amet';
 
   Future<void> getDirectoryContents(Repository repo, String path) async {
-    final folder1Contents = await Directory.open(repo, path);
+    final folder1Contents = await Directory.read(repo, path);
     print('Directory contents: ${folder1Contents.toList()}');
   }
 
@@ -69,7 +69,7 @@ void main() {
     }
     // Get contents of folder1 (/folder1) and confirm it contains only one entry
     {
-      final folder1Contents = await Directory.open(repository, folder1Path);
+      final folder1Contents = await Directory.read(repository, folder1Path);
       expect(folder1Contents.toList().length, equals(1));
 
       print('Folder1 contents: ${folder1Contents.toList()}');
@@ -93,7 +93,7 @@ void main() {
     }
     // Get contents of folder1 (/folder1) and confirm it contains only one entry
     {
-      final folder1Contents = await Directory.open(repository, folder1Path);
+      final folder1Contents = await Directory.read(repository, folder1Path);
       expect(folder1Contents.toList().length, equals(1));
 
       print('Folder1 contents: ${folder1Contents.toList()}');

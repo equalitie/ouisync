@@ -27,6 +27,7 @@ ouisync-bridge              = { path = "../bridge" }
 ouisync-vfs                 = { path = "../vfs" }
 rmp-serde                   = { workspace = true }
 serde                       = { workspace = true }
+serde_bytes                 = { workspace = true }
 scoped_task                 = { path = "../scoped_task" }
 slab                        = { workspace = true }
 state_monitor               = { path = "../state_monitor" }

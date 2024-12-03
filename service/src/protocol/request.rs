@@ -1,4 +1,4 @@
-use crate::repository::RepositoryHandle;
+use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
@@ -9,6 +9,24 @@ use super::MessageId;
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Request {
+    DirectoryCreate {
+        repository: RepositoryHandle,
+        path: String,
+    },
+    DirectoryRead {
+        repository: RepositoryHandle,
+        path: String,
+    },
+    FileClose(FileHandle),
+    FileCreate {
+        repository: RepositoryHandle,
+        path: String,
+    },
+    FileWrite {
+        file: FileHandle,
+        offset: u64,
+        data: Bytes,
+    },
     MetricsBind(Option<SocketAddr>),
     MetricsGetListenerAddr,
     NetworkAddUserProvidedPeers(#[serde(with = "as_strs")] Vec<PeerAddr>),
@@ -37,7 +55,7 @@ pub enum Request {
         pex: bool,
     },
     RepositoryCreateMirror {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         host: String,
     },
     /// Delete a repository
@@ -45,12 +63,12 @@ pub enum Request {
     /// Delete a repository with the given name (name matching is the same as in `RepositoryFind).
     RepositoryDeleteByName(String),
     RepositoryDeleteMirror {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         host: String,
     },
     /// Export repository to a file
     RepositoryExport {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         output: PathBuf,
     },
     /// Find repository by name. Returns the repository that matches the name exactly or
@@ -75,16 +93,16 @@ pub enum Request {
     RepositoryIsPexEnabled(RepositoryHandle),
     RepositoryList,
     RepositoryMirrorExists {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         host: String,
     },
     RepositoryMount(RepositoryHandle),
     RepositoryResetAccess {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         token: ShareToken,
     },
     RepositorySetBlockExpiration {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         value: Option<Duration>,
     },
     RepositorySetDefaultBlockExpiration {
@@ -97,25 +115,25 @@ pub enum Request {
         value: Option<Duration>,
     },
     RepositorySetDhtEnabled {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         enabled: bool,
     },
     RepositorySetMountDir(PathBuf),
     RepositorySetPexEnabled {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         enabled: bool,
     },
     RepositorySetQuota {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         quota: Option<StorageSize>,
     },
     RepositorySetRepositoryExpiration {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         value: Option<Duration>,
     },
     RepositorySetStoreDir(PathBuf),
     RepositoryShare {
-        handle: RepositoryHandle,
+        repository: RepositoryHandle,
         secret: Option<LocalSecret>,
         mode: AccessMode,
     },
@@ -124,6 +142,30 @@ pub enum Request {
     /// Cancel a subscription identified by the given message id. The message id should be the same
     /// that was used for sending the corresponding subscribe request.
     Unsubscribe(MessageId),
+}
+
+/// Simple wrapper for `Vec<u8>` with a custom `Debug` impl that doesn't print the whole content to
+/// prevent spamming logs.
+#[derive(Eq, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Bytes(#[serde(with = "serde_bytes")] Vec<u8>);
+
+impl From<Vec<u8>> for Bytes {
+    fn from(v: Vec<u8>) -> Self {
+        Self(v)
+    }
+}
+
+impl From<Bytes> for Vec<u8> {
+    fn from(b: Bytes) -> Self {
+        b.0
+    }
+}
+
+impl fmt::Debug for Bytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{} bytes]", self.0.len())
+    }
 }
 
 /*
@@ -199,14 +241,6 @@ pub(crate) enum Request {
         share_token: ShareToken,
         host: String,
     },
-    DirectoryCreate {
-        repository: RepositoryHandle,
-        path: Utf8PathBuf,
-    },
-    DirectoryOpen {
-        repository: RepositoryHandle,
-        path: Utf8PathBuf,
-    },
     DirectoryExists {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
@@ -224,10 +258,6 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
-    FileCreate {
-        repository: RepositoryHandle,
-        path: Utf8PathBuf,
-    },
     FileRemove {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
@@ -237,11 +267,6 @@ pub(crate) enum Request {
         offset: u64,
         len: u64,
     },
-    FileWrite {
-        file: FileHandle,
-        offset: u64,
-        data: Bytes,
-    },
     FileTruncate {
         file: FileHandle,
         len: u64,
@@ -249,7 +274,6 @@ pub(crate) enum Request {
     FileLen(FileHandle),
     FileProgress(FileHandle),
     FileFlush(FileHandle),
-    FileClose(FileHandle),
     NetworkInit(NetworkDefaults),
     NetworkSubscribe,
     NetworkThisRuntimeId,

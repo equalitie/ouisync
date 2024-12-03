@@ -14,6 +14,8 @@ pub enum Error {
     InitializeLogger(#[source] io::Error),
     #[error("failed to initialize runtime")]
     InitializeRuntime(#[source] io::Error),
+    #[error("resource handle is invalid")]
+    InvalidHandle,
     #[error("argument is not valid utf-8 encoded string")]
     InvalidUtf8,
     #[error("I/O error")]
@@ -26,8 +28,6 @@ pub enum Error {
     Repository(#[from] ouisync::Error),
     #[error("repository already exists")]
     RepositoryExists,
-    #[error("repository not found")]
-    RepositoryNotFound,
     #[error("repository sync is disabled")]
     RepositorySyncDisabled,
     #[error("store error")]
