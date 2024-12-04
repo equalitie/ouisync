@@ -24,7 +24,7 @@ use tokio::sync::watch;
 
 /// Container for known connections.
 pub(super) struct ConnectionSet {
-    connections: watch::Sender<HashMap<Key, Data>>,
+    connections: watch::Sender<HashMap<ConnectionKey, ConnectionData>>,
 }
 
 impl ConnectionSet {
@@ -39,7 +39,7 @@ impl ConnectionSet {
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
     /// Also returns a notification object that can be used to wait until the permit gets released.
     pub fn reserve(&self, addr: PeerAddr, source: PeerSource) -> ReserveResult {
-        let key = Key {
+        let key = ConnectionKey {
             addr,
             dir: ConnectionDirection::from_source(source),
         };
@@ -49,7 +49,7 @@ impl ConnectionSet {
                 Entry::Vacant(entry) => {
                     let id = ConnectionId::next();
 
-                    entry.insert(Data {
+                    entry.insert(ConnectionData {
                         id,
                         state: PeerState::Known,
                         source,
@@ -89,12 +89,12 @@ impl ConnectionSet {
         let connections = self.connections.borrow();
 
         connections
-            .get(&Key {
+            .get(&ConnectionKey {
                 addr,
                 dir: ConnectionDirection::Incoming,
             })
             .or_else(|| {
-                connections.get(&Key {
+                connections.get(&ConnectionKey {
                     addr,
                     dir: ConnectionDirection::Outgoing,
                 })
@@ -102,8 +102,8 @@ impl ConnectionSet {
             .map(|data| data.peer_info(addr))
     }
 
-    pub fn subscribe(&self) -> ConnectionSetSubscription {
-        ConnectionSetSubscription(self.connections.subscribe())
+    pub fn subscribe(&self) -> watch::Receiver<HashMap<ConnectionKey, ConnectionData>> {
+        self.connections.subscribe()
     }
 }
 
@@ -134,17 +134,7 @@ pub(super) enum ReserveResult {
 }
 
 #[derive(Clone)]
-pub struct ConnectionSetSubscription(watch::Receiver<HashMap<Key, Data>>);
-
-impl ConnectionSetSubscription {
-    pub async fn changed(&mut self) -> Result<(), watch::error::RecvError> {
-        self.0.changed().await?;
-        Ok(())
-    }
-}
-
-#[derive(Clone)]
-pub struct PeerInfoCollector(watch::Sender<HashMap<Key, Data>>);
+pub struct PeerInfoCollector(watch::Sender<HashMap<ConnectionKey, ConnectionData>>);
 
 impl PeerInfoCollector {
     pub fn collect(&self) -> Vec<PeerInfo> {
@@ -177,8 +167,8 @@ impl ConnectionDirection {
 /// Connection permit that prevents another connection to the same peer (socket address) to be
 /// established as long as it remains in scope.
 pub(super) struct ConnectionPermit {
-    connections: watch::Sender<HashMap<Key, Data>>,
-    key: Key,
+    connections: watch::Sender<HashMap<ConnectionKey, ConnectionData>>,
+    key: ConnectionKey,
     id: ConnectionId,
 }
 
@@ -240,7 +230,7 @@ impl ConnectionPermit {
 
     fn with<F, R>(&self, f: F) -> Option<R>
     where
-        F: FnOnce(&Data) -> R,
+        F: FnOnce(&ConnectionData) -> R,
     {
         self.connections.borrow().get(&self.key).map(f)
     }
@@ -273,12 +263,12 @@ impl Drop for ConnectionPermit {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-struct Key {
+pub(super) struct ConnectionKey {
     addr: PeerAddr,
     dir: ConnectionDirection,
 }
 
-struct Data {
+pub(super) struct ConnectionData {
     id: ConnectionId,
     state: PeerState,
     source: PeerSource,
@@ -286,7 +276,7 @@ struct Data {
     on_release: DropAwaitable,
 }
 
-impl Data {
+impl ConnectionData {
     fn peer_info(&self, addr: PeerAddr) -> PeerInfo {
         let stats = self.stats_tracker.read();
 

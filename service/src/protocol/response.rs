@@ -1,6 +1,5 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-use ouisync::{EntryType, PeerAddr, PeerInfo, ShareToken, StorageSize};
+use ouisync::{EntryType, NetworkEvent, PeerAddr, PeerInfo, ShareToken, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -163,20 +162,6 @@ pub struct DirectoryEntry {
 pub struct QuotaInfo {
     pub quota: Option<StorageSize>,
     pub size: StorageSize,
-}
-
-/// Network notification event.
-#[derive(
-    Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize, TryFromPrimitive, IntoPrimitive,
-)]
-#[repr(u8)]
-#[serde(into = "u8", try_from = "u8")]
-pub enum NetworkEvent {
-    /// A peer has appeared with higher protocol version than us. Probably means we are using
-    /// outdated library. This event can be used to notify the user that they should update the app.
-    ProtocolVersionMismatch = 0,
-    /// The set of known peers has changed (e.g., a new peer has been discovered)
-    PeerSetChange = 1,
 }
 
 #[cfg(test)]

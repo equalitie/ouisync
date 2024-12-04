@@ -252,7 +252,7 @@ where
     F: Fn(&PeerState) -> bool,
 {
     time::timeout(*TEST_TIMEOUT, async move {
-        let mut rx = network.on_peer_set_change();
+        let mut rx = network.subscribe();
         let peer_addr = actor::lookup_addr(peer_name).await;
 
         loop {
@@ -262,7 +262,7 @@ where
                 }
             }
 
-            rx.changed().await.unwrap();
+            rx.recv().await.unwrap();
         }
     })
     .await
@@ -273,7 +273,7 @@ async fn expect_knows_port(network: &Network, peer_port: u16) {
     let collector = network.peer_info_collector();
 
     time::timeout(*TEST_TIMEOUT, async move {
-        let mut rx = network.on_peer_set_change();
+        let mut rx = network.subscribe();
 
         loop {
             let mut peer_ports = collector.collect().into_iter().map(|info| info.addr.port());
@@ -282,7 +282,7 @@ async fn expect_knows_port(network: &Network, peer_port: u16) {
                 break;
             }
 
-            rx.changed().await.unwrap();
+            rx.recv().await.unwrap();
         }
     })
     .await

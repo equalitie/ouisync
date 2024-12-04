@@ -331,11 +331,9 @@ impl Service {
                 Ok(().into())
             }
             Request::NetworkSubscribe => {
-                todo!()
-                // let rx = self.network.pe
-                // self.subscriptions
-                //     .insert((conn_id, message.id), SubscriptionStream::repository(rx));
-                // Ok(().into())
+                let rx = self.state.network.subscribe();
+                self.subscriptions.insert((conn_id, message.id), rx.into());
+                Ok(().into())
             }
             Request::RemoteControlBind(addr) => {
                 self.bind_remote_control(addr).await?;
@@ -513,8 +511,7 @@ impl Service {
                 .into()),
             Request::RepositorySubscribe(repository) => {
                 let rx = self.state.subscribe_to_repository(repository)?;
-                self.subscriptions
-                    .insert((conn_id, message.id), SubscriptionStream::repository(rx));
+                self.subscriptions.insert((conn_id, message.id), rx.into());
                 Ok(().into())
             }
             Request::RepositoryUnmount(repository) => {

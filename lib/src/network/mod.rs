@@ -6,6 +6,7 @@ mod constants;
 mod crypto;
 mod debug_payload;
 mod dht_discovery;
+mod event;
 mod gateway;
 mod ip;
 mod local_discovery;
@@ -30,8 +31,9 @@ mod tests;
 mod upnp;
 
 pub use self::{
-    connection::{ConnectionSetSubscription, PeerInfoCollector},
+    connection::PeerInfoCollector,
     dht_discovery::{DhtContactsStoreTrait, DHT_ROUTERS},
+    event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
     peer_source::PeerSource,
@@ -41,6 +43,7 @@ pub use self::{
 };
 use choke::Choker;
 use constants::REQUEST_TIMEOUT;
+use event::ProtocolVersions;
 pub use net::stun::NatBehavior;
 use request_tracker::RequestTracker;
 
@@ -63,7 +66,6 @@ use crate::{
     network::connection::ConnectionDirection,
     protocol::RepositoryId,
     repository::{RepositoryHandle, Vault},
-    sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
@@ -82,7 +84,7 @@ use std::{
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::mpsc,
+    sync::{mpsc, watch},
     task::{AbortHandle, JoinSet},
     time::Duration,
 };
@@ -122,8 +124,6 @@ impl Network {
         let (pex_discovery_tx, pex_discovery_rx) = mpsc::channel(1);
         let pex_discovery = PexDiscovery::new(pex_discovery_tx);
 
-        let (on_protocol_mismatch_tx, _) = uninitialized_watch::channel();
-
         let user_provided_peers = SeenPeers::new();
 
         let this_runtime_id = this_runtime_id.unwrap_or_else(SecretRuntimeId::random);
@@ -157,10 +157,9 @@ impl Network {
             pex_discovery,
             stun_clients: StunClients::new(),
             connections: ConnectionSet::new(),
-            on_protocol_mismatch_tx,
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
-            highest_seen_protocol_version: BlockingMutex::new(VERSION),
+            protocol_versions: watch::Sender::new(ProtocolVersions::new()),
             our_addresses: BlockingMutex::new(HashSet::default()),
             stats_tracker: StatsTracker::default(),
         });
@@ -303,22 +302,20 @@ impl Network {
         self.inner.connections.get_peer_info(addr)
     }
 
-    pub fn current_protocol_version(&self) -> u32 {
-        VERSION.into()
+    pub fn current_protocol_version(&self) -> u64 {
+        self.inner.protocol_versions.borrow().our.into()
     }
 
-    pub fn highest_seen_protocol_version(&self) -> u32 {
-        (*self.inner.highest_seen_protocol_version.lock().unwrap()).into()
+    pub fn highest_seen_protocol_version(&self) -> u64 {
+        self.inner.protocol_versions.borrow().highest_seen.into()
     }
 
-    /// Subscribe to network protocol mismatch events.
-    pub fn on_protocol_mismatch(&self) -> uninitialized_watch::Receiver<()> {
-        self.inner.on_protocol_mismatch_tx.subscribe()
-    }
-
-    /// Subscribe change in connected peers events.
-    pub fn on_peer_set_change(&self) -> ConnectionSetSubscription {
-        self.inner.connections.subscribe()
+    /// Subscribe to network events.
+    pub fn subscribe(&self) -> NetworkEventReceiver {
+        NetworkEventReceiver::new(
+            self.inner.protocol_versions.subscribe(),
+            self.inner.connections.subscribe(),
+        )
     }
 
     /// Register a local repository into the network. This links the repository with all matching
@@ -519,12 +516,11 @@ struct Inner {
     pex_discovery: PexDiscovery,
     stun_clients: StunClients,
     connections: ConnectionSet,
-    on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
+    protocol_versions: watch::Sender<ProtocolVersions>,
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<BlockingMutex<JoinSet<()>>>,
-    highest_seen_protocol_version: BlockingMutex<Version>,
     // Used to prevent repeatedly connecting to self.
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
     stats_tracker: StatsTracker,
@@ -963,16 +959,14 @@ impl Inner {
     }
 
     fn on_protocol_mismatch(&self, their_version: Version) {
-        // We know that `their_version` is higher than our version because otherwise this function
-        // wouldn't get called, but let's double check.
-        assert!(VERSION < their_version);
-
-        let mut highest = self.highest_seen_protocol_version.lock().unwrap();
-
-        if *highest < their_version {
-            *highest = their_version;
-            self.on_protocol_mismatch_tx.send(()).unwrap_or(());
-        }
+        self.protocol_versions.send_if_modified(|versions| {
+            if versions.highest_seen < their_version {
+                versions.highest_seen = their_version;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     fn spawn<Fut>(&self, f: Fut) -> AbortHandle

@@ -410,14 +410,14 @@ mod tests {
 
     async fn expect_knows(network: &Network, peer_addr: PeerAddr) {
         time::timeout(TIMEOUT, async move {
-            let mut rx = network.on_peer_set_change();
+            let mut rx = network.subscribe();
 
             loop {
                 if network.peer_info(peer_addr).is_some() {
                     break;
                 }
 
-                rx.changed().await.unwrap();
+                rx.recv().await.unwrap();
             }
         })
         .await

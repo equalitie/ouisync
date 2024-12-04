@@ -12,7 +12,6 @@ use tokio_stream::wrappers::WatchStream;
 /// Similar to tokio::sync::watch, but has no initial value. Because there is no initial value the
 /// API must be sligthly different. In particular, we don't have the `borrow` function.
 pub mod uninitialized_watch {
-    use futures_util::{stream, Stream};
     use tokio::sync::watch as w;
     pub use w::error::RecvError;
 
@@ -25,10 +24,6 @@ pub mod uninitialized_watch {
             self.0
                 .send(Some(value))
                 .map_err(|e| w::error::SendError(e.0.unwrap()))
-        }
-
-        pub fn subscribe(&self) -> Receiver<T> {
-            Receiver(self.0.subscribe())
         }
     }
 
@@ -48,20 +43,6 @@ pub mod uninitialized_watch {
                     Some(v) => return Ok(v.clone()),
                 }
             }
-        }
-
-        /// Returns a `Stream` that calls `changed` repeatedly and yields the returned values.
-        pub fn as_stream(&mut self) -> impl Stream<Item = T> + '_ {
-            stream::unfold(self, |rx| async {
-                rx.changed().await.ok().map(|value| (value, rx))
-            })
-        }
-
-        pub fn is_closed(&self) -> bool {
-            // `tokio::sync::watch::Receiver` doesn't expose a `is_closed`, but we can get the same
-            // information by checking whether `has_changed` returns an error as it only does so
-            // when the chanel has been closed.
-            self.0.has_changed().is_err()
         }
     }
 
