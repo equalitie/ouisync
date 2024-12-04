@@ -119,45 +119,26 @@ class Session {
       });
 
   /// Binds network to the specified addresses.
-  Future<void> bindNetwork({
-    String? quicV4,
-    String? quicV6,
-    String? tcpV4,
-    String? tcpV6,
-  }) async {
-    await _client.invoke<void>("network_bind", {
-      'quic_v4': quicV4,
-      'quic_v6': quicV6,
-      'tcp_v4': tcpV4,
-      'tcp_v6': tcpV6,
-    });
-  }
+  Future<void> bindNetwork(List<String> addrs) =>
+      _client.invoke<void>("network_bind", addrs);
 
   Stream<NetworkEvent> get networkEvents => _client
       .subscribe('network', null)
       .map((raw) => NetworkEvent.decode(raw as int));
 
-  Future<void> addUserProvidedPeer(String addr) =>
-      _client.invoke<void>('network_add_user_provided_peer', addr);
+  Future<void> addUserProvidedPeers(List<String> addrs) =>
+      _client.invoke<void>('network_add_user_provided_peers', addrs);
 
-  Future<void> removeUserProvidedPeer(String addr) =>
-      _client.invoke<void>('network_remove_user_provided_peer', addr);
+  Future<void> removeUserProvidedPeer(List<String> addrs) =>
+      _client.invoke<void>('network_remove_user_provided_peers', addrs);
 
   Future<List<String>> get userProvidedPeers => _client
       .invoke<List<Object?>>('network_user_provided_peers')
       .then((list) => list.cast<String>());
 
-  Future<String?> get tcpListenerLocalAddressV4 =>
-      _client.invoke<String?>('network_tcp_listener_local_addr_v4');
-
-  Future<String?> get tcpListenerLocalAddressV6 =>
-      _client.invoke<String?>('network_tcp_listener_local_addr_v6');
-
-  Future<String?> get quicListenerLocalAddressV4 =>
-      _client.invoke<String?>('network_quic_listener_local_addr_v4');
-
-  Future<String?> get quicListenerLocalAddressV6 =>
-      _client.invoke<String?>('network_quic_listener_local_addr_v6');
+  Future<List<String>> get listenerAddrs => _client
+      .invoke<List<Object?>>('network_get_listener_addrs')
+      .then((list) => list.cast<String>());
 
   Future<String?> get externalAddressV4 =>
       _client.invoke<String?>('network_external_addr_v4');
@@ -489,24 +470,16 @@ class Repository {
         'enabled': enabled,
       });
 
-  /// Create a share token providing access to this repository with the given mode. Can optionally
-  /// specify repository name which will be included in the token and suggested to the recipient.
-  Future<ShareToken> createShareToken({
+  /// Create a share token providing access to this repository with the given mode.
+  Future<ShareToken> share({
     required AccessMode accessMode,
     LocalSecret? secret,
-    String? name,
-  }) {
-    if (debugTrace) {
-      print("Repository.createShareToken");
-    }
-
-    return _client.invoke<String>('repository_create_share_token', {
-      'repository': _handle,
-      'secret': secret?.encode(),
-      'access_mode': accessMode.encode(),
-      'name': name,
-    }).then((token) => ShareToken._(_client, token));
-  }
+  }) =>
+      _client.invoke<String>('repository_share', {
+        'repository': _handle,
+        'secret': secret?.encode(),
+        'mode': accessMode.encode(),
+      }).then((token) => ShareToken._(_client, token));
 
   Future<Progress> get syncProgress => _client
       .invoke<List<Object?>>('repository_sync_progress', _handle)

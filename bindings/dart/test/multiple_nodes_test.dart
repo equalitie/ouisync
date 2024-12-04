@@ -27,7 +27,7 @@ void main() {
       writeSecret: null,
     );
     await repo1.setSyncEnabled(true);
-    final token = await repo1.createShareToken(accessMode: AccessMode.write);
+    final token = await repo1.share(accessMode: AccessMode.write);
 
     repo2 = await Repository.create(
       session2,
@@ -38,8 +38,8 @@ void main() {
     );
     await repo2.setSyncEnabled(true);
 
-    await session1.bindNetwork(quicV4: "127.0.0.1:0");
-    await session2.bindNetwork(quicV4: "127.0.0.1:0");
+    await session1.bindNetwork(["quic/127.0.0.1:0"]);
+    await session2.bindNetwork(["quic/127.0.0.1:0"]);
   });
 
   tearDown(() async {
@@ -49,8 +49,8 @@ void main() {
   });
 
   test('notification on sync', () async {
-    final addr = (await session1.quicListenerLocalAddressV4)!;
-    await session2.addUserProvidedPeer('quic/$addr');
+    final addr = await session1.listenerAddrs.then((addrs) => addrs.first);
+    await session2.addUserProvidedPeers([addr]);
 
     // One event for each block created (one for the root directory and one for the file)
     final expect = expectLater(repo2.events, emitsInOrder([null, null]));
@@ -62,26 +62,26 @@ void main() {
   });
 
   test('notification on peers change', () async {
-    final addr = (await session1.quicListenerLocalAddressV4)!;
+    final addr = await session1.listenerAddrs.then((addrs) => addrs.first);
 
     final expect = expectLater(
       session2.networkEvents.asyncMap((_) => session2.peers),
       emitsThrough(contains(isA<PeerInfo>()
-          .having((peer) => peer.addr, 'addr', equals('quic/$addr'))
+          .having((peer) => peer.addr, 'addr', equals(addr))
           .having(
               (peer) => peer.source, 'source', equals(PeerSource.userProvided))
           .having((peer) => peer.state, 'state', equals(PeerStateKind.active))
           .having((peer) => peer.runtimeId, 'runtimeId', isNotNull))),
     );
 
-    await session2.addUserProvidedPeer('quic/$addr');
+    await session2.addUserProvidedPeers([addr]);
 
     await expect;
   });
 
   test('network stats', () async {
-    final addr = (await session1.quicListenerLocalAddressV4)!;
-    await session2.addUserProvidedPeer('quic/$addr');
+    final addr = await session1.listenerAddrs.then((addrs) => addrs.first);
+    await session2.addUserProvidedPeers([addr]);
 
     final file = await File.create(repo1, 'file.txt');
     await file.close();

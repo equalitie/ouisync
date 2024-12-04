@@ -581,7 +581,7 @@ impl Repository {
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
-    /// If the entry exists, returns its `JointEntryType`, otherwise returns `EntryNotFound`.
+    /// If the entry exists, returns its `EntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
         match path::decompose(path.as_ref()) {
             Some((parent, name)) => {

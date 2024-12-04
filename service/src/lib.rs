@@ -251,8 +251,31 @@ impl Service {
             Request::FileCreate { repository, path } => {
                 Ok(self.state.create_file(repository, path).await?.into())
             }
+            Request::FileExists { repository, path } => {
+                Ok(self.state.file_exists(repository, path).await?.into())
+            }
+            Request::FileFlush(file) => {
+                self.state.flush_file(file).await?;
+                Ok(().into())
+            }
+            Request::FileLen(file) => Ok(self.state.file_len(file)?.into()),
+            Request::FileOpen { repository, path } => {
+                Ok(self.state.open_file(repository, path).await?.into())
+            }
+            Request::FileProgress(file) => Ok(self.state.file_progress(file).await?.into()),
+            Request::FileRead { file, offset, len } => {
+                Ok(self.state.read_file(file, offset, len).await?.into())
+            }
+            Request::FileRemove { repository, path } => {
+                self.state.remove_file(repository, path).await?;
+                Ok(().into())
+            }
+            Request::FileTruncate { file, len } => {
+                self.state.truncate_file(file, len).await?;
+                Ok(().into())
+            }
             Request::FileWrite { file, offset, data } => {
-                self.state.write_to_file(file, offset, data.into()).await?;
+                self.state.write_file(file, offset, data.into()).await?;
                 Ok(().into())
             }
             Request::MetricsBind(addr) => {
@@ -306,6 +329,13 @@ impl Service {
             Request::NetworkSetPortForwardingEnabled(enabled) => {
                 self.state.set_port_forwarding_enabled(enabled).await;
                 Ok(().into())
+            }
+            Request::NetworkSubscribe => {
+                todo!()
+                // let rx = self.network.pe
+                // self.subscriptions
+                //     .insert((conn_id, message.id), SubscriptionStream::repository(rx));
+                // Ok(().into())
             }
             Request::RemoteControlBind(addr) => {
                 self.bind_remote_control(addr).await?;

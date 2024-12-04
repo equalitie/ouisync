@@ -7,8 +7,8 @@ use crate::{
     utils,
 };
 use ouisync::{
-    AccessMode, Credentials, Event, LocalSecret, Network, PeerAddr, SetLocalSecret, ShareToken,
-    StorageSize,
+    AccessMode, Credentials, EntryType, Event, LocalSecret, Network, PeerAddr, SetLocalSecret,
+    ShareToken, StorageSize,
 };
 use ouisync_bridge::{
     config::{ConfigError, ConfigKey, ConfigStore},
@@ -813,7 +813,57 @@ impl State {
         Ok(handle)
     }
 
-    pub async fn write_to_file(
+    pub async fn open_file(
+        &mut self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<FileHandle, Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidHandle)?
+            .repository();
+        let local_branch = repo.local_branch()?;
+
+        let file = repo.create_file(&path).await?;
+        let holder = FileHolder { file, local_branch };
+        let handle = self.files.insert(holder);
+
+        Ok(handle)
+    }
+
+    /// Remove (delete) the file at the given path from the repository.
+    pub async fn remove_file(&mut self, repo: RepositoryHandle, path: String) -> Result<(), Error> {
+        self.repos
+            .get(repo)
+            .ok_or(Error::InvalidHandle)?
+            .repository()
+            .remove_entry(&path)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn read_file(
+        &mut self,
+        handle: FileHandle,
+        offset: u64,
+        len: u64,
+    ) -> Result<Vec<u8>, Error> {
+        let len = len as usize;
+        let mut buffer = vec![0; len];
+
+        let holder = self.files.get_mut(handle).ok_or(Error::InvalidHandle)?;
+
+        holder.file.seek(SeekFrom::Start(offset));
+
+        // TODO: consider using just `read`
+        let len = holder.file.read_all(&mut buffer).await?;
+        buffer.truncate(len);
+
+        Ok(buffer)
+    }
+
+    pub async fn write_file(
         &mut self,
         file: FileHandle,
         offset: u64,
@@ -826,6 +876,63 @@ impl State {
 
         // TODO: consider using just `write` and returning the number of bytes written
         holder.file.write_all(&data).await?;
+
+        Ok(())
+    }
+
+    pub async fn file_exists(&self, repo: RepositoryHandle, path: String) -> Result<bool, Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidHandle)?
+            .repository();
+
+        match repo.lookup_type(&path).await {
+            Ok(EntryType::File) => Ok(true),
+            Ok(EntryType::Directory) => Ok(false),
+            Err(ouisync::Error::EntryNotFound) => Ok(false),
+            Err(ouisync::Error::AmbiguousEntry) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn file_len(&self, handle: FileHandle) -> Result<u64, Error> {
+        Ok(self
+            .files
+            .get(handle)
+            .ok_or(Error::InvalidHandle)?
+            .file
+            .len())
+    }
+
+    pub async fn file_progress(&self, handle: FileHandle) -> Result<u64, Error> {
+        // Don't keep the file locked while progress is being awaited.
+        let progress = self
+            .files
+            .get(handle)
+            .ok_or(Error::InvalidHandle)?
+            .file
+            .progress();
+        let progress = progress.await?;
+
+        Ok(progress)
+    }
+
+    pub async fn truncate_file(&mut self, handle: FileHandle, len: u64) -> Result<(), Error> {
+        let holder = self.files.get_mut(handle).ok_or(Error::InvalidHandle)?;
+        holder.file.fork(holder.local_branch.clone()).await?;
+        holder.file.truncate(len)?;
+
+        Ok(())
+    }
+
+    pub async fn flush_file(&mut self, handle: FileHandle) -> Result<(), Error> {
+        self.files
+            .get_mut(handle)
+            .ok_or(Error::InvalidHandle)?
+            .file
+            .flush()
+            .await?;
 
         Ok(())
     }

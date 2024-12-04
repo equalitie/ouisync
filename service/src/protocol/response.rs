@@ -10,7 +10,10 @@ use std::{
 };
 use thiserror::Error;
 
-use super::ProtocolError;
+use super::{
+    helpers::{self, Bytes},
+    ProtocolError,
+};
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -34,12 +37,13 @@ impl From<Result<Response, ProtocolError>> for ServerPayload {
 pub enum Response {
     None,
     Bool(bool),
+    Bytes(Bytes),
     Directory(Vec<DirectoryEntry>),
     Duration(Duration),
     File(FileHandle),
     NetworkEvent(NetworkEvent),
     Path(PathBuf),
-    PeerAddrs(Vec<PeerAddr>),
+    PeerAddrs(#[serde(with = "helpers::strs")] Vec<PeerAddr>),
     PeerInfo(Vec<PeerInfo>),
     QuotaInfo(QuotaInfo),
     Repository(RepositoryHandle),
@@ -50,6 +54,7 @@ pub enum Response {
     SocketAddrs(Vec<SocketAddr>),
     StorageSize(StorageSize),
     U32(u32),
+    U64(u64),
 }
 
 macro_rules! impl_response_conversion {
@@ -120,6 +125,12 @@ impl<'a> From<&'a Path> for Response {
     }
 }
 
+impl From<Vec<u8>> for Response {
+    fn from(value: Vec<u8>) -> Self {
+        Self::Bytes(value.into())
+    }
+}
+
 impl_response_conversion!(Bool(bool));
 impl_response_conversion!(Directory(Vec<DirectoryEntry>));
 impl_response_conversion!(Duration(Duration));
@@ -136,6 +147,7 @@ impl_response_conversion!(SocketAddrs(Vec<SocketAddr>));
 impl_response_conversion!(StorageSize(StorageSize));
 impl_response_conversion!(QuotaInfo(QuotaInfo));
 impl_response_conversion!(U32(u32));
+impl_response_conversion!(U64(u64));
 
 #[derive(Error, Debug)]
 #[error("unexpected response")]

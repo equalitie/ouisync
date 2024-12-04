@@ -5,7 +5,7 @@ import 'package:msgpack_dart/msgpack_dart.dart';
 import '../exception.dart';
 
 Uint8List encodeMessage(int id, String method, Object? args) {
-  //print('send: id=$id method=$method args=$args');
+  print('send: id=$id method=$method args=$args');
 
   // Message format:
   //
@@ -29,7 +29,7 @@ DecodeResult decodeMessage(Uint8List bytes) {
   final id = bytes.buffer.asByteData().getUint64(0, Endian.big);
   final payload = deserialize(bytes.sublist(8));
 
-  //print('recv: id=$id, payload=$payload');
+  print('recv: id=$id, payload=$payload');
 
   if (payload is! Map) {
     return MalformedPayload._(id);

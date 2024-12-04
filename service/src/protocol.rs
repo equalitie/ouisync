@@ -1,5 +1,6 @@
 mod error;
 mod error_code;
+mod helpers;
 mod log;
 mod message;
 mod request;
