@@ -52,8 +52,8 @@ void main() {
   });
 
   test('notification on sync', () async {
-    final addr = await session1.listenerAddrs.then((addrs) => addrs.first);
-    await session2.addUserProvidedPeers([addr]);
+    final addrs = await session1.listenerAddrs;
+    await session2.addUserProvidedPeers(addrs);
 
     // One event for each block created (one for the root directory and one for the file)
     final expect = expectLater(repo2.events, emitsInOrder([null, null]));

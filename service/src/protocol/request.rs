@@ -1,5 +1,6 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize};
+use ouisync_bridge::network::NetworkDefaults;
 use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
@@ -62,6 +63,7 @@ pub enum Request {
     NetworkGetListenerAddrs,
     NetworkGetPeers,
     NetworkGetUserProvidedPeers,
+    NetworkInit(NetworkDefaults),
     NetworkIsLocalDiscoveryEnabled,
     NetworkIsPexRecvEnabled,
     NetworkIsPexSendEnabled,
@@ -255,7 +257,6 @@ pub(crate) enum Request {
         path: Utf8PathBuf,
         recursive: bool,
     },
-    NetworkInit(NetworkDefaults),
     NetworkThisRuntimeId,
     NetworkHighestSeenProtocolVersion,
     NetworkExternalAddrV4,

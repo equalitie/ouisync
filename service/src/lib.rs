@@ -302,6 +302,10 @@ impl Service {
             Request::NetworkGetUserProvidedPeers => {
                 Ok(self.state.user_provided_peers().await.into())
             }
+            Request::NetworkInit(defaults) => {
+                self.state.init_network(defaults).await;
+                Ok(().into())
+            }
             Request::NetworkIsLocalDiscoveryEnabled => {
                 Ok(self.state.network.is_local_discovery_enabled().into())
             }

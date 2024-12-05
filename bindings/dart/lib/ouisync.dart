@@ -110,10 +110,12 @@ class Session {
   /// Initialize network from config. Fall back to the provided defaults if the corresponding
   /// config entries don't exist.
   Future<void> initNetwork({
+    List<String> defaultBindAddrs = const [],
     bool defaultPortForwardingEnabled = false,
     bool defaultLocalDiscoveryEnabled = false,
   }) =>
       _client.invoke<void>("network_init", {
+        'bind': defaultBindAddrs,
         'port_forwarding_enabled': defaultPortForwardingEnabled,
         'local_discovery_enabled': defaultLocalDiscoveryEnabled,
       });

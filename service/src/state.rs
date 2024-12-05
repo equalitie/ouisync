@@ -22,7 +22,6 @@ use std::{
     collections::BTreeMap,
     ffi::OsStr,
     io::SeekFrom,
-    net::{Ipv4Addr, Ipv6Addr},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -71,20 +70,6 @@ impl State {
             None,
         );
 
-        network::init(
-            &network,
-            &config,
-            NetworkDefaults {
-                port_forwarding_enabled: true,
-                local_discovery_enabled: true,
-                bind: vec![
-                    PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()),
-                    PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()),
-                ],
-            },
-        )
-        .await;
-
         let store_dir = match config.entry(STORE_DIR_KEY).get().await {
             Ok(dir) => dir,
             Err(ConfigError::NotFound) => default_store_dir,
@@ -120,6 +105,12 @@ impl State {
         state.load_repositories().await;
 
         Ok(state)
+    }
+
+    /// Initializes the network according to the stored configuration. If a particular network
+    /// parameter is not yet configured, falls back to the given defaults.
+    pub async fn init_network(&self, defaults: NetworkDefaults) {
+        network::init(&self.network, &self.config, defaults).await;
     }
 
     pub async fn bind_network(&self, addrs: Vec<PeerAddr>) {
