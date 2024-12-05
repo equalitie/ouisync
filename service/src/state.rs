@@ -7,8 +7,8 @@ use crate::{
     utils,
 };
 use ouisync::{
-    AccessMode, Credentials, EntryType, Event, LocalSecret, Network, PeerAddr, SetLocalSecret,
-    ShareToken, StorageSize,
+    AccessMode, Credentials, EntryType, Event, LocalSecret, Network, PeerAddr, Progress,
+    SetLocalSecret, ShareToken, StorageSize,
 };
 use ouisync_bridge::{
     config::{ConfigError, ConfigKey, ConfigStore},
@@ -284,6 +284,33 @@ impl State {
         Ok(())
     }
 
+    pub async fn open_repository(
+        &mut self,
+        name: String,
+        local_secret: Option<LocalSecret>,
+    ) -> Result<RepositoryHandle, Error> {
+        if self.repos.find_by_name(&name).is_ok() {
+            // TODO: return the existing repo instead (but unlock using `local_secret`)?
+            Err(Error::RepositoryExists)?;
+        }
+
+        let store_path = self.store_path(&name);
+
+        self.load_repository(&store_path, local_secret).await
+    }
+
+    pub async fn close_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
+        let mut holder = self.repos.remove(handle).ok_or(Error::InvalidHandle)?;
+
+        if let Some(mounter) = &self.mounter {
+            mounter.remove(holder.name())?;
+        }
+
+        holder.close().await?;
+
+        Ok(())
+    }
+
     pub async fn export_repository(
         &self,
         handle: RepositoryHandle,
@@ -356,7 +383,7 @@ impl State {
             }
         }
 
-        self.open_repository(&store_path).await
+        self.load_repository(&store_path, None).await
     }
 
     pub async fn share_repository(
@@ -391,6 +418,15 @@ impl State {
             .await?;
 
         Ok(())
+    }
+
+    pub fn repository_access_mode(&self, handle: RepositoryHandle) -> Result<AccessMode, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidHandle)?
+            .repository()
+            .access_mode())
     }
 
     pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
@@ -466,6 +502,19 @@ impl State {
         }
 
         Ok(())
+    }
+
+    pub async fn repository_sync_progress(
+        &self,
+        handle: RepositoryHandle,
+    ) -> Result<Progress, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidHandle)?
+            .repository()
+            .sync_progress()
+            .await?)
     }
 
     pub fn is_repository_dht_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
@@ -998,7 +1047,7 @@ impl State {
                 continue;
             }
 
-            match self.open_repository(path).await {
+            match self.load_repository(path, None).await {
                 Ok(_) => (),
                 Err(error) => {
                     tracing::error!(?error, ?path, "failed to open repository");
@@ -1022,10 +1071,14 @@ impl State {
         }
     }
 
-    async fn open_repository(&mut self, path: &Path) -> Result<RepositoryHandle, Error> {
+    async fn load_repository(
+        &mut self,
+        path: &Path,
+        local_secret: Option<LocalSecret>,
+    ) -> Result<RepositoryHandle, Error> {
         let repo = ouisync_bridge::repository::open(
             path.to_path_buf(),
-            None,
+            local_secret,
             &self.config,
             &self.repos_monitor,
         )
@@ -1059,6 +1112,9 @@ impl State {
     }
 
     fn store_path(&self, repo_name: &str) -> PathBuf {
+        // TODO: when `repo_name` is already a path (starts with '/' for absolute or './' for
+        // relative), use it as is
+
         let suffix = Path::new(repo_name);
         let extension = if let Some(extension) = suffix.extension() {
             let mut extension = extension.to_owned();

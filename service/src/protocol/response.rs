@@ -1,5 +1,8 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
-use ouisync::{EntryType, NetworkEvent, PeerAddr, PeerInfo, ShareToken, Stats, StorageSize};
+use ouisync::{
+    AccessMode, EntryType, NetworkEvent, PeerAddr, PeerInfo, Progress, ShareToken, Stats,
+    StorageSize,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -44,6 +47,7 @@ impl From<ResponseResult> for Result<Response, ProtocolError> {
 #[expect(clippy::large_enum_variant)]
 pub enum Response {
     None,
+    AccessMode(AccessMode),
     Bool(bool),
     Bytes(Bytes),
     Directory(Vec<DirectoryEntry>),
@@ -54,6 +58,7 @@ pub enum Response {
     Path(PathBuf),
     PeerAddrs(#[serde(with = "helpers::strs")] Vec<PeerAddr>),
     PeerInfo(Vec<PeerInfo>),
+    Progress(Progress),
     QuotaInfo(QuotaInfo),
     Repository(RepositoryHandle),
     RepositoryEvent,
@@ -140,6 +145,7 @@ impl From<Vec<u8>> for Response {
     }
 }
 
+impl_response_conversion!(AccessMode(AccessMode));
 impl_response_conversion!(Bool(bool));
 impl_response_conversion!(Directory(Vec<DirectoryEntry>));
 impl_response_conversion!(Duration(Duration));
@@ -147,6 +153,7 @@ impl_response_conversion!(File(FileHandle));
 impl_response_conversion!(NetworkEvent(NetworkEvent));
 impl_response_conversion!(NetworkStats(Stats));
 impl_response_conversion!(Path(PathBuf));
+impl_response_conversion!(Progress(Progress));
 impl_response_conversion!(Repository(RepositoryHandle));
 impl_response_conversion!(Repositories(BTreeMap<String, RepositoryHandle>));
 impl_response_conversion!(PeerInfo(Vec<PeerInfo>));

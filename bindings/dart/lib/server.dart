@@ -6,32 +6,100 @@ import 'package:ffi/ffi.dart';
 import 'bindings.dart';
 import 'exception.dart';
 
-/// Runs Ouisync server and bind it to the specified local socket. Returns when the server
-/// terminates.
-Future<void> runServer({
-  required String socketPath,
-  required String configPath,
-  required String storePath,
-  String? debugLabel,
-}) async {
-  final bindings = Bindings.instance;
+class Server {
+  final Isolate isolate;
+  final Future<void> terminated;
 
-  final rawErrorCode = await Isolate.run(
-    () => _withPool(
-      (pool) => bindings.start(
-          pool.toNativeUtf8(socketPath),
-          pool.toNativeUtf8(configPath),
-          pool.toNativeUtf8(storePath),
-          debugLabel != null ? pool.toNativeUtf8(debugLabel) : nullptr),
-    ),
-  );
+  Server._(this.isolate, this.terminated);
 
-  final errorCode = ErrorCode.decode(rawErrorCode);
+  static Future<Server> start({
+    required String socketPath,
+    required String configPath,
+    required String storePath,
+    String? debugLabel,
+  }) async {
+    final rx = ReceivePort();
+    final tx = rx.sendPort;
+    final isolate = await Isolate.spawn(
+      _entryPoint,
+      _Params(
+        port: tx,
+        socketPath: socketPath,
+        configPath: configPath,
+        storePath: storePath,
+        debugLabel: debugLabel,
+      ),
+    );
 
-  if (errorCode != ErrorCode.ok) {
-    throw OuisyncException(errorCode);
+    final terminated = rx.first.then((output) {
+      final errorCode = output as ErrorCode;
+
+      if (errorCode != ErrorCode.ok) {
+        throw OuisyncException(errorCode);
+      }
+    });
+
+    return Server._(isolate, terminated);
   }
 }
+
+class _Params {
+  final SendPort port;
+  final String socketPath;
+  final String configPath;
+  final String storePath;
+  final String? debugLabel;
+
+  _Params({
+    required this.port,
+    required this.socketPath,
+    required this.configPath,
+    required this.storePath,
+    this.debugLabel,
+  });
+}
+
+void _entryPoint(_Params params) {
+  final bindings = Bindings.instance;
+  final debugLabel = params.debugLabel;
+
+  final rawErrorCode = _withPool((pool) => bindings.start(
+        pool.toNativeUtf8(params.socketPath),
+        pool.toNativeUtf8(params.configPath),
+        pool.toNativeUtf8(params.storePath),
+        debugLabel != null ? pool.toNativeUtf8(debugLabel) : nullptr,
+      ));
+  final errorCode = ErrorCode.decode(rawErrorCode);
+
+  params.port.send(errorCode);
+}
+
+///// Runs Ouisync server and bind it to the specified local socket. Returns when the server
+///// terminates.
+//Future<void> runServer({
+//  required String socketPath,
+//  required String configPath,
+//  required String storePath,
+//  String? debugLabel,
+//}) async {
+//  final bindings = Bindings.instance;
+
+//  final rawErrorCode = await Isolate.run(
+//    () => _withPool(
+//      (pool) => bindings.start(
+//          pool.toNativeUtf8(socketPath),
+//          pool.toNativeUtf8(configPath),
+//          pool.toNativeUtf8(storePath),
+//          debugLabel != null ? pool.toNativeUtf8(debugLabel) : nullptr),
+//    ),
+//  );
+
+//  final errorCode = ErrorCode.decode(rawErrorCode);
+
+//  if (errorCode != ErrorCode.ok) {
+//    throw OuisyncException(errorCode);
+//  }
+//}
 
 void logInit({String? file, String tag = ''}) =>
     _withPool((pool) => Bindings.instance.log_init(

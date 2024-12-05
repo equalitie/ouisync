@@ -112,12 +112,13 @@ unsafe fn start(
 
     runtime.block_on(
         async move {
+            tracing::info!("initializing");
             let mut service = Service::init(socket_path, config_dir, default_store_dir).await?;
-
-            // TODO: handle sigint/sigterm
-
+            tracing::info!("running");
             service.run().await?;
+            tracing::info!("closing");
             service.close().await;
+            tracing::info!("closed");
 
             Ok(())
         }

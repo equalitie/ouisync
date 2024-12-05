@@ -37,9 +37,11 @@ const defaultLogTag = 'flutter-ouisync';
 /// and closed at the end. There can be only one session at the time.
 class Session {
   final Client _client;
+  final Server _server;
+
   String? _mountPoint;
 
-  Session._(this._client);
+  Session._(this._client, this._server);
 
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
@@ -53,36 +55,29 @@ class Session {
     // TODO: temp hack
     final storeDir = await io.Directory.systemTemp.createTemp('ouisync');
 
-    // Start the server. If another server is already listening on the same socket, wait forever so
-    // that the client future definitely completes first.
-    final serverFuture = runServer(
+    // TODO: handle server already running
+    final server = await Server.start(
       socketPath: socketPath,
       configPath: configPath,
       storePath: storeDir.path,
       debugLabel: debugLabel,
-    ).then(
-      (_) {
-        throw OuisyncException(
-          ErrorCode.other,
-          'server unexpectedly terminated',
-        );
-      },
-      onError: (error) {
-        return switch (error) {
-          ServiceAlreadyRunning => Future.any([]), // wait forewer
-          _ => throw error,
-        };
-      },
     );
 
-    // Create a client and connect it to the server.
-    final clientFuture = SocketClient.connect(socketPath);
+    final clientConnect = SocketClient.connect(socketPath);
 
-    // Run both the server and the client futures concurrently. Because the server future never
-    // returns, this will either return a new client or throw.
-    final client = await Future.any([clientFuture, serverFuture]);
+    final client = await Future.any([
+      server.terminated.then((_) => null),
+      clientConnect,
+    ]);
 
-    return Session._(client);
+    if (client == null) {
+      throw OuisyncException(
+        ErrorCode.other,
+        'server terminated before client connected',
+      );
+    }
+
+    return Session._(client, server);
   }
 
   /* TODO: do we still need this?
@@ -133,7 +128,7 @@ class Session {
   Future<void> addUserProvidedPeers(List<String> addrs) =>
       _client.invoke<void>('network_add_user_provided_peers', addrs);
 
-  Future<void> removeUserProvidedPeer(List<String> addrs) =>
+  Future<void> removeUserProvidedPeers(List<String> addrs) =>
       _client.invoke<void>('network_remove_user_provided_peers', addrs);
 
   Future<List<String>> get userProvidedPeers => _client
@@ -190,20 +185,24 @@ class Session {
 
   // Utility functions to generate password salts and to derive LocalSecretKey from LocalPasswords.
 
-  Future<PasswordSalt> generateSaltForPasswordHash() => _client
-      .invoke<Uint8List>('generate_salt_for_secret_key')
+  Future<PasswordSalt> generatePasswordSalt() => _client
+      .invoke<Uint8List>('password_generate_salt')
       .then((bytes) => PasswordSalt(bytes));
 
-  Future<LocalSecretKey> deriveLocalSecretKey(
-          LocalPassword pwd, PasswordSalt salt) =>
-      _client.invoke<Uint8List>('derive_secret_key', {
+  Future<LocalSecretKey> deriveSecretKey(
+    LocalPassword pwd,
+    PasswordSalt salt,
+  ) =>
+      _client.invoke<Uint8List>('password_derive_secret_key', {
         'password': pwd.string,
         'salt': salt._bytes
       }).then((bytes) => LocalSecretKey(bytes));
 
   /// Try to gracefully close connections to peers then close the session.
   Future<void> close() async {
+    await _client.invoke<void>('shutdown');
     await _client.close();
+    await _server.terminated;
   }
 }
 
@@ -395,7 +394,7 @@ class Repository {
 
   Future<AccessMode> get accessMode {
     return _client
-        .invoke<int>('repository_access_mode', _handle)
+        .invoke<int>('repository_get_access_mode', _handle)
         .then((n) => AccessMode.decode(n));
   }
 
@@ -431,17 +430,12 @@ class Repository {
   }
 
   /// Move/rename the file/directory from [src] to [dst].
-  Future<void> move(String src, String dst) async {
-    if (debugTrace) {
-      print("Repository.move $src -> $dst");
-    }
-
-    await _client.invoke<void>('repository_move_entry', {
-      'repository': _handle,
-      'src': src,
-      'dst': dst,
-    });
-  }
+  Future<void> move(String src, String dst) =>
+      _client.invoke<void>('repository_move_entry', {
+        'repository': _handle,
+        'src': src,
+        'dst': dst,
+      });
 
   Stream<void> get events =>
       _client.subscribe('repository', _handle).cast<void>();
@@ -660,6 +654,9 @@ class DirEntry {
 
     return DirEntry(name, EntryType.decode(type));
   }
+
+  @override
+  String toString() => '$name (${entryType.name})';
 }
 
 /// A reference to a directory (folder) in a [Repository].

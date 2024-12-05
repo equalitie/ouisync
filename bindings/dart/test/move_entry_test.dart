@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:ouisync/ouisync.dart';
+import 'package:ouisync/server.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -16,10 +17,12 @@ void main() {
   final fileContent = 'hello world';
 
   setUp(() async {
+    logInit();
+
     temp = await io.Directory.systemTemp.createTemp();
     session = await Session.create(
       socketPath: '${temp.path}/sock',
-      configPath: '${temp.path}/device_id.conf',
+      configPath: '${temp.path}/config',
     );
     repository = await Repository.create(
       session,

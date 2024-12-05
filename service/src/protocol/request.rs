@@ -1,5 +1,8 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
-use ouisync::{AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize};
+use ouisync::{
+    crypto::PasswordSalt, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken,
+    StorageSize,
+};
 use ouisync_bridge::network::NetworkDefaults;
 use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
@@ -75,8 +78,14 @@ pub enum Request {
     NetworkSetPortForwardingEnabled(bool),
     NetworkStats,
     NetworkSubscribe,
+    PasswordGenerateSalt,
+    PasswordDeriveSecretKey {
+        password: String,
+        salt: PasswordSalt,
+    },
     RemoteControlBind(Option<SocketAddr>),
     RemoteControlGetListenerAddr,
+    RepositoryClose(RepositoryHandle),
     RepositoryCreate {
         name: String,
         read_secret: Option<SetLocalSecret>,
@@ -105,6 +114,7 @@ pub enum Request {
     /// Find repository by name. Returns the repository that matches the name exactly or
     /// unambiguously by prefix.
     RepositoryFind(String),
+    RepositoryGetAccessMode(RepositoryHandle),
     RepositoryGetBlockExpiration(RepositoryHandle),
     RepositoryGetDefaultBlockExpiration,
     RepositoryGetDefaultQuota,
@@ -133,6 +143,10 @@ pub enum Request {
         repository: RepositoryHandle,
         src: String,
         dst: String,
+    },
+    RepositoryOpen {
+        name: String,
+        secret: Option<LocalSecret>,
     },
     RepositoryResetAccess {
         repository: RepositoryHandle,
@@ -179,7 +193,11 @@ pub enum Request {
         mode: AccessMode,
     },
     RepositorySubscribe(RepositoryHandle),
+    RepositorySyncProgress(RepositoryHandle),
     RepositoryUnmount(RepositoryHandle),
+    ShareTokenMode(#[serde(with = "helpers::str")] ShareToken),
+    /// Shutdown the service
+    Shutdown,
     /// Cancel a subscription identified by the given message id. The message id should be the same
     /// that was used for sending the corresponding subscribe request.
     Unsubscribe(MessageId),
@@ -193,11 +211,6 @@ pub enum Request {
 #[serde(rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Request {
-    RepositoryOpen {
-        path: Utf8PathBuf,
-        secret: Option<LocalSecret>,
-    },
-    RepositoryClose(RepositoryHandle),
     ListRepositoriesSubscribe,
     RepositoryRequiresLocalSecretForReading(RepositoryHandle),
     RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
@@ -211,7 +224,6 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         credentials: Bytes,
     },
-    RepositoryAccessMode(RepositoryHandle),
     RepositorySetAccessMode {
         repository: RepositoryHandle,
         access_mode: AccessMode,
@@ -228,7 +240,6 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
-    RepositorySyncProgress(RepositoryHandle),
     RepositoryMountAll(PathBuf),
     RepositoryGetMetadata {
         repository: RepositoryHandle,
@@ -239,7 +250,6 @@ pub(crate) enum Request {
         edits: Vec<MetadataEdit>,
     },
     RepositoryStats(RepositoryHandle),
-    ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
     ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
@@ -265,11 +275,6 @@ pub(crate) enum Request {
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
-    GenerateSaltForSecretKey,
-    DeriveSecretKey {
-        password: String,
-        salt: PasswordSalt,
-    },
     GetReadPasswordSalt(RepositoryHandle),
     GetWritePasswordSalt(RepositoryHandle),
 }

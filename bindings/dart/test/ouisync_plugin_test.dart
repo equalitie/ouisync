@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io' as io;
+import 'package:ouisync/server.dart';
 import 'package:test/test.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:ouisync/state_monitor.dart';
@@ -9,6 +10,8 @@ void main() {
   late Session session;
 
   setUp(() async {
+    logInit();
+
     temp = await io.Directory.systemTemp.createTemp();
     session = await Session.create(
       socketPath: '${temp.path}/sock',
@@ -60,13 +63,13 @@ void main() {
     });
 
     test('empty directory', () async {
-      final rootDir = await Directory.open(repo, '/');
+      final rootDir = await Directory.read(repo, '/');
       expect(rootDir, isEmpty);
     });
 
     test('share token access mode', () async {
       for (var mode in AccessMode.values) {
-        final token = await repo.createShareToken(accessMode: mode);
+        final token = await repo.share(accessMode: mode);
         expect(await token.mode, equals(mode));
       }
     });
@@ -113,7 +116,7 @@ void main() {
     });
 
     test('get root directory contents after create and open', () async {
-      expect(await Directory.open(repo, '/'), equals([]));
+      expect(await Directory.read(repo, '/'), equals([]));
 
       await repo.close();
 
@@ -123,7 +126,7 @@ void main() {
         secret: null,
       );
 
-      expect(await Directory.open(repo, '/'), equals([]));
+      expect(await Directory.read(repo, '/'), equals([]));
 
       await repo.close();
     });
@@ -230,22 +233,22 @@ void main() {
     final addr0 = 'quic/127.0.0.1:12345';
     final addr1 = 'quic/127.0.0.2:54321';
 
-    await session.addUserProvidedPeer(addr0);
+    await session.addUserProvidedPeers([addr0]);
     expect(await session.userProvidedPeers, equals([addr0]));
 
-    await session.addUserProvidedPeer(addr1);
+    await session.addUserProvidedPeers([addr1]);
     expect(await session.userProvidedPeers, equals([addr0, addr1]));
 
-    await session.removeUserProvidedPeer(addr0);
+    await session.removeUserProvidedPeers([addr0]);
     expect(await session.userProvidedPeers, equals([addr1]));
 
-    await session.removeUserProvidedPeer(addr1);
+    await session.removeUserProvidedPeers([addr1]);
     expect(await session.userProvidedPeers, isEmpty);
   });
 
   group('stun', () {
     setUp(() async {
-      await session.bindNetwork(quicV4: '0.0.0.0:0', quicV6: '[::]:0');
+      await session.bindNetwork(['quic/0.0.0.0:0', 'quic/[::]:0']);
     });
 
     test('external address', () async {

@@ -17,11 +17,13 @@ pub use error::Error;
 
 use futures_util::SinkExt;
 use metrics::MetricsServer;
+use ouisync::crypto::{cipher::SecretKey, PasswordSalt};
 use ouisync_bridge::config::{ConfigError, ConfigKey};
 use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response, ResponseResult};
+use rand::{rngs::OsRng, Rng};
 use slab::Slab;
 use state::State;
-use std::{convert::Infallible, future, io, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{future, io, net::SocketAddr, path::PathBuf, time::Duration};
 use subscription::SubscriptionStream;
 use tokio::{
     select,
@@ -40,6 +42,7 @@ const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("remote_control", "Remote control endpoint address");
 
 pub struct Service {
+    running: bool,
     state: State,
     local_server: LocalServer,
     remote_server: Option<RemoteServer>,
@@ -84,6 +87,7 @@ impl Service {
         let metrics_server = MetricsServer::init(&state).await?;
 
         Ok(Self {
+            running: false,
             state,
             local_server,
             remote_server,
@@ -94,17 +98,15 @@ impl Service {
         })
     }
 
-    /// Runs the service. The future returned from this function never completes (unless it errors)
-    /// but it's safe to cancel.
-    //
-    // Note we are using `Infallible` for the `Ok` variant which reads a bit weird but it just means
-    // the function never returns `Ok`. When `!` (the "never" type) is stabilized we should use
-    // that instead.
-    pub async fn run(&mut self) -> Result<Infallible, Error> {
+    /// Runs the service. This function completes only when `Request::Shutdown` is sent by a client
+    /// or on error. It is also safe to cancel.
+    pub async fn run(&mut self) -> Result<(), Error> {
+        self.running = true;
+
         let mut repo_expiration_interval = time::interval(REPOSITORY_EXPIRATION_POLL_INTERVAL);
         repo_expiration_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-        loop {
+        while self.running {
             select! {
                 result = self.local_server.accept() => {
                     let (reader, writer) = result.map_err(Error::Accept)?;
@@ -138,6 +140,8 @@ impl Service {
                 }
             }
         }
+
+        Ok(())
     }
 
     pub async fn close(&mut self) {
@@ -285,6 +289,14 @@ impl Service {
                 self.state.write_file(file, offset, data.into()).await?;
                 Ok(().into())
             }
+            Request::PasswordGenerateSalt => {
+                let salt: PasswordSalt = OsRng.gen();
+                Ok(salt.as_ref().to_vec().into())
+            }
+            Request::PasswordDeriveSecretKey { password, salt } => {
+                let secret_key = SecretKey::derive_from_password(&password, &salt);
+                Ok(secret_key.as_array().to_vec().into())
+            }
             Request::MetricsBind(addr) => {
                 Ok(self.metrics_server.bind(&self.state, addr).await?.into())
             }
@@ -356,6 +368,10 @@ impl Service {
                 .as_ref()
                 .map(|server| server.local_addr())
                 .into()),
+            Request::RepositoryClose(repository) => {
+                self.state.close_repository(repository).await?;
+                Ok(().into())
+            }
             Request::RepositoryCreate {
                 name,
                 read_secret,
@@ -397,6 +413,9 @@ impl Service {
                 Ok(output.into())
             }
             Request::RepositoryFind(name) => Ok(self.state.find_repository(&name)?.into()),
+            Request::RepositoryGetAccessMode(repository) => {
+                Ok(self.state.repository_access_mode(repository)?.into())
+            }
             Request::RepositoryGetBlockExpiration(repository) => {
                 Ok(self.state.block_expiration(repository)?.into())
             }
@@ -454,6 +473,9 @@ impl Service {
                     .move_repository_entry(repository, src, dst)
                     .await?;
                 Ok(().into())
+            }
+            Request::RepositoryOpen { name, secret } => {
+                Ok(self.state.open_repository(name, secret).await?.into())
             }
             Request::RepositoryResetAccess { repository, token } => {
                 self.state
@@ -538,6 +560,16 @@ impl Service {
             }
             Request::RepositoryUnmount(repository) => {
                 self.state.unmount_repository(repository).await?;
+                Ok(().into())
+            }
+            Request::RepositorySyncProgress(repository) => Ok(self
+                .state
+                .repository_sync_progress(repository)
+                .await?
+                .into()),
+            Request::ShareTokenMode(token) => Ok(token.access_mode().into()),
+            Request::Shutdown => {
+                self.running = false;
                 Ok(().into())
             }
             Request::Unsubscribe(id) => {

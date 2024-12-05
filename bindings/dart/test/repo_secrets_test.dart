@@ -62,13 +62,11 @@ void main() {
     final writePassword = LocalPassword("bar");
 
     {
-      final readSalt = await session.generateSaltForPasswordHash();
-      final writeSalt = await session.generateSaltForPasswordHash();
+      final readSalt = await session.generatePasswordSalt();
+      final writeSalt = await session.generatePasswordSalt();
 
-      final readKey =
-          await session.deriveLocalSecretKey(readPassword, readSalt);
-      final writeKey =
-          await session.deriveLocalSecretKey(writePassword, writeSalt);
+      final readKey = await session.deriveSecretKey(readPassword, readSalt);
+      final writeKey = await session.deriveSecretKey(writePassword, writeSalt);
 
       final repo = await Repository.create(
         session,
