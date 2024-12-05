@@ -45,6 +45,7 @@ class SocketClient extends Client {
       } on SocketException catch (e) {
         lastException = e;
         delay = _minDuration(delay * 2, maxDelay);
+        await Future.delayed(delay);
       }
     }
   }

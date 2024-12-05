@@ -12,23 +12,25 @@ Future<void> runServer({
   required String socketPath,
   required String configPath,
   required String storePath,
-}) {
+  String? debugLabel,
+}) async {
   final bindings = Bindings.instance;
 
-  final run = Isolate.run(() {
-    final rawErrorCode = _withPool((pool) => bindings.start(
+  final rawErrorCode = await Isolate.run(
+    () => _withPool(
+      (pool) => bindings.start(
           pool.toNativeUtf8(socketPath),
           pool.toNativeUtf8(configPath),
           pool.toNativeUtf8(storePath),
-        ));
+          debugLabel != null ? pool.toNativeUtf8(debugLabel) : nullptr),
+    ),
+  );
 
-    final errorCode = ErrorCode.decode(rawErrorCode);
-    if (errorCode != ErrorCode.ok) {
-      throw OuisyncException(errorCode);
-    }
-  });
+  final errorCode = ErrorCode.decode(rawErrorCode);
 
-  return run;
+  if (errorCode != ErrorCode.ok) {
+    throw OuisyncException(errorCode);
+  }
 }
 
 void logInit({String? file, String tag = ''}) =>

@@ -61,7 +61,14 @@ impl Service {
                 .await
                 .map_err(|error| match error.kind() {
                     io::ErrorKind::AddrInUse => Error::ServiceAlreadyRunning,
-                    _ => Error::Bind(error),
+                    _ => {
+                        tracing::error!(
+                            ?error,
+                            "failed to bind local listener to {:?}",
+                            local_socket_path,
+                        );
+                        Error::Bind(error)
+                    }
                 })?;
 
         let remote_server = match state.config.entry(REMOTE_CONTROL_KEY).get().await {

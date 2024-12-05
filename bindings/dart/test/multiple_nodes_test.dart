@@ -14,13 +14,20 @@ void main() {
     logInit();
 
     temp = await io.Directory.systemTemp.createTemp();
+
+    await io.Directory('${temp.path}/1').create();
+    await io.Directory('${temp.path}/2').create();
+
     session1 = await Session.create(
       socketPath: '${temp.path}/1/sock',
       configPath: '${temp.path}/1/config',
+      debugLabel: '1',
     );
+
     session2 = await Session.create(
       socketPath: '${temp.path}/2/sock',
       configPath: '${temp.path}/2/config',
+      debugLabel: '2',
     );
 
     repo1 = await Repository.create(

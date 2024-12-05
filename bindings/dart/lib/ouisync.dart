@@ -48,8 +48,7 @@ class Session {
   static Future<Session> create({
     required String socketPath,
     required String configPath,
-    String? logPath,
-    String logTag = defaultLogTag,
+    String? debugLabel,
   }) async {
     // TODO: temp hack
     final storeDir = await io.Directory.systemTemp.createTemp('ouisync');
@@ -60,6 +59,7 @@ class Session {
       socketPath: socketPath,
       configPath: configPath,
       storePath: storeDir.path,
+      debugLabel: debugLabel,
     ).then(
       (_) {
         throw OuisyncException(
@@ -67,9 +67,11 @@ class Session {
           'server unexpectedly terminated',
         );
       },
-      onError: (error) => switch (error) {
-        ServiceAlreadyRunning => Future.any([]), // wait forewer
-        _ => throw error,
+      onError: (error) {
+        return switch (error) {
+          ServiceAlreadyRunning => Future.any([]), // wait forewer
+          _ => throw error,
+        };
       },
     );
 

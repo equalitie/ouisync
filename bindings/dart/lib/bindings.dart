@@ -13,8 +13,14 @@ typedef ouisync_start = Uint16 Function(
   Pointer<Char>,
   Pointer<Char>,
   Pointer<Char>,
+  Pointer<Char>,
 );
-typedef Start = int Function(Pointer<Char>, Pointer<Char>, Pointer<Char>);
+typedef Start = int Function(
+  Pointer<Char>,
+  Pointer<Char>,
+  Pointer<Char>,
+  Pointer<Char>,
+);
 
 typedef ouisync_log_init = Uint16 Function(
   Pointer<Char>,

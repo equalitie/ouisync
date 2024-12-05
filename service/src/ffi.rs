@@ -7,6 +7,7 @@ use std::{
 
 use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
 use tokio::runtime;
+use tracing::Instrument;
 
 use crate::{
     protocol::{ErrorCode, LogLevel, ToErrorCode},
@@ -25,8 +26,9 @@ pub unsafe extern "C" fn ouisync_start(
     socket_path: *const c_char,
     config_dir: *const c_char,
     default_store_dir: *const c_char,
+    debug_label: *const c_char,
 ) -> ErrorCode {
-    start(socket_path, config_dir, default_store_dir).to_error_code()
+    start(socket_path, config_dir, default_store_dir, debug_label).to_error_code()
 }
 
 /// Initialize logging. Should be called before `ouisync_start`.
@@ -91,26 +93,36 @@ unsafe fn start(
     socket_path: *const c_char,
     config_dir: *const c_char,
     default_store_dir: *const c_char,
+    debug_label: *const c_char,
 ) -> Result<(), Error> {
     let socket_path = PathBuf::from(CStr::from_ptr(socket_path).to_str()?);
     let config_dir = PathBuf::from(CStr::from_ptr(config_dir).to_str()?);
     let default_store_dir = PathBuf::from(CStr::from_ptr(default_store_dir).to_str()?);
+
+    let span = if !debug_label.is_null() {
+        tracing::info_span!("service", message = CStr::from_ptr(debug_label).to_str()?)
+    } else {
+        tracing::info_span!("service")
+    };
 
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(Error::InitializeRuntime)?;
 
-    runtime.block_on(async move {
-        let mut service = Service::init(socket_path, config_dir, default_store_dir).await?;
+    runtime.block_on(
+        async move {
+            let mut service = Service::init(socket_path, config_dir, default_store_dir).await?;
 
-        // TODO: handle sigint/sigterm
+            // TODO: handle sigint/sigterm
 
-        service.run().await?;
-        service.close().await;
+            service.run().await?;
+            service.close().await;
 
-        Ok(())
-    })
+            Ok(())
+        }
+        .instrument(span),
+    )
 }
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
