@@ -733,10 +733,6 @@ class File {
   ///
   /// Throws if [path] doesn't exists or is a directory.
   static Future<File> open(Repository repo, String path) async {
-    if (debugTrace) {
-      print("File.open");
-    }
-
     return File._(
         repo._client,
         await repo._client.invoke<int>('file_open', {

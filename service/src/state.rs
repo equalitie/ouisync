@@ -815,7 +815,7 @@ impl State {
             .repository();
         let local_branch = repo.local_branch()?;
 
-        let file = repo.create_file(&path).await?;
+        let file = repo.open_file(&path).await?;
         let holder = FileHolder { file, local_branch };
         let handle = self.files.insert(holder);
 
