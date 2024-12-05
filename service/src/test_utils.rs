@@ -1,5 +1,6 @@
 use futures_util::future::{AbortHandle, Abortable};
 use tokio::task::{self, JoinHandle};
+use tracing::{Instrument, Span};
 
 use crate::Service;
 
@@ -20,15 +21,20 @@ pub(crate) struct ServiceRunner {
 
 impl ServiceRunner {
     pub fn start(mut service: Service) -> Self {
+        // Using `AbortHandle` instead of aborting the task itself so we can get the service back
+        // after abort.
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
-        let task = task::spawn(async move {
-            match Abortable::new(service.run(), abort_registration).await {
-                Ok(Err(error)) => panic!("unexpected error: {error:?}"),
-                Err(_) => (),
-            }
+        let task = task::spawn(
+            async move {
+                match Abortable::new(service.run(), abort_registration).await {
+                    Ok(Err(error)) => panic!("unexpected error: {error:?}"),
+                    Err(_) => (),
+                }
 
-            service
-        });
+                service
+            }
+            .instrument(Span::current()),
+        );
 
         Self { task, abort_handle }
     }

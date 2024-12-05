@@ -1,4 +1,5 @@
 import 'dart:io' as io;
+import 'package:ouisync/server.dart';
 import 'package:test/test.dart';
 import 'package:ouisync/ouisync.dart';
 
@@ -10,6 +11,8 @@ void main() {
   late Repository repo2;
 
   setUp(() async {
+    logInit();
+
     temp = await io.Directory.systemTemp.createTemp();
     session1 = await Session.create(
       socketPath: '${temp.path}/1/sock',

@@ -17,7 +17,7 @@ impl MessageId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Eq, PartialEq, Debug)]
 pub struct Message<T> {
     pub id: MessageId,
     pub payload: T,

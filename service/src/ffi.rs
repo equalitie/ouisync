@@ -124,7 +124,7 @@ unsafe fn log_init(log_file: *const c_char, log_tag: *const c_char) -> Result<()
 
     let log_tag = CStr::from_ptr(log_tag).to_str()?.to_owned();
 
-    let logger = Logger::new(log_file, log_tag, LogFormat::Human, LogColor::Auto)
+    let logger = Logger::new(log_file, log_tag, LogFormat::Human, LogColor::Always)
         .map_err(Error::InitializeLogger)?;
 
     LOGGER.set(logger).map_err(|_| {

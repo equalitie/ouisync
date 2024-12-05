@@ -330,6 +330,7 @@ impl Service {
                 self.state.set_port_forwarding_enabled(enabled).await;
                 Ok(().into())
             }
+            Request::NetworkStats => Ok(self.state.network.stats().into()),
             Request::NetworkSubscribe => {
                 let rx = self.state.network.subscribe();
                 self.subscriptions.insert((conn_id, message.id), rx.into());

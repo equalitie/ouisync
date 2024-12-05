@@ -154,16 +154,30 @@ fn into_send_error(src: io::Error) -> WriteError {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::VecDeque,
+        net::Ipv4Addr,
+        path::{Path, PathBuf},
+    };
+
     use assert_matches::assert_matches;
     use futures_util::SinkExt;
+    use ouisync::{AccessSecrets, PeerAddr, ShareToken};
     use tempfile::TempDir;
     use tokio_stream::StreamExt;
+    use tracing::Instrument;
 
     use crate::{
-        protocol::{Message, MessageId, Request, Response, ServerPayload},
+        file::FileHandle,
+        protocol::{
+            Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ServerPayload,
+            ToErrorCode,
+        },
         test_utils::{self, ServiceRunner},
         transport, Service,
     };
+
+    use super::{LocalClientReader, LocalClientWriter};
 
     #[tokio::test]
     async fn sanity_check() {
@@ -183,35 +197,28 @@ mod tests {
 
         let runner = ServiceRunner::start(service);
 
-        let (mut client_reader, mut client_writer) =
-            transport::local::connect(&socket_path).await.unwrap();
+        let mut client = TestClient::connect(&socket_path).await;
 
         let message_id = MessageId::next();
-        client_writer
-            .send(Message {
-                id: message_id,
-                payload: Request::RepositoryGetStoreDir,
-            })
+        let value: PathBuf = client
+            .invoke(message_id, Request::RepositoryGetStoreDir)
             .await
             .unwrap();
-
-        let message = client_reader.next().await.unwrap().unwrap();
-        assert_eq!(message.id, message_id);
-        let value = assert_matches!(message.payload, ServerPayload::Success(Response::Path(value)) => value);
+        assert_eq!(client.unsolicited_responses, []);
         assert_eq!(value, store_dir);
 
         runner.stop().await.close().await;
     }
 
     #[tokio::test]
-    async fn notifications() {
+    async fn notifications_on_local_changes() {
         test_utils::init_log();
 
         let temp_dir = TempDir::new().unwrap();
         let socket_path = temp_dir.path().join("sock");
         let store_dir = temp_dir.path().join("store");
 
-        let mut service = Service::init(
+        let service = Service::init(
             socket_path.clone(),
             temp_dir.path().join("config"),
             store_dir.clone(),
@@ -219,101 +226,281 @@ mod tests {
         .await
         .unwrap();
 
-        let repo_handle = service
-            .state_mut()
-            .create_repository("foo".to_string(), None, None, None, false, false)
-            .await
-            .unwrap();
-
         let runner = ServiceRunner::start(service);
 
-        let (mut client_reader, mut client_writer) =
-            transport::local::connect(&socket_path).await.unwrap();
+        let mut client = TestClient::connect(&socket_path).await;
+
+        let repo_handle: RepositoryHandle = client
+            .invoke(
+                MessageId::next(),
+                Request::RepositoryCreate {
+                    name: "foo".to_string(),
+                    read_secret: None,
+                    write_secret: None,
+                    token: None,
+                    dht: false,
+                    pex: false,
+                },
+            )
+            .await
+            .unwrap();
 
         // Subscribe to repository event notifications
-        let subscribe_message_id = MessageId::next();
-        client_writer
-            .send(Message {
-                id: subscribe_message_id,
-                payload: Request::RepositorySubscribe(repo_handle),
-            })
+        let sub_id = MessageId::next();
+        let () = client
+            .invoke(sub_id, Request::RepositorySubscribe(repo_handle))
+            .await
+            .unwrap();
+        assert_eq!(client.unsolicited_responses, []);
+
+        // Modify the repo to trigger a notification
+        let file_handle: FileHandle = client
+            .invoke(
+                MessageId::next(),
+                Request::FileCreate {
+                    repository: repo_handle,
+                    path: "a.txt".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+        let () = client
+            .invoke(MessageId::next(), Request::FileClose(file_handle))
             .await
             .unwrap();
 
-        let message = client_reader.next().await.unwrap().unwrap();
-        assert_eq!(message.id, subscribe_message_id);
-        assert_matches!(message.payload, ServerPayload::Success(Response::None));
-
-        let service = runner.stop().await;
-
-        // Modify the repo to trigger a notification
-        let repo = service.state().get_repository(repo_handle).unwrap();
-        repo.create_file("a.txt").await.unwrap();
-
-        let runner = ServiceRunner::start(service);
-
-        let message = client_reader.next().await.unwrap().unwrap();
-        assert_eq!(message.id, subscribe_message_id);
+        let message = client.next().await.unwrap();
+        assert_eq!(message.id, sub_id);
         assert_matches!(
             message.payload,
             ServerPayload::Success(Response::RepositoryEvent)
         );
 
         // Unsubscribe
-        let unsubscribe_message_id = MessageId::next();
-        client_writer
-            .send(Message {
-                id: unsubscribe_message_id,
-                payload: Request::Unsubscribe(subscribe_message_id),
-            })
+        let () = client
+            .invoke(MessageId::next(), Request::Unsubscribe(sub_id))
             .await
             .unwrap();
 
-        // There could have been further notification events sent before the unsubscribe, ignore
-        // them.
-        loop {
-            let message = client_reader.next().await.unwrap().unwrap();
-            if message.id == unsubscribe_message_id {
-                assert_matches!(message.payload, ServerPayload::Success(Response::None));
-                break;
-            } else if message.id == subscribe_message_id {
-                assert_matches!(
-                    message.payload,
-                    ServerPayload::Success(Response::RepositoryEvent)
-                );
-                continue;
-            } else {
-                panic!(
-                    "unexpected message id: {:?}, expecting {:?} or {:?}",
-                    message.id, subscribe_message_id, unsubscribe_message_id
-                );
-            }
+        // Drain any other notification events sent before the unsubscribe.
+        while let Some(message) = client.unsolicited_responses.pop_front() {
+            assert_eq!(message.id, sub_id);
+            assert_matches!(
+                message.payload,
+                ServerPayload::Success(Response::RepositoryEvent)
+            );
         }
-
-        let service = runner.stop().await;
 
         // Modify the repo to trigger another notification. Because we've unsubscribed, we should
         // not receive this one.
-        let repo = service.state().get_repository(repo_handle).unwrap();
-        repo.create_file("b.txt").await.unwrap();
-
-        let runner = ServiceRunner::start(service);
-
-        // Send some message whose id is different than what the subscription had. Then when we
-        // receive a response with that id we know the subscription has been cancelled before,
-        // otherwise we would have received the notification first.
-        let other_message_id = MessageId::next();
-        client_writer
-            .send(Message {
-                id: other_message_id,
-                payload: Request::RepositoryGetStoreDir,
-            })
+        let file_handle: FileHandle = client
+            .invoke(
+                MessageId::next(),
+                Request::FileCreate {
+                    repository: repo_handle,
+                    path: "b.txt".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+        let () = client
+            .invoke(MessageId::next(), Request::FileClose(file_handle))
             .await
             .unwrap();
 
-        let message = client_reader.next().await.unwrap().unwrap();
-        assert_eq!(message.id, other_message_id);
+        // Verify we didn't receive any further notifications by sending some request and checking
+        // we only received response to that request and nothing else.
+        let _: PathBuf = client
+            .invoke(MessageId::next(), Request::RepositoryGetStoreDir)
+            .await
+            .unwrap();
+        assert_eq!(client.unsolicited_responses, []);
 
         runner.stop().await.close().await;
+    }
+
+    #[tokio::test]
+    async fn notifications_on_sync() {
+        test_utils::init_log();
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create two separate services (A and B), each with its own client.
+        let (socket_path_a, runner_a) = async {
+            let socket_path = temp_dir.path().join("a.sock");
+            let service = Service::init(
+                socket_path.clone(),
+                temp_dir.path().join("config_a"),
+                temp_dir.path().join("store_a"),
+            )
+            .await
+            .unwrap();
+            let runner = ServiceRunner::start(service);
+
+            (socket_path, runner)
+        }
+        .instrument(tracing::info_span!("a"))
+        .await;
+
+        let (socket_path_b, runner_b) = async {
+            let socket_path = temp_dir.path().join("b.sock");
+            let service = Service::init(
+                socket_path.clone(),
+                temp_dir.path().join("config_b"),
+                temp_dir.path().join("store_b"),
+            )
+            .await
+            .unwrap();
+            let runner = ServiceRunner::start(service);
+
+            (socket_path, runner)
+        }
+        .instrument(tracing::info_span!("b"))
+        .await;
+
+        let mut client_a = TestClient::connect(&socket_path_a).await;
+        let mut client_b = TestClient::connect(&socket_path_b).await;
+
+        let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
+
+        let () = client_a
+            .invoke(MessageId::next(), Request::NetworkBind(vec![bind_addr]))
+            .await
+            .unwrap();
+
+        let () = client_b
+            .invoke(MessageId::next(), Request::NetworkBind(vec![bind_addr]))
+            .await
+            .unwrap();
+
+        // Connect A and B
+        let addrs_a: Vec<PeerAddr> = client_a
+            .invoke(MessageId::next(), Request::NetworkGetListenerAddrs)
+            .await
+            .unwrap();
+        let () = client_b
+            .invoke(
+                MessageId::next(),
+                Request::NetworkAddUserProvidedPeers(addrs_a),
+            )
+            .await
+            .unwrap();
+
+        // Create repo shared between them
+        let token = ShareToken::from(AccessSecrets::random_write());
+
+        let repo_handle_a: RepositoryHandle = client_a
+            .invoke(
+                MessageId::next(),
+                Request::RepositoryCreate {
+                    name: "repo".to_owned(),
+                    read_secret: None,
+                    write_secret: None,
+                    token: Some(token.clone()),
+                    dht: false,
+                    pex: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        let repo_handle_b: RepositoryHandle = client_b
+            .invoke(
+                MessageId::next(),
+                Request::RepositoryCreate {
+                    name: "repo".to_owned(),
+                    read_secret: None,
+                    write_secret: None,
+                    token: Some(token),
+                    dht: false,
+                    pex: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        // B subscribes to the repo notifications
+        let sub_id_b = MessageId::next();
+        let () = client_b
+            .invoke(sub_id_b, Request::RepositorySubscribe(repo_handle_b))
+            .await
+            .unwrap();
+
+        // A makes some changes
+        let _: FileHandle = client_a
+            .invoke(
+                MessageId::next(),
+                Request::FileCreate {
+                    repository: repo_handle_a,
+                    path: "test.txt".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+
+        // B syncs with A and observes notifications
+        let message = client_b.next().await.unwrap();
+        assert_eq!(message.id, sub_id_b);
+        assert_matches!(
+            message.payload,
+            ServerPayload::Success(Response::RepositoryEvent)
+        );
+
+        runner_a.stop().await.close().await;
+        runner_b.stop().await.close().await;
+    }
+
+    struct TestClient {
+        reader: LocalClientReader,
+        writer: LocalClientWriter,
+        unsolicited_responses: VecDeque<Message<ServerPayload>>,
+    }
+
+    impl TestClient {
+        async fn connect(socket_path: &Path) -> Self {
+            let (reader, writer) = transport::local::connect(socket_path).await.unwrap();
+
+            Self {
+                reader,
+                writer,
+                unsolicited_responses: VecDeque::new(),
+            }
+        }
+
+        async fn invoke<T>(
+            &mut self,
+            message_id: MessageId,
+            request: Request,
+        ) -> Result<T, ProtocolError>
+        where
+            T: TryFrom<Response>,
+            T::Error: std::error::Error + ToErrorCode,
+        {
+            self.writer
+                .send(Message {
+                    id: message_id,
+                    payload: request,
+                })
+                .await
+                .unwrap();
+
+            loop {
+                let message = self.reader.next().await.unwrap().unwrap();
+                if message.id == message_id {
+                    break Result::from(message.payload)
+                        .and_then(|response| response.try_into().map_err(ProtocolError::from));
+                } else {
+                    self.unsolicited_responses.push_back(message);
+                }
+            }
+        }
+
+        async fn next(&mut self) -> Option<Message<ServerPayload>> {
+            if let Some(message) = self.unsolicited_responses.pop_front() {
+                Some(message)
+            } else {
+                self.reader.next().await.transpose().unwrap()
+            }
+        }
     }
 }

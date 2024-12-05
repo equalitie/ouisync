@@ -154,7 +154,7 @@ class Session {
       .then((list) => NetworkStats.decode(list));
 
   Future<List<PeerInfo>> get peers => _client
-      .invoke<List<Object?>>('network_known_peers')
+      .invoke<List<Object?>>('network_get_peers')
       .then(PeerInfo.decodeAll);
 
   StateMonitor get rootStateMonitor => StateMonitor.getRoot(_client);
@@ -759,10 +759,6 @@ class File {
 
   /// Removes (deletes) a file at [path] from [repo].
   static Future<void> remove(Repository repo, String path) {
-    if (debugTrace) {
-      print("File.remove $path");
-    }
-
     return repo._client.invoke<void>('file_remove', {
       'repository': repo._handle,
       'path': path,
@@ -771,19 +767,11 @@ class File {
 
   /// Flushed and closes this file.
   Future<void> close() {
-    if (debugTrace) {
-      print("File.close");
-    }
-
     return _client.invoke<void>('file_close', _handle);
   }
 
   /// Flushes any pending writes to this file.
   Future<void> flush() {
-    if (debugTrace) {
-      print("File.flush");
-    }
-
     return _client.invoke<void>('file_flush', _handle);
   }
 

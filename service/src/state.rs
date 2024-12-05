@@ -47,7 +47,6 @@ const DEFAULT_REPOSITORY_EXPIRATION_KEY: ConfigKey<u64> = ConfigKey::new(
 const AUTOMOUNT_KEY: &str = "automount";
 
 const REPOSITORY_FILE_EXTENSION: &str = "ouisyncdb";
-const DEFAULT_PORT: u16 = 20209;
 
 pub(crate) struct State {
     pub config: ConfigStore,
@@ -79,8 +78,8 @@ impl State {
                 port_forwarding_enabled: true,
                 local_discovery_enabled: true,
                 bind: vec![
-                    PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, DEFAULT_PORT).into()),
-                    PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, DEFAULT_PORT).into()),
+                    PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()),
+                    PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()),
                 ],
             },
         )

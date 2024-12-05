@@ -8,6 +8,8 @@ use crate::{
     transport::{ClientError, ReadError, ValidateError, WriteError},
 };
 
+use super::UnexpectedResponse;
+
 #[derive(
     Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, IntoPrimitive, TryFromPrimitive,
 )]
@@ -156,6 +158,12 @@ impl ToErrorCode for ValidateError {
         match self {
             Self::PermissionDenied => ErrorCode::PermissionDenied,
         }
+    }
+}
+
+impl ToErrorCode for UnexpectedResponse {
+    fn to_error_code(&self) -> ErrorCode {
+        ErrorCode::InvalidData
     }
 }
 
