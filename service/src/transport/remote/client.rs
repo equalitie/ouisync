@@ -12,7 +12,7 @@ use tokio_tungstenite::{tungstenite as ws, Connector, MaybeTlsStream, WebSocketS
 
 use crate::{
     protocol::{
-        ErrorCode, Message, MessageId, ProtocolError, RepositoryHandle, Response, ServerPayload,
+        ErrorCode, Message, MessageId, ProtocolError, RepositoryHandle, Response, ResponseResult,
         UnexpectedResponse,
     },
     transport::ClientError,
@@ -21,7 +21,7 @@ use crate::{
 use super::{extract_session_cookie, protocol, RemoteSocket};
 
 pub struct RemoteClient {
-    reader: RemoteSocket<ServerPayload, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>,
+    reader: RemoteSocket<ResponseResult, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>,
     writer: RemoteSocket<
         protocol::Request,
         SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, ws::Message>,
@@ -150,8 +150,8 @@ impl RemoteClient {
         }
 
         let response = match message.payload {
-            ServerPayload::Success(response) => response,
-            ServerPayload::Failure(error) => return Err(ClientError::Response(error)),
+            ResponseResult::Success(response) => response,
+            ResponseResult::Failure(error) => return Err(ClientError::Response(error)),
         };
 
         Ok(response)

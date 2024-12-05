@@ -1,5 +1,5 @@
 use super::{ClientError, ReadError, WriteError};
-use crate::protocol::{Message, Request, ServerPayload};
+use crate::protocol::{Message, Request, ResponseResult};
 use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use interprocess::local_socket::{
@@ -66,9 +66,9 @@ pub async fn connect(
 }
 
 pub(crate) type LocalServerReader = LocalReader<Request>;
-pub(crate) type LocalServerWriter = LocalWriter<ServerPayload>;
+pub(crate) type LocalServerWriter = LocalWriter<ResponseResult>;
 
-pub type LocalClientReader = LocalReader<ServerPayload>;
+pub type LocalClientReader = LocalReader<ResponseResult>;
 pub type LocalClientWriter = LocalWriter<Request>;
 
 pub struct LocalReader<T> {
@@ -170,7 +170,7 @@ mod tests {
     use crate::{
         file::FileHandle,
         protocol::{
-            Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ServerPayload,
+            Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ResponseResult,
             ToErrorCode,
         },
         test_utils::{self, ServiceRunner},
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(message.id, sub_id);
         assert_matches!(
             message.payload,
-            ServerPayload::Success(Response::RepositoryEvent)
+            ResponseResult::Success(Response::RepositoryEvent)
         );
 
         // Unsubscribe
@@ -287,7 +287,7 @@ mod tests {
             assert_eq!(message.id, sub_id);
             assert_matches!(
                 message.payload,
-                ServerPayload::Success(Response::RepositoryEvent)
+                ResponseResult::Success(Response::RepositoryEvent)
             );
         }
 
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(message.id, sub_id_b);
         assert_matches!(
             message.payload,
-            ServerPayload::Success(Response::RepositoryEvent)
+            ResponseResult::Success(Response::RepositoryEvent)
         );
 
         runner_a.stop().await.close().await;
@@ -453,7 +453,7 @@ mod tests {
     struct TestClient {
         reader: LocalClientReader,
         writer: LocalClientWriter,
-        unsolicited_responses: VecDeque<Message<ServerPayload>>,
+        unsolicited_responses: VecDeque<Message<ResponseResult>>,
     }
 
     impl TestClient {
@@ -495,7 +495,7 @@ mod tests {
             }
         }
 
-        async fn next(&mut self) -> Option<Message<ServerPayload>> {
+        async fn next(&mut self) -> Option<Message<ResponseResult>> {
             if let Some(message) = self.unsolicited_responses.pop_front() {
                 Some(message)
             } else {

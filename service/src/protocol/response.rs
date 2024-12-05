@@ -16,12 +16,12 @@ use super::{
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ServerPayload {
+pub enum ResponseResult {
     Success(Response),
     Failure(ProtocolError),
 }
 
-impl From<Result<Response, ProtocolError>> for ServerPayload {
+impl From<Result<Response, ProtocolError>> for ResponseResult {
     fn from(result: Result<Response, ProtocolError>) -> Self {
         match result {
             Ok(response) => Self::Success(response),
@@ -30,11 +30,11 @@ impl From<Result<Response, ProtocolError>> for ServerPayload {
     }
 }
 
-impl From<ServerPayload> for Result<Response, ProtocolError> {
-    fn from(payload: ServerPayload) -> Self {
+impl From<ResponseResult> for Result<Response, ProtocolError> {
+    fn from(payload: ResponseResult) -> Self {
         match payload {
-            ServerPayload::Success(response) => Ok(response),
-            ServerPayload::Failure(error) => Err(error),
+            ResponseResult::Success(response) => Ok(response),
+            ResponseResult::Failure(error) => Err(error),
         }
     }
 }

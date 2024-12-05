@@ -7,7 +7,7 @@ use ouisync::{crypto::Password, LocalSecret, PeerAddr, PeerInfo, SetLocalSecret,
 use ouisync_service::{
     protocol::{
         ErrorCode, Message, MessageId, ProtocolError, QuotaInfo, RepositoryHandle, Request,
-        Response, ServerPayload, UnexpectedResponse,
+        Response, ResponseResult, UnexpectedResponse,
     },
     transport::{
         local::{self, LocalClientReader, LocalClientWriter},
@@ -544,8 +544,8 @@ impl LocalClient {
         };
 
         match message.payload {
-            ServerPayload::Success(response) => Ok(response.try_into()?),
-            ServerPayload::Failure(error) => Err(error.into()),
+            ResponseResult::Success(response) => Ok(response.try_into()?),
+            ResponseResult::Failure(error) => Err(error.into()),
         }
     }
 

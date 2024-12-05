@@ -23,7 +23,7 @@ use tokio_tungstenite::{tungstenite as ws, WebSocketStream};
 use tracing::{Instrument, Span};
 
 use crate::{
-    protocol::{Message, MessageId, Request, ServerPayload},
+    protocol::{Message, MessageId, Request, ResponseResult},
     transport::{ReadError, ValidateError, WriteError},
 };
 
@@ -227,7 +227,7 @@ impl Stream for RemoteServerReader {
 
 pub(crate) struct RemoteServerWriter {
     socket:
-        RemoteSocket<ServerPayload, SplitSink<WebSocketStream<TlsStream<TcpStream>>, ws::Message>>,
+        RemoteSocket<ResponseResult, SplitSink<WebSocketStream<TlsStream<TcpStream>>, ws::Message>>,
 }
 
 impl RemoteServerWriter {
@@ -238,7 +238,7 @@ impl RemoteServerWriter {
     }
 }
 
-impl Sink<Message<ServerPayload>> for RemoteServerWriter {
+impl Sink<Message<ResponseResult>> for RemoteServerWriter {
     type Error = WriteError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -255,7 +255,7 @@ impl Sink<Message<ServerPayload>> for RemoteServerWriter {
 
     fn start_send(
         self: Pin<&mut Self>,
-        message: Message<ServerPayload>,
+        message: Message<ResponseResult>,
     ) -> Result<(), Self::Error> {
         self.get_mut().socket.start_send_unpin(message)
     }

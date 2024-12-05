@@ -963,14 +963,6 @@ impl State {
         self.close_repositories().await;
     }
 
-    #[cfg(test)]
-    pub(crate) fn get_repository(
-        &self,
-        handle: RepositoryHandle,
-    ) -> Option<&Arc<ouisync::Repository>> {
-        self.repos.get(handle).map(|holder| holder.repository())
-    }
-
     // Find all repositories in the store dir and open them.
     async fn load_repositories(&mut self) {
         if !fs::try_exists(&self.store_dir).await.unwrap_or(false) {

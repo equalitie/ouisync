@@ -18,7 +18,7 @@ pub use error::Error;
 use futures_util::SinkExt;
 use metrics::MetricsServer;
 use ouisync_bridge::config::{ConfigError, ConfigKey};
-use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response, ServerPayload};
+use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response, ResponseResult};
 use slab::Slab;
 use state::State;
 use std::{convert::Infallible, future, io, net::SocketAddr, path::PathBuf, time::Duration};
@@ -122,7 +122,7 @@ impl Service {
                         conn_id,
                         Message {
                             id: message_id,
-                            payload: ServerPayload::Success(response)
+                            payload: ResponseResult::Success(response)
                         },
                     ).await;
                 }
@@ -209,7 +209,7 @@ impl Service {
                     conn_id,
                     Message {
                         id,
-                        payload: ServerPayload::Failure(error.into()),
+                        payload: ResponseResult::Failure(error.into()),
                     },
                 )
                 .await;
@@ -221,7 +221,7 @@ impl Service {
                     conn_id,
                     Message {
                         id,
-                        payload: ServerPayload::Failure(error.into()),
+                        payload: ResponseResult::Failure(error.into()),
                     },
                 )
                 .await;
@@ -526,7 +526,7 @@ impl Service {
         }
     }
 
-    async fn send_message(&mut self, conn_id: ConnectionId, message: Message<ServerPayload>) {
+    async fn send_message(&mut self, conn_id: ConnectionId, message: Message<ResponseResult>) {
         let Some(writer) = self.writers.get_mut(conn_id) else {
             tracing::error!("connection not found");
             return;
