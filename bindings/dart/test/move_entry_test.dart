@@ -45,14 +45,14 @@ void main() {
     }
     // Check that root (/) contains only one entry (/file1)
     {
-      final rootContents = await Directory.open(repository, '/');
+      final rootContents = await Directory.read(repository, '/');
       expect(rootContents.toList().length, equals(1));
 
       print('Root contents: ${rootContents.toList()}');
     }
     // Check that folder2 (/folder1/folder2) is empty
     {
-      final rootContents = await Directory.open(repository, folder2Path);
+      final rootContents = await Directory.read(repository, folder2Path);
       expect(rootContents.toList().length, equals(0));
 
       print('Folder2 contents: ${rootContents.toList()}');
@@ -65,7 +65,7 @@ void main() {
     // Check the contents in root for two entries: folder1 (/folder1) and folder2 (/folder2)
     {
       final rootContentsAfterMovingFolder2 =
-          await Directory.open(repository, '/');
+          await Directory.read(repository, '/');
       expect(rootContentsAfterMovingFolder2.isNotEmpty, equals(true));
       expect(rootContentsAfterMovingFolder2.toList().length, equals(2));
 
@@ -85,7 +85,7 @@ void main() {
     }
     // Check that root (/) contains only one entry (/file1)
     {
-      final rootContents = await Directory.open(repository, '/');
+      final rootContents = await Directory.read(repository, '/');
       expect(rootContents.toList().length, equals(1));
 
       print('Root contents: ${rootContents.toList()}');
@@ -98,7 +98,7 @@ void main() {
     }
     // Check that folder2 (/folder1/folder2) contains only one entry (/folder1/folder2/file1.txt)
     {
-      final folder2Contents = await Directory.open(repository, folder2Path);
+      final folder2Contents = await Directory.read(repository, folder2Path);
       expect(folder2Contents.toList().length, equals(1));
 
       print('Folder2 contents: ${folder2Contents.toList()}');
@@ -111,7 +111,7 @@ void main() {
     // Check the contents in root for two entryes: folder1 (/folder1) and folder2 (/folder2)
     {
       final rootContentsAfterMovingFolder2 =
-          await Directory.open(repository, '/');
+          await Directory.read(repository, '/');
       expect(rootContentsAfterMovingFolder2.isNotEmpty, equals(true));
       expect(rootContentsAfterMovingFolder2.toList().length, equals(2));
 

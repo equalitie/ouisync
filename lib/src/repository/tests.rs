@@ -281,9 +281,7 @@ async fn move_file_onto_non_existing_entry() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_file("src.txt").await.unwrap();
-    repo.move_entry("/", "src.txt", "/", "dst.txt")
-        .await
-        .unwrap();
+    repo.move_entry("src.txt", "dst.txt").await.unwrap();
 
     assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
     assert_matches!(repo.open_file("dst.txt").await, Ok(_));
@@ -298,9 +296,7 @@ async fn move_file_onto_tombstone() {
     repo.create_file("dst.txt").await.unwrap();
     repo.remove_entry("dst.txt").await.unwrap();
 
-    repo.move_entry("/", "src.txt", "/", "dst.txt")
-        .await
-        .unwrap();
+    repo.move_entry("src.txt", "dst.txt").await.unwrap();
 
     assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
     assert_matches!(repo.open_file("dst.txt").await, Ok(_));
@@ -320,9 +316,7 @@ async fn move_file_onto_existing_file() {
     file.flush().await.unwrap();
     drop(file);
 
-    repo.move_entry("/", "src.txt", "/", "dst.txt")
-        .await
-        .unwrap();
+    repo.move_entry("src.txt", "dst.txt").await.unwrap();
 
     assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
 
@@ -338,7 +332,7 @@ async fn move_file_onto_existing_directory() {
     repo.create_directory("dst").await.unwrap();
 
     assert_matches!(
-        repo.move_entry("/", "src.txt", "/", "dst").await,
+        repo.move_entry("src.txt", "dst").await,
         Err(Error::EntryIsDirectory)
     )
 }
@@ -348,7 +342,7 @@ async fn move_directory_onto_non_existing_entry() {
     let (_base_dir, repo) = setup().await;
 
     repo.create_directory("src").await.unwrap();
-    repo.move_entry("/", "src", "/", "dst").await.unwrap();
+    repo.move_entry("src", "dst").await.unwrap();
 
     assert_matches!(repo.open_directory("src").await, Err(Error::EntryNotFound));
     assert_matches!(repo.open_directory("dst").await, Ok(_));
@@ -362,7 +356,7 @@ async fn move_directory_onto_file_tombstone() {
     repo.create_file("dst").await.unwrap();
     repo.remove_entry("dst").await.unwrap();
 
-    repo.move_entry("/", "src", "/", "dst").await.unwrap();
+    repo.move_entry("src", "dst").await.unwrap();
 
     assert_matches!(repo.open_directory("src").await, Err(Error::EntryNotFound));
     assert_matches!(repo.open_directory("dst").await, Ok(_));
@@ -376,7 +370,7 @@ async fn move_directory_onto_directory_tombstone() {
     repo.create_directory("dst").await.unwrap();
     repo.remove_entry("dst").await.unwrap();
 
-    repo.move_entry("/", "src", "/", "dst").await.unwrap();
+    repo.move_entry("src", "dst").await.unwrap();
 
     assert_matches!(repo.open_directory("src").await, Err(Error::EntryNotFound));
     assert_matches!(repo.open_directory("dst").await, Ok(_));
@@ -389,7 +383,7 @@ async fn move_directory_onto_existing_empty_directory() {
     repo.create_directory("src").await.unwrap();
     repo.create_directory("dst").await.unwrap();
 
-    repo.move_entry("/", "src", "/", "dst").await.unwrap();
+    repo.move_entry("src", "dst").await.unwrap();
 
     assert_matches!(repo.open_directory("src").await, Err(Error::EntryNotFound));
     assert_matches!(repo.open_directory("dst").await, Ok(_));
@@ -405,7 +399,7 @@ async fn move_directory_onto_existing_non_empty_directory() {
     repo.create_file("dst/file.txt").await.unwrap();
 
     assert_matches!(
-        repo.move_entry("/", "src", "/", "dst").await,
+        repo.move_entry("src", "dst").await,
         Err(Error::DirectoryNotEmpty)
     );
 }
@@ -417,10 +411,7 @@ async fn move_directory_onto_existing_file() {
     repo.create_directory("src").await.unwrap();
     repo.create_file("dst").await.unwrap();
 
-    assert_matches!(
-        repo.move_entry("/", "src", "/", "dst").await,
-        Err(Error::EntryIsFile)
-    );
+    assert_matches!(repo.move_entry("src", "dst").await, Err(Error::EntryIsFile));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -430,7 +421,7 @@ async fn move_file_into_non_existing_directory() {
     repo.create_file("src.txt").await.unwrap();
 
     assert_matches!(
-        repo.move_entry("/", "src.txt", "/missing", "dst.txt").await,
+        repo.move_entry("src.txt", "missing/dst.txt").await,
         Err(Error::EntryNotFound)
     );
 }
@@ -451,9 +442,7 @@ async fn move_from_open_file() {
 
     let _file = repo.create_file("src.txt").await.unwrap();
 
-    repo.move_entry("/", "src.txt", "/", "dst.txt")
-        .await
-        .unwrap();
+    repo.move_entry("src.txt", "dst.txt").await.unwrap();
 
     assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
     assert_matches!(repo.open_file("dst.txt").await, Ok(_));
@@ -472,9 +461,7 @@ async fn move_onto_open_file() {
     file.write(b"dst").await.unwrap();
     file.flush().await.unwrap();
 
-    repo.move_entry("/", "src.txt", "/", "dst.txt")
-        .await
-        .unwrap();
+    repo.move_entry("src.txt", "dst.txt").await.unwrap();
 
     assert_matches!(repo.open_file("src.txt").await, Err(Error::EntryNotFound));
 
@@ -896,7 +883,7 @@ async fn version_vector_moved_non_empty_directory() {
         .version_vector()
         .clone();
 
-    repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+    repo.move_entry("foo", "bar").await.unwrap();
 
     let vv_1 = repo
         .local_branch()
@@ -930,9 +917,7 @@ async fn version_vector_file_moved_over_tombstone() {
     let vv_1 = vv_0.incremented(branch_id);
 
     repo.create_file("new.txt").await.unwrap();
-    repo.move_entry("/", "new.txt", "/", "old.txt")
-        .await
-        .unwrap();
+    repo.move_entry("new.txt", "old.txt").await.unwrap();
 
     let vv_2 = repo
         .local_branch()

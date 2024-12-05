@@ -881,17 +881,15 @@ impl Inner {
         );
 
         let src_dir = self.inodes.get(src_parent).calculate_path();
+        let src = src_dir.join(src_name);
 
-        let dst_dir = if src_parent == dst_parent {
-            // TODO: Maybe we could use something like Cow?
-            src_dir.clone()
+        let dst = if src_parent == dst_parent {
+            src_dir.join(dst_name)
         } else {
-            self.inodes.get(dst_parent).calculate_path()
+            self.inodes.get(dst_parent).calculate_path().join(dst_name)
         };
 
-        self.repository
-            .move_entry(src_dir, src_name, dst_dir, dst_name)
-            .await
+        self.repository.move_entry(src, dst).await
     }
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {

@@ -445,6 +445,16 @@ impl Service {
             Request::RepositoryMount(repository) => {
                 Ok(self.state.mount_repository(repository).await?.into())
             }
+            Request::RepositoryMoveEntry {
+                repository,
+                src,
+                dst,
+            } => {
+                self.state
+                    .move_repository_entry(repository, src, dst)
+                    .await?;
+                Ok(().into())
+            }
             Request::RepositoryResetAccess { repository, token } => {
                 self.state
                     .reset_repository_access(repository, token)

@@ -613,9 +613,7 @@ fn remote_rename_file() {
         rx.recv().await;
 
         // Rename it and wait until reader is done
-        repo.move_entry("/", "foo.txt", "/", "bar.txt")
-            .await
-            .unwrap();
+        repo.move_entry("foo.txt", "bar.txt").await.unwrap();
         rx.recv().await;
     });
 
@@ -645,7 +643,7 @@ fn remote_rename_empty_directory() {
         rx.recv().await;
 
         // Rename the directory and wait until reader is done
-        repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+        repo.move_entry("foo", "bar").await.unwrap();
         rx.recv().await;
     });
 
@@ -679,7 +677,7 @@ fn remote_rename_non_empty_directory() {
         drop(dir);
 
         // Rename the directory and wait until reader is done
-        repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+        repo.move_entry("foo", "bar").await.unwrap();
         rx.recv().await;
     });
 
@@ -720,7 +718,7 @@ fn remote_rename_directory_during_conflict() {
             .unwrap();
         rx.recv().await;
 
-        repo.move_entry("/", "foo", "/", "bar")
+        repo.move_entry("foo", "bar")
             .instrument(info_span!("move", src = "foo", dst = "bar"))
             .await
             .unwrap();
@@ -763,12 +761,12 @@ fn remote_move_file_to_directory_then_rename_that_directory() {
         rx.recv().await;
 
         repo.create_directory("archive").await.unwrap();
-        repo.move_entry("/", "data.txt", "archive", "data.txt")
+        repo.move_entry("data.txt", "archive/data.txt")
             .await
             .unwrap();
         rx.recv().await;
 
-        repo.move_entry("/", "archive", "/", "trash").await.unwrap();
+        repo.move_entry("archive", "trash").await.unwrap();
         rx.recv().await;
     });
 

@@ -129,6 +129,11 @@ pub enum Request {
         host: String,
     },
     RepositoryMount(RepositoryHandle),
+    RepositoryMoveEntry {
+        repository: RepositoryHandle,
+        src: String,
+        dst: String,
+    },
     RepositoryResetAccess {
         repository: RepositoryHandle,
         token: ShareToken,
@@ -222,11 +227,6 @@ pub(crate) enum Request {
     RepositoryEntryVersionHash {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
-    },
-    RepositoryMoveEntry {
-        repository: RepositoryHandle,
-        src: Utf8PathBuf,
-        dst: Utf8PathBuf,
     },
     RepositorySyncProgress(RepositoryHandle),
     RepositoryMountAll(PathBuf),

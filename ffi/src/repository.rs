@@ -320,15 +320,7 @@ pub(crate) async fn entry_version_hash(
             let parent_dir = holder.repository.open_directory(parent).await?;
             parent_dir.lookup_unique(name)?.version_vector().hash()
         }
-        None => {
-            let branches = holder.repository.load_branches().await?;
-            let mut vvs = Vec::with_capacity(branches.len());
-            for branch in branches {
-                let vv_hash = branch.version_vector().await?.hash();
-                vvs.push(vv_hash);
-            }
-            vvs.hash()
-        }
+        None => holder.repository.get_merged_version_vector().await?.hash(),
     };
 
     Ok(hash.as_ref().into())
@@ -341,13 +333,11 @@ pub(crate) async fn move_entry(
     src: Utf8PathBuf,
     dst: Utf8PathBuf,
 ) -> Result<(), Error> {
-    let holder = state.repositories.get(handle)?;
-    let (src_dir, src_name) = path::decompose(&src).ok_or(ouisync_lib::Error::EntryNotFound)?;
-    let (dst_dir, dst_name) = path::decompose(&dst).ok_or(ouisync_lib::Error::EntryNotFound)?;
-
-    holder
+    state
+        .repositories
+        .get(handle)?
         .repository
-        .move_entry(src_dir, src_name, dst_dir, dst_name)
+        .move_entry(src, dst)
         .await?;
 
     Ok(())

@@ -746,6 +746,22 @@ impl State {
         }
     }
 
+    pub async fn move_repository_entry(
+        &self,
+        repo: RepositoryHandle,
+        src: String,
+        dst: String,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(repo)
+            .ok_or(Error::InvalidHandle)?
+            .repository()
+            .move_entry(src, dst)
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn create_directory(
         &self,
         repo: RepositoryHandle,

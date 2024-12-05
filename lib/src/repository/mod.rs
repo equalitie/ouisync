@@ -666,11 +666,12 @@ impl Repository {
     /// If both source and destination refer to the same entry, this is a no-op.
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
-        src_dir_path: S,
-        src_name: &str,
-        dst_dir_path: D,
-        dst_name: &str,
+        src: S,
+        dst: D,
     ) -> Result<()> {
+        let (src_dir_path, src_name) = path::decompose(src.as_ref()).ok_or(Error::EntryNotFound)?;
+        let (dst_dir_path, dst_name) = path::decompose(dst.as_ref()).ok_or(Error::EntryNotFound)?;
+
         let local_branch = self.local_branch()?;
         let src_joint_dir = self.cd(src_dir_path).await?;
 
@@ -757,10 +758,6 @@ impl Repository {
     #[cfg(test)]
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
         self.shared.get_branch(id)
-    }
-
-    pub async fn load_branches(&self) -> Result<Vec<Branch>> {
-        self.shared.load_branches().await
     }
 
     /// Returns version vector of the given branch. Works in all access moded.
