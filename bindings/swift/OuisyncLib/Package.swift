@@ -1,9 +1,10 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
+
 let package = Package(
     name: "OuisyncLib",
-    platforms: [.macOS(.v13), .iOS(.v13), .macCatalyst(.v13)],
+    platforms: [.macOS(.v13), .iOS(.v16)],
     products: [
         .library(name: "OuisyncLib",
                  type: .static,
@@ -16,7 +17,8 @@ let package = Package(
         .target(name: "OuisyncLib",
                 dependencies: [.product(name: "MessagePack",
                                         package: "MessagePack.swift"),
-                               "FFIBuilder", "OuisyncLibFFI"],
+                               "FFIBuilder",
+                               "OuisyncLibFFI"],
                 path: "Sources"),
         .testTarget(name: "OuisyncLibTests",
                     dependencies: ["OuisyncLib"],
@@ -29,7 +31,7 @@ let package = Package(
                 path: "Plugins/Builder"),
         .plugin(name: "Update rust dependencies",
                 capability: .command(intent: .custom(verb: "cargo-fetch",
-                                                     description: "Updates rust dependencies"),
+                                                     description: "Update rust dependencies"),
                                      permissions: [
                 .allowNetworkConnections(scope: .all(),
                                          reason: "Downloads dependencies defined by Cargo.toml"),
