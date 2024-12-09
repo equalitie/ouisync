@@ -2,15 +2,12 @@ use super::monitor::RepositoryMonitor;
 use crate::{db, device_id::DeviceId, error::Result};
 use metrics::{NoopRecorder, Recorder};
 use state_monitor::{metrics::MetricsRecorder, StateMonitor};
-use std::{
-    borrow::Cow,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 pub struct RepositoryParams<R> {
     store: Store,
     device_id: DeviceId,
-    parent_monitor: Option<StateMonitor>,
+    monitor: Option<StateMonitor>,
     recorder: Option<R>,
 }
 
@@ -19,9 +16,9 @@ impl<R> RepositoryParams<R> {
         Self { device_id, ..self }
     }
 
-    pub fn with_parent_monitor(self, parent_monitor: StateMonitor) -> Self {
+    pub fn with_monitor(self, monitor: StateMonitor) -> Self {
         Self {
-            parent_monitor: Some(parent_monitor),
+            monitor: Some(monitor),
             ..self
         }
     }
@@ -30,7 +27,7 @@ impl<R> RepositoryParams<R> {
         RepositoryParams {
             store: self.store,
             device_id: self.device_id,
-            parent_monitor: self.parent_monitor,
+            monitor: self.monitor,
             recorder: Some(recorder),
         }
     }
@@ -39,7 +36,7 @@ impl<R> RepositoryParams<R> {
         match &self.store {
             Store::Path(path) => db::create(path).await,
             #[cfg(test)]
-            Store::Pool { pool, .. } => Ok(pool.clone()),
+            Store::Pool(pool) => Ok(pool.clone()),
         }
     }
 
@@ -47,7 +44,7 @@ impl<R> RepositoryParams<R> {
         match &self.store {
             Store::Path(path) => db::open(path).await,
             #[cfg(test)]
-            Store::Pool { pool, .. } => Ok(pool.clone()),
+            Store::Pool(pool) => Ok(pool.clone()),
         }
     }
 
@@ -61,10 +58,8 @@ where
     R: Recorder,
 {
     pub(super) fn monitor(&self) -> RepositoryMonitor {
-        let name = self.store.name();
-
-        let monitor = if let Some(parent_monitor) = &self.parent_monitor {
-            parent_monitor.make_child(name)
+        let monitor = if let Some(monitor) = &self.monitor {
+            monitor.clone()
         } else {
             StateMonitor::make_root()
         };
@@ -83,18 +78,15 @@ impl RepositoryParams<NoopRecorder> {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_pool(pool: db::Pool, name: &str) -> Self {
-        Self::with_store(Store::Pool {
-            pool,
-            name: name.to_owned(),
-        })
+    pub(crate) fn with_pool(pool: db::Pool) -> Self {
+        Self::with_store(Store::Pool(pool))
     }
 
     fn with_store(store: Store) -> Self {
         Self {
             store,
             device_id: rand::random(),
-            parent_monitor: None,
+            monitor: None,
             recorder: None,
         }
     }
@@ -103,18 +95,5 @@ impl RepositoryParams<NoopRecorder> {
 enum Store {
     Path(PathBuf),
     #[cfg(test)]
-    Pool {
-        pool: db::Pool,
-        name: String,
-    },
-}
-
-impl Store {
-    fn name(&self) -> Cow<'_, str> {
-        match self {
-            Self::Path(path) => path.as_os_str().to_string_lossy(),
-            #[cfg(test)]
-            Self::Pool { name, .. } => name.into(),
-        }
-    }
+    Pool(db::Pool),
 }

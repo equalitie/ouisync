@@ -29,7 +29,7 @@ pub async fn create_repo(
     let repository = Repository::create(
         &RepositoryParams::new(store)
             .with_device_id(rng.gen())
-            .with_parent_monitor(monitor),
+            .with_monitor(monitor.make_child(store.to_string_lossy())),
         Access::WriteUnlocked { secrets },
     )
     .await

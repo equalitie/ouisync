@@ -57,9 +57,10 @@ pub async fn create(
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository, OpenError> {
+    let monitor = repos_monitor.make_child(store.to_string_lossy());
     let params = RepositoryParams::new(store)
         .with_device_id(device_id::get_or_create(config).await?)
-        .with_parent_monitor(repos_monitor.clone());
+        .with_monitor(monitor);
 
     let access_secrets = if let Some(share_token) = share_token {
         share_token.into_secrets()
@@ -87,9 +88,10 @@ pub async fn open(
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository, OpenError> {
+    let monitor = repos_monitor.make_child(store.to_string_lossy());
     let params = RepositoryParams::new(store)
         .with_device_id(device_id::get_or_create(config).await?)
-        .with_parent_monitor(repos_monitor.clone());
+        .with_monitor(monitor);
 
     let repository = Repository::open(&params, local_secret, AccessMode::Write).await?;
 

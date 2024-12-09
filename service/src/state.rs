@@ -1443,7 +1443,7 @@ mod tests {
 
             let repo = Repository::create(
                 &RepositoryParams::new(temp_dir.path().join("remote/repo.ouisyncdb"))
-                    .with_parent_monitor(monitor.clone()),
+                    .with_monitor(monitor.make_child("repo")),
                 Access::WriteUnlocked {
                     secrets: secrets.clone(),
                 },

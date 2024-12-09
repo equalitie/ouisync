@@ -248,7 +248,7 @@ pub(crate) mod actor {
         ACTOR.with(|actor| {
             RepositoryParams::new(actor.repo_path(name))
                 .with_device_id(actor.device_id)
-                .with_parent_monitor(actor.monitor.clone())
+                .with_monitor(actor.monitor.make_child(name))
                 .with_recorder(NoopRecorder)
         })
     }

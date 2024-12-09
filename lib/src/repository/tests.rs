@@ -476,8 +476,7 @@ async fn blind_access_non_empty_repo() {
     test_utils::init_log();
 
     let (_base_dir, pool) = db::create_temp().await.unwrap();
-    let params =
-        RepositoryParams::with_pool(pool, "test").with_parent_monitor(StateMonitor::make_root());
+    let params = RepositoryParams::with_pool(pool);
     let local_secret = SetLocalSecret::random();
 
     // Create the repo and put a file in it.
@@ -543,7 +542,7 @@ async fn blind_access_empty_repo() {
     test_utils::init_log();
 
     let (_base_dir, pool) = db::create_temp().await.unwrap();
-    let params = RepositoryParams::with_pool(pool, "test");
+    let params = RepositoryParams::with_pool(pool);
 
     let local_secret = SetLocalSecret::random();
 
@@ -573,7 +572,7 @@ async fn read_access_same_replica() {
     test_utils::init_log();
 
     let (_base_dir, pool) = db::create_temp().await.unwrap();
-    let params = RepositoryParams::with_pool(pool, "test");
+    let params = RepositoryParams::with_pool(pool);
 
     let repo = Repository::create(
         &params,
@@ -631,7 +630,7 @@ async fn read_access_different_replica() {
 
     let (_base_dir, pool) = db::create_temp().await.unwrap();
 
-    let params_a = RepositoryParams::with_pool(pool.clone(), "test").with_device_id(rand::random());
+    let params_a = RepositoryParams::with_pool(pool.clone()).with_device_id(rand::random());
     let repo = Repository::create(
         &params_a,
         Access::WriteUnlocked {
@@ -648,7 +647,7 @@ async fn read_access_different_replica() {
     drop(file);
     drop(repo);
 
-    let params_b = RepositoryParams::with_pool(pool, "test").with_device_id(rand::random());
+    let params_b = RepositoryParams::with_pool(pool).with_device_id(rand::random());
     let repo = Repository::open(&params_b, None, AccessMode::Read)
         .await
         .unwrap();
