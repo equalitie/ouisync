@@ -5,27 +5,35 @@ export 'bindings.dart' show ErrorCode;
 class OuisyncException implements Exception {
   final ErrorCode code;
   final String message;
+  final List<String> sources;
 
-  OuisyncException._(this.code, String? message)
+  OuisyncException._(this.code, String? message, this.sources)
       : message = message ?? code.toString() {
     assert(code != ErrorCode.ok);
   }
 
-  factory OuisyncException(ErrorCode code, [String? message]) => switch (code) {
-        ErrorCode.invalidData => InvalidData(message),
-        ErrorCode.serviceAlreadyRunning => ServiceAlreadyRunning(message),
-        _ => OuisyncException._(code, message),
+  factory OuisyncException(
+    ErrorCode code, [
+    String? message,
+    List<String> sources = const [],
+  ]) =>
+      switch (code) {
+        ErrorCode.invalidData => InvalidData(message, sources),
+        ErrorCode.serviceAlreadyRunning =>
+          ServiceAlreadyRunning(message, sources),
+        _ => OuisyncException._(code, message, sources),
       };
 
   @override
-  String toString() => message;
+  String toString() => [message].followedBy(sources).join(' → ');
 }
 
 class InvalidData extends OuisyncException {
-  InvalidData([String? message]) : super._(ErrorCode.invalidData, message);
+  InvalidData([String? message, List<String> sources = const []])
+      : super._(ErrorCode.invalidData, message, sources);
 }
 
 class ServiceAlreadyRunning extends OuisyncException {
-  ServiceAlreadyRunning([String? message])
-      : super._(ErrorCode.serviceAlreadyRunning, message);
+  ServiceAlreadyRunning([String? message, List<String> sources = const []])
+      : super._(ErrorCode.serviceAlreadyRunning, message, sources);
 }

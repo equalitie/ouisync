@@ -1,14 +1,14 @@
 use crate::{
     error::Error,
     file::{FileHandle, FileHolder, FileSet},
-    protocol::{DirectoryEntry, ImportMode, QuotaInfo},
+    protocol::{DirectoryEntry, ImportMode, MetadataEdit, QuotaInfo},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     transport::remote::RemoteClient,
     utils,
 };
 use ouisync::{
-    AccessMode, Credentials, EntryType, Event, LocalSecret, Network, PeerAddr, Progress,
-    SetLocalSecret, ShareToken, StorageSize,
+    AccessChange, AccessMode, Credentials, EntryType, Event, LocalSecret, Network, PeerAddr,
+    Progress, SetLocalSecret, ShareToken, StorageSize,
 };
 use ouisync_bridge::{
     config::{ConfigError, ConfigKey, ConfigStore},
@@ -422,6 +422,21 @@ impl State {
         Ok(())
     }
 
+    pub async fn set_repository_access(
+        &self,
+        handle: RepositoryHandle,
+        read: Option<AccessChange>,
+        write: Option<AccessChange>,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .set_access(read, write)
+            .await?;
+        Ok(())
+    }
+
     pub fn repository_access_mode(&self, handle: RepositoryHandle) -> Result<AccessMode, Error> {
         Ok(self
             .repos
@@ -429,6 +444,47 @@ impl State {
             .ok_or(Error::InvalidArgument)?
             .repository()
             .access_mode())
+    }
+
+    pub async fn set_repository_access_mode(
+        &self,
+        handle: RepositoryHandle,
+        access_mode: AccessMode,
+        local_secret: Option<LocalSecret>,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .set_access_mode(access_mode, local_secret)
+            .await?;
+
+        Ok(())
+    }
+
+    pub fn repository_credentials(&self, handle: RepositoryHandle) -> Result<Vec<u8>, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .credentials()
+            .encode())
+    }
+
+    pub async fn set_repository_credentials(
+        &self,
+        handle: RepositoryHandle,
+        credentials: Vec<u8>,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .set_credentials(Credentials::decode(&credentials)?)
+            .await?;
+
+        Ok(())
     }
 
     pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
@@ -795,6 +851,51 @@ impl State {
                 }
             }
         }
+    }
+
+    pub async fn repository_metadata(
+        &self,
+        handle: RepositoryHandle,
+        key: String,
+    ) -> Result<Option<String>, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .metadata()
+            .get(&key)
+            .await?)
+    }
+
+    pub async fn set_repository_metadata(
+        &self,
+        handle: RepositoryHandle,
+        edits: Vec<MetadataEdit>,
+    ) -> Result<bool, Error> {
+        let repo = self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .repository();
+
+        let mut tx = repo.metadata().write().await?;
+
+        for edit in edits {
+            if tx.get(&edit.key).await? != edit.old {
+                return Ok(false);
+            }
+
+            if let Some(new) = edit.new {
+                tx.set(&edit.key, new).await?;
+            } else {
+                tx.remove(&edit.key).await?;
+            }
+        }
+
+        tx.commit().await?;
+
+        Ok(true)
     }
 
     pub async fn move_repository_entry(

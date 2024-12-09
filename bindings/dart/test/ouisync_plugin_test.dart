@@ -93,15 +93,23 @@ void main() {
       final cred = await repo.credentials;
       await repo.close();
 
+      final base = await session.storeDir;
+
       final dstName = 'repo-new';
-      final src = '${temp.path}/repo.db';
-      final dst = '${temp.path}/$dstName.db';
+      final ext = 'ouisyncdb';
+      final src = '$base/repo.$ext';
+      final dst = '$base/$dstName.$ext';
 
-      for (final ext in ['', '-wal', '-shm']) {
-        final file = io.File('$src$ext');
+      for (final suffix in ['', '-wal', '-shm']) {
+        final file = io.File('$src$suffix');
+        final exists = await file.exists();
 
-        if (await file.exists()) {
-          await file.rename('$dst$ext');
+        if (suffix.isEmpty) {
+          expect(exists, isTrue, reason: '${file.path} does not exist');
+        }
+
+        if (exists) {
+          await file.rename('$dst$suffix');
         }
       }
 
@@ -178,34 +186,34 @@ void main() {
       expect(await repo.getMetadata('test.foo'), isNull);
       expect(await repo.getMetadata('test.bar'), isNull);
 
-      await repo.setMetadata({
-        'test.foo': (oldValue: null, newValue: 'foo value 1'),
-        'test.bar': (oldValue: null, newValue: 'bar value 1'),
-      });
+      expect(
+        await repo.setMetadata({
+          'test.foo': (oldValue: null, newValue: 'foo value 1'),
+          'test.bar': (oldValue: null, newValue: 'bar value 1'),
+        }),
+        isTrue,
+      );
 
       expect(await repo.getMetadata('test.foo'), equals('foo value 1'));
       expect(await repo.getMetadata('test.bar'), equals('bar value 1'));
 
-      await repo.setMetadata({
-        'test.foo': (oldValue: 'foo value 1', newValue: 'foo value 2'),
-        'test.bar': (oldValue: 'bar value 1', newValue: null),
-      });
+      expect(
+        await repo.setMetadata({
+          'test.foo': (oldValue: 'foo value 1', newValue: 'foo value 2'),
+          'test.bar': (oldValue: 'bar value 1', newValue: null),
+        }),
+        isTrue,
+      );
 
       expect(await repo.getMetadata('test.foo'), equals('foo value 2'));
       expect(await repo.getMetadata('test.bar'), isNull);
 
       // Old value mismatch
-      await expectLater(
-        repo.setMetadata({
+      expect(
+        await repo.setMetadata({
           'test.foo': (oldValue: 'foo value 1', newValue: 'foo value 3'),
         }),
-        throwsA(
-          isA<OuisyncException>().having(
-            (e) => e.code,
-            'code',
-            equals(ErrorCode.entryChanged),
-          ),
-        ),
+        isFalse,
       );
 
       expect(await repo.getMetadata('test.foo'), equals('foo value 2'));
@@ -214,7 +222,10 @@ void main() {
 
   test('parse invalid share token', () async {
     final input = "broken!@#%";
-    expect(ShareToken.fromString(session, input), throwsA(isA<Error>()));
+    await expectLater(
+      ShareToken.fromString(session, input),
+      throwsA(isA<InvalidData>()),
+    );
   });
 
   test('state monitor missing node', () async {

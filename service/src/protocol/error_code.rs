@@ -58,8 +58,6 @@ pub enum ErrorCode {
     DirectoryNotEmpty = 2048 + 4,
     /// File or directory is busy
     ResourceBusy = 2048 + 5,
-    /// Entry has been changed and no longer matches the expected value
-    EntryChanged = 2048 + 6,
 
     // # Service errors
     /// Failed to initialize runtime

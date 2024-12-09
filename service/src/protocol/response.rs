@@ -70,6 +70,7 @@ pub enum Response {
     StateMonitor(StateMonitor),
     StateMonitorEvent,
     StorageSize(StorageSize),
+    String(String),
     U32(u32),
     U64(u64),
 }
@@ -166,6 +167,7 @@ impl_response_conversion!(SocketAddr(SocketAddr));
 impl_response_conversion!(SocketAddrs(Vec<SocketAddr>));
 impl_response_conversion!(StateMonitor(StateMonitor));
 impl_response_conversion!(StorageSize(StorageSize));
+impl_response_conversion!(String(String));
 impl_response_conversion!(QuotaInfo(QuotaInfo));
 impl_response_conversion!(U32(u32));
 impl_response_conversion!(U64(u64));

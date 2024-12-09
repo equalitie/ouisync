@@ -1,7 +1,7 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{
-    crypto::PasswordSalt, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken,
-    StorageSize,
+    crypto::PasswordSalt, AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret,
+    ShareToken, StorageSize,
 };
 use ouisync_bridge::network::NetworkDefaults;
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use super::{
     helpers::{self, Bytes},
-    MessageId,
+    MessageId, MetadataEdit,
 };
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
@@ -99,6 +99,7 @@ pub enum Request {
         repository: RepositoryHandle,
         host: String,
     },
+    RepositoryCredentials(RepositoryHandle),
     /// Delete a repository
     RepositoryDelete(RepositoryHandle),
     /// Delete a repository with the given name (name matching is the same as in `RepositoryFind).
@@ -120,6 +121,10 @@ pub enum Request {
     RepositoryGetDefaultBlockExpiration,
     RepositoryGetDefaultQuota,
     RepositoryGetDefaultRepositoryExpiration,
+    RepositoryGetMetadata {
+        repository: RepositoryHandle,
+        key: String,
+    },
     RepositoryGetMountDir,
     RepositoryGetQuota(RepositoryHandle),
     RepositoryGetRepositoryExpiration(RepositoryHandle),
@@ -153,9 +158,23 @@ pub enum Request {
         repository: RepositoryHandle,
         token: ShareToken,
     },
+    RepositorySetAccess {
+        repository: RepositoryHandle,
+        read: Option<AccessChange>,
+        write: Option<AccessChange>,
+    },
+    RepositorySetAccessMode {
+        repository: RepositoryHandle,
+        access_mode: AccessMode,
+        secret: Option<LocalSecret>,
+    },
     RepositorySetBlockExpiration {
         repository: RepositoryHandle,
         value: Option<Duration>,
+    },
+    RepositorySetCredentials {
+        repository: RepositoryHandle,
+        credentials: Bytes,
     },
     RepositorySetDefaultBlockExpiration {
         value: Option<Duration>,
@@ -169,6 +188,10 @@ pub enum Request {
     RepositorySetDhtEnabled {
         repository: RepositoryHandle,
         enabled: bool,
+    },
+    RepositorySetMetadata {
+        repository: RepositoryHandle,
+        edits: Vec<MetadataEdit>,
     },
     RepositorySetMountDir(PathBuf),
     RepositorySetPexEnabled {
@@ -197,6 +220,7 @@ pub enum Request {
     RepositorySyncProgress(RepositoryHandle),
     RepositoryUnmount(RepositoryHandle),
     ShareTokenMode(#[serde(with = "helpers::str")] ShareToken),
+    ShareTokenNormalize(#[serde(with = "helpers::str")] ShareToken),
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
     /// Cancel a subscription identified by the given message id. The message id should be the same
@@ -215,21 +239,6 @@ pub(crate) enum Request {
     ListRepositoriesSubscribe,
     RepositoryRequiresLocalSecretForReading(RepositoryHandle),
     RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
-    RepositorySetAccess {
-        repository: RepositoryHandle,
-        read: Option<AccessChange>,
-        write: Option<AccessChange>,
-    },
-    RepositoryCredentials(RepositoryHandle),
-    RepositorySetCredentials {
-        repository: RepositoryHandle,
-        credentials: Bytes,
-    },
-    RepositorySetAccessMode {
-        repository: RepositoryHandle,
-        access_mode: AccessMode,
-        secret: Option<LocalSecret>,
-    },
     RepositoryName(RepositoryHandle),
     RepositoryInfoHash(RepositoryHandle),
     RepositoryDatabaseId(RepositoryHandle),
@@ -242,18 +251,9 @@ pub(crate) enum Request {
         path: Utf8PathBuf,
     },
     RepositoryMountAll(PathBuf),
-    RepositoryGetMetadata {
-        repository: RepositoryHandle,
-        key: String,
-    },
-    RepositorySetMetadata {
-        repository: RepositoryHandle,
-        edits: Vec<MetadataEdit>,
-    },
     RepositoryStats(RepositoryHandle),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
-    ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
     ShareTokenMirrorExists {
         #[serde(with = "as_str")]
         share_token: ShareToken,

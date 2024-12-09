@@ -64,7 +64,6 @@ enum ErrorCode {
   notDirectory,
   directoryNotEmpty,
   resourceBusy,
-  entryChanged,
   initializeRuntime,
   initializeLogger,
   config,
@@ -97,7 +96,6 @@ enum ErrorCode {
       case 2051: return ErrorCode.notDirectory;
       case 2052: return ErrorCode.directoryNotEmpty;
       case 2053: return ErrorCode.resourceBusy;
-      case 2054: return ErrorCode.entryChanged;
       case 4097: return ErrorCode.initializeRuntime;
       case 4098: return ErrorCode.initializeLogger;
       case 4099: return ErrorCode.config;
@@ -132,7 +130,6 @@ enum ErrorCode {
       case ErrorCode.notDirectory: return 2051;
       case ErrorCode.directoryNotEmpty: return 2052;
       case ErrorCode.resourceBusy: return 2053;
-      case ErrorCode.entryChanged: return 2054;
       case ErrorCode.initializeRuntime: return 4097;
       case ErrorCode.initializeLogger: return 4098;
       case ErrorCode.config: return 4099;

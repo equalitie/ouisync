@@ -391,6 +391,9 @@ impl Service {
                     .await?;
                 Ok(().into())
             }
+            Request::RepositoryCredentials(repository) => {
+                Ok(self.state.repository_credentials(repository)?.into())
+            }
             Request::RepositoryDelete(handle) => {
                 self.state.delete_repository(handle).await?;
                 Ok(().into())
@@ -423,6 +426,11 @@ impl Service {
             Request::RepositoryGetDefaultRepositoryExpiration => {
                 Ok(self.state.default_repository_expiration().await?.into())
             }
+            Request::RepositoryGetMetadata { repository, key } => Ok(self
+                .state
+                .repository_metadata(repository, key)
+                .await?
+                .into()),
             Request::RepositoryGetMountDir => Ok(self.state.mount_dir().into()),
             Request::RepositoryGetQuota(repository) => {
                 Ok(self.state.repository_quota(repository).await?.into())
@@ -481,8 +489,37 @@ impl Service {
                     .await?;
                 Ok(().into())
             }
+            Request::RepositorySetAccess {
+                repository,
+                read,
+                write,
+            } => {
+                self.state
+                    .set_repository_access(repository, read, write)
+                    .await?;
+                Ok(().into())
+            }
+            Request::RepositorySetAccessMode {
+                repository,
+                access_mode,
+                secret,
+            } => {
+                self.state
+                    .set_repository_access_mode(repository, access_mode, secret)
+                    .await?;
+                Ok(().into())
+            }
             Request::RepositorySetBlockExpiration { repository, value } => {
                 self.state.set_block_expiration(repository, value).await?;
+                Ok(().into())
+            }
+            Request::RepositorySetCredentials {
+                repository,
+                credentials,
+            } => {
+                self.state
+                    .set_repository_credentials(repository, credentials.into())
+                    .await?;
                 Ok(().into())
             }
             Request::RepositorySetDefaultBlockExpiration { value } => {
@@ -506,6 +543,11 @@ impl Service {
                     .await?;
                 Ok(().into())
             }
+            Request::RepositorySetMetadata { repository, edits } => Ok(self
+                .state
+                .set_repository_metadata(repository, edits)
+                .await?
+                .into()),
             Request::RepositorySetMountDir(path) => {
                 self.state.set_mount_dir(path).await?;
                 Ok(().into())
@@ -566,6 +608,7 @@ impl Service {
                 .await?
                 .into()),
             Request::ShareTokenMode(token) => Ok(token.access_mode().into()),
+            Request::ShareTokenNormalize(token) => Ok(token.into()),
             Request::StateMonitorGet(path) => Ok(self.state.state_monitor(path)?.into()),
             Request::StateMonitorSubscribe(path) => {
                 let rx = self.state.subscribe_to_state_monitor(path)?;

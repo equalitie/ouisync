@@ -38,8 +38,6 @@ class Session {
   final Client _client;
   final Server _server;
 
-  String? _mountPoint;
-
   Session._(this._client, this._server);
 
   /// Creates a new session in this process.
@@ -80,15 +78,14 @@ class Session {
   }
   */
 
-  String? get mountPoint => _mountPoint;
+  Future<String> get storeDir => _client.invoke('repository_get_store_dir');
 
-  // Mount all repositories that are open now or in future in read or
-  // read/write mode into the `mountPoint`. The `mountPoint` may point to an
-  // empty directory or may be a drive letter.
-  Future<void> mountAllRepositories(String mountPoint) async {
-    await _client.invoke<void>("repository_mount_all", mountPoint);
-    _mountPoint = mountPoint;
-  }
+  Future<String?> get mountDir => _client.invoke('repository_get_mount_dir');
+
+  Future<void> setMountDir(String path) => _client.invoke(
+        'repository_set_mount_dir',
+        path,
+      );
 
   /// Initialize network from config. Fall back to the provided defaults if the corresponding
   /// config entries don't exist.
@@ -516,10 +513,10 @@ class Repository {
         'key': key,
       });
 
-  Future<void> setMetadata(
+  Future<bool> setMetadata(
     Map<String, ({String? oldValue, String? newValue})> edits,
   ) =>
-      _client.invoke<void>('repository_set_metadata', {
+      _client.invoke('repository_set_metadata', {
         'repository': _handle,
         'edits': edits.entries
             .map((entry) => {

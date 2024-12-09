@@ -50,18 +50,24 @@ DecodeResult decodeMessage(Uint8List bytes) {
   }
 
   final rawError = payload.remove('failure');
-  if (rawError == null) {
+  if (rawError is! List<Object?>) {
     return MalformedPayload._(id);
   }
 
   final code = rawError[0];
   final message = rawError[1];
+  final sources = rawError[2];
 
-  if (code is! int || message is! String) {
+  if (code is! int || message is! String || sources is! List<Object?>) {
     return MalformedPayload._(id);
   }
 
-  final error = OuisyncException(ErrorCode.decode(code), message);
+  final error = OuisyncException(
+    ErrorCode.decode(code),
+    message,
+    sources.cast(),
+  );
+
   return MessageFailure._(id, error);
 }
 
