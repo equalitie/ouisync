@@ -40,7 +40,9 @@ class Subscriptions {
   }
 
   void close() {
-    _sinks.values.forEach((sink) => sink.close());
+    for (var sink in _sinks.values) {
+      sink.close();
+    }
     _sinks.clear();
   }
 }

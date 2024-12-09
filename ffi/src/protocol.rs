@@ -55,6 +55,10 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         credentials: Bytes,
     },
+    RepositoryResetCredentials {
+        repository: RepositoryHandle,
+        token: ShareToken,
+    },
     RepositoryAccessMode(RepositoryHandle),
     RepositorySetAccessMode {
         repository: RepositoryHandle,
