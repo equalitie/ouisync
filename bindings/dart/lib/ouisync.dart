@@ -118,7 +118,7 @@ class Session {
       _client.invoke<void>('network_remove_user_provided_peers', addrs);
 
   Future<List<String>> get userProvidedPeers => _client
-      .invoke<List<Object?>>('network_user_provided_peers')
+      .invoke<List<Object?>>('network_get_user_provided_peers')
       .then((list) => list.cast<String>());
 
   Future<List<String>> get listenerAddrs => _client

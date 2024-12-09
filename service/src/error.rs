@@ -14,10 +14,8 @@ pub enum Error {
     InitializeLogger(#[source] io::Error),
     #[error("failed to initialize runtime")]
     InitializeRuntime(#[source] io::Error),
-    #[error("resource handle is invalid")]
-    InvalidHandle,
-    #[error("argument is not valid utf-8 encoded string")]
-    InvalidUtf8,
+    #[error("argument is invalid")]
+    InvalidArgument,
     #[error("I/O error")]
     Io(#[from] io::Error),
     #[error("operation not supported")]
@@ -61,12 +59,12 @@ impl From<OpenError> for Error {
 
 impl From<Utf8Error> for Error {
     fn from(_: Utf8Error) -> Self {
-        Self::InvalidUtf8
+        Self::InvalidArgument
     }
 }
 
 impl From<IntoStringError> for Error {
     fn from(_: IntoStringError) -> Self {
-        Self::InvalidUtf8
+        Self::InvalidArgument
     }
 }

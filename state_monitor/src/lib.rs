@@ -512,6 +512,12 @@ impl std::error::Error for ValueError {}
 
 // --- Serialization
 
+impl fmt::Debug for StateMonitor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StateMonitor").finish_non_exhaustive()
+    }
+}
+
 impl Serialize for StateMonitor {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

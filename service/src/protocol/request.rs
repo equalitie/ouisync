@@ -5,6 +5,7 @@ use ouisync::{
 };
 use ouisync_bridge::network::NetworkDefaults;
 use serde::{Deserialize, Serialize};
+use state_monitor::MonitorId;
 use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
 use thiserror::Error;
 
@@ -196,6 +197,8 @@ pub enum Request {
     RepositorySyncProgress(RepositoryHandle),
     RepositoryUnmount(RepositoryHandle),
     ShareTokenMode(#[serde(with = "helpers::str")] ShareToken),
+    StateMonitorGet(Vec<MonitorId>),
+    StateMonitorSubscribe(Vec<MonitorId>),
     /// Cancel a subscription identified by the given message id. The message id should be the same
     /// that was used for sending the corresponding subscribe request.
     Unsubscribe(MessageId),
@@ -271,8 +274,6 @@ pub(crate) enum Request {
     NetworkExternalAddrV6,
     NetworkNatBehavior,
     NetworkShutdown,
-    StateMonitorGet(Vec<MonitorId>),
-    StateMonitorSubscribe(Vec<MonitorId>),
     GetReadPasswordSalt(RepositoryHandle),
     GetWritePasswordSalt(RepositoryHandle),
 }

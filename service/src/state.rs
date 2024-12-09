@@ -16,7 +16,7 @@ use ouisync_bridge::{
     transport::tls,
 };
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
-use state_monitor::StateMonitor;
+use state_monitor::{MonitorId, StateMonitor};
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -28,7 +28,7 @@ use std::{
 };
 use tokio::{
     fs,
-    sync::{broadcast, OnceCell},
+    sync::{broadcast, watch, OnceCell},
 };
 use tokio_rustls::rustls;
 use tokio_stream::StreamExt;
@@ -54,6 +54,7 @@ pub(crate) struct State {
     mounter: Option<MultiRepoVFS>,
     repos: RepositorySet,
     files: FileSet,
+    root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
     remote_server_config: OnceCell<Arc<rustls::ServerConfig>>,
     remote_client_config: OnceCell<Arc<rustls::ClientConfig>>,
@@ -62,10 +63,10 @@ pub(crate) struct State {
 impl State {
     pub async fn init(config_dir: PathBuf, default_store_dir: PathBuf) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
-        let monitor = StateMonitor::make_root();
+        let root_monitor = StateMonitor::make_root();
 
         let network = Network::new(
-            monitor.make_child("Network"),
+            root_monitor.make_child("Network"),
             Some(config.dht_contacts_store()),
             None,
         );
@@ -88,13 +89,14 @@ impl State {
             None
         };
 
-        let repos_monitor = monitor.make_child("Repositories");
+        let repos_monitor = root_monitor.make_child("Repositories");
 
         let mut state = Self {
             config,
             network,
             store_dir,
             mounter,
+            root_monitor,
             repos_monitor,
             repos: RepositorySet::new(),
             files: FileSet::new(),
@@ -300,7 +302,7 @@ impl State {
     }
 
     pub async fn close_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
-        let mut holder = self.repos.remove(handle).ok_or(Error::InvalidHandle)?;
+        let mut holder = self.repos.remove(handle).ok_or(Error::InvalidArgument)?;
 
         if let Some(mounter) = &self.mounter {
             mounter.remove(holder.name())?;
@@ -316,7 +318,7 @@ impl State {
         handle: RepositoryHandle,
         output_path: PathBuf,
     ) -> Result<PathBuf, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
 
         let output_path = if output_path.extension().is_some() {
             output_path
@@ -392,7 +394,7 @@ impl State {
         secret: Option<LocalSecret>,
         mode: AccessMode,
     ) -> Result<ShareToken, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
         let token = ouisync_bridge::repository::create_share_token(
             holder.repository(),
             secret,
@@ -412,7 +414,7 @@ impl State {
         let new_credentials = Credentials::with_random_writer_id(token.into_secrets());
         self.repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .set_credentials(new_credentials)
             .await?;
@@ -424,13 +426,13 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .access_mode())
     }
 
     pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
 
         holder
             .repository()
@@ -451,7 +453,7 @@ impl State {
     }
 
     pub async fn unmount_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
 
         holder.repository().metadata().remove(AUTOMOUNT_KEY).await?;
 
@@ -469,7 +471,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .subscribe())
     }
@@ -478,7 +480,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .registration()
             .is_some())
     }
@@ -488,7 +490,7 @@ impl State {
         handle: RepositoryHandle,
         enabled: bool,
     ) -> Result<(), Error> {
-        let holder = self.repos.get_mut(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.repos.get_mut(handle).ok_or(Error::InvalidArgument)?;
 
         match (enabled, holder.registration().is_some()) {
             (true, false) => {
@@ -511,7 +513,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .sync_progress()
             .await?)
@@ -521,7 +523,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .registration()
             .ok_or(Error::RepositorySyncDisabled)?
             .is_dht_enabled())
@@ -534,7 +536,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .registration()
             .ok_or(Error::RepositorySyncDisabled)?
             .set_dht_enabled(enabled)
@@ -546,7 +548,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .registration()
             .ok_or(Error::RepositorySyncDisabled)?
             .is_pex_enabled())
@@ -559,7 +561,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .registration()
             .ok_or(Error::RepositorySyncDisabled)?
             .set_pex_enabled(enabled)
@@ -580,7 +582,7 @@ impl State {
         handle: RepositoryHandle,
         host: String,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
         let secrets = holder
             .repository()
             .secrets()
@@ -601,7 +603,7 @@ impl State {
         handle: RepositoryHandle,
         host: String,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
         let secrets = holder
             .repository()
             .secrets()
@@ -622,7 +624,7 @@ impl State {
         handle: RepositoryHandle,
         host: String,
     ) -> Result<bool, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
 
         let mut client = self.connect_remote_client(&host).await?;
 
@@ -635,7 +637,7 @@ impl State {
     }
 
     pub async fn repository_quota(&self, handle: RepositoryHandle) -> Result<QuotaInfo, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
         let quota = holder.repository().quota().await?;
         let size = holder.repository().size().await?;
 
@@ -649,7 +651,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .set_quota(quota)
             .await?;
@@ -673,7 +675,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .set_repository_expiration(value)
             .await?;
         Ok(())
@@ -685,7 +687,7 @@ impl State {
     ) -> Result<Option<Duration>, Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository_expiration()
             .await
     }
@@ -724,7 +726,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .set_block_expiration(value)
             .await?;
@@ -735,7 +737,7 @@ impl State {
         Ok(self
             .repos
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .block_expiration())
     }
@@ -803,7 +805,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(repo)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .move_entry(src, dst)
             .await?;
@@ -818,7 +820,7 @@ impl State {
     ) -> Result<(), Error> {
         self.repos
             .get(repo)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .create_directory(path)
             .await?;
@@ -834,7 +836,7 @@ impl State {
         let repo = self
             .repos
             .get(repo)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository();
 
         let dir = repo.open_directory(path).await?;
@@ -857,7 +859,7 @@ impl State {
         let repo = self
             .repos
             .get(repo)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository();
         let local_branch = repo.local_branch()?;
 
@@ -876,7 +878,7 @@ impl State {
         let repo = self
             .repos
             .get(repo)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository();
         let local_branch = repo.local_branch()?;
 
@@ -891,7 +893,7 @@ impl State {
     pub async fn remove_file(&mut self, repo: RepositoryHandle, path: String) -> Result<(), Error> {
         self.repos
             .get(repo)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository()
             .remove_entry(&path)
             .await?;
@@ -907,7 +909,7 @@ impl State {
         let len = len as usize;
         let mut buffer = vec![0; len];
 
-        let holder = self.files.get_mut(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.files.get_mut(handle).ok_or(Error::InvalidArgument)?;
 
         holder.file.seek(SeekFrom::Start(offset));
 
@@ -924,7 +926,7 @@ impl State {
         offset: u64,
         data: Vec<u8>,
     ) -> Result<(), Error> {
-        let holder = self.files.get_mut(file).ok_or(Error::InvalidHandle)?;
+        let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
 
         holder.file.seek(SeekFrom::Start(offset));
         holder.file.fork(holder.local_branch.clone()).await?;
@@ -939,7 +941,7 @@ impl State {
         let repo = self
             .repos
             .get(repo)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .repository();
 
         match repo.lookup_type(&path).await {
@@ -955,7 +957,7 @@ impl State {
         Ok(self
             .files
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .file
             .len())
     }
@@ -965,7 +967,7 @@ impl State {
         let progress = self
             .files
             .get(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .file
             .progress();
         let progress = progress.await?;
@@ -974,7 +976,7 @@ impl State {
     }
 
     pub async fn truncate_file(&mut self, handle: FileHandle, len: u64) -> Result<(), Error> {
-        let holder = self.files.get_mut(handle).ok_or(Error::InvalidHandle)?;
+        let holder = self.files.get_mut(handle).ok_or(Error::InvalidArgument)?;
         holder.file.fork(holder.local_branch.clone()).await?;
         holder.file.truncate(len)?;
 
@@ -984,7 +986,7 @@ impl State {
     pub async fn flush_file(&mut self, handle: FileHandle) -> Result<(), Error> {
         self.files
             .get_mut(handle)
-            .ok_or(Error::InvalidHandle)?
+            .ok_or(Error::InvalidArgument)?
             .file
             .flush()
             .await?;
@@ -1012,6 +1014,21 @@ impl State {
             .get_or_try_init(|| make_client_config(self.config.dir()))
             .await
             .cloned()
+    }
+
+    pub fn state_monitor(&self, path: Vec<MonitorId>) -> Result<StateMonitor, Error> {
+        self.root_monitor.locate(path).ok_or(Error::InvalidArgument)
+    }
+
+    pub fn subscribe_to_state_monitor(
+        &self,
+        path: Vec<MonitorId>,
+    ) -> Result<watch::Receiver<()>, Error> {
+        Ok(self
+            .root_monitor
+            .locate(path)
+            .ok_or(Error::InvalidArgument)?
+            .subscribe())
     }
 
     pub async fn close(&mut self) {

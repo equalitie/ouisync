@@ -4,6 +4,7 @@ use ouisync::{
     StorageSize,
 };
 use serde::{Deserialize, Serialize};
+use state_monitor::StateMonitor;
 use std::{
     collections::BTreeMap,
     net::SocketAddr,
@@ -66,6 +67,8 @@ pub enum Response {
     ShareToken(ShareToken),
     SocketAddr(SocketAddr),
     SocketAddrs(Vec<SocketAddr>),
+    StateMonitor(StateMonitor),
+    StateMonitorEvent,
     StorageSize(StorageSize),
     U32(u32),
     U64(u64),
@@ -161,6 +164,7 @@ impl_response_conversion!(PeerAddrs(Vec<PeerAddr>));
 impl_response_conversion!(ShareToken(ShareToken));
 impl_response_conversion!(SocketAddr(SocketAddr));
 impl_response_conversion!(SocketAddrs(Vec<SocketAddr>));
+impl_response_conversion!(StateMonitor(StateMonitor));
 impl_response_conversion!(StorageSize(StorageSize));
 impl_response_conversion!(QuotaInfo(QuotaInfo));
 impl_response_conversion!(U32(u32));

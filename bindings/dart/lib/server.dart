@@ -6,6 +6,7 @@ import 'package:ffi/ffi.dart';
 import 'bindings.dart';
 import 'exception.dart';
 
+/// Handle to start and stop Ouisync service inside this process.
 class Server {
   Pointer<Void> _handle;
 

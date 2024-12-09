@@ -19,12 +19,19 @@ use crate::{
 
 /// Start Ouisync service in a new thread and bind it to the specified local socket.
 ///
+/// Invokes `callback` after the service initialization completes. The first argument is the
+/// `callback_context` argument unchanged, the second argument is the error code indicating the
+/// status of the service initialization. If this is `Ok`, the service has been initialized
+/// successfully and is ready to accept client connections.
+///
+/// Returns an opaque handle which must be passed to [ouisync_stop] to terminate the service.
+///
 /// # Safety
 ///
 /// - `socket_path`, `config_dir` and `default_store_dir` must be safe to pass to
 ///   [std::ffi::CStr::from_ptr].
 /// - `debug_label` must be either null or must be safe to pass to [std::ffi::CStr::from_ptr].
-/// - `callback_context` must be safe to access from multiple threads.
+/// - `callback_context` must be either null or it must be safe to access from multiple threads.
 #[no_mangle]
 pub unsafe extern "C" fn ouisync_start(
     socket_path: *const c_char,
@@ -61,13 +68,15 @@ pub unsafe extern "C" fn ouisync_start(
     stop_tx
 }
 
-/// Stops a running ousiync service.
+/// Stops a running Ouisync service.
+///
+/// Invokes `callback` after the service shutdown has been completed.
 ///
 /// # Safety
 ///
 /// - `handle must have been obtained by calling `ouisync_start` and it must not have already been
 /// passed to `ouisync_stop`.
-/// - `callback_context` must be safe to access from multiple threads.
+/// - `callback_context` must be either null of it must be safe to access from multiple threads.
 #[no_mangle]
 pub unsafe extern "C" fn ouisync_stop(
     handle: *mut c_void,

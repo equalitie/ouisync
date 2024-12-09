@@ -566,6 +566,12 @@ impl Service {
                 .await?
                 .into()),
             Request::ShareTokenMode(token) => Ok(token.access_mode().into()),
+            Request::StateMonitorGet(path) => Ok(self.state.state_monitor(path)?.into()),
+            Request::StateMonitorSubscribe(path) => {
+                let rx = self.state.subscribe_to_state_monitor(path)?;
+                self.subscriptions.insert((conn_id, message.id), rx.into());
+                Ok(().into())
+            }
             Request::Unsubscribe(id) => {
                 self.subscriptions.remove(&(conn_id, id));
                 Ok(().into())
