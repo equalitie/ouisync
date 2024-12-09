@@ -1,6 +1,3 @@
-// ignore_for_file: camel_case_types
-// ignore_for_file: non_constant_identifier_names
-
 import 'dart:ffi';
 import 'dart:io';
 
@@ -9,50 +6,70 @@ import 'package:flutter/foundation.dart' show kReleaseMode;
 
 export 'bindings.g.dart';
 
-typedef ouisync_start = Uint16 Function(
+/// Callback for `start` and `stop`.
+typedef Callback = Void Function(Pointer<Void>, Uint16);
+
+///
+typedef Start = Pointer<Void> Function(
   Pointer<Char>,
   Pointer<Char>,
   Pointer<Char>,
   Pointer<Char>,
-);
-typedef Start = int Function(
-  Pointer<Char>,
-  Pointer<Char>,
-  Pointer<Char>,
-  Pointer<Char>,
+  Pointer<NativeFunction<Callback>>,
+  Pointer<Void>,
 );
 
-typedef ouisync_log_init = Uint16 Function(
+typedef _StartC = Pointer<Void> Function(
   Pointer<Char>,
   Pointer<Char>,
+  Pointer<Char>,
+  Pointer<Char>,
+  Pointer<NativeFunction<Callback>>,
+  Pointer<Void>,
 );
+
+typedef Stop = void Function(
+    Pointer<Void>, Pointer<NativeFunction<Callback>>, Pointer<Void>);
+
+typedef _StopC = Void Function(
+    Pointer<Void>, Pointer<NativeFunction<Callback>>, Pointer<Void>);
+
 typedef LogInit = int Function(Pointer<Char>, Pointer<Char>);
 
-typedef ouisync_log_print = Void Function(
+typedef _LogInitC = Uint16 Function(
+  Pointer<Char>,
+  Pointer<Char>,
+);
+
+typedef LogPrint = void Function(int, Pointer<Char>, Pointer<Char>);
+
+typedef _LogPrintC = Void Function(
   Uint8,
   Pointer<Char>,
   Pointer<Char>,
 );
-typedef LogPrint = void Function(int, Pointer<Char>, Pointer<Char>);
 
 class Bindings {
   Bindings(DynamicLibrary library)
       : start = library
-            .lookup<NativeFunction<ouisync_start>>('ouisync_start')
+            .lookup<NativeFunction<_StartC>>('ouisync_start')
             .asFunction(),
-        log_init = library
-            .lookup<NativeFunction<ouisync_log_init>>('ouisync_log_init')
+        stop =
+            library.lookup<NativeFunction<_StopC>>('ouisync_stop').asFunction(),
+        logInit = library
+            .lookup<NativeFunction<_LogInitC>>('ouisync_log_init')
             .asFunction(),
-        log_print = library
-            .lookup<NativeFunction<ouisync_log_print>>('ouisync_log_print')
+        logPrint = library
+            .lookup<NativeFunction<_LogPrintC>>('ouisync_log_print')
             .asFunction();
 
   /// Bidings instance that uses the default library.
   static Bindings instance = Bindings(_defaultLib());
 
   final Start start;
-  final LogInit log_init;
-  final LogPrint log_print;
+  final Stop stop;
+  final LogInit logInit;
+  final LogPrint logPrint;
 }
 
 DynamicLibrary _defaultLib() {

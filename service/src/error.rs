@@ -1,7 +1,7 @@
 use crate::transport::ClientError;
 use ouisync_bridge::{config::ConfigError, repository::OpenError};
 use ouisync_vfs::MountError;
-use std::{io, str::Utf8Error};
+use std::{ffi::IntoStringError, io, str::Utf8Error};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -61,6 +61,12 @@ impl From<OpenError> for Error {
 
 impl From<Utf8Error> for Error {
     fn from(_: Utf8Error) -> Self {
+        Self::InvalidUtf8
+    }
+}
+
+impl From<IntoStringError> for Error {
+    fn from(_: IntoStringError) -> Self {
         Self::InvalidUtf8
     }
 }

@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:ffi';
-import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
@@ -7,149 +7,124 @@ import 'bindings.dart';
 import 'exception.dart';
 
 class Server {
-  final Isolate isolate;
-  final Future<void> terminated;
+  Pointer<Void> _handle;
 
-  Server._(this.isolate, this.terminated);
+  Server._(this._handle);
 
+  /// Starts the server and bind it to the specified local socket. After this function completes the
+  /// server is ready to accept client connections.
   static Future<Server> start({
     required String socketPath,
     required String configPath,
     required String storePath,
     String? debugLabel,
   }) async {
-    final rx = ReceivePort();
-    final tx = rx.sendPort;
-    final isolate = await Isolate.spawn(
-      _entryPoint,
-      _Params(
-        port: tx,
-        socketPath: socketPath,
-        configPath: configPath,
-        storePath: storePath,
-        debugLabel: debugLabel,
-      ),
+    final socketPathPtr = socketPath.toNativeUtf8(allocator: malloc);
+    final configPathPtr = configPath.toNativeUtf8(allocator: malloc);
+    final storePathPtr = storePath.toNativeUtf8(allocator: malloc);
+    final debugLabelPtr = debugLabel != null
+        ? debugLabel.toNativeUtf8(allocator: malloc)
+        : nullptr;
+
+    final completer = Completer<int>();
+    final callback = NativeCallable<Callback>.listener(
+      (Pointer<Void> context, int errorCode) => completer.complete(errorCode),
     );
 
-    final terminated = rx.first.then((output) {
-      final errorCode = output as ErrorCode;
+    try {
+      final handle = Bindings.instance.start(
+        socketPathPtr.cast(),
+        configPathPtr.cast(),
+        storePathPtr.cast(),
+        debugLabelPtr.cast(),
+        callback.nativeFunction,
+        nullptr,
+      );
+
+      final errorCode = ErrorCode.decode(await completer.future);
+
+      if (errorCode == ErrorCode.ok) {
+        return Server._(handle);
+      } else {
+        throw OuisyncException(errorCode);
+      }
+    } finally {
+      callback.close();
+
+      if (debugLabelPtr != nullptr) {
+        malloc.free(debugLabelPtr);
+      }
+
+      malloc.free(storePathPtr);
+      malloc.free(configPathPtr);
+      malloc.free(socketPathPtr);
+    }
+  }
+
+  /// Stops the server.
+  Future<void> stop() async {
+    final handle = _handle;
+    _handle = nullptr;
+
+    if (handle == nullptr) {
+      // Already stopped.
+      return;
+    }
+
+    final completer = Completer<int>();
+    final callback = NativeCallable<Callback>.listener(
+      (Pointer<Void> context, int errorCode) => completer.complete(errorCode),
+    );
+
+    try {
+      Bindings.instance.stop(
+        handle,
+        callback.nativeFunction,
+        nullptr,
+      );
+
+      final errorCode = ErrorCode.decode(await completer.future);
 
       if (errorCode != ErrorCode.ok) {
         throw OuisyncException(errorCode);
       }
-    });
-
-    return Server._(isolate, terminated);
-  }
-}
-
-class _Params {
-  final SendPort port;
-  final String socketPath;
-  final String configPath;
-  final String storePath;
-  final String? debugLabel;
-
-  _Params({
-    required this.port,
-    required this.socketPath,
-    required this.configPath,
-    required this.storePath,
-    this.debugLabel,
-  });
-}
-
-void _entryPoint(_Params params) {
-  final bindings = Bindings.instance;
-  final debugLabel = params.debugLabel;
-
-  final rawErrorCode = _withPool((pool) => bindings.start(
-        pool.toNativeUtf8(params.socketPath),
-        pool.toNativeUtf8(params.configPath),
-        pool.toNativeUtf8(params.storePath),
-        debugLabel != null ? pool.toNativeUtf8(debugLabel) : nullptr,
-      ));
-  final errorCode = ErrorCode.decode(rawErrorCode);
-
-  params.port.send(errorCode);
-}
-
-///// Runs Ouisync server and bind it to the specified local socket. Returns when the server
-///// terminates.
-//Future<void> runServer({
-//  required String socketPath,
-//  required String configPath,
-//  required String storePath,
-//  String? debugLabel,
-//}) async {
-//  final bindings = Bindings.instance;
-
-//  final rawErrorCode = await Isolate.run(
-//    () => _withPool(
-//      (pool) => bindings.start(
-//          pool.toNativeUtf8(socketPath),
-//          pool.toNativeUtf8(configPath),
-//          pool.toNativeUtf8(storePath),
-//          debugLabel != null ? pool.toNativeUtf8(debugLabel) : nullptr),
-//    ),
-//  );
-
-//  final errorCode = ErrorCode.decode(rawErrorCode);
-
-//  if (errorCode != ErrorCode.ok) {
-//    throw OuisyncException(errorCode);
-//  }
-//}
-
-void logInit({String? file, String tag = ''}) =>
-    _withPool((pool) => Bindings.instance.log_init(
-          file != null ? pool.toNativeUtf8(file) : nullptr,
-          pool.toNativeUtf8(tag),
-        ));
-
-/// Print log message
-void logPrint(LogLevel level, String scope, String message) =>
-    _withPool((pool) => Bindings.instance.log_print(
-          level.encode(),
-          pool.toNativeUtf8(scope),
-          pool.toNativeUtf8(message),
-        ));
-
-// Call the sync function passing it a [_Pool] which will be released when the function returns.
-T _withPool<T>(T Function(_Pool) fun) {
-  final pool = _Pool();
-
-  try {
-    return fun(pool);
-  } finally {
-    pool.release();
-  }
-}
-
-// Allocator that tracks all allocations and frees them all at the same time.
-class _Pool implements Allocator {
-  List<Pointer<NativeType>> ptrs = [];
-
-  @override
-  Pointer<T> allocate<T extends NativeType>(int byteCount, {int? alignment}) {
-    final ptr = malloc.allocate<T>(byteCount, alignment: alignment);
-    ptrs.add(ptr);
-    return ptr;
-  }
-
-  @override
-  void free(Pointer<NativeType> ptr) {
-    // free on [release]
-  }
-
-  void release() {
-    for (var ptr in ptrs) {
-      malloc.free(ptr);
+    } finally {
+      callback.close();
     }
   }
+}
 
-  // Convenience function to convert a dart string to a C-style nul-terminated utf-8 encoded
-  // string pointer. The pointer is allocated using this pool.
-  Pointer<Char> toNativeUtf8(String str) =>
-      str.toNativeUtf8(allocator: this).cast<Char>();
+void logInit({String? file, String tag = ''}) {
+  final filePtr = file != null ? file.toNativeUtf8(allocator: malloc) : nullptr;
+  final tagPtr = tag.toNativeUtf8(allocator: malloc);
+
+  try {
+    Bindings.instance.logInit(
+      filePtr.cast(),
+      tagPtr.cast(),
+    );
+  } finally {
+    if (filePtr != nullptr) {
+      malloc.free(filePtr);
+    }
+
+    malloc.free(tagPtr);
+  }
+}
+
+/// Print log message
+void logPrint(LogLevel level, String scope, String message) {
+  final scopePtr = scope.toNativeUtf8(allocator: malloc);
+  final messagePtr = message.toNativeUtf8(allocator: malloc);
+
+  try {
+    Bindings.instance.logPrint(
+      level.encode(),
+      scopePtr.cast(),
+      messagePtr.cast(),
+    );
+  } finally {
+    malloc.free(messagePtr);
+    malloc.free(scopePtr);
+  }
 }

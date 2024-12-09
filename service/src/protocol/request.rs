@@ -196,8 +196,6 @@ pub enum Request {
     RepositorySyncProgress(RepositoryHandle),
     RepositoryUnmount(RepositoryHandle),
     ShareTokenMode(#[serde(with = "helpers::str")] ShareToken),
-    /// Shutdown the service
-    Shutdown,
     /// Cancel a subscription identified by the given message id. The message id should be the same
     /// that was used for sending the corresponding subscribe request.
     Unsubscribe(MessageId),

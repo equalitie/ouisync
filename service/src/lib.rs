@@ -23,7 +23,7 @@ use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response
 use rand::{rngs::OsRng, Rng};
 use slab::Slab;
 use state::State;
-use std::{future, io, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{convert::Infallible, future, io, net::SocketAddr, path::PathBuf, time::Duration};
 use subscription::SubscriptionStream;
 use tokio::{
     select,
@@ -42,7 +42,6 @@ const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("remote_control", "Remote control endpoint address");
 
 pub struct Service {
-    running: bool,
     state: State,
     local_server: LocalServer,
     remote_server: Option<RemoteServer>,
@@ -87,7 +86,6 @@ impl Service {
         let metrics_server = MetricsServer::init(&state).await?;
 
         Ok(Self {
-            running: false,
             state,
             local_server,
             remote_server,
@@ -98,15 +96,17 @@ impl Service {
         })
     }
 
-    /// Runs the service. This function completes only when `Request::Shutdown` is sent by a client
-    /// or on error. It is also safe to cancel.
-    pub async fn run(&mut self) -> Result<(), Error> {
-        self.running = true;
-
+    /// Runs the service. The future returned from this function never completes (unless it errors)
+    /// but it's safe to cancel.
+    //
+    // Note we are using `Infallible` for the `Ok` variant which reads a bit weird but it just means
+    // the function never returns `Ok`. When `!` (the "never" type) is stabilized we should use
+    // that instead.
+    pub async fn run(&mut self) -> Result<Infallible, Error> {
         let mut repo_expiration_interval = time::interval(REPOSITORY_EXPIRATION_POLL_INTERVAL);
         repo_expiration_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-        while self.running {
+        loop {
             select! {
                 result = self.local_server.accept() => {
                     let (reader, writer) = result.map_err(Error::Accept)?;
@@ -140,8 +140,6 @@ impl Service {
                 }
             }
         }
-
-        Ok(())
     }
 
     pub async fn close(&mut self) {
@@ -568,10 +566,6 @@ impl Service {
                 .await?
                 .into()),
             Request::ShareTokenMode(token) => Ok(token.access_mode().into()),
-            Request::Shutdown => {
-                self.running = false;
-                Ok(().into())
-            }
             Request::Unsubscribe(id) => {
                 self.subscriptions.remove(&(conn_id, id));
                 Ok(().into())

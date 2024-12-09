@@ -9,7 +9,6 @@ import 'package:hex/hex.dart';
 
 import 'bindings.dart';
 import 'client.dart';
-import 'exception.dart';
 import 'server.dart';
 import 'state_monitor.dart';
 
@@ -46,7 +45,6 @@ class Session {
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
   /// doesn't exists, it will be created.
-  /// [logPath] is a path to the log file. If null, logs will be printed to standard output.
   static Future<Session> create({
     required String socketPath,
     required String configPath,
@@ -63,19 +61,7 @@ class Session {
       debugLabel: debugLabel,
     );
 
-    final clientConnect = SocketClient.connect(socketPath);
-
-    final client = await Future.any([
-      server.terminated.then((_) => null),
-      clientConnect,
-    ]);
-
-    if (client == null) {
-      throw OuisyncException(
-        ErrorCode.other,
-        'server terminated before client connected',
-      );
-    }
+    final client = await SocketClient.connect(socketPath);
 
     return Session._(client, server);
   }
@@ -200,9 +186,8 @@ class Session {
 
   /// Try to gracefully close connections to peers then close the session.
   Future<void> close() async {
-    await _client.invoke<void>('shutdown');
     await _client.close();
-    await _server.terminated;
+    await _server.stop();
   }
 }
 
