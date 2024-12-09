@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'dart:math';
 
 import 'package:hex/hex.dart';
+import 'package:ouisync/exception.dart';
 
 import 'bindings.dart';
 import 'client.dart';
@@ -36,7 +37,7 @@ const defaultLogTag = 'flutter-ouisync';
 /// and closed at the end. There can be only one session at the time.
 class Session {
   final Client _client;
-  final Server _server;
+  final Server? _server;
 
   Session._(this._client, this._server);
 
@@ -51,13 +52,19 @@ class Session {
     // TODO: temp hack
     final storeDir = await io.Directory.systemTemp.createTemp('ouisync');
 
-    // TODO: handle server already running
-    final server = await Server.start(
-      socketPath: socketPath,
-      configPath: configPath,
-      storePath: storeDir.path,
-      debugLabel: debugLabel,
-    );
+    Server? server;
+
+    // Try to start our own server but if one is already running connect to that one instead.
+    try {
+      server = await Server.start(
+        socketPath: socketPath,
+        configPath: configPath,
+        storePath: storeDir.path,
+        debugLabel: debugLabel,
+      );
+    } on ServiceAlreadyRunning catch (_) {
+      server = null;
+    }
 
     final client = await SocketClient.connect(socketPath);
 
@@ -184,7 +191,7 @@ class Session {
   /// Try to gracefully close connections to peers then close the session.
   Future<void> close() async {
     await _client.close();
-    await _server.stop();
+    await _server?.stop();
   }
 }
 
@@ -290,7 +297,7 @@ class Repository {
     required String name,
     required SetLocalSecret? readSecret,
     required SetLocalSecret? writeSecret,
-    ShareToken? shareToken,
+    ShareToken? token,
   }) async {
     final handle = await session._client.invoke<int>(
       'repository_create',
@@ -298,7 +305,7 @@ class Repository {
         'name': name,
         'read_secret': readSecret?.encode(),
         'write_secret': writeSecret?.encode(),
-        'share_token': shareToken?.toString(),
+        'token': token?.toString(),
         'dht': false,
         'pex': false,
       },
@@ -390,10 +397,6 @@ class Repository {
   /// Returns the type (file, directory, ..) of the entry at [path]. Returns `null` if the entry
   /// doesn't exists.
   Future<EntryType?> type(String path) async {
-    if (debugTrace) {
-      print("Repository.type $path");
-    }
-
     final raw = await _client.invoke<int?>('repository_entry_type', {
       'repository': _handle,
       'path': path,

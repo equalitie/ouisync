@@ -63,7 +63,7 @@ void main() {
       Server.start(
           socketPath: socketPath,
           configPath: '${temp.path}/config1',
-          storePath: '${temp.path}/store0'),
+          storePath: '${temp.path}/store1'),
       throwsA(isA<ServiceAlreadyRunning>()),
     );
 

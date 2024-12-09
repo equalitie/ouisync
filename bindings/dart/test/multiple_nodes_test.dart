@@ -42,7 +42,7 @@ void main() {
     repo2 = await Repository.create(
       session2,
       name: 'repo2',
-      shareToken: token,
+      token: token,
       readSecret: null,
       writeSecret: null,
     );
@@ -59,11 +59,11 @@ void main() {
   });
 
   test('notification on sync', () async {
-    final addrs = await session1.listenerAddrs;
-    await session2.addUserProvidedPeers(addrs);
-
     // One event for each block created (one for the root directory and one for the file)
     final expect = expectLater(repo2.events, emitsInOrder([null, null]));
+
+    final addrs = await session1.listenerAddrs;
+    await session2.addUserProvidedPeers(addrs);
 
     final file = await File.create(repo1, "file.txt");
     await file.close();

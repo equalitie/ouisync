@@ -38,7 +38,7 @@ DecodeResult decodeMessage(Uint8List bytes) {
   if (payload.containsKey('success')) {
     final success = payload.remove('success');
 
-    if (success == "none") {
+    if (success is String) {
       return MessageSuccess._(id, null);
     }
 
