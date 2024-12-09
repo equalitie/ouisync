@@ -7,8 +7,9 @@ use crate::{
     utils,
 };
 use ouisync::{
-    AccessChange, AccessMode, Credentials, EntryType, Event, LocalSecret, Network, PeerAddr,
-    Progress, SetLocalSecret, ShareToken, StorageSize,
+    Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
+    Network, PeerAddr, Progress, Repository, RepositoryParams, SetLocalSecret, ShareToken,
+    StorageSize,
 };
 use ouisync_bridge::{
     config::{ConfigError, ConfigKey, ConfigStore},
@@ -222,21 +223,31 @@ impl State {
 
         let store_path = self.store_path(name.as_ref());
 
-        let repository = ouisync_bridge::repository::create(
-            store_path,
-            read_secret,
-            write_secret,
-            share_token,
-            &self.config,
-            &self.repos_monitor,
-        )
-        .await?;
+        let params = RepositoryParams::new(store_path)
+            .with_device_id(ouisync_bridge::device_id::get_or_create(&self.config).await?)
+            .with_monitor(self.repos_monitor.make_child(name.clone()));
 
-        let registration = self.network.register(repository.handle()).await;
+        let access_secrets = if let Some(share_token) = share_token {
+            share_token.into_secrets()
+        } else {
+            AccessSecrets::random_write()
+        };
+
+        let access = Access::new(read_secret, write_secret, access_secrets);
+
+        let repo = Repository::create(&params, access).await?;
+
+        let value = ouisync_bridge::repository::get_default_quota(&self.config).await?;
+        repo.set_quota(value).await?;
+
+        let value = ouisync_bridge::repository::get_default_block_expiration(&self.config).await?;
+        repo.set_block_expiration(value).await?;
+
+        let registration = self.network.register(repo.handle()).await;
         registration.set_dht_enabled(enable_dht).await;
         registration.set_pex_enabled(enable_pex).await;
 
-        let mut holder = RepositoryHolder::new(name.clone(), repository);
+        let mut holder = RepositoryHolder::new(name.clone(), repo);
         holder.enable_sync(registration);
 
         let value = self.default_repository_expiration().await?;
@@ -1194,14 +1205,6 @@ impl State {
         path: &Path,
         local_secret: Option<LocalSecret>,
     ) -> Result<RepositoryHandle, Error> {
-        let repo = ouisync_bridge::repository::open(
-            path.to_path_buf(),
-            local_secret,
-            &self.config,
-            &self.repos_monitor,
-        )
-        .await?;
-
         let name = path
             .strip_prefix(&self.store_dir)
             .unwrap_or(path)
@@ -1209,6 +1212,11 @@ impl State {
             .to_string_lossy()
             .into_owned();
 
+        let params = RepositoryParams::new(path)
+            .with_device_id(ouisync_bridge::device_id::get_or_create(&self.config).await?)
+            .with_monitor(self.repos_monitor.make_child(name.clone()));
+
+        let repo = Repository::open(&params, local_secret, AccessMode::Write).await?;
         let registration = self.network.register(repo.handle()).await;
 
         let mut holder = RepositoryHolder::new(name, repo);
