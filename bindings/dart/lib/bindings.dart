@@ -14,13 +14,11 @@ typedef Start = Pointer<Void> Function(
   Pointer<Char>,
   Pointer<Char>,
   Pointer<Char>,
-  Pointer<Char>,
   Pointer<NativeFunction<Callback>>,
   Pointer<Void>,
 );
 
 typedef _StartC = Pointer<Void> Function(
-  Pointer<Char>,
   Pointer<Char>,
   Pointer<Char>,
   Pointer<Char>,

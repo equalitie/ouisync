@@ -1,4 +1,4 @@
-use crate::options::ServerCommand;
+use crate::{defaults, options::ServerCommand};
 use ouisync_bridge::logger::Logger;
 use ouisync_service::{Error, Service};
 use std::{io, path::PathBuf};
@@ -7,7 +7,6 @@ use tokio::select;
 pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), Error> {
     let ServerCommand::Start {
         config_dir,
-        default_store_dir,
         log_format,
         log_color,
     } = command;
@@ -19,7 +18,11 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
         log_color,
     )?;
 
-    let mut service = Service::init(socket, config_dir, default_store_dir).await?;
+    let mut service = Service::init(socket, config_dir).await?;
+
+    if service.store_dir().is_none() {
+        service.set_store_dir(defaults::store_dir()).await?;
+    }
 
     select! {
         result = service.run() => match result {

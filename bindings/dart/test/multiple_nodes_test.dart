@@ -23,12 +23,14 @@ void main() {
       configPath: '${temp.path}/1/config',
       debugLabel: '1',
     );
+    await session1.setStoreDir('${temp.path}/1/store');
 
     session2 = await Session.create(
       socketPath: '${temp.path}/2/sock',
       configPath: '${temp.path}/2/config',
       debugLabel: '2',
     );
+    await session2.setStoreDir('${temp.path}/2/store');
 
     repo1 = await Repository.create(
       session1,

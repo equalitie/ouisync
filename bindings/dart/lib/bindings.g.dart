@@ -73,6 +73,7 @@ enum ErrorCode {
   tlsConfig,
   createMounter,
   serviceAlreadyRunning,
+  storeDirUnspecified,
   other,
   ;
 
@@ -105,6 +106,7 @@ enum ErrorCode {
       case 4103: return ErrorCode.tlsConfig;
       case 4104: return ErrorCode.createMounter;
       case 4105: return ErrorCode.serviceAlreadyRunning;
+      case 4106: return ErrorCode.storeDirUnspecified;
       case 65535: return ErrorCode.other;
       default: throw ArgumentError('invalid value: $n');
     }
@@ -139,6 +141,7 @@ enum ErrorCode {
       case ErrorCode.tlsConfig: return 4103;
       case ErrorCode.createMounter: return 4104;
       case ErrorCode.serviceAlreadyRunning: return 4105;
+      case ErrorCode.storeDirUnspecified: return 4106;
       case ErrorCode.other: return 65535;
     }
   }

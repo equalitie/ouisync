@@ -49,9 +49,6 @@ class Session {
     required String configPath,
     String? debugLabel,
   }) async {
-    // TODO: temp hack
-    final storeDir = await io.Directory.systemTemp.createTemp('ouisync');
-
     Server? server;
 
     // Try to start our own server but if one is already running connect to that one instead.
@@ -59,7 +56,6 @@ class Session {
       server = await Server.start(
         socketPath: socketPath,
         configPath: configPath,
-        storePath: storeDir.path,
         debugLabel: debugLabel,
       );
     } on ServiceAlreadyRunning catch (_) {
@@ -85,7 +81,10 @@ class Session {
   }
   */
 
-  Future<String> get storeDir => _client.invoke('repository_get_store_dir');
+  Future<String?> get storeDir => _client.invoke('repository_get_store_dir');
+
+  Future<void> setStoreDir(String path) =>
+      _client.invoke('repository_set_store_dir', path);
 
   Future<String?> get mountDir => _client.invoke('repository_get_mount_dir');
 

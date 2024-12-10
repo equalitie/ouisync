@@ -30,6 +30,8 @@ pub enum Error {
     RepositorySyncDisabled,
     #[error("store error")]
     Store(#[from] ouisync::StoreError),
+    #[error("store dir not specified")]
+    StoreDirUnspecified,
     #[error("TLS certificates not found")]
     TlsCertificatesNotFound,
     #[error("TLS certificates failed to load")]

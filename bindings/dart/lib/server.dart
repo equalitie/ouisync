@@ -17,12 +17,10 @@ class Server {
   static Future<Server> start({
     required String socketPath,
     required String configPath,
-    required String storePath,
     String? debugLabel,
   }) async {
     final socketPathPtr = socketPath.toNativeUtf8(allocator: malloc);
     final configPathPtr = configPath.toNativeUtf8(allocator: malloc);
-    final storePathPtr = storePath.toNativeUtf8(allocator: malloc);
     final debugLabelPtr = debugLabel != null
         ? debugLabel.toNativeUtf8(allocator: malloc)
         : nullptr;
@@ -36,7 +34,6 @@ class Server {
       final handle = Bindings.instance.start(
         socketPathPtr.cast(),
         configPathPtr.cast(),
-        storePathPtr.cast(),
         debugLabelPtr.cast(),
         callback.nativeFunction,
         nullptr,
@@ -56,7 +53,6 @@ class Server {
         malloc.free(debugLabelPtr);
       }
 
-      malloc.free(storePathPtr);
       malloc.free(configPathPtr);
       malloc.free(socketPathPtr);
     }

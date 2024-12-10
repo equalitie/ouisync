@@ -187,25 +187,26 @@ mod tests {
         let socket_path = temp_dir.path().join("sock");
         let store_dir = temp_dir.path().join("store");
 
-        let service = Service::init(
-            socket_path.clone(),
-            temp_dir.path().join("config"),
-            store_dir.clone(),
-        )
-        .await
-        .unwrap();
+        let mut service = Service::init(socket_path.clone(), temp_dir.path().join("config"))
+            .await
+            .unwrap();
+        service
+            .state_mut()
+            .set_store_dir(store_dir.clone())
+            .await
+            .unwrap();
 
         let runner = ServiceRunner::start(service);
 
         let mut client = TestClient::connect(&socket_path).await;
 
         let message_id = MessageId::next();
-        let value: PathBuf = client
+        let value: Option<PathBuf> = client
             .invoke(message_id, Request::RepositoryGetStoreDir)
             .await
             .unwrap();
         assert_eq!(client.unsolicited_responses, []);
-        assert_eq!(value, store_dir);
+        assert_eq!(value, Some(store_dir));
 
         runner.stop().await.close().await;
     }
@@ -218,13 +219,10 @@ mod tests {
         let socket_path = temp_dir.path().join("sock");
         let store_dir = temp_dir.path().join("store");
 
-        let service = Service::init(
-            socket_path.clone(),
-            temp_dir.path().join("config"),
-            store_dir.clone(),
-        )
-        .await
-        .unwrap();
+        let mut service = Service::init(socket_path.clone(), temp_dir.path().join("config"))
+            .await
+            .unwrap();
+        service.state_mut().set_store_dir(store_dir).await.unwrap();
 
         let runner = ServiceRunner::start(service);
 
@@ -328,13 +326,14 @@ mod tests {
         // Create two separate services (A and B), each with its own client.
         let (socket_path_a, runner_a) = async {
             let socket_path = temp_dir.path().join("a.sock");
-            let service = Service::init(
-                socket_path.clone(),
-                temp_dir.path().join("config_a"),
-                temp_dir.path().join("store_a"),
-            )
-            .await
-            .unwrap();
+            let mut service = Service::init(socket_path.clone(), temp_dir.path().join("config_a"))
+                .await
+                .unwrap();
+            service
+                .state_mut()
+                .set_store_dir(temp_dir.path().join("store_a"))
+                .await
+                .unwrap();
             let runner = ServiceRunner::start(service);
 
             (socket_path, runner)
@@ -344,13 +343,14 @@ mod tests {
 
         let (socket_path_b, runner_b) = async {
             let socket_path = temp_dir.path().join("b.sock");
-            let service = Service::init(
-                socket_path.clone(),
-                temp_dir.path().join("config_b"),
-                temp_dir.path().join("store_b"),
-            )
-            .await
-            .unwrap();
+            let mut service = Service::init(socket_path.clone(), temp_dir.path().join("config_b"))
+                .await
+                .unwrap();
+            service
+                .state_mut()
+                .set_store_dir(temp_dir.path().join("store_b"))
+                .await
+                .unwrap();
             let runner = ServiceRunner::start(service);
 
             (socket_path, runner)

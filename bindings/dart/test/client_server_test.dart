@@ -18,19 +18,17 @@ void main() {
 
   test('sanity check', () async {
     final socketPath = '${temp.path}/sock';
-    final storePath = '${temp.path}/store';
 
     final server = await Server.start(
       socketPath: socketPath,
       configPath: '${temp.path}/config',
-      storePath: storePath,
     );
 
     final client = await SocketClient.connect(socketPath);
 
     expect(
-      await client.invoke<String>('repository_get_store_dir'),
-      equals(storePath),
+      await client.invoke<String?>('repository_get_store_dir'),
+      isNull,
     );
 
     await client.close();
@@ -52,18 +50,16 @@ void main() {
 
     logInit();
 
-    final storePath0 = '${temp.path}/store0';
     final server0 = await Server.start(
       socketPath: socketPath,
       configPath: '${temp.path}/config0',
-      storePath: storePath0,
     );
 
     await expectLater(
       Server.start(
-          socketPath: socketPath,
-          configPath: '${temp.path}/config1',
-          storePath: '${temp.path}/store1'),
+        socketPath: socketPath,
+        configPath: '${temp.path}/config1',
+      ),
       throwsA(isA<ServiceAlreadyRunning>()),
     );
 
@@ -71,8 +67,8 @@ void main() {
 
     try {
       expect(
-        await client.invoke<String>('repository_get_store_dir'),
-        equals(storePath0),
+        await client.invoke<String?>('repository_get_store_dir'),
+        isNull,
       );
     } finally {
       await client.close();

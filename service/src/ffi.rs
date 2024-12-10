@@ -28,22 +28,19 @@ use crate::{
 ///
 /// # Safety
 ///
-/// - `socket_path`, `config_dir` and `default_store_dir` must be safe to pass to
-///   [std::ffi::CStr::from_ptr].
+/// - `socket_path` and `config_dir` must be safe to pass to [std::ffi::CStr::from_ptr].
 /// - `debug_label` must be either null or must be safe to pass to [std::ffi::CStr::from_ptr].
 /// - `callback_context` must be either null or it must be safe to access from multiple threads.
 #[no_mangle]
 pub unsafe extern "C" fn ouisync_start(
     socket_path: *const c_char,
     config_dir: *const c_char,
-    default_store_dir: *const c_char,
     debug_label: *const c_char,
     callback: extern "C" fn(*const c_void, ErrorCode),
     callback_context: *const c_void,
 ) -> *mut c_void {
     let socket_path = CStr::from_ptr(socket_path).to_owned();
     let config_dir = CStr::from_ptr(config_dir).to_owned();
-    let default_store_dir = CStr::from_ptr(default_store_dir).to_owned();
     let debug_label = if !debug_label.is_null() {
         Some(CStr::from_ptr(debug_label).to_owned())
     } else {
@@ -54,16 +51,7 @@ pub unsafe extern "C" fn ouisync_start(
     let (stop_tx, stop_rx) = oneshot::channel();
     let stop_tx = Box::into_raw(Box::new(stop_tx)) as _;
 
-    thread::spawn(move || {
-        run(
-            socket_path,
-            config_dir,
-            default_store_dir,
-            debug_label,
-            callback,
-            stop_rx,
-        )
-    });
+    thread::spawn(move || run(socket_path, config_dir, debug_label, callback, stop_rx));
 
     stop_tx
 }
@@ -118,22 +106,20 @@ mod callback {
 fn run(
     socket_path: CString,
     config_dir: CString,
-    default_store_dir: CString,
     debug_label: Option<CString>,
     on_init: Callback,
     on_stop_rx: oneshot::Receiver<Callback>,
 ) {
-    let (runtime, mut service, span) =
-        match init(socket_path, config_dir, default_store_dir, debug_label) {
-            Ok(parts) => {
-                on_init.call(ErrorCode::Ok);
-                parts
-            }
-            Err(error) => {
-                on_init.call(error.to_error_code());
-                return;
-            }
-        };
+    let (runtime, mut service, span) = match init(socket_path, config_dir, debug_label) {
+        Ok(parts) => {
+            on_init.call(ErrorCode::Ok);
+            parts
+        }
+        Err(error) => {
+            on_init.call(error.to_error_code());
+            return;
+        }
+    };
 
     runtime.block_on(
         async move {
@@ -162,12 +148,10 @@ fn run(
 fn init(
     socket_path: CString,
     config_dir: CString,
-    default_store_dir: CString,
     debug_label: Option<CString>,
 ) -> Result<(runtime::Runtime, Service, Span), Error> {
     let socket_path = socket_path.into_string()?.into();
     let config_dir = config_dir.into_string()?.into();
-    let default_store_dir = default_store_dir.into_string()?.into();
 
     let span = if let Some(debug_label) = debug_label {
         tracing::info_span!("service", message = debug_label.into_string()?)
@@ -180,9 +164,8 @@ fn init(
         .build()
         .map_err(Error::InitializeRuntime)?;
 
-    let service = runtime.block_on(
-        Service::init(socket_path, config_dir, default_store_dir).instrument(span.clone()),
-    )?;
+    let service =
+        runtime.block_on(Service::init(socket_path, config_dir).instrument(span.clone()))?;
 
     Ok((runtime, service, span))
 }

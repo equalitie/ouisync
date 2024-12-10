@@ -23,7 +23,13 @@ use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response
 use rand::{rngs::OsRng, Rng};
 use slab::Slab;
 use state::State;
-use std::{convert::Infallible, future, io, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    convert::Infallible,
+    future, io,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use subscription::SubscriptionStream;
 use tokio::{
     select,
@@ -52,12 +58,8 @@ pub struct Service {
 }
 
 impl Service {
-    pub async fn init(
-        local_socket_path: PathBuf,
-        config_dir: PathBuf,
-        default_store_dir: PathBuf,
-    ) -> Result<Self, Error> {
-        let state = State::init(config_dir, default_store_dir).await?;
+    pub async fn init(local_socket_path: PathBuf, config_dir: PathBuf) -> Result<Self, Error> {
+        let state = State::init(config_dir).await?;
         let local_server =
             LocalServer::bind(&local_socket_path)
                 .await
@@ -154,6 +156,14 @@ impl Service {
         }
 
         self.state.close().await;
+    }
+
+    pub fn store_dir(&self) -> Option<&Path> {
+        self.state.store_dir()
+    }
+
+    pub async fn set_store_dir(&mut self, path: impl Into<PathBuf>) -> Result<(), Error> {
+        self.state.set_store_dir(path.into()).await
     }
 
     pub(crate) async fn bind_remote_control(
@@ -701,22 +711,14 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         let socket_path = temp_dir.path().join("sock");
-        let mut service0 = Service::init(
-            socket_path.clone(),
-            temp_dir.path().join("config0"),
-            temp_dir.path().join("store0"),
-        )
-        .await
-        .unwrap();
+        let mut service0 = Service::init(socket_path.clone(), temp_dir.path().join("config"))
+            .await
+            .unwrap();
 
         assert_matches!(
-            Service::init(
-                socket_path,
-                temp_dir.path().join("config0"),
-                temp_dir.path().join("store0")
-            )
-            .await
-            .map(|_| ()),
+            Service::init(socket_path, temp_dir.path().join("config"),)
+                .await
+                .map(|_| ()),
             Err(Error::ServiceAlreadyRunning)
         );
 

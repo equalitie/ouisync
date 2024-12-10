@@ -33,6 +33,8 @@ void main() {
       socketPath: '${temp.path}/sock',
       configPath: '${temp.path}/device_id.conf',
     );
+    await session.setStoreDir('${temp.path}/store');
+
     repository = await Repository.create(
       session,
       name: 'foo',

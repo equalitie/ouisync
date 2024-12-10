@@ -78,6 +78,8 @@ pub enum ErrorCode {
     CreateMounter = 4096 + 8,
     /// Another instance of the service is already running
     ServiceAlreadyRunning = 4096 + 9,
+    /// Store directory is not specified
+    StoreDirUnspecified = 4096 + 10,
 
     /// Unspecified error
     Other = 65535,
@@ -102,6 +104,7 @@ impl ToErrorCode for Error {
             Self::RepositoryExists => ErrorCode::AlreadyExists,
             Self::RepositorySyncDisabled => ErrorCode::Unsupported,
             Self::Store(_) => todo!(),
+            Self::StoreDirUnspecified => ErrorCode::StoreDirUnspecified,
             Self::TlsCertificatesNotFound => ErrorCode::TlsCertificatesNotFound,
             Self::TlsCertificatesInvalid(_) => ErrorCode::TlsCertificatesInvalid,
             Self::TlsConfig(_) => ErrorCode::TlsConfig,

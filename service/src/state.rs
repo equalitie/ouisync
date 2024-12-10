@@ -51,7 +51,7 @@ const REPOSITORY_FILE_EXTENSION: &str = "ouisyncdb";
 pub(crate) struct State {
     pub config: ConfigStore,
     pub network: Network,
-    store_dir: PathBuf,
+    store_dir: Option<PathBuf>,
     mounter: Option<MultiRepoVFS>,
     repos: RepositorySet,
     files: FileSet,
@@ -62,7 +62,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn init(config_dir: PathBuf, default_store_dir: PathBuf) -> Result<Self, Error> {
+    pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
         let root_monitor = StateMonitor::make_root();
 
@@ -73,8 +73,8 @@ impl State {
         );
 
         let store_dir = match config.entry(STORE_DIR_KEY).get().await {
-            Ok(dir) => dir,
-            Err(ConfigError::NotFound) => default_store_dir,
+            Ok(dir) => Some(dir),
+            Err(ConfigError::NotFound) => None,
             Err(error) => return Err(error.into()),
         };
 
@@ -143,17 +143,17 @@ impl State {
             .await
     }
 
-    pub fn store_dir(&self) -> &Path {
-        &self.store_dir
+    pub fn store_dir(&self) -> Option<&Path> {
+        self.store_dir.as_deref()
     }
 
     pub async fn set_store_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
-        if dir == self.store_dir {
+        if Some(dir.as_path()) == self.store_dir.as_deref() {
             return Ok(());
         }
 
         self.config.entry(STORE_DIR_KEY).set(&dir).await?;
-        self.store_dir = dir;
+        self.store_dir = Some(dir);
 
         // Close repos from the previous store dir and load repos from the new dir.
         self.close_repositories().await;
@@ -221,7 +221,7 @@ impl State {
             }
         }
 
-        let store_path = self.store_path(name.as_ref());
+        let store_path = self.store_path(name.as_ref())?;
 
         let params = RepositoryParams::new(store_path)
             .with_device_id(ouisync_bridge::device_id::get_or_create(&self.config).await?)
@@ -269,13 +269,13 @@ impl State {
 
         holder.close().await?;
 
-        let store_path = self.store_path(holder.name());
+        let store_path = self.store_path(holder.name())?;
 
         ouisync::delete_repository(&store_path).await?;
 
         // Remove ancestors directories up to `store_dir` but only if they are empty.
         for path in store_path.ancestors().skip(1) {
-            if *path == self.store_dir {
+            if Some(path) == self.store_dir.as_deref() {
                 break;
             }
 
@@ -307,7 +307,7 @@ impl State {
             Err(Error::RepositoryExists)?;
         }
 
-        let store_path = self.store_path(&name);
+        let store_path = self.store_path(&name)?;
 
         self.load_repository(&store_path, local_secret).await
     }
@@ -358,7 +358,8 @@ impl State {
                 .to_string_lossy()
                 .into_owned()
         };
-        let store_path = self.store_path(&name);
+
+        let store_path = self.store_path(&name)?;
 
         if fs::try_exists(&store_path).await? {
             if force {
@@ -1194,12 +1195,17 @@ impl State {
 
     // Find all repositories in the store dir and open them.
     async fn load_repositories(&mut self) {
-        if !fs::try_exists(&self.store_dir).await.unwrap_or(false) {
+        let Some(store_dir) = self.store_dir.as_deref() else {
+            tracing::warn!("store dir not specified");
+            return;
+        };
+
+        if !fs::try_exists(store_dir).await.unwrap_or(false) {
             tracing::error!("store dir doesn't exist");
             return;
         }
 
-        let mut walkdir = utils::walk_dir(&self.store_dir);
+        let mut walkdir = utils::walk_dir(store_dir);
 
         while let Some(entry) = walkdir.next().await {
             let entry = match entry {
@@ -1249,8 +1255,13 @@ impl State {
         path: &Path,
         local_secret: Option<LocalSecret>,
     ) -> Result<RepositoryHandle, Error> {
+        let store_dir = self
+            .store_dir
+            .as_deref()
+            .ok_or(Error::StoreDirUnspecified)?;
+
         let name = path
-            .strip_prefix(&self.store_dir)
+            .strip_prefix(store_dir)
             .unwrap_or(path)
             .with_extension("")
             .to_string_lossy()
@@ -1281,7 +1292,7 @@ impl State {
         self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
     }
 
-    fn store_path(&self, repo_name: &str) -> PathBuf {
+    fn store_path(&self, repo_name: &str) -> Result<PathBuf, Error> {
         // TODO: when `repo_name` is already a path (starts with '/' for absolute or './' for
         // relative), use it as is
 
@@ -1296,7 +1307,10 @@ impl State {
             Cow::Borrowed(REPOSITORY_FILE_EXTENSION.as_ref())
         };
 
-        self.store_dir.join(suffix).with_extension(extension)
+        self.store_dir
+            .as_deref()
+            .ok_or(Error::StoreDirUnspecified)
+            .map(|store_dir| store_dir.join(suffix).with_extension(extension))
     }
 
     async fn connect_remote_client(&self, host: &str) -> Result<RemoteClient, Error> {
@@ -1377,16 +1391,20 @@ mod tests {
 
     #[tokio::test]
     async fn store_path_sanity_check() {
-        let (_temp_dir, state) = setup().await;
-        let store_dir = state.store_dir();
+        let (temp_dir, mut state) = setup().await;
+        let store_dir = temp_dir.path().join("store");
+        state.set_store_dir(store_dir.clone()).await.unwrap();
 
-        assert_eq!(state.store_path("foo"), store_dir.join("foo.ouisyncdb"));
         assert_eq!(
-            state.store_path("foo/bar"),
+            state.store_path("foo").unwrap(),
+            store_dir.join("foo.ouisyncdb")
+        );
+        assert_eq!(
+            state.store_path("foo/bar").unwrap(),
             store_dir.join("foo/bar.ouisyncdb")
         );
         assert_eq!(
-            state.store_path("foo/bar.baz"),
+            state.store_path("foo/bar.baz").unwrap(),
             store_dir.join("foo/bar.baz.ouisyncdb")
         );
     }
@@ -1479,7 +1497,10 @@ mod tests {
         state.delete_expired_repositories().await;
 
         assert_eq!(state.find_repository(name), Err(FindError::NotFound));
-        assert_eq!(read_dir(state.store_dir()).await, Vec::<PathBuf>::new());
+        assert_eq!(
+            read_dir(state.store_dir().unwrap()).await,
+            Vec::<PathBuf>::new()
+        );
     }
 
     #[tokio::test]
@@ -1526,16 +1547,15 @@ mod tests {
             .next()
             .unwrap();
 
-        let mut local_state = State::init(
-            temp_dir.path().join("local/config"),
-            temp_dir.path().join("local/store"),
-        )
-        .instrument(tracing::info_span!("local"))
-        .await
-        .unwrap();
+        let mut local_state = State::init(temp_dir.path().join("local/config"))
+            .instrument(tracing::info_span!("local"))
+            .await
+            .unwrap();
 
-        local_state.set_port_forwarding_enabled(false).await;
-        local_state.set_local_discovery_enabled(false).await;
+        local_state
+            .set_store_dir(temp_dir.path().join("local/store"))
+            .await
+            .unwrap();
         local_state
             .bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
             .await;
@@ -1588,23 +1608,18 @@ mod tests {
 
         assert_eq!(local_state.find_repository(name), Err(FindError::NotFound));
         assert_eq!(
-            read_dir(local_state.store_dir()).await,
+            read_dir(local_state.store_dir().unwrap()).await,
             Vec::<PathBuf>::new(),
         );
     }
 
     async fn setup() -> (TempDir, State) {
         let temp_dir = TempDir::new().unwrap();
-        let state = State::init(
-            temp_dir.path().join("config"),
-            temp_dir.path().join("store"),
-        )
-        .await
-        .unwrap();
-
-        state.bind_network(vec![]).await;
-        state.set_port_forwarding_enabled(false).await;
-        state.set_local_discovery_enabled(false).await;
+        let mut state = State::init(temp_dir.path().join("config")).await.unwrap();
+        state
+            .set_store_dir(temp_dir.path().join("store"))
+            .await
+            .unwrap();
 
         (temp_dir, state)
     }

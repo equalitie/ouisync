@@ -17,6 +17,7 @@ void main() {
       socketPath: '${temp.path}/sock',
       configPath: '${temp.path}/config',
     );
+    await session.setStoreDir('${temp.path}/store');
   });
 
   tearDown(() async {

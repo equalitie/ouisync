@@ -20,10 +20,13 @@ void main() {
     logInit();
 
     temp = await io.Directory.systemTemp.createTemp();
+
     session = await Session.create(
       socketPath: '${temp.path}/sock',
       configPath: '${temp.path}/config',
     );
+    await session.setStoreDir('${temp.path}/store');
+
     repository = await Repository.create(
       session,
       name: 'repo',

@@ -255,17 +255,14 @@ mod tests {
         let remote_client_config =
             ouisync_bridge::transport::make_client_config(slice::from_ref(cert)).unwrap();
 
-        let mut service = Service::init(
-            socket_path.clone(),
-            config_dir,
-            temp_dir.path().join("store"),
-        )
-        .await
-        .unwrap();
+        let mut service = Service::init(socket_path.clone(), config_dir)
+            .await
+            .unwrap();
 
-        service.state_mut().bind_network(vec![]).await;
-        service.state_mut().set_port_forwarding_enabled(false).await;
-        service.state_mut().set_local_discovery_enabled(false).await;
+        service
+            .set_store_dir(temp_dir.path().join("store"))
+            .await
+            .unwrap();
 
         let remote_port = service
             .bind_remote_control(Some((Ipv4Addr::LOCALHOST, 0).into()))
