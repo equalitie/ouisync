@@ -276,9 +276,9 @@ class NetworkStats {
 class Repository {
   final Client _client;
   final int _handle;
-  final String _name;
+  final String _path;
 
-  Repository._(this._client, this._handle, this._name);
+  Repository._(this._client, this._handle, this._path);
 
   /// Creates a new repository and set access to it based on the following table:
   ///
@@ -293,15 +293,16 @@ class Repository {
   /// any             |  any             |  write         |  read with one secret, write with (possibly same) one
   static Future<Repository> create(
     Session session, {
-    required String name,
+    required String path,
     required SetLocalSecret? readSecret,
     required SetLocalSecret? writeSecret,
     ShareToken? token,
   }) async {
-    final handle = await session._client.invoke<int>(
+    final client = session._client;
+    final handle = await client.invoke<int>(
       'repository_create',
       {
-        'name': name,
+        'path': path,
         'read_secret': readSecret?.encode(),
         'write_secret': writeSecret?.encode(),
         'token': token?.toString(),
@@ -310,7 +311,9 @@ class Repository {
       },
     );
 
-    return Repository._(session._client, handle, name);
+    final fullPath = await client.invoke<String>('repository_get_path', handle);
+
+    return Repository._(client, handle, fullPath);
   }
 
   /// Opens an existing repository. If the same repository is opened again, a new handle pointing
@@ -319,15 +322,18 @@ class Repository {
   /// See also [close].
   static Future<Repository> open(
     Session session, {
-    required String name,
+    required String path,
     LocalSecret? secret,
   }) async {
-    final handle = await session._client.invoke<int>('repository_open', {
-      'name': name,
+    final client = session._client;
+    final handle = await client.invoke<int>('repository_open', {
+      'path': path,
       'secret': secret?.encode(),
     });
 
-    return Repository._(session._client, handle, name);
+    final fullPath = await client.invoke<String>('repository_get_path', handle);
+
+    return Repository._(client, handle, fullPath);
   }
 
   /// Returns all currently opened repositories.
@@ -344,6 +350,8 @@ class Repository {
   Future<void> close() async {
     await _client.invoke('repository_close', _handle);
   }
+
+  String get path => _path;
 
   /// Checks whether syncing with other replicas is enabled.
   Future<bool> get isSyncEnabled =>
@@ -404,7 +412,7 @@ class Repository {
 
   /// Returns the type (file, directory, ..) of the entry at [path]. Returns `null` if the entry
   /// doesn't exists.
-  Future<EntryType?> type(String path) async {
+  Future<EntryType?> entryType(String path) async {
     final raw = await _client.invoke<int?>('repository_entry_type', {
       'repository': _handle,
       'path': path,
@@ -414,16 +422,12 @@ class Repository {
   }
 
   /// Returns whether the entry (file or directory) at [path] exists.
-  Future<bool> exists(String path) async {
-    if (debugTrace) {
-      print("Repository.exists $path");
-    }
-
-    return await type(path) != null;
+  Future<bool> entryExists(String path) async {
+    return await entryType(path) != null;
   }
 
   /// Move/rename the file/directory from [src] to [dst].
-  Future<void> move(String src, String dst) =>
+  Future<void> moveEntry(String src, String dst) =>
       _client.invoke<void>('repository_move_entry', {
         'repository': _handle,
         'src': src,
@@ -433,24 +437,14 @@ class Repository {
   Stream<void> get events =>
       _client.subscribe('repository', _handle).cast<void>();
 
-  Future<bool> get isDhtEnabled async {
-    if (debugTrace) {
-      print("Repository.isDhtEnabled");
-    }
+  Future<bool> get isDhtEnabled =>
+      _client.invoke('repository_is_dht_enabled', _handle);
 
-    return await _client.invoke<bool>('repository_is_dht_enabled', _handle);
-  }
-
-  Future<void> setDhtEnabled(bool enabled) async {
-    if (debugTrace) {
-      print("Repository.setDhtEnabled($enabled)");
-    }
-
-    await _client.invoke<void>('repository_set_dht_enabled', {
-      'repository': _handle,
-      'enabled': enabled,
-    });
-  }
+  Future<void> setDhtEnabled(bool enabled) =>
+      _client.invoke('repository_set_dht_enabled', {
+        'repository': _handle,
+        'enabled': enabled,
+      });
 
   Future<bool> get isPexEnabled =>
       _client.invoke<bool>('repository_is_pex_enabled', _handle);
@@ -478,7 +472,7 @@ class Repository {
 
   StateMonitor? get stateMonitor => StateMonitor.getRoot(_client)
       .child(MonitorId.expectUnique("Repositories"))
-      .child(MonitorId.expectUnique(_name));
+      .child(MonitorId.expectUnique(_path));
 
   Future<String> get infoHash =>
       _client.invoke<String>("repository_info_hash", _handle);
@@ -563,7 +557,7 @@ class Repository {
   int get hashCode => Object.hash(_client, _handle);
 
   @override
-  String toString() => '$runtimeType("$_name")';
+  String toString() => '$runtimeType($_path)';
 }
 
 sealed class AccessChange {

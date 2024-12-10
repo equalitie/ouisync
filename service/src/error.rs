@@ -26,6 +26,8 @@ pub enum Error {
     Repository(#[from] ouisync::Error),
     #[error("repository already exists")]
     RepositoryExists,
+    #[error("repository not found")]
+    RepositoryNotFound,
     #[error("repository sync is disabled")]
     RepositorySyncDisabled,
     #[error("store error")]

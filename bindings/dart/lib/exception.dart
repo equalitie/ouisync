@@ -19,6 +19,7 @@ class OuisyncException implements Exception {
   ]) =>
       switch (code) {
         ErrorCode.invalidData => InvalidData(message, sources),
+        ErrorCode.alreadyExists => AlreadyExists(message, sources),
         ErrorCode.serviceAlreadyRunning =>
           ServiceAlreadyRunning(message, sources),
         _ => OuisyncException._(code, message, sources),
@@ -31,6 +32,11 @@ class OuisyncException implements Exception {
 class InvalidData extends OuisyncException {
   InvalidData([String? message, List<String> sources = const []])
       : super._(ErrorCode.invalidData, message, sources);
+}
+
+class AlreadyExists extends OuisyncException {
+  AlreadyExists([String? message, List<String> sources = const []])
+      : super._(ErrorCode.alreadyExists, message, sources);
 }
 
 class ServiceAlreadyRunning extends OuisyncException {

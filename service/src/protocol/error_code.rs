@@ -102,6 +102,7 @@ impl ToErrorCode for Error {
             Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::Repository(error) => error.to_error_code(),
             Self::RepositoryExists => ErrorCode::AlreadyExists,
+            Self::RepositoryNotFound => ErrorCode::NotFound,
             Self::RepositorySyncDisabled => ErrorCode::Unsupported,
             Self::Store(_) => ErrorCode::StoreError,
             Self::StoreDirUnspecified => ErrorCode::StoreDirUnspecified,

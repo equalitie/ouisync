@@ -186,7 +186,7 @@ impl State {
                     .await?
                     .unwrap_or(false)
                 {
-                    mounter.insert(holder.name().to_owned(), holder.repository().clone())?;
+                    mounter.insert(holder.short_name().to_owned(), holder.repository().clone())?;
                 }
             }
         } else {
@@ -197,28 +197,30 @@ impl State {
         Ok(())
     }
 
-    pub fn find_repository(&self, name: &str) -> Result<RepositoryHandle, FindError> {
-        let (handle, _) = self.repos.find_by_name(name)?;
+    pub fn find_repository(&self, pattern: &str) -> Result<RepositoryHandle, FindError> {
+        let (handle, _) = self.repos.find_by_subpath(pattern)?;
         Ok(handle)
     }
 
-    pub fn list_repositories(&self) -> BTreeMap<String, RepositoryHandle> {
+    pub fn list_repositories(&self) -> BTreeMap<PathBuf, RepositoryHandle> {
         self.repos
             .iter()
-            .map(|(handle, holder)| (holder.name().to_owned(), handle))
+            .map(|(handle, holder)| (holder.path().to_owned(), handle))
             .collect()
     }
 
     pub async fn create_repository(
         &mut self,
-        name: String,
+        path: PathBuf,
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
         share_token: Option<ShareToken>,
         enable_dht: bool,
         enable_pex: bool,
     ) -> Result<RepositoryHandle, Error> {
-        if self.repos.find_by_name(&name).is_ok() {
+        let path = self.normalize_repository_path(&path)?;
+
+        if self.repos.find_by_path(&path).is_some() {
             Err(Error::RepositoryExists)?;
         }
 
@@ -228,11 +230,9 @@ impl State {
             }
         }
 
-        let store_path = self.store_path(name.as_ref())?;
-
-        let params = RepositoryParams::new(store_path)
+        let params = RepositoryParams::new(&path)
             .with_device_id(ouisync_bridge::device_id::get_or_create(&self.config).await?)
-            .with_monitor(self.repos_monitor.make_child(name.clone()));
+            .with_monitor(self.repos_monitor.make_child(path.to_string_lossy()));
 
         let access_secrets = if let Some(share_token) = share_token {
             share_token.into_secrets()
@@ -254,17 +254,17 @@ impl State {
         registration.set_dht_enabled(enable_dht).await;
         registration.set_pex_enabled(enable_pex).await;
 
-        let mut holder = RepositoryHolder::new(name.clone(), repo);
+        let mut holder = RepositoryHolder::new(path, repo);
         holder.enable_sync(registration);
 
         let value = self.default_repository_expiration().await?;
         holder.set_repository_expiration(value).await?;
 
+        tracing::info!(name = holder.short_name(), "repository created");
+
         // unwrap is ok because we already checked that the repo doesn't exist earlier and we have
         // exclusive access to this state.
         let handle = self.repos.try_insert(holder).unwrap();
-
-        tracing::info!(name, "repository created");
 
         Ok(handle)
     }
@@ -276,12 +276,10 @@ impl State {
 
         holder.close().await?;
 
-        let store_path = self.store_path(holder.name())?;
-
-        ouisync::delete_repository(&store_path).await?;
+        ouisync::delete_repository(holder.path()).await?;
 
         // Remove ancestors directories up to `store_dir` but only if they are empty.
-        for path in store_path.ancestors().skip(1) {
+        for path in holder.path().ancestors().skip(1) {
             if Some(path) == self.store_dir.as_deref() {
                 break;
             }
@@ -290,7 +288,7 @@ impl State {
             // error and propagate the rest.
             if let Err(error) = fs::remove_dir(&path).await {
                 tracing::error!(
-                    repo = holder.name(),
+                    repo = holder.short_name(),
                     path = %path.display(),
                     ?error,
                     "failed to remove repository store subdirectory"
@@ -299,31 +297,31 @@ impl State {
             }
         }
 
-        tracing::info!(name = holder.name(), "repository deleted");
+        tracing::info!(name = holder.short_name(), "repository deleted");
 
         Ok(())
     }
 
     pub async fn open_repository(
         &mut self,
-        name: String,
+        path: &Path,
         local_secret: Option<LocalSecret>,
     ) -> Result<RepositoryHandle, Error> {
-        if self.repos.find_by_name(&name).is_ok() {
+        let path = self.normalize_repository_path(path)?;
+
+        if self.repos.find_by_path(&path).is_some() {
             // TODO: return the existing repo instead (but unlock using `local_secret`)?
             Err(Error::RepositoryExists)?;
         }
 
-        let store_path = self.store_path(&name)?;
-
-        self.load_repository(&store_path, local_secret).await
+        self.load_repository(&path, local_secret).await
     }
 
     pub async fn close_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
         let mut holder = self.repos.remove(handle).ok_or(Error::InvalidArgument)?;
 
         if let Some(mounter) = &self.mounter {
-            mounter.remove(holder.name())?;
+            mounter.remove(holder.short_name())?;
         }
 
         holder.close().await?;
@@ -366,11 +364,11 @@ impl State {
                 .into_owned()
         };
 
-        let store_path = self.store_path(&name)?;
+        let path = self.normalize_repository_path(Path::new(&name))?;
 
-        if fs::try_exists(&store_path).await? {
+        if fs::try_exists(&path).await? {
             if force {
-                if let Ok((handle, _)) = self.repos.find_by_name(&name) {
+                if let Some((handle, _)) = self.repos.find_by_path(&path) {
                     if let Some(mut holder) = self.repos.remove(handle) {
                         holder.close().await?;
                     }
@@ -384,27 +382,27 @@ impl State {
 
         match mode {
             ImportMode::Copy => {
-                fs::copy(input_path, &store_path).await?;
+                fs::copy(input_path, &path).await?;
             }
             ImportMode::Move => {
-                fs::rename(input_path, &store_path).await?;
+                fs::rename(input_path, &path).await?;
             }
             ImportMode::SoftLink => {
                 #[cfg(unix)]
-                fs::symlink(input_path, &store_path).await?;
+                fs::symlink(input_path, &path).await?;
 
                 #[cfg(windows)]
-                fs::symlink_file(input_path, &store_path).await?;
+                fs::symlink_file(input_path, &path).await?;
 
                 #[cfg(not(any(unix, windows)))]
                 return Err(Error::OperationNotSupported);
             }
             ImportMode::HardLink => {
-                fs::hard_link(input_path, &store_path).await?;
+                fs::hard_link(input_path, &path).await?;
             }
         }
 
-        self.load_repository(&store_path, None).await
+        self.load_repository(&path, None).await
     }
 
     pub async fn share_repository(
@@ -418,11 +416,20 @@ impl State {
             holder.repository(),
             secret,
             mode,
-            Some(holder.name().to_owned()),
+            Some(holder.short_name().to_owned()),
         )
         .await?;
 
         Ok(token)
+    }
+
+    pub fn repository_path(&self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .path()
+            .to_owned())
     }
 
     pub async fn reset_repository_access(
@@ -519,11 +526,11 @@ impl State {
             return Err(Error::OperationNotSupported);
         };
 
-        if let Some(mount_point) = mounter.mount_point(holder.name()) {
+        if let Some(mount_point) = mounter.mount_point(holder.short_name()) {
             // Already mounted
             Ok(mount_point)
         } else {
-            Ok(mounter.insert(holder.name().to_owned(), holder.repository().clone())?)
+            Ok(mounter.insert(holder.short_name().to_owned(), holder.repository().clone())?)
         }
     }
 
@@ -533,7 +540,7 @@ impl State {
         holder.repository().metadata().remove(AUTOMOUNT_KEY).await?;
 
         if let Some(mounter) = &self.mounter {
-            mounter.remove(holder.name())?;
+            mounter.remove(holder.short_name())?;
         }
 
         Ok(())
@@ -544,7 +551,12 @@ impl State {
         handle: RepositoryHandle,
     ) -> Result<Option<PathBuf>, Error> {
         if let Some(mounter) = &self.mounter {
-            Ok(mounter.mount_point(self.repos.get(handle).ok_or(Error::InvalidArgument)?.name()))
+            Ok(mounter.mount_point(
+                self.repos
+                    .get(handle)
+                    .ok_or(Error::InvalidArgument)?
+                    .short_name(),
+            ))
         } else {
             Ok(None)
         }
@@ -1257,13 +1269,21 @@ impl State {
     async fn close_repositories(&mut self) {
         for mut holder in self.repos.drain() {
             if let Some(mounter) = &self.mounter {
-                if let Err(error) = mounter.remove(holder.name()) {
-                    tracing::warn!(?error, repo = holder.name(), "failed to unmount repository",);
+                if let Err(error) = mounter.remove(holder.short_name()) {
+                    tracing::warn!(
+                        ?error,
+                        repo = holder.short_name(),
+                        "failed to unmount repository",
+                    );
                 }
             }
 
             if let Err(error) = holder.close().await {
-                tracing::warn!(?error, repo = holder.name(), "failed to close repository");
+                tracing::warn!(
+                    ?error,
+                    repo = holder.short_name(),
+                    "failed to close repository"
+                );
             }
         }
     }
@@ -1273,26 +1293,14 @@ impl State {
         path: &Path,
         local_secret: Option<LocalSecret>,
     ) -> Result<RepositoryHandle, Error> {
-        let store_dir = self
-            .store_dir
-            .as_deref()
-            .ok_or(Error::StoreDirUnspecified)?;
-
-        let name = path
-            .strip_prefix(store_dir)
-            .unwrap_or(path)
-            .with_extension("")
-            .to_string_lossy()
-            .into_owned();
-
         let params = RepositoryParams::new(path)
             .with_device_id(ouisync_bridge::device_id::get_or_create(&self.config).await?)
-            .with_monitor(self.repos_monitor.make_child(name.clone()));
+            .with_monitor(self.repos_monitor.make_child(path.to_string_lossy()));
 
         let repo = Repository::open(&params, local_secret, AccessMode::Write).await?;
         let registration = self.network.register(repo.handle()).await;
 
-        let mut holder = RepositoryHolder::new(name, repo);
+        let mut holder = RepositoryHolder::new(path.to_owned(), repo);
         holder.enable_sync(registration);
 
         if let Some(mounter) = &self.mounter {
@@ -1303,32 +1311,36 @@ impl State {
                 .await?
                 .unwrap_or(false)
             {
-                mounter.insert(holder.name().to_owned(), holder.repository().clone())?;
+                mounter.insert(holder.short_name().to_owned(), holder.repository().clone())?;
             }
         }
 
         self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
     }
 
-    fn store_path(&self, repo_name: &str) -> Result<PathBuf, Error> {
-        // TODO: when `repo_name` is already a path (starts with '/' for absolute or './' for
-        // relative), use it as is
-
-        let suffix = Path::new(repo_name);
-        let extension = if let Some(extension) = suffix.extension() {
-            let mut extension = extension.to_owned();
-            extension.push(".");
-            extension.push(REPOSITORY_FILE_EXTENSION);
-
-            Cow::Owned(extension)
+    fn normalize_repository_path(&self, path: &Path) -> Result<PathBuf, Error> {
+        let path = if path.is_absolute() {
+            Cow::Borrowed(path)
         } else {
-            Cow::Borrowed(REPOSITORY_FILE_EXTENSION.as_ref())
+            Cow::Owned(
+                self.store_dir
+                    .as_deref()
+                    .ok_or(Error::StoreDirUnspecified)?
+                    .join(path),
+            )
         };
 
-        self.store_dir
-            .as_deref()
-            .ok_or(Error::StoreDirUnspecified)
-            .map(|store_dir| store_dir.join(suffix).with_extension(extension))
+        match path.extension() {
+            Some(extension) if extension == REPOSITORY_FILE_EXTENSION => Ok(path.into_owned()),
+            Some(extension) => {
+                let mut extension = extension.to_owned();
+                extension.push(".");
+                extension.push(REPOSITORY_FILE_EXTENSION);
+
+                Ok(path.with_extension(extension))
+            }
+            None => Ok(path.with_extension(REPOSITORY_FILE_EXTENSION)),
+        }
     }
 
     async fn connect_remote_client(&self, host: &str) -> Result<RemoteClient, Error> {
@@ -1408,40 +1420,56 @@ mod tests {
     use tracing::Instrument;
 
     #[tokio::test]
-    async fn store_path_sanity_check() {
+    async fn normalize_repository_path() {
         let (temp_dir, mut state) = setup().await;
         let store_dir = temp_dir.path().join("store");
         state.set_store_dir(store_dir.clone()).await.unwrap();
 
         assert_eq!(
-            state.store_path("foo").unwrap(),
+            state.normalize_repository_path(Path::new("foo")).unwrap(),
             store_dir.join("foo.ouisyncdb")
         );
         assert_eq!(
-            state.store_path("foo/bar").unwrap(),
+            state
+                .normalize_repository_path(Path::new("foo/bar"))
+                .unwrap(),
             store_dir.join("foo/bar.ouisyncdb")
         );
         assert_eq!(
-            state.store_path("foo/bar.baz").unwrap(),
+            state
+                .normalize_repository_path(Path::new("foo/bar.baz"))
+                .unwrap(),
             store_dir.join("foo/bar.baz.ouisyncdb")
+        );
+        assert_eq!(
+            state
+                .normalize_repository_path(Path::new("foo.ouisyncdb"))
+                .unwrap(),
+            store_dir.join("foo.ouisyncdb")
+        );
+        assert_eq!(
+            state
+                .normalize_repository_path(Path::new("/home/alice/repos/foo"))
+                .unwrap(),
+            Path::new("/home/alice/repos/foo.ouisyncdb")
         );
     }
 
     #[tokio::test]
     async fn non_unique_repository_name() {
         let (_temp_dir, mut state) = setup().await;
-        let name = "test";
+        let path = Path::new("test");
 
         assert_matches!(
             state
-                .create_repository(name.to_owned(), None, None, None, false, false)
+                .create_repository(path.to_owned(), None, None, None, false, false)
                 .await,
             Ok(_)
         );
 
         assert_matches!(
             state
-                .create_repository(name.to_owned(), None, None, None, false, false)
+                .create_repository(path.to_owned(), None, None, None, false, false)
                 .await,
             Err(Error::RepositoryExists)
         );
@@ -1455,14 +1483,7 @@ mod tests {
 
         assert_matches!(
             state
-                .create_repository(
-                    "foo".to_owned(),
-                    None,
-                    None,
-                    Some(token.clone()),
-                    false,
-                    false
-                )
+                .create_repository("foo".into(), None, None, Some(token.clone()), false, false)
                 .await,
             Ok(_)
         );
@@ -1470,7 +1491,7 @@ mod tests {
         // different name but same token
         assert_matches!(
             state
-                .create_repository("bar".to_owned(), None, None, Some(token), false, false)
+                .create_repository("bar".into(), None, None, Some(token), false, false)
                 .await,
             Err(Error::RepositoryExists)
         );
@@ -1489,7 +1510,7 @@ mod tests {
         let name = "foo";
         let handle = state
             .create_repository(
-                name.to_owned(),
+                name.into(),
                 None,
                 None,
                 Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
@@ -1582,7 +1603,7 @@ mod tests {
         let name = "foo";
         let handle = local_state
             .create_repository(
-                name.to_owned(),
+                name.into(),
                 None,
                 None,
                 Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),

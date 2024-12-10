@@ -26,14 +26,13 @@ void main() {
   });
 
   group('repository', () {
-    late String name;
+    final name = 'repo';
     late Repository repo;
 
     setUp(() async {
-      name = 'repo';
       repo = await Repository.create(
         session,
-        name: name,
+        path: name,
         readSecret: null,
         writeSecret: null,
       );
@@ -43,12 +42,12 @@ void main() {
       await repo.close();
       expect(await Repository.list(session), isEmpty);
 
-      repo = await Repository.open(session, name: name);
+      repo = await Repository.open(session, path: name);
       expect(await Repository.list(session), equals([repo]));
 
       final repo2 = await Repository.create(
         session,
-        name: 'repo2',
+        path: 'repo2',
         readSecret: null,
         writeSecret: null,
       );
@@ -86,13 +85,13 @@ void main() {
     });
 
     test('directory create and remove', () async {
-      expect(await repo.type('dir'), isNull);
+      expect(await repo.entryType('dir'), isNull);
 
       await Directory.create(repo, 'dir');
-      expect(await repo.type('dir'), equals(EntryType.directory));
+      expect(await repo.entryType('dir'), equals(EntryType.directory));
 
       await Directory.remove(repo, 'dir');
-      expect(await repo.type('dir'), isNull);
+      expect(await repo.entryType('dir'), isNull);
     });
 
     test('share token access mode', () async {
@@ -141,7 +140,7 @@ void main() {
         }
       }
 
-      repo = await Repository.open(session, name: dstName);
+      repo = await Repository.open(session, path: dstName);
       await repo.setCredentials(cred);
 
       {
@@ -158,7 +157,7 @@ void main() {
 
       repo = await Repository.open(
         session,
-        name: name,
+        path: name,
         secret: null,
       );
 
@@ -189,14 +188,14 @@ void main() {
       await repo.close();
       repo = await Repository.open(
         session,
-        name: name,
+        path: name,
       );
       expect(await repo.accessMode, equals(AccessMode.blind));
 
       await repo.close();
       repo = await Repository.open(
         session,
-        name: name,
+        path: name,
         secret: LocalPassword('read_pass'),
       );
       expect(await repo.accessMode, equals(AccessMode.read));
@@ -204,7 +203,7 @@ void main() {
       await repo.close();
       repo = await Repository.open(
         session,
-        name: name,
+        path: name,
         secret: LocalPassword('write_pass'),
       );
       expect(await repo.accessMode, equals(AccessMode.write));

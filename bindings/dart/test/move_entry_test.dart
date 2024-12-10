@@ -29,7 +29,7 @@ void main() {
 
     repository = await Repository.create(
       session,
-      name: 'repo',
+      path: 'repo',
       readSecret: null,
       writeSecret: null,
     );
@@ -66,7 +66,7 @@ void main() {
     // Move folder2 (/folder1/folder2) to root (/folder2)
     {
       print('Moving folder: src: $folder2Path - dst: $folder2RootPath');
-      await repository.move(folder2Path, folder2RootPath);
+      await repository.moveEntry(folder2Path, folder2RootPath);
     }
     // Check the contents in root for two entries: folder1 (/folder1) and folder2 (/folder2)
     {
@@ -112,7 +112,7 @@ void main() {
     // Move folder2 (/folder1/folder2) to root (/folder2) when folder2 is not empty (/folder1/folder2/file1.txt)
     {
       print('Moving folder: src: $folder2Path - dst: $folder2RootPath');
-      await repository.move(folder2Path, folder2RootPath);
+      await repository.moveEntry(folder2Path, folder2RootPath);
     }
     // Check the contents in root for two entryes: folder1 (/folder1) and folder2 (/folder2)
     {

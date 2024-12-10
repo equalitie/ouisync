@@ -27,7 +27,7 @@ void main() {
     {
       final repo = await Repository.create(
         session,
-        name: repoName,
+        path: repoName,
         readSecret: readSecret,
         writeSecret: writeSecret,
       );
@@ -38,7 +38,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        name: repoName,
+        path: repoName,
         secret: readSecret.key,
       );
 
@@ -49,7 +49,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        name: repoName,
+        path: repoName,
         secret: writeSecret.key,
       );
 
@@ -71,7 +71,7 @@ void main() {
 
       final repo = await Repository.create(
         session,
-        name: repoName,
+        path: repoName,
         readSecret: LocalSecretKeyAndSalt(readKey, readSalt),
         writeSecret: LocalSecretKeyAndSalt(writeKey, writeSalt),
       );
@@ -82,7 +82,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        name: repoName,
+        path: repoName,
         secret: readPassword,
       );
 
@@ -93,7 +93,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        name: repoName,
+        path: repoName,
         secret: writePassword,
       );
 

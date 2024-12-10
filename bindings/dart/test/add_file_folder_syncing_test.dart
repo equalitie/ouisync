@@ -37,7 +37,7 @@ void main() {
 
     repository = await Repository.create(
       session,
-      name: 'foo',
+      path: 'foo',
       readSecret: null,
       writeSecret: null,
     );

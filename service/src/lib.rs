@@ -391,7 +391,7 @@ impl Service {
                 Ok(().into())
             }
             Request::RepositoryCreate {
-                name,
+                path,
                 read_secret,
                 write_secret,
                 token,
@@ -400,7 +400,7 @@ impl Service {
             } => {
                 let handle = self
                     .state
-                    .create_repository(name, read_secret, write_secret, token, dht, pex)
+                    .create_repository(path, read_secret, write_secret, token, dht, pex)
                     .await?;
 
                 Ok(handle.into())
@@ -438,7 +438,7 @@ impl Service {
                 let output = self.state.export_repository(repository, output).await?;
                 Ok(output.into())
             }
-            Request::RepositoryFind(name) => Ok(self.state.find_repository(&name)?.into()),
+            Request::RepositoryFind(pattern) => Ok(self.state.find_repository(&pattern)?.into()),
             Request::RepositoryGetAccessMode(repository) => {
                 Ok(self.state.repository_access_mode(repository)?.into())
             }
@@ -460,6 +460,9 @@ impl Service {
                 Ok(self.state.repository_mount_point(repository)?.into())
             }
             Request::RepositoryGetMountRoot => Ok(self.state.mount_root().into()),
+            Request::RepositoryGetPath(repository) => {
+                Ok(self.state.repository_path(repository)?.into())
+            }
             Request::RepositoryGetQuota(repository) => {
                 Ok(self.state.repository_quota(repository).await?.into())
             }
@@ -508,8 +511,8 @@ impl Service {
                     .await?;
                 Ok(().into())
             }
-            Request::RepositoryOpen { name, secret } => {
-                Ok(self.state.open_repository(name, secret).await?.into())
+            Request::RepositoryOpen { path, secret } => {
+                Ok(self.state.open_repository(&path, secret).await?.into())
             }
             Request::RepositoryResetAccess { repository, token } => {
                 self.state

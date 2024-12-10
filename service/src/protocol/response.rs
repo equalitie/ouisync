@@ -64,7 +64,7 @@ pub enum Response {
     QuotaInfo(QuotaInfo),
     Repository(RepositoryHandle),
     RepositoryEvent,
-    Repositories(BTreeMap<String, RepositoryHandle>),
+    Repositories(BTreeMap<PathBuf, RepositoryHandle>),
     ShareToken(ShareToken),
     SocketAddr(SocketAddr),
     SocketAddrs(Vec<SocketAddr>),
@@ -161,7 +161,7 @@ impl_response_conversion!(NetworkStats(Stats));
 impl_response_conversion!(Path(PathBuf));
 impl_response_conversion!(Progress(Progress));
 impl_response_conversion!(Repository(RepositoryHandle));
-impl_response_conversion!(Repositories(BTreeMap<String, RepositoryHandle>));
+impl_response_conversion!(Repositories(BTreeMap<PathBuf, RepositoryHandle>));
 impl_response_conversion!(PeerInfo(Vec<PeerInfo>));
 impl_response_conversion!(PeerAddrs(Vec<PeerAddr>));
 impl_response_conversion!(ShareToken(ShareToken));
@@ -235,8 +235,8 @@ mod tests {
             (
                 Response::Repositories(
                     [
-                        ("one".to_string(), RepositoryHandle::from_raw(1)),
-                        ("two".to_string(), RepositoryHandle::from_raw(2)),
+                        ("one".into(), RepositoryHandle::from_raw(1)),
+                        ("two".into(), RepositoryHandle::from_raw(2)),
                     ]
                     .into(),
                 ),

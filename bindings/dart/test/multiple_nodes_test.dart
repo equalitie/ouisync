@@ -34,7 +34,7 @@ void main() {
 
     repo1 = await Repository.create(
       session1,
-      name: 'repo1',
+      path: 'repo1',
       readSecret: null,
       writeSecret: null,
     );
@@ -43,7 +43,7 @@ void main() {
 
     repo2 = await Repository.create(
       session2,
-      name: 'repo2',
+      path: 'repo2',
       token: token,
       readSecret: null,
       writeSecret: null,

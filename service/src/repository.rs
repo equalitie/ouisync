@@ -5,7 +5,7 @@ use slab::Slab;
 use std::{
     collections::{btree_map::Entry, BTreeMap},
     fmt,
-    ops::Bound,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -15,7 +15,7 @@ const EXPIRATION_KEY: &str = "expiration";
 
 pub(crate) struct RepositorySet {
     repos: Slab<RepositoryHolder>,
-    index: BTreeMap<String, usize>,
+    index: BTreeMap<PathBuf, usize>,
 }
 
 impl RepositorySet {
@@ -27,7 +27,7 @@ impl RepositorySet {
     }
 
     pub fn try_insert(&mut self, holder: RepositoryHolder) -> Option<RepositoryHandle> {
-        match self.index.entry(holder.name().to_owned()) {
+        match self.index.entry(holder.path().to_owned()) {
             Entry::Vacant(entry) => {
                 let handle = self.repos.insert(holder);
                 entry.insert(handle);
@@ -39,7 +39,7 @@ impl RepositorySet {
 
     pub fn remove(&mut self, handle: RepositoryHandle) -> Option<RepositoryHolder> {
         let holder = self.repos.try_remove(handle.0)?;
-        self.index.remove(holder.name());
+        self.index.remove(holder.path());
 
         Some(holder)
     }
@@ -52,25 +52,11 @@ impl RepositorySet {
         self.repos.get_mut(handle.0)
     }
 
-    pub fn find_by_name(
-        &self,
-        prefix: &str,
-    ) -> Result<(RepositoryHandle, &RepositoryHolder), FindError> {
-        let handle = self.find_handle_by_name(prefix)?;
-        let holder = self.get(handle).ok_or(FindError::NotFound)?;
+    pub fn find_by_path(&self, path: &Path) -> Option<(RepositoryHandle, &RepositoryHolder)> {
+        let handle = self.index.get(path).copied()?;
+        let holder = self.repos.get(handle)?;
 
-        Ok((handle, holder))
-    }
-
-    #[expect(dead_code)]
-    pub fn find_by_name_mut(
-        &mut self,
-        prefix: &str,
-    ) -> Result<(RepositoryHandle, &mut RepositoryHolder), FindError> {
-        let handle = self.find_handle_by_name(prefix)?;
-        let holder = self.get_mut(handle).ok_or(FindError::NotFound)?;
-
-        Ok((handle, holder))
+        Some((RepositoryHandle(handle), holder))
     }
 
     pub fn find_by_id(&self, id: &RepositoryId) -> Option<(RepositoryHandle, &RepositoryHolder)> {
@@ -79,6 +65,24 @@ impl RepositorySet {
             .iter()
             .find(|(_, holder)| holder.repository().secrets().id() == id)
             .map(|(handle, holder)| (RepositoryHandle(handle), holder))
+    }
+
+    /// Finds repository whose path matches the given string. Succeeds only if exactly one
+    /// repository matches.
+    // TODO: consider returning all matches
+    pub fn find_by_subpath(
+        &self,
+        pattern: &str,
+    ) -> Result<(RepositoryHandle, &RepositoryHolder), FindError> {
+        // TODO: This is very inefficient, although for small number of repos (which should be the
+        // most common case) it's probably fine.
+        let (handle, holder) = single(
+            self.repos
+                .iter()
+                .filter(|(_, holder)| holder.path().to_string_lossy().contains(pattern)),
+        )?;
+
+        Ok((RepositoryHandle(handle), holder))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (RepositoryHandle, &RepositoryHolder)> {
@@ -92,26 +96,6 @@ impl RepositorySet {
     pub fn drain(&mut self) -> impl Iterator<Item = RepositoryHolder> + '_ {
         self.index.clear();
         self.repos.drain()
-    }
-
-    fn find_handle_by_name(&self, prefix: &str) -> Result<RepositoryHandle, FindError> {
-        let mut iter = self
-            .index
-            .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
-            .take_while(|(name, _)| name.starts_with(prefix));
-
-        let (name, &handle) = iter.next().ok_or(FindError::NotFound)?;
-
-        if name.len() == prefix.len() {
-            // Exact match
-            Ok(RepositoryHandle(handle))
-        } else if iter.next().is_none() {
-            // Unambiguous prefix match
-            Ok(RepositoryHandle(handle))
-        } else {
-            // Ambiguous prefix match
-            Err(FindError::Ambiguous)
-        }
     }
 }
 
@@ -133,22 +117,30 @@ impl fmt::Display for RepositoryHandle {
 }
 
 pub(crate) struct RepositoryHolder {
-    name: String,
+    path: PathBuf,
     repo: Arc<Repository>,
     registration: Option<Registration>,
 }
 
 impl RepositoryHolder {
-    pub fn new(name: String, repo: Repository) -> Self {
+    pub fn new(path: PathBuf, repo: Repository) -> Self {
         Self {
-            name,
+            path,
             repo: Arc::new(repo),
             registration: None,
         }
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Short name of the repository for information purposes. Might not be unique.
+    pub fn short_name(&self) -> &str {
+        self.path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
     }
 
     pub fn repository(&self) -> &Arc<Repository> {
@@ -206,6 +198,20 @@ pub(crate) enum FindError {
     NotFound,
     #[error("repository name is ambiguous")]
     Ambiguous,
+}
+
+fn single<T>(iter: T) -> Result<T::Item, FindError>
+where
+    T: IntoIterator,
+{
+    let mut iter = iter.into_iter();
+    let item = iter.next().ok_or(FindError::NotFound)?;
+
+    if iter.next().is_none() {
+        Ok(item)
+    } else {
+        Err(FindError::Ambiguous)
+    }
 }
 
 // #[cfg(test)]

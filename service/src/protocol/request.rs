@@ -93,7 +93,7 @@ pub enum Request {
     RemoteControlGetListenerAddr,
     RepositoryClose(RepositoryHandle),
     RepositoryCreate {
-        name: String,
+        path: PathBuf,
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
         token: Option<ShareToken>,
@@ -107,7 +107,7 @@ pub enum Request {
     RepositoryCredentials(RepositoryHandle),
     /// Delete a repository
     RepositoryDelete(RepositoryHandle),
-    /// Delete a repository with the given name (name matching is the same as in `RepositoryFind).
+    /// Delete a repository with the given name.
     RepositoryDeleteByName(String),
     RepositoryDeleteMirror {
         repository: RepositoryHandle,
@@ -122,8 +122,7 @@ pub enum Request {
         repository: RepositoryHandle,
         output: PathBuf,
     },
-    /// Find repository by name. Returns the repository that matches the name exactly or
-    /// unambiguously by prefix.
+    /// Find repository whose path uniquely matches the given string.
     RepositoryFind(String),
     RepositoryGetAccessMode(RepositoryHandle),
     RepositoryGetBlockExpiration(RepositoryHandle),
@@ -136,6 +135,7 @@ pub enum Request {
     },
     RepositoryGetMountPoint(RepositoryHandle),
     RepositoryGetMountRoot,
+    RepositoryGetPath(RepositoryHandle),
     RepositoryGetQuota(RepositoryHandle),
     RepositoryGetRepositoryExpiration(RepositoryHandle),
     RepositoryGetStoreDir,
@@ -161,7 +161,7 @@ pub enum Request {
         dst: String,
     },
     RepositoryOpen {
-        name: String,
+        path: PathBuf,
         secret: Option<LocalSecret>,
     },
     RepositoryResetAccess {
@@ -355,7 +355,7 @@ mod tests {
             ),
             (
                 Request::RepositoryCreate {
-                    name: "foo".to_owned(),
+                    path: "foo".into(),
                     read_secret: None,
                     write_secret: None,
                     token: None,
@@ -366,7 +366,7 @@ mod tests {
             ),
             (
                 Request::RepositoryCreate {
-                    name: "foo".to_owned(),
+                    path: "foo".into(),
                     read_secret: None,
                     write_secret: None,
                     token: Some(ShareToken::from(secrets)),

@@ -267,7 +267,7 @@ fn make_repository_name(id: &RepositoryId) -> String {
 
 fn make_repository_create_request(id: RepositoryId) -> Request {
     Request::RepositoryCreate {
-        name: make_repository_name(&id),
+        path: make_repository_name(&id).into(),
         read_secret: None,
         write_secret: None,
         token: Some(ShareToken::from(AccessSecrets::Blind { id })),

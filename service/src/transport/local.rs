@@ -232,7 +232,7 @@ mod tests {
             .invoke(
                 MessageId::next(),
                 Request::RepositoryCreate {
-                    name: "foo".to_string(),
+                    path: "foo".into(),
                     read_secret: None,
                     write_secret: None,
                     token: None,
@@ -393,7 +393,7 @@ mod tests {
             .invoke(
                 MessageId::next(),
                 Request::RepositoryCreate {
-                    name: "repo".to_owned(),
+                    path: "repo".into(),
                     read_secret: None,
                     write_secret: None,
                     token: Some(token.clone()),
@@ -408,7 +408,7 @@ mod tests {
             .invoke(
                 MessageId::next(),
                 Request::RepositoryCreate {
-                    name: "repo".to_owned(),
+                    path: "repo".into(),
                     read_secret: None,
                     write_secret: None,
                     token: Some(token),
