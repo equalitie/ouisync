@@ -146,7 +146,7 @@ impl FromIterator<(PublicKey, u64)> for VersionVector {
     }
 }
 
-impl<'a> Add for &'a VersionVector {
+impl Add for &VersionVector {
     type Output = VersionVector;
 
     fn add(self, other: Self) -> Self::Output {

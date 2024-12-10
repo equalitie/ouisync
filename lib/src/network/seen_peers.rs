@@ -1,18 +1,18 @@
+//! When a peer is found using some discovery mechanisms (local discovery, DHT, PEX, ...), the
+//! networking code will try to connect to it. However, if connecting to the peer fails we would
+//! like to keep trying to connect to it again. On one hand we don't want to keep trying to connect
+//! to the peer indefinitely, but on the other hand we also don't want to wait until the next time
+//! the discovery mechanism finds the peer (which may be more than 10 minutes).
+//!
+//! This code solves the problem by giving the networking code a `SeenPeer` structure that
+//! dereferences to `Some(PeerAddr)` for as long as the discovery mechanism "thinks" the peer
+//! is still available, and to `None` once the mechanism hasn't seen the peer for a while.
+
 use super::PeerAddr;
 use crate::collections::{HashMap, HashSet};
 use deadlock::BlockingRwLock;
 use std::{fmt, sync::Arc};
 use tokio::sync::watch;
-
-/// When a peer is found using some discovery mechanisms (local discovery, DHT, PEX, ...), the
-/// networking code will try to connect to it. However, if connecting to the peer fails we would
-/// like to keep trying to connect to it again. On one hand we don't want to keep trying to connect
-/// to the peer indefinitely, but on the other hand we also don't want to wait until the next time
-/// the discovery mechanism finds the peer (which may be more than 10 minutes).
-///
-/// This code solves the problem by giving the networking code a `SeenPeer` structure that
-/// dereferences to `Some(PeerAddr)` for as long as the discovery mechanism "thinks" the peer
-/// is still available, and to `None` once the mechanism hasn't seen the peer for a while.
 
 // When a peer has not been seen after this many rounds, it'll be removed.
 const REMOVE_AFTER_ROUND_COUNT: u64 = 2;

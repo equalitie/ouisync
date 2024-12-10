@@ -65,7 +65,7 @@ pub enum MaybeOwnedMut<'a, T> {
     Borrowed(&'a mut T),
 }
 
-impl<'a, T> Deref for MaybeOwnedMut<'a, T> {
+impl<T> Deref for MaybeOwnedMut<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -76,7 +76,7 @@ impl<'a, T> Deref for MaybeOwnedMut<'a, T> {
     }
 }
 
-impl<'a, T> DerefMut for MaybeOwnedMut<'a, T> {
+impl<T> DerefMut for MaybeOwnedMut<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
             Self::Owned(v) => v,

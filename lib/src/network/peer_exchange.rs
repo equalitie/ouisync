@@ -283,7 +283,7 @@ impl PexSender {
 /// Collects contacts of other peers to be sent to this peer.
 pub(crate) struct PexCollector<'a>(&'a PexSender);
 
-impl<'a> PexCollector<'a> {
+impl PexCollector<'_> {
     fn collect(&self) -> Result<HashSet<PeerAddr>, CollectError> {
         let state = self.0.state.borrow();
 
@@ -324,7 +324,7 @@ impl<'a> PexCollector<'a> {
     }
 }
 
-impl<'a> Drop for PexCollector<'a> {
+impl Drop for PexCollector<'_> {
     fn drop(&mut self) {
         self.0.state.send_modify(|state| {
             if let Some(repo) = state.repos.get_mut(self.0.repo_id) {
