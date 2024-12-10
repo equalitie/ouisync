@@ -330,6 +330,15 @@ class Repository {
     return Repository._(session._client, handle, name);
   }
 
+  /// Returns all currently opened repositories.
+  static Future<List<Repository>> list(Session session) => session._client
+      .invoke<Map<Object?, Object?>>('repository_list')
+      .then((handles) => handles
+          .cast<String, int>()
+          .entries
+          .map((entry) => Repository._(session._client, entry.value, entry.key))
+          .toList());
+
   /// Closes the repository. All outstanding handles become invalid. Invoking any operation on a
   /// repository after it's been closed results in an error being thrown.
   Future<void> close() async {
@@ -539,6 +548,18 @@ class Repository {
   Future<NetworkStats> get networkStats => _client
       .invoke<List<Object?>>('repository_stats', _handle)
       .then((list) => NetworkStats.decode(list));
+
+  @override
+  bool operator ==(Object other) =>
+      other is Repository &&
+      other._client == _client &&
+      other._handle == _handle;
+
+  @override
+  int get hashCode => Object.hash(_client, _handle);
+
+  @override
+  String toString() => '$runtimeType("$_name")';
 }
 
 sealed class AccessChange {

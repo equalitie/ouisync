@@ -39,6 +39,23 @@ void main() {
       );
     });
 
+    test('list', () async {
+      await repo.close();
+      expect(await Repository.list(session), isEmpty);
+
+      repo = await Repository.open(session, name: name);
+      expect(await Repository.list(session), equals([repo]));
+
+      final repo2 = await Repository.create(
+        session,
+        name: 'repo2',
+        readSecret: null,
+        writeSecret: null,
+      );
+
+      expect(await Repository.list(session), unorderedEquals([repo, repo2]));
+    });
+
     test('file write and read', () async {
       final path = '/test.txt';
       final origContent = 'hello world';
