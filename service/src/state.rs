@@ -909,6 +909,27 @@ impl State {
         Ok(true)
     }
 
+    /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
+    /// exist.
+    pub async fn repository_entry_type(
+        &self,
+        handle: RepositoryHandle,
+        path: String,
+    ) -> Result<Option<EntryType>, Error> {
+        match self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .lookup_type(path)
+            .await
+        {
+            Ok(entry_type) => Ok(Some(entry_type)),
+            Err(ouisync::Error::EntryNotFound) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub async fn move_repository_entry(
         &self,
         repo: RepositoryHandle,
@@ -961,6 +982,29 @@ impl State {
             .collect();
 
         Ok(entries)
+    }
+
+    /// Removes the directory at the given path from the repository. If `recursive` is true it removes
+    /// also the contents, otherwise the directory must be empty.
+    pub async fn remove_directory(
+        &self,
+        repo: RepositoryHandle,
+        path: String,
+        recursive: bool,
+    ) -> Result<(), Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository();
+
+        if recursive {
+            repo.remove_entry_recursively(path).await?
+        } else {
+            repo.remove_entry(path).await?
+        }
+
+        Ok(())
     }
 
     pub async fn create_file(

@@ -53,6 +53,7 @@ pub enum Response {
     Bytes(Bytes),
     Directory(Vec<DirectoryEntry>),
     Duration(Duration),
+    EntryType(EntryType),
     File(FileHandle),
     NetworkEvent(NetworkEvent),
     NetworkStats(Stats),
@@ -153,6 +154,7 @@ impl_response_conversion!(AccessMode(AccessMode));
 impl_response_conversion!(Bool(bool));
 impl_response_conversion!(Directory(Vec<DirectoryEntry>));
 impl_response_conversion!(Duration(Duration));
+impl_response_conversion!(EntryType(EntryType));
 impl_response_conversion!(File(FileHandle));
 impl_response_conversion!(NetworkEvent(NetworkEvent));
 impl_response_conversion!(NetworkStats(Stats));

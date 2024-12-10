@@ -253,6 +253,16 @@ impl Service {
             Request::DirectoryRead { repository, path } => {
                 Ok(self.state.read_directory(repository, path).await?.into())
             }
+            Request::DirectoryRemove {
+                repository,
+                path,
+                recursive,
+            } => {
+                self.state
+                    .remove_directory(repository, path, recursive)
+                    .await?;
+                Ok(().into())
+            }
             Request::FileClose(file) => {
                 self.state.close_file(file).await?;
                 Ok(().into())
@@ -409,6 +419,11 @@ impl Service {
                     .await?;
                 Ok(().into())
             }
+            Request::RepositoryEntryType { repository, path } => Ok(self
+                .state
+                .repository_entry_type(repository, path)
+                .await?
+                .into()),
             Request::RepositoryExport { repository, output } => {
                 let output = self.state.export_repository(repository, output).await?;
                 Ok(output.into())

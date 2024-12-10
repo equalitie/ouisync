@@ -67,6 +67,16 @@ void main() {
       expect(rootDir, isEmpty);
     });
 
+    test('directory create and remove', () async {
+      expect(await repo.type('dir'), isNull);
+
+      await Directory.create(repo, 'dir');
+      expect(await repo.type('dir'), equals(EntryType.directory));
+
+      await Directory.remove(repo, 'dir');
+      expect(await repo.type('dir'), isNull);
+    });
+
     test('share token access mode', () async {
       for (var mode in AccessMode.values) {
         final token = await repo.share(accessMode: mode);

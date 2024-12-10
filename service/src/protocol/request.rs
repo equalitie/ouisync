@@ -25,6 +25,11 @@ pub enum Request {
         repository: RepositoryHandle,
         path: String,
     },
+    DirectoryRemove {
+        repository: RepositoryHandle,
+        path: String,
+        recursive: bool,
+    },
     FileClose(FileHandle),
     FileCreate {
         repository: RepositoryHandle,
@@ -107,6 +112,10 @@ pub enum Request {
     RepositoryDeleteMirror {
         repository: RepositoryHandle,
         host: String,
+    },
+    RepositoryEntryType {
+        repository: RepositoryHandle,
+        path: String,
     },
     /// Export repository to a file
     RepositoryExport {
@@ -242,10 +251,6 @@ pub(crate) enum Request {
     RepositoryName(RepositoryHandle),
     RepositoryInfoHash(RepositoryHandle),
     RepositoryDatabaseId(RepositoryHandle),
-    RepositoryEntryType {
-        repository: RepositoryHandle,
-        path: Utf8PathBuf,
-    },
     RepositoryEntryVersionHash {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
@@ -262,11 +267,6 @@ pub(crate) enum Request {
     DirectoryExists {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
-    },
-    DirectoryRemove {
-        repository: RepositoryHandle,
-        path: Utf8PathBuf,
-        recursive: bool,
     },
     NetworkThisRuntimeId,
     NetworkHighestSeenProtocolVersion,
