@@ -86,10 +86,10 @@ class Session {
   Future<void> setStoreDir(String path) =>
       _client.invoke('repository_set_store_dir', path);
 
-  Future<String?> get mountDir => _client.invoke('repository_get_mount_dir');
+  Future<String?> get mountRoot => _client.invoke('repository_get_mount_root');
 
-  Future<void> setMountDir(String path) => _client.invoke(
-        'repository_set_mount_dir',
+  Future<void> setMountRoot(String? path) => _client.invoke(
+        'repository_set_mount_root',
         path,
       );
 
@@ -538,11 +538,15 @@ class Repository {
             .toList(),
       });
 
-  /// Mount the repository. Currently supported only on the desktop platforms.
-  Future<void> mount() => _client.invoke<void>("repository_mount", _handle);
+  /// Mount the repository if supported by the platform.
+  Future<void> mount() => _client.invoke<void>('repository_mount', _handle);
 
   /// Unmount the repository.
-  Future<void> unmount() => _client.invoke<void>("repository_unmount", _handle);
+  Future<void> unmount() => _client.invoke<void>('repository_unmount', _handle);
+
+  /// Returns the mount point of this repository or null if not mounted.
+  Future<String?> get mountPoint =>
+      _client.invoke('repository_get_mount_point', _handle);
 
   /// Fetch the per-repository network statistics.
   Future<NetworkStats> get networkStats => _client

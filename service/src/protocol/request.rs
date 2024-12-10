@@ -134,7 +134,8 @@ pub enum Request {
         repository: RepositoryHandle,
         key: String,
     },
-    RepositoryGetMountDir,
+    RepositoryGetMountPoint(RepositoryHandle),
+    RepositoryGetMountRoot,
     RepositoryGetQuota(RepositoryHandle),
     RepositoryGetRepositoryExpiration(RepositoryHandle),
     RepositoryGetStoreDir,
@@ -202,7 +203,7 @@ pub enum Request {
         repository: RepositoryHandle,
         edits: Vec<MetadataEdit>,
     },
-    RepositorySetMountDir(PathBuf),
+    RepositorySetMountRoot(Option<PathBuf>),
     RepositorySetPexEnabled {
         repository: RepositoryHandle,
         enabled: bool,

@@ -162,29 +162,36 @@ impl State {
         Ok(())
     }
 
-    pub fn mount_dir(&self) -> Option<&Path> {
+    pub fn mount_root(&self) -> Option<&Path> {
         self.mounter.as_ref().map(|m| m.mount_root())
     }
 
-    pub async fn set_mount_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
-        if Some(dir.as_path()) == self.mount_dir() {
+    pub async fn set_mount_root(&mut self, dir: Option<PathBuf>) -> Result<(), Error> {
+        if dir.as_deref() == self.mount_root() {
             return Ok(());
         }
 
-        self.config.entry(MOUNT_DIR_KEY).set(&dir).await?;
-        let mounter = self.mounter.insert(MultiRepoVFS::create(dir).await?);
+        let config_entry = self.config.entry(MOUNT_DIR_KEY);
 
-        // Remount all mounted repos
-        for (_, holder) in self.repos.iter() {
-            if holder
-                .repository()
-                .metadata()
-                .get(AUTOMOUNT_KEY)
-                .await?
-                .unwrap_or(false)
-            {
-                mounter.insert(holder.name().to_owned(), holder.repository().clone())?;
+        if let Some(dir) = dir {
+            config_entry.set(&dir).await?;
+            let mounter = self.mounter.insert(MultiRepoVFS::create(dir).await?);
+
+            // Remount all mounted repos
+            for (_, holder) in self.repos.iter() {
+                if holder
+                    .repository()
+                    .metadata()
+                    .get(AUTOMOUNT_KEY)
+                    .await?
+                    .unwrap_or(false)
+                {
+                    mounter.insert(holder.name().to_owned(), holder.repository().clone())?;
+                }
             }
+        } else {
+            config_entry.remove().await?;
+            self.mounter = None;
         }
 
         Ok(())
@@ -530,6 +537,17 @@ impl State {
         }
 
         Ok(())
+    }
+
+    pub fn repository_mount_point(
+        &self,
+        handle: RepositoryHandle,
+    ) -> Result<Option<PathBuf>, Error> {
+        if let Some(mounter) = &self.mounter {
+            Ok(mounter.mount_point(self.repos.get(handle).ok_or(Error::InvalidArgument)?.name()))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn subscribe_to_repository(

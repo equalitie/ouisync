@@ -456,7 +456,10 @@ impl Service {
                 .repository_metadata(repository, key)
                 .await?
                 .into()),
-            Request::RepositoryGetMountDir => Ok(self.state.mount_dir().into()),
+            Request::RepositoryGetMountPoint(repository) => {
+                Ok(self.state.repository_mount_point(repository)?.into())
+            }
+            Request::RepositoryGetMountRoot => Ok(self.state.mount_root().into()),
             Request::RepositoryGetQuota(repository) => {
                 Ok(self.state.repository_quota(repository).await?.into())
             }
@@ -573,8 +576,8 @@ impl Service {
                 .set_repository_metadata(repository, edits)
                 .await?
                 .into()),
-            Request::RepositorySetMountDir(path) => {
-                self.state.set_mount_dir(path).await?;
+            Request::RepositorySetMountRoot(path) => {
+                self.state.set_mount_root(path).await?;
                 Ok(().into())
             }
             Request::RepositorySetPexEnabled {
