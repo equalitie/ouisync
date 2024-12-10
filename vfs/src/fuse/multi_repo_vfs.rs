@@ -78,8 +78,8 @@ fn extract_mount_point(store_path: &Path) -> Result<&OsStr, io::Error> {
 }
 
 // TODO: should this be async?
-fn prepare_mountpoint(store_path: &PathBuf, mount_root: &PathBuf) -> Result<PathBuf, io::Error> {
-    let mount_point = extract_mount_point(&store_path)?;
+fn prepare_mountpoint(store_path: &Path, mount_root: &Path) -> Result<PathBuf, io::Error> {
+    let mount_point = extract_mount_point(store_path)?;
     let mount_point = mount_root.join(mount_point);
 
     let create_dir_error = match fs::create_dir_all(&mount_point) {
