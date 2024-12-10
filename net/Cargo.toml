@@ -13,7 +13,13 @@ bytes              = "1.1.0"
 futures-util       = { workspace = true }
 hex_fmt            = { workspace = true }
 pin-project-lite   = { workspace = true }
-quinn              = "0.11.4"
+# The quinn-udp package that comes in quinn version 0.11.4 - 0.11.6 (inclusive)
+# has an issue causing large packets to not be delivered between Linux and
+# Android. The issue has been resolved by commit b1bd28e9 which, at time of
+# writing this text, has not yet made it into quinn. It did made it into new
+# quinn-udp 0.5.8 however.
+quinn-udp          = "0.5.8"
+quinn              = "0.11.6"
 rand               = { package = "ouisync-rand", path = "../rand" }
 rcgen              = { workspace = true }
 slab               = { workspace = true }
