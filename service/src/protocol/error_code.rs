@@ -103,7 +103,7 @@ impl ToErrorCode for Error {
             Self::Repository(error) => error.to_error_code(),
             Self::RepositoryExists => ErrorCode::AlreadyExists,
             Self::RepositorySyncDisabled => ErrorCode::Unsupported,
-            Self::Store(_) => todo!(),
+            Self::Store(_) => ErrorCode::StoreError,
             Self::StoreDirUnspecified => ErrorCode::StoreDirUnspecified,
             Self::TlsCertificatesNotFound => ErrorCode::TlsCertificatesNotFound,
             Self::TlsCertificatesInvalid(_) => ErrorCode::TlsCertificatesInvalid,

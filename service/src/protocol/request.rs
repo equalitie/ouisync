@@ -346,7 +346,7 @@ mod tests {
                     Ipv4Addr::UNSPECIFIED,
                     12345,
                 )))]),
-                "81ac6e6574776f726b5f62696e649181a47175696381a25634929400000000cd3039",
+                "81ac6e6574776f726b5f62696e6491b2717569632f302e302e302e303a3132333435",
             ),
             (
                 Request::NetworkGetListenerAddrs,

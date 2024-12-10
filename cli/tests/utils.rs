@@ -38,6 +38,7 @@ impl Bin {
         let base_dir = TempDir::new().unwrap();
         let config_dir = base_dir.path().join(CONFIG_DIR);
         let socket_path = base_dir.path().join(API_SOCKET);
+        let store_dir = base_dir.path().join("store");
         let mount_dir = base_dir.path().join(MOUNT_DIR);
 
         fs::create_dir_all(mount_dir.join(DEFAULT_REPO)).unwrap();
@@ -57,9 +58,6 @@ impl Bin {
         command.arg("--socket").arg(&socket_path);
         command.arg("start");
         command.arg("--config-dir").arg(&config_dir);
-        command
-            .arg("--default-store-dir")
-            .arg(base_dir.path().join("store"));
 
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -79,6 +77,16 @@ impl Bin {
             base_dir,
             process,
         };
+
+        expect_output(
+            &bin.id,
+            "",
+            bin.client_command()
+                .arg("store-dir")
+                .arg(store_dir)
+                .output()
+                .unwrap(),
+        );
 
         expect_output(
             &bin.id,
