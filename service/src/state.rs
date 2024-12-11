@@ -22,7 +22,7 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     ffi::OsStr,
-    io::SeekFrom,
+    io::{self, SeekFrom},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -276,26 +276,15 @@ impl State {
 
         holder.close().await?;
 
-        ouisync::delete_repository(holder.path()).await?;
-
-        // Remove ancestors directories up to `store_dir` but only if they are empty.
-        for path in holder.path().ancestors().skip(1) {
-            if Some(path) == self.store_dir.as_deref() {
-                break;
-            }
-
-            // TODO: When `io::ErrorKind::DirectoryNotEmpty` is stabilized, we should break only on that
-            // error and propagate the rest.
-            if let Err(error) = fs::remove_dir(&path).await {
-                tracing::error!(
-                    repo = holder.short_name(),
-                    path = %path.display(),
-                    ?error,
-                    "failed to remove repository store subdirectory"
-                );
-                break;
+        for path in ouisync::repository_files(holder.path()) {
+            match fs::remove_file(path).await {
+                Ok(()) => (),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
             }
         }
+
+        self.remove_empty_ancestor_dirs(holder.path()).await?;
 
         tracing::info!(name = holder.short_name(), "repository deleted");
 
@@ -314,7 +303,8 @@ impl State {
             Err(Error::RepositoryExists)?;
         }
 
-        self.load_repository(&path, local_secret).await
+        let holder = self.load_repository(&path, local_secret).await?;
+        self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
     }
 
     pub async fn close_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
@@ -402,7 +392,8 @@ impl State {
             }
         }
 
-        self.load_repository(&path, None).await
+        let holder = self.load_repository(&path, None).await?;
+        self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
     }
 
     pub async fn share_repository(
@@ -434,29 +425,58 @@ impl State {
 
     pub async fn move_repository(
         &mut self,
-        _handle: RepositoryHandle,
-        _dst: &Path,
+        handle: RepositoryHandle,
+        dst: &Path,
     ) -> Result<(), Error> {
-        todo!()
+        // This function is "best effort atomic".
 
-        // let dst = self.normalize_repository_path(dst)?;
+        let dst = self.normalize_repository_path(dst)?;
+        let dst_parent = dst.parent().ok_or(Error::InvalidArgument)?;
 
-        // if self.repos.find_by_path(&dst).is_some() {
-        //     return Err(Error::RepositoryExists);
-        // }
+        if self.repos.find_by_path(&dst).is_some() {
+            return Err(Error::RepositoryExists);
+        }
 
-        // let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+        let holder = self.repos.get_mut(handle).ok_or(Error::InvalidArgument)?;
+        // Preserve access mode after the move
+        let credentials = holder.repository().credentials();
 
-        // // TODO: close all open files of this repo
+        // TODO: close all open files of this repo
 
-        // if let Some(mounter) = &self.mounter {
-        //     mounter.remove(holder.short_name())?;
-        // }
+        if let Some(mounter) = &self.mounter {
+            mounter.remove(holder.short_name())?;
+        }
 
-        // // Preserve access mode after the move
-        // let credentials = holder.repository().credentials();
+        fs::create_dir_all(dst_parent).await?;
 
-        // holder.close().await?;
+        if let Err(error) = holder.close().await {
+            // Try to revert creating the dst parent directory but if it fails still return the
+            // close error because it's more important.
+            self.remove_empty_ancestor_dirs(dst_parent).await.ok();
+            return Err(error);
+        }
+
+        let src = holder.path().to_owned();
+
+        let (old_path, new_path, result) = match move_file(&src, &dst).await {
+            Ok(()) => (src, dst, Ok(())),
+            Err(error) => (dst, src, Err(error.into())), // Restore the original repo
+        };
+
+        *holder = load_repository(
+            &new_path,
+            None,
+            &self.config,
+            &self.network,
+            &self.repos_monitor,
+            self.mounter.as_ref(),
+        )
+        .await?;
+        holder.repository().set_credentials(credentials).await?;
+
+        self.remove_empty_ancestor_dirs(&old_path).await?;
+
+        result
     }
 
     pub async fn reset_repository_access(
@@ -1316,33 +1336,19 @@ impl State {
     }
 
     async fn load_repository(
-        &mut self,
+        &self,
         path: &Path,
         local_secret: Option<LocalSecret>,
-    ) -> Result<RepositoryHandle, Error> {
-        let params = RepositoryParams::new(path)
-            .with_device_id(ouisync_bridge::device_id::get_or_create(&self.config).await?)
-            .with_monitor(self.repos_monitor.make_child(path.to_string_lossy()));
-
-        let repo = Repository::open(&params, local_secret, AccessMode::Write).await?;
-        let registration = self.network.register(repo.handle()).await;
-
-        let mut holder = RepositoryHolder::new(path.to_owned(), repo);
-        holder.enable_sync(registration);
-
-        if let Some(mounter) = &self.mounter {
-            if holder
-                .repository()
-                .metadata()
-                .get(AUTOMOUNT_KEY)
-                .await?
-                .unwrap_or(false)
-            {
-                mounter.insert(holder.short_name().to_owned(), holder.repository().clone())?;
-            }
-        }
-
-        self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
+    ) -> Result<RepositoryHolder, Error> {
+        load_repository(
+            path,
+            local_secret,
+            &self.config,
+            &self.network,
+            &self.repos_monitor,
+            self.mounter.as_ref(),
+        )
+        .await
     }
 
     fn normalize_repository_path(&self, path: &Path) -> Result<PathBuf, Error> {
@@ -1368,6 +1374,23 @@ impl State {
             }
             None => Ok(path.with_extension(REPOSITORY_FILE_EXTENSION)),
         }
+    }
+
+    // Remove ancestors directories up to `store_dir` but only if they are empty.
+    async fn remove_empty_ancestor_dirs(&self, path: &Path) -> Result<(), io::Error> {
+        for path in path.ancestors().skip(1) {
+            if Some(path) == self.store_dir.as_deref() {
+                break;
+            }
+
+            match fs::remove_dir(&path).await {
+                Ok(()) => (),
+                Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => break,
+                Err(error) => return Err(error),
+            }
+        }
+
+        Ok(())
     }
 
     async fn connect_remote_client(&self, host: &str) -> Result<RemoteClient, Error> {
@@ -1429,6 +1452,58 @@ async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfi
         .map_err(Error::TlsCertificatesInvalid)?;
 
     ouisync_bridge::transport::make_client_config(&additional_root_certs).map_err(Error::TlsConfig)
+}
+
+async fn load_repository(
+    path: &Path,
+    local_secret: Option<LocalSecret>,
+    config: &ConfigStore,
+    network: &Network,
+    repos_monitor: &StateMonitor,
+    mounter: Option<&MultiRepoVFS>,
+) -> Result<RepositoryHolder, Error> {
+    let params = RepositoryParams::new(path)
+        .with_device_id(ouisync_bridge::device_id::get_or_create(config).await?)
+        .with_monitor(repos_monitor.make_child(path.to_string_lossy()));
+
+    let repo = Repository::open(&params, local_secret, AccessMode::Write).await?;
+    let registration = network.register(repo.handle()).await;
+
+    let mut holder = RepositoryHolder::new(path.to_owned(), repo);
+    holder.enable_sync(registration);
+
+    if let Some(mounter) = &mounter {
+        if holder
+            .repository()
+            .metadata()
+            .get(AUTOMOUNT_KEY)
+            .await?
+            .unwrap_or(false)
+        {
+            mounter.insert(holder.short_name().to_owned(), holder.repository().clone())?;
+        }
+    }
+
+    Ok(holder)
+}
+
+/// Move file from `src` to `dst`. If they are on the same filesystem, it does a simple rename.
+/// Otherwise it copies `src` to `dst` first and then deletes `src`.
+async fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
+    // First try rename
+    match fs::rename(src, dst).await {
+        Ok(()) => return Ok(()),
+        Err(_error) => {
+            // TODO: we should only fallback on `io::ErrorKind::CrossesDevices` but that variant is
+            // currently unstable.
+        }
+    }
+
+    // If that didn't work, fallback to copy + remove
+    fs::copy(src, dst).await?;
+    fs::remove_file(src).await?;
+
+    Ok(())
 }
 
 #[cfg(test)]

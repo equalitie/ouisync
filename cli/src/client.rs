@@ -89,7 +89,7 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
 
             let _: RepositoryHandle = client
                 .invoke(Request::RepositoryCreate {
-                    name,
+                    path: name.into(),
                     token,
                     read_secret,
                     write_secret,
@@ -250,11 +250,11 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
             }
         }
         ClientCommand::ListRepositories => {
-            let repos: BTreeMap<String, RepositoryHandle> =
+            let repos: BTreeMap<PathBuf, RepositoryHandle> =
                 client.invoke(Request::RepositoryList).await?;
 
-            for name in repos.keys() {
-                println!("{name}");
+            for path in repos.keys() {
+                println!("{}", path.display());
             }
         }
         ClientCommand::LocalDiscovery { enabled } => {
@@ -335,9 +335,11 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::MountDir { path } => {
             if let Some(path) = path {
-                let () = client.invoke(Request::RepositorySetMountDir(path)).await?;
+                let () = client
+                    .invoke(Request::RepositorySetMountRoot(Some(path)))
+                    .await?;
             } else {
-                let path: PathBuf = client.invoke(Request::RepositoryGetMountDir).await?;
+                let path: PathBuf = client.invoke(Request::RepositoryGetMountRoot).await?;
 
                 println!("{}", path.display());
             }
@@ -554,7 +556,7 @@ impl LocalClient {
     }
 
     async fn list_repositories(&mut self) -> Result<Vec<RepositoryHandle>, ClientError> {
-        let repos: BTreeMap<String, RepositoryHandle> =
+        let repos: BTreeMap<PathBuf, RepositoryHandle> =
             self.invoke(Request::RepositoryList).await?;
         Ok(repos.into_values().collect())
     }

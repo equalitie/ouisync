@@ -43,9 +43,14 @@ use futures_util::{stream, StreamExt};
 use metrics::{NoopRecorder, Recorder};
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
-use std::{borrow::Cow, io, path::Path, pin::pin, sync::Arc, time::SystemTime};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+    pin::pin,
+    sync::Arc,
+    time::SystemTime,
+};
 use tokio::{
-    fs,
     sync::broadcast::{self, error::RecvError},
     time::Duration,
 };
@@ -59,27 +64,18 @@ pub struct Repository {
     progress_reporter_handle: BlockingMutex<Option<ScopedJoinHandle<()>>>,
 }
 
-/// Delete the repository database
-pub async fn delete(store: impl AsRef<Path>) -> io::Result<()> {
+/// Given a path to the main repository file, return paths to all the repository files (the main db
+/// file and all auxiliary files).
+pub fn repository_files(store_path: impl AsRef<Path>) -> Vec<PathBuf> {
     // Sqlite database consists of up to three files: main db (always present), WAL and WAL-index.
-    // Try to delete all of them even if any of them fail then return the first error (if any)
-    future::join_all(["", "-wal", "-shm"].into_iter().map(|suffix| {
-        let mut path = store.as_ref().as_os_str().to_owned();
-        path.push(suffix);
-
-        async move {
-            match fs::remove_file(&path).await {
-                Ok(()) => Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            }
-        }
-    }))
-    .await
-    .into_iter()
-    .find_map(Result::err)
-    .map(Err)
-    .unwrap_or(Ok(()))
+    ["", "-wal", "-shm"]
+        .into_iter()
+        .map(|suffix| {
+            let mut path = store_path.as_ref().as_os_str().to_owned();
+            path.push(suffix);
+            path.into()
+        })
+        .collect()
 }
 
 impl Repository {

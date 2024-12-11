@@ -61,8 +61,7 @@ pub use self::{
     progress::Progress,
     protocol::{RepositoryId, StorageSize, BLOCK_SIZE},
     repository::{
-        delete as delete_repository, Credentials, Metadata, Repository, RepositoryHandle,
-        RepositoryParams,
+        repository_files, Credentials, Metadata, Repository, RepositoryHandle, RepositoryParams,
     },
     store::{Error as StoreError, DATA_VERSION},
     version_vector::VersionVector,

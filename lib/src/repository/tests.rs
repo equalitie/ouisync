@@ -9,6 +9,7 @@ use rand::Rng;
 use std::{future::Future, io::SeekFrom};
 use tempfile::TempDir;
 use tokio::{
+    fs,
     sync::broadcast::Receiver,
     time::{self, timeout, Duration},
 };

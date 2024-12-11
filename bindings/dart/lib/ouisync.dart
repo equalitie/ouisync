@@ -276,7 +276,7 @@ class NetworkStats {
 class Repository {
   final Client _client;
   final int _handle;
-  final String _path;
+  String _path;
 
   Repository._(this._client, this._handle, this._path);
 
@@ -352,6 +352,15 @@ class Repository {
   }
 
   String get path => _path;
+
+  Future<void> move(String to) async {
+    await _client.invoke<void>('repository_move', {
+      'repository': _handle,
+      'to': to,
+    });
+
+    _path = await _client.invoke('repository_get_path', _handle);
+  }
 
   /// Checks whether syncing with other replicas is enabled.
   Future<bool> get isSyncEnabled =>

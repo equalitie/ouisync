@@ -501,6 +501,10 @@ impl Service {
             Request::RepositoryMount(repository) => {
                 Ok(self.state.mount_repository(repository).await?.into())
             }
+            Request::RepositoryMove { repository, to } => {
+                self.state.move_repository(repository, &to).await?;
+                Ok(().into())
+            }
             Request::RepositoryMoveEntry {
                 repository,
                 src,

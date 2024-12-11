@@ -155,6 +155,10 @@ pub enum Request {
         host: String,
     },
     RepositoryMount(RepositoryHandle),
+    RepositoryMove {
+        repository: RepositoryHandle,
+        to: PathBuf,
+    },
     RepositoryMoveEntry {
         repository: RepositoryHandle,
         src: String,
