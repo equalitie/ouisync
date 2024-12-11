@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:io' as io;
 import 'dart:typed_data';
 import 'dart:math';
 
@@ -23,6 +22,7 @@ export 'bindings.dart'
         PeerSource,
         PeerStateKind;
 export 'exception.dart';
+export 'server.dart' show logInit, logPrint;
 
 part 'local_secret.dart';
 
@@ -345,11 +345,13 @@ class Repository {
           .map((entry) => Repository._(session._client, entry.value, entry.key))
           .toList());
 
-  /// Closes the repository. All outstanding handles become invalid. Invoking any operation on a
-  /// repository after it's been closed results in an error being thrown.
-  Future<void> close() async {
-    await _client.invoke('repository_close', _handle);
-  }
+  /// Closes the repository. All outstanding handles become invalid. It's an error to invoke any
+  /// operation on this handle after it's been closed.
+  Future<void> close() => _client.invoke('repository_close', _handle);
+
+  /// Delete this repository. It's an error to invoke any operation on this handle after it's been
+  /// deleted.
+  Future<void> delete() => _client.invoke('repository_delete', _handle);
 
   String get path => _path;
 

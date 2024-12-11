@@ -106,7 +106,8 @@ class StateMonitor {
   StateMonitor child(MonitorId childId) =>
       StateMonitor._(_client, [..._path, childId]);
 
-  Stream<void> subscribe() => _client
+  /// Stream of change notifications
+  Stream<void> get changes => _client
       .subscribe('state_monitor', _path.map((id) => id.toString()))
       .cast<void>();
 

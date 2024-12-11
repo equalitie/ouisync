@@ -262,7 +262,7 @@ void main() {
     expect(node, isNull);
 
     // This is to assert that no exception is thrown
-    monitor.subscribe().listen((_) {});
+    monitor.changes.listen((_) {});
   });
 
   test('user provided peers', () async {
