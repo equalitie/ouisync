@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, ops::Deref};
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,14 @@ impl From<Vec<u8>> for Bytes {
 impl From<Bytes> for Vec<u8> {
     fn from(b: Bytes) -> Self {
         b.0
+    }
+}
+
+impl Deref for Bytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

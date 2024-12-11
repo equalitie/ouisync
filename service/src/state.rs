@@ -211,14 +211,14 @@ impl State {
 
     pub async fn create_repository(
         &mut self,
-        path: PathBuf,
+        path: &Path,
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
         share_token: Option<ShareToken>,
         enable_dht: bool,
         enable_pex: bool,
     ) -> Result<RepositoryHandle, Error> {
-        let path = self.normalize_repository_path(&path)?;
+        let path = self.normalize_repository_path(path)?;
 
         if self.repos.find_by_path(&path).is_some() {
             Err(Error::RepositoryExists)?;
@@ -430,6 +430,33 @@ impl State {
             .ok_or(Error::InvalidArgument)?
             .path()
             .to_owned())
+    }
+
+    pub async fn move_repository(
+        &mut self,
+        _handle: RepositoryHandle,
+        _dst: &Path,
+    ) -> Result<(), Error> {
+        todo!()
+
+        // let dst = self.normalize_repository_path(dst)?;
+
+        // if self.repos.find_by_path(&dst).is_some() {
+        //     return Err(Error::RepositoryExists);
+        // }
+
+        // let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+
+        // // TODO: close all open files of this repo
+
+        // if let Some(mounter) = &self.mounter {
+        //     mounter.remove(holder.short_name())?;
+        // }
+
+        // // Preserve access mode after the move
+        // let credentials = holder.repository().credentials();
+
+        // holder.close().await?;
     }
 
     pub async fn reset_repository_access(
@@ -1060,7 +1087,7 @@ impl State {
     pub async fn open_file(
         &mut self,
         repo: RepositoryHandle,
-        path: String,
+        path: &str,
     ) -> Result<FileHandle, Error> {
         let repo = self
             .repos
@@ -1069,7 +1096,7 @@ impl State {
             .repository();
         let local_branch = repo.local_branch()?;
 
-        let file = repo.open_file(&path).await?;
+        let file = repo.open_file(path).await?;
         let holder = FileHolder { file, local_branch };
         let handle = self.files.insert(holder);
 
@@ -1111,7 +1138,7 @@ impl State {
         &mut self,
         file: FileHandle,
         offset: u64,
-        data: Vec<u8>,
+        data: &[u8],
     ) -> Result<(), Error> {
         let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
 
@@ -1119,7 +1146,7 @@ impl State {
         holder.file.fork(holder.local_branch.clone()).await?;
 
         // TODO: consider using just `write` and returning the number of bytes written
-        holder.file.write_all(&data).await?;
+        holder.file.write_all(data).await?;
 
         Ok(())
     }
@@ -1406,7 +1433,7 @@ async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfi
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
+    use std::{future, net::Ipv4Addr};
 
     use crate::test_utils;
 
@@ -1462,14 +1489,14 @@ mod tests {
 
         assert_matches!(
             state
-                .create_repository(path.to_owned(), None, None, None, false, false)
+                .create_repository(path, None, None, None, false, false)
                 .await,
             Ok(_)
         );
 
         assert_matches!(
             state
-                .create_repository(path.to_owned(), None, None, None, false, false)
+                .create_repository(path, None, None, None, false, false)
                 .await,
             Err(Error::RepositoryExists)
         );
@@ -1483,7 +1510,14 @@ mod tests {
 
         assert_matches!(
             state
-                .create_repository("foo".into(), None, None, Some(token.clone()), false, false)
+                .create_repository(
+                    Path::new("foo"),
+                    None,
+                    None,
+                    Some(token.clone()),
+                    false,
+                    false
+                )
                 .await,
             Ok(_)
         );
@@ -1491,7 +1525,7 @@ mod tests {
         // different name but same token
         assert_matches!(
             state
-                .create_repository("bar".into(), None, None, Some(token), false, false)
+                .create_repository(Path::new("bar"), None, None, Some(token), false, false)
                 .await,
             Err(Error::RepositoryExists)
         );
@@ -1510,7 +1544,7 @@ mod tests {
         let name = "foo";
         let handle = state
             .create_repository(
-                name.into(),
+                Path::new(name),
                 None,
                 None,
                 Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
@@ -1603,7 +1637,7 @@ mod tests {
         let name = "foo";
         let handle = local_state
             .create_repository(
-                name.into(),
+                Path::new(name),
                 None,
                 None,
                 Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
@@ -1650,6 +1684,52 @@ mod tests {
             read_dir(local_state.store_dir().unwrap()).await,
             Vec::<PathBuf>::new(),
         );
+    }
+
+    #[tokio::test]
+    async fn move_repository() {
+        let (_temp_dir, mut state) = setup().await;
+        let src = Path::new("foo");
+        let dst = Path::new("bar");
+
+        let repo = state
+            .create_repository(src, None, None, None, false, false)
+            .await
+            .unwrap();
+        let src_full = state.repository_path(repo).unwrap();
+
+        let file = state.create_file(repo, "test.txt".into()).await.unwrap();
+        state.write_file(file, 0, b"hello").await.unwrap();
+        state.close_file(file).await.unwrap();
+
+        state.move_repository(repo, dst).await.unwrap();
+        let dst_full = state.repository_path(repo).unwrap();
+
+        let file = state.open_file(repo, "test.txt").await.unwrap();
+        let len = state.file_len(file).unwrap();
+        let content = state.read_file(file, 0, len).await.unwrap();
+        assert_eq!(content, b"hello");
+
+        assert!(fs::try_exists(dst_full).await.unwrap());
+
+        // Check none of the src files (including the aux files) exist anymore
+        let src_files: Vec<_> =
+            ReadDirStream::new(fs::read_dir(src_full.parent().unwrap()).await.unwrap())
+                .try_filter(|entry| {
+                    future::ready(
+                        entry
+                            .path()
+                            .to_str()
+                            .unwrap()
+                            .starts_with(src_full.to_str().unwrap()),
+                    )
+                })
+                .map_ok(|entry| entry.path())
+                .try_collect()
+                .await
+                .unwrap();
+
+        assert_eq!(src_files, Vec::<PathBuf>::new());
     }
 
     async fn setup() -> (TempDir, State) {

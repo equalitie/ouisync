@@ -289,7 +289,7 @@ impl Service {
             }
             Request::FileLen(file) => Ok(self.state.file_len(file)?.into()),
             Request::FileOpen { repository, path } => {
-                Ok(self.state.open_file(repository, path).await?.into())
+                Ok(self.state.open_file(repository, &path).await?.into())
             }
             Request::FileProgress(file) => Ok(self.state.file_progress(file).await?.into()),
             Request::FileRead { file, offset, len } => {
@@ -304,7 +304,7 @@ impl Service {
                 Ok(().into())
             }
             Request::FileWrite { file, offset, data } => {
-                self.state.write_file(file, offset, data.into()).await?;
+                self.state.write_file(file, offset, &data).await?;
                 Ok(().into())
             }
             Request::PasswordGenerateSalt => {
@@ -400,7 +400,7 @@ impl Service {
             } => {
                 let handle = self
                     .state
-                    .create_repository(path, read_secret, write_secret, token, dht, pex)
+                    .create_repository(&path, read_secret, write_secret, token, dht, pex)
                     .await?;
 
                 Ok(handle.into())
