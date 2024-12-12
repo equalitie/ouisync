@@ -97,8 +97,9 @@ pub enum Request {
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
         token: Option<ShareToken>,
-        dht: bool,
-        pex: bool,
+        sync_enabled: bool,
+        dht_enabled: bool,
+        pex_enabled: bool,
     },
     RepositoryCreateMirror {
         repository: RepositoryHandle,
@@ -129,6 +130,7 @@ pub enum Request {
     RepositoryGetDefaultBlockExpiration,
     RepositoryGetDefaultQuota,
     RepositoryGetDefaultRepositoryExpiration,
+    RepositoryGetInfoHash(RepositoryHandle),
     RepositoryGetMetadata {
         repository: RepositoryHandle,
         key: String,
@@ -140,6 +142,7 @@ pub enum Request {
     RepositoryGetRepositoryExpiration(RepositoryHandle),
     RepositoryGetStoreDir,
     /// Import a repository from a file
+    #[deprecated = "use RepositoryOpen or move/copy/link the file manually"]
     RepositoryImport {
         input: PathBuf,
         name: Option<String>,
@@ -233,7 +236,9 @@ pub enum Request {
     RepositorySubscribe(RepositoryHandle),
     RepositorySyncProgress(RepositoryHandle),
     RepositoryUnmount(RepositoryHandle),
-    ShareTokenMode(#[serde(with = "helpers::str")] ShareToken),
+    ShareTokenGetInfoHash(#[serde(with = "helpers::str")] ShareToken),
+    ShareTokenGetAccessMode(#[serde(with = "helpers::str")] ShareToken),
+    ShareTokenGetSuggestedName(#[serde(with = "helpers::str")] ShareToken),
     ShareTokenNormalize(#[serde(with = "helpers::str")] ShareToken),
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
@@ -254,7 +259,6 @@ pub(crate) enum Request {
     RepositoryRequiresLocalSecretForReading(RepositoryHandle),
     RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
     RepositoryName(RepositoryHandle),
-    RepositoryInfoHash(RepositoryHandle),
     RepositoryDatabaseId(RepositoryHandle),
     RepositoryEntryVersionHash {
         repository: RepositoryHandle,
@@ -262,8 +266,6 @@ pub(crate) enum Request {
     },
     RepositoryMountAll(PathBuf),
     RepositoryStats(RepositoryHandle),
-    ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
-    ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
     ShareTokenMirrorExists {
         #[serde(with = "as_str")]
         share_token: ShareToken,
@@ -343,8 +345,8 @@ mod tests {
                     Ipv4Addr::LOCALHOST,
                     12345,
                 )))]),
-                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f706565727391b4717569632f\
-                 3132372e302e302e313a3132333435",
+                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f706565727391b4717569632f31\
+                 32372e302e302e313a3132333435",
             ),
             (
                 Request::NetworkBind(vec![PeerAddr::Quic(SocketAddr::from((
@@ -363,10 +365,11 @@ mod tests {
                     read_secret: None,
                     write_secret: None,
                     token: None,
-                    dht: false,
-                    pex: false,
+                    sync_enabled: true,
+                    dht_enabled: false,
+                    pex_enabled: false,
                 },
-                "81b17265706f7369746f72795f63726561746596a3666f6fc0c0c0c2c2",
+                "81b17265706f7369746f72795f63726561746597a3666f6fc0c0c0c3c2c2",
             ),
             (
                 Request::RepositoryCreate {
@@ -374,12 +377,13 @@ mod tests {
                     read_secret: None,
                     write_secret: None,
                     token: Some(ShareToken::from(secrets)),
-                    dht: false,
-                    pex: false,
+                    sync_enabled: true,
+                    dht_enabled: false,
+                    pex_enabled: false,
                 },
-                "81b17265706f7369746f72795f63726561746596a3666f6fc0c0d94568747470733a2f2f6f756973\
-                 796e632e6e65742f722341774967663238737a62495f4b7274376153654f6c4877427868594b4d63\
-                 3843775a30473050626c71783132693555c2c2",
+                "81b17265706f7369746f72795f63726561746597a3666f6fc0c0d94568747470733a2f2f6f75697379\
+                 6e632e6e65742f722341774967663238737a62495f4b7274376153654f6c4877427868594b4d633843\
+                 775a30473050626c71783132693555c3c2c2",
             ),
         ];
 

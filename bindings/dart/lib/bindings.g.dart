@@ -71,7 +71,8 @@ enum ErrorCode {
   tlsCertificatesInvalid,
   tlsKeysNotFound,
   tlsConfig,
-  createMounter,
+  vfsDriverInstallError,
+  vfsOtherError,
   serviceAlreadyRunning,
   storeDirUnspecified,
   other,
@@ -104,9 +105,10 @@ enum ErrorCode {
       case 4101: return ErrorCode.tlsCertificatesInvalid;
       case 4102: return ErrorCode.tlsKeysNotFound;
       case 4103: return ErrorCode.tlsConfig;
-      case 4104: return ErrorCode.createMounter;
-      case 4105: return ErrorCode.serviceAlreadyRunning;
-      case 4106: return ErrorCode.storeDirUnspecified;
+      case 4104: return ErrorCode.vfsDriverInstallError;
+      case 4105: return ErrorCode.vfsOtherError;
+      case 4106: return ErrorCode.serviceAlreadyRunning;
+      case 4107: return ErrorCode.storeDirUnspecified;
       case 65535: return ErrorCode.other;
       default: throw ArgumentError('invalid value: $n');
     }
@@ -139,9 +141,10 @@ enum ErrorCode {
       case ErrorCode.tlsCertificatesInvalid: return 4101;
       case ErrorCode.tlsKeysNotFound: return 4102;
       case ErrorCode.tlsConfig: return 4103;
-      case ErrorCode.createMounter: return 4104;
-      case ErrorCode.serviceAlreadyRunning: return 4105;
-      case ErrorCode.storeDirUnspecified: return 4106;
+      case ErrorCode.vfsDriverInstallError: return 4104;
+      case ErrorCode.vfsOtherError: return 4105;
+      case ErrorCode.serviceAlreadyRunning: return 4106;
+      case ErrorCode.storeDirUnspecified: return 4107;
       case ErrorCode.other: return 65535;
     }
   }

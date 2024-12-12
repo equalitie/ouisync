@@ -1,4 +1,5 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ouisync_vfs::MountError;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -74,12 +75,14 @@ pub enum ErrorCode {
     TlsKeysNotFound = 4096 + 6,
     /// Failed to create TLS config
     TlsConfig = 4096 + 7,
-    /// Failed to create mounter
-    CreateMounter = 4096 + 8,
+    /// Failed to install virtual filesystem driver
+    VfsDriverInstallError = 4096 + 8,
+    /// Unspecified virtual filesystem error
+    VfsOtherError = 4096 + 9,
     /// Another instance of the service is already running
-    ServiceAlreadyRunning = 4096 + 9,
+    ServiceAlreadyRunning = 4096 + 10,
     /// Store directory is not specified
-    StoreDirUnspecified = 4096 + 10,
+    StoreDirUnspecified = 4096 + 11,
 
     /// Unspecified error
     Other = 65535,
@@ -93,7 +96,7 @@ impl ToErrorCode for Error {
     fn to_error_code(&self) -> ErrorCode {
         match self {
             Self::Config(_) => ErrorCode::Config,
-            Self::CreateMounter(_) => ErrorCode::CreateMounter,
+            Self::CreateMounter(error) => error.to_error_code(),
             Self::InitializeLogger(_) => ErrorCode::InitializeLogger,
             Self::InitializeRuntime(_) => ErrorCode::InitializeRuntime,
             Self::InvalidArgument => ErrorCode::InvalidInput,
@@ -165,6 +168,17 @@ impl ToErrorCode for ValidateError {
 impl ToErrorCode for UnexpectedResponse {
     fn to_error_code(&self) -> ErrorCode {
         ErrorCode::InvalidData
+    }
+}
+
+impl ToErrorCode for MountError {
+    fn to_error_code(&self) -> ErrorCode {
+        match self {
+            Self::DriverInstall => ErrorCode::VfsDriverInstallError,
+            Self::InvalidMountPoint | Self::Unsupported | Self::Backend(_) => {
+                ErrorCode::VfsOtherError
+            }
+        }
     }
 }
 

@@ -209,14 +209,16 @@ impl State {
             .collect()
     }
 
+    #[expect(clippy::too_many_arguments)] // TODO: extract the args to a struct
     pub async fn create_repository(
         &mut self,
         path: &Path,
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
         share_token: Option<ShareToken>,
-        enable_dht: bool,
-        enable_pex: bool,
+        sync_enabled: bool,
+        dht_enabled: bool,
+        pex_enabled: bool,
     ) -> Result<RepositoryHandle, Error> {
         let path = self.normalize_repository_path(path)?;
 
@@ -250,12 +252,14 @@ impl State {
         let value = ouisync_bridge::repository::get_default_block_expiration(&self.config).await?;
         repo.set_block_expiration(value).await?;
 
-        let registration = self.network.register(repo.handle()).await;
-        registration.set_dht_enabled(enable_dht).await;
-        registration.set_pex_enabled(enable_pex).await;
-
         let mut holder = RepositoryHolder::new(path, repo);
-        holder.enable_sync(registration);
+
+        if sync_enabled {
+            let registration = self.network.register(holder.repository().handle()).await;
+            registration.set_dht_enabled(dht_enabled).await;
+            registration.set_pex_enabled(pex_enabled).await;
+            holder.enable_sync(registration);
+        }
 
         let value = self.default_repository_expiration().await?;
         holder.set_repository_expiration(value).await?;
@@ -303,7 +307,7 @@ impl State {
             Err(Error::RepositoryExists)?;
         }
 
-        let holder = self.load_repository(&path, local_secret).await?;
+        let holder = self.load_repository(&path, local_secret, false).await?;
         self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
     }
 
@@ -337,6 +341,7 @@ impl State {
         Ok(output_path)
     }
 
+    #[deprecated = "use open_repository or move/copy/link the file manually"]
     pub async fn import_repository(
         &mut self,
         input_path: PathBuf,
@@ -392,7 +397,7 @@ impl State {
             }
         }
 
-        let holder = self.load_repository(&path, None).await?;
+        let holder = self.load_repository(&path, None, true).await?;
         self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
     }
 
@@ -423,6 +428,20 @@ impl State {
             .to_owned())
     }
 
+    /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
+    /// unique, non-secret identifier of the repository.
+    /// User is responsible for deallocating the returned string.
+    pub fn repository_info_hash(&self, handle: RepositoryHandle) -> Result<String, Error> {
+        let repo = self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .repository();
+        let info_hash = ouisync::repository_info_hash(repo.secrets().id());
+
+        Ok(hex::encode(info_hash))
+    }
+
     pub async fn move_repository(
         &mut self,
         handle: RepositoryHandle,
@@ -440,6 +459,7 @@ impl State {
         let holder = self.repos.get_mut(handle).ok_or(Error::InvalidArgument)?;
         // Preserve access mode after the move
         let credentials = holder.repository().credentials();
+        let sync_enabled = holder.registration().is_some();
 
         // TODO: close all open files of this repo
 
@@ -466,6 +486,7 @@ impl State {
         *holder = load_repository(
             &new_path,
             None,
+            sync_enabled,
             &self.config,
             &self.network,
             &self.repos_monitor,
@@ -636,19 +657,15 @@ impl State {
         enabled: bool,
     ) -> Result<(), Error> {
         let holder = self.repos.get_mut(handle).ok_or(Error::InvalidArgument)?;
-
-        match (enabled, holder.registration().is_some()) {
-            (true, false) => {
-                let registration = self.network.register(holder.repository().handle()).await;
-                holder.enable_sync(registration);
-            }
-            (false, true) => {
-                holder.disable_sync();
-            }
-            (true, true) | (false, false) => (),
-        }
+        set_sync_enabled(holder, &self.network, enabled).await;
 
         Ok(())
+    }
+
+    pub async fn set_all_repositories_sync_enabled(&mut self, enabled: bool) {
+        for (_, holder) in self.repos.iter_mut() {
+            set_sync_enabled(holder, &self.network, enabled).await;
+        }
     }
 
     pub async fn repository_sync_progress(
@@ -1303,7 +1320,7 @@ impl State {
                 continue;
             }
 
-            match self.load_repository(path, None).await {
+            match self.load_repository(path, None, false).await {
                 Ok(_) => (),
                 Err(error) => {
                     tracing::error!(?error, ?path, "failed to open repository");
@@ -1339,10 +1356,12 @@ impl State {
         &self,
         path: &Path,
         local_secret: Option<LocalSecret>,
+        sync_enabled: bool,
     ) -> Result<RepositoryHolder, Error> {
         load_repository(
             path,
             local_secret,
+            sync_enabled,
             &self.config,
             &self.network,
             &self.repos_monitor,
@@ -1457,6 +1476,7 @@ async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfi
 async fn load_repository(
     path: &Path,
     local_secret: Option<LocalSecret>,
+    sync_enabled: bool,
     config: &ConfigStore,
     network: &Network,
     repos_monitor: &StateMonitor,
@@ -1467,10 +1487,12 @@ async fn load_repository(
         .with_monitor(repos_monitor.make_child(path.to_string_lossy()));
 
     let repo = Repository::open(&params, local_secret, AccessMode::Write).await?;
-    let registration = network.register(repo.handle()).await;
-
     let mut holder = RepositoryHolder::new(path.to_owned(), repo);
-    holder.enable_sync(registration);
+
+    if sync_enabled {
+        let registration = network.register(holder.repository().handle()).await;
+        holder.enable_sync(registration);
+    }
 
     if let Some(mounter) = &mounter {
         if holder
@@ -1485,6 +1507,19 @@ async fn load_repository(
     }
 
     Ok(holder)
+}
+
+async fn set_sync_enabled(holder: &mut RepositoryHolder, network: &Network, enabled: bool) {
+    match (enabled, holder.registration().is_some()) {
+        (true, false) => {
+            let registration = network.register(holder.repository().handle()).await;
+            holder.enable_sync(registration);
+        }
+        (false, true) => {
+            holder.disable_sync();
+        }
+        (true, true) | (false, false) => (),
+    }
 }
 
 /// Move file from `src` to `dst`. If they are on the same filesystem, it does a simple rename.
@@ -1564,14 +1599,14 @@ mod tests {
 
         assert_matches!(
             state
-                .create_repository(path, None, None, None, false, false)
+                .create_repository(path, None, None, None, false, false, false)
                 .await,
             Ok(_)
         );
 
         assert_matches!(
             state
-                .create_repository(path, None, None, None, false, false)
+                .create_repository(path, None, None, None, false, false, false)
                 .await,
             Err(Error::RepositoryExists)
         );
@@ -1591,6 +1626,7 @@ mod tests {
                     None,
                     Some(token.clone()),
                     false,
+                    false,
                     false
                 )
                 .await,
@@ -1600,7 +1636,15 @@ mod tests {
         // different name but same token
         assert_matches!(
             state
-                .create_repository(Path::new("bar"), None, None, Some(token), false, false)
+                .create_repository(
+                    Path::new("bar"),
+                    None,
+                    None,
+                    Some(token),
+                    false,
+                    false,
+                    false
+                )
                 .await,
             Err(Error::RepositoryExists)
         );
@@ -1623,6 +1667,7 @@ mod tests {
                 None,
                 None,
                 Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
+                false,
                 false,
                 false,
             )
@@ -1716,6 +1761,7 @@ mod tests {
                 None,
                 None,
                 Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
+                true,
                 false,
                 false,
             )
@@ -1768,7 +1814,7 @@ mod tests {
         let dst = Path::new("bar");
 
         let repo = state
-            .create_repository(src, None, None, None, false, false)
+            .create_repository(src, None, None, None, false, false, false)
             .await
             .unwrap();
         let src_full = state.repository_path(repo).unwrap();

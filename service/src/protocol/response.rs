@@ -150,6 +150,12 @@ impl From<Vec<u8>> for Response {
     }
 }
 
+impl<'a> From<&'a str> for Response {
+    fn from(value: &'a str) -> Self {
+        Self::String(value.to_owned())
+    }
+}
+
 impl_response_conversion!(AccessMode(AccessMode));
 impl_response_conversion!(Bool(bool));
 impl_response_conversion!(Directory(Vec<DirectoryEntry>));

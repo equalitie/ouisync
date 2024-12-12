@@ -271,12 +271,13 @@ fn make_repository_create_request(id: RepositoryId) -> Request {
         read_secret: None,
         write_secret: None,
         token: Some(ShareToken::from(AccessSecrets::Blind { id })),
+        sync_enabled: true,
         // NOTE: DHT is disabled to prevent spamming the DHT when there is a lot of repos.
-        // This is fine because the clients add the storage servers as user-provided peers.
+        // This is fine because the clients add the cache servers as user-provided peers.
         // TODO: After we address https://github.com/equalitie/ouisync/issues/128 we should
         // consider enabling it again.
-        dht: false,
-        pex: true,
+        dht_enabled: false,
+        pex_enabled: true,
     }
 }
 

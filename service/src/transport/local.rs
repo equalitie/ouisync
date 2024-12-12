@@ -236,8 +236,9 @@ mod tests {
                     read_secret: None,
                     write_secret: None,
                     token: None,
-                    dht: false,
-                    pex: false,
+                    sync_enabled: false,
+                    dht_enabled: false,
+                    pex_enabled: false,
                 },
             )
             .await
@@ -397,8 +398,9 @@ mod tests {
                     read_secret: None,
                     write_secret: None,
                     token: Some(token.clone()),
-                    dht: false,
-                    pex: false,
+                    sync_enabled: true,
+                    dht_enabled: false,
+                    pex_enabled: false,
                 },
             )
             .await
@@ -412,8 +414,9 @@ mod tests {
                     read_secret: None,
                     write_secret: None,
                     token: Some(token),
-                    dht: false,
-                    pex: false,
+                    sync_enabled: true,
+                    dht_enabled: false,
+                    pex_enabled: false,
                 },
             )
             .await

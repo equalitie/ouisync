@@ -166,6 +166,11 @@ impl Service {
         self.state.set_store_dir(path.into()).await
     }
 
+    /// Enable or disable syncing for all currently open repos.
+    pub async fn set_sync_enabled_all(&mut self, enabled: bool) {
+        self.state.set_all_repositories_sync_enabled(enabled).await
+    }
+
     pub(crate) async fn bind_remote_control(
         &mut self,
         addr: Option<SocketAddr>,
@@ -395,12 +400,21 @@ impl Service {
                 read_secret,
                 write_secret,
                 token,
-                dht,
-                pex,
+                sync_enabled,
+                dht_enabled,
+                pex_enabled,
             } => {
                 let handle = self
                     .state
-                    .create_repository(&path, read_secret, write_secret, token, dht, pex)
+                    .create_repository(
+                        &path,
+                        read_secret,
+                        write_secret,
+                        token,
+                        sync_enabled,
+                        dht_enabled,
+                        pex_enabled,
+                    )
                     .await?;
 
                 Ok(handle.into())
@@ -450,6 +464,9 @@ impl Service {
             }
             Request::RepositoryGetDefaultRepositoryExpiration => {
                 Ok(self.state.default_repository_expiration().await?.into())
+            }
+            Request::RepositoryGetInfoHash(repository) => {
+                Ok(self.state.repository_info_hash(repository)?.into())
             }
             Request::RepositoryGetMetadata { repository, key } => Ok(self
                 .state
@@ -642,7 +659,11 @@ impl Service {
                 .repository_sync_progress(repository)
                 .await?
                 .into()),
-            Request::ShareTokenMode(token) => Ok(token.access_mode().into()),
+            Request::ShareTokenGetAccessMode(token) => Ok(token.access_mode().into()),
+            Request::ShareTokenGetInfoHash(token) => {
+                Ok(hex::encode(ouisync::repository_info_hash(token.id()).as_ref()).into())
+            }
+            Request::ShareTokenGetSuggestedName(token) => Ok(token.suggested_name().into()),
             Request::ShareTokenNormalize(token) => Ok(token.into()),
             Request::StateMonitorGet(path) => Ok(self.state.state_monitor(path)?.into()),
             Request::StateMonitorSubscribe(path) => {

@@ -20,6 +20,8 @@ class OuisyncException implements Exception {
       switch (code) {
         ErrorCode.invalidData => InvalidData(message, sources),
         ErrorCode.alreadyExists => AlreadyExists(message, sources),
+        ErrorCode.vfsDriverInstallError =>
+          VFSDriverInstallError(message, sources),
         ErrorCode.serviceAlreadyRunning =>
           ServiceAlreadyRunning(message, sources),
         _ => OuisyncException._(code, message, sources),
@@ -42,4 +44,9 @@ class AlreadyExists extends OuisyncException {
 class ServiceAlreadyRunning extends OuisyncException {
   ServiceAlreadyRunning([String? message, List<String> sources = const []])
       : super._(ErrorCode.serviceAlreadyRunning, message, sources);
+}
+
+class VFSDriverInstallError extends OuisyncException {
+  VFSDriverInstallError([String? message, List<String> sources = const []])
+      : super._(ErrorCode.vfsDriverInstallError, message, sources);
 }

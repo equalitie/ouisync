@@ -306,8 +306,9 @@ class Repository {
         'read_secret': readSecret?.encode(),
         'write_secret': writeSecret?.encode(),
         'token': token?.toString(),
-        'dht': false,
-        'pex': false,
+        'sync_enabled': false,
+        'dht_enabled': false,
+        'pex_enabled': false,
       },
     );
 
@@ -329,6 +330,7 @@ class Repository {
     final handle = await client.invoke<int>('repository_open', {
       'path': path,
       'secret': secret?.encode(),
+      'sync_enabled': false,
     });
 
     final fullPath = await client.invoke<String>('repository_get_path', handle);
@@ -387,6 +389,14 @@ class Repository {
         'write': write?.encode(),
       });
 
+  /// Resets access using `token` and reset any values encrypted with local secrets to random
+  /// values. Currently that is only the writer ID.
+  Future<void> resetAccess(ShareToken token) =>
+      _client.invoke<void>('repository_reset_access', {
+        'repository': _handle,
+        'token': token.toString(),
+      });
+
   /// Obtain the current repository credentials. They can be used to restore repository access
   /// (with [setCredentials]) after the repo has been closed and re-opened without needing the
   /// local secret. This is useful for example when renaming/moving the repository database.
@@ -397,15 +407,6 @@ class Repository {
       _client.invoke<void>('repository_set_credentials', {
         'repository': _handle,
         'credentials': credentials,
-      });
-
-  /// Like `setCredentials` but use the `ShareToken` and reset any values
-  /// encrypted with local secrets to random values. Currently that is only the
-  /// writer ID.
-  Future<void> resetCredentials(ShareToken token) =>
-      _client.invoke<void>('repository_reset_credentials', {
-        'repository': _handle,
-        'token': token.toString(),
       });
 
   Future<AccessMode> get accessMode {
@@ -486,13 +487,7 @@ class Repository {
       .child(MonitorId.expectUnique(_path));
 
   Future<String> get infoHash =>
-      _client.invoke<String>("repository_info_hash", _handle);
-
-  Future<String> hexDatabaseId() async {
-    final bytes =
-        await _client.invoke<Uint8List>("repository_database_id", _handle);
-    return HEX.encode(bytes);
-  }
+      _client.invoke<String>("repository_get_info_hash", _handle);
 
   /// Create mirror of this repository on the cache server.
   Future<void> createMirror(String host) =>
@@ -602,15 +597,15 @@ class ShareToken {
 
   /// Get the suggested repository name from the share token.
   Future<String> get suggestedName =>
-      _client.invoke<String>('share_token_suggested_name', _token);
+      _client.invoke<String>('share_token_get_suggested_name', _token);
 
   Future<String> get infoHash =>
-      _client.invoke<String>('share_token_info_hash', _token);
+      _client.invoke<String>('share_token_get_info_hash', _token);
 
   /// Get the access mode the share token provides.
-  Future<AccessMode> get mode => _client
-      .invoke<int>('share_token_mode', _token)
-      .then((n) => AccessMode.decode(n));
+  Future<AccessMode> get accessMode => _client
+      .invoke<int>('share_token_get_access_mode', _token)
+      .then(AccessMode.decode);
 
   /// Check if the repository of this share token is mirrored on the cache server.
   Future<bool> mirrorExists(String host) =>

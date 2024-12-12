@@ -85,12 +85,23 @@ impl RepositorySet {
         Ok((RepositoryHandle(handle), holder))
     }
 
+    /// Returns iterator over entries of this set in their lexicographical order.
     pub fn iter(&self) -> impl Iterator<Item = (RepositoryHandle, &RepositoryHolder)> {
         self.index.values().copied().filter_map(|handle| {
             self.repos
                 .get(handle)
                 .map(|holder| (RepositoryHandle(handle), holder))
         })
+    }
+
+    /// NOTE: Unlike `iter`, this *does not* return the entries in lexicographical order (Due to
+    /// borrow checker issues that are likely solvable only with `unsafe`. See
+    /// https://stackoverflow.com/questions/63437935/in-rust-how-do-i-create-a-mutable-iterator for
+    /// details).
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (RepositoryHandle, &mut RepositoryHolder)> {
+        self.repos
+            .iter_mut()
+            .map(|(handle, holder)| (RepositoryHandle(handle), holder))
     }
 
     pub fn drain(&mut self) -> impl Iterator<Item = RepositoryHolder> + '_ {

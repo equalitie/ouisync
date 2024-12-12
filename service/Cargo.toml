@@ -16,6 +16,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 bytes                       = { workspace = true }
 clap                        = { workspace = true }
 futures-util                = { workspace = true }
+hex                         = { workspace = true }
 hyper                       = { version = "1.4.1", features = ["server", "http1"] }
 interprocess                = { version = "2.2.1", features = ["tokio"] }
 maxminddb                   = "0.24.0"
@@ -43,7 +44,6 @@ walkdir                     = "2.5.0"
 
 [dev-dependencies]
 assert_matches              = { workspace = true }
-hex                         = "0.4.3"
 rcgen                       = { workspace = true, features = ["pem"] }
 tempfile                    = { workspace = true }
 tracing-subscriber          = { workspace = true, features = ["env-filter"] }
