@@ -18,12 +18,12 @@ use std::{
     sync::{Arc, RwLock as BlockingRwLock},
 };
 use thiserror::Error;
-use tokio::sync::{broadcast::error::RecvError, watch, RwLock as AsyncRwLock};
+use tokio::sync::{broadcast::error::RecvError, watch};
 
 pub(crate) struct RepositoryHolder {
     pub store_path: PathBuf,
     pub repository: Arc<Repository>,
-    pub registration: AsyncRwLock<Option<Registration>>,
+    pub registration: BlockingRwLock<Option<Registration>>,
 }
 
 pub(crate) type RepositoryHandle = Handle<Arc<RepositoryHolder>>;
@@ -58,7 +58,7 @@ pub(crate) async fn create(
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration: AsyncRwLock::new(None),
+        registration: BlockingRwLock::new(None),
     };
     let handle = entry.insert(holder);
 
@@ -98,7 +98,7 @@ pub(crate) async fn open(
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration: AsyncRwLock::new(None),
+        registration: BlockingRwLock::new(None),
     };
     let handle = entry.insert(holder);
 
@@ -156,16 +156,13 @@ pub async fn close_all_repositories(state: &State) {
     }
 }
 
-pub(crate) async fn is_sync_enabled(
-    state: &State,
-    handle: RepositoryHandle,
-) -> Result<bool, Error> {
+pub(crate) fn is_sync_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .is_some())
 }
 
@@ -177,12 +174,12 @@ pub(crate) async fn set_sync_enabled(
     let holder = state.repositories.get(handle)?;
 
     if enabled {
-        let mut registration = holder.registration.write().await;
+        let mut registration = holder.registration.write().unwrap();
         if registration.is_none() {
-            *registration = Some(state.network.register(holder.repository.handle()).await);
+            *registration = Some(state.network.register(holder.repository.handle()));
         }
     } else {
-        holder.registration.write().await.take();
+        holder.registration.write().unwrap().take();
     }
 
     Ok(())
@@ -371,19 +368,19 @@ pub(crate) fn subscribe(
     Ok(handle)
 }
 
-pub(crate) async fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+pub(crate) fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
         .is_dht_enabled())
 }
 
-pub(crate) async fn set_dht_enabled(
+pub(crate) fn set_dht_enabled(
     state: &State,
     handle: RepositoryHandle,
     enabled: bool,
@@ -393,27 +390,26 @@ pub(crate) async fn set_dht_enabled(
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
-        .set_dht_enabled(enabled)
-        .await;
+        .set_dht_enabled(enabled);
     Ok(())
 }
 
-pub(crate) async fn is_pex_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+pub(crate) fn is_pex_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
         .is_pex_enabled())
 }
 
-pub(crate) async fn set_pex_enabled(
+pub(crate) fn set_pex_enabled(
     state: &State,
     handle: RepositoryHandle,
     enabled: bool,
@@ -423,11 +419,10 @@ pub(crate) async fn set_pex_enabled(
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
-        .set_pex_enabled(enabled)
-        .await;
+        .set_pex_enabled(enabled);
     Ok(())
 }
 
@@ -557,13 +552,13 @@ pub(crate) async fn metadata_set(
 }
 
 /// Fetch per-repository network statistics
-pub(crate) async fn stats(state: &State, handle: RepositoryHandle) -> Result<Stats, Error> {
+pub(crate) fn stats(state: &State, handle: RepositoryHandle) -> Result<Stats, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
         .stats())

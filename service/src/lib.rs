@@ -167,7 +167,7 @@ impl Service {
     }
 
     /// Enable or disable syncing for all currently open repos.
-    pub async fn set_sync_enabled_all(&mut self, enabled: bool) {
+    pub async fn set_sync_enabled_all(&mut self, enabled: bool) -> Result<(), Error> {
         self.state.set_all_repositories_sync_enabled(enabled).await
     }
 

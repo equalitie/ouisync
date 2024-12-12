@@ -90,9 +90,6 @@ use tokio::{
 };
 use tracing::{Instrument, Span};
 
-const DHT_ENABLED: &str = "dht_enabled";
-const PEX_ENABLED: &str = "pex_enabled";
-
 pub struct Network {
     inner: Arc<Inner>,
     // We keep tasks here instead of in Inner because we want them to be
@@ -326,33 +323,11 @@ impl Network {
     /// Note: A repository should have at most one registration - creating more than one has
     /// undesired effects. This is currently not enforced and so it's a responsibility of the
     /// caller.
-    pub async fn register(&self, handle: RepositoryHandle) -> Registration {
+    pub fn register(&self, handle: RepositoryHandle) -> Registration {
         *handle.vault.monitor.info_hash.get() =
             Some(repository_info_hash(handle.vault.repository_id()));
 
-        let metadata = handle.vault.metadata();
-        let dht_enabled = metadata
-            .get(DHT_ENABLED)
-            .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-        let pex_enabled = metadata
-            .get(PEX_ENABLED)
-            .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-
-        let dht = if dht_enabled {
-            Some(
-                self.inner
-                    .start_dht_lookup(repository_info_hash(handle.vault.repository_id())),
-            )
-        } else {
-            None
-        };
-
         let pex = self.inner.pex_discovery.new_repository();
-        pex.set_enabled(pex_enabled);
 
         let request_tracker = RequestTracker::new(handle.vault.monitor.traffic.clone());
         request_tracker.set_timeout(REQUEST_TIMEOUT);
@@ -374,7 +349,7 @@ impl Network {
 
         let key = registry.repos.insert(RegistrationHolder {
             vault: handle.vault,
-            dht,
+            dht: None,
             pex,
             request_tracker,
             choker,
@@ -418,9 +393,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub async fn set_dht_enabled(&self, enabled: bool) {
-        set_metadata_bool(&self.inner, self.key, DHT_ENABLED, enabled).await;
-
+    pub fn set_dht_enabled(&self, enabled: bool) {
         let mut registry = self.inner.registry.lock().unwrap();
         let holder = &mut registry.repos[self.key];
 
@@ -449,9 +422,7 @@ impl Registration {
     /// Note: sending/receiving over PEX for this repo is enabled only if it's enabled using this
     /// function and also globally using [Network::set_pex_send_enabled] and/or
     /// [Network::set_pex_recv_enabled].
-    pub async fn set_pex_enabled(&self, enabled: bool) {
-        set_metadata_bool(&self.inner, self.key, PEX_ENABLED, enabled).await;
-
+    pub fn set_pex_enabled(&self, enabled: bool) {
         let registry = self.inner.registry.lock().unwrap();
         registry.repos[self.key].pex.set_enabled(enabled);
     }
@@ -484,11 +455,6 @@ impl Drop for Registration {
             }
         }
     }
-}
-
-async fn set_metadata_bool(inner: &Inner, key: usize, name: &str, value: bool) {
-    let metadata = inner.registry.lock().unwrap().repos[key].vault.metadata();
-    metadata.set(name, value).await.ok();
 }
 
 struct RegistrationHolder {

@@ -93,8 +93,9 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                     token,
                     read_secret,
                     write_secret,
-                    dht: false,
-                    pex: false,
+                    sync_enabled: true,
+                    dht_enabled: false,
+                    pex_enabled: false,
                 })
                 .await?;
         }

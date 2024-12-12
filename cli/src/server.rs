@@ -24,6 +24,8 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
         service.set_store_dir(defaults::store_dir()).await?;
     }
 
+    service.set_sync_enabled_all(true).await?;
+
     select! {
         result = service.run() => match result {
             Err(error) => Err(error)?,

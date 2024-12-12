@@ -157,8 +157,8 @@ async fn test_sync(work_dir: &Path, input_dump: &Path) {
     .instrument(info_span!("b"))
     .await;
 
-    let _reg_a = network_a.register(repo_a.handle()).await;
-    let _reg_b = network_b.register(repo_b.handle()).await;
+    let _reg_a = network_a.register(repo_a.handle());
+    let _reg_b = network_b.register(repo_b.handle());
 
     network_b.add_user_provided_peer(&network_a.listener_local_addrs().into_iter().next().unwrap());
 

@@ -1,5 +1,7 @@
 //! Dart FFI (foreign function interface) for the ouisync library.
 
+#![deprecated = "use ouisync-service instead"]
+
 #[macro_use]
 mod utils;
 mod c;

@@ -126,7 +126,7 @@ fn main() -> ExitCode {
             )
             .await
             .unwrap();
-            let _reg = network.register(repo.handle()).await;
+            let _reg = network.register(repo.handle());
 
             // Create the file
             if actor.access_mode == AccessMode::Write {

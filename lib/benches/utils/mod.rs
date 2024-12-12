@@ -134,7 +134,7 @@ impl Actor {
             .await;
 
         let repo = create_repo(rng, &base_dir.join("repo.db"), 0, monitor).await;
-        let reg = network.register(repo.handle()).await;
+        let reg = network.register(repo.handle());
 
         Self {
             network,
