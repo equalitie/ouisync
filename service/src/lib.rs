@@ -171,6 +171,10 @@ impl Service {
         self.state.set_all_repositories_sync_enabled(enabled).await
     }
 
+    pub fn enable_panic_monitor(&self) {
+        self.state.enable_panic_monitor();
+    }
+
     pub(crate) async fn bind_remote_control(
         &mut self,
         addr: Option<SocketAddr>,

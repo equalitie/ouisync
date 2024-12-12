@@ -23,6 +23,7 @@ use std::{
     collections::BTreeMap,
     ffi::OsStr,
     io::{self, SeekFrom},
+    panic,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -113,6 +114,20 @@ impl State {
         state.load_repositories().await;
 
         Ok(state)
+    }
+
+    pub fn enable_panic_monitor(&self) {
+        let panic_counter = self
+            .root_monitor
+            .make_child("Service")
+            .make_value("panic_counter", 0u32);
+
+        // TODO: This is not atomic. Use `panic::update_hook` when stabilized.
+        let default_panic_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |panic_info| {
+            *panic_counter.get() += 1;
+            default_panic_hook(panic_info);
+        }));
     }
 
     /// Initializes the network according to the stored configuration. If a particular network

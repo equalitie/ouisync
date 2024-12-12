@@ -166,6 +166,7 @@ fn init(
 
     let service =
         runtime.block_on(Service::init(socket_path, config_dir).instrument(span.clone()))?;
+    service.enable_panic_monitor();
 
     Ok((runtime, service, span))
 }
