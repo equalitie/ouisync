@@ -97,7 +97,7 @@ void main() {
     test('share token access mode', () async {
       for (var mode in AccessMode.values) {
         final token = await repo.share(accessMode: mode);
-        expect(await token.mode, equals(mode));
+        expect(await token.accessMode, equals(mode));
       }
     });
 

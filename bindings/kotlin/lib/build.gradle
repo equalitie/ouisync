@@ -75,7 +75,7 @@ dependencies {
 
 cargo {
     module = "$rootDir/../.."
-    libname = 'ouisync_ffi'
+    libname = 'ouisync_service'
 
     // Targets can be overriden with "rust.targets" in local.properties.
     // Example: "rust.targets=arm64,x86_64".
@@ -84,7 +84,7 @@ cargo {
 
     profile = 'release'
 
-    extraCargoBuildArguments = ['--package', 'ouisync-ffi']
+    extraCargoBuildArguments = ['--package', 'ouisync-service']
 
     def relTargetDir = localProperties.getProperty('rust.cargoTargetDir')
     def absTargetDir = null

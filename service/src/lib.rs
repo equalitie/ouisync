@@ -5,6 +5,7 @@ pub mod transport;
 mod error;
 mod file;
 mod metrics;
+mod network;
 mod repository;
 mod state;
 mod subscription;
@@ -336,7 +337,7 @@ impl Service {
                 self.state.bind_network(addrs).await;
                 Ok(().into())
             }
-            Request::NetworkCurrentProtocolVersion => {
+            Request::NetworkGetCurrentProtocolVersion => {
                 Ok(self.state.network.current_protocol_version().into())
             }
             Request::NetworkGetListenerAddrs => {
@@ -344,6 +345,9 @@ impl Service {
             }
             Request::NetworkGetPeers => {
                 Ok(self.state.network.peer_info_collector().collect().into())
+            }
+            Request::NetworkGetRuntimeId => {
+                Ok(hex::encode(self.state.network.this_runtime_id().as_ref()).into())
             }
             Request::NetworkGetUserProvidedPeers => {
                 Ok(self.state.user_provided_peers().await.into())

@@ -64,7 +64,7 @@ jobs:
       - name: Run clippy
         run: >
           ${{ matrix.cargo-command }} clippy
-          --package ouisync --package ouisync-bridge --package ouisync-ffi
+          --package ouisync --package ouisync-bridge --package ouisync-service
           ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
           --all-targets
           --no-deps
@@ -104,8 +104,8 @@ jobs:
 
       - name: Install system dependencies
         # NOTE: fuse isn't used by the bindings themselves but it's required for the unit tests
-        # because they use the linux version of the ouisync_ffi library, not the android one and
-        # the linux version does currently unconditionally depend on fuse.
+        # because they use the linux version of the ouisync_service library, not the android one
+        # and the linux version does currently unconditionally depend on fuse.
         run: sudo apt-get install libfuse-dev
 
       # - name: Install NDK
@@ -197,8 +197,8 @@ jobs:
           dart analyze lib
           dart analyze example
 
-      - name: Building the ouisync library for tests
-        run: cargo build -p ouisync-ffi --lib
+      - name: Building the ouisync service library for tests
+        run: cargo build -p ouisync-service --lib
 
       - name: Run tests
         working-directory: bindings/dart

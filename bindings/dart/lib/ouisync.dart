@@ -148,10 +148,10 @@ class Session {
   StateMonitor get rootStateMonitor => StateMonitor.getRoot(_client);
 
   Future<int> get currentProtocolVersion =>
-      _client.invoke<int>('network_current_protocol_version');
+      _client.invoke<int>('network_get_current_protocol_version');
 
   Future<int> get highestSeenProtocolVersion =>
-      _client.invoke<int>('network_highest_seen_protocol_version');
+      _client.invoke<int>('network_get_highest_seen_protocol_version');
 
   /// Is port forwarding (UPnP) enabled?
   Future<bool> get isPortForwardingEnabled =>
@@ -169,8 +169,8 @@ class Session {
   Future<void> setLocalDiscoveryEnabled(bool enabled) =>
       _client.invoke<void>('network_set_local_discovery_enabled', enabled);
 
-  Future<String> get thisRuntimeId =>
-      _client.invoke<String>('network_this_runtime_id');
+  Future<String> get runtimeId =>
+      _client.invoke<String>('network_get_runtime_id');
 
   // Utility functions to generate password salts and to derive LocalSecretKey from LocalPasswords.
 

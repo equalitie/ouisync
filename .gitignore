@@ -1,7 +1,7 @@
 .DS_Store
 /target
 proptest-regressions
-bindings/dart/darwin/libouisync_ffi.a
+bindings/dart/darwin/libouisync_service.a
 
 # This is a symbolic link created by {windows,linux}/CMakeLists.txt scripts
 # because git often doesn't support symlinks by default (depends on which OS,

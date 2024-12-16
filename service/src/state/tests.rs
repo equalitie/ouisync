@@ -108,6 +108,37 @@ async fn non_unique_repository_id() {
 // TODO: test import repo with non-unique id
 
 #[tokio::test]
+async fn open_already_opened_repository() {
+    let (_temp_dir, mut state) = setup().await;
+
+    let name = "foo";
+    let handle0 = state
+        .create_repository(Path::new(name), None, None, None, false, false, false)
+        .await
+        .unwrap();
+
+    // Open by full path
+    let handle1 = state
+        .open_repository(
+            &state
+                .store_dir()
+                .unwrap()
+                .join(name)
+                .with_extension(REPOSITORY_FILE_EXTENSION),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle1, handle0);
+
+    // Open by partial path
+    let handle2 = state.open_repository(Path::new(name), None).await.unwrap();
+    assert_eq!(handle2, handle0);
+}
+
+// TODO: test reopen with higher access mode
+
+#[tokio::test]
 async fn expire_empty_repository() {
     test_utils::init_log();
 

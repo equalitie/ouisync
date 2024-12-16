@@ -3,7 +3,6 @@ use ouisync::{
     crypto::PasswordSalt, AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret,
     ShareToken, StorageSize,
 };
-use ouisync_bridge::network::NetworkDefaults;
 use serde::{Deserialize, Serialize};
 use state_monitor::MonitorId;
 use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
@@ -68,9 +67,10 @@ pub enum Request {
     MetricsGetListenerAddr,
     NetworkAddUserProvidedPeers(#[serde(with = "helpers::strs")] Vec<PeerAddr>),
     NetworkBind(#[serde(with = "helpers::strs")] Vec<PeerAddr>),
-    NetworkCurrentProtocolVersion,
+    NetworkGetCurrentProtocolVersion,
     NetworkGetListenerAddrs,
     NetworkGetPeers,
+    NetworkGetRuntimeId,
     NetworkGetUserProvidedPeers,
     NetworkInit(NetworkDefaults),
     NetworkIsLocalDiscoveryEnabled,
@@ -275,7 +275,6 @@ pub(crate) enum Request {
         repository: RepositoryHandle,
         path: Utf8PathBuf,
     },
-    NetworkThisRuntimeId,
     NetworkHighestSeenProtocolVersion,
     NetworkExternalAddrV4,
     NetworkExternalAddrV6,
@@ -285,6 +284,14 @@ pub(crate) enum Request {
     GetWritePasswordSalt(RepositoryHandle),
 }
 */
+
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub struct NetworkDefaults {
+    #[serde(with = "helpers::strs")]
+    pub bind: Vec<PeerAddr>,
+    pub port_forwarding_enabled: bool,
+    pub local_discovery_enabled: bool,
+}
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ImportMode {

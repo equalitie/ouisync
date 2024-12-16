@@ -28,7 +28,7 @@ In order to use this plugin, one must generate the `lib/bindings.g.dart` file:
     $ dart run util/bindgen.dart
 
 Note that the above needs to be done every time the public interface of the
-`ouisync_ffi` library changes.
+`ouisync_service` library changes.
 
 ## Building the AAR
 

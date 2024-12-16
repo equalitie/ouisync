@@ -1,7 +1,8 @@
 use crate::{
     error::Error,
     file::{FileHandle, FileHolder, FileSet},
-    protocol::{DirectoryEntry, ImportMode, MetadataEdit, QuotaInfo},
+    network::PexConfig,
+    protocol::{DirectoryEntry, ImportMode, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     transport::remote::RemoteClient,
     utils,
@@ -13,7 +14,7 @@ use ouisync::{
 };
 use ouisync_bridge::{
     config::{ConfigError, ConfigKey, ConfigStore},
-    network::{self, NetworkDefaults},
+    network,
     transport::tls,
 };
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
@@ -38,19 +39,42 @@ use tokio_stream::StreamExt;
 #[cfg(test)]
 mod tests;
 
-const STORE_DIR_KEY: ConfigKey<PathBuf> =
-    ConfigKey::new("store_dir", "Repository storage directory");
+// Global configs
+
+const BIND_KEY: ConfigKey<Vec<PeerAddr>> =
+    ConfigKey::new("bind", "Addresses to bind the network listeners to");
+
+const LOCAL_DISCOVERY_ENABLED_KEY: ConfigKey<bool> =
+    ConfigKey::new("local_discovery_enabled", "Enable local discovery");
 
 const MOUNT_DIR_KEY: ConfigKey<PathBuf> = ConfigKey::new("mount_dir", "Repository mount directory");
+
+const PEERS_KEY: ConfigKey<Vec<PeerAddr>> = ConfigKey::new(
+    "peers",
+    "List of peers to connect to in addition to the ones found by various discovery mechanisms\n\
+     (e.g. DHT)",
+);
+
+const PEX_KEY: ConfigKey<PexConfig> = ConfigKey::new("pex", "Peer exchange configuration");
+
+const PORT_FORWARDING_ENABLED_KEY: ConfigKey<bool> =
+    ConfigKey::new("port_forwarding_enabled", "Enable port forwarding / UPnP");
+
+const STORE_DIR_KEY: ConfigKey<PathBuf> =
+    ConfigKey::new("store_dir", "Repository storage directory");
 
 const DEFAULT_REPOSITORY_EXPIRATION_KEY: ConfigKey<u64> = ConfigKey::new(
     "default_repository_expiration",
     "Default time in milliseconds after repository is deleted if all its blocks expired",
 );
 
+// Per-repo configs
+
 const AUTOMOUNT_KEY: &str = "automount";
 const DHT_ENABLED_KEY: &str = "dht_enabled";
 const PEX_ENABLED_KEY: &str = "pex_enabled";
+
+// Other constants
 
 const REPOSITORY_FILE_EXTENSION: &str = "ouisyncdb";
 
@@ -133,7 +157,39 @@ impl State {
     /// Initializes the network according to the stored configuration. If a particular network
     /// parameter is not yet configured, falls back to the given defaults.
     pub async fn init_network(&self, defaults: NetworkDefaults) {
-        network::init(&self.network, &self.config, defaults).await;
+        let bind_addrs = self
+            .config
+            .entry(BIND_KEY)
+            .get()
+            .await
+            .unwrap_or(defaults.bind);
+        ouisync_bridge::network::bind_with_reuse_ports(&self.network, &self.config, &bind_addrs)
+            .await;
+
+        let enabled = self
+            .config
+            .entry(PORT_FORWARDING_ENABLED_KEY)
+            .get()
+            .await
+            .unwrap_or(defaults.port_forwarding_enabled);
+        self.network.set_port_forwarding_enabled(enabled);
+
+        let enabled = self
+            .config
+            .entry(LOCAL_DISCOVERY_ENABLED_KEY)
+            .get()
+            .await
+            .unwrap_or(defaults.local_discovery_enabled);
+        self.network.set_local_discovery_enabled(enabled);
+
+        let peers = self.config.entry(PEERS_KEY).get().await.unwrap_or_default();
+        for peer in peers {
+            self.network.add_user_provided_peer(&peer);
+        }
+
+        let PexConfig { send, recv } = self.config.entry(PEX_KEY).get().await.unwrap_or_default();
+        self.network.set_pex_send_enabled(send);
+        self.network.set_pex_recv_enabled(recv);
     }
 
     pub async fn bind_network(&self, addrs: Vec<PeerAddr>) {
@@ -338,14 +394,22 @@ impl State {
         local_secret: Option<LocalSecret>,
     ) -> Result<RepositoryHandle, Error> {
         let path = self.normalize_repository_path(path)?;
+        let handle = if let Some((handle, holder)) = self.repos.find_by_path(&path) {
+            // If `local_secret` provides higher access mode than what the repo currently has,
+            // increase it. If not, the access mode remains unchanged.
+            holder
+                .repository()
+                .set_access_mode(AccessMode::Write, local_secret)
+                .await?;
 
-        if self.repos.find_by_path(&path).is_some() {
-            // TODO: return the existing repo instead (but unlock using `local_secret`)?
-            Err(Error::RepositoryExists)?;
-        }
+            handle
+        } else {
+            let holder = self.load_repository(&path, local_secret, false).await?;
+            // unwrap is ok because we already handled the case when the repo already exists.
+            self.repos.try_insert(holder).unwrap()
+        };
 
-        let holder = self.load_repository(&path, local_secret, false).await?;
-        self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
+        Ok(handle)
     }
 
     pub async fn close_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {

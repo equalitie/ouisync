@@ -90,7 +90,7 @@ pub async fn bind(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
     bind_with_reuse_ports(network, config, addrs).await;
 }
 
-async fn bind_with_reuse_ports(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
+pub async fn bind_with_reuse_ports(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
     let mut last_used_ports = LastUsedPorts::load(config).await;
     let addrs: Vec<_> = addrs
         .iter()
