@@ -9,7 +9,7 @@ use crate::{
     error::Error,
     file::{FileHandle, FileHolder, FileSet},
     network::{self, PexConfig},
-    protocol::{DirectoryEntry, ImportMode, MetadataEdit, NetworkDefaults, QuotaInfo},
+    protocol::{DirectoryEntry, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     tls,
     transport::remote::RemoteClient,
@@ -444,66 +444,6 @@ impl State {
         holder.repository().export(&output_path).await?;
 
         Ok(output_path)
-    }
-
-    #[deprecated = "use open_repository or move/copy/link the file manually"]
-    pub async fn import_repository(
-        &mut self,
-        input_path: PathBuf,
-        name: Option<String>,
-        mode: ImportMode,
-        force: bool,
-    ) -> Result<RepositoryHandle, Error> {
-        let name = if let Some(name) = name {
-            name
-        } else {
-            input_path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        };
-
-        let path = self.normalize_repository_path(Path::new(&name))?;
-
-        if fs::try_exists(&path).await? {
-            if force {
-                if let Some((handle, _)) = self.repos.find_by_path(&path) {
-                    if let Some(mut holder) = self.repos.remove(handle) {
-                        holder.close().await?;
-                    }
-                }
-            } else {
-                return Err(Error::RepositoryExists);
-            }
-        }
-
-        // TODO: check if repo with same id exists
-
-        match mode {
-            ImportMode::Copy => {
-                fs::copy(input_path, &path).await?;
-            }
-            ImportMode::Move => {
-                fs::rename(input_path, &path).await?;
-            }
-            ImportMode::SoftLink => {
-                #[cfg(unix)]
-                fs::symlink(input_path, &path).await?;
-
-                #[cfg(windows)]
-                fs::symlink_file(input_path, &path).await?;
-
-                #[cfg(not(any(unix, windows)))]
-                return Err(Error::OperationNotSupported);
-            }
-            ImportMode::HardLink => {
-                fs::hard_link(input_path, &path).await?;
-            }
-        }
-
-        let holder = self.load_repository(&path, None, true).await?;
-        self.repos.try_insert(holder).ok_or(Error::RepositoryExists)
     }
 
     pub async fn share_repository(

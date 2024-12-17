@@ -5,8 +5,7 @@ use ouisync::{
 };
 use serde::{Deserialize, Serialize};
 use state_monitor::MonitorId;
-use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration};
-use thiserror::Error;
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use super::{
     helpers::{self, Bytes},
@@ -141,14 +140,6 @@ pub enum Request {
     RepositoryGetQuota(RepositoryHandle),
     RepositoryGetRepositoryExpiration(RepositoryHandle),
     RepositoryGetStoreDir,
-    /// Import a repository from a file
-    #[deprecated = "use RepositoryOpen or move/copy/link the file manually"]
-    RepositoryImport {
-        input: PathBuf,
-        name: Option<String>,
-        mode: ImportMode,
-        force: bool,
-    },
     RepositoryIsDhtEnabled(RepositoryHandle),
     RepositoryIsPexEnabled(RepositoryHandle),
     RepositoryIsSyncEnabled(RepositoryHandle),
@@ -292,43 +283,6 @@ pub struct NetworkDefaults {
     pub port_forwarding_enabled: bool,
     pub local_discovery_enabled: bool,
 }
-
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub enum ImportMode {
-    Copy,
-    Move,
-    SoftLink,
-    HardLink,
-}
-
-impl FromStr for ImportMode {
-    type Err = InvalidImportMode;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim_start().chars().next() {
-            Some('c') | Some('C') => Ok(Self::Copy),
-            Some('m') | Some('M') => Ok(Self::Move),
-            Some('s') | Some('S') => Ok(Self::SoftLink),
-            Some('h') | Some('H') => Ok(Self::HardLink),
-            _ => Err(InvalidImportMode),
-        }
-    }
-}
-
-impl fmt::Display for ImportMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Copy => write!(f, "copy"),
-            Self::Move => write!(f, "move"),
-            Self::SoftLink => write!(f, "softlink"),
-            Self::HardLink => write!(f, "hardlink"),
-        }
-    }
-}
-
-#[derive(Error, Debug)]
-#[error("invalid import mode")]
-pub struct InvalidImportMode;
 
 #[cfg(test)]
 mod tests {

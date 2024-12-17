@@ -502,18 +502,6 @@ impl Service {
             }
             Request::RepositoryGetStoreDir => Ok(self.state.store_dir().into()),
             Request::RepositoryGetDefaultQuota => Ok(self.state.default_quota().await?.into()),
-            Request::RepositoryImport {
-                input,
-                name,
-                mode,
-                force,
-            } => {
-                let handle = self
-                    .state
-                    .import_repository(input, name, mode, force)
-                    .await?;
-                Ok(handle.into())
-            }
             Request::RepositoryIsDhtEnabled(repository) => {
                 Ok(self.state.is_repository_dht_enabled(repository)?.into())
             }

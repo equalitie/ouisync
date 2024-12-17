@@ -1,3 +1,5 @@
+#![deprecated = "use ouisync-service instead"]
+
 pub mod config;
 pub mod device_id;
 pub mod dht_contacts;

@@ -228,21 +228,6 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
 
             println!("{}", path.display());
         }
-        ClientCommand::Import {
-            input,
-            name,
-            mode,
-            force,
-        } => {
-            let _: RepositoryHandle = client
-                .invoke(Request::RepositoryImport {
-                    input: to_absolute(input)?,
-                    name,
-                    mode,
-                    force,
-                })
-                .await?;
-        }
         ClientCommand::ListPeers => {
             let infos: Vec<PeerInfo> = client.invoke(Request::NetworkGetPeers).await?;
 

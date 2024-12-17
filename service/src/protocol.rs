@@ -13,7 +13,7 @@ pub use error_code::ErrorCode;
 pub use log::LogLevel;
 pub use message::{DecodeError, EncodeError, Message, MessageId};
 pub use metadata::MetadataEdit;
-pub use request::{ImportMode, NetworkDefaults, Request};
+pub use request::{NetworkDefaults, Request};
 pub use response::{DirectoryEntry, QuotaInfo, Response, ResponseResult, UnexpectedResponse};
 
 pub(crate) use error_code::ToErrorCode;

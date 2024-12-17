@@ -4,10 +4,7 @@ use clap::{
     Parser, Subcommand, ValueEnum,
 };
 use ouisync::{AccessMode, PeerAddr, StorageSize};
-use ouisync_service::{
-    logger::{LogColor, LogFormat},
-    protocol::ImportMode,
-};
+use ouisync_service::logger::{LogColor, LogFormat};
 use std::{net::SocketAddr, path::PathBuf};
 
 #[derive(Parser, Debug)]
@@ -147,23 +144,6 @@ pub(crate) enum ClientCommand {
         /// File to export the repository to
         #[arg(value_name = "PATH")]
         output: PathBuf,
-    },
-    /// Import a repository from a file
-    Import {
-        /// File to import the repository from
-        #[arg(value_name = "PATH")]
-        input: PathBuf,
-
-        /// Name for the repository. Default is the filename the repository is imported from.
-        name: Option<String>,
-
-        /// How to import the repository ("copy", "move", "softlink" or "hardlink")
-        #[arg(short, long, default_value_t = ImportMode::Copy)]
-        mode: ImportMode,
-
-        /// Overwrite the destination if it exists
-        #[arg(short, long)]
-        force: bool,
     },
     /// List all known peers.
     ///
