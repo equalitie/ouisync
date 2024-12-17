@@ -39,8 +39,9 @@ impl MultiRepoMount for MultiRepoVFS {
     fn create(
         mount_root: impl AsRef<Path>,
     ) -> impl Future<Output = Result<Self, MountError>> + Send {
+        let mount_root = mount_root.as_ref().to_owned();
+
         async {
-            let mount_root = mount_root.as_ref().to_owned();
             let mount_root_u16c = match U16CString::from_os_str(mount_root.as_os_str()) {
                 Ok(mount_root) => mount_root,
                 Err(error) => {
@@ -93,8 +94,8 @@ impl MultiRepoMount for MultiRepoVFS {
                     unmount_rx.recv().unwrap_or(());
 
                     // If we don't do this then dropping `file_system` will block.
-                    if !unmount(&mount_point_u16c) {
-                        tracing::warn!("Failed to unmount {mount_point:?}");
+                    if !unmount(&mount_root_u16c) {
+                        tracing::warn!("Failed to unmount {mount_root_u16c:?}");
                     }
 
                     drop(file_system);
@@ -124,7 +125,7 @@ impl MultiRepoMount for MultiRepoVFS {
     }
 
     fn insert(&self, name: String, repo: Arc<Repository>) -> Result<PathBuf, io::Error> {
-        let mount_point = self.mount_point.join(&name);
+        let mount_point = self.mount_root.join(&name);
         let name = match U16CString::from_str(&name) {
             Ok(name) => name,
             Err(_) => {
@@ -164,11 +165,13 @@ impl MultiRepoMount for MultiRepoVFS {
     }
 
     fn mount_point(&self, name: &str) -> Option<PathBuf> {
+        let name_u16c = U16CString::from_str(name).ok()?;
+
         self.repos
             .read()
             .unwrap()
-            .contains_key(name)
-            .then(|| self.mount_point.join(name))
+            .contains_key(&name_u16c)
+            .then(|| self.mount_root.join(name))
     }
 }
 
