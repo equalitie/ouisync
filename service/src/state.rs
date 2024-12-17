@@ -1502,8 +1502,16 @@ impl State {
 
     // Remove ancestors directories up to `store_dir` but only if they are empty.
     async fn remove_empty_ancestor_dirs(&self, path: &Path) -> Result<(), io::Error> {
+        let Some(store_dir) = &self.store_dir else {
+            return Ok(());
+        };
+
+        if !path.starts_with(store_dir) {
+            return Ok(());
+        }
+
         for path in path.ancestors().skip(1) {
-            if Some(path) == self.store_dir.as_deref() {
+            if path == store_dir {
                 break;
             }
 

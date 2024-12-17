@@ -177,7 +177,7 @@ async fn expire_empty_repository() {
 
     assert_eq!(state.find_repository(name), Err(FindError::NotFound));
     assert_eq!(
-        read_dir(state.store_dir().unwrap()).await,
+        read_dir(state.store_dir().unwrap(), "").await,
         Vec::<PathBuf>::new()
     );
 }
@@ -288,7 +288,7 @@ async fn expire_synced_repository() {
 
     assert_eq!(local_state.find_repository(name), Err(FindError::NotFound));
     assert_eq!(
-        read_dir(local_state.store_dir().unwrap()).await,
+        read_dir(local_state.store_dir().unwrap(), "").await,
         Vec::<PathBuf>::new(),
     );
 }
@@ -339,6 +339,88 @@ async fn move_repository() {
     assert_eq!(src_files, Vec::<PathBuf>::new());
 }
 
+#[tokio::test]
+async fn delete_repository_with_simple_name() {
+    let (_temp_dir, mut state) = setup().await;
+
+    let name0 = "foo";
+    let repo0 = state
+        .create_repository(Path::new(name0), None, None, None, false, false, false)
+        .await
+        .unwrap();
+    let path0 = state.repository_path(repo0).unwrap();
+
+    let name1 = "bar";
+    let repo1 = state
+        .create_repository(Path::new(name1), None, None, None, false, false, false)
+        .await
+        .unwrap();
+    let path1 = state.repository_path(repo1).unwrap();
+
+    state.delete_repository(repo0).await.unwrap();
+
+    // Check none of the repo0's files (including the aux files) exist anymore
+    assert_eq!(
+        read_dir(state.store_dir().unwrap(), path0.to_str().unwrap()).await,
+        Vec::<PathBuf>::new()
+    );
+
+    // Check the other repo still exists
+    assert!(fs::try_exists(path1).await.unwrap());
+}
+
+#[tokio::test]
+async fn delete_repository_in_subdir_of_store_dir() {
+    let (_temp_dir, mut state) = setup().await;
+
+    let name = "foo/bar/baz";
+    let repo = state
+        .create_repository(Path::new(name), None, None, None, false, false, false)
+        .await
+        .unwrap();
+    let path = state.repository_path(repo).unwrap();
+
+    state.delete_repository(repo).await.unwrap();
+
+    assert!(!fs::try_exists(&path).await.unwrap());
+
+    for path in path.ancestors() {
+        if path == state.store_dir().unwrap() {
+            break;
+        }
+
+        assert!(!fs::try_exists(path).await.unwrap());
+    }
+
+    assert!(fs::try_exists(state.store_dir().unwrap()).await.unwrap());
+}
+
+#[tokio::test]
+async fn delete_repository_outside_of_store_dir() {
+    let (temp_dir, mut state) = setup().await;
+    let parent_dir = temp_dir.path().join("external");
+
+    let name = "foo";
+    let repo = state
+        .create_repository(
+            &parent_dir.join(name),
+            None,
+            None,
+            None,
+            false,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    let path = state.repository_path(repo).unwrap();
+
+    state.delete_repository(repo).await.unwrap();
+
+    assert!(!fs::try_exists(&path).await.unwrap());
+    assert!(fs::try_exists(parent_dir).await.unwrap());
+}
+
 async fn setup() -> (TempDir, State) {
     let temp_dir = TempDir::new().unwrap();
     let mut state = State::init(temp_dir.path().join("config")).await.unwrap();
@@ -350,8 +432,11 @@ async fn setup() -> (TempDir, State) {
     (temp_dir, state)
 }
 
-async fn read_dir(path: impl AsRef<Path>) -> Vec<PathBuf> {
+/// Collect all files in the directory at `path` whose paths start with `prefix` (using `str`
+/// match, not `Path` match!).
+async fn read_dir(path: impl AsRef<Path>, prefix: &str) -> Vec<PathBuf> {
     ReadDirStream::new(fs::read_dir(path).await.unwrap())
+        .try_filter(|entry| future::ready(entry.path().to_str().unwrap().starts_with(prefix)))
         .map_ok(|entry| entry.path())
         .try_collect::<Vec<_>>()
         .await
