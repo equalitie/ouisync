@@ -1,9 +1,17 @@
 use crate::{
+    config_keys::{
+        BIND_KEY, DEFAULT_BLOCK_EXPIRATION_MILLIS, DEFAULT_QUOTA_KEY,
+        DEFAULT_REPOSITORY_EXPIRATION_KEY, LOCAL_DISCOVERY_ENABLED_KEY, MOUNT_DIR_KEY, PEERS_KEY,
+        PEX_KEY, PORT_FORWARDING_ENABLED_KEY, STORE_DIR_KEY,
+    },
+    config_store::{ConfigError, ConfigStore},
+    device_id, dht_contacts,
     error::Error,
     file::{FileHandle, FileHolder, FileSet},
-    network::PexConfig,
+    network::{self, PexConfig},
     protocol::{DirectoryEntry, ImportMode, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
+    tls,
     transport::remote::RemoteClient,
     utils,
 };
@@ -11,11 +19,6 @@ use ouisync::{
     Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
     Network, PeerAddr, Progress, Repository, RepositoryParams, SetLocalSecret, ShareToken,
     StorageSize,
-};
-use ouisync_bridge::{
-    config::{ConfigError, ConfigKey, ConfigStore},
-    network,
-    transport::tls,
 };
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use state_monitor::{MonitorId, StateMonitor};
@@ -39,42 +42,9 @@ use tokio_stream::StreamExt;
 #[cfg(test)]
 mod tests;
 
-// Global configs
-
-const BIND_KEY: ConfigKey<Vec<PeerAddr>> =
-    ConfigKey::new("bind", "Addresses to bind the network listeners to");
-
-const LOCAL_DISCOVERY_ENABLED_KEY: ConfigKey<bool> =
-    ConfigKey::new("local_discovery_enabled", "Enable local discovery");
-
-const MOUNT_DIR_KEY: ConfigKey<PathBuf> = ConfigKey::new("mount_dir", "Repository mount directory");
-
-const PEERS_KEY: ConfigKey<Vec<PeerAddr>> = ConfigKey::new(
-    "peers",
-    "List of peers to connect to in addition to the ones found by various discovery mechanisms\n\
-     (e.g. DHT)",
-);
-
-const PEX_KEY: ConfigKey<PexConfig> = ConfigKey::new("pex", "Peer exchange configuration");
-
-const PORT_FORWARDING_ENABLED_KEY: ConfigKey<bool> =
-    ConfigKey::new("port_forwarding_enabled", "Enable port forwarding / UPnP");
-
-const STORE_DIR_KEY: ConfigKey<PathBuf> =
-    ConfigKey::new("store_dir", "Repository storage directory");
-
-const DEFAULT_REPOSITORY_EXPIRATION_KEY: ConfigKey<u64> = ConfigKey::new(
-    "default_repository_expiration",
-    "Default time in milliseconds after repository is deleted if all its blocks expired",
-);
-
-// Per-repo configs
-
 const AUTOMOUNT_KEY: &str = "automount";
 const DHT_ENABLED_KEY: &str = "dht_enabled";
 const PEX_ENABLED_KEY: &str = "pex_enabled";
-
-// Other constants
 
 const REPOSITORY_FILE_EXTENSION: &str = "ouisyncdb";
 
@@ -95,10 +65,11 @@ impl State {
     pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
         let root_monitor = StateMonitor::make_root();
+        let dht_contacts_store = dht_contacts::Store::new(config.dir());
 
         let network = Network::new(
             root_monitor.make_child("Network"),
-            Some(config.dht_contacts_store()),
+            Some(Arc::new(dht_contacts_store)),
             None,
         );
 
@@ -163,8 +134,7 @@ impl State {
             .get()
             .await
             .unwrap_or(defaults.bind);
-        ouisync_bridge::network::bind_with_reuse_ports(&self.network, &self.config, &bind_addrs)
-            .await;
+        network::bind_with_reuse_ports(&self.network, &self.config, &bind_addrs).await;
 
         let enabled = self
             .config
@@ -192,31 +162,65 @@ impl State {
         self.network.set_pex_recv_enabled(recv);
     }
 
-    pub async fn bind_network(&self, addrs: Vec<PeerAddr>) {
-        network::bind(&self.network, &self.config, &addrs).await
+    pub async fn bind_network(&self, addrs: &[PeerAddr]) {
+        self.config.entry(BIND_KEY).set(addrs).await.ok();
+        network::bind_with_reuse_ports(&self.network, &self.config, addrs).await;
     }
 
-    pub async fn add_user_provided_peers(&self, addrs: Vec<PeerAddr>) {
-        ouisync_bridge::network::add_user_provided_peers(&self.network, &self.config, &addrs).await
+    pub async fn add_user_provided_peers(&self, addrs: &[PeerAddr]) {
+        let entry = self.config.entry(PEERS_KEY);
+        let mut stored = entry.get().await.unwrap_or_default();
+
+        let len = stored.len();
+        stored.extend(addrs.iter().copied());
+        stored.sort();
+        stored.dedup();
+
+        if stored.len() > len {
+            entry.set(&stored).await.ok();
+        }
+
+        for addr in addrs {
+            self.network.add_user_provided_peer(addr);
+        }
     }
 
-    pub async fn remove_user_provided_peers(&self, addrs: Vec<PeerAddr>) {
-        ouisync_bridge::network::remove_user_provided_peers(&self.network, &self.config, &addrs)
-            .await
+    pub async fn remove_user_provided_peers(&self, addrs: &[PeerAddr]) {
+        let entry = self.config.entry(PEERS_KEY);
+        let mut stored = entry.get().await.unwrap_or_default();
+
+        let len = stored.len();
+        stored.retain(|stored| !addrs.contains(stored));
+
+        if stored.len() < len {
+            entry.set(&stored).await.ok();
+        }
+
+        for addr in addrs {
+            self.network.remove_user_provided_peer(addr);
+        }
     }
 
     pub async fn user_provided_peers(&self) -> Vec<PeerAddr> {
-        ouisync_bridge::network::user_provided_peers(&self.config).await
+        self.config.entry(PEERS_KEY).get().await.unwrap_or_default()
     }
 
     pub async fn set_local_discovery_enabled(&self, enabled: bool) {
-        ouisync_bridge::network::set_local_discovery_enabled(&self.network, &self.config, enabled)
-            .await;
+        self.config
+            .entry(LOCAL_DISCOVERY_ENABLED_KEY)
+            .set(&enabled)
+            .await
+            .ok();
+        self.network.set_local_discovery_enabled(enabled);
     }
 
     pub async fn set_port_forwarding_enabled(&self, enabled: bool) {
-        ouisync_bridge::network::set_port_forwarding_enabled(&self.network, &self.config, enabled)
+        self.config
+            .entry(PORT_FORWARDING_ENABLED_KEY)
+            .set(&enabled)
             .await
+            .ok();
+        self.network.set_port_forwarding_enabled(enabled);
     }
 
     pub fn store_dir(&self) -> Option<&Path> {
@@ -310,7 +314,7 @@ impl State {
 
         // Create the repo
         let params = RepositoryParams::new(&path)
-            .with_device_id(ouisync_bridge::device_id::get_or_create(&self.config).await?)
+            .with_device_id(device_id::get_or_create(&self.config).await?)
             .with_monitor(self.repos_monitor.make_child(path.to_string_lossy()));
 
         let access_secrets = if let Some(share_token) = share_token {
@@ -348,10 +352,10 @@ impl State {
         }
 
         // Configure quota and expiration
-        let value = ouisync_bridge::repository::get_default_quota(&self.config).await?;
+        let value = default_quota(&self.config).await?;
         holder.repository().set_quota(value).await?;
 
-        let value = ouisync_bridge::repository::get_default_block_expiration(&self.config).await?;
+        let value = default_block_expiration(&self.config).await?;
         holder.repository().set_block_expiration(value).await?;
 
         let value = self.default_repository_expiration().await?;
@@ -505,19 +509,21 @@ impl State {
     pub async fn share_repository(
         &self,
         handle: RepositoryHandle,
-        secret: Option<LocalSecret>,
-        mode: AccessMode,
+        local_secret: Option<LocalSecret>,
+        access_mode: AccessMode,
     ) -> Result<ShareToken, Error> {
         let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
-        let token = ouisync_bridge::repository::create_share_token(
-            holder.repository(),
-            secret,
-            mode,
-            Some(holder.short_name().to_owned()),
-        )
-        .await?;
 
-        Ok(token)
+        let access_secrets = if let Some(local_secret) = local_secret {
+            holder.repository().unlock_secrets(local_secret).await?
+        } else {
+            holder.repository().secrets()
+        };
+
+        let share_token =
+            ShareToken::from(access_secrets.with_mode(access_mode)).with_name(holder.short_name());
+
+        Ok(share_token)
     }
 
     pub fn repository_path(&self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
@@ -837,11 +843,23 @@ impl State {
     }
 
     pub async fn set_pex_send_enabled(&self, enabled: bool) {
-        ouisync_bridge::network::set_pex_send_enabled(&self.network, &self.config, enabled).await
+        self.config
+            .entry(PEX_KEY)
+            .modify(|pex_config| pex_config.send = enabled)
+            .await
+            .ok();
+
+        self.network.set_pex_send_enabled(enabled);
     }
 
     pub async fn set_pex_recv_enabled(&self, enabled: bool) {
-        ouisync_bridge::network::set_pex_recv_enabled(&self.network, &self.config, enabled).await
+        self.config
+            .entry(PEX_KEY)
+            .modify(|pex_config| pex_config.recv = enabled)
+            .await
+            .ok();
+
+        self.network.set_pex_recv_enabled(enabled);
     }
 
     pub async fn create_repository_mirror(
@@ -927,11 +945,11 @@ impl State {
     }
 
     pub async fn default_quota(&self) -> Result<Option<StorageSize>, Error> {
-        Ok(ouisync_bridge::repository::get_default_quota(&self.config).await?)
+        Ok(default_quota(&self.config).await?)
     }
 
     pub async fn set_default_quota(&self, value: Option<StorageSize>) -> Result<(), Error> {
-        ouisync_bridge::repository::set_default_quota(&self.config, value).await?;
+        set_default_quota(&self.config, value).await?;
         Ok(())
     }
 
@@ -981,7 +999,7 @@ impl State {
 
         match entry.get().await {
             Ok(millis) => Ok(Some(Duration::from_millis(millis))),
-            Err(ouisync_bridge::config::ConfigError::NotFound) => Ok(None),
+            Err(ConfigError::NotFound) => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
@@ -1010,12 +1028,12 @@ impl State {
     }
 
     pub async fn set_default_block_expiration(&self, value: Option<Duration>) -> Result<(), Error> {
-        ouisync_bridge::repository::set_default_block_expiration(&self.config, value).await?;
+        set_default_block_expiration(&self.config, value).await?;
         Ok(())
     }
 
     pub async fn default_block_expiration(&self) -> Result<Option<Duration>, Error> {
-        Ok(ouisync_bridge::repository::get_default_block_expiration(&self.config).await?)
+        Ok(default_block_expiration(&self.config).await?)
     }
 
     pub async fn delete_expired_repositories(&mut self) {
@@ -1360,14 +1378,14 @@ impl State {
 
     pub async fn remote_server_config(&self) -> Result<Arc<rustls::ServerConfig>, Error> {
         self.remote_server_config
-            .get_or_try_init(|| make_server_config(self.config.dir()))
+            .get_or_try_init(|| tls::make_server_config(self.config.dir()))
             .await
             .cloned()
     }
 
     pub async fn remote_client_config(&self) -> Result<Arc<rustls::ClientConfig>, Error> {
         self.remote_client_config
-            .get_or_try_init(|| make_client_config(self.config.dir()))
+            .get_or_try_init(|| tls::make_client_config(self.config.dir()))
             .await
             .cloned()
     }
@@ -1530,62 +1548,6 @@ impl State {
     }
 }
 
-async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfig>, Error> {
-    let cert_path = config_dir.join("cert.pem");
-    let key_path = config_dir.join("key.pem");
-
-    let certs = tls::load_certificates_from_file(&cert_path)
-        .await
-        .map_err(|error| {
-            tracing::error!(
-                "failed to load TLS certificate from {}: {}",
-                cert_path.display(),
-                error,
-            );
-
-            Error::TlsCertificatesNotFound
-        })?;
-
-    if certs.is_empty() {
-        tracing::error!(
-            "failed to load TLS certificate from {}: no certificates found",
-            cert_path.display()
-        );
-
-        return Err(Error::TlsCertificatesNotFound);
-    }
-
-    let keys = tls::load_keys_from_file(&key_path).await.map_err(|error| {
-        tracing::error!(
-            "failed to load TLS key from {}: {}",
-            key_path.display(),
-            error
-        );
-
-        Error::TlsKeysNotFound
-    })?;
-
-    let key = keys.into_iter().next().ok_or_else(|| {
-        tracing::error!(
-            "failed to load TLS key from {}: no keys found",
-            cert_path.display()
-        );
-
-        Error::TlsKeysNotFound
-    })?;
-
-    ouisync_bridge::transport::make_server_config(certs, key).map_err(Error::TlsConfig)
-}
-
-async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfig>, Error> {
-    // Load custom root certificates (if any)
-    let additional_root_certs = tls::load_certificates_from_dir(&config_dir.join("root_certs"))
-        .await
-        .map_err(Error::TlsCertificatesInvalid)?;
-
-    ouisync_bridge::transport::make_client_config(&additional_root_certs).map_err(Error::TlsConfig)
-}
-
 async fn load_repository(
     path: &Path,
     local_secret: Option<LocalSecret>,
@@ -1596,7 +1558,7 @@ async fn load_repository(
     mounter: Option<&MultiRepoVFS>,
 ) -> Result<RepositoryHolder, Error> {
     let params = RepositoryParams::new(path)
-        .with_device_id(ouisync_bridge::device_id::get_or_create(config).await?)
+        .with_device_id(device_id::get_or_create(config).await?)
         .with_monitor(repos_monitor.make_child(path.to_string_lossy()));
 
     let repo = Repository::open(&params, local_secret, AccessMode::Write).await?;
@@ -1672,4 +1634,56 @@ async fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
     fs::remove_file(src).await?;
 
     Ok(())
+}
+
+async fn set_default_quota(
+    config: &ConfigStore,
+    value: Option<StorageSize>,
+) -> Result<(), ConfigError> {
+    let entry = config.entry(DEFAULT_QUOTA_KEY);
+
+    if let Some(value) = value {
+        entry.set(&value.to_bytes()).await?;
+    } else {
+        entry.remove().await?;
+    }
+
+    Ok(())
+}
+
+async fn default_quota(config: &ConfigStore) -> Result<Option<StorageSize>, ConfigError> {
+    let entry = config.entry(DEFAULT_QUOTA_KEY);
+
+    match entry.get().await {
+        Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
+        Err(ConfigError::NotFound) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+async fn set_default_block_expiration(
+    config: &ConfigStore,
+    value: Option<Duration>,
+) -> Result<(), ConfigError> {
+    let entry = config.entry(DEFAULT_BLOCK_EXPIRATION_MILLIS);
+
+    if let Some(value) = value {
+        entry
+            .set(&value.as_millis().try_into().unwrap_or(u64::MAX))
+            .await?;
+    } else {
+        entry.remove().await?;
+    }
+
+    Ok(())
+}
+
+async fn default_block_expiration(config: &ConfigStore) -> Result<Option<Duration>, ConfigError> {
+    let entry = config.entry::<u64>(DEFAULT_BLOCK_EXPIRATION_MILLIS);
+
+    match entry.get().await {
+        Ok(millis) => Ok(Some(Duration::from_millis(millis))),
+        Err(ConfigError::NotFound) => Ok(None),
+        Err(error) => Err(error),
+    }
 }

@@ -2,13 +2,19 @@ pub mod ffi;
 pub mod protocol;
 pub mod transport;
 
+mod config_keys;
+mod config_store;
+mod device_id;
+mod dht_contacts;
 mod error;
 mod file;
+mod logger;
 mod metrics;
 mod network;
 mod repository;
 mod state;
 mod subscription;
+mod tls;
 mod utils;
 
 #[cfg(test)]
@@ -16,10 +22,10 @@ mod test_utils;
 
 pub use error::Error;
 
+use config_store::{ConfigError, ConfigKey};
 use futures_util::SinkExt;
 use metrics::MetricsServer;
 use ouisync::crypto::{cipher::SecretKey, PasswordSalt};
-use ouisync_bridge::config::{ConfigError, ConfigKey};
 use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response, ResponseResult};
 use rand::{rngs::OsRng, Rng};
 use slab::Slab;
@@ -330,11 +336,11 @@ impl Service {
             }
             Request::MetricsGetListenerAddr => todo!(),
             Request::NetworkAddUserProvidedPeers(addrs) => {
-                self.state.add_user_provided_peers(addrs).await;
+                self.state.add_user_provided_peers(&addrs).await;
                 Ok(().into())
             }
             Request::NetworkBind(addrs) => {
-                self.state.bind_network(addrs).await;
+                self.state.bind_network(&addrs).await;
                 Ok(().into())
             }
             Request::NetworkGetCurrentProtocolVersion => {
@@ -365,7 +371,7 @@ impl Service {
                 Ok(self.state.network.is_port_forwarding_enabled().into())
             }
             Request::NetworkRemoveUserProvidedPeers(addrs) => {
-                self.state.remove_user_provided_peers(addrs).await;
+                self.state.remove_user_provided_peers(&addrs).await;
                 Ok(().into())
             }
             Request::NetworkSetLocalDiscoveryEnabled(enabled) => {

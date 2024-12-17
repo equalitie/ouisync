@@ -1,5 +1,4 @@
-use crate::transport::ClientError;
-use ouisync_bridge::{config::ConfigError, repository::OpenError};
+use crate::{config_store::ConfigError, transport::ClientError};
 use ouisync_vfs::MountError;
 use std::{ffi::IntoStringError, io, str::Utf8Error};
 use thiserror::Error;
@@ -50,15 +49,6 @@ pub enum Error {
     Accept(#[source] io::Error),
     #[error("client request failed")]
     Client(#[from] ClientError),
-}
-
-impl From<OpenError> for Error {
-    fn from(src: OpenError) -> Self {
-        match src {
-            OpenError::Repository(error) => Self::Repository(error),
-            OpenError::Config(error) => Self::Config(error),
-        }
-    }
 }
 
 impl From<Utf8Error> for Error {

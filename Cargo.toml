@@ -51,6 +51,7 @@ metrics = "0.22.0"
 metrics-exporter-prometheus = { version = "0.13.0", default-features = false }
 metrics-util = { version = "0.16.0", default-features = false }
 num_enum = { version = "0.7.3", default-features = false }
+pem = "3.0.4"
 pin-project-lite = "0.2.14"
 proptest = "1.5"
 rand = { package = "ouisync-rand", path = "rand" }
@@ -73,6 +74,7 @@ tokio-util = "0.7.12"
 tracing = { version = "0.1.38" }
 tracing-subscriber = { version = "0.3.18" }
 turmoil = "0.6.4"
+webpki-roots = "0.26.5"
 
 [profile.bench]
 # Enable debug info so we can profile the benches

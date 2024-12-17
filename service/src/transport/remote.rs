@@ -117,13 +117,13 @@ fn into_write_error(src: ws::Error) -> WriteError {
 #[cfg(test)]
 mod tests {
     use super::RemoteClient;
-    use std::{net::Ipv4Addr, slice, sync::Arc};
+    use std::{net::Ipv4Addr, sync::Arc};
 
     use assert_matches::assert_matches;
     use ouisync::WriteSecrets;
     use tempfile::TempDir;
     use tokio::fs;
-    use tokio_rustls::rustls::ClientConfig;
+    use tokio_rustls::rustls::{self, ClientConfig};
 
     use crate::{
         test_utils::{self, ServiceRunner},
@@ -242,7 +242,6 @@ mod tests {
         let config_dir = temp_dir.path().join("config");
 
         let gen = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-        let cert = gen.cert.der();
 
         fs::create_dir_all(&config_dir).await.unwrap();
         fs::write(config_dir.join("cert.pem"), gen.cert.pem())
@@ -252,8 +251,14 @@ mod tests {
             .await
             .unwrap();
 
-        let remote_client_config =
-            ouisync_bridge::transport::make_client_config(slice::from_ref(cert)).unwrap();
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        root_cert_store.add(gen.cert.into()).unwrap();
+
+        let remote_client_config = Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_cert_store)
+                .with_no_client_auth(),
+        );
 
         let mut service = Service::init(socket_path.clone(), config_dir)
             .await

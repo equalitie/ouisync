@@ -7,12 +7,12 @@ use std::{
     thread,
 };
 
-use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
 use tokio::{runtime, select, sync::oneshot};
 use tracing::{Instrument, Span};
 
 use self::callback::Callback;
 use crate::{
+    logger::{LogColor, LogFormat, Logger},
     protocol::{ErrorCode, LogLevel, ToErrorCode},
     Error, Service,
 };

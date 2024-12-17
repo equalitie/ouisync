@@ -13,23 +13,28 @@ version.workspace = true
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
+async-trait                 = { workspace = true }
 bytes                       = { workspace = true }
 clap                        = { workspace = true }
+file-rotate                 = "0.7.5"
 futures-util                = { workspace = true }
 hex                         = { workspace = true }
 hyper                       = { version = "1.4.1", features = ["server", "http1"] }
+indexmap                    = { workspace = true }
 interprocess                = { version = "2.2.1", features = ["tokio"] }
 maxminddb                   = "0.24.0"
 metrics                     = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 num_enum                    = { workspace = true }
 ouisync                     = { path = "../lib" }
-ouisync-bridge              = { path = "../bridge" }
+ouisync-tracing-fmt         = { path = "../tracing_fmt" }
 ouisync-vfs                 = { path = "../vfs" }
+pem                         = { workspace = true }
 rand                        = { workspace = true }
 rmp-serde                   = { workspace = true }
 serde                       = { workspace = true }
 serde_bytes                 = { workspace = true }
+serde_json                  = { workspace = true }
 scoped_task                 = { path = "../scoped_task" }
 slab                        = { workspace = true }
 state_monitor               = { path = "../state_monitor" }
@@ -40,10 +45,11 @@ tokio-stream                = { workspace = true }
 tokio-tungstenite           = { version = "0.24.0", features = ["rustls-tls-webpki-roots"] }
 tokio-util                  = { workspace = true, features = ["codec"] }
 tracing                     = { workspace = true }
+tracing-subscriber          = { workspace = true, features = ["env-filter", "json"] }
 walkdir                     = "2.5.0"
+webpki-roots                = { workspace = true }
 
 [dev-dependencies]
 assert_matches              = { workspace = true }
 rcgen                       = { workspace = true, features = ["pem"] }
 tempfile                    = { workspace = true }
-tracing-subscriber          = { workspace = true, features = ["env-filter"] }

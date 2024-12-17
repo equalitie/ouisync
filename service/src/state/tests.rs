@@ -236,7 +236,7 @@ async fn expire_synced_repository() {
         .await
         .unwrap();
     local_state
-        .bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .bind_network(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;
     local_state.network.add_user_provided_peer(&remote_addr);
 

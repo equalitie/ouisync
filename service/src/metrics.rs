@@ -1,12 +1,11 @@
 mod geo_ip;
 
-use crate::{error::Error, state::State};
+use crate::{config_keys::BIND_METRICS_KEY, config_store::ConfigError, error::Error, state::State};
 use geo_ip::{CountryCode, GeoIp};
 use hyper::{server::conn::http1, service::service_fn, Response};
 use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
 use ouisync::{PeerInfoCollector, PeerState, PublicRuntimeId};
-use ouisync_bridge::config::{ConfigError, ConfigKey};
 use scoped_task::ScopedAbortHandle;
 use std::{
     collections::HashMap,
@@ -24,9 +23,6 @@ use tokio::{
     task::{self, JoinSet},
 };
 use tokio_rustls::TlsAcceptor;
-
-const BIND_METRICS_KEY: ConfigKey<SocketAddr> =
-    ConfigKey::new("bind_metrics", "Addresses to bind the metrics endpoint to");
 
 // Path to the geo ip database, relative to the config store root.
 const GEO_IP_PATH: &str = "GeoLite2-Country.mmdb";

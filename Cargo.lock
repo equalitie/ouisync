@@ -2876,6 +2876,7 @@ dependencies = [
  "ouisync",
  "ouisync-bridge",
  "ouisync-rand",
+ "ouisync-service",
  "ouisync-vfs",
  "rcgen",
  "scoped_task",
@@ -2987,6 +2988,50 @@ name = "ouisync-repogen"
 version = "0.8.10"
 dependencies = [
  "ouisync",
+]
+
+[[package]]
+name = "ouisync-service"
+version = "0.8.10"
+dependencies = [
+ "assert_matches",
+ "async-trait",
+ "bytes",
+ "clap 4.5.21",
+ "file-rotate",
+ "futures-util",
+ "hex",
+ "hyper 1.5.1",
+ "indexmap 2.6.0",
+ "interprocess",
+ "maxminddb",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "num_enum",
+ "ouisync",
+ "ouisync-rand",
+ "ouisync-tracing-fmt",
+ "ouisync-vfs",
+ "pem",
+ "rcgen",
+ "rmp-serde",
+ "scoped_task",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "slab",
+ "state_monitor",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
+ "webpki-roots",
 ]
 
 [[package]]
