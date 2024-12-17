@@ -62,24 +62,10 @@ class Session {
       server = null;
     }
 
-    final client = await SocketClient.connect(socketPath);
+    final client = await Client.connect(socketPath);
 
     return Session._(client, server);
   }
-
-  /* TODO: do we still need this?
-
-  // Creates a new session which forwards calls to Ouisync backend running in the
-  // native code.
-  // [channelName] is the name of the MethodChannel to be used, equally named channel
-  // must be created and set up to listen to the commands in the native code.
-  static Future<Session> createChanneled(String channelName,
-      [void Function()? onClose]) async {
-    final client = ChannelClient(channelName, onClose);
-    await client.initialized;
-    return Session._(client);
-  }
-  */
 
   Future<String?> get storeDir => _client.invoke('repository_get_store_dir');
 

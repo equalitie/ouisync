@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:ouisync/ouisync.dart';
-import 'package:ouisync/server.dart';
 import 'package:test/test.dart';
+
+import 'utils.dart';
 
 void main() {
   late io.Directory temp;
@@ -30,7 +31,7 @@ void main() {
     logInit();
 
     session = await Session.create(
-      socketPath: '${temp.path}/sock',
+      socketPath: getTestSocketPath(temp.path),
       configPath: '${temp.path}/device_id.conf',
     );
     await session.setStoreDir('${temp.path}/store');

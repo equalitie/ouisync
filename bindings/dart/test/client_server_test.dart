@@ -1,9 +1,11 @@
 import 'dart:io' as io;
 
-import 'package:ouisync/internal/socket_client.dart';
+import 'package:ouisync/client.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:ouisync/server.dart';
 import 'package:test/test.dart';
+
+import 'utils.dart';
 
 void main() {
   late io.Directory temp;
@@ -17,14 +19,13 @@ void main() {
   });
 
   test('sanity check', () async {
-    final socketPath = '${temp.path}/sock';
-
+    final socketPath = getTestSocketPath(temp.path);
     final server = await Server.start(
       socketPath: socketPath,
       configPath: '${temp.path}/config',
     );
 
-    final client = await SocketClient.connect(socketPath);
+    final client = await Client.connect(socketPath);
 
     expect(
       await client.invoke<String?>('repository_get_store_dir'),
@@ -37,7 +38,7 @@ void main() {
 
   test('connect timeout', () async {
     await expectLater(
-      SocketClient.connect(
+      Client.connect(
         '${temp.path}/sock',
         timeout: const Duration(milliseconds: 500),
       ),
@@ -63,7 +64,7 @@ void main() {
       throwsA(isA<ServiceAlreadyRunning>()),
     );
 
-    final client = await SocketClient.connect(socketPath);
+    final client = await Client.connect(socketPath);
 
     try {
       expect(
