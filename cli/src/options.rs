@@ -207,6 +207,13 @@ pub(crate) enum ClientCommand {
     },
     /// Get or set the mount directory
     MountDir { path: Option<PathBuf> },
+    /// Open a repository at the given path
+    Open {
+        path: PathBuf,
+        /// Local password
+        #[arg(short = 'P')]
+        password: Option<String>,
+    },
     /// Configure Peer Exchange (PEX)
     Pex {
         /// Name of the repository to enable/disable PEX for.

@@ -345,6 +345,14 @@ pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<
                 println!("{}", path.display());
             }
         }
+        ClientCommand::Open { path, password } => {
+            let password = get_or_read(password, "input password").await?;
+            let secret = password.map(Password::from).map(LocalSecret::Password);
+
+            let _: RepositoryHandle = client
+                .invoke(Request::RepositoryOpen { path, secret })
+                .await?;
+        }
         ClientCommand::Pex {
             name,
             enabled,
