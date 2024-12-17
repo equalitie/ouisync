@@ -28,7 +28,6 @@ maxminddb = "0.24.0"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 ouisync = { path = "../lib" }
-ouisync-bridge = { path = "../bridge" }
 ouisync-service = { path = "../service" }
 ouisync-vfs = { path = "../vfs" }
 rand = { workspace = true }

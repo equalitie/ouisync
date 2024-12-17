@@ -1,4 +1,5 @@
 pub mod ffi;
+pub mod logger;
 pub mod protocol;
 pub mod transport;
 
@@ -8,7 +9,6 @@ mod device_id;
 mod dht_contacts;
 mod error;
 mod file;
-mod logger;
 mod metrics;
 mod network;
 mod repository;

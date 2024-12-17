@@ -2874,7 +2874,6 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "ouisync",
- "ouisync-bridge",
  "ouisync-rand",
  "ouisync-service",
  "ouisync-vfs",

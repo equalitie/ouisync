@@ -4,8 +4,10 @@ use clap::{
     Parser, Subcommand, ValueEnum,
 };
 use ouisync::{AccessMode, PeerAddr, StorageSize};
-use ouisync_bridge::logger::{LogColor, LogFormat};
-use ouisync_service::protocol::ImportMode;
+use ouisync_service::{
+    logger::{LogColor, LogFormat},
+    protocol::ImportMode,
+};
 use std::{net::SocketAddr, path::PathBuf};
 
 #[derive(Parser, Debug)]

@@ -1,6 +1,5 @@
 use crate::{defaults, options::ServerCommand};
-use ouisync_bridge::logger::Logger;
-use ouisync_service::{Error, Service};
+use ouisync_service::{logger::Logger, Error, Service};
 use std::{io, path::PathBuf};
 use tokio::select;
 
