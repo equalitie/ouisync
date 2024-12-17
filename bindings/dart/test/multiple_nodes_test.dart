@@ -59,7 +59,12 @@ void main() {
   tearDown(() async {
     await session2.close();
     await session1.close();
-    await temp.delete(recursive: true);
+
+    try {
+      await temp.delete(recursive: true);
+    } on io.PathNotFoundException {
+      // TODO: Why does this sometimes happen?
+    }
   });
 
   test('notification on sync', () async {

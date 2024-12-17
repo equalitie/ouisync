@@ -23,7 +23,12 @@ void main() {
 
   tearDown(() async {
     await session.close();
-    await temp.delete(recursive: true);
+
+    try {
+      await temp.delete(recursive: true);
+    } on io.PathNotFoundException {
+      // TODO: Why does this sometimes happen?
+    }
   });
 
   group('repository', () {
