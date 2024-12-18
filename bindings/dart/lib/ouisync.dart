@@ -115,13 +115,13 @@ class Session {
       .then((list) => list.cast<String>());
 
   Future<String?> get externalAddressV4 =>
-      _client.invoke<String?>('network_external_addr_v4');
+      _client.invoke<String?>('network_get_external_addr_v4');
 
   Future<String?> get externalAddressV6 =>
-      _client.invoke<String?>('network_external_addr_v6');
+      _client.invoke<String?>('network_get_external_addr_v6');
 
   Future<String?> get natBehavior =>
-      _client.invoke<String?>('network_nat_behavior');
+      _client.invoke<String?>('network_get_nat_behavior');
 
   Future<NetworkStats> get networkStats => _client
       .invoke<List<Object?>>('network_stats')
@@ -536,7 +536,7 @@ class Repository {
 
   /// Fetch the per-repository network statistics.
   Future<NetworkStats> get networkStats => _client
-      .invoke<List<Object?>>('repository_stats', _handle)
+      .invoke<List<Object?>>('repository_get_stats', _handle)
       .then((list) => NetworkStats.decode(list));
 
   @override

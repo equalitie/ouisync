@@ -1,6 +1,9 @@
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart';
+
 export 'bindings.g.dart';
 
 /// Callback for `start` and `stop`.
@@ -89,15 +92,15 @@ DynamicLibrary _defaultLib() {
   if (env.containsKey('OUISYNC_LIB')) {
     // user provided library path
     path = env['OUISYNC_LIB']!;
-    //} else if (env.containsKey('FLUTTER_TEST')) {
-    //  // guess the location of flutter's build output
-    //  final String build;
-    //  if (Platform.isMacOS) {
-    //    build = join(dirname(Platform.script.toFilePath()), 'ouisync');
-    //  } else {
-    //    build = join('..', '..');
-    //  }
-    //  path = join(build, 'target', kReleaseMode ? 'release' : 'debug', name);
+  } else if (env.containsKey('FLUTTER_TEST')) {
+    // guess the location of flutter's build output
+    final String build;
+    if (Platform.isMacOS) {
+      build = join(dirname(Platform.script.toFilePath()), 'ouisync');
+    } else {
+      build = join('..', '..');
+    }
+    path = join(build, 'target', kReleaseMode ? 'release' : 'debug', name);
   } else {
     // assume that the library is available globally by name only
     path = name;

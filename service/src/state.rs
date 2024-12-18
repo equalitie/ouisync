@@ -17,7 +17,7 @@ use crate::{
 };
 use ouisync::{
     Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
-    Network, PeerAddr, Progress, Repository, RepositoryParams, SetLocalSecret, ShareToken,
+    Network, PeerAddr, Progress, Repository, RepositoryParams, SetLocalSecret, ShareToken, Stats,
     StorageSize,
 };
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
@@ -730,14 +730,19 @@ impl State {
             .await?)
     }
 
-    pub fn is_repository_dht_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
-        Ok(self
-            .repos
-            .get(handle)
-            .ok_or(Error::InvalidArgument)?
-            .registration()
-            .ok_or(Error::RepositorySyncDisabled)?
-            .is_dht_enabled())
+    pub async fn is_repository_dht_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+
+        if let Some(reg) = holder.registration() {
+            Ok(reg.is_dht_enabled())
+        } else {
+            Ok(holder
+                .repository()
+                .metadata()
+                .get(DHT_ENABLED_KEY)
+                .await?
+                .unwrap_or(false))
+        }
     }
 
     pub async fn set_repository_dht_enabled(
@@ -756,14 +761,19 @@ impl State {
         Ok(())
     }
 
-    pub fn is_repository_pex_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
-        Ok(self
-            .repos
-            .get(handle)
-            .ok_or(Error::InvalidArgument)?
-            .registration()
-            .ok_or(Error::RepositorySyncDisabled)?
-            .is_pex_enabled())
+    pub async fn is_repository_pex_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
+        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+
+        if let Some(reg) = holder.registration() {
+            Ok(reg.is_pex_enabled())
+        } else {
+            Ok(holder
+                .repository()
+                .metadata()
+                .get(PEX_ENABLED_KEY)
+                .await?
+                .unwrap_or(false))
+        }
     }
 
     pub async fn set_repository_pex_enabled(
@@ -800,6 +810,17 @@ impl State {
             .ok();
 
         self.network.set_pex_recv_enabled(enabled);
+    }
+
+    pub fn repository_stats(&self, handle: RepositoryHandle) -> Result<Stats, Error> {
+        Ok(self
+            .repos
+            .get(handle)
+            .ok_or(Error::InvalidArgument)?
+            .registration()
+            .as_ref()
+            .map(|reg| reg.stats())
+            .unwrap_or_default())
     }
 
     pub async fn create_repository_mirror(
@@ -1383,12 +1404,17 @@ impl State {
                 continue;
             }
 
-            match self.load_repository(path, None, false).await {
-                Ok(_) => (),
+            let holder = match self.load_repository(path, None, false).await {
+                Ok(holder) => holder,
                 Err(error) => {
                     tracing::error!(?error, ?path, "failed to open repository");
                     continue;
                 }
+            };
+
+            if self.repos.try_insert(holder).is_none() {
+                tracing::error!(?path, "repository already exists");
+                continue;
             }
         }
     }

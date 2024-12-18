@@ -346,9 +346,16 @@ impl Service {
             Request::NetworkGetCurrentProtocolVersion => {
                 Ok(self.state.network.current_protocol_version().into())
             }
+            Request::NetworkGetExternalAddrV4 => {
+                Ok(self.state.network.external_addr_v4().await.into())
+            }
+            Request::NetworkGetExternalAddrV6 => {
+                Ok(self.state.network.external_addr_v6().await.into())
+            }
             Request::NetworkGetListenerAddrs => {
                 Ok(self.state.network.listener_local_addrs().into())
             }
+            Request::NetworkGetNatBehavior => Ok(self.state.network.nat_behavior().await.into()),
             Request::NetworkGetPeers => {
                 Ok(self.state.network.peer_info_collector().collect().into())
             }
@@ -500,14 +507,21 @@ impl Service {
             Request::RepositoryGetRepositoryExpiration(repository) => {
                 Ok(self.state.repository_expiration(repository).await?.into())
             }
+            Request::RepositoryGetStats(repository) => {
+                Ok(self.state.repository_stats(repository)?.into())
+            }
             Request::RepositoryGetStoreDir => Ok(self.state.store_dir().into()),
             Request::RepositoryGetDefaultQuota => Ok(self.state.default_quota().await?.into()),
-            Request::RepositoryIsDhtEnabled(repository) => {
-                Ok(self.state.is_repository_dht_enabled(repository)?.into())
-            }
-            Request::RepositoryIsPexEnabled(repository) => {
-                Ok(self.state.is_repository_pex_enabled(repository)?.into())
-            }
+            Request::RepositoryIsDhtEnabled(repository) => Ok(self
+                .state
+                .is_repository_dht_enabled(repository)
+                .await?
+                .into()),
+            Request::RepositoryIsPexEnabled(repository) => Ok(self
+                .state
+                .is_repository_pex_enabled(repository)
+                .await?
+                .into()),
             Request::RepositoryIsSyncEnabled(repository) => {
                 Ok(self.state.is_repository_sync_enabled(repository)?.into())
             }

@@ -27,8 +27,6 @@ pub enum Error {
     RepositoryExists,
     #[error("repository not found")]
     RepositoryNotFound,
-    #[error("repository sync is disabled")]
-    RepositorySyncDisabled,
     #[error("store error")]
     Store(#[from] ouisync::StoreError),
     #[error("store dir not specified")]

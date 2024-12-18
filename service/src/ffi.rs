@@ -136,6 +136,7 @@ fn run(
             };
 
             service.close().await;
+            drop(service);
 
             if let Ok(on_stop) = on_stop_result {
                 on_stop.call(run_result.to_error_code());
@@ -250,5 +251,53 @@ pub unsafe extern "C" fn ouisync_log_print(
         Ok(LogLevel::Debug) => tracing::debug!("{}", message),
         Ok(LogLevel::Trace) => tracing::trace!("{}", message),
         Err(_) => tracing::error!(level, "invalid log level"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, ptr, sync::mpsc};
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn sanity_check() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let socket_path = temp_dir.path().join("sock");
+
+        let config_dir = temp_dir.path().join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let socket_path =
+            CString::new(socket_path.into_os_string().into_string().unwrap()).unwrap();
+        let config_dir = CString::new(config_dir.into_os_string().into_string().unwrap()).unwrap();
+
+        extern "C" fn callback(cx: *const c_void, error_code: ErrorCode) {
+            let tx: Box<mpsc::Sender<_>> = unsafe { Box::from_raw(cx as _) };
+            tx.send(error_code).unwrap();
+        }
+
+        let (tx, rx) = mpsc::channel::<ErrorCode>();
+        let handle = unsafe {
+            ouisync_start(
+                socket_path.as_ptr(),
+                config_dir.as_ptr(),
+                ptr::null(),
+                callback,
+                Box::into_raw(Box::new(tx)) as _,
+            )
+        };
+
+        assert_eq!(rx.recv().unwrap(), ErrorCode::Ok);
+
+        let (tx, rx) = mpsc::channel::<ErrorCode>();
+        unsafe {
+            ouisync_stop(handle, callback, Box::into_raw(Box::new(tx)) as _);
+        }
+
+        assert_eq!(rx.recv().unwrap(), ErrorCode::Ok);
     }
 }

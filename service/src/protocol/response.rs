@@ -1,13 +1,13 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{
-    AccessMode, EntryType, NetworkEvent, PeerAddr, PeerInfo, Progress, ShareToken, Stats,
-    StorageSize,
+    AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress, ShareToken,
+    Stats, StorageSize,
 };
 use serde::{Deserialize, Serialize};
 use state_monitor::StateMonitor;
 use std::{
     collections::BTreeMap,
-    net::SocketAddr,
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -66,8 +66,7 @@ pub enum Response {
     RepositoryEvent,
     Repositories(BTreeMap<PathBuf, RepositoryHandle>),
     ShareToken(ShareToken),
-    SocketAddr(SocketAddr),
-    SocketAddrs(Vec<SocketAddr>),
+    SocketAddr(#[serde(with = "helpers::str")] SocketAddr),
     StateMonitor(StateMonitor),
     StateMonitorEvent,
     StorageSize(StorageSize),
@@ -156,6 +155,24 @@ impl<'a> From<&'a str> for Response {
     }
 }
 
+impl From<SocketAddrV4> for Response {
+    fn from(value: SocketAddrV4) -> Self {
+        Self::SocketAddr(value.into())
+    }
+}
+
+impl From<SocketAddrV6> for Response {
+    fn from(value: SocketAddrV6) -> Self {
+        Self::SocketAddr(value.into())
+    }
+}
+
+impl From<NatBehavior> for Response {
+    fn from(value: NatBehavior) -> Self {
+        value.to_string().into()
+    }
+}
+
 impl_response_conversion!(AccessMode(AccessMode));
 impl_response_conversion!(Bool(bool));
 impl_response_conversion!(Directory(Vec<DirectoryEntry>));
@@ -172,7 +189,6 @@ impl_response_conversion!(PeerInfo(Vec<PeerInfo>));
 impl_response_conversion!(PeerAddrs(Vec<PeerAddr>));
 impl_response_conversion!(ShareToken(ShareToken));
 impl_response_conversion!(SocketAddr(SocketAddr));
-impl_response_conversion!(SocketAddrs(Vec<SocketAddr>));
 impl_response_conversion!(StateMonitor(StateMonitor));
 impl_response_conversion!(StorageSize(StorageSize));
 impl_response_conversion!(String(String));
@@ -198,7 +214,7 @@ pub struct QuotaInfo {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::Ipv4Addr;
 
     use ouisync::{AccessSecrets, PeerSource, PeerState, Stats, WriteSecrets};
     use rand::{rngs::StdRng, SeedableRng};
@@ -278,15 +294,7 @@ mod tests {
             ),
             (
                 Response::SocketAddr((Ipv4Addr::LOCALHOST, 24816).into()),
-                "81ab736f636b65745f6164647281a2563492947f000001cd60f0",
-            ),
-            (
-                Response::SocketAddrs(vec![
-                    (Ipv4Addr::LOCALHOST, 24816).into(),
-                    (Ipv6Addr::LOCALHOST, 36912).into(),
-                ]),
-                "81ac736f636b65745f61646472739281a2563492947f000001cd60f081a2563692dc001000000000\
-                 000000000000000000000001cd9030",
+                "81ab736f636b65745f61646472af3132372e302e302e313a3234383136",
             ),
             (
                 Response::StorageSize(StorageSize::from_bytes(1024)),
