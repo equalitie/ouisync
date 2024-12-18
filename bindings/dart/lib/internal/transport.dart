@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -44,22 +45,43 @@ class UnixSocketTransport extends Transport {
 }
 
 class NamedPipeTransport extends Transport {
-  @override
-  final Stream<Uint8List> stream;
+  final RandomAccessFile _file;
+  bool _open = true;
+
+  NamedPipeTransport._(this._file);
+
+  static Future<NamedPipeTransport> connect(String path) async =>
+      NamedPipeTransport._(await File(path).open(mode: FileMode.write));
 
   @override
-  final IOSink sink;
-
-  NamedPipeTransport._(this.stream, this.sink);
-
-  static Future<NamedPipeTransport> connect(String path) {
-    final file = File(path);
-    final stream = file.openRead().cast<Uint8List>();
-    final sink = file.openWrite(mode: FileMode.append);
-
-    return Future.value(NamedPipeTransport._(stream, sink));
+  Stream<Uint8List> get stream async* {
+    while (_open) {
+      yield await _file.read(4096);
+    }
   }
 
   @override
-  Future<void> close() => sink.close();
+  IOSink get sink => IOSink(_NamedPipeConsumer(_file));
+
+  @override
+  Future<void> close() async {
+    _open = false;
+    await _file.close();
+  }
+}
+
+class _NamedPipeConsumer implements StreamConsumer<List<int>> {
+  final RandomAccessFile file;
+
+  _NamedPipeConsumer(this.file);
+
+  @override
+  Future<void> addStream(Stream<List<int>> stream) async {
+    await for (final chunk in stream) {
+      await file.writeFrom(chunk);
+    }
+  }
+
+  @override
+  Future<void> close() => file.close();
 }
