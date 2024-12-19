@@ -13,17 +13,17 @@ class SyncTest {
     lateinit var sessionB: Session
 
     @Before
-    fun setup() {
+    fun setup() = runTest {
         tempDir = JFile(createTempDirectory().toString())
 
         sessionA = Session.create(
-            configsPath = "$tempDir/a/config",
-            kind = SessionKind.UNIQUE,
+            socketPath = "$tempDir/a/sock",
+            configPath = "$tempDir/a/config",
         )
 
         sessionB = Session.create(
-            configsPath = "$tempDir/b/config",
-            kind = SessionKind.UNIQUE,
+            socketPath = "$tempDir/b/sock",
+            configPath = "$tempDir/b/config",
         )
     }
 

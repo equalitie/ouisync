@@ -17,12 +17,14 @@ class RepositoryTest {
     lateinit var session: Session
 
     @Before
-    fun setup() {
+    fun setup() = runTest {
         tempDir = JFile(createTempDirectory().toString())
+
+        initLog("$tempDir/test.log")
+
         session = Session.create(
-            configsPath = "$tempDir/config",
-            logPath = "$tempDir/test.log",
-            kind = SessionKind.UNIQUE,
+            socketPath = "$tempDir/sock",
+            configPath = "$tempDir/config",
         )
     }
 
@@ -228,7 +230,7 @@ class RepositoryTest {
                 File.open(repo, "missing.txt")
                 fail("unexpected successs - expected 'entry not found'")
             } catch (e: Error) {
-                assertEquals(ErrorCode.ENTRY_NOT_FOUND, e.code)
+                assertEquals(ErrorCode.NOT_FOUND, e.code)
             }
         }
     }

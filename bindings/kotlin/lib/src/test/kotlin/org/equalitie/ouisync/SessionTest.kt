@@ -17,12 +17,14 @@ class SessionTest {
     lateinit var session: Session
 
     @Before
-    fun setup() {
+    fun setup() = runTest {
         tempDir = File(createTempDirectory().toString())
+
+        initLog("$tempDir/test.log")
+
         session = Session.create(
-            configsPath = "$tempDir/config",
-            logPath = "$tempDir/test.log",
-            kind = SessionKind.UNIQUE,
+            socketPath = "$tempDir/sock",
+            configPath = "$tempDir/config",
         )
     }
 

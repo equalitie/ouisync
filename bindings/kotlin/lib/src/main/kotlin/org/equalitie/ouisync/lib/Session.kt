@@ -1,9 +1,6 @@
 package org.equalitie.ouisync.lib
 
-import com.sun.jna.Pointer
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.runBlocking
 
 /**
  * The entry point to the ouisync library.
@@ -23,71 +20,38 @@ import kotlinx.coroutines.runBlocking
  * ```
  */
 class Session private constructor(
-    private val handle: Long,
     internal val client: Client,
-    private val callback: Callback,
+    private val server: Server?,
 ) {
     companion object {
-        internal val bindings = Bindings.INSTANCE
 
         /**
          * Creates a new Ouisync session.
          *
-         * @param configsPath path to the directory where ouisync stores its config files.
-         * @param logPath     path to the log file. Ouisync always logs using the
-         *                    [android log API](https://developer.android.com/reference/android/util/Log)
-         *                    but if this param is not null, it logs to the specified file as well.
-         * @param logTag      tag for all log messages produced by the Ouisync library.
-         * @param kind        whether to create shared or unique session. `SHARED` should be used
-         *                    by default. `UNIQUE` is useful mostly for tests, to ensure test
-         *                    isolation and/or to simulate multiple replicas in a single test.
+         * @param socketPath TODO
+         * @param configPath path to the directory where ouisync stores its config files.
+         * @param debugLabel label used to distinguish multiple [Session] instances for debug
+         * purposes. Useful mostly for tests and can be ignored otherwise.
+         *
          * @throws Error
          */
-        fun create(
-            configsPath: String,
-            logPath: String? = null,
-            logTag: String = "ouisync",
-            kind: SessionKind = SessionKind.SHARED,
+        suspend fun create(
+            socketPath: String,
+            configPath: String,
+            debugLabel: String? = null,
         ): Session {
-            val client = Client()
+            var server: Server? = null
 
-            val callback = object : Callback {
-                override fun invoke(context: Pointer?, msg_ptr: Pointer, msg_len: Long) {
-                    val buffer = msg_ptr.getByteArray(0, msg_len.toInt())
-
-                    runBlocking {
-                        client.receive(buffer)
-                    }
-                }
+            try {
+                server = Server.start(socketPath, configPath, debugLabel)
+            } catch (e: ServiceAlreadyRunning) {
+                server = null
             }
 
-            val result = bindings.session_create(
-                kind.encode(),
-                configsPath,
-                logPath,
-                logTag,
-                null,
-                callback,
-            )
+            val client = Client.connect(socketPath)
 
-            val errorCode = ErrorCode.decode(result.error_code)
-
-            if (errorCode == ErrorCode.OK) {
-                // Keep a reference to the callback in this session to ensure it doesn't get
-                // garbage collected prematurely. More info:
-                // https://github.com/java-native-access/jna/blob/master/www/CallbacksAndClosures.md
-                return Session(result.handle, client, callback)
-            } else {
-                val message = result.error_message?.getString(0) ?: "unknown error"
-                bindings.free_string(result.error_message)
-
-                throw Error(errorCode, message)
-            }
+            return Session(client, server)
         }
-    }
-
-    init {
-        client.sessionHandle = handle
     }
 
     /**
@@ -96,21 +60,15 @@ class Session private constructor(
      * Don't forget to call this when the session is no longer needed, to avoid leaking resources.
      */
     suspend fun close() {
-        val deferred = CompletableDeferred<Any?>()
-        val callback = object : Callback {
-            override fun invoke(context: Pointer?, msg_ptr: Pointer, msg_len: Long) {
-                deferred.complete(null)
-            }
-        }
-
-        bindings.session_close(handle, null, callback)
-        deferred.await()
+        client.close()
+        server?.stop()
     }
 
     /**
      * Initializes the network according to the stored config. If no config exists, falls back to
      * the given parameters.
      *
+     * @param defaultBindAddrs             addresses to bind the listeners to by default.
      * @param defaultPortForwardingEnabled whether Port Forwarding/UPnP should be enabled by default.
      * @param defaultLocalDiscoveryEnabled whether Local Discovery should be enabled by default.
      *
@@ -120,11 +78,13 @@ class Session private constructor(
      * @see setLocalDiscoveryEnabled
      */
     suspend fun initNetwork(
+        defaultBindAddrs: List<String> = listOf(),
         defaultPortForwardingEnabled: Boolean,
         defaultLocalDiscoveryEnabled: Boolean,
     ) {
         val response = client.invoke(
             NetworkInit(
+                defaultBindAddrs,
                 defaultLocalDiscoveryEnabled,
                 defaultPortForwardingEnabled,
             ),

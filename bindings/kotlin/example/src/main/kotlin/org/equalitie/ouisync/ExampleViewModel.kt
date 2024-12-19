@@ -15,7 +15,11 @@ import java.io.File
 private val DB_EXTENSION = "ouisyncdb"
 private const val TAG = "ouisync.example"
 
-class ExampleViewModel(private val configDir: String, private val storeDir: String) : ViewModel() {
+class ExampleViewModel(
+    private val socketPath: String,
+    private val configDir: String,
+    private val storeDir: String,
+) : ViewModel() {
     private var session: Session? = null
 
     var sessionError by mutableStateOf<String?>(null)
@@ -25,17 +29,17 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
         private set
 
     init {
-        try {
-            session = Session.create(configDir)
-        } catch (e: Exception) {
-            Log.e(TAG, "Session.create failed", e)
-            sessionError = e.toString()
-        } catch (e: java.lang.Error) {
-            Log.e(TAG, "Session.create failed", e)
-            sessionError = e.toString()
-        }
-
         viewModelScope.launch {
+            try {
+                session = Session.create(socketPath, configDir)
+            } catch (e: Exception) {
+                Log.e(TAG, "Session.create failed", e)
+                sessionError = e.toString()
+            } catch (e: java.lang.Error) {
+                Log.e(TAG, "Session.create failed", e)
+                sessionError = e.toString()
+            }
+
             session?.let {
                 // Bind the network sockets to all interfaces and random ports. Use only the QUIC
                 // protocol and use both IPv4 and IPv6.

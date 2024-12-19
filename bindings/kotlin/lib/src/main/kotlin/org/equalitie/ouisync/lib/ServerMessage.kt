@@ -157,7 +157,7 @@ internal class Success(val value: Any?) : Response {
 
 internal class Failure(val error: Error) : Response {
     companion object {
-        private val INVALID_ERROR = Error(ErrorCode.MALFORMED_MESSAGE, "invalid error response")
+        private val INVALID_ERROR = Error(ErrorCode.INVALID_DATA, "invalid error response")
 
         fun unpack(unpacker: MessageUnpacker): Response {
             if (unpacker.getNextFormat().getValueType() != ValueType.ARRAY) {

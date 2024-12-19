@@ -363,12 +363,14 @@ internal class FileClose : ValueRequest<Long> {
 }
 
 internal class NetworkInit(
+    val bindAddrs: List<String>,
     val portForwardingEnabled: Boolean,
     val localDiscoveryEnabled: Boolean,
 ) : Request() {
     override fun packContent(packer: MessagePacker) =
         packer.packMap(
             mapOf(
+                "bind" to bindAddrs,
                 "port_forwarding_enabled" to
                     portForwardingEnabled,
                 "local_discovery_enabled" to

@@ -37,7 +37,7 @@ android {
 
     defaultConfig {
         targetSdkVersion 34
-        minSdkVersion 21
+        minSdkVersion 26
         versionCode 1
         versionName version
     }
@@ -68,6 +68,7 @@ dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
     implementation 'org.msgpack:msgpack-core:0.9.5'
+    implementation 'com.kohlschutter.junixsocket:junixsocket-core:2.10.1'
 
     testImplementation "junit:junit:4.13"
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0'
@@ -122,7 +123,7 @@ tasks.register('generateBindings', Exec) {
 tasks.register('cargoBuildUnitTest', Exec) {
     description 'Build the native library for unit tests'
     workingDir "$rootDir/../.."
-    commandLine 'cargo', 'build', '--package', 'ouisync-ffi', '--lib'
+    commandLine 'cargo', 'build', '--package', 'ouisync-service', '--lib'
 }
 
 tasks.withType(DokkaTask) {
