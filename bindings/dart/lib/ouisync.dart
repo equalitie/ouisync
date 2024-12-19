@@ -496,14 +496,6 @@ class Repository {
         'host': host,
       });
 
-  Future<PasswordSalt> getReadPasswordSalt() => _client
-      .invoke<Uint8List>("get_read_password_salt", _handle)
-      .then((bytes) => PasswordSalt(bytes));
-
-  Future<PasswordSalt> getWritePasswordSalt() => _client
-      .invoke<Uint8List>("get_write_password_salt", _handle)
-      .then((bytes) => PasswordSalt(bytes));
-
   Future<String?> getMetadata(String key) =>
       _client.invoke<String?>('repository_get_metadata', {
         'repository': _handle,

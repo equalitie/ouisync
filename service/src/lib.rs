@@ -352,6 +352,9 @@ impl Service {
             Request::NetworkGetExternalAddrV6 => {
                 Ok(self.state.network.external_addr_v6().await.into())
             }
+            Request::NetworkGetHighestSeenProtocolVersion => {
+                Ok(self.state.network.highest_seen_protocol_version().into())
+            }
             Request::NetworkGetListenerAddrs => {
                 Ok(self.state.network.listener_local_addrs().into())
             }
@@ -528,7 +531,7 @@ impl Service {
             Request::RepositoryList => Ok(self.state.list_repositories().into()),
             Request::RepositoryMirrorExists { repository, host } => Ok(self
                 .state
-                .repository_mirror_exists(repository, host)
+                .repository_mirror_exists(repository, &host)
                 .await?
                 .into()),
             Request::RepositoryMount(repository) => {
@@ -680,6 +683,11 @@ impl Service {
                 Ok(hex::encode(ouisync::repository_info_hash(token.id()).as_ref()).into())
             }
             Request::ShareTokenGetSuggestedName(token) => Ok(token.suggested_name().into()),
+            Request::ShareTokenMirrorExists { token, host } => Ok(self
+                .state
+                .share_token_mirror_exists(&token, &host)
+                .await?
+                .into()),
             Request::ShareTokenNormalize(token) => Ok(token.into()),
             Request::StateMonitorGet(path) => Ok(self.state.state_monitor(path)?.into()),
             Request::StateMonitorSubscribe(path) => {

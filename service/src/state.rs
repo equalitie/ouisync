@@ -868,15 +868,28 @@ impl State {
     pub async fn repository_mirror_exists(
         &self,
         handle: RepositoryHandle,
-        host: String,
+        host: &str,
     ) -> Result<bool, Error> {
         let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
 
-        let mut client = self.connect_remote_client(&host).await?;
+        let mut client = self.connect_remote_client(host).await?;
 
         let result = client
             .mirror_exists(holder.repository().secrets().id())
             .await;
+        client.close().await;
+
+        Ok(result?)
+    }
+
+    pub async fn share_token_mirror_exists(
+        &self,
+        token: &ShareToken,
+        host: &str,
+    ) -> Result<bool, Error> {
+        let mut client = self.connect_remote_client(host).await?;
+
+        let result = client.mirror_exists(token.id()).await;
         client.close().await;
 
         Ok(result?)

@@ -69,6 +69,7 @@ pub enum Request {
     NetworkGetCurrentProtocolVersion,
     NetworkGetExternalAddrV4,
     NetworkGetExternalAddrV6,
+    NetworkGetHighestSeenProtocolVersion,
     NetworkGetListenerAddrs,
     NetworkGetNatBehavior,
     NetworkGetPeers,
@@ -234,6 +235,11 @@ pub enum Request {
     ShareTokenGetInfoHash(#[serde(with = "helpers::str")] ShareToken),
     ShareTokenGetAccessMode(#[serde(with = "helpers::str")] ShareToken),
     ShareTokenGetSuggestedName(#[serde(with = "helpers::str")] ShareToken),
+    ShareTokenMirrorExists {
+        #[serde(with = "helpers::str")]
+        token: ShareToken,
+        host: String,
+    },
     ShareTokenNormalize(#[serde(with = "helpers::str")] ShareToken),
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
@@ -241,40 +247,6 @@ pub enum Request {
     /// that was used for sending the corresponding subscribe request.
     Unsubscribe(MessageId),
 }
-
-/*
-
-    From ffi:
-
-#[derive(Eq, PartialEq, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum Request {
-    ListRepositoriesSubscribe,
-    RepositoryRequiresLocalSecretForReading(RepositoryHandle),
-    RepositoryRequiresLocalSecretForWriting(RepositoryHandle),
-    RepositoryName(RepositoryHandle),
-    RepositoryDatabaseId(RepositoryHandle),
-    RepositoryEntryVersionHash {
-        repository: RepositoryHandle,
-        path: Utf8PathBuf,
-    },
-    RepositoryMountAll(PathBuf),
-    ShareTokenMirrorExists {
-        #[serde(with = "as_str")]
-        share_token: ShareToken,
-        host: String,
-    },
-    DirectoryExists {
-        repository: RepositoryHandle,
-        path: Utf8PathBuf,
-    },
-    NetworkHighestSeenProtocolVersion,
-    NetworkShutdown,
-    GetReadPasswordSalt(RepositoryHandle),
-    GetWritePasswordSalt(RepositoryHandle),
-}
-*/
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NetworkDefaults {
