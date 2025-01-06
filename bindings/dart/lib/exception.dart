@@ -22,6 +22,7 @@ class OuisyncException implements Exception {
         ErrorCode.alreadyExists => AlreadyExists(message, sources),
         ErrorCode.vfsDriverInstallError =>
           VFSDriverInstallError(message, sources),
+        ErrorCode.listenerBind => ServiceAlreadyRunning(message, sources),
         ErrorCode.serviceAlreadyRunning =>
           ServiceAlreadyRunning(message, sources),
         _ => OuisyncException._(code, message, sources),
