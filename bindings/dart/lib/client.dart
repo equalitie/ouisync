@@ -1,7 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
+import 'package:hex/hex.dart';
 
 import 'exception.dart';
 import 'internal/length_delimited_codec.dart';
@@ -9,14 +13,15 @@ import 'internal/message_codec.dart';
 
 class Client {
   final Socket _socket;
+  final Stream<Uint8List> _stream;
   StreamSubscription<Uint8List>? _streamSubscription;
   int _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
   final _notifications = <int, StreamSink<Object?>>{};
 
-  Client._(this._socket) {
+  Client._(this._socket, this._stream) {
     _streamSubscription =
-        _socket.transform(LengthDelimitedCodec()).listen(_receive);
+        _stream.transform(LengthDelimitedCodec()).listen(_receive);
   }
 
   static Future<Client> connect({
@@ -33,6 +38,9 @@ class Client {
             await File('$configPath/local_control_port.conf').readAsString())
         as int;
 
+    final authKey = HEX.decode(json.decode(
+        await File('$configPath/local_control_auth_key.conf').readAsString()));
+
     while (true) {
       if (timeout != null) {
         if (DateTime.now().difference(start) >= timeout) {
@@ -42,7 +50,10 @@ class Client {
 
       try {
         final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
-        return Client._(socket);
+        final stream = socket.asBroadcastStream();
+        await _authenticate(stream, socket, authKey);
+
+        return Client._(socket, stream);
       } on SocketException catch (e) {
         lastException = e;
         delay = _minDuration(delay * 2, maxDelay);
@@ -144,3 +155,56 @@ class Client {
 }
 
 _minDuration(Duration a, Duration b) => (a < b) ? a : b;
+
+Future<void> _authenticate(
+  Stream<Uint8List> stream,
+  IOSink sink,
+  List<int> authKey,
+) async {
+  const challengeSize = 256;
+  const proofSize = 32;
+
+  final random = Random.secure();
+  final hmac = Hmac(sha256, authKey);
+  final reader = _Reader(stream);
+
+  final clientChallenge =
+      List<int>.generate(challengeSize, (_) => random.nextInt(256));
+
+  sink.add(clientChallenge);
+
+  final serverProof = Digest(await reader.read(proofSize));
+  if (serverProof != hmac.convert(clientChallenge)) {
+    throw PermissionDenied('server authentication failed');
+  }
+
+  final serverChallenge = await reader.read(challengeSize);
+  final clientProof = hmac.convert(serverChallenge);
+
+  sink.add(clientProof.bytes);
+}
+
+class _Reader {
+  final Stream<Uint8List> stream;
+  final builder = BytesBuilder();
+
+  _Reader(this.stream);
+
+  Future<List<int>> read(int length) async {
+    if (builder.length < length) {
+      await for (final chunk in stream) {
+        builder.add(chunk);
+
+        if (builder.length >= length) {
+          break;
+        }
+      }
+    }
+
+    final bytes = builder.takeBytes();
+    final output = bytes.sublist(0, length);
+    builder.add(bytes.sublist(length));
+
+    return output;
+  }
+}
