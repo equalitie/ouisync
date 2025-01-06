@@ -138,6 +138,7 @@ impl ToErrorCode for ProtocolError {
 impl ToErrorCode for ClientError {
     fn to_error_code(&self) -> ErrorCode {
         match self {
+            Self::Authentication => ErrorCode::PermissionDenied,
             Self::Connect(_) => ErrorCode::ConnectionRefused,
             Self::Disconnected => ErrorCode::ConnectionAborted,
             Self::InvalidArgument => ErrorCode::InvalidInput,

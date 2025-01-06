@@ -22,7 +22,7 @@ mod test_utils;
 
 pub use error::Error;
 
-use config_store::{ConfigError, ConfigKey};
+use config_store::{ConfigError, ConfigKey, ConfigStore};
 use futures_util::SinkExt;
 use metrics::MetricsServer;
 use ouisync::crypto::{cipher::SecretKey, PasswordSalt};
@@ -44,7 +44,7 @@ use tokio::{
 };
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use transport::{
-    local::LocalServer,
+    local::{AuthKey, LocalServer},
     remote::{RemoteServer, RemoteServerReader, RemoteServerWriter},
     ReadError, ServerReader, ServerWriter,
 };
@@ -53,6 +53,7 @@ const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 6
 
 // Don't use comments here so the file can be parsed as json.
 const LOCAL_CONTROL_PORT_KEY: ConfigKey<u16> = ConfigKey::new("local_control_port", "");
+const LOCAL_CONTROL_AUTH_KEY_KEY: ConfigKey<AuthKey> = ConfigKey::new("local_control_auth_key", "");
 
 const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("remote_control", "Remote control endpoint address");
@@ -77,17 +78,18 @@ impl Service {
             Err(ConfigError::NotFound) => 0,
             Err(error) => return Err(error.into()),
         };
-        let local_server =
-            LocalServer::bind(local_port)
-                .await
-                .map_err(|error| match error.kind() {
-                    io::ErrorKind::AddrInUse => Error::ServiceAlreadyRunning,
-                    _ => Error::Bind(error),
-                })?;
+
+        let local_auth_key = fetch_local_auth_key(&state.config).await?;
+
+        let local_server = LocalServer::bind(local_port, local_auth_key)
+            .await
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::AddrInUse => Error::ServiceAlreadyRunning,
+                _ => Error::Bind(error),
+            })?;
 
         if local_port == 0 {
-            let local_port = local_server.port().map_err(Error::Bind)?;
-            local_port_entry.set(&local_port).await?;
+            local_port_entry.set(&local_server.port()).await?;
         }
 
         let remote_server = match state.config.entry(REMOTE_CONTROL_KEY).get().await {
@@ -173,8 +175,12 @@ impl Service {
         self.state.close().await;
     }
 
-    pub fn local_port(&self) -> Result<u16, Error> {
-        Ok(self.local_server.port()?)
+    pub fn local_port(&self) -> u16 {
+        self.local_server.port()
+    }
+
+    pub fn local_auth_key(&self) -> &AuthKey {
+        self.local_server.auth_key()
     }
 
     pub fn store_dir(&self) -> Option<&Path> {
@@ -763,6 +769,20 @@ async fn maybe_accept(
         server.accept().await
     } else {
         future::pending().await
+    }
+}
+
+async fn fetch_local_auth_key(config: &ConfigStore) -> Result<AuthKey, ConfigError> {
+    let entry = config.entry(LOCAL_CONTROL_AUTH_KEY_KEY);
+
+    match entry.get().await {
+        Ok(key) => Ok(key),
+        Err(ConfigError::NotFound) => {
+            let key = AuthKey::random();
+            entry.set(&key).await?;
+            Ok(key)
+        }
+        Err(error) => Err(error),
     }
 }
 

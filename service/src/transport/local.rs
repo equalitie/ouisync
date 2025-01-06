@@ -1,3 +1,7 @@
+mod auth;
+
+pub(crate) use auth::AuthKey;
+
 use super::{ClientError, ReadError, WriteError};
 use crate::protocol::{Message, Request, ResponseResult};
 use bytes::BytesMut;
@@ -18,18 +22,27 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub(crate) struct LocalServer {
     listener: TcpListener,
+    port: u16,
+    auth_key: AuthKey,
 }
 
 impl LocalServer {
-    pub async fn bind(port: u16) -> io::Result<Self> {
+    pub async fn bind(port: u16, auth_key: AuthKey) -> io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
+        let port = listener.local_addr()?.port();
 
-        Ok(Self { listener })
+        Ok(Self {
+            listener,
+            port,
+            auth_key,
+        })
     }
 
     pub async fn accept(&self) -> io::Result<(LocalServerReader, LocalServerWriter)> {
         let (stream, _addr) = self.listener.accept().await?;
-        let (reader, writer) = stream.into_split();
+        let (mut reader, mut writer) = stream.into_split();
+
+        auth::server(&mut reader, &mut writer, &self.auth_key).await?;
 
         let reader = LocalReader::new(reader);
         let writer = LocalWriter::new(writer);
@@ -37,17 +50,26 @@ impl LocalServer {
         Ok((reader, writer))
     }
 
-    pub fn port(&self) -> io::Result<u16> {
-        self.listener.local_addr().map(|addr| addr.port())
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn auth_key(&self) -> &AuthKey {
+        &self.auth_key
     }
 }
 
-pub async fn connect(port: u16) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
+pub async fn connect(
+    port: u16,
+    auth_key: &AuthKey,
+) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
     let socket = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
         .await
         .map_err(ClientError::Connect)?;
 
-    let (reader, writer) = socket.into_split();
+    let (mut reader, mut writer) = socket.into_split();
+
+    auth::client(&mut reader, &mut writer, auth_key).await?;
 
     let reader = LocalReader::new(reader);
     let writer = LocalWriter::new(writer);
@@ -160,7 +182,8 @@ mod tests {
             ToErrorCode,
         },
         test_utils::{self, ServiceRunner},
-        transport, Service,
+        transport::{self, local::AuthKey, ClientError},
+        Service,
     };
 
     use super::{LocalClientReader, LocalClientWriter};
@@ -173,7 +196,8 @@ mod tests {
         let store_dir = temp_dir.path().join("store");
 
         let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
-        let port = service.local_port().unwrap();
+        let port = service.local_port();
+        let auth_key = *service.local_auth_key();
         service
             .state_mut()
             .set_store_dir(store_dir.clone())
@@ -182,7 +206,7 @@ mod tests {
 
         let runner = ServiceRunner::start(service);
 
-        let mut client = TestClient::connect(port).await;
+        let mut client = TestClient::connect(port, &auth_key).await;
 
         let message_id = MessageId::next();
         let value: Option<PathBuf> = client
@@ -196,6 +220,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authentication() {
+        test_utils::init_log();
+
+        let temp_dir = TempDir::new().unwrap();
+
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_port();
+
+        let invalid_auth_key = AuthKey::random();
+
+        let runner = ServiceRunner::start(service);
+
+        match transport::local::connect(port, &invalid_auth_key).await {
+            Err(ClientError::Authentication) => (),
+            Err(error) => panic!("unexpected error: {error:?}"),
+            Ok(_) => panic!("unexpected success"),
+        }
+
+        runner.stop().await.close().await;
+    }
+
+    #[tokio::test]
     async fn notifications_on_local_changes() {
         test_utils::init_log();
 
@@ -203,12 +249,13 @@ mod tests {
         let store_dir = temp_dir.path().join("store");
 
         let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
-        let port = service.local_port().unwrap();
+        let port = service.local_port();
+        let auth_key = *service.local_auth_key();
         service.state_mut().set_store_dir(store_dir).await.unwrap();
 
         let runner = ServiceRunner::start(service);
 
-        let mut client = TestClient::connect(port).await;
+        let mut client = TestClient::connect(port, &auth_key).await;
 
         let repo_handle: RepositoryHandle = client
             .invoke(
@@ -307,11 +354,12 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // Create two separate services (A and B), each with its own client.
-        let (socket_port_a, runner_a) = async {
+        let (port_a, auth_key_a, runner_a) = async {
             let mut service = Service::init(temp_dir.path().join("config_a"))
                 .await
                 .unwrap();
-            let port = service.local_port().unwrap();
+            let port = service.local_port();
+            let auth_key = *service.local_auth_key();
             service
                 .state_mut()
                 .set_store_dir(temp_dir.path().join("store_a"))
@@ -319,16 +367,17 @@ mod tests {
                 .unwrap();
             let runner = ServiceRunner::start(service);
 
-            (port, runner)
+            (port, auth_key, runner)
         }
         .instrument(tracing::info_span!("a"))
         .await;
 
-        let (socket_port_b, runner_b) = async {
+        let (port_b, auth_key_b, runner_b) = async {
             let mut service = Service::init(temp_dir.path().join("config_b"))
                 .await
                 .unwrap();
-            let port = service.local_port().unwrap();
+            let port = service.local_port();
+            let auth_key = *service.local_auth_key();
             service
                 .state_mut()
                 .set_store_dir(temp_dir.path().join("store_b"))
@@ -336,13 +385,13 @@ mod tests {
                 .unwrap();
             let runner = ServiceRunner::start(service);
 
-            (port, runner)
+            (port, auth_key, runner)
         }
         .instrument(tracing::info_span!("b"))
         .await;
 
-        let mut client_a = TestClient::connect(socket_port_a).await;
-        let mut client_b = TestClient::connect(socket_port_b).await;
+        let mut client_a = TestClient::connect(port_a, &auth_key_a).await;
+        let mut client_b = TestClient::connect(port_b, &auth_key_b).await;
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 
@@ -442,8 +491,8 @@ mod tests {
     }
 
     impl TestClient {
-        async fn connect(port: u16) -> Self {
-            let (reader, writer) = transport::local::connect(port).await.unwrap();
+        async fn connect(port: u16, auth_key: &AuthKey) -> Self {
+            let (reader, writer) = transport::local::connect(port, auth_key).await.unwrap();
 
             Self {
                 reader,

@@ -19,6 +19,7 @@ clap                        = { workspace = true }
 file-rotate                 = "0.7.5"
 futures-util                = { workspace = true }
 hex                         = { workspace = true }
+hmac                        = { workspace = true }
 hyper                       = { version = "1.4.1", features = ["server", "http1"] }
 indexmap                    = { workspace = true }
 interprocess                = { version = "2.2.2", features = ["tokio"] }
@@ -36,6 +37,7 @@ serde                       = { workspace = true }
 serde_bytes                 = { workspace = true }
 serde_json                  = { workspace = true }
 scoped_task                 = { path = "../scoped_task" }
+sha2                        = { workspace = true }
 slab                        = { workspace = true }
 state_monitor               = { path = "../state_monitor" }
 thiserror                   = { workspace = true }
