@@ -80,14 +80,16 @@ impl<T> ConfigEntry<'_, T> {
             .open(path)
             .await?;
 
-        for line in self.key.comment.lines() {
-            file.write_all(format!("# {line}\n").as_bytes()).await?;
+        if !self.key.comment.is_empty() {
+            for line in self.key.comment.lines() {
+                file.write_all(format!("# {line}\n").as_bytes()).await?;
+            }
+            file.write_all(b"\n").await?;
         }
 
         let content = serde_json::to_string_pretty(value)
             .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?;
 
-        file.write_all(b"\n").await?;
         file.write_all(content.as_bytes()).await?;
         file.write_all(b"\n").await?;
         file.flush().await?;

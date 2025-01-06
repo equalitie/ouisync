@@ -1,11 +1,10 @@
+import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:ouisync/client.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:ouisync/server.dart';
 import 'package:test/test.dart';
-
-import 'utils.dart';
 
 void main() {
   late io.Directory temp;
@@ -19,13 +18,9 @@ void main() {
   });
 
   test('sanity check', () async {
-    final socketPath = getTestSocketPath(temp.path);
-    final server = await Server.start(
-      socketPath: socketPath,
-      configPath: '${temp.path}/config',
-    );
-
-    final client = await Client.connect(socketPath);
+    final configPath = '${temp.path}/config';
+    final server = await Server.start(configPath: configPath);
+    final client = await Client.connect(configPath: configPath);
 
     expect(
       await client.invoke<String?>('repository_get_store_dir'),
@@ -37,34 +32,35 @@ void main() {
   });
 
   test('connect timeout', () async {
+    final configPath = '${temp.path}/config';
+
+    await io.Directory(configPath).create(recursive: true);
+    await io.File('$configPath/local_control_port.conf').writeAsString('0');
+
     await expectLater(
       Client.connect(
-        '${temp.path}/sock',
+        configPath: configPath,
         timeout: const Duration(milliseconds: 500),
       ),
-      throwsException,
+      throwsA(isA<io.SocketException>()),
     );
   });
 
   test('server already running', () async {
-    final socketPath = '${temp.path}/sock';
-
     logInit();
 
+    final configPath = '${temp.path}/config';
+
     final server0 = await Server.start(
-      socketPath: socketPath,
-      configPath: '${temp.path}/config0',
+      configPath: configPath,
     );
 
     await expectLater(
-      Server.start(
-        socketPath: socketPath,
-        configPath: '${temp.path}/config1',
-      ),
+      Server.start(configPath: configPath),
       throwsA(isA<ServiceAlreadyRunning>()),
     );
 
-    final client = await Client.connect(socketPath);
+    final client = await Client.connect(configPath: configPath);
 
     try {
       expect(

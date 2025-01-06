@@ -45,7 +45,6 @@ class Session {
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
   /// doesn't exists, it will be created.
   static Future<Session> create({
-    required String socketPath,
     required String configPath,
     String? debugLabel,
   }) async {
@@ -54,7 +53,6 @@ class Session {
     // Try to start our own server but if one is already running connect to that one instead.
     try {
       server = await Server.start(
-        socketPath: socketPath,
         configPath: configPath,
         debugLabel: debugLabel,
       );
@@ -62,7 +60,7 @@ class Session {
       server = null;
     }
 
-    final client = await Client.connect(socketPath);
+    final client = await Client.connect(configPath: configPath);
 
     return Session._(client, server);
   }

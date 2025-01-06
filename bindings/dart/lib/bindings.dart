@@ -10,26 +10,24 @@ export 'bindings.g.dart';
 typedef Callback = Void Function(Pointer<Void>, Uint16);
 
 ///
-typedef Start = Pointer<Void> Function(
-  Pointer<Char>,
-  Pointer<Char>,
-  Pointer<Char>,
-  Pointer<NativeFunction<Callback>>,
-  Pointer<Void>,
-);
-
-typedef _StartC = Pointer<Void> Function(
-  Pointer<Char>,
+typedef ServiceStart = Pointer<Void> Function(
   Pointer<Char>,
   Pointer<Char>,
   Pointer<NativeFunction<Callback>>,
   Pointer<Void>,
 );
 
-typedef Stop = void Function(
+typedef _ServiceStartC = Pointer<Void> Function(
+  Pointer<Char>,
+  Pointer<Char>,
+  Pointer<NativeFunction<Callback>>,
+  Pointer<Void>,
+);
+
+typedef ServiceStop = void Function(
     Pointer<Void>, Pointer<NativeFunction<Callback>>, Pointer<Void>);
 
-typedef _StopC = Void Function(
+typedef _ServiceStopC = Void Function(
     Pointer<Void>, Pointer<NativeFunction<Callback>>, Pointer<Void>);
 
 typedef LogInit = int Function(Pointer<Char>, Pointer<Char>);
@@ -49,23 +47,23 @@ typedef _LogPrintC = Void Function(
 
 class Bindings {
   Bindings(DynamicLibrary library)
-      : start = library
-            .lookup<NativeFunction<_StartC>>('ouisync_start')
+      : serviceStart = library
+            .lookup<NativeFunction<_ServiceStartC>>('service_start')
             .asFunction(),
-        stop =
-            library.lookup<NativeFunction<_StopC>>('ouisync_stop').asFunction(),
-        logInit = library
-            .lookup<NativeFunction<_LogInitC>>('ouisync_log_init')
+        serviceStop = library
+            .lookup<NativeFunction<_ServiceStopC>>('service_stop')
             .asFunction(),
+        logInit =
+            library.lookup<NativeFunction<_LogInitC>>('log_init').asFunction(),
         logPrint = library
-            .lookup<NativeFunction<_LogPrintC>>('ouisync_log_print')
+            .lookup<NativeFunction<_LogPrintC>>('log_print')
             .asFunction();
 
   /// Bidings instance that uses the default library.
   static Bindings instance = Bindings(_defaultLib());
 
-  final Start start;
-  final Stop stop;
+  final ServiceStart serviceStart;
+  final ServiceStop serviceStop;
   final LogInit logInit;
   final LogPrint logPrint;
 }

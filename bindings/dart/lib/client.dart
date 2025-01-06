@@ -1,26 +1,26 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'exception.dart';
 import 'internal/length_delimited_codec.dart';
 import 'internal/message_codec.dart';
-import 'internal/transport.dart';
 
 class Client {
-  final Transport _transport;
+  final Socket _socket;
   StreamSubscription<Uint8List>? _streamSubscription;
   int _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
   final _notifications = <int, StreamSink<Object?>>{};
 
-  Client._(this._transport) {
+  Client._(this._socket) {
     _streamSubscription =
-        _transport.stream.transform(LengthDelimitedCodec()).listen(_receive);
+        _socket.transform(LengthDelimitedCodec()).listen(_receive);
   }
 
-  static Future<Client> connect(
-    String path, {
+  static Future<Client> connect({
+    required String configPath,
     Duration? timeout,
     Duration minDelay = const Duration(milliseconds: 50),
     Duration maxDelay = const Duration(seconds: 1),
@@ -28,6 +28,10 @@ class Client {
     DateTime start = DateTime.now();
     Duration delay = minDelay;
     SocketException? lastException;
+
+    final port = json.decode(
+            await File('$configPath/local_control_port.conf').readAsString())
+        as int;
 
     while (true) {
       if (timeout != null) {
@@ -37,8 +41,8 @@ class Client {
       }
 
       try {
-        final transport = await Transport.connect(path);
-        return Client._(transport);
+        final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
+        return Client._(socket);
       } on SocketException catch (e) {
         lastException = e;
         delay = _minDuration(delay * 2, maxDelay);
@@ -70,7 +74,7 @@ class Client {
 
   Future<void> close() async {
     await _streamSubscription?.cancel();
-    await _transport.close();
+    await _socket.close();
   }
 
   Future<T> _invokeWithMessageId<T>(int id, String method, Object? args) async {
@@ -80,7 +84,7 @@ class Client {
     _responses[id] = completer;
 
     final bytes = encodeLengthDelimited(encodeMessage(id, method, args));
-    _transport.sink.add(bytes);
+    _socket.add(bytes);
 
     return await response;
   }

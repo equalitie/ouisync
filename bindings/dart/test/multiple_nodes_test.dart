@@ -3,8 +3,6 @@ import 'dart:io' as io;
 import 'package:test/test.dart';
 import 'package:ouisync/ouisync.dart';
 
-import 'utils.dart';
-
 void main() {
   late io.Directory temp;
   late Session session1;
@@ -21,14 +19,12 @@ void main() {
     await io.Directory('${temp.path}/2').create();
 
     session1 = await Session.create(
-      socketPath: getTestSocketPath(temp.path),
       configPath: '${temp.path}/1/config',
       debugLabel: '1',
     );
     await session1.setStoreDir('${temp.path}/1/store');
 
     session2 = await Session.create(
-      socketPath: getTestSocketPath(temp.path),
       configPath: '${temp.path}/2/config',
       debugLabel: '2',
     );

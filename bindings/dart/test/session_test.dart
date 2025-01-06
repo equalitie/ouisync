@@ -2,8 +2,6 @@ import 'dart:io' as io;
 import 'package:test/test.dart';
 import 'package:ouisync/ouisync.dart';
 
-import 'utils.dart';
-
 void main() {
   late io.Directory temp;
 
@@ -16,15 +14,11 @@ void main() {
   });
 
   test('shared session', () async {
-    final socketPath = getTestSocketPath(temp.path);
-
     final session0 = await Session.create(
-      socketPath: socketPath,
       configPath: '${temp.path}/config',
     );
 
     final session1 = await Session.create(
-      socketPath: socketPath,
       configPath: '${temp.path}/config',
     );
 
@@ -43,7 +37,6 @@ void main() {
 
   test('use after close', () async {
     final session = await Session.create(
-      socketPath: getTestSocketPath(temp.path),
       configPath: '${temp.path}/config',
     );
     await session.close();

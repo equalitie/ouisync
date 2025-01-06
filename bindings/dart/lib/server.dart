@@ -12,14 +12,12 @@ class Server {
 
   Server._(this._handle);
 
-  /// Starts the server and bind it to the specified local socket. After this function completes the
-  /// server is ready to accept client connections.
+  /// Starts the server. After this function completes the server is ready to accept client
+  /// connections.
   static Future<Server> start({
-    required String socketPath,
     required String configPath,
     String? debugLabel,
   }) async {
-    final socketPathPtr = socketPath.toNativeUtf8(allocator: malloc);
     final configPathPtr = configPath.toNativeUtf8(allocator: malloc);
     final debugLabelPtr = debugLabel != null
         ? debugLabel.toNativeUtf8(allocator: malloc)
@@ -31,8 +29,7 @@ class Server {
     );
 
     try {
-      final handle = Bindings.instance.start(
-        socketPathPtr.cast(),
+      final handle = Bindings.instance.serviceStart(
         configPathPtr.cast(),
         debugLabelPtr.cast(),
         callback.nativeFunction,
@@ -54,7 +51,6 @@ class Server {
       }
 
       malloc.free(configPathPtr);
-      malloc.free(socketPathPtr);
     }
   }
 
@@ -74,7 +70,7 @@ class Server {
     );
 
     try {
-      Bindings.instance.stop(
+      Bindings.instance.serviceStop(
         handle,
         callback.nativeFunction,
         nullptr,

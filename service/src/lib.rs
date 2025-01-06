@@ -51,8 +51,8 @@ use transport::{
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-const LOCAL_CONTROL_PORT_KEY: ConfigKey<u16> =
-    ConfigKey::new("local_control_port", "Local control port");
+// Don't use comments here so the file can be parsed as json.
+const LOCAL_CONTROL_PORT_KEY: ConfigKey<u16> = ConfigKey::new("local_control_port", "");
 
 const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("remote_control", "Remote control endpoint address");
