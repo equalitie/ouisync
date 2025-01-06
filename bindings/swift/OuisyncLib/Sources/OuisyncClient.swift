@@ -8,6 +8,18 @@
 import Foundation
 import OuisyncLibFFI
 
+
+fileprivate func OnReceiveFromBackend(context: FFIContext?,
+                                      dataPointer: UnsafePointer<UInt8>?,
+                                      size: UInt64) -> Void {
+    let client: OuisyncClient = OuisyncFFI.fromUnretainedPtr(ptr: context!)
+    guard let onReceive = client.onReceiveFromBackend else {
+        fatalError("OuisyncClient has no onReceive handler set")
+    }
+    onReceive(Array(UnsafeBufferPointer(start: dataPointer, count: Int(exactly: size)!)))
+}
+
+
 public class OuisyncClient {
     var clientHandle: SessionHandle
     let ffi: OuisyncFFI
@@ -20,15 +32,8 @@ public class OuisyncClient {
 
         let logTag = "ouisync-backend"
         let result = ffi.ffiSessionCreate(ffi.sessionKindShared, configPath, logPath, logTag,
-                                          .init(mutating: OuisyncFFI.toUnretainedPtr(obj: client))) {
-            context, dataPointer, size in
-            let client: OuisyncClient = OuisyncFFI.fromUnretainedPtr(ptr: context!)
-            guard let onReceive = client.onReceiveFromBackend else {
-                fatalError("OuisyncClient has no onReceive handler set")
-            }
-            onReceive(Array(UnsafeBufferPointer(start: dataPointer, count: Int(exactly: size)!)))
-        }
-
+                                          .init(mutating: OuisyncFFI.toUnretainedPtr(obj: client)),
+                                          OnReceiveFromBackend)
         if result.error_code != 0 {
             throw SessionCreateError("Failed to create session, code:\(result.error_code), message:\(result.error_message!)")
         }
