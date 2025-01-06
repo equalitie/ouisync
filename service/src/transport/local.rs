@@ -2,62 +2,52 @@ use super::{ClientError, ReadError, WriteError};
 use crate::protocol::{Message, Request, ResponseResult};
 use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use interprocess::local_socket::{
-    tokio::{Listener, RecvHalf, SendHalf, Stream as Socket},
-    traits::tokio::{Listener as _, Stream as _},
-    GenericFilePath, ListenerOptions, ToFsName,
-};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     io,
     marker::PhantomData,
-    path::Path,
+    net::Ipv4Addr,
     pin::Pin,
     task::{ready, Context, Poll},
+};
+use tokio::net::{
+    tcp::{OwnedReadHalf, OwnedWriteHalf},
+    TcpListener, TcpStream,
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub(crate) struct LocalServer {
-    listener: Listener,
+    listener: TcpListener,
 }
 
 impl LocalServer {
-    pub async fn bind(socket_path: &Path) -> io::Result<Self> {
-        let listener = socket_path
-            .to_fs_name::<GenericFilePath>()
-            .and_then(|name| {
-                ListenerOptions::new()
-                    .name(name)
-                    .reclaim_name(true)
-                    .create_tokio()
-            })?;
+    pub async fn bind(port: u16) -> io::Result<Self> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
 
         Ok(Self { listener })
     }
 
     pub async fn accept(&self) -> io::Result<(LocalServerReader, LocalServerWriter)> {
-        let stream = self.listener.accept().await?;
-        let (reader, writer) = stream.split();
+        let (stream, _addr) = self.listener.accept().await?;
+        let (reader, writer) = stream.into_split();
 
         let reader = LocalReader::new(reader);
         let writer = LocalWriter::new(writer);
 
         Ok((reader, writer))
     }
+
+    pub fn port(&self) -> io::Result<u16> {
+        self.listener.local_addr().map(|addr| addr.port())
+    }
 }
 
-pub async fn connect(
-    socket_path: &Path,
-) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
-    let socket = Socket::connect(
-        socket_path
-            .to_fs_name::<GenericFilePath>()
-            .map_err(|_| ClientError::InvalidSocketAddr)?,
-    )
-    .await
-    .map_err(ClientError::Connect)?;
+pub async fn connect(port: u16) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
+    let socket = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+        .await
+        .map_err(ClientError::Connect)?;
 
-    let (reader, writer) = socket.split();
+    let (reader, writer) = socket.into_split();
 
     let reader = LocalReader::new(reader);
     let writer = LocalWriter::new(writer);
@@ -72,12 +62,12 @@ pub type LocalClientReader = LocalReader<ResponseResult>;
 pub type LocalClientWriter = LocalWriter<Request>;
 
 pub struct LocalReader<T> {
-    reader: FramedRead<RecvHalf, LengthDelimitedCodec>,
+    reader: FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
     _type: PhantomData<fn() -> T>,
 }
 
 impl<T> LocalReader<T> {
-    pub(super) fn new(inner: RecvHalf) -> Self {
+    pub(super) fn new(inner: OwnedReadHalf) -> Self {
         Self {
             reader: FramedRead::new(inner, LengthDelimitedCodec::new()),
             _type: PhantomData,
@@ -103,13 +93,13 @@ where
 }
 
 pub struct LocalWriter<T> {
-    writer: FramedWrite<SendHalf, LengthDelimitedCodec>,
+    writer: FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>,
     buffer: BytesMut,
     _type: PhantomData<fn(T)>,
 }
 
 impl<T> LocalWriter<T> {
-    pub(super) fn new(inner: SendHalf) -> Self {
+    pub(super) fn new(inner: OwnedWriteHalf) -> Self {
         Self {
             writer: FramedWrite::new(inner, LengthDelimitedCodec::new()),
             buffer: BytesMut::new(),
@@ -154,11 +144,7 @@ fn into_send_error(src: io::Error) -> WriteError {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        net::Ipv4Addr,
-        path::{Path, PathBuf},
-    };
+    use std::{collections::VecDeque, net::Ipv4Addr, path::PathBuf};
 
     use assert_matches::assert_matches;
     use futures_util::SinkExt;
@@ -184,12 +170,10 @@ mod tests {
         test_utils::init_log();
 
         let temp_dir = TempDir::new().unwrap();
-        let socket_path = temp_dir.path().join("sock");
         let store_dir = temp_dir.path().join("store");
 
-        let mut service = Service::init(socket_path.clone(), temp_dir.path().join("config"))
-            .await
-            .unwrap();
+        let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_port().unwrap();
         service
             .state_mut()
             .set_store_dir(store_dir.clone())
@@ -198,7 +182,7 @@ mod tests {
 
         let runner = ServiceRunner::start(service);
 
-        let mut client = TestClient::connect(&socket_path).await;
+        let mut client = TestClient::connect(port).await;
 
         let message_id = MessageId::next();
         let value: Option<PathBuf> = client
@@ -216,17 +200,15 @@ mod tests {
         test_utils::init_log();
 
         let temp_dir = TempDir::new().unwrap();
-        let socket_path = temp_dir.path().join("sock");
         let store_dir = temp_dir.path().join("store");
 
-        let mut service = Service::init(socket_path.clone(), temp_dir.path().join("config"))
-            .await
-            .unwrap();
+        let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_port().unwrap();
         service.state_mut().set_store_dir(store_dir).await.unwrap();
 
         let runner = ServiceRunner::start(service);
 
-        let mut client = TestClient::connect(&socket_path).await;
+        let mut client = TestClient::connect(port).await;
 
         let repo_handle: RepositoryHandle = client
             .invoke(
@@ -325,11 +307,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // Create two separate services (A and B), each with its own client.
-        let (socket_path_a, runner_a) = async {
-            let socket_path = temp_dir.path().join("a.sock");
-            let mut service = Service::init(socket_path.clone(), temp_dir.path().join("config_a"))
+        let (socket_port_a, runner_a) = async {
+            let mut service = Service::init(temp_dir.path().join("config_a"))
                 .await
                 .unwrap();
+            let port = service.local_port().unwrap();
             service
                 .state_mut()
                 .set_store_dir(temp_dir.path().join("store_a"))
@@ -337,16 +319,16 @@ mod tests {
                 .unwrap();
             let runner = ServiceRunner::start(service);
 
-            (socket_path, runner)
+            (port, runner)
         }
         .instrument(tracing::info_span!("a"))
         .await;
 
-        let (socket_path_b, runner_b) = async {
-            let socket_path = temp_dir.path().join("b.sock");
-            let mut service = Service::init(socket_path.clone(), temp_dir.path().join("config_b"))
+        let (socket_port_b, runner_b) = async {
+            let mut service = Service::init(temp_dir.path().join("config_b"))
                 .await
                 .unwrap();
+            let port = service.local_port().unwrap();
             service
                 .state_mut()
                 .set_store_dir(temp_dir.path().join("store_b"))
@@ -354,13 +336,13 @@ mod tests {
                 .unwrap();
             let runner = ServiceRunner::start(service);
 
-            (socket_path, runner)
+            (port, runner)
         }
         .instrument(tracing::info_span!("b"))
         .await;
 
-        let mut client_a = TestClient::connect(&socket_path_a).await;
-        let mut client_b = TestClient::connect(&socket_path_b).await;
+        let mut client_a = TestClient::connect(socket_port_a).await;
+        let mut client_b = TestClient::connect(socket_port_b).await;
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 
@@ -460,8 +442,8 @@ mod tests {
     }
 
     impl TestClient {
-        async fn connect(socket_path: &Path) -> Self {
-            let (reader, writer) = transport::local::connect(socket_path).await.unwrap();
+        async fn connect(port: u16) -> Self {
+            let (reader, writer) = transport::local::connect(port).await.unwrap();
 
             Self {
                 reader,

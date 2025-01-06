@@ -51,6 +51,9 @@ use transport::{
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
+const LOCAL_CONTROL_PORT_KEY: ConfigKey<u16> =
+    ConfigKey::new("local_control_port", "Local control port");
+
 const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("remote_control", "Remote control endpoint address");
 
@@ -65,22 +68,27 @@ pub struct Service {
 }
 
 impl Service {
-    pub async fn init(local_socket_path: PathBuf, config_dir: PathBuf) -> Result<Self, Error> {
+    pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
         let state = State::init(config_dir).await?;
+
+        let local_port_entry = state.config.entry(LOCAL_CONTROL_PORT_KEY);
+        let local_port = match local_port_entry.get().await {
+            Ok(port) => port,
+            Err(ConfigError::NotFound) => 0,
+            Err(error) => return Err(error.into()),
+        };
         let local_server =
-            LocalServer::bind(&local_socket_path)
+            LocalServer::bind(local_port)
                 .await
                 .map_err(|error| match error.kind() {
                     io::ErrorKind::AddrInUse => Error::ServiceAlreadyRunning,
-                    _ => {
-                        tracing::error!(
-                            ?error,
-                            "failed to bind local listener to {:?}",
-                            local_socket_path,
-                        );
-                        Error::Bind(error)
-                    }
+                    _ => Error::Bind(error),
                 })?;
+
+        if local_port == 0 {
+            let local_port = local_server.port().map_err(Error::Bind)?;
+            local_port_entry.set(&local_port).await?;
+        }
 
         let remote_server = match state.config.entry(REMOTE_CONTROL_KEY).get().await {
             Ok(addr) => Some(
@@ -163,6 +171,10 @@ impl Service {
         }
 
         self.state.close().await;
+    }
+
+    pub fn local_port(&self) -> Result<u16, Error> {
+        Ok(self.local_server.port()?)
     }
 
     pub fn store_dir(&self) -> Option<&Path> {
@@ -765,13 +777,10 @@ mod tests {
     async fn already_running() {
         let temp_dir = TempDir::new().unwrap();
 
-        let socket_path = temp_dir.path().join("sock");
-        let mut service0 = Service::init(socket_path.clone(), temp_dir.path().join("config"))
-            .await
-            .unwrap();
+        let mut service0 = Service::init(temp_dir.path().join("config")).await.unwrap();
 
         assert_matches!(
-            Service::init(socket_path, temp_dir.path().join("config"),)
+            Service::init(temp_dir.path().join("config"))
                 .await
                 .map(|_| ()),
             Err(Error::ServiceAlreadyRunning)

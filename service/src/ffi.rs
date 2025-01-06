@@ -28,18 +28,16 @@ use crate::{
 ///
 /// # Safety
 ///
-/// - `socket_path` and `config_dir` must be safe to pass to [std::ffi::CStr::from_ptr].
+/// - `config_dir` must be safe to pass to [std::ffi::CStr::from_ptr].
 /// - `debug_label` must be either null or must be safe to pass to [std::ffi::CStr::from_ptr].
 /// - `callback_context` must be either null or it must be safe to access from multiple threads.
 #[no_mangle]
-pub unsafe extern "C" fn ouisync_start(
-    socket_path: *const c_char,
+pub unsafe extern "C" fn service_start(
     config_dir: *const c_char,
     debug_label: *const c_char,
     callback: extern "C" fn(*const c_void, ErrorCode),
     callback_context: *const c_void,
 ) -> *mut c_void {
-    let socket_path = CStr::from_ptr(socket_path).to_owned();
     let config_dir = CStr::from_ptr(config_dir).to_owned();
     let debug_label = if !debug_label.is_null() {
         Some(CStr::from_ptr(debug_label).to_owned())
@@ -51,7 +49,7 @@ pub unsafe extern "C" fn ouisync_start(
     let (stop_tx, stop_rx) = oneshot::channel();
     let stop_tx = Box::into_raw(Box::new(stop_tx)) as _;
 
-    thread::spawn(move || run(socket_path, config_dir, debug_label, callback, stop_rx));
+    thread::spawn(move || run(config_dir, debug_label, callback, stop_rx));
 
     stop_tx
 }
@@ -66,7 +64,7 @@ pub unsafe extern "C" fn ouisync_start(
 /// passed to `ouisync_stop`.
 /// - `callback_context` must be either null of it must be safe to access from multiple threads.
 #[no_mangle]
-pub unsafe extern "C" fn ouisync_stop(
+pub unsafe extern "C" fn service_stop(
     handle: *mut c_void,
     callback: extern "C" fn(*const c_void, ErrorCode),
     callback_context: *const c_void,
@@ -104,13 +102,12 @@ mod callback {
 }
 
 fn run(
-    socket_path: CString,
     config_dir: CString,
     debug_label: Option<CString>,
     on_init: Callback,
     on_stop_rx: oneshot::Receiver<Callback>,
 ) {
-    let (runtime, mut service, span) = match init(socket_path, config_dir, debug_label) {
+    let (runtime, mut service, span) = match init(config_dir, debug_label) {
         Ok(parts) => {
             on_init.call(ErrorCode::Ok);
             parts
@@ -147,11 +144,9 @@ fn run(
 }
 
 fn init(
-    socket_path: CString,
     config_dir: CString,
     debug_label: Option<CString>,
 ) -> Result<(runtime::Runtime, Service, Span), Error> {
-    let socket_path = socket_path.into_string()?.into();
     let config_dir = config_dir.into_string()?.into();
 
     let span = if let Some(debug_label) = debug_label {
@@ -165,8 +160,7 @@ fn init(
         .build()
         .map_err(Error::InitializeRuntime)?;
 
-    let service =
-        runtime.block_on(Service::init(socket_path, config_dir).instrument(span.clone()))?;
+    let service = runtime.block_on(Service::init(config_dir).instrument(span.clone()))?;
     service.enable_panic_monitor();
 
     Ok((runtime, service, span))
@@ -182,16 +176,13 @@ fn init(
 /// `log_file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
 /// `log_tag` must be non-null and safe to pass to [std::ffi::CStr::from_ptr].
 #[no_mangle]
-pub unsafe extern "C" fn ouisync_log_init(
-    log_file: *const c_char,
-    log_tag: *const c_char,
-) -> ErrorCode {
-    log_init(log_file, log_tag).to_error_code()
+pub unsafe extern "C" fn log_init(log_file: *const c_char, log_tag: *const c_char) -> ErrorCode {
+    try_log_init(log_file, log_tag).to_error_code()
 }
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
 
-unsafe fn log_init(log_file: *const c_char, log_tag: *const c_char) -> Result<(), Error> {
+unsafe fn try_log_init(log_file: *const c_char, log_tag: *const c_char) -> Result<(), Error> {
     let log_file = if log_file.is_null() {
         None
     } else {
@@ -219,7 +210,7 @@ unsafe fn log_init(log_file: *const c_char, log_tag: *const c_char) -> Result<()
 ///
 /// `scope_ptr` and `message_ptr` must be safe to pass to [std::ffi::CStr::from_ptr].
 #[no_mangle]
-pub unsafe extern "C" fn ouisync_log_print(
+pub unsafe extern "C" fn log_print(
     level: u8,
     scope_ptr: *const c_char,
     message_ptr: *const c_char,
@@ -266,13 +257,9 @@ mod tests {
     fn sanity_check() {
         let temp_dir = TempDir::new().unwrap();
 
-        let socket_path = temp_dir.path().join("sock");
-
         let config_dir = temp_dir.path().join("config");
         fs::create_dir_all(&config_dir).unwrap();
 
-        let socket_path =
-            CString::new(socket_path.into_os_string().into_string().unwrap()).unwrap();
         let config_dir = CString::new(config_dir.into_os_string().into_string().unwrap()).unwrap();
 
         extern "C" fn callback(cx: *const c_void, error_code: ErrorCode) {
@@ -282,8 +269,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<ErrorCode>();
         let handle = unsafe {
-            ouisync_start(
-                socket_path.as_ptr(),
+            service_start(
                 config_dir.as_ptr(),
                 ptr::null(),
                 callback,
@@ -295,7 +281,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<ErrorCode>();
         unsafe {
-            ouisync_stop(handle, callback, Box::into_raw(Box::new(tx)) as _);
+            service_stop(handle, callback, Box::into_raw(Box::new(tx)) as _);
         }
 
         assert_eq!(rx.recv().unwrap(), ErrorCode::Ok);

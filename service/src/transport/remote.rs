@@ -238,7 +238,6 @@ mod tests {
 
     pub(super) async fn setup_service() -> (TempDir, Service, String, Arc<ClientConfig>) {
         let temp_dir = TempDir::new().unwrap();
-        let socket_path = temp_dir.path().join("sock");
         let config_dir = temp_dir.path().join("config");
 
         let gen = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
@@ -260,9 +259,7 @@ mod tests {
                 .with_no_client_auth(),
         );
 
-        let mut service = Service::init(socket_path.clone(), config_dir)
-            .await
-            .unwrap();
+        let mut service = Service::init(config_dir).await.unwrap();
 
         service
             .set_store_dir(temp_dir.path().join("store"))
