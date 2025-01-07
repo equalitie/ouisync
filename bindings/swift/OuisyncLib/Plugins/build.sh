@@ -1,26 +1,19 @@
 #!/usr/bin/env zsh
 # Command line tool which produces a `OuisyncLibFFI` framework for all configured llvm triples from
-# OuisyncLib/config.sh
+# OuisyncLib/config.sh (currently generated in the ouisync-app repository)
 #
-# This tool runs in a sandboxed process that can only write to a `output` folder and cannot access
-# the network, so it relies on the `Updater` companion plugin to download the required dependencies
-# before hand. Unfortunately, this does not work 100% of the time since both rust and especially
-# cargo like to touch the lockfiles or the network for various reasons even when told not to.
-#
-# Called by the builder plugin which passes its own environment as well as the input, dependency
-# and output paths. The builder checks that the dependency folder exists, but does not otherwise
-# FIXME: validate that it contains all necessary dependencies as defined in Cargo.toml
-#
-# Hic sunt dracones! These might be of interest to anyone thinking they can do better than this mess:
-#
+# This tool runs in a sandboxed process that cannot access the network, so it relies on the updater
+# companion plugin to download the required dependencies ahead of time. Called by the builder plugin
+# which passes both plugins' output paths as arguments. Hic sunt dracones! These may be of interest:
 # [1] https://forums.developer.apple.com/forums/thread/666335
 # [2] https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/Plugins.md#build-tool-target-dependencies
 # [3] https://www.amyspark.me/blog/posts/2024/01/10/stripping-rust-libraries.html
+fatal() { echo "Error $@" && exit $1 }
 PROJECT_HOME=$(realpath "$(dirname "$0")/../../../../")
-PACKAGE_HOME=$(realpath "$PROJECT_HOME/bindings/swift/OuisyncLib")
-export CARGO_HOME="$1"
+export CARGO_HOME=$(realpath "$1")
+export PATH="$CARGO_HOME/bin:$PATH"
 export RUSTUP_HOME="$CARGO_HOME/.rustup"
-BUILD_OUTPUT="$2"
+BUILD_OUTPUT=$(realpath "$2")
 
 # cargo builds some things that confuse xcode such as fingerprints and depfiles which cannot be
 # (easily) disabled; additionally, xcode does pick up the xcframework and reports it as a duplicate
@@ -29,7 +22,7 @@ BUILD_OUTPUT="$2"
 mkdir -p "$BUILD_OUTPUT/dummy"
 
 # read config and prepare to build
-source "$PACKAGE_HOME/config.sh"
+source "$PROJECT_HOME/bindings/swift/OuisyncLib/config.sh"
 if [ $SKIP ] && [ $SKIP -gt 0 ]; then
     exit 0
 fi
@@ -49,12 +42,12 @@ for TARGET in $LIST[@]; do TARGETS[$TARGET]="" done
 # build configured targets
 cd $PROJECT_HOME
 for TARGET in ${(k)TARGETS}; do
-    "$CARGO_HOME/bin/cross" build \
+    cross build \
         --frozen \
         --package ouisync-ffi \
         --target $TARGET \
         --target-dir "$BUILD_OUTPUT" \
-        $FLAGS || exit 1
+        $FLAGS || fatal 1 "Unable to compile for $TARGET"
 done
 
 # generate include files
@@ -64,11 +57,7 @@ echo "module OuisyncLibFFI {
     header \"bindings.h\"
     export *
 }" > "$INCLUDE/module.modulemap"
-"$CARGO_HOME/bin/cbindgen" --lang C --crate ouisync-ffi > "$INCLUDE/bindings.h" || exit 2
-
-# delete previous framework (possibly a stub) and replace with new one that contains the archive
-# TODO: some symlinks would be lovely here instead, cargo already create two copies
-rm -Rf $BUILD_OUTPUT/output/OuisyncLibFFI.xcframework
+cbindgen --lang C --crate ouisync-ffi > "$INCLUDE/bindings.h" || fatal 2 "Unable to generate bindings.h"
 
 # xcodebuild refuses multiple architectures per platform, instead expecting fat libraries when the
 # destination operating system supports multiple architectures; apple also explicitly rejects any
@@ -96,11 +85,17 @@ for PLATFORM OUTPUTS in ${(kv)TREE}; do
     else  # at least two architectures; run lipo on all matches and link the output instead
         LIBRARY="$BUILD_OUTPUT/$PLATFORM/libouisync_ffi.a"
         mkdir -p "$(dirname "$LIBRARY")"
-        lipo -create $MATCHED[@] -output $LIBRARY || exit 3
+        lipo -create $MATCHED[@] -output $LIBRARY || fatal 3 "Unable to run lipo for ${MATCHED[@]}"
     fi
     PARAMS+=("-library" "$LIBRARY" "-headers" "$INCLUDE")
 done
-echo ${PARAMS[@]}
+
+# TODO: skip xcodebuild and manually create symlinks instead (faster but Info.plist would be tricky)
+rm -Rf "$BUILD_OUTPUT/temp.xcframework"
+find "$BUILD_OUTPUT/OuisyncLibFFI.xcframework" -mindepth 1 -delete
 xcodebuild \
     -create-xcframework ${PARAMS[@]} \
-    -output "$BUILD_OUTPUT/output/OuisyncLibFFI.xcframework" || exit 4
+    -output "$BUILD_OUTPUT/temp.xcframework" || fatal 4 "Unable to build xcframework"
+for FILE in $(ls "$BUILD_OUTPUT/temp.xcframework"); do
+    mv "$BUILD_OUTPUT/temp.xcframework/$FILE" "$BUILD_OUTPUT/OuisyncLibFFI.xcframework/$FILE"
+done

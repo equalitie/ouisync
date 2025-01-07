@@ -1,7 +1,6 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-
 let package = Package(
     name: "OuisyncLib",
     platforms: [.macOS(.v13), .iOS(.v16)],
@@ -25,7 +24,7 @@ let package = Package(
                     path: "Tests"),
         // FIXME: move this to a separate package / framework
         .binaryTarget(name: "OuisyncLibFFI",
-                      path: "output/OuisyncLibFFI.xcframework"),
+                      path: "OuisyncLibFFI.xcframework"),
         .plugin(name: "FFIBuilder",
                 capability: .buildTool(),
                 path: "Plugins/Builder"),
@@ -34,8 +33,7 @@ let package = Package(
                                                      description: "Update rust dependencies"),
                                      permissions: [
                 .allowNetworkConnections(scope: .all(),
-                                         reason: "Downloads dependencies defined by Cargo.toml"),
-                .writeToPackageDirectory(reason: "These are not the droids you are looking for")]),
+                                         reason: "Downloads dependencies defined by Cargo.toml")]),
                 path: "Plugins/Updater"),
     ]
 )

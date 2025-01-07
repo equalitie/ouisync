@@ -1,4 +1,5 @@
-/output
+/OuisyncLibFFI.xcframework
+/config.sh
 .DS_Store
 /.build
 /Packages

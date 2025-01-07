@@ -18,18 +18,11 @@ import PackagePlugin
 
     func performCommand(context: PackagePlugin.PluginContext,
                         arguments: [String] = []) async throws {
-        let update = context.pluginWorkDirectory
-
-        // FIXME: this path is very unstable; we might need to search the tree instead
-        let build = update
-            .removingLastComponent()
-            .appending(["\(context.package.id).output", "OuisyncLib", "FFIBuilder"])
-
         let task = Process()
         let exe = context.package.directory.appending(["Plugins", "update.sh"]).string
         task.standardInput = nil
         task.executableURL = URL(fileURLWithPath: exe)
-        task.arguments = [update.string, build.string]
+        task.arguments = [context.pluginWorkDirectory.string]
         do { try task.run() } catch { panic("Unable to start \(exe): \(error)") }
         task.waitUntilExit()
 
