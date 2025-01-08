@@ -10,7 +10,7 @@ use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
+    net::TcpStream,
 };
 
 use crate::transport::ClientError;
@@ -25,7 +25,7 @@ use crate::transport::ClientError;
 // `client_proof`     : HMAC_SHA-256(psk, server_challenge)
 //
 // 1. Client sends `client_challenge` to the server
-// 2. Server sends `server_proof` followed by `server_challenge` to the client
+// 2. Server sends `server_proof` and `server_challenge` to the client
 // 3. Client verifies `server_proof`. If it's valid, it send `client_proof` to the server. Otherwise
 // it closes the connection and returns "authentication failed" error.
 // 4. Server verifies `client_proof`. If it's valid, the client is authenticated. Otherwise it
@@ -96,53 +96,47 @@ impl<'de> Deserialize<'de> for AuthKey {
     }
 }
 
-pub(super) async fn server(
-    reader: &mut OwnedReadHalf,
-    writer: &mut OwnedWriteHalf,
-    auth_key: &AuthKey,
-) -> io::Result<()> {
+/// Server-side part of the authentication protocol.
+pub(super) async fn server(socket: &mut TcpStream, auth_key: &AuthKey) -> io::Result<()> {
     let mut client_challenge = [0; AUTH_CHALLENGE_SIZE];
-    reader.read_exact(&mut client_challenge).await?;
+    socket.read_exact(&mut client_challenge).await?;
 
     let server_proof = hmac(auth_key, &client_challenge).finalize();
 
     let mut server_challenge = [0; AUTH_CHALLENGE_SIZE];
     OsRng.fill(&mut server_challenge);
 
-    writer.write_all(&server_proof.into_bytes()).await?;
-    writer.write_all(&server_challenge).await?;
+    socket.write_all(&server_proof.into_bytes()).await?;
+    socket.write_all(&server_challenge).await?;
 
     let mut client_proof = [0; AUTH_PROOF_SIZE];
-    reader.read_exact(&mut client_proof).await?;
+    socket.read_exact(&mut client_proof).await?;
 
     hmac(auth_key, &server_challenge)
         .verify_slice(&client_proof)
-        .map_err(|_| io::Error::other("client authentication failed"))?;
+        .map_err(|_| io::Error::other("authentication challenge failed"))?;
 
     Ok(())
 }
 
-pub(super) async fn client(
-    reader: &mut OwnedReadHalf,
-    writer: &mut OwnedWriteHalf,
-    auth_key: &AuthKey,
-) -> Result<(), ClientError> {
+/// Client-side part of the authentication protocol.
+pub(super) async fn client(socket: &mut TcpStream, auth_key: &AuthKey) -> Result<(), ClientError> {
     let mut client_challenge = [0; AUTH_CHALLENGE_SIZE];
     OsRng.fill(&mut client_challenge);
-    writer.write_all(&client_challenge).await?;
+    socket.write_all(&client_challenge).await?;
 
     let mut server_proof = [0; AUTH_PROOF_SIZE];
-    reader.read_exact(&mut server_proof).await?;
+    socket.read_exact(&mut server_proof).await?;
 
     hmac(auth_key, &client_challenge)
         .verify_slice(&server_proof)
         .map_err(|_| ClientError::Authentication)?;
 
     let mut server_challenge = [0; AUTH_CHALLENGE_SIZE];
-    reader.read_exact(&mut server_challenge).await?;
+    socket.read_exact(&mut server_challenge).await?;
 
     let client_proof = hmac(auth_key, &server_challenge).finalize();
-    writer.write_all(&client_proof.into_bytes()).await?;
+    socket.write_all(&client_proof.into_bytes()).await?;
 
     Ok(())
 }

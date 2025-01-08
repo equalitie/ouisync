@@ -3,7 +3,9 @@ mod protocol;
 mod server;
 
 pub use client::RemoteClient;
-pub(crate) use server::{RemoteServer, RemoteServerReader, RemoteServerWriter};
+pub(crate) use server::{
+    AcceptedRemoteConnection, RemoteServer, RemoteServerReader, RemoteServerWriter,
+};
 
 use std::{
     io::Cursor,
@@ -134,10 +136,9 @@ mod tests {
     async fn create_ok() {
         test_utils::init_log();
 
-        let (_temp_dir, service, mut client) = setup().await;
-        let runner = ServiceRunner::start(service);
-
+        let (_temp_dir, runner, mut client) = setup().await;
         let secrets = WriteSecrets::random();
+
         client.create_mirror(&secrets).await.unwrap();
 
         runner.stop().await.close().await;
@@ -145,11 +146,9 @@ mod tests {
 
     #[tokio::test]
     async fn create_duplicate() {
-        let (_temp_dir, service, mut client) = setup().await;
-
+        let (_temp_dir, runner, mut client) = setup().await;
         let secrets = WriteSecrets::random();
 
-        let runner = ServiceRunner::start(service);
         assert_matches!(client.create_mirror(&secrets).await, Ok(_));
 
         let service = runner.stop().await;
@@ -169,11 +168,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_present() {
-        let (_temp_dir, service, mut client) = setup().await;
-
+        let (_temp_dir, runner, mut client) = setup().await;
         let secrets = WriteSecrets::random();
 
-        let runner = ServiceRunner::start(service);
         client.create_mirror(&secrets).await.unwrap();
 
         let service = runner.stop().await;
@@ -190,10 +187,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_missing() {
-        let (_temp_dir, service, mut client) = setup().await;
+        let (_temp_dir, runner, mut client) = setup().await;
 
         let secrets = WriteSecrets::random();
-        let runner = ServiceRunner::start(service);
 
         // Delete is idempotent so this still return Ok
         assert_matches!(client.delete_mirror(&secrets).await, Ok(()));
@@ -205,10 +201,9 @@ mod tests {
     async fn exists_present() {
         test_utils::init_log();
 
-        let (_temp_dir, service, mut client) = setup().await;
+        let (_temp_dir, runner, mut client) = setup().await;
         let secrets = WriteSecrets::random();
 
-        let runner = ServiceRunner::start(service);
         client.create_mirror(&secrets).await.unwrap();
 
         assert_matches!(client.mirror_exists(&secrets.id).await, Ok(true));
@@ -218,22 +213,23 @@ mod tests {
 
     #[tokio::test]
     async fn exists_missing() {
-        let (_temp_dir, service, mut client) = setup().await;
+        let (_temp_dir, runner, mut client) = setup().await;
         let repository_id = WriteSecrets::random().id;
 
-        let runner = ServiceRunner::start(service);
         assert_matches!(client.mirror_exists(&repository_id).await, Ok(false));
 
         runner.stop().await.close().await;
     }
 
-    pub(super) async fn setup() -> (TempDir, Service, RemoteClient) {
+    pub(super) async fn setup() -> (TempDir, ServiceRunner, RemoteClient) {
         let (temp_dir, service, server_addr, client_config) = setup_service().await;
+        let runner = ServiceRunner::start(service);
+
         let client = RemoteClient::connect(&server_addr, client_config)
             .await
             .unwrap();
 
-        (temp_dir, service, client)
+        (temp_dir, runner, client)
     }
 
     pub(super) async fn setup_service() -> (TempDir, Service, String, Arc<ClientConfig>) {

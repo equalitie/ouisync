@@ -12,12 +12,32 @@ use thiserror::Error;
 use tokio_tungstenite::tungstenite as ws;
 
 use self::{
-    local::{LocalServerReader, LocalServerWriter},
-    remote::{RemoteServerReader, RemoteServerWriter},
+    local::{AcceptedLocalConnection, LocalServerReader, LocalServerWriter},
+    remote::{AcceptedRemoteConnection, RemoteServerReader, RemoteServerWriter},
 };
 use crate::protocol::{
     DecodeError, EncodeError, Message, MessageId, ProtocolError, Request, ResponseResult,
 };
+
+pub(crate) enum AcceptedConnection {
+    Local(AcceptedLocalConnection),
+    Remote(AcceptedRemoteConnection),
+}
+
+impl AcceptedConnection {
+    pub async fn finalize(self) -> Option<(ServerReader, ServerWriter)> {
+        match self {
+            Self::Local(conn) => {
+                let (reader, writer) = conn.finalize().await?;
+                Some((ServerReader::Local(reader), ServerWriter::Local(writer)))
+            }
+            Self::Remote(conn) => {
+                let (reader, writer) = conn.finalize().await?;
+                Some((ServerReader::Remote(reader), ServerWriter::Remote(writer)))
+            }
+        }
+    }
+}
 
 pub(crate) enum ServerReader {
     Local(LocalServerReader),

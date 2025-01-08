@@ -38,16 +38,15 @@ impl LocalServer {
         })
     }
 
-    pub async fn accept(&self) -> io::Result<(LocalServerReader, LocalServerWriter)> {
-        let (stream, _addr) = self.listener.accept().await?;
-        let (mut reader, mut writer) = stream.into_split();
+    /// Accept the next local client connection. The returned value needs to be finalized (
+    /// [AcceptedLocalConnection::finalize]) before use.
+    pub async fn accept(&self) -> io::Result<AcceptedLocalConnection> {
+        let (socket, _addr) = self.listener.accept().await?;
 
-        auth::server(&mut reader, &mut writer, &self.auth_key).await?;
-
-        let reader = LocalReader::new(reader);
-        let writer = LocalWriter::new(writer);
-
-        Ok((reader, writer))
+        Ok(AcceptedLocalConnection {
+            socket,
+            auth_key: self.auth_key,
+        })
     }
 
     pub fn port(&self) -> u16 {
@@ -59,18 +58,42 @@ impl LocalServer {
     }
 }
 
+pub(crate) struct AcceptedLocalConnection {
+    socket: TcpStream,
+    auth_key: AuthKey,
+}
+
+impl AcceptedLocalConnection {
+    /// Finalize accepting the connection.
+    ///
+    /// # Cancel safety
+    ///
+    /// This function is *not* cancel safe.
+    pub async fn finalize(mut self) -> Option<(LocalServerReader, LocalServerWriter)> {
+        auth::server(&mut self.socket, &self.auth_key)
+            .await
+            .inspect_err(|error| tracing::debug!(?error, "client authentication failed"))
+            .ok()?;
+
+        let (reader, writer) = self.socket.into_split();
+        let reader = LocalReader::new(reader);
+        let writer = LocalWriter::new(writer);
+
+        Some((reader, writer))
+    }
+}
+
 pub async fn connect(
     port: u16,
     auth_key: &AuthKey,
 ) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
-    let socket = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+    let mut socket = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
         .await
         .map_err(ClientError::Connect)?;
 
-    let (mut reader, mut writer) = socket.into_split();
+    auth::client(&mut socket, auth_key).await?;
 
-    auth::client(&mut reader, &mut writer, auth_key).await?;
-
+    let (reader, writer) = socket.into_split();
     let reader = LocalReader::new(reader);
     let writer = LocalWriter::new(writer);
 

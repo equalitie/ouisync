@@ -1,7 +1,6 @@
 use std::{
     io, iter,
     net::SocketAddr,
-    ops::ControlFlow,
     pin::Pin,
     sync::Arc,
     task::{ready, Context, Poll},
@@ -12,15 +11,9 @@ use futures_util::{
     Sink, SinkExt, Stream, StreamExt,
 };
 use ouisync::{crypto::sign::Signature, AccessSecrets, RepositoryId, ShareToken};
-use tokio::{
-    net::{TcpListener, TcpStream},
-    select,
-    sync::mpsc,
-    task,
-};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
 use tokio_tungstenite::{tungstenite as ws, WebSocketStream};
-use tracing::{Instrument, Span};
 
 use crate::{
     protocol::{Message, MessageId, Request, ResponseResult},
@@ -30,7 +23,8 @@ use crate::{
 use super::{extract_session_cookie, protocol, RemoteSocket};
 
 pub(crate) struct RemoteServer {
-    rx: mpsc::Receiver<(RemoteServerReader, RemoteServerWriter)>,
+    tcp_listener: TcpListener,
+    tls_acceptor: TlsAcceptor,
     local_addr: SocketAddr,
 }
 
@@ -43,85 +37,71 @@ impl RemoteServer {
 
         tracing::info!("remote server listening on {}", local_addr);
 
-        // Running the acceptor in a background task for cancel safety
-        let (tx, rx) = mpsc::channel(1);
-        task::spawn(run_acceptor(tcp_listener, tls_acceptor, tx).instrument(Span::current()));
-
-        Ok(Self { rx, local_addr })
+        Ok(Self {
+            tcp_listener,
+            tls_acceptor,
+            local_addr,
+        })
     }
 
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
-    pub async fn accept(&mut self) -> io::Result<(RemoteServerReader, RemoteServerWriter)> {
-        self.rx
-            .recv()
-            .await
-            .ok_or_else(|| io::Error::other("acceptor terminated"))
+    /// Accept the next remote client connection. The returned value needs to be finalized (
+    /// [AcceptedRemoteConnection::finalize]) before use.
+    pub async fn accept(&self) -> io::Result<AcceptedRemoteConnection> {
+        let (socket, addr) = self.tcp_listener.accept().await?;
+
+        Ok(AcceptedRemoteConnection {
+            socket,
+            addr,
+            tls_acceptor: self.tls_acceptor.clone(),
+        })
     }
 }
 
-async fn run_acceptor(
-    tcp_listener: TcpListener,
+pub(crate) struct AcceptedRemoteConnection {
+    socket: TcpStream,
+    addr: SocketAddr,
     tls_acceptor: TlsAcceptor,
-    tx: mpsc::Sender<(RemoteServerReader, RemoteServerWriter)>,
-) {
-    loop {
-        select! {
-            result = accept(&tcp_listener, &tls_acceptor) => {
-                match result {
-                    Ok(conn) => {
-                        tx.send(conn).await.ok();
-                    }
-                    Err(ControlFlow::Continue(())) => continue,
-                    Err(ControlFlow::Break(())) => break,
-                }
-            }
-            _ = tx.closed() => break,
-        }
-    }
 }
 
-async fn accept(
-    tcp_listener: &TcpListener,
-    tls_acceptor: &TlsAcceptor,
-) -> Result<(RemoteServerReader, RemoteServerWriter), ControlFlow<()>> {
-    let (stream, addr) = match tcp_listener.accept().await {
-        Ok(conn) => conn,
-        Err(error) => {
-            tracing::error!(?error, "failed to accept tcp connection");
-            return Err(ControlFlow::Break(()));
-        }
-    };
+impl AcceptedRemoteConnection {
+    /// Finalize accepting the connection by upgrading it to websockets+tls
+    ///
+    /// # Cancel safety
+    ///
+    /// This function is *not* cancel safe.
+    pub async fn finalize(self) -> Option<(RemoteServerReader, RemoteServerWriter)> {
+        // Upgrade to TLS
+        let socket = self
+            .tls_acceptor
+            .accept(self.socket)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(?error, addr = ?self.addr, "failed to upgrade the connection to TLS")
+            })
+            .ok()?;
 
-    // Upgrade to TLS
-    let stream = match tls_acceptor.accept(stream).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            tracing::warn!(?error, "failed to upgrade connection to tls");
-            return Err(ControlFlow::Continue(()));
-        }
-    };
+        let session_cookie = extract_session_cookie(socket.get_ref().1);
 
-    let session_cookie = extract_session_cookie(stream.get_ref().1);
+        // Upgrade to websocket
+        let socket = tokio_tungstenite::accept_async(socket)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(?error, addr = ?self.addr, "failed to upgrade the connection to websocket")
+            })
+            .ok()?;
 
-    // Upgrade to websocket
-    let stream = match tokio_tungstenite::accept_async(stream).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            tracing::warn!(?error, "failed to upgrade connection to websocket");
-            return Err(ControlFlow::Continue(()));
-        }
-    };
+        tracing::info!(addr = ?self.addr, "accepted remote client");
 
-    tracing::info!(?addr, "accepted remote client");
+        let (writer, reader) = socket.split();
+        let reader = RemoteServerReader::new(reader, session_cookie);
+        let writer = RemoteServerWriter::new(writer);
 
-    let (writer, reader) = stream.split();
-    let reader = RemoteServerReader::new(reader, session_cookie);
-    let writer = RemoteServerWriter::new(writer);
-
-    Ok((reader, writer))
+        Some((reader, writer))
+    }
 }
 
 pub(crate) struct RemoteServerReader {

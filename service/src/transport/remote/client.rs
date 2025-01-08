@@ -180,6 +180,7 @@ mod tests {
     #[tokio::test]
     async fn proof_replay_attack() {
         let (_temp_dir, service, server_addr, client_config) = setup_service().await;
+        let runner = ServiceRunner::start(service);
 
         let client0 = RemoteClient::connect(&server_addr, client_config.clone())
             .await
@@ -192,7 +193,6 @@ mod tests {
         let proof = secrets.write_keys.sign(&client0.session_cookie);
 
         // Attempt to invoke the request using a proof leaked from another client.
-        let runner = ServiceRunner::start(service);
         let error = assert_matches!(
             client1
                 .invoke(protocol::v1::Request::Create {

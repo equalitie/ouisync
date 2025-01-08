@@ -23,7 +23,7 @@ mod test_utils;
 pub use error::Error;
 
 use config_store::{ConfigError, ConfigKey, ConfigStore};
-use futures_util::SinkExt;
+use futures_util::{stream::FuturesUnordered, SinkExt};
 use metrics::MetricsServer;
 use ouisync::crypto::{cipher::SecretKey, PasswordSalt};
 use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response, ResponseResult};
@@ -45,8 +45,8 @@ use tokio::{
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use transport::{
     local::{AuthKey, LocalServer},
-    remote::{RemoteServer, RemoteServerReader, RemoteServerWriter},
-    ClientError, ReadError, ServerReader, ServerWriter,
+    remote::{AcceptedRemoteConnection, RemoteServer},
+    AcceptedConnection, ClientError, ReadError, ServerReader, ServerWriter,
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -125,18 +125,22 @@ impl Service {
         let mut repo_expiration_interval = time::interval(REPOSITORY_EXPIRATION_POLL_INTERVAL);
         repo_expiration_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
+        let mut accepted_conns = FuturesUnordered::new();
+
         loop {
             select! {
                 result = self.local_server.accept() => {
-                    let (reader, writer) = result.map_err(Error::Accept)?;
-                    self.insert_connection(
-                        ServerReader::Local(reader),
-                        ServerWriter::Local(writer)
-                    );
+                    let conn = result.map_err(Error::Accept)?;
+                    accepted_conns.push(AcceptedConnection::Local(conn).finalize());
                 }
-                result = maybe_accept(self.remote_server.as_mut()) => {
-                    let (reader, writer) = result.map_err(Error::Accept)?;
-                    self.insert_connection(ServerReader::Remote(reader), ServerWriter::Remote(writer));
+                result = maybe_accept(self.remote_server.as_ref()) => {
+                    let conn = result.map_err(Error::Accept)?;
+                    accepted_conns.push(AcceptedConnection::Remote(conn).finalize());
+                }
+                Some(result) = accepted_conns.next() => {
+                    if let Some((reader, writer)) = result {
+                       self.insert_connection(reader, writer);
+                    }
                 }
                 Some((conn_id, message)) = self.readers.next() => {
                     if let Some(message) = message {
@@ -782,9 +786,7 @@ pub async fn local_control_endpoint(config_path: &Path) -> Result<(u16, AuthKey)
 type ConnectionId = usize;
 type SubscriptionId = (ConnectionId, MessageId);
 
-async fn maybe_accept(
-    server: Option<&mut RemoteServer>,
-) -> io::Result<(RemoteServerReader, RemoteServerWriter)> {
+async fn maybe_accept(server: Option<&RemoteServer>) -> io::Result<AcceptedRemoteConnection> {
     if let Some(server) = server {
         server.accept().await
     } else {
