@@ -67,8 +67,8 @@ dependencies {
 
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0"
     implementation 'org.msgpack:msgpack-core:0.9.5'
-    implementation 'com.kohlschutter.junixsocket:junixsocket-core:2.10.1'
 
     testImplementation "junit:junit:4.13"
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0'

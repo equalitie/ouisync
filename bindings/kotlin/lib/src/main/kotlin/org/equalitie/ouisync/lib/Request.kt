@@ -50,11 +50,19 @@ internal abstract class ValueRequest<T : Any>(val value: T) : Request() {
     }
 }
 
+internal class RepositoryGetStoreDir : EmptyRequest()
+internal class RepositorySetStoreDir(value: String) : ValueRequest<String>(value)
+
+internal class RepositoryList : EmptyRequest()
+
 internal class RepositoryCreate(
     val path: String,
     val readSecret: SetLocalSecret?,
     val writeSecret: SetLocalSecret?,
-    val shareToken: String?,
+    val token: String?,
+    val syncEnabled: Boolean,
+    val dhtEnabled: Boolean,
+    val pexEnabled: Boolean,
 ) : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packMap(
@@ -62,7 +70,10 @@ internal class RepositoryCreate(
                 "path" to path,
                 "read_secret" to readSecret,
                 "write_secret" to writeSecret,
-                "share_token" to shareToken,
+                "token" to token,
+                "sync_enabled" to syncEnabled,
+                "dht_enabled" to dhtEnabled,
+                "pex_enabled" to pexEnabled,
             ),
         )
     }
@@ -74,9 +85,9 @@ internal class RepositoryOpen(val path: String, val secret: LocalSecret?) : Requ
     }
 }
 
-internal class RepositoryClose : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
-}
+internal class RepositoryClose(value: Long) : ValueRequest<Long>(value)
+
+internal class RepositoryDelete(value: Long) : ValueRequest<Long>(value)
 
 internal class RepositorySubscribe : ValueRequest<Long> {
     constructor(value: Long) : super(value)
@@ -113,20 +124,20 @@ internal class RepositorySetAccess(
     }
 }
 
-internal class RepositoryAccessMode : ValueRequest<Long> {
+internal class RepositoryGetAccessMode : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
 internal class RepositorySetAccessMode(
     val repository: Long,
-    val accessMode: AccessMode,
+    val mode: AccessMode,
     val secret: LocalSecret?,
 ) : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packMap(
             mapOf(
                 "repository" to repository,
-                "access_mode" to accessMode,
+                "mode" to mode,
                 "secret" to secret,
             ),
         )
@@ -151,29 +162,7 @@ internal class RepositorySetCredentials(
     }
 }
 
-internal class RepositoryRemoveReadKey : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
-}
-
-internal class RepositoryRemoveWriteKey : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
-}
-
-internal class RepositoryRequiresLocalSecretForReading : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
-}
-
-internal class RepositoryRequiresLocalSecretForWriting : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
-}
-
-internal class RepositoryInfoHash : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
-}
-
-internal class RepositoryDatabaseId : ValueRequest<Long> {
-    constructor(value: Long) : super(value)
-}
+internal class RepositoryGetInfoHash(value: Long) : ValueRequest<Long>(value)
 
 internal class RepositoryEntryType(val repository: Long, val path: String) : Request() {
     override fun packContent(packer: MessagePacker) =
@@ -214,19 +203,17 @@ internal class RepositorySetPexEnabled(val repository: Long, val enabled: Boolea
         packer.packMap(mapOf("repository" to repository, "enabled" to enabled))
 }
 
-internal class RepositoryCreateShareToken(
+internal class RepositoryShare(
     val repository: Long,
     val secret: LocalSecret?,
-    val accessMode: AccessMode,
-    val name: String?,
+    val mode: AccessMode,
 ) : Request() {
     override fun packContent(packer: MessagePacker) =
         packer.packMap(
             mapOf(
                 "repository" to repository,
                 "secret" to secret,
-                "access_mode" to accessMode.encode(),
-                "name" to name,
+                "mode" to mode.encode(),
             ),
         )
 }
@@ -269,15 +256,15 @@ internal class RepositoryMountAll : ValueRequest<String> {
     constructor(value: String) : super(value)
 }
 
-internal class ShareTokenMode : ValueRequest<String> {
+internal class ShareTokenGetAccessMode : ValueRequest<String> {
     constructor(value: String) : super(value)
 }
 
-internal class ShareTokenInfoHash : ValueRequest<String> {
+internal class ShareTokenGetInfoHash : ValueRequest<String> {
     constructor(value: String) : super(value)
 }
 
-internal class ShareTokenSuggestedName : ValueRequest<String> {
+internal class ShareTokenGetSuggestedName : ValueRequest<String> {
     constructor(value: String) : super(value)
 }
 
@@ -295,7 +282,7 @@ internal class DirectoryCreate(val repository: Long, val path: String) : Request
         )
 }
 
-internal class DirectoryOpen(val repository: Long, val path: String) : Request() {
+internal class DirectoryRead(val repository: Long, val path: String) : Request() {
     override fun packContent(packer: MessagePacker) =
         packer.packMap(
             mapOf(
@@ -367,61 +354,44 @@ internal class NetworkInit(
     val portForwardingEnabled: Boolean,
     val localDiscoveryEnabled: Boolean,
 ) : Request() {
-    override fun packContent(packer: MessagePacker) =
-        packer.packMap(
-            mapOf(
-                "bind" to bindAddrs,
-                "port_forwarding_enabled" to
-                    portForwardingEnabled,
-                "local_discovery_enabled" to
-                    localDiscoveryEnabled,
-            ),
-        )
+    override fun packContent(packer: MessagePacker) = packer.packMap(
+        mapOf(
+            "bind" to bindAddrs,
+            "port_forwarding_enabled" to portForwardingEnabled,
+            "local_discovery_enabled" to localDiscoveryEnabled,
+        ),
+    )
 }
 
-internal class NetworkBind(
-    val quicV4: String?,
-    val quicV6: String?,
-    val tcpV4: String?,
-    val tcpV6: String?,
-) : Request() {
+internal class NetworkBind(val addrs: List<String>) : Request() {
     override fun packContent(packer: MessagePacker) {
-        packer.packMap(
-            mapOf(
-                "quic_v4" to quicV4,
-                "quic_v6" to quicV6,
-                "tcp_v4" to tcpV4,
-                "tcp_v6" to tcpV6,
-            ),
-        )
+        packer.packArrayHeader(addrs.size)
+
+        for (addr in addrs) {
+            packer.packString(addr)
+        }
     }
 }
 
 internal class NetworkSubscribe : EmptyRequest()
 
-internal class NetworkTcpListenerLocalAddrV4 : EmptyRequest()
+internal class NetworkGetListenerAddrs : EmptyRequest()
 
-internal class NetworkTcpListenerLocalAddrV6 : EmptyRequest()
-
-internal class NetworkQuicListenerLocalAddrV4 : EmptyRequest()
-
-internal class NetworkQuicListenerLocalAddrV6 : EmptyRequest()
-
-internal class NetworkAddUserProvidedPeer : ValueRequest<String> {
-    constructor(value: String) : super(value)
+internal class NetworkAddUserProvidedPeers : ValueRequest<List<String>> {
+    constructor(value: List<String>) : super(value)
 }
 
-internal class NetworkRemoveUserProvidedPeer : ValueRequest<String> {
-    constructor(value: String) : super(value)
+internal class NetworkRemoveUserProvidedPeers : ValueRequest<List<String>> {
+    constructor(value: List<String>) : super(value)
 }
 
-internal class NetworkKnownPeers : EmptyRequest()
+internal class NetworkGetPeers : EmptyRequest()
 
-internal class NetworkThisRuntimeId : EmptyRequest()
+internal class NetworkGetRuntimeId : EmptyRequest()
 
-internal class NetworkCurrentProtocolVersion : EmptyRequest()
+internal class NetworkGetCurrentProtocolVersion : EmptyRequest()
 
-internal class NetworkHighestSeenProtocolVersion : EmptyRequest()
+internal class NetworkGetHighestSeenProtocolVersion : EmptyRequest()
 
 internal class NetworkIsPortForwardingEnabled : EmptyRequest()
 
@@ -445,6 +415,14 @@ internal class Unsubscribe : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
+internal fun MessagePacker.packList(list: List<Any?>) {
+    packArrayHeader(list.size)
+
+    for (item in list) {
+        packAny(item)
+    }
+}
+
 internal fun MessagePacker.packMap(map: Map<String, Any?>) {
     packMapHeader(map.count { it.value != null })
 
@@ -458,8 +436,9 @@ internal fun MessagePacker.packMap(map: Map<String, Any?>) {
     }
 }
 
-private fun MessagePacker.packAny(value: Any) {
+private fun MessagePacker.packAny(value: Any?) {
     when (value) {
+        is List<Any?> -> packList(value)
         is Boolean -> packBoolean(value)
         is Byte -> packByte(value)
         is ByteArray -> {
@@ -471,8 +450,10 @@ private fun MessagePacker.packAny(value: Any) {
         is Short -> packShort(value)
         is String -> packString(value)
         is AccessChange -> value.pack(this)
+        is AccessMode -> packByte(value.encode())
         is LocalSecret -> value.pack(this)
         is SetLocalSecret -> value.pack(this)
+        null -> packNil()
         else -> throw IllegalArgumentException("can't pack ${value::class.qualifiedName}")
     }
 }

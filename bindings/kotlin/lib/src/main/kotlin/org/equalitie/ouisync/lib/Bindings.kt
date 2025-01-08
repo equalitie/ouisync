@@ -13,34 +13,32 @@ internal interface Bindings : Library {
         }
     }
 
-    fun ouisync_start(
-        socket_path: String,
+    fun service_start(
         config_dir: String,
         debug_label: String?,
-        callback: Callback,
+        callback: StatusCallback,
         callback_context: Pointer?,
     ): Pointer
 
-    fun ouisync_stop(
+    fun service_stop(
         handle: Pointer,
-        callback: Callback,
+        callback: StatusCallback,
         callback_context: Pointer?,
     )
 
-    fun ouisync_log_init(
-        log_file: String?,
-        log_tag: String,
+    fun log_init(
+        file: String?,
+        callback: LogCallback?,
+        tag: String,
     ): Short
-
-    fun ouisync_log_print(
-        level: Byte,
-        scope: String,
-        message: String,
-    )
 }
 
 internal typealias Handle = Long
 
-interface Callback : JnaCallback {
+interface StatusCallback : JnaCallback {
     fun invoke(context: Pointer?, error_code: Short)
+}
+
+interface LogCallback : JnaCallback {
+    fun invoke(level: Byte, message: String)
 }

@@ -24,20 +24,18 @@ class ShareToken internal constructor(private val value: String, private val cli
     /**
      * Returns the access mode this share token grants.
      */
-    suspend fun accessMode(): AccessMode {
-        val raw = client.invoke(ShareTokenMode(value)) as Byte
-        return AccessMode.decode(raw)
-    }
+    suspend fun accessMode(): AccessMode =
+        client.invoke(ShareTokenGetAccessMode(value)) as AccessMode
 
     /**
      * Returns the Bittorrent DHT info-hash of the repository.
      */
-    suspend fun infoHash() = client.invoke(ShareTokenInfoHash(value)) as String
+    suspend fun infoHash() = client.invoke(ShareTokenGetInfoHash(value)) as String
 
     /**
      * Returns the suggested name for the repository.
      */
-    suspend fun suggestedName() = client.invoke(ShareTokenSuggestedName(value)) as String
+    suspend fun suggestedName() = client.invoke(ShareTokenGetSuggestedName(value)) as String
 
     override operator fun equals(other: Any?) = other is ShareToken && value == other.value
 

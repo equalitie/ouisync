@@ -12,11 +12,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val rootDir = getFilesDir()
-        val socketPath = "$rootDir/sock"
         val configDir = "$rootDir/config"
         val storeDir = "$rootDir/store"
 
-        val viewModel = ExampleViewModel(socketPath, configDir, storeDir)
+        val viewModel = ExampleViewModel(configDir, storeDir)
 
         setContent {
             MaterialTheme {

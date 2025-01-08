@@ -52,6 +52,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -305,10 +306,10 @@ fun FolderDetail(
 
     // Refresh the directory on every notification event from the repo.
     LaunchedEffect(repository, path) {
-        directory = Directory.open(repository, path)
+        directory = Directory.read(repository, path)
 
-        repository.subscribe().consumeAsFlow().collect {
-            directory = Directory.open(repository, path)
+        repository.subscribe().collect {
+            directory = Directory.read(repository, path)
         }
     }
 
@@ -381,7 +382,12 @@ fun FileDetail(repo: Repository, path: String, modifier: Modifier = Modifier) {
     // simplicity.
     LaunchedEffect(repo, path) {
         val digest = MessageDigest.getInstance("SHA-256")
-        val events = repo.subscribe()
+
+        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+        val events = produce {
+            repo.subscribe().collect(::send)
+        }
+
         var maybeFile: File? = null
 
         while (true) {
@@ -476,6 +482,8 @@ fun FileDetail(repo: Repository, path: String, modifier: Modifier = Modifier) {
                 events.receive()
             }
         }
+
+        events.cancel()
     }
 
     Column(modifier = modifier) {
@@ -665,7 +673,7 @@ fun DeleteRepositoryDialog(onSubmit: () -> Unit = {}, onCancel: () -> Unit = {})
 }
 
 suspend fun shareRepository(context: Context, repo: Repository) {
-    val token = repo.createShareToken().toString()
+    val token = repo.share().toString()
 
     val sendIntent = Intent().apply {
         action = Intent.ACTION_SEND

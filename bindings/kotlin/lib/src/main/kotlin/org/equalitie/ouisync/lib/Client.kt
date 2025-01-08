@@ -1,331 +1,365 @@
 package org.equalitie.ouisync.lib
 
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
-import java.io.InputStream
-import java.io.OutputStream
-import java.nio.file.Path
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.serialization.json.Json
 import org.msgpack.core.MessagePack
-import org.newsclub.net.unix.AFUNIXSocket
-import org.newsclub.net.unix.AFUNIXSocketAddress
+import java.io.File
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.SocketAddress
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.channels.AsynchronousCloseException
+import java.nio.channels.AsynchronousSocketChannel
+import java.nio.channels.CompletionHandler
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.math.max
 
-/**
- * Receiver for events of type `E`
- */
-class EventReceiver<E> internal constructor(
-    private val client: Client,
-    private val id: Long,
-    private val channel: ReceiveChannel<Any?>,
-) {
-    /**
-     * Receives next event
-     */
-    suspend fun receive(): E {
-        @Suppress("UNCHECKED_CAST")
-        return channel.receive() as E
-    }
-
-    /**
-     * Unsubscribes from the events
-     */
-    suspend fun close() {
-        channel.cancel()
-        client.unsubscribe(id)
-    }
-
-    /**
-     * Converts this receiver into [Flow]. The receiver is automatically
-     * [close]d after the flow is collected.
-     */
-    fun consumeAsFlow(): Flow<E> = flow {
-        try {
-            while (true) {
-                emit(receive())
-            }
-        } finally {
-            close()
-        }
-    }
-}
-
-internal class Client private constructor(
-    private val socket: Socket,
-) {
+internal class Client private constructor(private val socket: AsynchronousSocket) {
     companion object {
-        suspend fun connect(socketPath: String): Client {
+        @OptIn(kotlin.ExperimentalStdlibApi::class)
+        suspend fun connect(configPath: String): Client {
+            val portRaw = File("$configPath/local_control_port.conf").readText()
+            val port = Json.decodeFromString<Int>(portRaw)
+
+            val authKeyRaw = File("$configPath/local_control_auth_key.conf").readText()
+            val authKey = Json.decodeFromString<String>(authKeyRaw).hexToByteArray()
+
             // TODO: retry connect
 
-            val socket = Socket.connect(socketPath)
+            val socket = AsynchronousSocket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port))
+
+            authenticate(socket, authKey)
 
             return Client(socket)
         }
     }
 
     private val messageMatcher = MessageMatcher()
-    private var receiveJob: Job? = null
+    private val coroutineScope = CoroutineScope(Dispatchers.Default)
 
     init {
-        // TODO: get coroutine scope
-        receiveJob = launch {
+        coroutineScope.launch {
             receive()
         }
     }
 
-    suspend fun invoke(request: Request): Any? {
-        val response = messageMatcher.response()
+    suspend fun invoke(request: Request): Any =
+        invoke(messageMatcher.nextId(), request)
 
-        val stream = ByteArrayOutputStream()
-        DataOutputStream(stream).writeLong(response.id)
+    fun subscribe(request: Request): Flow<Any> = channelFlow {
+        val id = messageMatcher.nextId()
 
-        val packer = MessagePack.newDefaultPacker(stream)
-        request.pack(packer)
-        packer.close()
-
-        socket.write(stream.toByteArray())
-
-        return response.await()
+        try {
+            invoke(id, request)
+            messageMatcher.register(id, channel)
+            awaitClose()
+        } finally {
+            messageMatcher.deregister(id)
+            invoke(Unsubscribe(id))
+        }
     }
-
-    suspend fun <E> subscribe(request: Request): EventReceiver<E> {
-        TODO()
-    }
-
-    suspend fun unsubscribe(id: Long) {
-        TODO()
-    }
+        .buffer(onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        .map {
+            when (it) {
+                is Success -> it.value
+                is Failure -> throw it.error
+            }
+        }
 
     suspend fun close() {
+        coroutineScope.cancel()
         socket.close()
-        receiveJob.cancelAndJoin()
+    }
+
+    private suspend fun invoke(id: Long, request: Request): Any {
+        val deferred = CompletableDeferred<Response>()
+        messageMatcher.register(id, deferred)
+
+        send(id, request)
+
+        val response = deferred.await()
+
+        when (response) {
+            is Success -> return response.value
+            is Failure -> throw response.error
+        }
+    }
+
+    private suspend fun send(id: Long, request: Request) {
+        // Message format:
+        //
+        // | length  | message_id | payload            |
+        // +---------+------------+--------------------+
+        // | u32, be | u64, be    | `length` - 8 bytes |
+
+        val payload = MessagePack.newDefaultBufferPacker().let {
+            request.pack(it)
+            it.toByteArray()
+        }
+
+        val buffer = ByteBuffer.allocate(HEADER_SIZE + payload.size)
+        buffer.order(ByteOrder.BIG_ENDIAN)
+        buffer.putInt(payload.size + Long.SIZE_BYTES)
+        buffer.putLong(id)
+        buffer.put(payload)
+        buffer.flip()
+
+        socket.writeAll(buffer)
     }
 
     private suspend fun receive() {
-        // val buffer = socket.read(8)
-        // val
+        var buffer = ByteBuffer.allocate(HEADER_SIZE)
+        buffer.order(ByteOrder.BIG_ENDIAN)
 
-        // val stream = ByteArrayInputStream(buffer)
+        while (true) {
+            buffer.limit(HEADER_SIZE)
+            buffer.rewind()
+            socket.readExact(buffer)
+            buffer.flip()
 
-        // val id = try {
-        //     DataInputStream(stream).readLong()
-        // } catch (e: EOFException) {
-        //     return
-        // }
+            if (buffer.remaining() < HEADER_SIZE) {
+                messageMatcher.cancel()
+                break
+            }
 
-        // try {
-        //     val unpacker = MessagePack.newDefaultUnpacker(stream)
-        //     val message = ServerMessage.unpack(unpacker)
+            val size = buffer.getInt() - Long.SIZE_BYTES
+            val id = buffer.getLong()
 
-        //     when (message) {
-        //         is Success -> handleSuccess(id, message.value)
-        //         is Failure -> handleFailure(id, message.error)
-        //         is Notification -> handleNotification(id, message.content)
-        //     }
-        // } catch (e: InvalidResponse) {
-        //     handleFailure(id, e)
-        // } catch (e: InvalidNotification) {
-        //     // TODO: log?
-        // } catch (e: Exception) {
-        //     // TODO: log?
-        // }
+            if (size > buffer.capacity()) {
+                buffer = ByteBuffer.allocate(max(2 * buffer.capacity(), size))
+                buffer.order(ByteOrder.BIG_ENDIAN)
+            }
+
+            buffer.limit(size)
+            buffer.rewind()
+            socket.readExact(buffer)
+            buffer.flip()
+
+            val completer = messageMatcher.completer(id)
+
+            if (completer == null) {
+                // unsolicited response
+                continue
+            }
+
+            try {
+                val unpacker = MessagePack.newDefaultUnpacker(buffer)
+                val response = Response.unpack(unpacker)
+
+                completer.complete(response)
+            } catch (e: Error) {
+                completer.complete(Failure(e))
+            } catch (e: Exception) {
+                completer.complete(Failure(InvalidData("invalid response: $e")))
+            }
+        }
     }
 }
 
 private class MessageMatcher {
     private var nextId: Long = 0
-    private val mutex = Mutex()
-    private val responses: HashMap<Long, CompletableDeferred<Any?>> = HashMap()
-    private val subscriptions: HashMap<Long, SendChannel<Any?>> = HashMap()
+    private val oneshots: HashMap<Long, CompletableDeferred<Response>> = HashMap()
+    private val channels: HashMap<Long, SendChannel<Response>> = HashMap()
 
+    @Synchronized
+    fun nextId(): Long = nextId++
 
+    @Synchronized
+    fun register(id: Long, deferred: CompletableDeferred<Response>) {
+        oneshots.put(id, deferred)
+    }
+
+    @Synchronized
+    fun register(id: Long, channel: SendChannel<Response>) {
+        channels.put(id, channel)
+    }
+
+    // This deregisters only channels because deferreds are unregistered automatically on
+    // completion.
+    @Synchronized
+    fun deregister(id: Long) {
+        channels.remove(id)
+    }
+
+    @Synchronized
+    fun completer(id: Long): Completer? {
+        val deferred = oneshots.remove(id)
+        if (deferred != null) {
+            return Completer.Oneshot(deferred)
+        }
+
+        val channel = channels.get(id)
+        if (channel != null) {
+            return Completer.Channel(channel)
+        }
+
+        return null
+    }
+
+    @Synchronized
+    fun cancel() {
+        for (deferred in oneshots.values) {
+            deferred.cancel()
+        }
+        oneshots.clear()
+
+        for (channel in channels.values) {
+            channel.close()
+        }
+        channels.clear()
+    }
 }
 
-// Async wrapper around AFUNIXSocket
-// TODO: Look into nio and non-blocking mode
-private class Socket(
-    private val socket: AFUNIXSocket,
-    private val inputStream: InputStream,
-    private val outputStream: OutputStream,
-) {
-    companion object {
-        suspend fun connect(path: String): Socket = withContext(Dispatchers.IO) {
-            val socket = AFUNIXSocket.newInstance()
-
-            val addr = AFUNIXSocketAddress.of(Path.of(path))
-            socket.connect(addr)
-
-            val inputStream = socket.getInputStream()
-            val outputStream = socket.getOutputStream()
-
-            Socket(socket, inputStream, outputStream)
+private sealed class Completer {
+    class Oneshot(val deferred: CompletableDeferred<Response>) : Completer() {
+        override suspend fun complete(value: Response) {
+            deferred.complete(value)
         }
     }
 
-    suspend fun read(len: Int): ByteArray = withContext(Dispatchers.IO) {
-        inputStream.readNBytes(len)
+    class Channel(val channel: SendChannel<Response>) : Completer() {
+        override suspend fun complete(value: Response) = channel.send(value)
     }
 
-    suspend fun write(buffer: ByteArray) = withContext(Dispatchers.IO) {
-        outputStream.write(buffer)
+    abstract suspend fun complete(value: Response)
+}
+
+private const val HEADER_SIZE = Int.SIZE_BYTES + Long.SIZE_BYTES
+
+private const val CHALLENGE_SIZE = 256
+private const val PROOF_SIZE = 32
+
+private suspend fun authenticate(socket: AsynchronousSocket, authKey: ByteArray) {
+    val random = SecureRandom()
+
+    val hmacAlgo = "HmacSHA256"
+    val hmacKey = SecretKeySpec(authKey, hmacAlgo)
+    val hmac = Mac.getInstance(hmacAlgo).apply { init(hmacKey) }
+
+    val buffer = ByteBuffer.allocate(CHALLENGE_SIZE + PROOF_SIZE)
+
+    val clientChallenge = ByteArray(CHALLENGE_SIZE)
+    random.nextBytes(clientChallenge)
+
+    buffer.put(clientChallenge)
+    buffer.flip()
+    socket.writeAll(buffer)
+
+    buffer.limit(CHALLENGE_SIZE + PROOF_SIZE)
+    buffer.rewind()
+    socket.readExact(buffer)
+    buffer.flip()
+
+    val serverProof = ByteArray(PROOF_SIZE)
+    buffer.get(serverProof)
+
+    if (!MessageDigest.isEqual(serverProof, hmac.doFinal(clientChallenge))) {
+        throw PermissionDenied()
     }
 
-    suspend fun close() = withContext(Dispatchers.IO) {
-        inputStream.close()
-        outputStream.close()
-        socket.close()
+    val serverChallenge = ByteArray(CHALLENGE_SIZE)
+    buffer.get(serverChallenge)
+
+    hmac.init(hmacKey)
+    val clientProof = hmac.doFinal(serverChallenge)
+
+    buffer.limit(CHALLENGE_SIZE)
+    buffer.rewind()
+    buffer.put(clientProof)
+    buffer.flip()
+
+    socket.writeAll(buffer)
+}
+
+// Wrapper around AsynchronousSocketChannel which provides a convenient, coroutine based API.
+private class AsynchronousSocket(private val channel: AsynchronousSocketChannel) {
+    companion object {
+        suspend fun connect(addr: SocketAddress): AsynchronousSocket {
+            val channel = AsynchronousSocketChannel.open()
+
+            suspendCancellableCoroutine<Unit> { cont ->
+                channel.connect(addr, cont, ConnectHandler)
+            }
+
+            return AsynchronousSocket(channel)
+        }
+    }
+
+    suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont ->
+        channel.read(buffer, cont, IOHandler())
+    }
+
+    suspend fun readExact(buffer: ByteBuffer): Int {
+        var total = 0
+
+        while (buffer.hasRemaining()) {
+            val n = read(buffer)
+
+            if (n == 0) {
+                break
+            } else {
+                total += n
+            }
+        }
+
+        return total
+    }
+
+    suspend fun write(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont ->
+        channel.write(buffer, cont, IOHandler())
+    }
+
+    suspend fun writeAll(buffer: ByteBuffer) {
+        while (buffer.hasRemaining()) {
+            write(buffer)
+        }
+    }
+
+    fun close() {
+        channel.close()
     }
 }
 
+object ConnectHandler : CompletionHandler<Void?, CancellableContinuation<Unit>> {
+    override fun completed(result: Void?, cont: CancellableContinuation<Unit>) {
+        cont.resume(Unit)
+    }
 
-// import kotlinx.coroutines.channels.Channel
-// import kotlinx.coroutines.channels.SendChannel
-// import java.io.DataInputStream
-// import java.io.DataOutputStream
-// import java.io.EOFException
+    override fun failed(ex: Throwable, cont: CancellableContinuation<Unit>) {
+        if (ex is AsynchronousCloseException && cont.isCancelled) return
+        cont.resumeWithException(ex)
+    }
+}
 
+class IOHandler<T> : CompletionHandler<T, CancellableContinuation<T>> {
+    override fun completed(result: T, cont: CancellableContinuation<T>) {
+        cont.resume(result)
+    }
 
-// internal class Client {
-//     var sessionHandle: Long = 0
-
-//     private var nextMessageId: Long = 0
-//     private val subscriptions: HashMap<Long, SendChannel<Any?>> = HashMap()
-
-//     suspend fun invoke(request: Request): Any? {
-//         val id = nextMessageId++
-
-//         val stream = ByteArrayOutputStream()
-//         DataOutputStream(stream).writeLong(id)
-//         val packer = MessagePack.newDefaultPacker(stream)
-//         request.pack(packer)
-//         packer.close()
-//         val message = stream.toByteArray()
-
-//         val deferred = CompletableDeferred<Any?>()
-
-//         mutex.withLock {
-//             responses.put(id, deferred)
-//         }
-
-//         Session.bindings.session_channel_send(sessionHandle, message, message.size)
-
-//         return deferred.await()
-//     }
-
-//     suspend fun receive(buffer: ByteArray) {
-//         val stream = ByteArrayInputStream(buffer)
-
-//         val id = try {
-//             DataInputStream(stream).readLong()
-//         } catch (e: EOFException) {
-//             return
-//         }
-
-//         try {
-//             val unpacker = MessagePack.newDefaultUnpacker(stream)
-//             val message = ServerMessage.unpack(unpacker)
-
-//             when (message) {
-//                 is Success -> handleSuccess(id, message.value)
-//                 is Failure -> handleFailure(id, message.error)
-//                 is Notification -> handleNotification(id, message.content)
-//             }
-//         } catch (e: InvalidResponse) {
-//             handleFailure(id, e)
-//         } catch (e: InvalidNotification) {
-//             // TODO: log?
-//         } catch (e: Exception) {
-//             // TODO: log?
-//         }
-//     }
-
-//     suspend fun <E> subscribe(request: Request): EventReceiver<E> {
-//         // FIXME: race condition - if a notification arrives after we call `invoke` but before we
-//         // register the sender then it gets silently dropped
-
-//         val id = invoke(request) as Long
-//         val channel = Channel<Any?>(1024)
-
-//         mutex.withLock {
-//             subscriptions.put(id, channel)
-//         }
-
-//         return EventReceiver(this, id, channel)
-//     }
-
-//     suspend fun unsubscribe(id: Long) {
-//         mutex.withLock {
-//             subscriptions.remove(id)
-//         }
-
-//         invoke(Unsubscribe(id))
-//     }
-
-//     private suspend fun handleSuccess(id: Long, content: Any?) {
-//         mutex.withLock {
-//             responses.remove(id)?.complete(content)
-//         }
-//     }
-
-//     private suspend fun handleNotification(id: Long, content: Any?) {
-//         mutex.withLock {
-//             subscriptions.get(id)?.send(content)
-//         }
-//     }
-
-//     private suspend fun handleFailure(id: Long, error: Exception) {
-//         mutex.withLock {
-//             responses.remove(id)?.completeExceptionally(error)
-//         }
-//     }
-// }
-
-// private data class ServerEnvelope(val id: Long, val content: ServerMessage)
-
-
-
-// Adapters to add suspend API to AsynchronousSocketChannel
-// (Stolen from https://github.com/Kotlin/kotlinx.coroutines/blob/87eaba8a287285d4c47f84c91df7671fcb58271f/integration/kotlinx-coroutines-nio/src/Nio.kt)
-
-// private suspend fun AsynchronousSocketChannel.asyncConnect(
-//     addr: SocketAddress
-// ) = suspendCoroutine<Unit> { cont ->
-//     connect(addr, cont, object : CompletionHandler<Void?, Continuation<Unit>> {
-//         override fun completed(result: Void?, cont: Continuation<Unit>) {
-//             cont.resume(Unit)
-//         }
-
-//         override fun failed(ex: Throwable, cont: Continuation<Unit>) {
-//             cont.resumeWithException(ex)
-//         }
-//     })
-// }
-
-// private suspend fun AsynchronousSocketChannel.asyncRead(
-//     buffer: ByteBuffer,
-//     timeout: Long = 0L,
-//     timeUnit: TimeUnit = TimeUnit.MILLISECONDS
-// ) = suspendCancellableCoroutine<Int> { cont ->
-//     read(buffer, timeout, timeUnit, cont, AsyncIOHandler())
-//     closeOnCancel(cont)
-// }
-
-// private suspend fun AsynchronousSocketChannel.asyncWrite(
-//     buffer: ByteBuffer,
-//     timeout: Long = 0L,
-//     timeUnit: TimeUnit = TimeUnit.MILLISECONDS
-// ) = suspendCancellableCoroutine<Int> { cont ->
-//     write(buffer, timeout, timeUnit, cont, AsyncIOHandler())
-//     closeOnCancel(cont)
-// }
-
+    override fun failed(ex: Throwable, cont: CancellableContinuation<T>) {
+        // just return if already cancelled and got an expected exception for that case
+        if (ex is AsynchronousCloseException && cont.isCancelled) return
+        cont.resumeWithException(ex)
+    }
+}

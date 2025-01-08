@@ -594,11 +594,11 @@ impl Service {
             }
             Request::RepositorySetAccessMode {
                 repository,
-                access_mode,
+                mode,
                 secret,
             } => {
                 self.state
-                    .set_repository_access_mode(repository, access_mode, secret)
+                    .set_repository_access_mode(repository, mode, secret)
                     .await?;
                 Ok(().into())
             }

@@ -178,7 +178,7 @@ pub enum Request {
     },
     RepositorySetAccessMode {
         repository: RepositoryHandle,
-        access_mode: AccessMode,
+        mode: AccessMode,
         secret: Option<LocalSecret>,
     },
     RepositorySetBlockExpiration {

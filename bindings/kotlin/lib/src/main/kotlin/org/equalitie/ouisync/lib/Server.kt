@@ -9,12 +9,11 @@ class Server private constructor(private val handle: Pointer) {
     companion object {
 
         suspend fun start(
-            socketPath: String,
             configPath: String,
             debugLabel: String? = null,
         ): Server {
             val result = ResultHandler()
-            val handle = bindings.ouisync_start(socketPath, configPath, debugLabel, result, null)
+            val handle = bindings.service_start(configPath, debugLabel, result, null)
             result.await()
 
             return Server(handle)
@@ -23,12 +22,26 @@ class Server private constructor(private val handle: Pointer) {
 
     suspend fun stop() {
         val result = ResultHandler()
-        bindings.ouisync_stop(handle, result, null)
+        bindings.service_stop(handle, result, null)
         result.await()
     }
 }
 
-private class ResultHandler() : Callback {
+typealias LogFunction = (level: LogLevel, message: String) -> Unit
+
+fun initLog(
+    file: String? = null,
+    callback: LogFunction? = null,
+    tag: String = "",
+) {
+    bindings.log_init(
+        file,
+        callback?.let(::LogHandler),
+        tag,
+    )
+}
+
+private class ResultHandler() : StatusCallback {
     private val deferred = CompletableDeferred<Short>()
 
     override fun invoke(context: Pointer?, errorCode: Short) {
@@ -39,11 +52,13 @@ private class ResultHandler() : Callback {
         val errorCode = ErrorCode.decode(deferred.await())
 
         if (errorCode != ErrorCode.OK) {
-            throw Error.fromCode(errorCode)
+            throw Error.dispatch(errorCode)
         }
     }
 }
 
-fun initLog(logFile: String? = null, logTag: String = "") {
-    bindings.ouisync_log_init(logFile, logTag)
+private class LogHandler(val function: LogFunction) : LogCallback {
+    override fun invoke(level: Byte, message: String) {
+        function(LogLevel.decode(level), message)
+    }
 }

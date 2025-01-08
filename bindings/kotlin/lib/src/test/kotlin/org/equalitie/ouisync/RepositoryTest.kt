@@ -22,10 +22,8 @@ class RepositoryTest {
 
         initLog("$tempDir/test.log")
 
-        session = Session.create(
-            socketPath = "$tempDir/sock",
-            configPath = "$tempDir/config",
-        )
+        session = Session.create(configPath = "$tempDir/config")
+        session.setStoreDir("$tempDir/store")
     }
 
     @After
@@ -46,7 +44,7 @@ class RepositoryTest {
 
         try {
             repo.close()
-            repo = Repository.open(session, repoPath)
+            repo = Repository.open(session, repoName)
         } finally {
             repo.close()
         }
@@ -92,7 +90,7 @@ class RepositoryTest {
         try {
             val credentials = repo.credentials()
             repo.close()
-            repo = Repository.open(session, repoPath)
+            repo = Repository.open(session, repoName)
             repo.setCredentials(credentials)
         } finally {
             repo.close()
@@ -101,21 +99,29 @@ class RepositoryTest {
 
     @Test
     fun localPasswords() = runTest {
+        suspend fun checkAccessMode(repo: Repository, set: AccessMode, expected: AccessMode) {
+            repo.setAccessMode(AccessMode.BLIND)
+            repo.setAccessMode(set)
+            assertEquals(expected, repo.accessMode())
+        }
+
         withRepo {
-            assertFalse(it.requiresLocalSecretForReading())
-            assertFalse(it.requiresLocalSecretForWriting())
+            checkAccessMode(it, set = AccessMode.READ, expected = AccessMode.READ)
+            checkAccessMode(it, set = AccessMode.WRITE, expected = AccessMode.WRITE)
 
             it.setAccess(read = EnableAccess(LocalPassword("banana")), write = EnableAccess(LocalPassword("banana")))
-            assertTrue(it.requiresLocalSecretForReading())
-            assertTrue(it.requiresLocalSecretForWriting())
+            checkAccessMode(it, set = AccessMode.READ, expected = AccessMode.BLIND)
+            checkAccessMode(it, set = AccessMode.WRITE, expected = AccessMode.BLIND)
 
+            it.setAccessMode(AccessMode.READ, LocalPassword("banana"))
             it.setAccess(read = EnableAccess(null))
-            assertFalse(it.requiresLocalSecretForReading())
-            assertTrue(it.requiresLocalSecretForWriting())
+            checkAccessMode(it, set = AccessMode.READ, expected = AccessMode.READ)
+            checkAccessMode(it, set = AccessMode.WRITE, expected = AccessMode.READ)
 
+            it.setAccessMode(AccessMode.WRITE, LocalPassword("banana"))
             it.setAccess(write = EnableAccess(null))
-            assertFalse(it.requiresLocalSecretForReading())
-            assertFalse(it.requiresLocalSecretForWriting())
+            checkAccessMode(it, set = AccessMode.READ, expected = AccessMode.READ)
+            checkAccessMode(it, set = AccessMode.WRITE, expected = AccessMode.WRITE)
         }
     }
 
@@ -123,13 +129,6 @@ class RepositoryTest {
     fun accessMode() = runTest {
         withRepo {
             assertEquals(AccessMode.WRITE, it.accessMode())
-        }
-    }
-
-    @Test
-    fun databaseId() = runTest {
-        withRepo {
-            assertTrue(it.databaseId().isNotEmpty())
         }
     }
 
@@ -246,12 +245,12 @@ class RepositoryTest {
             Directory.create(repo, dirName)
             assertEquals(EntryType.DIRECTORY, repo.entryType(dirName))
 
-            val dir0 = Directory.open(repo, dirName)
+            val dir0 = Directory.read(repo, dirName)
             assertEquals(0, dir0.size)
 
             File.create(repo, "$dirName/$fileName").close()
 
-            val dir1 = Directory.open(repo, dirName)
+            val dir1 = Directory.read(repo, dirName)
             assertEquals(1, dir1.size)
             assertEquals(fileName, dir1.elementAt(0).name)
             assertEquals(EntryType.FILE, dir1.elementAt(0).entryType)
@@ -264,10 +263,10 @@ class RepositoryTest {
     @Test
     fun shareTokenOperations() = runTest {
         withRepo { repo ->
-            var token = repo.createShareToken(name = "foo")
+            var token = repo.share()
 
             assertEquals(AccessMode.WRITE, token.accessMode())
-            assertEquals("foo", token.suggestedName())
+            assertEquals(repoName, token.suggestedName())
         }
     }
 
@@ -277,11 +276,11 @@ class RepositoryTest {
             session,
             "https://ouisync.net/r#AwAgEZkrt6b9gW47Nb6hGQjsZRGeh9GKp3gTyhZrxfT03SE",
         )
-        val repo = createRepo(shareToken = origToken)
+        val repo = createRepo(token = origToken)
 
         try {
-            val actualToken = repo.createShareToken()
-            assertEquals(origToken, actualToken)
+            val actualToken = repo.share()
+            assertEquals("$origToken?name=$repoName", actualToken.toString())
         } finally {
             repo.close()
         }
@@ -348,13 +347,13 @@ class RepositoryTest {
         }
     }
 
-    private suspend fun createRepo(shareToken: ShareToken? = null): Repository =
+    private suspend fun createRepo(token: ShareToken? = null): Repository =
         Repository.create(
             session,
-            repoPath,
+            repoName,
             readSecret = null,
             writeSecret = null,
-            shareToken = shareToken,
+            token = token,
         )
 
     private suspend fun <R> withRepo(block: suspend (repo: Repository) -> R): R {
@@ -367,6 +366,5 @@ class RepositoryTest {
         }
     }
 
-    private val repoPath: String
-        get() = "$tempDir/repo.db"
+    private val repoName = "repo"
 }
