@@ -46,7 +46,7 @@ use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use transport::{
     local::{AuthKey, LocalServer},
     remote::{RemoteServer, RemoteServerReader, RemoteServerWriter},
-    ReadError, ServerReader, ServerWriter,
+    ClientError, ReadError, ServerReader, ServerWriter,
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -79,7 +79,7 @@ impl Service {
             Err(error) => return Err(error.into()),
         };
 
-        let local_auth_key = fetch_local_auth_key(&state.config).await?;
+        let local_auth_key = fetch_local_control_auth_key(&state.config).await?;
 
         let local_server = LocalServer::bind(local_port, local_auth_key)
             .await
@@ -759,6 +759,26 @@ impl Service {
     }
 }
 
+/// Returns the loopback TCP port and authentication key for establishing local connection to the
+/// service.
+pub async fn local_control_endpoint(config_path: &Path) -> Result<(u16, AuthKey), ClientError> {
+    let store = ConfigStore::new(config_path);
+
+    let port = store
+        .entry(LOCAL_CONTROL_PORT_KEY)
+        .get()
+        .await
+        .map_err(|_| ClientError::InvalidEndpoint)?;
+
+    let auth_key = store
+        .entry(LOCAL_CONTROL_AUTH_KEY_KEY)
+        .get()
+        .await
+        .map_err(|_| ClientError::InvalidEndpoint)?;
+
+    Ok((port, auth_key))
+}
+
 type ConnectionId = usize;
 type SubscriptionId = (ConnectionId, MessageId);
 
@@ -772,7 +792,7 @@ async fn maybe_accept(
     }
 }
 
-async fn fetch_local_auth_key(config: &ConfigStore) -> Result<AuthKey, ConfigError> {
+async fn fetch_local_control_auth_key(config: &ConfigStore) -> Result<AuthKey, ConfigError> {
     let entry = config.entry(LOCAL_CONTROL_AUTH_KEY_KEY);
 
     match entry.get().await {

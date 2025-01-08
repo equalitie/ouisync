@@ -25,7 +25,6 @@ pub struct Bin {
 const COMMAND: &str = env!("CARGO_BIN_EXE_ouisync");
 const MOUNT_DIR: &str = "mnt";
 const CONFIG_DIR: &str = "config";
-const API_SOCKET: &str = "api.sock";
 const DEFAULT_REPO: &str = "test";
 
 static CERT: LazyLock<rcgen::CertifiedKey> =
@@ -37,7 +36,6 @@ impl Bin {
         let id = Id::new();
         let base_dir = TempDir::new().unwrap();
         let config_dir = base_dir.path().join(CONFIG_DIR);
-        let socket_path = base_dir.path().join(API_SOCKET);
         let store_dir = base_dir.path().join("store");
         let mount_dir = base_dir.path().join(MOUNT_DIR);
 
@@ -55,9 +53,8 @@ impl Bin {
         fs::write(config_dir.join("root_certs").join("localhost.pem"), &cert).unwrap();
 
         let mut command = Command::new(COMMAND);
-        command.arg("--socket").arg(&socket_path);
-        command.arg("start");
         command.arg("--config-dir").arg(&config_dir);
+        command.arg("start");
 
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -70,7 +67,8 @@ impl Bin {
         let stderr = BufReader::new(process.stderr.take().unwrap());
         copy_lines_prefixed(stderr, OutputStream::Stderr, &id);
 
-        wait_for_file_exists(&socket_path);
+        wait_for_file_exists(&config_dir.join("local_control_port.conf"));
+        wait_for_file_exists(&config_dir.join("local_control_auth_key.conf"));
 
         let bin = Self {
             id,
@@ -219,8 +217,8 @@ impl Bin {
     fn client_command(&self) -> Command {
         let mut command = Command::new(COMMAND);
         command
-            .arg("--socket")
-            .arg(self.base_dir.path().join(API_SOCKET));
+            .arg("--config-dir")
+            .arg(self.base_dir.path().join(CONFIG_DIR));
         command
     }
 }

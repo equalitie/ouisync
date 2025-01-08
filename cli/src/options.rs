@@ -10,12 +10,11 @@ use std::{net::SocketAddr, path::PathBuf};
 #[derive(Parser, Debug)]
 #[command(name = "ouisync", version, about)]
 pub(crate) struct Options {
-    /// Local socket (unix domain socket or windows named pipe) to connect to (if client) or to
-    /// bind to (if server)
+    /// Config directory
     ///
-    /// Can be also specified with env variable OUISYNC_SOCKET.
-    #[arg(short, long, default_value_os_t = defaults::socket(), value_name = "PATH")]
-    pub socket: PathBuf,
+    /// Can be also specified with env variable OUISYNC_CONFIG_DIR.
+    #[arg(long, default_value_os_t = defaults::config_dir(), value_name = "PATH")]
+    pub config_dir: PathBuf,
 
     #[command(subcommand)]
     pub command: Command,
@@ -33,12 +32,6 @@ pub(crate) enum Command {
 pub(crate) enum ServerCommand {
     /// Start the server
     Start {
-        /// Config directory
-        ///
-        /// Can be also specified with env variable OUISYNC_CONFIG_DIR.
-        #[arg(long, default_value_os_t = defaults::config_dir(), value_name = "PATH")]
-        config_dir: PathBuf,
-
         /// Log format ("human" or "json")
         #[arg(long, default_value_t = LogFormat::Human)]
         log_format: LogFormat,

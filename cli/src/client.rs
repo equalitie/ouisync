@@ -10,22 +10,17 @@ use ouisync_service::{
         Response, ResponseResult, UnexpectedResponse,
     },
     transport::{
-        local::{self, LocalClientReader, LocalClientWriter},
+        local::{self, AuthKey, LocalClientReader, LocalClientWriter},
         ClientError,
     },
 };
-use std::{
-    collections::BTreeMap,
-    env, io,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::BTreeMap, env, io, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_stream::StreamExt;
 
-pub(crate) async fn run(socket_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
-    let mut client = LocalClient::connect(&socket_path).await?;
+pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
+    let (port, auth_key) = ouisync_service::local_control_endpoint(&config_path).await?;
+    let mut client = LocalClient::connect(port, &auth_key).await?;
 
     match command {
         ClientCommand::AddPeers { addrs } => {
@@ -517,8 +512,8 @@ struct LocalClient {
 }
 
 impl LocalClient {
-    async fn connect(socket_path: &Path) -> Result<Self, ClientError> {
-        let (reader, writer) = local::connect(socket_path).await?;
+    async fn connect(port: u16, auth_key: &AuthKey) -> Result<Self, ClientError> {
+        let (reader, writer) = local::connect(port, auth_key).await?;
         Ok(Self { reader, writer })
     }
 

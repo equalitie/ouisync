@@ -112,10 +112,10 @@ pub enum ClientError {
     Connect(#[source] io::Error),
     #[error("connection closed by server")]
     Disconnected,
-    #[error("socket address is invalid")]
-    InvalidSocketAddr,
     #[error("request argument is invalid")]
     InvalidArgument,
+    #[error("server endpoint is invalid")]
+    InvalidEndpoint,
     #[error("I/O error")]
     Io(#[from] io::Error),
     #[error("failed to receive response")]

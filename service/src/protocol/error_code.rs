@@ -142,7 +142,7 @@ impl ToErrorCode for ClientError {
             Self::Connect(_) => ErrorCode::ConnectionRefused,
             Self::Disconnected => ErrorCode::ConnectionAborted,
             Self::InvalidArgument => ErrorCode::InvalidInput,
-            Self::InvalidSocketAddr => ErrorCode::InvalidInput,
+            Self::InvalidEndpoint => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,
             Self::Read(ReadError::Receive(_)) => ErrorCode::TransportError,
             Self::Read(ReadError::Decode(_)) => ErrorCode::InvalidData,

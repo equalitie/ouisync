@@ -14,10 +14,10 @@ async fn main() -> ExitCode {
     let options = Options::parse();
 
     let result = match options.command {
-        Command::Server(command) => server::run(options.socket, command)
+        Command::Server(command) => server::run(options.config_dir, command)
             .await
             .map_err(Error::from),
-        Command::Client(command) => client::run(options.socket, command)
+        Command::Client(command) => client::run(options.config_dir, command)
             .await
             .map_err(Error::from),
     };

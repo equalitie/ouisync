@@ -3,9 +3,8 @@ use ouisync_service::{logger::Logger, Error, Service};
 use std::{io, path::PathBuf};
 use tokio::select;
 
-pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), Error> {
+pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(), Error> {
     let ServerCommand::Start {
-        config_dir,
         log_format,
         log_color,
     } = command;
@@ -17,7 +16,7 @@ pub(crate) async fn run(socket: PathBuf, command: ServerCommand) -> Result<(), E
         log_color,
     )?;
 
-    let mut service = Service::init(socket, config_dir).await?;
+    let mut service = Service::init(config_dir).await?;
 
     if service.store_dir().is_none() {
         service.set_store_dir(defaults::store_dir()).await?;
