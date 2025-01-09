@@ -6,42 +6,42 @@ import 'package:path/path.dart';
 
 export 'bindings.g.dart';
 
-/// Callback for `start` and `stop`.
-typedef Callback = Void Function(Pointer<Void>, Uint16);
+/// Callback for `service_start` and `service_stop`.
+typedef StatusCallback = Void Function(Pointer<Void>, Uint16);
+
+/// Callback for `log_init`.
+typedef LogCallback = Void Function(Uint8, Pointer<Char>);
 
 ///
 typedef ServiceStart = Pointer<Void> Function(
   Pointer<Char>,
   Pointer<Char>,
-  Pointer<NativeFunction<Callback>>,
+  Pointer<NativeFunction<StatusCallback>>,
   Pointer<Void>,
 );
 
 typedef _ServiceStartC = Pointer<Void> Function(
   Pointer<Char>,
   Pointer<Char>,
-  Pointer<NativeFunction<Callback>>,
+  Pointer<NativeFunction<StatusCallback>>,
   Pointer<Void>,
 );
 
 typedef ServiceStop = void Function(
-    Pointer<Void>, Pointer<NativeFunction<Callback>>, Pointer<Void>);
+    Pointer<Void>, Pointer<NativeFunction<StatusCallback>>, Pointer<Void>);
 
 typedef _ServiceStopC = Void Function(
-    Pointer<Void>, Pointer<NativeFunction<Callback>>, Pointer<Void>);
+    Pointer<Void>, Pointer<NativeFunction<StatusCallback>>, Pointer<Void>);
 
-typedef LogInit = int Function(Pointer<Char>, Pointer<Char>);
-
-typedef _LogInitC = Uint16 Function(
+typedef LogInit = int Function(
   Pointer<Char>,
+  Pointer<NativeFunction<LogCallback>>,
   Pointer<Char>,
 );
 
-typedef LogPrint = void Function(int, Pointer<Char>, Pointer<Char>);
-
-typedef _LogPrintC = Void Function(
-  Uint8,
+typedef _LogInitC = Uint16 Function(
   Pointer<Char>,
+  Pointer<NativeFunction<LogCallback>>,
   Pointer<Char>,
 );
 
@@ -54,10 +54,7 @@ class Bindings {
             .lookup<NativeFunction<_ServiceStopC>>('service_stop')
             .asFunction(),
         logInit =
-            library.lookup<NativeFunction<_LogInitC>>('log_init').asFunction(),
-        logPrint = library
-            .lookup<NativeFunction<_LogPrintC>>('log_print')
-            .asFunction();
+            library.lookup<NativeFunction<_LogInitC>>('log_init').asFunction();
 
   /// Bidings instance that uses the default library.
   static Bindings instance = Bindings(_defaultLib());
@@ -65,7 +62,6 @@ class Bindings {
   final ServiceStart serviceStart;
   final ServiceStop serviceStop;
   final LogInit logInit;
-  final LogPrint logPrint;
 }
 
 DynamicLibrary _defaultLib() {

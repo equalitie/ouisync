@@ -24,7 +24,7 @@ class Server {
         : nullptr;
 
     final completer = Completer<int>();
-    final callback = NativeCallable<Callback>.listener(
+    final callback = NativeCallable<StatusCallback>.listener(
       (Pointer<Void> context, int errorCode) => completer.complete(errorCode),
     );
 
@@ -65,7 +65,7 @@ class Server {
     }
 
     final completer = Completer<int>();
-    final callback = NativeCallable<Callback>.listener(
+    final callback = NativeCallable<StatusCallback>.listener(
       (Pointer<Void> context, int errorCode) => completer.complete(errorCode),
     );
 
@@ -87,13 +87,18 @@ class Server {
   }
 }
 
-void logInit({String? file, String tag = ''}) {
+void logInit({
+  String? file,
+  Function(LogLevel, String)? callback,
+  String tag = '',
+}) {
   final filePtr = file != null ? file.toNativeUtf8(allocator: malloc) : nullptr;
   final tagPtr = tag.toNativeUtf8(allocator: malloc);
 
   try {
     Bindings.instance.logInit(
       filePtr.cast(),
+      nullptr, // TODO: callback
       tagPtr.cast(),
     );
   } finally {
@@ -102,22 +107,5 @@ void logInit({String? file, String tag = ''}) {
     }
 
     malloc.free(tagPtr);
-  }
-}
-
-/// Print log message
-void logPrint(LogLevel level, String scope, String message) {
-  final scopePtr = scope.toNativeUtf8(allocator: malloc);
-  final messagePtr = message.toNativeUtf8(allocator: malloc);
-
-  try {
-    Bindings.instance.logPrint(
-      level.encode(),
-      scopePtr.cast(),
-      messagePtr.cast(),
-    );
-  } finally {
-    malloc.free(messagePtr);
-    malloc.free(scopePtr);
   }
 }
