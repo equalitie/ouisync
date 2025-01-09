@@ -11,6 +11,7 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
 
     let _logger = Logger::new(
         None,
+        None,
         String::new(), // log tag, not used here
         log_format,
         log_color,

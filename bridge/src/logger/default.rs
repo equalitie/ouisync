@@ -49,7 +49,7 @@ impl Inner {
         let stdout_layer = match format {
             LogFormat::Human => EitherLayer::A(
                 fmt::layer()
-                    .event_format(Formatter::<SystemTime>::default())
+                    .event_format(Formatter::default().with_timer(SystemTime))
                     .with_ansi(color),
             ),
             LogFormat::Json => EitherLayer::B(
@@ -63,7 +63,7 @@ impl Inner {
         // Log to file
         let file_layer = path.map(|path| {
             fmt::layer()
-                .event_format(Formatter::<SystemTime>::default())
+                .event_format(Formatter::default().with_timer(SystemTime))
                 .with_ansi(false)
                 .with_writer(Mutex::new(common::create_file_writer(path)))
                 // HACK: Workaround for https://github.com/tokio-rs/tracing/issues/1372. See

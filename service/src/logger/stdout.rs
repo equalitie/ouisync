@@ -37,7 +37,7 @@ where
     match format {
         LogFormat::Human => EitherLayer::A(
             fmt::layer()
-                .event_format(Formatter::<SystemTime>::default())
+                .event_format(Formatter::default().with_timer(SystemTime))
                 .with_ansi(color),
         ),
         LogFormat::Json => EitherLayer::B(

@@ -166,32 +166,46 @@ fn init(
     Ok((runtime, service, span))
 }
 
-/// Initialize logging. Should be called before `ouisync_start`.
+/// Initialize logging. Should be called before `service_start`.
 ///
-/// Logs using the platforms' default logging infrastructure. If `log_file` is not null,
-/// additionally logs to that file.
+/// Logs using the platforms' default logging infrastructure. If `file` is not null, additionally
+/// logs to that file.
 ///
 /// # Safety
 ///
-/// `log_file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
-/// `log_tag` must be non-null and safe to pass to [std::ffi::CStr::from_ptr].
+/// `file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
+/// `tag`  must be non-null and safe to pass to [std::ffi::CStr::from_ptr].
 #[no_mangle]
-pub unsafe extern "C" fn log_init(log_file: *const c_char, log_tag: *const c_char) -> ErrorCode {
-    try_log_init(log_file, log_tag).to_error_code()
+pub unsafe extern "C" fn log_init(
+    file: *const c_char,
+    callback: Option<extern "C" fn(u8, *const c_char)>,
+    tag: *const c_char,
+) -> ErrorCode {
+    try_log_init(file, callback, tag).to_error_code()
 }
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
 
-unsafe fn try_log_init(log_file: *const c_char, log_tag: *const c_char) -> Result<(), Error> {
-    let log_file = if log_file.is_null() {
+unsafe fn try_log_init(
+    file: *const c_char,
+    callback: Option<extern "C" fn(u8, *const c_char)>,
+    tag: *const c_char,
+) -> Result<(), Error> {
+    let file = if file.is_null() {
         None
     } else {
-        Some(Path::new(CStr::from_ptr(log_file).to_str()?))
+        Some(Path::new(CStr::from_ptr(file).to_str()?))
     };
 
-    let log_tag = CStr::from_ptr(log_tag).to_str()?.to_owned();
+    let callback = callback.map(|callback| {
+        Box::new(move |level, message: &[u8]| {
+            callback(LogLevel::from(level).into(), message.as_ptr() as _)
+        }) as _
+    });
 
-    let logger = Logger::new(log_file, log_tag, LogFormat::Human, LogColor::Always)
+    let tag = CStr::from_ptr(tag).to_str()?.to_owned();
+
+    let logger = Logger::new(file, callback, tag, LogFormat::Human, LogColor::Always)
         .map_err(Error::InitializeLogger)?;
 
     LOGGER.set(logger).map_err(|_| {
@@ -202,47 +216,6 @@ unsafe fn try_log_init(log_file: *const c_char, log_tag: *const c_char) -> Resul
     })?;
 
     Ok(())
-}
-
-/// Print log message using the logger created with `ouisync_log_init`.
-///
-/// # Safety
-///
-/// `scope_ptr` and `message_ptr` must be safe to pass to [std::ffi::CStr::from_ptr].
-#[no_mangle]
-pub unsafe extern "C" fn log_print(
-    level: u8,
-    scope_ptr: *const c_char,
-    message_ptr: *const c_char,
-) {
-    let scope = match CStr::from_ptr(scope_ptr).to_str() {
-        Ok(scope) => scope,
-        Err(error) => {
-            tracing::error!(?error, "invalid log scope string");
-            return;
-        }
-    };
-
-    // NOTE: Passing `scope` as `message` for more succinct span rendering: `app{"foo"}` instead
-    // of `app{scope="foo"}`.
-    let _enter = tracing::info_span!("app", message = scope).entered();
-
-    let message = match CStr::from_ptr(message_ptr).to_str() {
-        Ok(message) => message,
-        Err(error) => {
-            tracing::error!(?error, "invalid log message string");
-            return;
-        }
-    };
-
-    match level.try_into() {
-        Ok(LogLevel::Error) => tracing::error!("{}", message),
-        Ok(LogLevel::Warn) => tracing::warn!("{}", message),
-        Ok(LogLevel::Info) => tracing::info!("{}", message),
-        Ok(LogLevel::Debug) => tracing::debug!("{}", message),
-        Ok(LogLevel::Trace) => tracing::trace!("{}", message),
-        Err(_) => tracing::error!(level, "invalid log level"),
-    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 #[cfg(target_os = "android")]
 mod android;
+mod callback;
 mod color;
 mod format;
 #[cfg(target_os = "android")]
@@ -7,6 +8,7 @@ mod redirect;
 #[cfg(not(target_os = "android"))]
 mod stdout;
 
+pub use callback::Callback;
 pub use color::{LogColor, ParseLogColorError};
 pub use format::{LogFormat, ParseLogFormatError};
 
@@ -38,8 +40,14 @@ pub struct Logger {
 }
 
 impl Logger {
+    /// Initializes the logger. By default logs to stdout. If `path` is `Some`, logs also to the
+    /// given file. If `callback` is `Some`, calls it for each log event, passing the log level and
+    /// the formatted log message to it (the message is terminated with a nul-byte, allowing
+    /// zero-cost conversion to a C-style string, which is useful for FFI. If this is not needed,
+    /// the final byte can be chopped off and the rest can be safely converted to a `str`).
     pub fn new(
         path: Option<&Path>,
+        callback: Option<Box<Callback>>,
         tag: String,
         format: LogFormat,
         color: LogColor,
@@ -51,7 +59,7 @@ impl Logger {
         // Log to file
         let file_layer = path.map(|path| {
             tracing_subscriber::fmt::layer()
-                .event_format(Formatter::<SystemTime>::default())
+                .event_format(Formatter::default().with_timer(SystemTime))
                 .with_ansi(false)
                 .with_writer(Mutex::new(create_file_writer(path)))
                 // HACK: Workaround for https://github.com/tokio-rs/tracing/issues/1372. See
@@ -59,10 +67,14 @@ impl Logger {
                 .fmt_fields(TypedFields::default())
         });
 
+        // Log by calling the callback
+        let callback_layer = callback.map(|callback| callback::layer(callback));
+
         tracing_subscriber::registry()
             .with(create_log_filter())
             .with(default_layer(tag, format, color))
             .with(file_layer)
+            .with(callback_layer)
             .try_init()
             // `Err` here just means the logger is already initialized, it's OK to ignore it.
             .unwrap_or(());

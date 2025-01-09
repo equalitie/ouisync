@@ -708,7 +708,7 @@ where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
     tracing_subscriber::fmt()
-        .event_format(Formatter::<SystemTime>::default())
+        .event_format(Formatter::default().with_timer(SystemTime))
         .with_writer(writer)
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
