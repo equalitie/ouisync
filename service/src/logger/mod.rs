@@ -1,27 +1,40 @@
 #[cfg(target_os = "android")]
 mod android;
-
+mod color;
+mod format;
+#[cfg(target_os = "android")]
+mod redirect;
 #[cfg(not(target_os = "android"))]
-mod default;
+mod stdout;
 
-mod common;
+pub use color::{LogColor, ParseLogColorError};
+pub use format::{LogFormat, ParseLogFormatError};
 
-use serde::{Deserialize, Serialize};
+use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
+use ouisync_tracing_fmt::Formatter;
 use std::{
-    fmt, fs, io,
+    env, fs, io,
     panic::{self, PanicHookInfo},
     path::Path,
-    str::FromStr,
+    sync::Mutex,
+};
+use tracing::Subscriber;
+use tracing_subscriber::{
+    field::RecordFields,
+    fmt::{
+        format::{DefaultFields, Writer},
+        time::SystemTime,
+        FormatFields,
+    },
+    layer::SubscriberExt,
+    registry::LookupSpan,
+    util::SubscriberInitExt,
+    EnvFilter, Layer,
 };
 
-#[cfg(target_os = "android")]
-use self::android::Inner;
-
-#[cfg(not(target_os = "android"))]
-use self::default::Inner;
-
 pub struct Logger {
-    _inner: Inner,
+    #[cfg(target_os = "android")]
+    _redirect: redirect::Redirect,
 }
 
 impl Logger {
@@ -35,7 +48,24 @@ impl Logger {
             fs::create_dir_all(parent)?;
         }
 
-        let inner = Inner::new(path, tag, format, color)?;
+        // Log to file
+        let file_layer = path.map(|path| {
+            tracing_subscriber::fmt::layer()
+                .event_format(Formatter::<SystemTime>::default())
+                .with_ansi(false)
+                .with_writer(Mutex::new(create_file_writer(path)))
+                // HACK: Workaround for https://github.com/tokio-rs/tracing/issues/1372. See
+                // `TypedFields` for more detauls.
+                .fmt_fields(TypedFields::default())
+        });
+
+        tracing_subscriber::registry()
+            .with(create_log_filter())
+            .with(default_layer(tag, format, color))
+            .with(file_layer)
+            .try_init()
+            // `Err` here just means the logger is already initialized, it's OK to ignore it.
+            .unwrap_or(());
 
         // Log panics
         let default_panic_hook = panic::take_hook();
@@ -44,100 +74,51 @@ impl Logger {
             default_panic_hook(panic_info);
         }));
 
-        Ok(Self { _inner: inner })
+        Ok(Self {
+            #[cfg(target_os = "android")]
+            _redirect: redirect::Redirect::new()?,
+        })
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub enum LogFormat {
-    /// human-readable
-    Human,
-    /// json (for machine processing)
-    Json,
+fn create_log_filter() -> EnvFilter {
+    EnvFilter::builder()
+        // TODO: Allow changing the log level at runtime or at least at init
+        // time (via a command-line option or so)
+        .parse_lossy(
+            env::var(EnvFilter::DEFAULT_ENV)
+                .unwrap_or_else(|_| "ouisync=debug,deadlock=warn".to_string()),
+        )
 }
 
-impl fmt::Display for LogFormat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Human => write!(f, "human"),
-            Self::Json => write!(f, "json"),
-        }
-    }
+fn create_file_writer(path: &Path) -> FileRotate<AppendCount> {
+    FileRotate::new(
+        path,
+        AppendCount::new(1),
+        ContentLimit::BytesSurpassed(10 * 1024 * 1024),
+        Compression::None,
+        #[cfg(unix)]
+        None,
+    )
 }
 
-impl FromStr for LogFormat {
-    type Err = ParseLogFormatError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_lowercase().as_str() {
-            "human" => Ok(Self::Human),
-            "json" => Ok(Self::Json),
-            _ => Err(ParseLogFormatError),
-        }
-    }
+#[cfg(target_os = "android")]
+fn default_layer<S>(tag: String, _format: LogFormat, _color: LogColor) -> impl Layer<S>
+where
+    S: Subscriber,
+    for<'a> S: LookupSpan<'a>,
+{
+    android::layer(tag)
 }
 
-#[derive(Debug)]
-pub struct ParseLogFormatError;
-
-impl fmt::Display for ParseLogFormatError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid log format")
-    }
+#[cfg(not(target_os = "android"))]
+fn default_layer<S>(_tag: String, format: LogFormat, color: LogColor) -> impl Layer<S>
+where
+    S: Subscriber,
+    for<'a> S: LookupSpan<'a>,
+{
+    stdout::layer(format, color)
 }
-
-impl std::error::Error for ParseLogFormatError {}
-
-/// How to color log messages
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub enum LogColor {
-    /// Awlays color
-    Always,
-    /// Never color
-    Never,
-    /// Color only when printing to a terminal but not when redirected to a file or a pipe.
-    Auto,
-}
-
-impl Default for LogColor {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
-
-impl fmt::Display for LogColor {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Always => write!(f, "always"),
-            Self::Never => write!(f, "never"),
-            Self::Auto => write!(f, "auto"),
-        }
-    }
-}
-
-impl FromStr for LogColor {
-    type Err = ParseLogColorError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_lowercase().as_str() {
-            "always" => Ok(Self::Always),
-            "never" => Ok(Self::Never),
-            "auto" => Ok(Self::Auto),
-            _ => Err(ParseLogColorError),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ParseLogColorError;
-
-impl fmt::Display for ParseLogColorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid log color")
-    }
-}
-
-impl std::error::Error for ParseLogColorError {}
 
 fn log_panic(info: &PanicHookInfo) {
     match (
@@ -163,4 +144,22 @@ fn log_panic(info: &PanicHookInfo) {
         ),
         (None, None) => tracing::error!("panic"),
     };
+}
+
+// A newtype for `DefaultFields`. Needed to work around
+// https://github.com/tokio-rs/tracing/issues/1372: By using a different type of `FormatFields` for
+// each layer we force them to record the fields into their own span extension instead of all
+// layers recording into the same extension. This avoid duplicating the fields in their respective
+// outputs.
+#[derive(Default)]
+struct TypedFields(DefaultFields);
+
+impl<'writer> FormatFields<'writer> for TypedFields {
+    fn format_fields<R: RecordFields>(
+        &self,
+        writer: Writer<'writer>,
+        fields: R,
+    ) -> std::fmt::Result {
+        self.0.format_fields(writer, fields)
+    }
 }
