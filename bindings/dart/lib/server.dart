@@ -95,10 +95,23 @@ void logInit({
   final filePtr = file != null ? file.toNativeUtf8(allocator: malloc) : nullptr;
   final tagPtr = tag.toNativeUtf8(allocator: malloc);
 
+  NativeCallable<LogCallback>? nativeCallback;
+
+  if (callback != null) {
+    nativeCallback = NativeCallable<LogCallback>.listener(
+      (int level, Pointer<Char> message) {
+        callback(
+          LogLevel.decode(level),
+          message.cast<Utf8>().toDartString(),
+        );
+      },
+    );
+  }
+
   try {
     Bindings.instance.logInit(
       filePtr.cast(),
-      nullptr, // TODO: callback
+      nativeCallback?.nativeFunction ?? nullptr,
       tagPtr.cast(),
     );
   } finally {
