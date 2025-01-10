@@ -2319,15 +2319,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
+name = "mdns-parser"
+version = "0.1.0"
+source = "git+https://github.com/keepsimple1/mdns-sd?rev=a56de72611233a36f5a612ea5f470f85305f50f1#a56de72611233a36f5a612ea5f470f85305f50f1"
+
+[[package]]
 name = "mdns-sd"
 version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1046f577ff959999f2aa9e6d3e5aae3fd5377c5ef07781914af1eaca07075bab"
+source = "git+https://github.com/keepsimple1/mdns-sd?rev=a56de72611233a36f5a612ea5f470f85305f50f1#a56de72611233a36f5a612ea5f470f85305f50f1"
 dependencies = [
  "fastrand",
  "flume",
  "if-addrs 0.13.3",
  "log",
+ "mdns-parser",
  "mio",
  "socket2",
 ]
@@ -2954,7 +2959,6 @@ dependencies = [
  "futures-util",
  "hex",
  "log",
- "mdns-sd",
  "ouisync",
  "ouisync-rand",
  "structopt",

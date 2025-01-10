@@ -15,11 +15,11 @@ async fn main() -> io::Result<()> {
 
     loop {
         let peer = discovery.recv().await;
-        println!("Found peer {peer:?}");
+        println!("Found peer {:?}", peer.initial_addr());
 
         task::spawn(async move {
             peer.on_unseen().await;
-            println!("Lost peer {peer:?}");
+            println!("Lost peer {:?}", peer.initial_addr());
         });
     }
 }
