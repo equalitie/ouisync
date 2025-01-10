@@ -1997,6 +1997,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a78a89907582615b19f6f0da1af18abf6ff08be259395669b834b057a7ee92d8"
+dependencies = [
+ "libc",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "if-watch"
 version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2006,7 +2016,7 @@ dependencies = [
  "core-foundation",
  "fnv",
  "futures",
- "if-addrs",
+ "if-addrs 0.10.2",
  "ipnet",
  "log",
  "netlink-packet-core",
@@ -2309,6 +2319,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
+name = "mdns-sd"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1046f577ff959999f2aa9e6d3e5aae3fd5377c5ef07781914af1eaca07075bab"
+dependencies = [
+ "fastrand",
+ "flume",
+ "if-addrs 0.13.3",
+ "log",
+ "mio",
+ "socket2",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2397,6 +2421,7 @@ checksum = "80e04d1dcff3aae0704555fe5fee3bcfaf3d1fdf8a7e521d5b9d2b42acb52cec"
 dependencies = [
  "hermit-abi 0.3.9",
  "libc",
+ "log",
  "wasi",
  "windows-sys 0.52.0",
 ]
@@ -2763,6 +2788,7 @@ dependencies = [
  "hex_fmt",
  "if-watch",
  "include_dir",
+ "mdns-sd",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics_ext",
@@ -2917,6 +2943,22 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "ouisync-local-discovery"
+version = "0.8.10"
+dependencies = [
+ "async-trait",
+ "env_logger 0.11.5",
+ "futures-util",
+ "hex",
+ "log",
+ "mdns-sd",
+ "ouisync",
+ "ouisync-rand",
+ "structopt",
+ "tokio",
 ]
 
 [[package]]

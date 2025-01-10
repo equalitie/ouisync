@@ -54,9 +54,9 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
     network::{
-        repository_info_hash, DhtContactsStoreTrait, NatBehavior, Network, PeerAddr, PeerInfo,
-        PeerInfoCollector, PeerSource, PeerState, PublicRuntimeId, Registration, SecretRuntimeId,
-        Stats, DHT_ROUTERS,
+        local_discovery::LocalDiscovery, repository_info_hash, DhtContactsStoreTrait, NatBehavior,
+        Network, PeerAddr, PeerInfo, PeerInfoCollector, PeerPort, PeerSource, PeerState,
+        PublicRuntimeId, Registration, SecretRuntimeId, Stats, DHT_ROUTERS,
     },
     progress::Progress,
     protocol::{RepositoryId, StorageSize, BLOCK_SIZE},

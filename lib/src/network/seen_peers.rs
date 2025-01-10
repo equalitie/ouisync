@@ -183,18 +183,18 @@ struct PeerEntry {
     is_seen_tx: watch::Sender<()>,
 }
 
-pub(crate) struct SeenPeer {
+pub struct SeenPeer {
     addr: PeerAddr,
     seen_peers: Arc<BlockingRwLock<SeenPeersInner>>,
     is_seen_rx: watch::Receiver<()>,
 }
 
 impl SeenPeer {
-    pub(crate) fn initial_addr(&self) -> &PeerAddr {
+    pub fn initial_addr(&self) -> &PeerAddr {
         &self.addr
     }
 
-    pub(crate) fn addr_if_seen(&self) -> Option<&PeerAddr> {
+    pub fn addr_if_seen(&self) -> Option<&PeerAddr> {
         let lock = self.seen_peers.read().unwrap();
         lock.peers
             .get(&self.addr)
@@ -207,7 +207,7 @@ impl SeenPeer {
             })
     }
 
-    pub(crate) async fn on_unseen(&self) {
+    pub async fn on_unseen(&self) {
         while self.is_seen_rx.clone().changed().await.is_ok() {}
     }
 }

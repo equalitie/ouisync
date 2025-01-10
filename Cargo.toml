@@ -45,6 +45,7 @@ criterion = "0.5.1"
 futures-util = { version = "0.3.30", default-features = false }
 hex_fmt = "0.3.0"
 indexmap = "2.6.0"
+mdns-sd = "0.13.1"
 metrics = "0.22.0"
 metrics-exporter-prometheus = { version = "0.13.0", default-features = false }
 metrics-util = { version = "0.16.0", default-features = false }

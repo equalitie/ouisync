@@ -8,7 +8,7 @@ mod debug_payload;
 mod dht_discovery;
 mod gateway;
 mod ip;
-mod local_discovery;
+pub mod local_discovery;
 mod message;
 mod message_broker;
 mod message_dispatcher;
@@ -20,7 +20,7 @@ mod peer_state;
 mod protocol;
 mod request_tracker;
 mod runtime_id;
-mod seen_peers;
+pub mod seen_peers;
 mod server;
 mod stats;
 mod stun;
@@ -32,7 +32,7 @@ mod upnp;
 pub use self::{
     connection::{ConnectionSetSubscription, PeerInfoCollector},
     dht_discovery::{DhtContactsStoreTrait, DHT_ROUTERS},
-    peer_addr::PeerAddr,
+    peer_addr::{PeerAddr, PeerPort},
     peer_info::PeerInfo,
     peer_source::PeerSource,
     peer_state::PeerState,
@@ -51,7 +51,6 @@ use self::{
     gateway::{Connectivity, Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    peer_addr::PeerPort,
     peer_exchange::{PexDiscovery, PexRepository},
     protocol::{Version, MAGIC, VERSION},
     seen_peers::{SeenPeer, SeenPeers},
@@ -678,7 +677,7 @@ impl Inner {
     async fn run_local_discovery(self: Arc<Self>, listener_port: PeerPort) {
         let mut discovery = LocalDiscovery::new(
             listener_port,
-            self.main_monitor.make_child("LocalDiscovery"),
+            Some(self.main_monitor.make_child("LocalDiscovery")),
         );
 
         loop {

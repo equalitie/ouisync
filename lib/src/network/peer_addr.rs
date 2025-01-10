@@ -11,6 +11,15 @@ pub enum PeerPort {
     Quic(u16),
 }
 
+impl PeerPort {
+    pub fn number(&self) -> u16 {
+        match self {
+            Self::Tcp(number) => *number,
+            Self::Quic(number) => *number,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum PeerAddr {
     Tcp(SocketAddr),

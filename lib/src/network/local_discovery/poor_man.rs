@@ -1,8 +1,19 @@
-use super::{
+//!
+//! Legacy local discovery code. It's a custom protocol that multicasts UDP packets over found
+//! interfaces. It has two known issues:
+//!
+//! 1. The rate at which multicast packets are sent doesn't consider the amount of devices present
+//!    on the network. Thus if there is too many devices, the network may get flooded.
+//! 2. iOS devices require special permissions that Apple needs to grant to do multicasting.
+//!
+//! This code may be considered deprecated, but let's keep it for a while so that older ouisync
+//! versions can still connect to the newer ones using mDNS.
+//!
+use crate::collections::HashMap;
+use crate::network::{
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::collections::HashMap;
 use deadlock::AsyncMutex;
 use futures_util::StreamExt;
 use if_watch::{tokio::IfWatcher, IfEvent};
@@ -29,19 +40,13 @@ const ERROR_DELAY: Duration = Duration::from_secs(3);
 const PROTOCOL_MAGIC: &[u8; 17] = b"OUISYNC_DISCOVERY";
 const PROTOCOL_VERSION: u8 = 0;
 
-// Poor man's local discovery using UDP multicast.
-// XXX: We should probably use mDNS or DNS-SD, but so far all libraries I tried had some issues.
-// http://http://dns-sd.org/
-// One advantage of the above ones compared to our own is that we would be using a standart port
-// for it.
-
-pub(crate) struct LocalDiscovery {
+pub struct LocalDiscovery {
     peer_rx: mpsc::Receiver<SeenPeer>,
     _work_handle: ScopedJoinHandle<()>,
 }
 
 impl LocalDiscovery {
-    pub fn new(listener_port: PeerPort, monitor: StateMonitor) -> Self {
+    pub fn new(listener_port: PeerPort, monitor: Option<StateMonitor>) -> Self {
         let (peer_tx, peer_rx) = mpsc::channel(1);
 
         let work_handle = scoped_task::spawn(
@@ -70,7 +75,7 @@ impl LocalDiscovery {
                     };
 
                     match event {
-                        IfEvent::Up(addr) => inner.add(addr.addr(), &monitor),
+                        IfEvent::Up(addr) => inner.add(addr.addr(), monitor.as_ref()),
                         IfEvent::Down(addr) => inner.remove(addr.addr()),
                     }
                 }
@@ -107,7 +112,7 @@ struct LocalDiscoveryInner {
 }
 
 impl LocalDiscoveryInner {
-    fn add(&mut self, interface: IpAddr, parent_monitor: &StateMonitor) {
+    fn add(&mut self, interface: IpAddr, parent_monitor: Option<&StateMonitor>) {
         use std::collections::hash_map::Entry;
 
         if interface.is_loopback() {
@@ -162,13 +167,13 @@ impl PerInterfaceLocalDiscovery {
         peer_tx: mpsc::Sender<SeenPeer>,
         listener_port: PeerPort,
         interface: Ipv4Addr,
-        parent_monitor: &StateMonitor,
+        parent_monitor: Option<&StateMonitor>,
     ) -> io::Result<Self> {
         // Only used to filter out multicast packets from self.
         let id = OsRng.gen();
         let socket_provider = Arc::new(SocketProvider::new(interface));
 
-        let monitor = parent_monitor.make_child(format!("{interface}"));
+        let monitor = parent_monitor.map(|m| m.make_child(format!("{interface}")));
         let span = Span::current();
 
         let seen_peers = SeenPeers::new();
@@ -209,13 +214,17 @@ impl PerInterfaceLocalDiscovery {
         listener_port: PeerPort,
         socket_provider: Arc<SocketProvider>,
         seen_peers: SeenPeers,
-        monitor: StateMonitor,
+        monitor: Option<StateMonitor>,
     ) {
         let mut recv_buffer = [0; 64];
         let mut recv_error_reported = false;
 
-        let beacon_requests_received = monitor.make_value("beacon requests received", 0);
-        let beacon_responses_received = monitor.make_value("beacon responses received", 0);
+        let beacon_requests_received = monitor
+            .as_ref()
+            .map(|m| m.make_value("beacon requests received", 0));
+        let beacon_responses_received = monitor
+            .as_ref()
+            .map(|m| m.make_value("beacon responses received", 0));
 
         loop {
             let socket = socket_provider.provide().await;
@@ -265,7 +274,9 @@ impl PerInterfaceLocalDiscovery {
             };
 
             if is_request {
-                *beacon_requests_received.get() += 1;
+                if let Some(value) = &beacon_requests_received {
+                    *value.get() += 1;
+                }
 
                 let msg = Message::Reply {
                     port: listener_port,
@@ -278,7 +289,9 @@ impl PerInterfaceLocalDiscovery {
                     socket_provider.mark_bad(socket).await;
                 }
             } else {
-                *beacon_responses_received.get() += 1;
+                if let Some(value) = &beacon_responses_received {
+                    *value.get() += 1;
+                }
             }
 
             let addr = match port {
@@ -309,11 +322,11 @@ async fn run_beacon(
     id: InsecureRuntimeId,
     listener_port: PeerPort,
     seen_peers: SeenPeers,
-    monitor: StateMonitor,
+    monitor: Option<StateMonitor>,
 ) {
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
-    let beacons_sent = monitor.make_value("beacons sent", 0);
+    let beacons_sent = monitor.as_ref().map(|m| m.make_value("beacons sent", 0));
     let mut error_shown = false;
 
     loop {
@@ -329,7 +342,9 @@ async fn run_beacon(
         match send(&socket, msg, multicast_endpoint).await {
             Ok(()) => {
                 error_shown = false;
-                *beacons_sent.get() += 1;
+                if let Some(value) = &beacons_sent {
+                    *value.get() += 1;
+                }
             }
             Err(error) => {
                 if !error_shown {
