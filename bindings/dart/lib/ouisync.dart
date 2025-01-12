@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:developer' show log;
 import 'dart:typed_data';
-import 'dart:math';
+import 'dart:math' show Random;
 
 import 'package:hex/hex.dart';
 import 'package:ouisync/exception.dart';
@@ -22,7 +23,7 @@ export 'bindings.dart'
         PeerSource,
         PeerStateKind;
 export 'exception.dart';
-export 'server.dart' show logInit, logPrint;
+export 'server.dart' show logInit;
 
 part 'local_secret.dart';
 
@@ -47,21 +48,26 @@ class Session {
   static Future<Session> create({
     required String configPath,
     String? debugLabel,
+    bool startServer = true,
+    void Function(LogLevel, String)? logger,
   }) async {
     Server? server;
 
-    // Try to start our own server but if one is already running connect to that one instead.
-    try {
-      server = await Server.start(
-        configPath: configPath,
-        debugLabel: debugLabel,
-      );
-    } on ServiceAlreadyRunning catch (_) {
-      server = null;
+    // Try to start our own server but if one is already running connect to
+    // that one instead. If we do spawn, we are responsible for logging
+    if (startServer) {
+      try {
+        server = await Server.start(
+          configPath: configPath,
+          debugLabel: debugLabel,
+        );
+        logInit(callback: logger, tag: 'Server');
+      } on ServiceAlreadyRunning catch (_) {
+        log('Service already started');
+      }
     }
 
     final client = await Client.connect(configPath: configPath);
-
     return Session._(client, server);
   }
 

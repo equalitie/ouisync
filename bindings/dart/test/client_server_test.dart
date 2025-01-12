@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:ouisync/client.dart';
