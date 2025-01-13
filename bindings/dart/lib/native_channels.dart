@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'ouisync.dart' show Repository, File;
@@ -82,12 +83,12 @@ class NativeChannels {
 
   Future<int?> _openFile(String path) async {
     final id = _files.insert(await File.open(_repository!, path));
-    print('openFile(path=$path) -> id=$id');
+    debugPrint('openFile(path=$path) -> id=$id');
     return id;
   }
 
   Future<void> _closeFile(int id) async {
-    print('closeFile(id=$id)');
+    debugPrint('closeFile(id=$id)');
 
     final file = _files.remove(id);
 
@@ -97,7 +98,7 @@ class NativeChannels {
   }
 
   Future<Uint8List> _readFile(int id, int chunkSize, int offset) async {
-    print('readFile(id=$id, chunkSize=$chunkSize, offset=$offset)');
+    debugPrint('readFile(id=$id, chunkSize=$chunkSize, offset=$offset)');
 
     final file = _files[id];
 

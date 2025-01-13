@@ -100,10 +100,5 @@ DynamicLibrary _defaultLib() {
     path = name;
   }
 
-  if (Platform.isIOS) {
-    // TODO: something about this?!
-    return DynamicLibrary.process();
-  } else {
-    return DynamicLibrary.open(path);
-  }
+  return DynamicLibrary.open(path);
 }

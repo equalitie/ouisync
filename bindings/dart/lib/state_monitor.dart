@@ -114,15 +114,15 @@ class StateMonitor {
   @override
   String toString() => "StateMonitor($_path)";
 
-  Future<StateMonitorNode?> load() async {
+  Future<StateMonitorNode> load() async {
     try {
-      final list = await _client.invoke(
-              "state_monitor_get", _path.map((id) => id.toString()))
-          as List<Object?>;
+      final List<Object?> list = await _client.invoke(
+        "state_monitor_get", _path.map((id) => id.toString())
+      );
       return StateMonitorNode._decode(_path, list);
-    } catch (e) {
-      print('failed to load state monitor node at $_path: $e');
-      return null;
+    } catch (e, st) {
+      final wrapped = Exception('failed to load state monitor node at $_path: ${e.toString()}');
+      Error.throwWithStackTrace(wrapped, st);
     }
   }
 }

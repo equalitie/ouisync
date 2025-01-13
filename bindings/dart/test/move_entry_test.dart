@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io' as io;
 
+import 'package:flutter/foundation.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:test/test.dart';
 
@@ -42,28 +43,28 @@ void main() {
     // Create folder1 (/folder1) and folder2 inside folder1 (/folder1/folder2)
     {
       await Directory.create(repository, folder1Path);
-      print('New folder: $folder1Path');
+      debugPrint('New folder: $folder1Path');
 
       await Directory.create(repository, folder2Path);
-      print('New folder: $folder2Path');
+      debugPrint('New folder: $folder2Path');
     }
     // Check that root (/) contains only one entry (/file1)
     {
       final rootContents = await Directory.read(repository, '/');
       expect(rootContents.toList().length, equals(1));
 
-      print('Root contents: ${rootContents.toList()}');
+      debugPrint('Root contents: ${rootContents.toList()}');
     }
     // Check that folder2 (/folder1/folder2) is empty
     {
       final rootContents = await Directory.read(repository, folder2Path);
       expect(rootContents.toList().length, equals(0));
 
-      print('Folder2 contents: ${rootContents.toList()}');
+      debugPrint('Folder2 contents: ${rootContents.toList()}');
     }
     // Move folder2 (/folder1/folder2) to root (/folder2)
     {
-      print('Moving folder: src: $folder2Path - dst: $folder2RootPath');
+      debugPrint('Moving folder: src: $folder2Path - dst: $folder2RootPath');
       await repository.moveEntry(folder2Path, folder2RootPath);
     }
     // Check the contents in root for two entries: folder1 (/folder1) and folder2 (/folder2)
@@ -73,7 +74,7 @@ void main() {
       expect(rootContentsAfterMovingFolder2.isNotEmpty, equals(true));
       expect(rootContentsAfterMovingFolder2.toList().length, equals(2));
 
-      print(
+      debugPrint(
           'Root contents after move: ${rootContentsAfterMovingFolder2.toList()}');
     }
   });
@@ -82,17 +83,17 @@ void main() {
     // Create folder1 (/folder1) and folder2 inside folder1 (/folder1/folder2)
     {
       await Directory.create(repository, folder1Path);
-      print('New folder: $folder1Path');
+      debugPrint('New folder: $folder1Path');
 
       await Directory.create(repository, folder2Path);
-      print('New folder: $folder2Path');
+      debugPrint('New folder: $folder2Path');
     }
     // Check that root (/) contains only one entry (/file1)
     {
       final rootContents = await Directory.read(repository, '/');
       expect(rootContents.toList().length, equals(1));
 
-      print('Root contents: ${rootContents.toList()}');
+      debugPrint('Root contents: ${rootContents.toList()}');
     }
     // Create new file1.txt in folder2 (/folder1/folder2/file1.txt)
     {
@@ -105,11 +106,11 @@ void main() {
       final folder2Contents = await Directory.read(repository, folder2Path);
       expect(folder2Contents.toList().length, equals(1));
 
-      print('Folder2 contents: ${folder2Contents.toList()}');
+      debugPrint('Folder2 contents: ${folder2Contents.toList()}');
     }
     // Move folder2 (/folder1/folder2) to root (/folder2) when folder2 is not empty (/folder1/folder2/file1.txt)
     {
-      print('Moving folder: src: $folder2Path - dst: $folder2RootPath');
+      debugPrint('Moving folder: src: $folder2Path - dst: $folder2RootPath');
       await repository.moveEntry(folder2Path, folder2RootPath);
     }
     // Check the contents in root for two entryes: folder1 (/folder1) and folder2 (/folder2)
@@ -119,7 +120,7 @@ void main() {
       expect(rootContentsAfterMovingFolder2.isNotEmpty, equals(true));
       expect(rootContentsAfterMovingFolder2.toList().length, equals(2));
 
-      print(
+      debugPrint(
           'Root contents after move: ${rootContentsAfterMovingFolder2.toList()}');
     }
   });

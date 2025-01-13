@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
+import 'package:flutter/foundation.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:test/test.dart';
 
@@ -20,7 +21,7 @@ void main() {
 
   Future<void> getDirectoryContents(Repository repo, String path) async {
     final folder1Contents = await Directory.read(repo, path);
-    print('Directory contents: ${folder1Contents.toList()}');
+    debugPrint('Directory contents: ${folder1Contents.toList()}');
   }
 
   setUp(() async {
@@ -43,7 +44,7 @@ void main() {
     currentPath = '/';
 
     subscription = repository.events.listen((_) async {
-      print('Syncing $currentPath');
+      debugPrint('Syncing $currentPath');
       await getDirectoryContents(repository, currentPath);
     });
   });
@@ -58,11 +59,11 @@ void main() {
     // Create folder1 (/folder1)
     {
       await Directory.create(repository, folder1Path);
-      print('New folder: $folder1Path');
+      debugPrint('New folder: $folder1Path');
     }
     // Create file1.txt inside folder1 (/folder1/file1.txt)
     {
-      print('About to create file $file1InFolder1Path');
+      debugPrint('About to create file $file1InFolder1Path');
       final file = await File.create(repository, file1InFolder1Path);
       await file.write(0, utf8.encode(file1Content));
       await file.close();
@@ -72,7 +73,7 @@ void main() {
       final folder1Contents = await Directory.read(repository, folder1Path);
       expect(folder1Contents.toList().length, equals(1));
 
-      print('Folder1 contents: ${folder1Contents.toList()}');
+      debugPrint('Folder1 contents: ${folder1Contents.toList()}');
     }
   });
 
@@ -80,13 +81,13 @@ void main() {
     // Create folder1 (/folder1)
     {
       await Directory.create(repository, folder1Path);
-      print('New folder: $folder1Path');
+      debugPrint('New folder: $folder1Path');
 
       currentPath = folder1Path;
     }
     // Create file1 inside folder1 (/folder1/file1.txt)
     {
-      print('About to create new file $file1InFolder1Path');
+      debugPrint('About to create new file $file1InFolder1Path');
       final file = await File.create(repository, file1InFolder1Path);
       await file.write(0, utf8.encode(file1Content));
       await file.close();
@@ -96,7 +97,7 @@ void main() {
       final folder1Contents = await Directory.read(repository, folder1Path);
       expect(folder1Contents.toList().length, equals(1));
 
-      print('Folder1 contents: ${folder1Contents.toList()}');
+      debugPrint('Folder1 contents: ${folder1Contents.toList()}');
     }
   });
 }

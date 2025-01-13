@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:developer' show log;
-import 'dart:typed_data';
 import 'dart:math' show Random;
 
+import 'package:flutter/foundation.dart';
 import 'package:hex/hex.dart';
 import 'package:ouisync/exception.dart';
 
@@ -63,7 +62,7 @@ class Session {
         );
         logInit(callback: logger, tag: 'Server');
       } on ServiceAlreadyRunning catch (_) {
-        log('Service already started');
+        debugPrint('Service already started');
       }
     }
 
@@ -734,7 +733,7 @@ class File {
   /// Throws if [path] already exists of if the parent of [path] doesn't exists.
   static Future<File> create(Repository repo, String path) async {
     if (debugTrace) {
-      print("File.create $path");
+      debugPrint("File.create $path");
     }
 
     return File._(
@@ -791,7 +790,7 @@ class File {
   /// ```
   Future<List<int>> read(int offset, int size) {
     if (debugTrace) {
-      print("File.read");
+      debugPrint("File.read");
     }
 
     return _client.invoke<Uint8List>(
@@ -801,7 +800,7 @@ class File {
   /// Write [data] to this file starting at [offset].
   Future<void> write(int offset, List<int> data) {
     if (debugTrace) {
-      print("File.write");
+      debugPrint("File.write");
     }
 
     return _client.invoke<void>('file_write', {
@@ -814,7 +813,7 @@ class File {
   /// Truncate the file to [size] bytes.
   Future<void> truncate(int size) {
     if (debugTrace) {
-      print("File.truncate");
+      debugPrint("File.truncate");
     }
 
     return _client.invoke<void>('file_truncate', {
@@ -826,7 +825,7 @@ class File {
   /// Returns the length of this file in bytes.
   Future<int> get length {
     if (debugTrace) {
-      print("File.length");
+      debugPrint("File.length");
     }
 
     return _client.invoke<int>('file_len', _handle);

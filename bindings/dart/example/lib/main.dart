@@ -3,7 +3,6 @@ import 'dart:async';
 
 import 'package:async/async.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:ouisync/native_channels.dart';
@@ -160,24 +159,17 @@ class _MyAppState extends State<MyApp> {
     File? newFile;
 
     try {
-      if (kDebugMode) {
-        print('Creating file $filePath');
-      }
+      debugPrint('Creating file $filePath');
       newFile = await File.create(repo, filePath);
     } catch (e) {
-      if (kDebugMode) {
-        print('Error creating file $filePath: $e');
-      }
+      debugPrint('Error creating file $filePath: $e');
     }
 
     return newFile!;
   }
 
-  Future<void> saveFile(
-      File file, String path, Stream<List<int>> stream) async {
-    if (kDebugMode) {
-      print('Writing file $path');
-    }
+  Future<void> saveFile(File file, String path, Stream<List<int>> stream) async {
+    debugPrint('Writing file $path');
 
     int offset = 0;
 
@@ -185,14 +177,10 @@ class _MyAppState extends State<MyApp> {
       final streamReader = ChunkedStreamReader(stream);
       while (true) {
         final buffer = await streamReader.readChunk(64000);
-        if (kDebugMode) {
-          print('Buffer size: ${buffer.length} - offset: $offset');
-        }
+        debugPrint('Buffer size: ${buffer.length} - offset: $offset');
 
         if (buffer.isEmpty) {
-          if (kDebugMode) {
-            print('The buffer is empty; reading from the stream is done!');
-          }
+          debugPrint('The buffer is empty; reading from the stream is done!');
           break;
         }
 
@@ -200,9 +188,7 @@ class _MyAppState extends State<MyApp> {
         offset += buffer.length;
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('Exception writing the file $path:\n${e.toString()}');
-      }
+      debugPrint('Exception writing the file $path:\n${e.toString()}');
     } finally {
       await file.close();
     }
