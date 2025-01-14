@@ -350,8 +350,8 @@ class Repository private constructor(internal val handle: Long, internal val cli
 
     override fun equals(other: Any?) =
         other is Repository &&
-        handle == other.handle &&
-        client == other.client
+            handle == other.handle &&
+            client == other.client
 
     override fun hashCode() = Objects.hash(handle, client)
 }

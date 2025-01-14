@@ -230,6 +230,9 @@ impl Drop for Bin {
 }
 
 thread_local! {
+    // HACK: This is being falsely triggered on android. Using `expect` to silence it and also to
+    // get notified when it gets fixed upstream.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local))]
     static NEXT_ID: Cell<u32> = const { Cell::new(0) };
 }
 

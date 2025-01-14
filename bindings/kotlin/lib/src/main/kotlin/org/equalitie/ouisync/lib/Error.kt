@@ -3,13 +3,13 @@ package org.equalitie.ouisync.lib
 open class Error internal constructor(
     val code: ErrorCode,
     message: String?,
-    val sources: List<String> = emptyList()
+    val sources: List<String> = emptyList(),
 ) : Exception(message ?: code.toString()) {
     companion object {
         internal fun dispatch(
             code: ErrorCode,
             message: String? = null,
-            sources: List<String> = emptyList()
+            sources: List<String> = emptyList(),
         ): Error = when (code) {
             ErrorCode.PERMISSION_DENIED -> PermissionDenied(message, sources)
             ErrorCode.INVALID_DATA -> InvalidData(message, sources)
@@ -37,4 +37,3 @@ open class Error internal constructor(
     class ServiceAlreadyRunning(message: String? = null, sources: List<String> = emptyList()) :
         Error(ErrorCode.SERVICE_ALREADY_RUNNING, message, sources)
 }
-
