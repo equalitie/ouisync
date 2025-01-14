@@ -13,6 +13,7 @@ PROJECT_HOME=$(realpath "$(dirname "$0")/../../../../")
 export CARGO_HOME=$(realpath "$1")
 export PATH="$CARGO_HOME/bin:$PATH"
 export RUSTUP_HOME="$CARGO_HOME/.rustup"
+export MACOSX_DEPLOYMENT_TARGET=13.0
 BUILD_OUTPUT=$(realpath "$2")
 
 # cargo builds some things that confuse xcode such as fingerprints and depfiles which cannot be
@@ -44,7 +45,7 @@ cd $PROJECT_HOME
 for TARGET in ${(k)TARGETS}; do
     cross build \
         --frozen \
-        --package ouisync-ffi \
+        --package ouisync-service \
         --target $TARGET \
         --target-dir "$BUILD_OUTPUT" \
         $FLAGS || fatal 1 "Unable to compile for $TARGET"
@@ -57,7 +58,9 @@ echo "module OuisyncLibFFI {
     header \"bindings.h\"
     export *
 }" > "$INCLUDE/module.modulemap"
-cbindgen --lang C --crate ouisync-ffi > "$INCLUDE/bindings.h" || fatal 2 "Unable to generate bindings.h"
+cbindgen --lang C --crate ouisync-service > "$INCLUDE/bindings.h" || fatal 2 "Unable to generate bindings.h"
+# hack for autoimporting enums https://stackoverflow.com/questions/60559599/swift-c-api-enum-in-swift
+perl -i -p0e 's/enum\s+(\w+)([^}]+});\ntypedef (\w+) \1/typedef enum __attribute__\(\(enum_extensibility\(open\)\)\) : \3\2 \1/sg' "$INCLUDE/bindings.h"
 
 # xcodebuild refuses multiple architectures per platform, instead expecting fat libraries when the
 # destination operating system supports multiple architectures; apple also explicitly rejects any
