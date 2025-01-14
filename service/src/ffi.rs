@@ -178,7 +178,7 @@ fn init(
 #[no_mangle]
 pub unsafe extern "C" fn log_init(
     file: *const c_char,
-    callback: Option<extern "C" fn(u8, *const c_char)>,
+    callback: Option<extern "C" fn(LogLevel, *const c_char)>,
     tag: *const c_char,
 ) -> ErrorCode {
     try_log_init(file, callback, tag).to_error_code()
@@ -188,7 +188,7 @@ static LOGGER: OnceLock<Logger> = OnceLock::new();
 
 unsafe fn try_log_init(
     file: *const c_char,
-    callback: Option<extern "C" fn(u8, *const c_char)>,
+    callback: Option<extern "C" fn(LogLevel, *const c_char)>,
     tag: *const c_char,
 ) -> Result<(), Error> {
     let file = if file.is_null() {
