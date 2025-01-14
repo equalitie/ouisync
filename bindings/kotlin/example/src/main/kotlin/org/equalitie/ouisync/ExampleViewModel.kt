@@ -10,7 +10,6 @@ import kotlinx.coroutines.launch
 import org.equalitie.ouisync.lib.Repository
 import org.equalitie.ouisync.lib.Session
 import org.equalitie.ouisync.lib.ShareToken
-import java.io.File
 
 private const val TAG = "ouisync.example"
 

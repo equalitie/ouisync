@@ -252,10 +252,6 @@ internal class RepositoryMirrorExists(val repository: Long, val host: String) : 
         )
 }
 
-internal class RepositoryMountAll : ValueRequest<String> {
-    constructor(value: String) : super(value)
-}
-
 internal class ShareTokenGetAccessMode : ValueRequest<String> {
     constructor(value: String) : super(value)
 }
@@ -404,12 +400,6 @@ internal class NetworkIsLocalDiscoveryEnabled : EmptyRequest()
 internal class NetworkSetLocalDiscoveryEnabled : ValueRequest<Boolean> {
     constructor(value: Boolean) : super(value)
 }
-
-internal class NetworkAddCacheServer : ValueRequest<String> {
-    constructor(value: String) : super(value)
-}
-
-internal class NetworkShutdown : EmptyRequest()
 
 internal class Unsubscribe : ValueRequest<Long> {
     constructor(value: Long) : super(value)

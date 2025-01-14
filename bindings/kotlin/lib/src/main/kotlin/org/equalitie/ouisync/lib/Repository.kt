@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filterIsInstance
 import org.msgpack.core.MessagePacker
 import java.security.SecureRandom
+import java.util.Objects
 
 /**
  *
@@ -346,6 +347,13 @@ class Repository private constructor(internal val handle: Long, internal val cli
      */
     suspend fun moveEntry(src: String, dst: String) =
         client.invoke(RepositoryMoveEntry(handle, src, dst))
+
+    override fun equals(other: Any?) =
+        other is Repository &&
+        handle == other.handle &&
+        client == other.client
+
+    override fun hashCode() = Objects.hash(handle, client)
 }
 
 /**

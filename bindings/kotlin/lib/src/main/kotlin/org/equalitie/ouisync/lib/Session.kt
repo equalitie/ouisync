@@ -42,7 +42,7 @@ class Session private constructor(
 
             try {
                 server = Server.start(configPath, debugLabel)
-            } catch (e: ServiceAlreadyRunning) {
+            } catch (e: Error.ServiceAlreadyRunning) {
                 server = null
             }
 

@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -50,12 +51,28 @@ class RepositoryTest {
         }
     }
 
+    @Test
+    fun list() = runTest {
+        val ext = "ouisyncdb"
+        val storeDir = session.storeDir()
+
+        val repoA = createRepo(name = "a")
+        assertEquals(mapOf("$storeDir/a.$ext" to repoA), Repository.list(session))
+
+        val repoB = createRepo(name = "b")
+        assertEquals(mapOf("$storeDir/a.$ext" to repoA, "$storeDir/b.$ext" to repoB), Repository.list(session))
+    }
+
     // TODO: events
 
     @Test
     fun infoHash() = runTest {
         withRepo {
-            assertTrue(it.infoHash().isNotEmpty())
+            val infoHash = it.infoHash()
+            assertTrue(infoHash.isNotEmpty())
+
+            val token = it.share()
+            assertEquals(infoHash, token.infoHash())
         }
     }
 
@@ -347,10 +364,26 @@ class RepositoryTest {
         }
     }
 
-    private suspend fun createRepo(token: ShareToken? = null): Repository =
+    @Test
+    fun delete() = runTest {
+        createRepo().apply { close() }
+
+        val repo = Repository.open(session, repoName)
+        repo.delete()
+
+        try {
+            Repository.open(session, repoName)
+            fail("unexpected success")
+        } catch (e: Error.StoreError) {
+        } catch (e: Exception) {
+            fail("unexpected exception: $e")
+        }
+    }
+
+    private suspend fun createRepo(name: String? = null, token: ShareToken? = null): Repository =
         Repository.create(
             session,
-            repoName,
+            name ?: repoName,
             readSecret = null,
             writeSecret = null,
             token = token,

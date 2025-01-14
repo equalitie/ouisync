@@ -171,7 +171,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             } catch (e: Error) {
                 completer.complete(Failure(e))
             } catch (e: Exception) {
-                completer.complete(Failure(InvalidData("invalid response: $e")))
+                completer.complete(Failure(Error.InvalidData("invalid response: $e")))
             }
         }
     }
@@ -275,7 +275,7 @@ private suspend fun authenticate(socket: AsynchronousSocket, authKey: ByteArray)
     buffer.get(serverProof)
 
     if (!MessageDigest.isEqual(serverProof, hmac.doFinal(clientChallenge))) {
-        throw PermissionDenied()
+        throw Error.PermissionDenied()
     }
 
     val serverChallenge = ByteArray(CHALLENGE_SIZE)

@@ -33,11 +33,11 @@ internal sealed interface Response {
             val type = unpacker.getNextFormat().getValueType()
 
             if (type != ValueType.MAP) {
-                throw InvalidData("invalid response: expected MAP, was $type")
+                throw Error.InvalidData("invalid response: expected MAP, was $type")
             }
 
             if (unpacker.unpackMapHeader() < 1) {
-                throw InvalidData("invalid response: empty map")
+                throw Error.InvalidData("invalid response: empty map")
             }
 
             val kind = unpacker.unpackString()
@@ -45,7 +45,7 @@ internal sealed interface Response {
             when (kind) {
                 "success" -> return unpackSuccess(unpacker)
                 "failure" -> return unpackFailure(unpacker)
-                else -> throw InvalidData("invalid response type: expected 'success' or 'failuire', was '$kind'")
+                else -> throw Error.InvalidData("invalid response type: expected 'success' or 'failuire', was '$kind'")
             }
         }
 
@@ -57,13 +57,13 @@ internal sealed interface Response {
                     val value = unpacker.unpackString()
                     when (value) {
                         "none", "repository_event", "state_monitor_event" -> return Success(Unit)
-                        else -> throw InvalidData("invalid response payload: '$value'")
+                        else -> throw Error.InvalidData("invalid response payload: '$value'")
                     }
                 }
                 ValueType.MAP -> {
                     val size = unpacker.unpackMapHeader()
                     if (size < 1) {
-                        throw InvalidData("invalid response payload: empty map")
+                        throw Error.InvalidData("invalid response payload: empty map")
                     }
 
                     val name = unpacker.unpackString()
@@ -77,41 +77,46 @@ internal sealed interface Response {
                         "file", "repository", "u64" -> unpacker.unpackLong()
                         "network_event" -> NetworkEvent.decode(unpacker.unpackByte())
                         // NetworkStats(Stats),
-                        // Path(PathBuf),
                         "peer_addrs" -> unpacker.unpackStringList()
                         "peer_info" -> unpacker.unpackPeerInfoList()
                         "progress" -> unpacker.unpackProgress()
                         // QuotaInfo(QuotaInfo),
-                        // Repositories(BTreeMap<PathBuf, RepositoryHandle>),
+                        "repositories" -> unpacker.unpackLongMap()
                         // SocketAddr(#[serde(with = "helpers::str")] SocketAddr),
                         // StateMonitor(StateMonitor),
                         // StorageSize(StorageSize),
-                        "share_token", "string" -> unpacker.unpackString()
+                        "path", "share_token", "string" -> unpacker.unpackString()
                         // U32(u32),
-                        else -> throw InvalidData("invalid response payload: '$name'")
+                        else -> throw Error.InvalidData("invalid response payload: '$name'")
                     }
 
                     return Success(value)
                 }
-                else -> throw InvalidData("invalid response payload: expected STRING or MAP, was $type")
+                else -> throw Error.InvalidData("invalid response payload: expected STRING or MAP, was $type")
             }
         }
 
         private fun unpackFailure(unpacker: MessageUnpacker): Failure {
             val type = unpacker.getNextFormat().getValueType()
             if (type != ValueType.ARRAY) {
-                throw InvalidData("invalid response payload: expected ARRAY, was $type")
+                throw Error.InvalidData("invalid response payload: expected ARRAY, was $type")
             }
 
             val size = unpacker.unpackArrayHeader()
             if (size < 2) {
-                throw InvalidData("invalid response array size: expected 2, was $size")
+                throw Error.InvalidData("invalid response array size: expected 2, was $size")
             }
 
             val code = ErrorCode.decode(unpacker.unpackInt().toShort())
             val message = unpacker.unpackString()
 
-            return Failure(Error.dispatch(code, message))
+            val sources = if (size > 2) {
+                unpacker.unpackStringList()
+            } else {
+                emptyList()
+            }
+
+            return Failure(Error.dispatch(code, message, sources))
         }
     }
 }
@@ -149,7 +154,7 @@ private fun MessageUnpacker.unpackPeerInfoList(): List<PeerInfo> {
 private fun MessageUnpacker.unpackPeerInfo(): PeerInfo {
     val size = unpackArrayHeader()
     if (size < 3) {
-        throw InvalidData("invalid PeerInfo: too few elements")
+        throw Error.InvalidData("invalid PeerInfo: too few elements")
     }
 
     val addr = unpackString()
@@ -170,12 +175,12 @@ private fun MessageUnpacker.unpackPeerState(): PeerState {
                 PeerStateKind.KNOWN -> PeerState.Known
                 PeerStateKind.CONNECTING -> PeerState.Connecting
                 PeerStateKind.HANDSHAKING -> PeerState.Handshaking
-                PeerStateKind.ACTIVE -> throw InvalidData("invalid PeerState: missing runtime id")
+                PeerStateKind.ACTIVE -> throw Error.InvalidData("invalid PeerState: missing runtime id")
             }
         }
         ValueType.ARRAY -> {
             if (unpackArrayHeader() < 2) {
-                throw InvalidData("invalid PeerState: too few elements")
+                throw Error.InvalidData("invalid PeerState: too few elements")
             }
 
             val kind = PeerStateKind.decode(unpackByte())
@@ -190,13 +195,13 @@ private fun MessageUnpacker.unpackPeerState(): PeerState {
                 PeerStateKind.ACTIVE -> PeerState.Active(runtimeId)
             }
         }
-        else -> throw InvalidData("invalid PeerState type: expected INTEGER or ARRAY, was $type")
+        else -> throw Error.InvalidData("invalid PeerState type: expected INTEGER or ARRAY, was $type")
     }
 }
 
 private fun MessageUnpacker.unpackProgress(): Progress {
     if (unpackArrayHeader() < 2) {
-        throw InvalidData("invalid Progress: too few elements")
+        throw Error.InvalidData("invalid Progress: too few elements")
     }
 
     val value = unpackLong()
@@ -214,7 +219,7 @@ private fun MessageUnpacker.unpackDirectory(): Directory {
 
 internal fun MessageUnpacker.unpackDirectoryEntry(): DirectoryEntry {
     if (unpackArrayHeader() < 2) {
-        throw InvalidData("invalid DirectoryEntry: too few elements")
+        throw Error.InvalidData("invalid DirectoryEntry: too few elements")
     }
 
     val name = unpackString()
@@ -223,5 +228,13 @@ internal fun MessageUnpacker.unpackDirectoryEntry(): DirectoryEntry {
     return DirectoryEntry(name, entryType)
 }
 
+internal fun MessageUnpacker.unpackLongMap(): Map<String, Long> {
+    val count = unpackMapHeader()
 
+    return 0.rangeUntil(count).associate {
+        val key = unpackString()
+        val value = unpackLong()
 
+        Pair(key, value)
+    }
+}

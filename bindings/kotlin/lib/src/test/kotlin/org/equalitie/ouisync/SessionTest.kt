@@ -109,4 +109,15 @@ class SessionTest {
         session.setLocalDiscoveryEnabled(true)
         assertTrue(session.isLocalDiscoveryEnabled())
     }
+
+    @Test
+    fun multipleSessions() = runTest {
+        val other = Session.create(configPath = "$tempDir/config")
+
+        try {
+            assertEquals(session.thisRuntimeId(), other.thisRuntimeId())
+        } finally {
+            other.close()
+        }
+    }
 }
