@@ -2893,33 +2893,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ouisync-ffi"
-version = "0.8.10"
-dependencies = [
- "async-trait",
- "bytes",
- "camino",
- "deadlock",
- "futures-util",
- "hex",
- "num_enum",
- "ouisync",
- "ouisync-bridge",
- "ouisync-vfs",
- "rmp-serde",
- "rustls",
- "scoped_task",
- "serde",
- "serde_bytes",
- "state_monitor",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "ouisync-net"
 version = "0.8.10"
 dependencies = [
