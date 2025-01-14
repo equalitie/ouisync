@@ -1,0 +1,4 @@
+[parse]
+parse_deps = true
+include = ['ouisync']
+

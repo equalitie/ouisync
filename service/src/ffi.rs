@@ -17,6 +17,30 @@ use crate::{
     Error, Service,
 };
 
+/// Does nothing except accepting arguments for each enum that is exported via the socket interface,
+/// thus tricking cbindgen into including them into the generated header.
+/// Currently suffers from https://github.com/mozilla/cbindgen/issues/1039
+#[no_mangle]
+pub unsafe extern "C" fn define_all_enums(
+    access_mode: AccessMode,
+    entry_type: EntryType,
+    network_event: NetworkEvent,
+    peer_source: PeerSource,
+    peer_state_kind: PeerStateKind,
+) -> u32 {
+    let _ = access_mode;
+    let _ = entry_type;
+    let _ = network_event;
+    let _ = peer_source;
+    let _ = peer_state_kind;
+    0
+}
+pub type AccessMode = ouisync::AccessMode;
+pub type EntryType = ouisync::EntryType;
+pub type NetworkEvent = ouisync::NetworkEvent;
+pub type PeerSource = ouisync::PeerSource;
+pub type PeerStateKind = ouisync::PeerStateKind;
+
 /// Start Ouisync service in a new thread and bind it to the specified local socket.
 ///
 /// Invokes `callback` after the service initialization completes. The first argument is the

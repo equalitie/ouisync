@@ -37,7 +37,7 @@ pub use self::{
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
     peer_source::PeerSource,
-    peer_state::PeerState,
+    peer_state::{PeerState, PeerStateKind},
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };

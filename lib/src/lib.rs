@@ -56,7 +56,8 @@ pub use self::{
     network::{
         repository_info_hash, DhtContactsStoreTrait, NatBehavior, Network, NetworkEvent,
         NetworkEventReceiver, NetworkEventStream, PeerAddr, PeerInfo, PeerInfoCollector,
-        PeerSource, PeerState, PublicRuntimeId, Registration, SecretRuntimeId, Stats, DHT_ROUTERS,
+        PeerSource, PeerState, PeerStateKind, PublicRuntimeId, Registration, SecretRuntimeId, Stats,
+        DHT_ROUTERS,
     },
     progress::Progress,
     protocol::{RepositoryId, StorageSize, BLOCK_SIZE},
