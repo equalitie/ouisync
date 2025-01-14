@@ -56,11 +56,11 @@ class Session {
     // that one instead. If we do spawn, we are responsible for logging
     if (startServer) {
       try {
+        logInit(callback: logger, tag: 'Server');
         server = await Server.start(
           configPath: configPath,
           debugLabel: debugLabel,
         );
-        logInit(callback: logger, tag: 'Server');
       } on ServiceAlreadyRunning catch (_) {
         debugPrint('Service already started');
       }
