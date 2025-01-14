@@ -3,7 +3,7 @@ use ouisync_lib::Repository;
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -11,7 +11,7 @@ struct MounterInner {
     // Repositories may be `mount`ed or `unmount`ed before, after or during the `mount_root` call,
     // this hash map records what the user requested to be mounted or unmounted and applies the
     // operations once `mount_root` finishes mounting the root.
-    repos: HashMap<PathBuf, Arc<Repository>>,
+    repos: HashMap<String, Arc<Repository>>,
     multi_repo_vfs: Option<MultiRepoVFS>,
 }
 
@@ -29,15 +29,14 @@ impl Mounter {
         }
     }
 
-    pub fn mount(&self, store_path: &Path, repository: &Arc<Repository>) -> Result<(), Error> {
+    pub fn mount(&self, name: &str, repository: &Arc<Repository>) -> Result<(), Error> {
         let mut inner = self.inner.lock().unwrap();
 
-        match inner.repos.entry(store_path.to_owned()) {
+        match inner.repos.entry(name.to_owned()) {
             Entry::Vacant(entry) => entry.insert(repository.clone()),
             Entry::Occupied(_) => {
-                // We could also probably just ignore this error because `store_path` can't point
-                // to more than one repository (so ignoring the error would make this function
-                // idempotent).
+                // We could also probably just ignore this error because repo name should be unique
+                // (so ignoring the error would make this function idempotent).
                 return Err(Error {
                     code: ErrorCode::EntryExists,
                     message: "The repository is already mounted".to_string(),
@@ -48,35 +47,35 @@ impl Mounter {
         let result = inner
             .multi_repo_vfs
             .as_ref()
-            .map(|vfs| vfs.insert(store_path.to_owned(), repository.clone()))
+            .map(|vfs| vfs.insert(name.to_owned(), repository.clone()).map(|_| ()))
             .unwrap_or(Ok(()))
             .map_err(|error| {
-                tracing::error!("Failed to mount repository {:?}: {error:?}", store_path);
+                tracing::error!("Failed to mount repository {:?}: {error:?}", name);
                 error.into()
             });
 
         if result.is_err() {
-            inner.repos.remove(store_path);
+            inner.repos.remove(name);
         }
 
         result
     }
 
-    pub fn unmount(&self, store_path: &Path) -> Result<(), Error> {
+    pub fn unmount(&self, name: &str) -> Result<(), Error> {
         let mut inner = self.inner.lock().unwrap();
 
         let result = inner
             .multi_repo_vfs
             .as_ref()
-            .map(|inner| inner.remove(store_path))
+            .map(|inner| inner.remove(name))
             .unwrap_or(Ok(()))
             .map_err(|error| {
-                tracing::error!("Failed to unmount repository {:?}: {error:?}", store_path);
+                tracing::error!("Failed to unmount repository {:?}: {error:?}", name);
                 error.into()
             });
 
         if result.is_ok() {
-            inner.repos.remove(store_path);
+            inner.repos.remove(name);
         }
 
         result

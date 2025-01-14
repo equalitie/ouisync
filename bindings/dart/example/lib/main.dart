@@ -3,7 +3,6 @@ import 'dart:async';
 
 import 'package:async/async.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:ouisync/native_channels.dart';
@@ -38,19 +37,23 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> initObjects() async {
     final dataDir = (await getApplicationSupportDirectory()).path;
-    final session = Session.create(configPath: join(dataDir, 'config.db'));
+    final session = await Session.create(configPath: join(dataDir, 'config.db'));
 
-    final store = join(dataDir, 'repo.db');
-    final storeExists = await io.File(store).exists();
+    final repoPath = join(dataDir, 'repo.db');
+    final repoExists = await io.File(repoPath).exists();
 
-    final repo = storeExists
-        ? await Repository.open(session, store: store, secret: null)
-        : await Repository.create(session,
-            store: store, readSecret: null, writeSecret: null);
+    final repo = repoExists
+        ? await Repository.open(session, path: repoPath, secret: null)
+        : await Repository.create(
+            session,
+            path: repoPath,
+            readSecret: null,
+            writeSecret: null,
+          );
 
     bittorrentDhtEnabled = await repo.isDhtEnabled;
 
-    final nativeChannels = NativeChannels(session);
+    final nativeChannels = NativeChannels();
     nativeChannels.repository = repo;
 
     setState(() {
@@ -156,24 +159,17 @@ class _MyAppState extends State<MyApp> {
     File? newFile;
 
     try {
-      if (kDebugMode) {
-        print('Creating file $filePath');
-      }
+      debugPrint('Creating file $filePath');
       newFile = await File.create(repo, filePath);
     } catch (e) {
-      if (kDebugMode) {
-        print('Error creating file $filePath: $e');
-      }
+      debugPrint('Error creating file $filePath: $e');
     }
 
     return newFile!;
   }
 
-  Future<void> saveFile(
-      File file, String path, Stream<List<int>> stream) async {
-    if (kDebugMode) {
-      print('Writing file $path');
-    }
+  Future<void> saveFile(File file, String path, Stream<List<int>> stream) async {
+    debugPrint('Writing file $path');
 
     int offset = 0;
 
@@ -181,14 +177,10 @@ class _MyAppState extends State<MyApp> {
       final streamReader = ChunkedStreamReader(stream);
       while (true) {
         final buffer = await streamReader.readChunk(64000);
-        if (kDebugMode) {
-          print('Buffer size: ${buffer.length} - offset: $offset');
-        }
+        debugPrint('Buffer size: ${buffer.length} - offset: $offset');
 
         if (buffer.isEmpty) {
-          if (kDebugMode) {
-            print('The buffer is empty; reading from the stream is done!');
-          }
+          debugPrint('The buffer is empty; reading from the stream is done!');
           break;
         }
 
@@ -196,22 +188,15 @@ class _MyAppState extends State<MyApp> {
         offset += buffer.length;
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('Exception writing the file $path:\n${e.toString()}');
-      }
+      debugPrint('Exception writing the file $path:\n${e.toString()}');
     } finally {
       await file.close();
     }
   }
 
   Future<void> getFiles(String path) async {
-    final dir = await Directory.open(repo, path);
-
-    final items = <String>[];
-    final iterator = dir.iterator;
-    while (iterator.moveNext()) {
-      items.add(iterator.current.name);
-    }
+    final dir = await Directory.read(repo, path);
+    final items = dir.map((entry) => entry.name).toList();
 
     setState(() {
       contents.clear();

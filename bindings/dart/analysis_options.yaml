@@ -6,4 +6,5 @@ analyzer:
 
 linter:
   rules:
-    unawaited_futures: true
+    - unawaited_futures
+    - avoid_print

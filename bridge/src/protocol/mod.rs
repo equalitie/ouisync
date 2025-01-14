@@ -1,6 +1,6 @@
 pub mod remote;
 
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ouisync_lib::NetworkEvent;
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub trait DeserializeVersioned<'de>: Sized {
@@ -38,20 +38,6 @@ pub enum Notification {
     StateMonitor,
     /// The list of repositories in a session has changed.
     RepositoryListChanged,
-}
-
-/// Network notification event.
-#[derive(
-    Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize, TryFromPrimitive, IntoPrimitive,
-)]
-#[repr(u8)]
-#[serde(into = "u8", try_from = "u8")]
-pub enum NetworkEvent {
-    /// A peer has appeared with higher protocol version than us. Probably means we are using
-    /// outdated library. This event can be used to notify the user that they should update the app.
-    ProtocolVersionMismatch = 0,
-    /// The set of known peers has changed (e.g., a new peer has been discovered)
-    PeerSetChange = 1,
 }
 
 /// Opaque, non-sensitive value unique to a particular client session and accessible to both the

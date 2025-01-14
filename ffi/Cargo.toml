@@ -18,7 +18,7 @@ bytes = { workspace = true }
 camino = { workspace = true, features = ["serde1"] }
 deadlock = { path = "../deadlock" }
 futures-util = { workspace = true }
-hex = "0.4.3"
+hex = { workspace = true }
 num_enum = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }

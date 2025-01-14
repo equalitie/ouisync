@@ -1,16 +1,15 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:ffi';
-import 'dart:isolate';
-import 'dart:typed_data';
-import 'dart:math';
+import 'dart:math' show Random;
 
-import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hex/hex.dart';
+import 'package:ouisync/exception.dart';
 
 import 'bindings.dart';
 import 'client.dart';
+import 'server.dart';
 import 'state_monitor.dart';
 
 export 'bindings.dart'
@@ -21,8 +20,9 @@ export 'bindings.dart'
         LogLevel,
         NetworkEvent,
         PeerSource,
-        PeerStateKind,
-        SessionKind;
+        PeerStateKind;
+export 'exception.dart';
+export 'server.dart' show logInit;
 
 part 'local_secret.dart';
 
@@ -37,151 +37,110 @@ const defaultLogTag = 'flutter-ouisync';
 /// and closed at the end. There can be only one session at the time.
 class Session {
   final Client _client;
-  final Subscription _networkSubscription;
-  String? _mountPoint;
+  final Server? _server;
 
-  Session._(this._client)
-      : _networkSubscription = Subscription(_client, "network", null);
+  Session._(this._client, this._server);
 
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
   /// doesn't exists, it will be created.
-  /// [logPath] is a path to the log file. If null, logs will be printed to standard output.
-  static Session create({
-    SessionKind kind = SessionKind.shared,
+  static Future<Session> create({
     required String configPath,
-    String? logPath,
-    String logTag = defaultLogTag,
-  }) {
-    if (debugTrace) {
-      print("Session.open $configPath");
+    String? debugLabel,
+    bool startServer = true,
+    void Function(LogLevel, String)? logger,
+  }) async {
+    Server? server;
+
+    // Try to start our own server but if one is already running connect to
+    // that one instead. If we do spawn, we are responsible for logging
+    if (startServer) {
+      try {
+        server = await Server.start(
+          configPath: configPath,
+          debugLabel: debugLabel,
+        );
+        logInit(callback: logger, tag: 'Server');
+      } on ServiceAlreadyRunning catch (_) {
+        debugPrint('Service already started');
+      }
     }
 
-    final recvPort = ReceivePort();
-
-    bindings ??= Bindings.loadDefault();
-
-    final result = _withPoolSync((pool) => bindings!.session_create(
-          kind.encode(),
-          pool.toNativeUtf8(configPath),
-          logPath != null ? pool.toNativeUtf8(logPath) : nullptr,
-          pool.toNativeUtf8(logTag),
-          NativeApi.postCObject,
-          recvPort.sendPort.nativePort,
-        ));
-
-    final errorCode = ErrorCode.decode(result.error_code);
-
-    int handle;
-
-    if (errorCode == ErrorCode.ok) {
-      handle = result.session;
-    } else {
-      final errorMessage = result.error_message.cast<Utf8>().intoDartString();
-      throw Error(errorCode, errorMessage);
-    }
-
-    final client = DirectClient(handle, recvPort, bindings!);
-
-    return Session._(client);
+    final client = await Client.connect(configPath: configPath);
+    return Session._(client, server);
   }
 
-  // Creates a new session which forwards calls to Ouisync backend running in the
-  // native code.
-  // [channelName] is the name of the MethodChannel to be used, equally named channel
-  // must be created and set up to listen to the commands in the native code.
-  static Future<Session> createChanneled(String channelName,
-      [void Function()? onClose]) async {
-    final client = ChannelClient(channelName, onClose);
-    await client.initialized;
-    return Session._(client);
-  }
+  Future<String?> get storeDir => _client.invoke('repository_get_store_dir');
 
-  String? get mountPoint => _mountPoint;
+  Future<void> setStoreDir(String path) =>
+      _client.invoke('repository_set_store_dir', path);
 
-  // Mount all repositories that are open now or in future in read or
-  // read/write mode into the `mountPoint`. The `mountPoint` may point to an
-  // empty directory or may be a drive letter.
-  Future<void> mountAllRepositories(String mountPoint) async {
-    await _client.invoke<void>("repository_mount_all", mountPoint);
-    _mountPoint = mountPoint;
-  }
+  Future<String?> get mountRoot => _client.invoke('repository_get_mount_root');
+
+  Future<void> setMountRoot(String? path) => _client.invoke(
+        'repository_set_mount_root',
+        path,
+      );
 
   /// Initialize network from config. Fall back to the provided defaults if the corresponding
   /// config entries don't exist.
   Future<void> initNetwork({
+    List<String> defaultBindAddrs = const [],
     bool defaultPortForwardingEnabled = false,
     bool defaultLocalDiscoveryEnabled = false,
   }) =>
       _client.invoke<void>("network_init", {
+        'bind': defaultBindAddrs,
         'port_forwarding_enabled': defaultPortForwardingEnabled,
         'local_discovery_enabled': defaultLocalDiscoveryEnabled,
       });
 
   /// Binds network to the specified addresses.
-  Future<void> bindNetwork({
-    String? quicV4,
-    String? quicV6,
-    String? tcpV4,
-    String? tcpV6,
-  }) async {
-    await _client.invoke<void>("network_bind", {
-      'quic_v4': quicV4,
-      'quic_v6': quicV6,
-      'tcp_v4': tcpV4,
-      'tcp_v6': tcpV6,
-    });
-  }
+  Future<void> bindNetwork(List<String> addrs) =>
+      _client.invoke<void>("network_bind", addrs);
 
-  Stream<NetworkEvent> get networkEvents =>
-      _networkSubscription.stream.map((raw) => NetworkEvent.decode(raw as int));
+  Stream<NetworkEvent> get networkEvents => _client
+      .subscribe('network', null)
+      .map((raw) => NetworkEvent.decode(raw as int));
 
-  Future<void> addUserProvidedPeer(String addr) =>
-      _client.invoke<void>('network_add_user_provided_peer', addr);
+  Future<void> addUserProvidedPeers(List<String> addrs) =>
+      _client.invoke<void>('network_add_user_provided_peers', addrs);
 
-  Future<void> removeUserProvidedPeer(String addr) =>
-      _client.invoke<void>('network_remove_user_provided_peer', addr);
+  Future<void> removeUserProvidedPeers(List<String> addrs) =>
+      _client.invoke<void>('network_remove_user_provided_peers', addrs);
 
   Future<List<String>> get userProvidedPeers => _client
-      .invoke<List<Object?>>('network_user_provided_peers')
+      .invoke<List<Object?>>('network_get_user_provided_peers')
       .then((list) => list.cast<String>());
 
-  Future<String?> get tcpListenerLocalAddressV4 =>
-      _client.invoke<String?>('network_tcp_listener_local_addr_v4');
-
-  Future<String?> get tcpListenerLocalAddressV6 =>
-      _client.invoke<String?>('network_tcp_listener_local_addr_v6');
-
-  Future<String?> get quicListenerLocalAddressV4 =>
-      _client.invoke<String?>('network_quic_listener_local_addr_v4');
-
-  Future<String?> get quicListenerLocalAddressV6 =>
-      _client.invoke<String?>('network_quic_listener_local_addr_v6');
+  Future<List<String>> get listenerAddrs => _client
+      .invoke<List<Object?>>('network_get_listener_addrs')
+      .then((list) => list.cast<String>());
 
   Future<String?> get externalAddressV4 =>
-      _client.invoke<String?>('network_external_addr_v4');
+      _client.invoke<String?>('network_get_external_addr_v4');
 
   Future<String?> get externalAddressV6 =>
-      _client.invoke<String?>('network_external_addr_v6');
+      _client.invoke<String?>('network_get_external_addr_v6');
 
   Future<String?> get natBehavior =>
-      _client.invoke<String?>('network_nat_behavior');
+      _client.invoke<String?>('network_get_nat_behavior');
 
   Future<NetworkStats> get networkStats => _client
       .invoke<List<Object?>>('network_stats')
       .then((list) => NetworkStats.decode(list));
 
   Future<List<PeerInfo>> get peers => _client
-      .invoke<List<Object?>>('network_known_peers')
+      .invoke<List<Object?>>('network_get_peers')
       .then(PeerInfo.decodeAll);
 
   StateMonitor get rootStateMonitor => StateMonitor.getRoot(_client);
 
   Future<int> get currentProtocolVersion =>
-      _client.invoke<int>('network_current_protocol_version');
+      _client.invoke<int>('network_get_current_protocol_version');
 
   Future<int> get highestSeenProtocolVersion =>
-      _client.invoke<int>('network_highest_seen_protocol_version');
+      _client.invoke<int>('network_get_highest_seen_protocol_version');
 
   /// Is port forwarding (UPnP) enabled?
   Future<bool> get isPortForwardingEnabled =>
@@ -199,48 +158,28 @@ class Session {
   Future<void> setLocalDiscoveryEnabled(bool enabled) =>
       _client.invoke<void>('network_set_local_discovery_enabled', enabled);
 
-  Future<String> get thisRuntimeId =>
-      _client.invoke<String>('network_this_runtime_id');
+  Future<String> get runtimeId =>
+      _client.invoke<String>('network_get_runtime_id');
 
   // Utility functions to generate password salts and to derive LocalSecretKey from LocalPasswords.
 
-  Future<PasswordSalt> generateSaltForPasswordHash() => _client
-      .invoke<Uint8List>('generate_salt_for_secret_key')
+  Future<PasswordSalt> generatePasswordSalt() => _client
+      .invoke<Uint8List>('password_generate_salt')
       .then((bytes) => PasswordSalt(bytes));
 
-  Future<LocalSecretKey> deriveLocalSecretKey(
-          LocalPassword pwd, PasswordSalt salt) =>
-      _client.invoke<Uint8List>('derive_secret_key', {
+  Future<LocalSecretKey> deriveSecretKey(
+    LocalPassword pwd,
+    PasswordSalt salt,
+  ) =>
+      _client.invoke<Uint8List>('password_derive_secret_key', {
         'password': pwd.string,
         'salt': salt._bytes
       }).then((bytes) => LocalSecretKey(bytes));
 
   /// Try to gracefully close connections to peers then close the session.
-  ///
-  /// Note that this function is idempotent with itself as well as with the
-  /// `closeSync` function.
   Future<void> close() async {
-    await _networkSubscription.close();
     await _client.close();
-  }
-
-  /// Try to gracefully close connections to peers then close the session.
-  /// Async functions don't work reliably when the dart engine is being
-  /// shutdown (on app exit). In those situations the network needs to be shut
-  /// down using a blocking call.
-  ///
-  /// This function closes the session only if the client used is the DirectClient.
-  /// Otherwise it throws.
-  ///
-  /// Note that this function is idempotent with itself as well as with the
-  /// `close` function.
-  void closeSync() {
-    final client = _client;
-    if (client is DirectClient) {
-      client.closeSync();
-    } else {
-      throw "closeSync is currently only implemented for DirectClient";
-    }
+    await _server?.stop();
   }
 }
 
@@ -326,11 +265,9 @@ class NetworkStats {
 class Repository {
   final Client _client;
   final int _handle;
-  final String? _store;
-  final Subscription _subscription;
+  String _path;
 
-  Repository._(this._client, this._handle, this._store)
-      : _subscription = Subscription(_client, "repository", _handle);
+  Repository._(this._client, this._handle, this._path);
 
   /// Creates a new repository and set access to it based on the following table:
   ///
@@ -345,26 +282,28 @@ class Repository {
   /// any             |  any             |  write         |  read with one secret, write with (possibly same) one
   static Future<Repository> create(
     Session session, {
-    required String store,
+    required String path,
     required SetLocalSecret? readSecret,
     required SetLocalSecret? writeSecret,
-    ShareToken? shareToken,
+    ShareToken? token,
   }) async {
-    if (debugTrace) {
-      print("Repository.create $store");
-    }
-
-    final handle = await session._client.invoke<int>(
+    final client = session._client;
+    final handle = await client.invoke<int>(
       'repository_create',
       {
-        'path': store,
+        'path': path,
         'read_secret': readSecret?.encode(),
         'write_secret': writeSecret?.encode(),
-        'share_token': shareToken?.toString()
+        'token': token?.toString(),
+        'sync_enabled': false,
+        'dht_enabled': false,
+        'pex_enabled': false,
       },
     );
 
-    return Repository._(session._client, handle, store);
+    final fullPath = await client.invoke<String>('repository_get_path', handle);
+
+    return Repository._(client, handle, fullPath);
   }
 
   /// Opens an existing repository. If the same repository is opened again, a new handle pointing
@@ -373,26 +312,47 @@ class Repository {
   /// See also [close].
   static Future<Repository> open(
     Session session, {
-    required String store,
+    required String path,
     LocalSecret? secret,
   }) async {
-    if (debugTrace) {
-      print("Repository.open $store");
-    }
-
-    final handle = await session._client.invoke<int>('repository_open', {
-      'path': store,
+    final client = session._client;
+    final handle = await client.invoke<int>('repository_open', {
+      'path': path,
       'secret': secret?.encode(),
+      'sync_enabled': false,
     });
 
-    return Repository._(session._client, handle, store);
+    final fullPath = await client.invoke<String>('repository_get_path', handle);
+
+    return Repository._(client, handle, fullPath);
   }
 
-  /// Closes the repository. All outstanding handles become invalid. Invoking any operation on a
-  /// repository after it's been closed results in an error being thrown.
-  Future<void> close() async {
-    await _subscription.close();
-    await _client.invoke('repository_close', _handle);
+  /// Returns all currently opened repositories.
+  static Future<List<Repository>> list(Session session) => session._client
+      .invoke<Map<Object?, Object?>>('repository_list')
+      .then((handles) => handles
+          .cast<String, int>()
+          .entries
+          .map((entry) => Repository._(session._client, entry.value, entry.key))
+          .toList());
+
+  /// Closes the repository. All outstanding handles become invalid. It's an error to invoke any
+  /// operation on this handle after it's been closed.
+  Future<void> close() => _client.invoke('repository_close', _handle);
+
+  /// Delete this repository. It's an error to invoke any operation on this handle after it's been
+  /// deleted.
+  Future<void> delete() => _client.invoke('repository_delete', _handle);
+
+  String get path => _path;
+
+  Future<void> move(String to) async {
+    await _client.invoke<void>('repository_move', {
+      'repository': _handle,
+      'to': to,
+    });
+
+    _path = await _client.invoke('repository_get_path', _handle);
   }
 
   /// Checks whether syncing with other replicas is enabled.
@@ -418,6 +378,14 @@ class Repository {
         'write': write?.encode(),
       });
 
+  /// Resets access using `token` and reset any values encrypted with local secrets to random
+  /// values. Currently that is only the writer ID.
+  Future<void> resetAccess(ShareToken token) =>
+      _client.invoke<void>('repository_reset_access', {
+        'repository': _handle,
+        'token': token.toString(),
+      });
+
   /// Obtain the current repository credentials. They can be used to restore repository access
   /// (with [setCredentials]) after the repo has been closed and re-opened without needing the
   /// local secret. This is useful for example when renaming/moving the repository database.
@@ -430,18 +398,9 @@ class Repository {
         'credentials': credentials,
       });
 
-  /// Like `setCredentials` but use the `ShareToken` and reset any values
-  /// encrypted with local secrets to random values. Currently that is only the
-  /// writer ID.
-  Future<void> resetCredentials(ShareToken token) =>
-      _client.invoke<void>('repository_reset_credentials', {
-        'repository': _handle,
-        'token': token.toString(),
-      });
-
   Future<AccessMode> get accessMode {
     return _client
-        .invoke<int>('repository_access_mode', _handle)
+        .invoke<int>('repository_get_access_mode', _handle)
         .then((n) => AccessMode.decode(n));
   }
 
@@ -454,11 +413,7 @@ class Repository {
 
   /// Returns the type (file, directory, ..) of the entry at [path]. Returns `null` if the entry
   /// doesn't exists.
-  Future<EntryType?> type(String path) async {
-    if (debugTrace) {
-      print("Repository.type $path");
-    }
-
+  Future<EntryType?> entryType(String path) async {
     final raw = await _client.invoke<int?>('repository_entry_type', {
       'repository': _handle,
       'path': path,
@@ -468,47 +423,29 @@ class Repository {
   }
 
   /// Returns whether the entry (file or directory) at [path] exists.
-  Future<bool> exists(String path) async {
-    if (debugTrace) {
-      print("Repository.exists $path");
-    }
-
-    return await type(path) != null;
+  Future<bool> entryExists(String path) async {
+    return await entryType(path) != null;
   }
 
   /// Move/rename the file/directory from [src] to [dst].
-  Future<void> move(String src, String dst) async {
-    if (debugTrace) {
-      print("Repository.move $src -> $dst");
-    }
+  Future<void> moveEntry(String src, String dst) =>
+      _client.invoke<void>('repository_move_entry', {
+        'repository': _handle,
+        'src': src,
+        'dst': dst,
+      });
 
-    await _client.invoke<void>('repository_move_entry', {
-      'repository': _handle,
-      'src': src,
-      'dst': dst,
-    });
-  }
+  Stream<void> get events =>
+      _client.subscribe('repository', _handle).cast<void>();
 
-  Stream<void> get events => _subscription.stream.cast<void>();
+  Future<bool> get isDhtEnabled =>
+      _client.invoke('repository_is_dht_enabled', _handle);
 
-  Future<bool> get isDhtEnabled async {
-    if (debugTrace) {
-      print("Repository.isDhtEnabled");
-    }
-
-    return await _client.invoke<bool>('repository_is_dht_enabled', _handle);
-  }
-
-  Future<void> setDhtEnabled(bool enabled) async {
-    if (debugTrace) {
-      print("Repository.setDhtEnabled($enabled)");
-    }
-
-    await _client.invoke<void>('repository_set_dht_enabled', {
-      'repository': _handle,
-      'enabled': enabled,
-    });
-  }
+  Future<void> setDhtEnabled(bool enabled) =>
+      _client.invoke('repository_set_dht_enabled', {
+        'repository': _handle,
+        'enabled': enabled,
+      });
 
   Future<bool> get isPexEnabled =>
       _client.invoke<bool>('repository_is_pex_enabled', _handle);
@@ -519,46 +456,27 @@ class Repository {
         'enabled': enabled,
       });
 
-  /// Create a share token providing access to this repository with the given mode. Can optionally
-  /// specify repository name which will be included in the token and suggested to the recipient.
-  Future<ShareToken> createShareToken({
+  /// Create a share token providing access to this repository with the given mode.
+  Future<ShareToken> share({
     required AccessMode accessMode,
     LocalSecret? secret,
-    String? name,
-  }) {
-    if (debugTrace) {
-      print("Repository.createShareToken");
-    }
-
-    return _client.invoke<String>('repository_create_share_token', {
-      'repository': _handle,
-      'secret': secret?.encode(),
-      'access_mode': accessMode.encode(),
-      'name': name,
-    }).then((token) => ShareToken._(_client, token));
-  }
+  }) =>
+      _client.invoke<String>('repository_share', {
+        'repository': _handle,
+        'secret': secret?.encode(),
+        'mode': accessMode.encode(),
+      }).then((token) => ShareToken._(_client, token));
 
   Future<Progress> get syncProgress => _client
       .invoke<List<Object?>>('repository_sync_progress', _handle)
       .then(Progress.decode);
 
-  StateMonitor? get stateMonitor {
-    final store = _store;
-    return store != null
-        ? StateMonitor.getRoot(_client)
-            .child(MonitorId.expectUnique("Repositories"))
-            .child(MonitorId.expectUnique(store))
-        : null;
-  }
+  StateMonitor? get stateMonitor => StateMonitor.getRoot(_client)
+      .child(MonitorId.expectUnique("Repositories"))
+      .child(MonitorId.expectUnique(_path));
 
   Future<String> get infoHash =>
-      _client.invoke<String>("repository_info_hash", _handle);
-
-  Future<String> hexDatabaseId() async {
-    final bytes =
-        await _client.invoke<Uint8List>("repository_database_id", _handle);
-    return HEX.encode(bytes);
-  }
+      _client.invoke<String>("repository_get_info_hash", _handle);
 
   /// Create mirror of this repository on the cache server.
   Future<void> createMirror(String host) =>
@@ -581,24 +499,16 @@ class Repository {
         'host': host,
       });
 
-  Future<PasswordSalt> getReadPasswordSalt() => _client
-      .invoke<Uint8List>("get_read_password_salt", _handle)
-      .then((bytes) => PasswordSalt(bytes));
-
-  Future<PasswordSalt> getWritePasswordSalt() => _client
-      .invoke<Uint8List>("get_write_password_salt", _handle)
-      .then((bytes) => PasswordSalt(bytes));
-
   Future<String?> getMetadata(String key) =>
       _client.invoke<String?>('repository_get_metadata', {
         'repository': _handle,
         'key': key,
       });
 
-  Future<void> setMetadata(
+  Future<bool> setMetadata(
     Map<String, ({String? oldValue, String? newValue})> edits,
   ) =>
-      _client.invoke<void>('repository_set_metadata', {
+      _client.invoke('repository_set_metadata', {
         'repository': _handle,
         'edits': edits.entries
             .map((entry) => {
@@ -609,16 +519,32 @@ class Repository {
             .toList(),
       });
 
-  /// Mount the repository. Currently supported only on the desktop platforms.
-  Future<void> mount() => _client.invoke<void>("repository_mount", _handle);
+  /// Mount the repository if supported by the platform.
+  Future<void> mount() => _client.invoke<void>('repository_mount', _handle);
 
   /// Unmount the repository.
-  Future<void> unmount() => _client.invoke<void>("repository_unmount", _handle);
+  Future<void> unmount() => _client.invoke<void>('repository_unmount', _handle);
+
+  /// Returns the mount point of this repository or null if not mounted.
+  Future<String?> get mountPoint =>
+      _client.invoke('repository_get_mount_point', _handle);
 
   /// Fetch the per-repository network statistics.
   Future<NetworkStats> get networkStats => _client
-      .invoke<List<Object?>>('repository_stats', _handle)
+      .invoke<List<Object?>>('repository_get_stats', _handle)
       .then((list) => NetworkStats.decode(list));
+
+  @override
+  bool operator ==(Object other) =>
+      other is Repository &&
+      other._client == _client &&
+      other._handle == _handle;
+
+  @override
+  int get hashCode => Object.hash(_client, _handle);
+
+  @override
+  String toString() => '$runtimeType($_path)';
 }
 
 sealed class AccessChange {
@@ -652,15 +578,15 @@ class ShareToken {
 
   /// Get the suggested repository name from the share token.
   Future<String> get suggestedName =>
-      _client.invoke<String>('share_token_suggested_name', _token);
+      _client.invoke<String>('share_token_get_suggested_name', _token);
 
   Future<String> get infoHash =>
-      _client.invoke<String>('share_token_info_hash', _token);
+      _client.invoke<String>('share_token_get_info_hash', _token);
 
   /// Get the access mode the share token provides.
-  Future<AccessMode> get mode => _client
-      .invoke<int>('share_token_mode', _token)
-      .then((n) => AccessMode.decode(n));
+  Future<AccessMode> get accessMode => _client
+      .invoke<int>('share_token_get_access_mode', _token)
+      .then(AccessMode.decode);
 
   /// Check if the repository of this share token is mirrored on the cache server.
   Future<bool> mirrorExists(String host) =>
@@ -718,6 +644,9 @@ class DirEntry {
 
     return DirEntry(name, EntryType.decode(type));
   }
+
+  @override
+  String toString() => '$name (${entryType.name})';
 }
 
 /// A reference to a directory (folder) in a [Repository].
@@ -732,18 +661,12 @@ class Directory with IterableMixin<DirEntry> {
 
   Directory._(this.entries);
 
-  /// Opens a directory of [repo] at [path].
+  /// Reads the directory of [repo] at [path].
   ///
   /// Throws if [path] doesn't exist or is not a directory.
-  ///
-  /// Note: don't forget to [close] it when no longer needed.
-  static Future<Directory> open(Repository repo, String path) async {
-    if (debugTrace) {
-      print("Directory.open $path");
-    }
-
+  static Future<Directory> read(Repository repo, String path) async {
     final rawEntries = await repo._client.invoke<List<Object?>>(
-      'directory_open',
+      'directory_read',
       {
         'repository': repo._handle,
         'path': path,
@@ -758,10 +681,6 @@ class Directory with IterableMixin<DirEntry> {
   ///
   /// Throws if [path] already exists of if the parent of [path] doesn't exists.
   static Future<void> create(Repository repo, String path) {
-    if (debugTrace) {
-      print("Directory.create $path");
-    }
-
     return repo._client.invoke<void>('directory_create', {
       'repository': repo._handle,
       'path': path,
@@ -776,10 +695,6 @@ class Directory with IterableMixin<DirEntry> {
     String path, {
     bool recursive = false,
   }) {
-    if (debugTrace) {
-      print("Directory.remove $path");
-    }
-
     return repo._client.invoke<void>('directory_remove', {
       'repository': repo._handle,
       'path': path,
@@ -805,10 +720,6 @@ class File {
   ///
   /// Throws if [path] doesn't exists or is a directory.
   static Future<File> open(Repository repo, String path) async {
-    if (debugTrace) {
-      print("File.open");
-    }
-
     return File._(
         repo._client,
         await repo._client.invoke<int>('file_open', {
@@ -822,7 +733,7 @@ class File {
   /// Throws if [path] already exists of if the parent of [path] doesn't exists.
   static Future<File> create(Repository repo, String path) async {
     if (debugTrace) {
-      print("File.create $path");
+      debugPrint("File.create $path");
     }
 
     return File._(
@@ -835,10 +746,6 @@ class File {
 
   /// Removes (deletes) a file at [path] from [repo].
   static Future<void> remove(Repository repo, String path) {
-    if (debugTrace) {
-      print("File.remove $path");
-    }
-
     return repo._client.invoke<void>('file_remove', {
       'repository': repo._handle,
       'path': path,
@@ -847,19 +754,11 @@ class File {
 
   /// Flushed and closes this file.
   Future<void> close() {
-    if (debugTrace) {
-      print("File.close");
-    }
-
     return _client.invoke<void>('file_close', _handle);
   }
 
   /// Flushes any pending writes to this file.
   Future<void> flush() {
-    if (debugTrace) {
-      print("File.flush");
-    }
-
     return _client.invoke<void>('file_flush', _handle);
   }
 
@@ -891,7 +790,7 @@ class File {
   /// ```
   Future<List<int>> read(int offset, int size) {
     if (debugTrace) {
-      print("File.read");
+      debugPrint("File.read");
     }
 
     return _client.invoke<Uint8List>(
@@ -901,7 +800,7 @@ class File {
   /// Write [data] to this file starting at [offset].
   Future<void> write(int offset, List<int> data) {
     if (debugTrace) {
-      print("File.write");
+      debugPrint("File.write");
     }
 
     return _client.invoke<void>('file_write', {
@@ -914,7 +813,7 @@ class File {
   /// Truncate the file to [size] bytes.
   Future<void> truncate(int size) {
     if (debugTrace) {
-      print("File.truncate");
+      debugPrint("File.truncate");
     }
 
     return _client.invoke<void>('file_truncate', {
@@ -926,102 +825,11 @@ class File {
   /// Returns the length of this file in bytes.
   Future<int> get length {
     if (debugTrace) {
-      print("File.length");
+      debugPrint("File.length");
     }
 
     return _client.invoke<int>('file_len', _handle);
   }
 
   Future<int> get progress => _client.invoke<int>('file_progress', _handle);
-
-  /// Copy the contents of the file into the provided raw file descriptor.
-  /// TODO: Right now this function only works when using the DirectClient,
-  /// otherwise throws.
-  Future<void> copyToRawFd(int fd) async {
-    if (debugTrace) {
-      print("File.copyToRawFd");
-    }
-
-    final client = _client;
-
-    if (client is DirectClient) {
-      await client.copyToRawFd(_handle, fd);
-    } else {
-      throw "copyToRawFd is currently implemented only for DirectClient";
-    }
-  }
-}
-
-/// Print log message
-void logPrint(LogLevel level, String scope, String message) =>
-    _withPoolSync((pool) => bindings!.log_print(
-          level.encode(),
-          pool.toNativeUtf8(scope),
-          pool.toNativeUtf8(message),
-        ));
-
-/// The exception type throws from this library.
-class Error implements Exception {
-  final String message;
-  final ErrorCode code;
-
-  Error(this.code, this.message);
-
-  @override
-  String toString() => message;
-}
-
-// Private helpers to simplify working with the native API:
-
-// Call the sync function passing it a [_Pool] which will be released when the function returns.
-T _withPoolSync<T>(T Function(_Pool) fun) {
-  final pool = _Pool();
-
-  try {
-    return fun(pool);
-  } finally {
-    pool.release();
-  }
-}
-
-// Allocator that tracks all allocations and frees them all at the same time.
-class _Pool implements Allocator {
-  List<Pointer<NativeType>> ptrs = [];
-
-  @override
-  Pointer<T> allocate<T extends NativeType>(int byteCount, {int? alignment}) {
-    final ptr = malloc.allocate<T>(byteCount, alignment: alignment);
-    ptrs.add(ptr);
-    return ptr;
-  }
-
-  @override
-  void free(Pointer<NativeType> ptr) {
-    // free on [release]
-  }
-
-  void release() {
-    for (var ptr in ptrs) {
-      malloc.free(ptr);
-    }
-  }
-
-  // Convenience function to convert a dart string to a C-style nul-terminated utf-8 encoded
-  // string pointer. The pointer is allocated using this pool.
-  Pointer<Char> toNativeUtf8(String str) =>
-      str.toNativeUtf8(allocator: this).cast<Char>();
-}
-
-extension Utf8Pointer on Pointer<Utf8> {
-  // Similar to [toDartString] but also deallocates the original pointer.
-  String intoDartString() {
-    final string = toDartString();
-    freeString(this);
-    return string;
-  }
-}
-
-// Free a pointer that was allocated by the native side.
-void freeString(Pointer<Utf8> ptr) {
-  bindings!.free_string(ptr.cast<Char>());
 }

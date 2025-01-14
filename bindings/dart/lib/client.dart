@@ -1,146 +1,210 @@
 import 'dart:async';
-import 'dart:collection';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 
-export 'internal/direct_client.dart';
+import 'package:crypto/crypto.dart';
+import 'package:hex/hex.dart';
 
-export 'internal/channel_client.dart';
+import 'exception.dart';
+import 'internal/length_delimited_codec.dart';
+import 'internal/message_codec.dart';
 
-abstract class Client {
-    Future<T> invoke<T>(String method, [Object? args]);
-    Future<void> close();
-    Subscriptions subscriptions();
-}
+class Client {
+  final Socket _socket;
+  final Stream<Uint8List> _stream;
+  StreamSubscription<Uint8List>? _streamSubscription;
+  int _nextMessageId = 0;
+  final _responses = <int, Completer<Object?>>{};
+  final _notifications = <int, StreamSink<Object?>>{};
 
-class Subscriptions {
-  final _sinks = HashMap<int, StreamSink<Object?>>();
-
-  void handle(int subscriptionId, Object? payload) {
-    final sink = _sinks[subscriptionId];
-
-    if (sink == null) {
-      print('unsolicited notification');
-      return;
-    }
-
-    try {
-      if (payload is String) {
-        sink.add(null);
-      } else if (payload is Map && payload.length == 1) {
-        sink.add(payload.entries.single.value);
-      } else {
-        final error = Exception('invalid notification');
-        sink.addError(error);
-      }
-    } catch (error) {
-      // We can get here if the `_controller` has been `close`d but the
-      // `_controller.onCancel` has not yet been executed (that's where the
-      // `Subscription` is removed from `_subscriptions`). We just ignore that
-      // error.
-    }
+  Client._(this._socket, this._stream) {
+    _streamSubscription =
+        _stream.transform(LengthDelimitedCodec()).listen(_receive);
   }
 
-  void close() {
-    for (var sink in _sinks.values) {
-      sink.close();
-    }
-    _sinks.clear();
-  }
-}
+  static Future<Client> connect({
+    required String configPath,
+    Duration? timeout,
+    Duration minDelay = const Duration(milliseconds: 50),
+    Duration maxDelay = const Duration(seconds: 1),
+  }) async {
+    DateTime start = DateTime.now();
+    Duration delay = minDelay;
+    SocketException? lastException;
 
-class Subscription {
-  final Client _client;
-  final StreamController<Object?> _controller;
-  final String _name;
-  final Object? _arg;
-  int _id = 0;
-  _SubscriptionState _state = _SubscriptionState.idle;
+    final port = json.decode(
+            await File('$configPath/local_control_port.conf').readAsString())
+        as int;
 
-  Subscription(this._client, this._name, this._arg)
-      : _controller = StreamController.broadcast() {
-    _controller.onListen = () => _switch(_SubscriptionState.subscribing);
-    _controller.onCancel = () => _switch(_SubscriptionState.unsubscribing);
-  }
-
-  Stream<Object?> get stream => _controller.stream;
-
-  Future<void> close() async {
-    if (_controller.hasListener) {
-      return await _controller.close();
-    }
-  }
-
-  Future<void> _switch(_SubscriptionState target) async {
-    switch (_state) {
-      case _SubscriptionState.idle:
-        _state = target;
-        break;
-      case _SubscriptionState.subscribing:
-      case _SubscriptionState.unsubscribing:
-        _state = target;
-        return;
-    }
+    final authKey = HEX.decode(json.decode(
+        await File('$configPath/local_control_auth_key.conf').readAsString()));
 
     while (true) {
-      final state = _state;
+      if (timeout != null) {
+        if (DateTime.now().difference(start) >= timeout) {
+          throw lastException ?? TimeoutException('connect timeout');
+        }
+      }
 
-      switch (state) {
-        case _SubscriptionState.idle:
+      try {
+        final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
+        final stream = socket.asBroadcastStream();
+        await _authenticate(stream, socket, authKey);
+
+        return Client._(socket, stream);
+      } on SocketException catch (e) {
+        lastException = e;
+        delay = _minDuration(delay * 2, maxDelay);
+        await Future.delayed(delay);
+      }
+    }
+  }
+
+  Future<T> invoke<T>(String method, [Object? args]) async {
+    final id = _nextMessageId++;
+    return await _invokeWithMessageId(id, method, args);
+  }
+
+  Stream<T> subscribe<T>(String method, Object? arg) {
+    final controller = StreamController<Object?>();
+    final id = _nextMessageId++;
+
+    controller.onListen = () => unawaited(_onSubscriptionListen(
+          id,
+          method,
+          arg,
+          controller.sink,
+        ));
+
+    controller.onCancel = () => unawaited(_onSubscriptionCancel(id));
+
+    return controller.stream.cast<T>();
+  }
+
+  Future<void> close() async {
+    await _streamSubscription?.cancel();
+    await _socket.close();
+  }
+
+  Future<T> _invokeWithMessageId<T>(int id, String method, Object? args) async {
+    final completer = Completer();
+    final response = completer.future;
+
+    _responses[id] = completer;
+
+    final bytes = encodeLengthDelimited(encodeMessage(id, method, args));
+    _socket.add(bytes);
+
+    return await response;
+  }
+
+  void _receive(Uint8List bytes) {
+    final message = decodeMessage(bytes);
+
+    switch (message) {
+      case MessageSuccess():
+        final completer = _responses.remove(message.id);
+        if (completer != null) {
+          completer.complete(message.payload);
           return;
-        case _SubscriptionState.subscribing:
-          await _subscribe();
-          break;
-        case _SubscriptionState.unsubscribing:
-          await _unsubscribe();
-          break;
-      }
+        }
 
-      if (_state == state) {
-        _state = _SubscriptionState.idle;
-      }
+        final controller = _notifications[message.id];
+        if (controller != null) {
+          controller.add(message.payload);
+        }
+
+      case MessageFailure():
+        final completer = _responses.remove(message.id);
+        if (completer != null) {
+          completer.completeError(message.exception);
+        }
+
+      case MalformedPayload():
+        final completer = _responses.remove(message.id);
+        if (completer != null) {
+          completer.completeError(InvalidData('invalid response'));
+        }
+
+      case MalformedMessage():
     }
   }
 
-  Future<void> _subscribe() async {
-    if (_id != 0) {
-      return;
-    }
+  Future<void> _onSubscriptionListen(
+    int id,
+    String method,
+    Object? arg,
+    StreamSink<Object?> sink,
+  ) async {
+    _notifications[id] = sink;
 
     try {
-      _id = await _client.invoke('${_name}_subscribe', _arg) as int;
-
-      // This subscription might have been `close`d in the meantime. Don't register the sink so
-      // that if a notification is still received from the backend it won't get added to the now
-      // closed controller (which would throw an exception).
-      if (_controller.isClosed) {
-        return;
-      }
-
-      _client.subscriptions()._sinks[_id] = _controller.sink;
-    } catch (e) {
-      print('failed to subscribe to $_name: $e');
+      await _invokeWithMessageId<void>(id, '${method}_subscribe', arg);
+    } catch (e, st) {
+      _notifications.remove(id);
+      sink.addError(e, st);
     }
   }
 
-  Future<void> _unsubscribe() async {
-    if (_id == 0) {
-      return;
-    }
-
-    _client.subscriptions()._sinks.remove(_id);
-
-    try {
-      await _client.invoke('unsubscribe', _id);
-    } catch (e) {
-      print('failed to unsubscribe from $_name: $e');
-    }
-
-    _id = 0;
+  Future<void> _onSubscriptionCancel(int id) async {
+    _notifications.remove(id);
+    await invoke<void>('unsubscribe', id);
   }
 }
 
-enum _SubscriptionState {
-  idle,
-  subscribing,
-  unsubscribing,
+_minDuration(Duration a, Duration b) => (a < b) ? a : b;
+
+Future<void> _authenticate(
+  Stream<Uint8List> stream,
+  IOSink sink,
+  List<int> authKey,
+) async {
+  const challengeSize = 256;
+  const proofSize = 32;
+
+  final random = Random.secure();
+  final hmac = Hmac(sha256, authKey);
+  final reader = _Reader(stream);
+
+  final clientChallenge =
+      List<int>.generate(challengeSize, (_) => random.nextInt(256));
+
+  sink.add(clientChallenge);
+
+  final serverProof = Digest(await reader.read(proofSize));
+  if (serverProof != hmac.convert(clientChallenge)) {
+    throw PermissionDenied('server authentication failed');
+  }
+
+  final serverChallenge = await reader.read(challengeSize);
+  final clientProof = hmac.convert(serverChallenge);
+
+  sink.add(clientProof.bytes);
 }
 
+class _Reader {
+  final Stream<Uint8List> stream;
+  final builder = BytesBuilder();
+
+  _Reader(this.stream);
+
+  Future<List<int>> read(int length) async {
+    if (builder.length < length) {
+      await for (final chunk in stream) {
+        builder.add(chunk);
+
+        if (builder.length >= length) {
+          break;
+        }
+      }
+    }
+
+    final bytes = builder.takeBytes();
+    final output = bytes.sublist(0, length);
+    builder.add(bytes.sublist(length));
+
+    return output;
+  }
+}

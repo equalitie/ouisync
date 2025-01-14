@@ -3,43 +3,42 @@ package org.equalitie.ouisync.lib
 import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.Pointer
-import com.sun.jna.Structure
-import com.sun.jna.Structure.FieldOrder
 import com.sun.jna.Callback as JnaCallback
 
 @Suppress("ktlint:standard:function-naming")
 internal interface Bindings : Library {
     companion object {
         val INSTANCE: Bindings by lazy {
-            Native.load("ouisync_ffi", Bindings::class.java)
+            Native.load("ouisync_service", Bindings::class.java)
         }
     }
 
-    fun session_create(
-        kind: Byte,
-        configs_path: String,
-        log_path: String?,
-        log_tag: String,
-        context: Pointer?,
-        callback: Callback,
-    ): SessionCreateResult
+    fun service_start(
+        config_dir: String,
+        debug_label: String?,
+        callback: StatusCallback,
+        callback_context: Pointer?,
+    ): Pointer
 
-    fun session_close(handle: Handle, context: Pointer?, callback: Callback)
+    fun service_stop(
+        handle: Pointer,
+        callback: StatusCallback,
+        callback_context: Pointer?,
+    )
 
-    fun session_channel_send(handle: Handle, msg: ByteArray, msg_len: Int)
-
-    fun free_string(ptr: Pointer?)
+    fun log_init(
+        file: String?,
+        callback: LogCallback?,
+        tag: String,
+    ): Short
 }
 
 internal typealias Handle = Long
 
-interface Callback : JnaCallback {
-    fun invoke(context: Pointer?, msg_ptr: Pointer, msg_len: Long)
+interface StatusCallback : JnaCallback {
+    fun invoke(context: Pointer?, error_code: Short)
 }
 
-@FieldOrder("handle", "error_code", "error_message")
-internal class SessionCreateResult(
-    @JvmField var handle: Handle = 0,
-    @JvmField var error_code: Short = ErrorCode.OK.encode(),
-    @JvmField var error_message: Pointer? = null,
-) : Structure(), Structure.ByValue
+interface LogCallback : JnaCallback {
+    fun invoke(level: Byte, message: String)
+}

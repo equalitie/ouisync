@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
+import 'package:flutter/foundation.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:test/test.dart';
 
@@ -19,30 +20,37 @@ void main() {
   final file1Content = 'Lorem ipsum dolor sit amet';
 
   Future<void> getDirectoryContents(Repository repo, String path) async {
-    final folder1Contents = await Directory.open(repo, path);
-    print('Directory contents: ${folder1Contents.toList()}');
+    final folder1Contents = await Directory.read(repo, path);
+    debugPrint('Directory contents: ${folder1Contents.toList()}');
   }
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
-    session = Session.create(
-      kind: SessionKind.unique,
+
+    logInit();
+
+    session = await Session.create(
       configPath: '${temp.path}/device_id.conf',
     );
-    repository = await Repository.create(session,
-        store: '${temp.path}/repo.db', readSecret: null, writeSecret: null);
+    await session.setStoreDir('${temp.path}/store');
+
+    repository = await Repository.create(
+      session,
+      path: 'foo',
+      readSecret: null,
+      writeSecret: null,
+    );
 
     currentPath = '/';
 
     subscription = repository.events.listen((_) async {
-      print('Syncing $currentPath');
+      debugPrint('Syncing $currentPath');
       await getDirectoryContents(repository, currentPath);
     });
   });
 
   tearDown(() async {
     await subscription.cancel();
-    await repository.close();
     await session.close();
     await temp.delete(recursive: true);
   });
@@ -51,21 +59,21 @@ void main() {
     // Create folder1 (/folder1)
     {
       await Directory.create(repository, folder1Path);
-      print('New folder: $folder1Path');
+      debugPrint('New folder: $folder1Path');
     }
     // Create file1.txt inside folder1 (/folder1/file1.txt)
     {
-      print('About to create file $file1InFolder1Path');
+      debugPrint('About to create file $file1InFolder1Path');
       final file = await File.create(repository, file1InFolder1Path);
       await file.write(0, utf8.encode(file1Content));
       await file.close();
     }
     // Get contents of folder1 (/folder1) and confirm it contains only one entry
     {
-      final folder1Contents = await Directory.open(repository, folder1Path);
+      final folder1Contents = await Directory.read(repository, folder1Path);
       expect(folder1Contents.toList().length, equals(1));
 
-      print('Folder1 contents: ${folder1Contents.toList()}');
+      debugPrint('Folder1 contents: ${folder1Contents.toList()}');
     }
   });
 
@@ -73,23 +81,23 @@ void main() {
     // Create folder1 (/folder1)
     {
       await Directory.create(repository, folder1Path);
-      print('New folder: $folder1Path');
+      debugPrint('New folder: $folder1Path');
 
       currentPath = folder1Path;
     }
     // Create file1 inside folder1 (/folder1/file1.txt)
     {
-      print('About to create new file $file1InFolder1Path');
+      debugPrint('About to create new file $file1InFolder1Path');
       final file = await File.create(repository, file1InFolder1Path);
       await file.write(0, utf8.encode(file1Content));
       await file.close();
     }
     // Get contents of folder1 (/folder1) and confirm it contains only one entry
     {
-      final folder1Contents = await Directory.open(repository, folder1Path);
+      final folder1Contents = await Directory.read(repository, folder1Path);
       expect(folder1Contents.toList().length, equals(1));
 
-      print('Folder1 contents: ${folder1Contents.toList()}');
+      debugPrint('Folder1 contents: ${folder1Contents.toList()}');
     }
   });
 }

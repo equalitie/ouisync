@@ -77,9 +77,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 session::subscribe(&self.state, &context.notification_tx).into()
             }
             Request::RepositoryIsSyncEnabled(handle) => {
-                repository::is_sync_enabled(&self.state, handle)
-                    .await?
-                    .into()
+                repository::is_sync_enabled(&self.state, handle)?.into()
             }
             Request::RepositorySetSyncEnabled {
                 repository,
@@ -170,27 +168,23 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await?
                 .into(),
             Request::RepositoryIsDhtEnabled(repository) => {
-                repository::is_dht_enabled(&self.state, repository)
-                    .await?
-                    .into()
+                repository::is_dht_enabled(&self.state, repository)?.into()
             }
             Request::RepositorySetDhtEnabled {
                 repository,
                 enabled,
             } => {
-                repository::set_dht_enabled(&self.state, repository, enabled).await?;
+                repository::set_dht_enabled(&self.state, repository, enabled)?;
                 ().into()
             }
             Request::RepositoryIsPexEnabled(repository) => {
-                repository::is_pex_enabled(&self.state, repository)
-                    .await?
-                    .into()
+                repository::is_pex_enabled(&self.state, repository)?.into()
             }
             Request::RepositorySetPexEnabled {
                 repository,
                 enabled,
             } => {
-                repository::set_pex_enabled(&self.state, repository, enabled).await?;
+                repository::set_pex_enabled(&self.state, repository, enabled)?;
                 ().into()
             }
             Request::RepositoryCreateShareToken {
@@ -255,7 +249,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .into()
             }
             Request::RepositoryStats(repository) => {
-                repository::stats(&self.state, repository).await?.into()
+                repository::stats(&self.state, repository)?.into()
             }
             Request::DirectoryCreate { repository, path } => {
                 directory::create(&self.state, repository, path)

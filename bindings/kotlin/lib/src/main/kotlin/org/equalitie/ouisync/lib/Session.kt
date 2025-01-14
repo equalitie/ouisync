@@ -1,9 +1,7 @@
 package org.equalitie.ouisync.lib
 
-import com.sun.jna.Pointer
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterIsInstance
 
 /**
  * The entry point to the ouisync library.
@@ -13,8 +11,7 @@ import kotlinx.coroutines.runBlocking
  * ```
  * // Create a session and initialize networking:
  * val session = Session.create("path/to/config/dir")
- * session.initNetwork()
- * session.bind(quicV4 = "0.0.0.0:0", quicV6 = "[::]:0")
+ * session.initNetwork(listOf("quic/0.0.0.0:0", "quic/[::]:0"))
  *
  * // ...
  *
@@ -23,71 +20,36 @@ import kotlinx.coroutines.runBlocking
  * ```
  */
 class Session private constructor(
-    private val handle: Long,
     internal val client: Client,
-    private val callback: Callback,
+    private val server: Server?,
 ) {
     companion object {
-        internal val bindings = Bindings.INSTANCE
 
         /**
          * Creates a new Ouisync session.
          *
-         * @param configsPath path to the directory where ouisync stores its config files.
-         * @param logPath     path to the log file. Ouisync always logs using the
-         *                    [android log API](https://developer.android.com/reference/android/util/Log)
-         *                    but if this param is not null, it logs to the specified file as well.
-         * @param logTag      tag for all log messages produced by the Ouisync library.
-         * @param kind        whether to create shared or unique session. `SHARED` should be used
-         *                    by default. `UNIQUE` is useful mostly for tests, to ensure test
-         *                    isolation and/or to simulate multiple replicas in a single test.
+         * @param configPath path to the directory where ouisync stores its config files.
+         * @param debugLabel label used to distinguish multiple [Session] instances for debug
+         * purposes. Useful mostly for tests and can be ignored otherwise.
+         *
          * @throws Error
          */
-        fun create(
-            configsPath: String,
-            logPath: String? = null,
-            logTag: String = "ouisync",
-            kind: SessionKind = SessionKind.SHARED,
+        suspend fun create(
+            configPath: String,
+            debugLabel: String? = null,
         ): Session {
-            val client = Client()
+            var server: Server? = null
 
-            val callback = object : Callback {
-                override fun invoke(context: Pointer?, msg_ptr: Pointer, msg_len: Long) {
-                    val buffer = msg_ptr.getByteArray(0, msg_len.toInt())
-
-                    runBlocking {
-                        client.receive(buffer)
-                    }
-                }
+            try {
+                server = Server.start(configPath, debugLabel)
+            } catch (e: Error.ServiceAlreadyRunning) {
+                server = null
             }
 
-            val result = bindings.session_create(
-                kind.encode(),
-                configsPath,
-                logPath,
-                logTag,
-                null,
-                callback,
-            )
+            val client = Client.connect(configPath)
 
-            val errorCode = ErrorCode.decode(result.error_code)
-
-            if (errorCode == ErrorCode.OK) {
-                // Keep a reference to the callback in this session to ensure it doesn't get
-                // garbage collected prematurely. More info:
-                // https://github.com/java-native-access/jna/blob/master/www/CallbacksAndClosures.md
-                return Session(result.handle, client, callback)
-            } else {
-                val message = result.error_message?.getString(0) ?: "unknown error"
-                bindings.free_string(result.error_message)
-
-                throw Error(errorCode, message)
-            }
+            return Session(client, server)
         }
-    }
-
-    init {
-        client.sessionHandle = handle
     }
 
     /**
@@ -96,21 +58,19 @@ class Session private constructor(
      * Don't forget to call this when the session is no longer needed, to avoid leaking resources.
      */
     suspend fun close() {
-        val deferred = CompletableDeferred<Any?>()
-        val callback = object : Callback {
-            override fun invoke(context: Pointer?, msg_ptr: Pointer, msg_len: Long) {
-                deferred.complete(null)
-            }
-        }
-
-        bindings.session_close(handle, null, callback)
-        deferred.await()
+        client.close()
+        server?.stop()
     }
+
+    suspend fun setStoreDir(path: String) = client.invoke(RepositorySetStoreDir(path))
+
+    suspend fun storeDir(): String? = client.invoke(RepositoryGetStoreDir()) as String?
 
     /**
      * Initializes the network according to the stored config. If no config exists, falls back to
      * the given parameters.
      *
+     * @param defaultBindAddrs             addresses to bind the listeners to by default.
      * @param defaultPortForwardingEnabled whether Port Forwarding/UPnP should be enabled by default.
      * @param defaultLocalDiscoveryEnabled whether Local Discovery should be enabled by default.
      *
@@ -120,94 +80,72 @@ class Session private constructor(
      * @see setLocalDiscoveryEnabled
      */
     suspend fun initNetwork(
+        defaultBindAddrs: List<String> = listOf(),
         defaultPortForwardingEnabled: Boolean,
         defaultLocalDiscoveryEnabled: Boolean,
-    ) {
-        val response = client.invoke(
-            NetworkInit(
-                defaultLocalDiscoveryEnabled,
-                defaultPortForwardingEnabled,
-            ),
-        )
-
-        assert(response == null)
-    }
+    ) = client.invoke(
+        NetworkInit(
+            defaultBindAddrs,
+            defaultLocalDiscoveryEnabled,
+            defaultPortForwardingEnabled,
+        ),
+    )
 
     /**
      * Binds the network listeners to the specified interfaces.
      *
      * Up to four listeners can be bound, one for each combination of protocol (TCP or QUIC) and IP
-     * family (IPv4 or IPv6). Specify the interfaces as "IP:PORT". If IP is IPv6, it needs to be
-     * enclosed in square brackets.
+     * family (IPv4 or IPv6). The format of the interfaces is "PROTO/IP:PORT" where PROTO is "tcp"
+     * or "quic". If IP is IPv6, it needs to be enclosed in square brackets.
      *
      * If port is `0`, binds to a random port initially but on subsequent starts tries to use the
      * same port (unless it's already taken). This can be useful to configuring port forwarding.
+     *
+     * ## Example
+     *
+     * ```
+     * session.bindNetwork(listOf("quic/0.0.0.0:0", "quic/[::]:0"))
+     * ```
      */
-    suspend fun bindNetwork(
-        quicV4: String? = null,
-        quicV6: String? = null,
-        tcpV4: String? = null,
-        tcpV6: String? = null,
-    ) {
-        val response = client.invoke(NetworkBind(quicV4, quicV6, tcpV4, tcpV6))
-        assert(response == null)
+    suspend fun bindNetwork(addrs: List<String>) = client.invoke(NetworkBind(addrs))
+
+    /**
+     * Returns a Flow of network events.
+     *
+     * Note the event subscription is created only after the flow starts being consumed.
+     **/
+    fun subscribeToNetworkEvents(): Flow<NetworkEvent> =
+        client.subscribe(NetworkSubscribe()).filterIsInstance<NetworkEvent>()
+
+    /**
+     * Returns the listener interface addresses.
+     */
+    suspend fun networkListenerAddrs(): List<String> {
+        val list = client.invoke(NetworkGetListenerAddrs()) as List<*>
+        return list.filterIsInstance<String>()
     }
 
     /**
-     * Subscribe to the network events.
-     **/
-    suspend fun subscribeToNetworkEvents(): EventReceiver<NetworkEvent> =
-        client.subscribe(NetworkSubscribe())
-
-    /**
-     * Returns the interface the QUIC IPv4 listener is bound to, if any.
-     */
-    suspend fun quicListenerLocalAddrV4(): String? =
-        client.invoke(NetworkQuicListenerLocalAddrV4()) as String?
-
-    /**
-     * Returns the interface the QUIC IPv6 listener is bound to, if any.
-     */
-    suspend fun quicListenerLocalAddrV6(): String? =
-        client.invoke(NetworkQuicListenerLocalAddrV6()) as String?
-
-    /**
-     * Returns the interface the TCP IPv4 listener is bound to, if any.
-     */
-    suspend fun tcpListenerLocalAddrV4(): String? =
-        client.invoke(NetworkTcpListenerLocalAddrV4()) as String?
-
-    /**
-     * Returns the interface the TCP IPv6 listener is bound to, if any.
-     */
-    suspend fun tcpListenerLocalAddrV6(): String? =
-        client.invoke(NetworkTcpListenerLocalAddrV6()) as String?
-
-    /**
-     * Adds a peer to connect to.
+     * Adds peers to connect to.
      *
      * Normally peers are discovered automatically (using Bittorrent DHT, Peer exchange or Local
      * discovery) but this function is useful in case when the discovery is not available for any
      * reason (e.g. in an isolated network).
      *
-     * Note that peers added with this function are remembered across restarts. To forget a peer,
-     * use [removeUserProvidedPeer].
+     * Note that peers added with this function are remembered across restarts. To forget peers,
+     * use [removeUserProvidedPeers].
      *
-     * @param addr address of the peer to connect to, in the "PROTOCOL/IP:PORT" format (PROTOCOL is
-     * is "tcp" or "quic"). Example: "quic/192.0.2.0:12345"
+     * @param addrs addresses of the peers to connect to, in the "PROTOCOL/IP:PORT" format
+     * (PROTOCOL is "tcp" or "quic"). Example: "quic/192.0.2.0:12345"
      */
-    suspend fun addUserProvidedPeer(addr: String) {
-        val response = client.invoke(NetworkAddUserProvidedPeer(addr))
-        assert(response == null)
-    }
+    suspend fun addUserProvidedPeers(addrs: List<String>) =
+        client.invoke(NetworkAddUserProvidedPeers(addrs))
 
     /**
-     * Removes a peer previously added with [addUserProvidedPeer]
+     * Removes peers previously added with [addUserProvidedPeers]
      */
-    suspend fun removeUserProvidedPeer(addr: String) {
-        val response = client.invoke(NetworkRemoveUserProvidedPeer(addr))
-        assert(response == null)
-    }
+    suspend fun removeUserProvidedPeers(addrs: List<String>) =
+        client.invoke(NetworkRemoveUserProvidedPeers(addrs))
 
     /**
      * Returns info about all known peers (both discovered and explicitly added).
@@ -219,7 +157,7 @@ class Session private constructor(
      * @see NetworkEvent
      */
     suspend fun peers(): List<PeerInfo> {
-        val list = client.invoke(NetworkKnownPeers()) as List<*>
+        val list = client.invoke(NetworkGetPeers()) as List<*>
         return list.map { it as PeerInfo }
     }
 
@@ -230,7 +168,7 @@ class Session private constructor(
      *
      * @see highestSeenProtocolVersion
      */
-    suspend fun currentProtocolVersion(): Int = client.invoke(NetworkCurrentProtocolVersion()) as Int
+    suspend fun currentProtocolVersion(): Long = client.invoke(NetworkGetCurrentProtocolVersion()) as Long
 
     /**
      * Returns the highest protocol version of all known peers. If this is higher than
@@ -238,7 +176,7 @@ class Session private constructor(
      * Ouisync. When a peer with higher protocol version is found, a
      * [NetworkEvent.PROTOCOL_VERSION_MISMATCH] is emitted.
      */
-    suspend fun highestSeenProtocolVersion(): Int = client.invoke(NetworkHighestSeenProtocolVersion()) as Int
+    suspend fun highestSeenProtocolVersion(): Long = client.invoke(NetworkGetHighestSeenProtocolVersion()) as Long
 
     /**
      * Is port forwarding (UPnP) enabled?
@@ -270,5 +208,5 @@ class Session private constructor(
      * The runtime id is a unique identifier of this instance which is randomly generated on
      * every start.
      */
-    suspend fun thisRuntimeId(): String = client.invoke(NetworkThisRuntimeId()) as String
+    suspend fun thisRuntimeId(): String = client.invoke(NetworkGetRuntimeId()) as String
 }

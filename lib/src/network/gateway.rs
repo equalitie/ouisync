@@ -510,7 +510,15 @@ impl TcpStack {
 
         let (connector, acceptor) =
             match tcp::configure(bind_addr, SocketOptions::default().with_reuse_addr()) {
-                Ok(stack) => stack,
+                Ok((connector, acceptor)) => {
+                    span.record(
+                        "addr",
+                        field::display(PeerAddr::Quic(*acceptor.local_addr())),
+                    );
+                    tracing::info!(parent: &span, "Stack configured");
+
+                    (connector, acceptor)
+                }
                 Err(error) => {
                     tracing::warn!(
                         parent: &span,

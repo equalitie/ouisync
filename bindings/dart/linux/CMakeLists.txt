@@ -29,7 +29,7 @@ set(OUISYNC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ouisync")
 
 corrosion_import_crate(
   MANIFEST_PATH "${OUISYNC_DIR}/Cargo.toml"
-  CRATES ouisync-ffi
+  CRATES ouisync-service
 )
 
 # This value is used when generating builds using this plugin, so it must
@@ -62,11 +62,11 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
-target_link_libraries(${PLUGIN_NAME} PUBLIC ouisync_ffi)
+target_link_libraries(${PLUGIN_NAME} PUBLIC ouisync_service)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
 # external build triggered from this build file.
-set(ouisync_bundled_libraries "${CMAKE_CURRENT_BINARY_DIR}/libouisync_ffi.so"
+set(ouisync_bundled_libraries "${CMAKE_CURRENT_BINARY_DIR}/libouisync_service.so"
   PARENT_SCOPE
 )

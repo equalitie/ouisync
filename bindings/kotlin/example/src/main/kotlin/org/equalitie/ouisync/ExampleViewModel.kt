@@ -10,12 +10,13 @@ import kotlinx.coroutines.launch
 import org.equalitie.ouisync.lib.Repository
 import org.equalitie.ouisync.lib.Session
 import org.equalitie.ouisync.lib.ShareToken
-import java.io.File
 
-private val DB_EXTENSION = "ouisyncdb"
 private const val TAG = "ouisync.example"
 
-class ExampleViewModel(private val configDir: String, private val storeDir: String) : ViewModel() {
+class ExampleViewModel(
+    private val configDir: String,
+    private val storeDir: String,
+) : ViewModel() {
     private var session: Session? = null
 
     var sessionError by mutableStateOf<String?>(null)
@@ -25,21 +26,22 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
         private set
 
     init {
-        try {
-            session = Session.create(configDir)
-        } catch (e: Exception) {
-            Log.e(TAG, "Session.create failed", e)
-            sessionError = e.toString()
-        } catch (e: java.lang.Error) {
-            Log.e(TAG, "Session.create failed", e)
-            sessionError = e.toString()
-        }
-
         viewModelScope.launch {
+            try {
+                session = Session.create(configDir)
+                session?.setStoreDir(storeDir)
+            } catch (e: Exception) {
+                Log.e(TAG, "Session.create failed", e)
+                sessionError = e.toString()
+            } catch (e: java.lang.Error) {
+                Log.e(TAG, "Session.create failed", e)
+                sessionError = e.toString()
+            }
+
             session?.let {
                 // Bind the network sockets to all interfaces and random ports. Use only the QUIC
                 // protocol and use both IPv4 and IPv6.
-                it.bindNetwork(quicV4 = "0.0.0.0:0", quicV6 = "[::]:0")
+                it.bindNetwork(listOf("quic/0.0.0.0:0", "quic/[::]:0"))
 
                 // Enable port forwarding (UPnP) to improve chances of connecting to peers.
                 it.setPortForwardingEnabled(true)
@@ -68,10 +70,10 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
 
         val repo = Repository.create(
             session,
-            "$storeDir/$name.$DB_EXTENSION",
+            name,
             readSecret = null,
             writeSecret = null,
-            shareToken = shareToken,
+            token = shareToken,
         )
 
         // Syncing is initially disabled, need to enable it.
@@ -88,49 +90,13 @@ class ExampleViewModel(private val configDir: String, private val storeDir: Stri
     suspend fun deleteRepository(name: String) {
         val repo = repositories.get(name) ?: return
 
-        repositories = repositories - name
-
-        repo.close()
-
-        val baseName = "$name.$DB_EXTENSION"
-        val files = File(storeDir).listFiles() ?: arrayOf()
-
-        // A ouisync repository database consist of multiple files having the same prefix. Delete
-        // all of them.
-        for (file in files) {
-            if (file.getName().startsWith(baseName)) {
-                file.delete()
-            }
-        }
+        repositories -= name
+        repo.delete()
     }
 
     private suspend fun openRepositories() {
         val session = this.session ?: return
-        val files = File(storeDir).listFiles() ?: arrayOf()
-
-        for (file in files) {
-            if (file.getName().endsWith(".$DB_EXTENSION")) {
-                try {
-                    val name = file
-                        .getName()
-                        .substring(0, file.getName().length - DB_EXTENSION.length - 1)
-                    val repo = Repository.open(session, file.getPath())
-
-                    // Syncing is initially disabled, enable it.
-                    repo.setSyncEnabled(true)
-
-                    // NOTE: The DHT and PEX settings are persisted from when the repo was created,
-                    // so it's not necessary to set them again here.
-
-                    Log.i(TAG, "Opened repository $name")
-
-                    repositories = repositories + (name to repo)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to open repository at ${file.getPath()}")
-                    continue
-                }
-            }
-        }
+        repositories = repositories + Repository.list(session)
     }
 
     override fun onCleared() {

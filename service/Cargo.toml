@@ -1,0 +1,63 @@
+[package]
+name = "ouisync-service"
+description = "Secure P2P file sharing (service)"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[dependencies]
+async-trait                 = { workspace = true }
+bytes                       = { workspace = true }
+clap                        = { workspace = true }
+file-rotate                 = "0.7.5"
+futures-util                = { workspace = true }
+hex                         = { workspace = true }
+hmac                        = { workspace = true }
+hyper                       = { version = "1.4.1", features = ["server", "http1"] }
+indexmap                    = { workspace = true }
+interprocess                = { version = "2.2.2", features = ["tokio"] }
+maxminddb                   = "0.24.0"
+metrics                     = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+num_enum                    = { workspace = true }
+ouisync                     = { path = "../lib" }
+ouisync-tracing-fmt         = { path = "../tracing_fmt" }
+ouisync-vfs                 = { path = "../vfs" }
+pem                         = { workspace = true }
+rand                        = { workspace = true }
+rmp-serde                   = { workspace = true }
+serde                       = { workspace = true }
+serde_bytes                 = { workspace = true }
+serde_json                  = { workspace = true }
+scoped_task                 = { path = "../scoped_task" }
+sha2                        = { workspace = true }
+slab                        = { workspace = true }
+state_monitor               = { path = "../state_monitor" }
+thiserror                   = { workspace = true }
+tokio                       = { workspace = true, features = ["signal"] }
+tokio-rustls                = { workspace = true }
+tokio-stream                = { workspace = true }
+tokio-tungstenite           = { version = "0.24.0", features = ["rustls-tls-webpki-roots"] }
+tokio-util                  = { workspace = true, features = ["codec"] }
+tracing                     = { workspace = true }
+tracing-subscriber          = { workspace = true, features = ["env-filter", "json"] }
+walkdir                     = "2.5.0"
+webpki-roots                = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+libc                        = "0.2.147"
+os_pipe                     = { version = "1.1.4", features = ["io_safety"] }
+paranoid-android            = "0.2.1"
+
+[dev-dependencies]
+assert_matches              = { workspace = true }
+rcgen                       = { workspace = true, features = ["pem"] }
+tempfile                    = { workspace = true }
+

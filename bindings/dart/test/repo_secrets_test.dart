@@ -5,17 +5,15 @@ import 'package:ouisync/ouisync.dart';
 void main() {
   late io.Directory temp;
   late Session session;
-  late String repoPath;
+  final repoName = 'repo';
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
 
-    repoPath = '${temp.path}/repo.db';
-
-    session = Session.create(
-      kind: SessionKind.unique,
+    session = await Session.create(
       configPath: '${temp.path}/config',
     );
+    await session.setStoreDir('${temp.path}/store');
   });
 
   test('Open repo using keys', () async {
@@ -28,7 +26,7 @@ void main() {
     {
       final repo = await Repository.create(
         session,
-        store: repoPath,
+        path: repoName,
         readSecret: readSecret,
         writeSecret: writeSecret,
       );
@@ -39,7 +37,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        store: repoPath,
+        path: repoName,
         secret: readSecret.key,
       );
 
@@ -50,7 +48,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        store: repoPath,
+        path: repoName,
         secret: writeSecret.key,
       );
 
@@ -64,17 +62,15 @@ void main() {
     final writePassword = LocalPassword("bar");
 
     {
-      final readSalt = await session.generateSaltForPasswordHash();
-      final writeSalt = await session.generateSaltForPasswordHash();
+      final readSalt = await session.generatePasswordSalt();
+      final writeSalt = await session.generatePasswordSalt();
 
-      final readKey =
-          await session.deriveLocalSecretKey(readPassword, readSalt);
-      final writeKey =
-          await session.deriveLocalSecretKey(writePassword, writeSalt);
+      final readKey = await session.deriveSecretKey(readPassword, readSalt);
+      final writeKey = await session.deriveSecretKey(writePassword, writeSalt);
 
       final repo = await Repository.create(
         session,
-        store: repoPath,
+        path: repoName,
         readSecret: LocalSecretKeyAndSalt(readKey, readSalt),
         writeSecret: LocalSecretKeyAndSalt(writeKey, writeSalt),
       );
@@ -85,7 +81,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        store: repoPath,
+        path: repoName,
         secret: readPassword,
       );
 
@@ -96,7 +92,7 @@ void main() {
     {
       final repo = await Repository.open(
         session,
-        store: repoPath,
+        path: repoName,
         secret: writePassword,
       );
 

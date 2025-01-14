@@ -47,13 +47,14 @@ const PEX_KEY: ConfigKey<PexConfig> = ConfigKey::new("pex", "Peer exchange confi
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NetworkDefaults {
+    pub bind: Vec<PeerAddr>,
     pub port_forwarding_enabled: bool,
     pub local_discovery_enabled: bool,
 }
 
 /// Initialize the network according to the config.
 pub async fn init(network: &Network, config: &ConfigStore, defaults: NetworkDefaults) {
-    let bind_addrs = config.entry(BIND_KEY).get().await.unwrap_or_default();
+    let bind_addrs = config.entry(BIND_KEY).get().await.unwrap_or(defaults.bind);
     bind_with_reuse_ports(network, config, &bind_addrs).await;
 
     let enabled = config
@@ -89,7 +90,7 @@ pub async fn bind(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
     bind_with_reuse_ports(network, config, addrs).await;
 }
 
-async fn bind_with_reuse_ports(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
+pub async fn bind_with_reuse_ports(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
     let mut last_used_ports = LastUsedPorts::load(config).await;
     let addrs: Vec<_> = addrs
         .iter()
@@ -409,14 +410,14 @@ mod tests {
 
     async fn expect_knows(network: &Network, peer_addr: PeerAddr) {
         time::timeout(TIMEOUT, async move {
-            let mut rx = network.on_peer_set_change();
+            let mut rx = network.subscribe();
 
             loop {
                 if network.peer_info(peer_addr).is_some() {
                     break;
                 }
 
-                rx.changed().await.unwrap();
+                rx.recv().await.unwrap();
             }
         })
         .await

@@ -1,5 +1,9 @@
 package org.equalitie.ouisync.lib
 
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -13,17 +17,15 @@ class SyncTest {
     lateinit var sessionB: Session
 
     @Before
-    fun setup() {
+    fun setup() = runTest {
         tempDir = JFile(createTempDirectory().toString())
 
         sessionA = Session.create(
-            configsPath = "$tempDir/a/config",
-            kind = SessionKind.UNIQUE,
+            configPath = "$tempDir/a/config",
         )
 
         sessionB = Session.create(
-            configsPath = "$tempDir/b/config",
-            kind = SessionKind.UNIQUE,
+            configPath = "$tempDir/b/config",
         )
     }
 
@@ -43,21 +45,20 @@ class SyncTest {
             writeSecret = null,
         )
 
-        val token = repoA.createShareToken()
+        val token = repoA.share()
         val repoB = Repository.create(
             sessionB,
             "$tempDir/b.ouisyncdb",
             readSecret = null,
             writeSecret = null,
-            shareToken = token,
+            token = token,
         )
-        val events = repoB.subscribe()
 
-        sessionA.bindNetwork(quicV4 = "127.0.0.1:0")
-        sessionB.bindNetwork(quicV4 = "127.0.0.1:0")
+        sessionA.bindNetwork(listOf("quic/127.0.0.1:0"))
+        sessionB.bindNetwork(listOf("quic/127.0.0.1:0"))
 
-        val addrA = sessionA.quicListenerLocalAddrV4()!!
-        sessionB.addUserProvidedPeer("quic/$addrA")
+        val addrsA = sessionA.networkListenerAddrs()
+        sessionB.addUserProvidedPeers(addrsA)
 
         repoA.setSyncEnabled(true)
         repoB.setSyncEnabled(true)
@@ -67,26 +68,30 @@ class SyncTest {
         fileA.write(0, contentA.toByteArray())
         fileA.close()
 
-        while (true) {
-            try {
-                val fileB = File.open(repoB, "test.txt")
-                try {
-                    val length = fileB.length()
-                    val contentB = fileB.read(0, length).decodeToString()
-
-                    if (contentB == contentA) {
-                        break
-                    }
-                } finally {
-                    fileB.close()
-                }
-            } catch (e: Exception) {
-            }
-
-            events.receive()
+        flow {
+            emit(Unit)
+            emitAll(repoB.subscribe())
         }
+            .filter checkContent@{
+                try {
+                    val fileB = File.open(repoB, "test.txt")
+                    try {
+                        val length = fileB.length()
+                        val contentB = fileB.read(0, length).decodeToString()
 
-        events.close()
+                        if (contentB == contentA) {
+                            return@checkContent true
+                        }
+                    } finally {
+                        fileB.close()
+                    }
+                } catch (e: Exception) {
+                }
+
+                return@checkContent false
+            }
+            .first()
+
         repoA.close()
         repoB.close()
     }

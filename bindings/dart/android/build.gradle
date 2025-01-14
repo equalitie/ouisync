@@ -109,11 +109,11 @@ cargo {
     // systems.
     pythonCommand = "python3"
     module = "../../.."
-    libname = "ouisync_ffi"
+    libname = "ouisync_service"
     targets = abiTargets
     profile = gradle.startParameter.taskNames.any{it.toLowerCase().contains("debug")} ? "debug" : "release"
 
-    extraCargoBuildArguments = ['-p', 'ouisync-ffi']
+    extraCargoBuildArguments = ['-p', 'ouisync-service']
 }
 
 preBuild.dependsOn 'cargoBuild'

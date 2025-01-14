@@ -1,11 +1,11 @@
 package org.equalitie.ouisync.lib
 
+import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -17,12 +17,13 @@ class SessionTest {
     lateinit var session: Session
 
     @Before
-    fun setup() {
+    fun setup() = runTest {
         tempDir = File(createTempDirectory().toString())
+
+        initLog("$tempDir/test.log")
+
         session = Session.create(
-            configsPath = "$tempDir/config",
-            logPath = "$tempDir/test.log",
-            kind = SessionKind.UNIQUE,
+            configPath = "$tempDir/config",
         )
     }
 
@@ -42,34 +43,42 @@ class SessionTest {
 
     @Test
     fun bindNetwork() = runTest {
-        session.bindNetwork(quicV4 = "0.0.0.0:0")
+        session.bindNetwork(listOf("quic/0.0.0.0:0"))
 
-        assertNotNull(session.quicListenerLocalAddrV4())
-        assertNull(session.quicListenerLocalAddrV6())
-        assertNull(session.tcpListenerLocalAddrV4())
-        assertNull(session.tcpListenerLocalAddrV6())
+        val addrs = session.networkListenerAddrs()
+        assertEquals(1, addrs.size)
+        assertTrue(addrs[0].startsWith("quic/0.0.0.0"))
     }
 
     @Test
     fun addAndRemoveUserProvidedPeer() = runTest {
         val addr = "quic/127.0.0.1:1234"
-        val events = session.subscribeToNetworkEvents()
 
         val peers0 = session.peers()
         assertTrue(peers0.isEmpty())
 
-        session.addUserProvidedPeer(addr)
+        // Convert the flow to ReceiveChannel so we can collect it one element at a time.
+        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+        val events = produce {
+            session.subscribeToNetworkEvents().collect(::send)
+        }
+
+        yield()
+
+        session.addUserProvidedPeers(listOf(addr))
         assertEquals(NetworkEvent.PEER_SET_CHANGE, events.receive())
 
         val peers1 = session.peers()
         assertEquals(1, peers1.size)
         assertEquals(addr, peers1[0].addr)
 
-        session.removeUserProvidedPeer(addr)
+        session.removeUserProvidedPeers(listOf(addr))
         assertEquals(NetworkEvent.PEER_SET_CHANGE, events.receive())
 
         val peers2 = session.peers()
         assertTrue(peers2.isEmpty())
+
+        events.cancel()
     }
 
     @Test
@@ -94,10 +103,21 @@ class SessionTest {
     @Test
     fun localDiscovery() = runTest {
         // Local discovery requires a running listener
-        session.bindNetwork(quicV4 = "0.0.0.0:0")
+        session.bindNetwork(listOf("quic/0.0.0.0:0"))
 
         assertFalse(session.isLocalDiscoveryEnabled())
         session.setLocalDiscoveryEnabled(true)
         assertTrue(session.isLocalDiscoveryEnabled())
+    }
+
+    @Test
+    fun multipleSessions() = runTest {
+        val other = Session.create(configPath = "$tempDir/config")
+
+        try {
+            assertEquals(session.thisRuntimeId(), other.thisRuntimeId())
+        } finally {
+            other.close()
+        }
     }
 }

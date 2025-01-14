@@ -2,7 +2,7 @@ use crate::udp::DatagramSocket;
 use bytecodec::{DecodeExt, EncodeExt};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    io, mem,
+    fmt, io, mem,
     net::SocketAddr,
     sync::Mutex,
     time::Duration,
@@ -310,6 +310,16 @@ pub enum NatBehavior {
     EndpointIndependent,
     AddressDependent,
     AddressAndPortDependent,
+}
+
+impl fmt::Display for NatBehavior {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::EndpointIndependent => write!(f, "endpoint independent"),
+            Self::AddressDependent => write!(f, "address dependent"),
+            Self::AddressAndPortDependent => write!(f, "address and port dependent"),
+        }
+    }
 }
 
 enum ResponseSlot {

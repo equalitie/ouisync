@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
     TryFromPrimitive,
 )]
 #[repr(u8)]
+#[serde(into = "u8", try_from = "u8")]
 pub enum EntryType {
     File = 1,
     Directory = 2,

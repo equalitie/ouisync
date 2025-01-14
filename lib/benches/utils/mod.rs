@@ -29,7 +29,7 @@ pub async fn create_repo(
     let repository = Repository::create(
         &RepositoryParams::new(store)
             .with_device_id(rng.gen())
-            .with_parent_monitor(monitor),
+            .with_monitor(monitor.make_child(store.to_string_lossy())),
         Access::WriteUnlocked { secrets },
     )
     .await
@@ -134,7 +134,7 @@ impl Actor {
             .await;
 
         let repo = create_repo(rng, &base_dir.join("repo.db"), 0, monitor).await;
-        let reg = network.register(repo.handle()).await;
+        let reg = network.register(repo.handle());
 
         Self {
             network,

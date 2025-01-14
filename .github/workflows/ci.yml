@@ -64,7 +64,7 @@ jobs:
       - name: Run clippy
         run: >
           ${{ matrix.cargo-command }} clippy
-          --package ouisync --package ouisync-bridge --package ouisync-ffi
+          --package ouisync --package ouisync-bridge --package ouisync-service
           ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
           --all-targets
           --no-deps
@@ -84,6 +84,7 @@ jobs:
         if: matrix.name == 'linux'
         run: ${{ matrix.cargo-command }} test --package ouisync-cli --test cli
 
+  TODO: The kotlin bindings need to be updated to the new service architecture, disabled for now
   check_kotlin_bindings:
     name: check kotlin bindings
     runs-on: ubuntu-24.04
@@ -104,8 +105,8 @@ jobs:
 
       - name: Install system dependencies
         # NOTE: fuse isn't used by the bindings themselves but it's required for the unit tests
-        # because they use the linux version of the ouisync_ffi library, not the android one and
-        # the linux version does currently unconditionally depend on fuse.
+        # because they use the linux version of the ouisync_service library, not the android one
+        # and the linux version does currently unconditionally depend on fuse.
         run: sudo apt-get install libfuse-dev
 
       # - name: Install NDK
@@ -159,8 +160,26 @@ jobs:
         run: ./gradlew --stacktrace example:assembleDebug
 
   check_dart_bindings:
-    name: check dart bindings
-    runs-on: ubuntu-24.04
+    name: check dart bindings on ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        name: [linux, windows]
+        include:
+          - name: linux
+            os: ubuntu-24.04
+            env:
+              OUISYNC_LIB: ../../target/debug/libouisync_service.so
+            cargo-dir: ~/.cargo
+
+          - name: windows
+            os: windows-latest
+            env:
+              OUISYNC_LIB: ..\..\target\debug\ouisync_service.dll
+              DOKAN_DLL_OUTPUT_PATH: C:\Windows\System32
+            cargo-dir: ~\cargo
+
     steps:
       - uses: actions/checkout@v4
 
@@ -173,14 +192,15 @@ jobs:
       - uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ouisync/target/
+            ${{ matrix.cargo-dir }}/bin/
+            ${{ matrix.cargo-dir }}/registry/index/
+            ${{ matrix.cargo-dir }}/registry/cache/
+            ${{ matrix.cargo-dir }}/git/db/
+            target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
       - name: Install system dependencies
+        if: matrix.name == 'linux'
         run: sudo apt-get install libfuse-dev
 
       - name: Get dart dependencies
@@ -192,13 +212,16 @@ jobs:
         run: dart run util/bindgen.dart
 
       - name: Analyze
+        # analyze should be the same on all platforms so run it on just one to save time
+        if: matrix.name == 'linux'
         working-directory: bindings/dart
         run: |
           dart analyze lib
+          dart analyze test
           dart analyze example
 
-      - name: Building the ouisync library for tests
-        run: cargo build -p ouisync-ffi --lib
+      - name: Build the ouisync service library for tests
+        run: cargo build -p ouisync-service --lib
 
       - name: Run tests
         working-directory: bindings/dart

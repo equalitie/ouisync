@@ -14,13 +14,11 @@ void main() {
   });
 
   test('shared session', () async {
-    final session0 = Session.create(
-      kind: SessionKind.shared,
+    final session0 = await Session.create(
       configPath: '${temp.path}/config',
     );
 
-    final session1 = Session.create(
-      kind: SessionKind.shared,
+    final session1 = await Session.create(
       configPath: '${temp.path}/config',
     );
 
@@ -38,8 +36,9 @@ void main() {
   });
 
   test('use after close', () async {
-    final session = Session.create(
-        kind: SessionKind.unique, configPath: '${temp.path}/config');
+    final session = await Session.create(
+      configPath: '${temp.path}/config',
+    );
     await session.close();
 
     await expectLater(

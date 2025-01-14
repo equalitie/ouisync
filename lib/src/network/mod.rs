@@ -6,6 +6,7 @@ mod constants;
 mod crypto;
 mod debug_payload;
 mod dht_discovery;
+mod event;
 mod gateway;
 mod ip;
 mod local_discovery;
@@ -30,8 +31,9 @@ mod tests;
 mod upnp;
 
 pub use self::{
-    connection::{ConnectionSetSubscription, PeerInfoCollector},
+    connection::PeerInfoCollector,
     dht_discovery::{DhtContactsStoreTrait, DHT_ROUTERS},
+    event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
     peer_source::PeerSource,
@@ -41,6 +43,7 @@ pub use self::{
 };
 use choke::Choker;
 use constants::REQUEST_TIMEOUT;
+use event::ProtocolVersions;
 pub use net::stun::NatBehavior;
 use request_tracker::RequestTracker;
 
@@ -63,7 +66,6 @@ use crate::{
     network::connection::ConnectionDirection,
     protocol::RepositoryId,
     repository::{RepositoryHandle, Vault},
-    sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
@@ -82,14 +84,11 @@ use std::{
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::mpsc,
+    sync::{mpsc, watch},
     task::{AbortHandle, JoinSet},
     time::Duration,
 };
 use tracing::{Instrument, Span};
-
-const DHT_ENABLED: &str = "dht_enabled";
-const PEX_ENABLED: &str = "pex_enabled";
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -121,8 +120,6 @@ impl Network {
 
         let (pex_discovery_tx, pex_discovery_rx) = mpsc::channel(1);
         let pex_discovery = PexDiscovery::new(pex_discovery_tx);
-
-        let (on_protocol_mismatch_tx, _) = uninitialized_watch::channel();
 
         let user_provided_peers = SeenPeers::new();
 
@@ -157,10 +154,9 @@ impl Network {
             pex_discovery,
             stun_clients: StunClients::new(),
             connections: ConnectionSet::new(),
-            on_protocol_mismatch_tx,
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
-            highest_seen_protocol_version: BlockingMutex::new(VERSION),
+            protocol_versions: watch::Sender::new(ProtocolVersions::new()),
             our_addresses: BlockingMutex::new(HashSet::default()),
             stats_tracker: StatsTracker::default(),
         });
@@ -303,22 +299,20 @@ impl Network {
         self.inner.connections.get_peer_info(addr)
     }
 
-    pub fn current_protocol_version(&self) -> u32 {
-        VERSION.into()
+    pub fn current_protocol_version(&self) -> u64 {
+        self.inner.protocol_versions.borrow().our.into()
     }
 
-    pub fn highest_seen_protocol_version(&self) -> u32 {
-        (*self.inner.highest_seen_protocol_version.lock().unwrap()).into()
+    pub fn highest_seen_protocol_version(&self) -> u64 {
+        self.inner.protocol_versions.borrow().highest_seen.into()
     }
 
-    /// Subscribe to network protocol mismatch events.
-    pub fn on_protocol_mismatch(&self) -> uninitialized_watch::Receiver<()> {
-        self.inner.on_protocol_mismatch_tx.subscribe()
-    }
-
-    /// Subscribe change in connected peers events.
-    pub fn on_peer_set_change(&self) -> ConnectionSetSubscription {
-        self.inner.connections.subscribe()
+    /// Subscribe to network events.
+    pub fn subscribe(&self) -> NetworkEventReceiver {
+        NetworkEventReceiver::new(
+            self.inner.protocol_versions.subscribe(),
+            self.inner.connections.subscribe(),
+        )
     }
 
     /// Register a local repository into the network. This links the repository with all matching
@@ -329,33 +323,11 @@ impl Network {
     /// Note: A repository should have at most one registration - creating more than one has
     /// undesired effects. This is currently not enforced and so it's a responsibility of the
     /// caller.
-    pub async fn register(&self, handle: RepositoryHandle) -> Registration {
+    pub fn register(&self, handle: RepositoryHandle) -> Registration {
         *handle.vault.monitor.info_hash.get() =
             Some(repository_info_hash(handle.vault.repository_id()));
 
-        let metadata = handle.vault.metadata();
-        let dht_enabled = metadata
-            .get(DHT_ENABLED)
-            .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-        let pex_enabled = metadata
-            .get(PEX_ENABLED)
-            .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-
-        let dht = if dht_enabled {
-            Some(
-                self.inner
-                    .start_dht_lookup(repository_info_hash(handle.vault.repository_id())),
-            )
-        } else {
-            None
-        };
-
         let pex = self.inner.pex_discovery.new_repository();
-        pex.set_enabled(pex_enabled);
 
         let request_tracker = RequestTracker::new(handle.vault.monitor.traffic.clone());
         request_tracker.set_timeout(REQUEST_TIMEOUT);
@@ -377,7 +349,7 @@ impl Network {
 
         let key = registry.repos.insert(RegistrationHolder {
             vault: handle.vault,
-            dht,
+            dht: None,
             pex,
             request_tracker,
             choker,
@@ -421,9 +393,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub async fn set_dht_enabled(&self, enabled: bool) {
-        set_metadata_bool(&self.inner, self.key, DHT_ENABLED, enabled).await;
-
+    pub fn set_dht_enabled(&self, enabled: bool) {
         let mut registry = self.inner.registry.lock().unwrap();
         let holder = &mut registry.repos[self.key];
 
@@ -452,9 +422,7 @@ impl Registration {
     /// Note: sending/receiving over PEX for this repo is enabled only if it's enabled using this
     /// function and also globally using [Network::set_pex_send_enabled] and/or
     /// [Network::set_pex_recv_enabled].
-    pub async fn set_pex_enabled(&self, enabled: bool) {
-        set_metadata_bool(&self.inner, self.key, PEX_ENABLED, enabled).await;
-
+    pub fn set_pex_enabled(&self, enabled: bool) {
         let registry = self.inner.registry.lock().unwrap();
         registry.repos[self.key].pex.set_enabled(enabled);
     }
@@ -489,11 +457,6 @@ impl Drop for Registration {
     }
 }
 
-async fn set_metadata_bool(inner: &Inner, key: usize, name: &str, value: bool) {
-    let metadata = inner.registry.lock().unwrap().repos[key].vault.metadata();
-    metadata.set(name, value).await.ok();
-}
-
 struct RegistrationHolder {
     vault: Vault,
     dht: Option<dht_discovery::LookupRequest>,
@@ -519,12 +482,11 @@ struct Inner {
     pex_discovery: PexDiscovery,
     stun_clients: StunClients,
     connections: ConnectionSet,
-    on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
+    protocol_versions: watch::Sender<ProtocolVersions>,
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<BlockingMutex<JoinSet<()>>>,
-    highest_seen_protocol_version: BlockingMutex<Version>,
     // Used to prevent repeatedly connecting to self.
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
     stats_tracker: StatsTracker,
@@ -963,16 +925,14 @@ impl Inner {
     }
 
     fn on_protocol_mismatch(&self, their_version: Version) {
-        // We know that `their_version` is higher than our version because otherwise this function
-        // wouldn't get called, but let's double check.
-        assert!(VERSION < their_version);
-
-        let mut highest = self.highest_seen_protocol_version.lock().unwrap();
-
-        if *highest < their_version {
-            *highest = their_version;
-            self.on_protocol_mismatch_tx.send(()).unwrap_or(());
-        }
+        self.protocol_versions.send_if_modified(|versions| {
+            if versions.highest_seen < their_version {
+                versions.highest_seen = their_version;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     fn spawn<Fut>(&self, f: Fut) -> AbortHandle

@@ -437,7 +437,7 @@ impl Setup {
 
         let vfs = MultiRepoVFS::create(mount_dir).await.unwrap();
 
-        vfs.insert(store_path, repo).unwrap();
+        vfs.insert("repo".to_owned(), repo).unwrap();
 
         // TODO: There is likely a bug in Dokan causing the repository not to appear as mounted righ
         // after the `mount` (or `mount_with_span`) finishes, which makes the tests fail.

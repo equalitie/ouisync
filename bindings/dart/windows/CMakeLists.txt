@@ -24,7 +24,7 @@ set(OUISYNC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ouisync")
 
 corrosion_import_crate(
   MANIFEST_PATH "${OUISYNC_DIR}/Cargo.toml"
-  CRATES ouisync-ffi
+  CRATES ouisync-service
 )
 
 # Not putting it inside Debug or Release subdirectories because they don't
@@ -33,7 +33,7 @@ set(DOKAN_DLL_OUTPUT_PATH "${CMAKE_CURRENT_BINARY_DIR}")
 
 # This forces the rust-dokan dependency to create the dokan2.dll library and
 # place in the ${binary_output_dir} directory.
-corrosion_set_env_vars(ouisync_ffi "DOKAN_DLL_OUTPUT_PATH=${DOKAN_DLL_OUTPUT_PATH}")
+corrosion_set_env_vars(ouisync_service "DOKAN_DLL_OUTPUT_PATH=${DOKAN_DLL_OUTPUT_PATH}")
 
 # This value is used when generating builds using this plugin, so it must
 # not be changed
@@ -52,7 +52,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
 
 # List of absolute paths to libraries that should be bundled with the plugin
 set(ouisync_bundled_libraries
-  ${CMAKE_CURRENT_BINARY_DIR}/ouisync_ffi.dll
+  ${CMAKE_CURRENT_BINARY_DIR}/ouisync_service.dll
   ${DOKAN_DLL_OUTPUT_PATH}/dokan2.dll
   PARENT_SCOPE
 )

@@ -1,6 +1,4 @@
-import 'client.dart' show Client, Subscription;
-
-export 'client.dart' show Subscription;
+import 'client.dart' show Client;
 
 // Version is incremented every time the monitor or any of it's values or
 // children changes.
@@ -108,21 +106,23 @@ class StateMonitor {
   StateMonitor child(MonitorId childId) =>
       StateMonitor._(_client, [..._path, childId]);
 
-  Subscription subscribe() =>
-      Subscription(_client, "state_monitor", _path.map((id) => id.toString()));
+  /// Stream of change notifications
+  Stream<void> get changes => _client
+      .subscribe('state_monitor', _path.map((id) => id.toString()))
+      .cast<void>();
 
   @override
   String toString() => "StateMonitor($_path)";
 
-  Future<StateMonitorNode?> load() async {
+  Future<StateMonitorNode> load() async {
     try {
-      final list = await _client.invoke(
-              "state_monitor_get", _path.map((id) => id.toString()))
-          as List<Object?>;
+      final List<Object?> list = await _client.invoke(
+        "state_monitor_get", _path.map((id) => id.toString())
+      );
       return StateMonitorNode._decode(_path, list);
-    } catch (e) {
-      print('failed to load state monitor node at $_path: $e');
-      return null;
+    } catch (e, st) {
+      final wrapped = Exception('failed to load state monitor node at $_path: ${e.toString()}');
+      Error.throwWithStackTrace(wrapped, st);
     }
   }
 }

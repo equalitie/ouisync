@@ -18,12 +18,12 @@ use std::{
     sync::{Arc, RwLock as BlockingRwLock},
 };
 use thiserror::Error;
-use tokio::sync::{broadcast::error::RecvError, watch, RwLock as AsyncRwLock};
+use tokio::sync::{broadcast::error::RecvError, watch};
 
 pub(crate) struct RepositoryHolder {
     pub store_path: PathBuf,
     pub repository: Arc<Repository>,
-    pub registration: AsyncRwLock<Option<Registration>>,
+    pub registration: BlockingRwLock<Option<Registration>>,
 }
 
 pub(crate) type RepositoryHandle = Handle<Arc<RepositoryHolder>>;
@@ -58,7 +58,7 @@ pub(crate) async fn create(
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration: AsyncRwLock::new(None),
+        registration: BlockingRwLock::new(None),
     };
     let handle = entry.insert(holder);
 
@@ -98,7 +98,7 @@ pub(crate) async fn open(
     let holder = RepositoryHolder {
         store_path,
         repository: Arc::new(repository),
-        registration: AsyncRwLock::new(None),
+        registration: BlockingRwLock::new(None),
     };
     let handle = entry.insert(holder);
 
@@ -125,7 +125,9 @@ async fn ensure_vacant_entry(
 pub(crate) async fn close(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
     if let Some(holder) = state.repositories.remove(handle) {
         holder.repository.close().await?;
-        state.mounter.unmount(&holder.store_path)?;
+        state
+            .mounter
+            .unmount(&holder.store_path.as_os_str().to_string_lossy())?;
     }
 
     Ok(())
@@ -142,7 +144,10 @@ pub async fn close_all_repositories(state: &State) {
                 holder.store_path
             );
         }
-        if let Err(error) = state.mounter.unmount(&holder.store_path) {
+        if let Err(error) = state
+            .mounter
+            .unmount(&holder.store_path.as_os_str().to_string_lossy())
+        {
             tracing::warn!(
                 "Failed to unmount repository \"{:?}\": {error:?}",
                 holder.store_path
@@ -151,16 +156,13 @@ pub async fn close_all_repositories(state: &State) {
     }
 }
 
-pub(crate) async fn is_sync_enabled(
-    state: &State,
-    handle: RepositoryHandle,
-) -> Result<bool, Error> {
+pub(crate) fn is_sync_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .is_some())
 }
 
@@ -172,12 +174,12 @@ pub(crate) async fn set_sync_enabled(
     let holder = state.repositories.get(handle)?;
 
     if enabled {
-        let mut registration = holder.registration.write().await;
+        let mut registration = holder.registration.write().unwrap();
         if registration.is_none() {
-            *registration = Some(state.network.register(holder.repository.handle()).await);
+            *registration = Some(state.network.register(holder.repository.handle()));
         }
     } else {
-        holder.registration.write().await.take();
+        holder.registration.write().unwrap().take();
     }
 
     Ok(())
@@ -268,12 +270,17 @@ pub(crate) fn get_name(state: &State, handle: RepositoryHandle) -> Result<OsStri
 
 pub(crate) fn mount(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
     let holder = state.repositories.get(handle)?;
-    state.mounter.mount(&holder.store_path, &holder.repository)
+    state.mounter.mount(
+        &holder.store_path.as_os_str().to_string_lossy(),
+        &holder.repository,
+    )
 }
 
 pub(crate) fn unmount(state: &State, handle: RepositoryHandle) -> Result<(), Error> {
     let holder = state.repositories.get(handle)?;
-    state.mounter.unmount(&holder.store_path)
+    state
+        .mounter
+        .unmount(&holder.store_path.as_os_str().to_string_lossy())
 }
 
 /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
@@ -310,15 +317,7 @@ pub(crate) async fn entry_version_hash(
             let parent_dir = holder.repository.open_directory(parent).await?;
             parent_dir.lookup_unique(name)?.version_vector().hash()
         }
-        None => {
-            let branches = holder.repository.load_branches().await?;
-            let mut vvs = Vec::with_capacity(branches.len());
-            for branch in branches {
-                let vv_hash = branch.version_vector().await?.hash();
-                vvs.push(vv_hash);
-            }
-            vvs.hash()
-        }
+        None => holder.repository.get_merged_version_vector().await?.hash(),
     };
 
     Ok(hash.as_ref().into())
@@ -331,13 +330,11 @@ pub(crate) async fn move_entry(
     src: Utf8PathBuf,
     dst: Utf8PathBuf,
 ) -> Result<(), Error> {
-    let holder = state.repositories.get(handle)?;
-    let (src_dir, src_name) = path::decompose(&src).ok_or(ouisync_lib::Error::EntryNotFound)?;
-    let (dst_dir, dst_name) = path::decompose(&dst).ok_or(ouisync_lib::Error::EntryNotFound)?;
-
-    holder
+    state
+        .repositories
+        .get(handle)?
         .repository
-        .move_entry(src_dir, src_name, dst_dir, dst_name)
+        .move_entry(src, dst)
         .await?;
 
     Ok(())
@@ -371,19 +368,19 @@ pub(crate) fn subscribe(
     Ok(handle)
 }
 
-pub(crate) async fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+pub(crate) fn is_dht_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
         .is_dht_enabled())
 }
 
-pub(crate) async fn set_dht_enabled(
+pub(crate) fn set_dht_enabled(
     state: &State,
     handle: RepositoryHandle,
     enabled: bool,
@@ -393,27 +390,26 @@ pub(crate) async fn set_dht_enabled(
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
-        .set_dht_enabled(enabled)
-        .await;
+        .set_dht_enabled(enabled);
     Ok(())
 }
 
-pub(crate) async fn is_pex_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
+pub(crate) fn is_pex_enabled(state: &State, handle: RepositoryHandle) -> Result<bool, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
         .is_pex_enabled())
 }
 
-pub(crate) async fn set_pex_enabled(
+pub(crate) fn set_pex_enabled(
     state: &State,
     handle: RepositoryHandle,
     enabled: bool,
@@ -423,11 +419,10 @@ pub(crate) async fn set_pex_enabled(
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
-        .set_pex_enabled(enabled)
-        .await;
+        .set_pex_enabled(enabled);
     Ok(())
 }
 
@@ -444,7 +439,7 @@ pub(crate) async fn create_share_token(
     let holder = state.repositories.get(repository)?;
     let token =
         repository::create_share_token(&holder.repository, local_secret, access_mode, name).await?;
-    Ok(token)
+    Ok(token.to_string())
 }
 
 /// Returns the syncing progress.
@@ -557,13 +552,13 @@ pub(crate) async fn metadata_set(
 }
 
 /// Fetch per-repository network statistics
-pub(crate) async fn stats(state: &State, handle: RepositoryHandle) -> Result<Stats, Error> {
+pub(crate) fn stats(state: &State, handle: RepositoryHandle) -> Result<Stats, Error> {
     Ok(state
         .repositories
         .get(handle)?
         .registration
         .read()
-        .await
+        .unwrap()
         .as_ref()
         .ok_or(RegistrationRequired)?
         .stats())

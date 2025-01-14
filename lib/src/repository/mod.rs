@@ -43,9 +43,14 @@ use futures_util::{stream, StreamExt};
 use metrics::{NoopRecorder, Recorder};
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
-use std::{borrow::Cow, io, path::Path, pin::pin, sync::Arc, time::SystemTime};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+    pin::pin,
+    sync::Arc,
+    time::SystemTime,
+};
 use tokio::{
-    fs,
     sync::broadcast::{self, error::RecvError},
     time::Duration,
 };
@@ -59,27 +64,18 @@ pub struct Repository {
     progress_reporter_handle: BlockingMutex<Option<ScopedJoinHandle<()>>>,
 }
 
-/// Delete the repository database
-pub async fn delete(store: impl AsRef<Path>) -> io::Result<()> {
+/// Given a path to the main repository file, return paths to all the repository files (the main db
+/// file and all auxiliary files).
+pub fn repository_files(store_path: impl AsRef<Path>) -> Vec<PathBuf> {
     // Sqlite database consists of up to three files: main db (always present), WAL and WAL-index.
-    // Try to delete all of them even if any of them fail then return the first error (if any)
-    future::join_all(["", "-wal", "-shm"].into_iter().map(|suffix| {
-        let mut path = store.as_ref().as_os_str().to_owned();
-        path.push(suffix);
-
-        async move {
-            match fs::remove_file(&path).await {
-                Ok(()) => Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            }
-        }
-    }))
-    .await
-    .into_iter()
-    .find_map(Result::err)
-    .map(Err)
-    .unwrap_or(Ok(()))
+    ["", "-wal", "-shm"]
+        .into_iter()
+        .map(|suffix| {
+            let mut path = store_path.as_ref().as_os_str().to_owned();
+            path.push(suffix);
+            path.into()
+        })
+        .collect()
 }
 
 impl Repository {
@@ -581,7 +577,7 @@ impl Repository {
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
-    /// If the entry exists, returns its `JointEntryType`, otherwise returns `EntryNotFound`.
+    /// If the entry exists, returns its `EntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
         match path::decompose(path.as_ref()) {
             Some((parent, name)) => {
@@ -666,11 +662,12 @@ impl Repository {
     /// If both source and destination refer to the same entry, this is a no-op.
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
-        src_dir_path: S,
-        src_name: &str,
-        dst_dir_path: D,
-        dst_name: &str,
+        src: S,
+        dst: D,
     ) -> Result<()> {
+        let (src_dir_path, src_name) = path::decompose(src.as_ref()).ok_or(Error::EntryNotFound)?;
+        let (dst_dir_path, dst_name) = path::decompose(dst.as_ref()).ok_or(Error::EntryNotFound)?;
+
         let local_branch = self.local_branch()?;
         let src_joint_dir = self.cd(src_dir_path).await?;
 
@@ -757,10 +754,6 @@ impl Repository {
     #[cfg(test)]
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
         self.shared.get_branch(id)
-    }
-
-    pub async fn load_branches(&self) -> Result<Vec<Branch>> {
-        self.shared.load_branches().await
     }
 
     /// Returns version vector of the given branch. Works in all access moded.

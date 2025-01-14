@@ -85,7 +85,7 @@ fn block_nonce_tamper() {
     env.actor("mallory", async move {
         let network = actor::create_network(Proto::Tcp).await;
         let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Blind).await;
-        let _reg = network.register(repo.handle()).await;
+        let _reg = network.register(repo.handle());
 
         // Connect to Alice and wait until fully synced (index + blocks).
         network.add_user_provided_peer(&actor::lookup_addr("alice").await);

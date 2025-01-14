@@ -27,7 +27,7 @@ fn peer_exchange_basics() {
         async move {
             let network = actor::create_network(proto).await;
             let (_repo, reg) = actor::create_linked_repo(DEFAULT_REPO, &network).await;
-            reg.set_pex_enabled(true).await;
+            reg.set_pex_enabled(true);
 
             barrier.wait().await;
         }
@@ -43,7 +43,7 @@ fn peer_exchange_basics() {
             let peer_addr = actor::lookup_addr("alice").await;
             network.add_user_provided_peer(&peer_addr);
 
-            reg.set_pex_enabled(true).await;
+            reg.set_pex_enabled(true);
 
             expect_peer_known(&network, "carol").await;
             barrier.wait().await;
@@ -58,7 +58,7 @@ fn peer_exchange_basics() {
             let peer_addr = actor::lookup_addr("alice").await;
             network.add_user_provided_peer(&peer_addr);
 
-            reg.set_pex_enabled(true).await;
+            reg.set_pex_enabled(true);
 
             expect_peer_known(&network, "bob").await;
             barrier.wait().await;
@@ -84,10 +84,10 @@ fn peer_exchange_discovers_only_peers_sharing_same_repository() {
             let network = actor::create_network(proto).await;
 
             let (_repo_1, reg_1) = actor::create_linked_repo("repo-1", &network).await;
-            reg_1.set_pex_enabled(true).await;
+            reg_1.set_pex_enabled(true);
 
             let (_repo_2, reg_2) = actor::create_linked_repo("repo-2", &network).await;
-            reg_2.set_pex_enabled(true).await;
+            reg_2.set_pex_enabled(true);
 
             barrier.wait().await;
             barrier.wait().await;
@@ -104,7 +104,7 @@ fn peer_exchange_discovers_only_peers_sharing_same_repository() {
             let peer_addr = actor::lookup_addr("alice").await;
             network.add_user_provided_peer(&peer_addr);
 
-            reg.set_pex_enabled(true).await;
+            reg.set_pex_enabled(true);
 
             expect_peer_known(&network, "carol").await;
 
@@ -126,7 +126,7 @@ fn peer_exchange_discovers_only_peers_sharing_same_repository() {
             let peer_addr = actor::lookup_addr("alice").await;
             network.add_user_provided_peer(&peer_addr);
 
-            reg.set_pex_enabled(true).await;
+            reg.set_pex_enabled(true);
 
             expect_peer_known(&network, "bob").await;
 
@@ -146,7 +146,7 @@ fn peer_exchange_discovers_only_peers_sharing_same_repository() {
             let peer_addr = actor::lookup_addr("alice").await;
             network.add_user_provided_peer(&peer_addr);
 
-            reg.set_pex_enabled(true).await;
+            reg.set_pex_enabled(true);
 
             barrier.wait().await;
 
@@ -168,9 +168,9 @@ fn dht_toggle() {
         let network = actor::create_network(proto).await;
         let (_repo, reg) = actor::create_linked_repo(DEFAULT_REPO, &network).await;
 
-        reg.set_dht_enabled(true).await;
-        reg.set_dht_enabled(false).await;
-        reg.set_dht_enabled(true).await;
+        reg.set_dht_enabled(true);
+        reg.set_dht_enabled(false);
+        reg.set_dht_enabled(true);
     });
 }
 
@@ -252,7 +252,7 @@ where
     F: Fn(&PeerState) -> bool,
 {
     time::timeout(*TEST_TIMEOUT, async move {
-        let mut rx = network.on_peer_set_change();
+        let mut rx = network.subscribe();
         let peer_addr = actor::lookup_addr(peer_name).await;
 
         loop {
@@ -262,7 +262,7 @@ where
                 }
             }
 
-            rx.changed().await.unwrap();
+            rx.recv().await.unwrap();
         }
     })
     .await
@@ -273,7 +273,7 @@ async fn expect_knows_port(network: &Network, peer_port: u16) {
     let collector = network.peer_info_collector();
 
     time::timeout(*TEST_TIMEOUT, async move {
-        let mut rx = network.on_peer_set_change();
+        let mut rx = network.subscribe();
 
         loop {
             let mut peer_ports = collector.collect().into_iter().map(|info| info.addr.port());
@@ -282,7 +282,7 @@ async fn expect_knows_port(network: &Network, peer_port: u16) {
                 break;
             }
 
-            rx.changed().await.unwrap();
+            rx.recv().await.unwrap();
         }
     })
     .await

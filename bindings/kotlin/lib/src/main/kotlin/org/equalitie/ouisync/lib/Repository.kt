@@ -1,7 +1,10 @@
 package org.equalitie.ouisync.lib
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterIsInstance
 import org.msgpack.core.MessagePacker
 import java.security.SecureRandom
+import java.util.Objects
 
 /**
  *
@@ -67,8 +70,7 @@ class Repository private constructor(internal val handle: Long, internal val cli
          * Creates a new repository.
          *
          * @param session     the Ouisync session.
-         * @param path        path to the local file to store the repository in. It's recommended
-         *                    to use the "ouisyncdb" file extension, but any extension works.
+         * @param path        path to the repository file or name of the repository.
          * @param readSecret  local secret for reading the repository on this device only. Do
          *                    not share with peers!. If null, the repo won't be protected and anyone
          *                    with physical access to the device will be able to read it.
@@ -80,8 +82,8 @@ class Repository private constructor(internal val handle: Long, internal val cli
          *                    physical access to the device will be able to read and write to it. If
          *                    `readSecret` is not null but `writeSecret` is null, the repo won't be
          *                    writable from this device.
-         * @param shareToken  used to share repositories between devices. If not null, this repo
-         *                    will be linked with the repos with the same share token on other
+         * @param token       used to share repositories between devices. If not null, this repo
+         *                    will be linked with the repos with the same token on other
          *                    devices. See also [createShareToken]. This also determines the
          *                    maximal access mode the repo can be opened in. If null, it's *write*
          *                    mode.
@@ -91,7 +93,7 @@ class Repository private constructor(internal val handle: Long, internal val cli
             path: String,
             readSecret: SetLocalSecret?,
             writeSecret: SetLocalSecret?,
-            shareToken: ShareToken? = null,
+            token: ShareToken? = null,
         ): Repository {
             val client = session.client
             val handle = client.invoke(
@@ -99,7 +101,10 @@ class Repository private constructor(internal val handle: Long, internal val cli
                     path,
                     readSecret,
                     writeSecret,
-                    shareToken?.toString(),
+                    token?.toString(),
+                    syncEnabled = false,
+                    dhtEnabled = false,
+                    pexEnabled = false,
                 ),
             ) as Long
 
@@ -125,6 +130,15 @@ class Repository private constructor(internal val handle: Long, internal val cli
 
             return Repository(handle, client)
         }
+
+        suspend fun list(session: Session): Map<String, Repository> {
+            val client = session.client
+            val handles = client.invoke(RepositoryList()) as Map<*, *>
+
+            return handles.asSequence().associate {
+                Pair(it.key as String, Repository(it.value as Long, client))
+            }
+        }
     }
 
     /**
@@ -133,13 +147,18 @@ class Repository private constructor(internal val handle: Long, internal val cli
     suspend fun close() = client.invoke(RepositoryClose(handle))
 
     /**
+     * Deletes this repository.
+     */
+    suspend fun delete() = client.invoke(RepositoryDelete(handle))
+
+    /**
      * Subscribe to repository events.
      *
      * An even is emitted every time the content of the repo changes (e.g., a file is created,
      * written to, removed, moved, ...).
      */
-    suspend fun subscribe(): EventReceiver<Unit> =
-        client.subscribe(RepositorySubscribe(handle))
+    fun subscribe(): Flow<Unit> =
+        client.subscribe(RepositorySubscribe(handle)).filterIsInstance<Unit>()
 
     /**
      * Returns whether syncing with other replicas is enabled.
@@ -159,14 +178,7 @@ class Repository private constructor(internal val handle: Long, internal val cli
      * Note the announce happens automatically. This function exists just for information/debugging
      * purposes.
      */
-    suspend fun infoHash() = client.invoke(RepositoryInfoHash(handle)) as String
-
-    /**
-     * Returns the *database id* of this repository. A *database id* remains unchanged even when
-     * the repo is renamed or moved and so can be used e.g. as a key for storing any per-repo
-     * configuration, if needed.
-     */
-    suspend fun databaseId() = client.invoke(RepositoryDatabaseId(handle)) as ByteArray
+    suspend fun infoHash() = client.invoke(RepositoryGetInfoHash(handle)) as String
 
     /**
      * Creates a *share token* to share this repository with other devices.
@@ -175,42 +187,25 @@ class Repository private constructor(internal val handle: Long, internal val cli
      * opened in but it can be escalated with the `secret` param or de-escalated with the
      * `accessMode` param.
      *
-     * @param secret   local repo secret. If not null, the share token's access mode will be
+     * @param secret     local repo secret. If not null, the share token's access mode will be
      *                   the same as what the secret provides. Useful to escalate the access mode
      *                   to above of what the repo is opened in.
      * @param accessMode access mode of the token. Useful to de-escalate the access mode to below
      *                   of what the repo is opened in.
-     * @param name       optional human-readable name of the repo that the share token will be
-     *                   labeled with. Useful to help organize the share tokens.
      */
-    suspend fun createShareToken(
+    suspend fun share(
         secret: LocalSecret? = null,
         accessMode: AccessMode = AccessMode.WRITE,
-        name: String? = null,
     ): ShareToken {
-        val raw = client.invoke(RepositoryCreateShareToken(handle, secret, accessMode, name)) as String
+        val raw = client.invoke(RepositoryShare(handle, secret, accessMode)) as String
         return ShareToken(raw, client)
     }
 
     /**
-     * Is local secret required to read this repo?
-     */
-    suspend fun requiresLocalSecretForReading() =
-        client.invoke(RepositoryRequiresLocalSecretForReading(handle)) as Boolean
-
-    /**
-     * Is local secret required to write to this repo?
-     */
-    suspend fun requiresLocalSecretForWriting() =
-        client.invoke(RepositoryRequiresLocalSecretForWriting(handle)) as Boolean
-
-    /**
      * Returns the access mode (*blind*, *read* or *write*) the repo is opened in.
      */
-    suspend fun accessMode(): AccessMode {
-        val raw = client.invoke(RepositoryAccessMode(handle)) as Byte
-        return AccessMode.decode(raw)
-    }
+    suspend fun accessMode(): AccessMode =
+        client.invoke(RepositoryGetAccessMode(handle)) as AccessMode
 
     /**
      * Switches the repository to the given access mode.
@@ -221,7 +216,7 @@ class Repository private constructor(internal val handle: Long, internal val cli
      */
     suspend fun setAccessMode(
         accessMode: AccessMode,
-        secret: LocalSecret?,
+        secret: LocalSecret? = null,
     ) =
         client.invoke(RepositorySetAccessMode(handle, accessMode, secret))
 
@@ -341,15 +336,8 @@ class Repository private constructor(internal val handle: Long, internal val cli
      *
      * @param path path of the entry, relative to the repo root.
      */
-    suspend fun entryType(path: String): EntryType? {
-        val raw = client.invoke(RepositoryEntryType(handle, path)) as Byte?
-
-        if (raw != null) {
-            return EntryType.decode(raw)
-        } else {
-            return null
-        }
-    }
+    suspend fun entryType(path: String): EntryType? =
+        client.invoke(RepositoryEntryType(handle, path)) as? EntryType
 
     /**
      * Moves an entry (file or directory) from `src` to `dst`.
@@ -359,6 +347,13 @@ class Repository private constructor(internal val handle: Long, internal val cli
      */
     suspend fun moveEntry(src: String, dst: String) =
         client.invoke(RepositoryMoveEntry(handle, src, dst))
+
+    override fun equals(other: Any?) =
+        other is Repository &&
+        handle == other.handle &&
+        client == other.client
+
+    override fun hashCode() = Objects.hash(handle, client)
 }
 
 /**

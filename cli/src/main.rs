@@ -1,45 +1,25 @@
 mod client;
-mod error;
-mod geo_ip;
-mod handler;
-mod metrics;
+mod defaults;
+mod format;
 mod options;
-mod protocol;
-mod repository;
 mod server;
-mod state;
-mod transport;
-mod utils;
 
 use clap::Parser;
-use options::Options;
-use protocol::Request;
-use std::process::ExitCode;
-
-pub(crate) const APP_NAME: &str = "ouisync";
-pub(crate) const DB_EXTENSION: &str = "ouisyncdb";
+use options::{Command, Options};
+use ouisync_service::{transport::ClientError, Error as ServerError};
+use std::{fmt, process::ExitCode};
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let options = Options::parse();
 
-    let result = if let Request::Start = &options.request {
-        server::run(
-            options.dirs,
-            options.socket,
-            options.log_format,
-            options.log_color,
-        )
-        .await
-    } else {
-        client::run(
-            options.dirs,
-            options.socket,
-            options.log_format,
-            options.log_color,
-            options.request,
-        )
-        .await
+    let result = match options.command {
+        Command::Server(command) => server::run(options.config_dir, command)
+            .await
+            .map_err(Error::from),
+        Command::Client(command) => client::run(options.config_dir, command)
+            .await
+            .map_err(Error::from),
     };
 
     match result {
@@ -47,6 +27,33 @@ async fn main() -> ExitCode {
         Err(error) => {
             eprintln!("{:#}", error);
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Error {
+    Server(ServerError),
+    Client(ClientError),
+}
+
+impl From<ServerError> for Error {
+    fn from(src: ServerError) -> Self {
+        Self::Server(src)
+    }
+}
+
+impl From<ClientError> for Error {
+    fn from(src: ClientError) -> Self {
+        Self::Client(src)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Server(error) => error.fmt(f),
+            Self::Client(error) => error.fmt(f),
         }
     }
 }

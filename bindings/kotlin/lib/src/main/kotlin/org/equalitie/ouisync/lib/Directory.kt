@@ -1,32 +1,17 @@
 package org.equalitie.ouisync.lib
 
-import org.msgpack.core.MessageUnpacker
-
 /**
  * A directory entry
  *
  * @property name      name of the entry.
  * @property entryType type of the entry (i.e., file or directory).
  */
-data class DirectoryEntry(val name: String, val entryType: EntryType) {
-    companion object {
-        internal fun unpack(unpacker: MessageUnpacker): DirectoryEntry {
-            if (unpacker.unpackArrayHeader() != 2) {
-                throw InvalidResponse()
-            }
-
-            val name = unpacker.unpackString()
-            val entryType = EntryType.decode(unpacker.unpackByte())
-
-            return DirectoryEntry(name, entryType)
-        }
-    }
-}
+data class DirectoryEntry(val name: String, val entryType: EntryType)
 
 /**
  * A read-only snapshot of a directory stored in a Ouisync repository
  */
-class Directory private constructor(private val entries: List<DirectoryEntry>) : Collection<DirectoryEntry> {
+class Directory internal constructor(private val entries: List<DirectoryEntry>) : Collection<DirectoryEntry> {
     companion object {
         /**
          * Returns an empty directory snapshot.
@@ -41,10 +26,10 @@ class Directory private constructor(private val entries: List<DirectoryEntry>) :
         }
 
         /**
-         * Opens an existing directory at the given path in the repository.
+         * Reads a directory at the given path in the repository.
          */
-        suspend fun open(repo: Repository, path: String): Directory {
-            return repo.client.invoke(DirectoryOpen(repo.handle, path)) as Directory
+        suspend fun read(repo: Repository, path: String): Directory {
+            return repo.client.invoke(DirectoryRead(repo.handle, path)) as Directory
         }
 
         /**
@@ -52,13 +37,6 @@ class Directory private constructor(private val entries: List<DirectoryEntry>) :
          */
         suspend fun remove(repo: Repository, path: String, recursive: Boolean = false) {
             repo.client.invoke(DirectoryRemove(repo.handle, path, recursive))
-        }
-
-        internal fun unpack(unpacker: MessageUnpacker): Directory {
-            val count = unpacker.unpackArrayHeader()
-            val entries = 0.rangeUntil(count).map { DirectoryEntry.unpack(unpacker) }
-
-            return Directory(entries)
         }
     }
 

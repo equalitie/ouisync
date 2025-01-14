@@ -248,7 +248,7 @@ pub(crate) mod actor {
         ACTOR.with(|actor| {
             RepositoryParams::new(actor.repo_path(name))
                 .with_device_id(actor.device_id)
-                .with_parent_monitor(actor.monitor.clone())
+                .with_monitor(actor.monitor.make_child(name))
                 .with_recorder(NoopRecorder)
         })
     }
@@ -295,7 +295,7 @@ pub(crate) mod actor {
         network: &Network,
     ) -> (Repository, Registration) {
         let repo = create_repo(name).await;
-        let reg = network.register(repo.handle()).await;
+        let reg = network.register(repo.handle());
 
         (repo, reg)
     }
@@ -708,7 +708,7 @@ where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
     tracing_subscriber::fmt()
-        .event_format(Formatter::<SystemTime>::default())
+        .event_format(Formatter::default().with_timer(SystemTime))
         .with_writer(writer)
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()

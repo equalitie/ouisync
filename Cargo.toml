@@ -9,6 +9,7 @@ members = [
     "net",
     "rand",
     "scoped_task",
+    "service",
     "state_monitor",
     "tracing_fmt",
     "utils/benchtool",
@@ -30,7 +31,7 @@ authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie
 repository = "https://github.com/equalitie/ouisync"
 license = "MPL-2.0"
 edition = "2021"
-rust-version = "1.80.0"
+rust-version = "1.83.0"
 
 [workspace.dependencies]
 anyhow = "1.0.90"
@@ -43,12 +44,15 @@ chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
 clap = { version = "4.5.20", features = ["derive"] }
 criterion = "0.5.1"
 futures-util = { version = "0.3.30", default-features = false }
+hex = "0.4.3"
 hex_fmt = "0.3.0"
+hmac = { version = "0.12.1", default-features = false }
 indexmap = "2.6.0"
 metrics = "0.22.0"
 metrics-exporter-prometheus = { version = "0.13.0", default-features = false }
 metrics-util = { version = "0.16.0", default-features = false }
 num_enum = { version = "0.7.3", default-features = false }
+pem = "3.0.4"
 pin-project-lite = "0.2.14"
 proptest = "1.5"
 rand = { package = "ouisync-rand", path = "rand" }
@@ -58,6 +62,7 @@ rustls = { version = "0.23.5", default-features = false }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_bytes = "0.11.8"
 serde_json = "1.0.109"
+sha2 = { version = "0.10.8", default-features = false }
 similar-asserts = "1.6.0"
 slab = "0.4.9"
 sqlx = { version = "0.8.2", default-features = false, features = ["derive", "runtime-tokio", "sqlite"] }
@@ -71,6 +76,7 @@ tokio-util = "0.7.12"
 tracing = { version = "0.1.38" }
 tracing-subscriber = { version = "0.3.18" }
 turmoil = "0.6.4"
+webpki-roots = "0.26.5"
 
 [profile.bench]
 # Enable debug info so we can profile the benches

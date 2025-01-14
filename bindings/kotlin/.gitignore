@@ -7,3 +7,5 @@ build
 local.properties
 *.hprof
 .kotlin
+
+hs_err_pid*.log

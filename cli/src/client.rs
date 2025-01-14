@@ -1,131 +1,565 @@
 use crate::{
-    handler::local::LocalHandler,
-    options::Dirs,
-    protocol::{ProtocolError, Request, Response},
-    state::State,
-    transport::{local::LocalClient, native::NativeClient},
+    format::{OptionSecondsDisplay, PeerAddrDisplay, PeerInfoDisplay, QuotaInfoDisplay},
+    options::{ClientCommand, MirrorCommand},
 };
-use ouisync_bridge::logger::{LogColor, LogFormat, Logger};
-use state_monitor::StateMonitor;
-use std::{
-    env, io,
-    path::{Path, PathBuf},
+use futures_util::SinkExt;
+use ouisync::{crypto::Password, LocalSecret, PeerAddr, PeerInfo, SetLocalSecret, ShareToken};
+use ouisync_service::{
+    protocol::{
+        ErrorCode, Message, MessageId, ProtocolError, QuotaInfo, RepositoryHandle, Request,
+        Response, ResponseResult, UnexpectedResponse,
+    },
+    transport::{
+        local::{self, AuthKey, LocalClientReader, LocalClientWriter},
+        ClientError,
+    },
 };
+use std::{collections::BTreeMap, env, io, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio_stream::StreamExt;
 
-pub(crate) async fn run(
-    dirs: Dirs,
-    socket: PathBuf,
-    log_format: LogFormat,
-    log_color: LogColor,
-    request: Request,
-) -> Result<(), ProtocolError> {
-    let _logger = Logger::new(None, String::new(), None, log_format, log_color)?;
-    let client = connect(&socket, &dirs).await?;
+pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
+    let (port, auth_key) = ouisync_service::local_control_endpoint(&config_path).await?;
+    let mut client = LocalClient::connect(port, &auth_key).await?;
 
-    let request = match request {
-        Request::Create {
+    match command {
+        ClientCommand::AddPeers { addrs } => {
+            let () = client
+                .invoke(Request::NetworkAddUserProvidedPeers(addrs))
+                .await?;
+        }
+        ClientCommand::Bind { addrs, disable } => {
+            if disable {
+                let () = client.invoke(Request::NetworkBind(vec![])).await?;
+            } else if !addrs.is_empty() {
+                let () = client.invoke(Request::NetworkBind(addrs)).await?;
+            }
+
+            let addrs: Vec<PeerAddr> = client.invoke(Request::NetworkGetListenerAddrs).await?;
+
+            for addr in addrs {
+                println!("{}", PeerAddrDisplay(&addr));
+            }
+        }
+        ClientCommand::Create {
             name,
-            share_token,
+            token,
             password,
             read_password,
             write_password,
         } => {
-            let share_token = get_or_read(share_token, "input share token").await?;
-            let password = get_or_read(password, "input password").await?;
-            let read_password = get_or_read(read_password, "input read password").await?;
-            let write_password = get_or_read(write_password, "input write password").await?;
+            let token = get_or_read(token, "input token").await?;
+            let token = token
+                .as_deref()
+                .map(str::parse::<ShareToken>)
+                .transpose()
+                .map_err(|error| {
+                    ProtocolError::new(
+                        ErrorCode::InvalidInput,
+                        format!("invalid share token: {error}"),
+                    )
+                })?;
 
-            Request::Create {
-                name,
-                share_token,
-                password,
-                read_password,
-                write_password,
+            let password = get_or_read(password, "input password").await?;
+
+            let read_password = get_or_read(read_password, "input read password").await?;
+            let read_secret = read_password
+                .or_else(|| password.as_ref().cloned())
+                .map(Password::from)
+                .map(SetLocalSecret::Password);
+
+            let write_password = get_or_read(write_password, "input write password").await?;
+            let write_secret = write_password
+                .or(password)
+                .map(Password::from)
+                .map(SetLocalSecret::Password);
+
+            let name = name
+                .or_else(|| {
+                    token
+                        .as_ref()
+                        .map(|token| token.suggested_name().to_owned())
+                })
+                .ok_or_else(|| ProtocolError::new(ErrorCode::InvalidInput, "name is missing"))?;
+
+            let _: RepositoryHandle = client
+                .invoke(Request::RepositoryCreate {
+                    path: name.into(),
+                    token,
+                    read_secret,
+                    write_secret,
+                    sync_enabled: true,
+                    dht_enabled: false,
+                    pex_enabled: false,
+                })
+                .await?;
+        }
+        ClientCommand::Delete { name } => {
+            let handle = client.find_repository(name).await?;
+            let () = client.invoke(Request::RepositoryDelete(handle)).await?;
+        }
+        ClientCommand::Dht { name, enabled } => {
+            let handle = client.find_repository(name).await?;
+
+            if let Some(enabled) = enabled {
+                let () = client
+                    .invoke(Request::RepositorySetDhtEnabled {
+                        repository: handle,
+                        enabled,
+                    })
+                    .await?;
+            } else {
+                let value: bool = client
+                    .invoke(Request::RepositoryIsDhtEnabled(handle))
+                    .await?;
+
+                println!("{value}");
             }
         }
-        Request::Open { name, password } => {
-            let password = get_or_read(password, "input password").await?;
-            Request::Open { name, password }
+        ClientCommand::Expiration {
+            name,
+            remove,
+            block,
+            repository,
+        } => {
+            if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+
+                if remove {
+                    let () = client
+                        .invoke(Request::RepositorySetBlockExpiration {
+                            repository: handle,
+                            value: None,
+                        })
+                        .await?;
+
+                    let () = client
+                        .invoke(Request::RepositorySetRepositoryExpiration {
+                            repository: handle,
+                            value: None,
+                        })
+                        .await?;
+                } else {
+                    if let Some(expiration) = block {
+                        let () = client
+                            .invoke(Request::RepositorySetBlockExpiration {
+                                repository: handle,
+                                value: Some(Duration::from_secs(expiration)),
+                            })
+                            .await?;
+                    }
+
+                    if let Some(expiration) = repository {
+                        let () = client
+                            .invoke(Request::RepositorySetRepositoryExpiration {
+                                repository: handle,
+                                value: Some(Duration::from_secs(expiration)),
+                            })
+                            .await?;
+                    }
+                }
+
+                let block: Option<Duration> = client
+                    .invoke(Request::RepositoryGetBlockExpiration(handle))
+                    .await?;
+                let repository: Option<Duration> = client
+                    .invoke(Request::RepositoryGetRepositoryExpiration(handle))
+                    .await?;
+
+                println!("block expiration:      {}", OptionSecondsDisplay(block));
+                println!(
+                    "repository expiration: {}",
+                    OptionSecondsDisplay(repository)
+                );
+            } else {
+                if remove {
+                    let () = client
+                        .invoke(Request::RepositorySetDefaultBlockExpiration { value: None })
+                        .await?;
+
+                    let () = client
+                        .invoke(Request::RepositorySetDefaultRepositoryExpiration { value: None })
+                        .await?;
+                } else {
+                    if let Some(expiration) = block {
+                        let () = client
+                            .invoke(Request::RepositorySetDefaultBlockExpiration {
+                                value: Some(Duration::from_secs(expiration)),
+                            })
+                            .await?;
+                    }
+
+                    if let Some(expiration) = repository {
+                        let () = client
+                            .invoke(Request::RepositorySetDefaultRepositoryExpiration {
+                                value: Some(Duration::from_secs(expiration)),
+                            })
+                            .await?;
+                    }
+                }
+
+                let block = client
+                    .invoke(Request::RepositoryGetDefaultBlockExpiration)
+                    .await?;
+                let repository = client
+                    .invoke(Request::RepositoryGetDefaultRepositoryExpiration)
+                    .await?;
+
+                println!("block expiration:      {}", OptionSecondsDisplay(block));
+                println!(
+                    "repository expiration: {}",
+                    OptionSecondsDisplay(repository)
+                );
+            }
         }
-        Request::Share {
+        ClientCommand::Export { name, output } => {
+            let handle = client.find_repository(name).await?;
+            let path: PathBuf = client
+                .invoke(Request::RepositoryExport {
+                    repository: handle,
+                    output: to_absolute(output)?,
+                })
+                .await?;
+
+            println!("{}", path.display());
+        }
+        ClientCommand::ListPeers => {
+            let infos: Vec<PeerInfo> = client.invoke(Request::NetworkGetPeers).await?;
+
+            for info in infos {
+                println!("{}", PeerInfoDisplay(&info));
+            }
+        }
+        ClientCommand::ListRepositories => {
+            let repos: BTreeMap<PathBuf, RepositoryHandle> =
+                client.invoke(Request::RepositoryList).await?;
+
+            for path in repos.keys() {
+                println!("{}", path.display());
+            }
+        }
+        ClientCommand::LocalDiscovery { enabled } => {
+            if let Some(enabled) = enabled {
+                let () = client
+                    .invoke(Request::NetworkSetLocalDiscoveryEnabled(enabled))
+                    .await?;
+            } else {
+                let value: bool = client
+                    .invoke(Request::NetworkIsLocalDiscoveryEnabled)
+                    .await?;
+
+                println!("{value}");
+            }
+        }
+        ClientCommand::Metrics { addr, disable } => {
+            if disable {
+                let () = client.invoke(Request::MetricsBind(None)).await?;
+            } else if let Some(addr) = addr {
+                let () = client.invoke(Request::MetricsBind(Some(addr))).await?;
+            }
+
+            let addr: Option<SocketAddr> = client.invoke(Request::MetricsGetListenerAddr).await?;
+
+            if let Some(addr) = addr {
+                println!("{addr}");
+            }
+        }
+        ClientCommand::Mirror {
+            command,
+            name,
+            host,
+        } => {
+            let handle = client.find_repository(name).await?;
+
+            match command {
+                MirrorCommand::Create => {
+                    let () = client
+                        .invoke(Request::RepositoryCreateMirror {
+                            repository: handle,
+                            host,
+                        })
+                        .await?;
+                }
+                MirrorCommand::Delete => {
+                    let () = client
+                        .invoke(Request::RepositoryDeleteMirror {
+                            repository: handle,
+                            host,
+                        })
+                        .await?;
+                }
+                MirrorCommand::Exists => {
+                    let value: bool = client
+                        .invoke(Request::RepositoryMirrorExists {
+                            repository: handle,
+                            host,
+                        })
+                        .await?;
+
+                    println!("{value}");
+                }
+            }
+        }
+        ClientCommand::Mount { name } => {
+            if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+                let path: PathBuf = client.invoke(Request::RepositoryMount(handle)).await?;
+
+                println!("{}", path.display());
+            } else {
+                let handles = client.list_repositories().await?;
+
+                for handle in handles {
+                    let _: PathBuf = client.invoke(Request::RepositoryMount(handle)).await?;
+                }
+            }
+        }
+        ClientCommand::MountDir { path } => {
+            if let Some(path) = path {
+                let () = client
+                    .invoke(Request::RepositorySetMountRoot(Some(path)))
+                    .await?;
+            } else {
+                let path: PathBuf = client.invoke(Request::RepositoryGetMountRoot).await?;
+
+                println!("{}", path.display());
+            }
+        }
+        ClientCommand::Open { path, password } => {
+            let password = get_or_read(password, "input password").await?;
+            let secret = password.map(Password::from).map(LocalSecret::Password);
+
+            let _: RepositoryHandle = client
+                .invoke(Request::RepositoryOpen { path, secret })
+                .await?;
+        }
+        ClientCommand::Pex {
+            name,
+            enabled,
+            send,
+            recv,
+        } => {
+            if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+
+                if let Some(enabled) = enabled {
+                    let () = client
+                        .invoke(Request::RepositorySetPexEnabled {
+                            repository: handle,
+                            enabled,
+                        })
+                        .await?;
+                } else {
+                    let value: bool = client
+                        .invoke(Request::RepositoryIsPexEnabled(handle))
+                        .await?;
+
+                    println!("{value}");
+                }
+            } else if send.is_some() || recv.is_some() {
+                if let Some(send) = send {
+                    let () = client
+                        .invoke(Request::NetworkSetPexSendEnabled(send))
+                        .await?;
+                }
+
+                if let Some(recv) = recv {
+                    let () = client
+                        .invoke(Request::NetworkSetPexRecvEnabled(recv))
+                        .await?;
+                }
+            } else {
+                let send: bool = client.invoke(Request::NetworkIsPexSendEnabled).await?;
+                let recv: bool = client.invoke(Request::NetworkIsPexRecvEnabled).await?;
+
+                println!("send: {send} recv: {recv}");
+            }
+        }
+        ClientCommand::PortForwarding { enabled } => {
+            if let Some(enabled) = enabled {
+                let () = client
+                    .invoke(Request::NetworkSetPortForwardingEnabled(enabled))
+                    .await?;
+            } else {
+                let value: bool = client
+                    .invoke(Request::NetworkIsPortForwardingEnabled)
+                    .await?;
+
+                println!("{value}");
+            }
+        }
+        ClientCommand::Quota {
+            name,
+            remove,
+            value,
+        } => {
+            if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+
+                if remove {
+                    let () = client
+                        .invoke(Request::RepositorySetQuota {
+                            repository: handle,
+                            quota: None,
+                        })
+                        .await?;
+                } else if let Some(value) = value {
+                    let () = client
+                        .invoke(Request::RepositorySetQuota {
+                            repository: handle,
+                            quota: Some(value),
+                        })
+                        .await?;
+                } else {
+                    let value: QuotaInfo =
+                        client.invoke(Request::RepositoryGetQuota(handle)).await?;
+                    println!("{}", QuotaInfoDisplay(&value));
+                }
+            } else if remove {
+                let () = client
+                    .invoke(Request::RepositorySetDefaultQuota { quota: None })
+                    .await?;
+            } else if let Some(value) = value {
+                let () = client
+                    .invoke(Request::RepositorySetDefaultQuota { quota: Some(value) })
+                    .await?;
+            } else {
+                let value: QuotaInfo = client.invoke(Request::RepositoryGetDefaultQuota).await?;
+                println!("{}", QuotaInfoDisplay(&value));
+            }
+        }
+        ClientCommand::RemoteControl { addr, disable } => {
+            if disable {
+                let () = client.invoke(Request::RemoteControlBind(None)).await?;
+            } else if let Some(addr) = addr {
+                let () = client
+                    .invoke(Request::RemoteControlBind(Some(addr)))
+                    .await?;
+            }
+
+            let addr: Option<SocketAddr> =
+                client.invoke(Request::RemoteControlGetListenerAddr).await?;
+
+            if let Some(addr) = addr {
+                println!("{}", addr);
+            }
+        }
+        ClientCommand::RemovePeers { addrs } => {
+            let () = client
+                .invoke(Request::NetworkRemoveUserProvidedPeers(addrs))
+                .await?;
+        }
+        ClientCommand::ResetAccess { name, token } => {
+            let handle = client.find_repository(name).await?;
+            let token = token.parse().map_err(|_| ClientError::InvalidArgument)?;
+
+            let () = client
+                .invoke(Request::RepositoryResetAccess {
+                    repository: handle,
+                    token,
+                })
+                .await?;
+        }
+        ClientCommand::Share {
             name,
             mode,
             password,
         } => {
+            let handle = client.find_repository(name).await?;
             let password = get_or_read(password, "input password").await?;
-            Request::Share {
-                name,
-                mode,
-                password,
+            let secret = password.map(Password::from).map(LocalSecret::Password);
+
+            let value: ShareToken = client
+                .invoke(Request::RepositoryShare {
+                    repository: handle,
+                    mode,
+                    secret,
+                })
+                .await?;
+
+            println!("{value}");
+        }
+        ClientCommand::StoreDir { path } => {
+            if let Some(path) = path {
+                let () = client.invoke(Request::RepositorySetStoreDir(path)).await?;
+            } else {
+                let path: PathBuf = client.invoke(Request::RepositoryGetStoreDir).await?;
+                println!("{}", path.display());
             }
         }
-        Request::Export { name, output } => Request::Export {
-            name,
-            output: to_absolute(output)?,
-        },
-        Request::Import {
-            name,
-            mode,
-            force,
-            input,
-        } => Request::Import {
-            name,
-            mode,
-            force,
-            input: to_absolute(input)?,
-        },
+        ClientCommand::Unmount { name } => {
+            if let Some(name) = name {
+                let handle = client.find_repository(name).await?;
+                let () = client.invoke(Request::RepositoryUnmount(handle)).await?;
+            } else {
+                let handles = client.list_repositories().await?;
 
-        _ => request,
+                for handle in handles {
+                    let () = client.invoke(Request::RepositoryUnmount(handle)).await?;
+                }
+            }
+        }
     };
 
-    let response = client.invoke(request).await?;
-    println!("{response}");
-
-    client.close().await;
+    client.close().await?;
 
     Ok(())
 }
 
-async fn connect(path: &Path, dirs: &Dirs) -> Result<Client, ProtocolError> {
-    match LocalClient::connect(path).await {
-        Ok(client) => Ok(Client::Local(client)),
-        Err(error) => match error.kind() {
-            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
-                let state = State::init(dirs, StateMonitor::make_root()).await?;
-                let handler = LocalHandler::new(state);
+struct LocalClient {
+    reader: LocalClientReader,
+    writer: LocalClientWriter,
+}
 
-                Ok(Client::Native(NativeClient::new(handler)))
-            }
-            _ => Err(error.into()),
-        },
+impl LocalClient {
+    async fn connect(port: u16, auth_key: &AuthKey) -> Result<Self, ClientError> {
+        let (reader, writer) = local::connect(port, auth_key).await?;
+        Ok(Self { reader, writer })
     }
-}
 
-enum Client {
-    Local(LocalClient),
-    Native(NativeClient),
-}
+    async fn invoke<T>(&mut self, request: Request) -> Result<T, ClientError>
+    where
+        T: TryFrom<Response, Error = UnexpectedResponse>,
+    {
+        self.writer
+            .send(Message {
+                id: MessageId::next(),
+                payload: request,
+            })
+            .await?;
 
-impl Client {
-    async fn invoke(&self, request: Request) -> Result<Response, ProtocolError> {
-        match self {
-            Self::Local(client) => client.invoke(request).await,
-            Self::Native(client) => client.invoke(request).await,
+        let message = match self.reader.next().await {
+            Some(Ok(message)) => message,
+            Some(Err(error)) => return Err(error.into()),
+            None => return Err(ClientError::Disconnected),
+        };
+
+        match message.payload {
+            ResponseResult::Success(response) => Ok(response.try_into()?),
+            ResponseResult::Failure(error) => Err(error.into()),
         }
     }
 
-    async fn close(&self) {
-        match self {
-            Self::Native(client) => client.close().await,
-            Self::Local(_) => (),
-        }
+    async fn find_repository(&mut self, name: String) -> Result<RepositoryHandle, ClientError> {
+        self.invoke(Request::RepositoryFind(name)).await
+    }
+
+    async fn list_repositories(&mut self) -> Result<Vec<RepositoryHandle>, ClientError> {
+        let repos: BTreeMap<PathBuf, RepositoryHandle> =
+            self.invoke(Request::RepositoryList).await?;
+        Ok(repos.into_values().collect())
+    }
+
+    async fn close(&mut self) -> Result<(), ClientError> {
+        self.writer.close().await?;
+
+        Ok(())
     }
 }
 
 /// If value is `Some("-")`, reads the value from stdin, otherwise returns it unchanged.
 // TODO: support invisible input for passwords, etc.
-async fn get_or_read(value: Option<String>, prompt: &str) -> Result<Option<String>, io::Error> {
+async fn get_or_read(value: Option<String>, prompt: &str) -> Result<Option<String>, ClientError> {
     if value
         .as_ref()
         .map(|value| value.trim() == "-")
