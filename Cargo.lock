@@ -2741,7 +2741,6 @@ dependencies = [
  "log",
  "ouisync",
  "ouisync-rand",
- "structopt",
  "tokio",
 ]
 
