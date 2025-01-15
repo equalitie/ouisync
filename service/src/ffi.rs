@@ -199,7 +199,7 @@ unsafe fn try_log_init(
 
     let callback = callback.map(|callback| {
         Box::new(move |level, message: &[u8]| {
-            callback(LogLevel::from(level).into(), message.as_ptr() as _)
+            callback(LogLevel::from(level), message.as_ptr() as _)
         }) as _
     });
 
