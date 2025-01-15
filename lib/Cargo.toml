@@ -43,7 +43,8 @@ hex = "0.4.3"
 hex_fmt = { workspace = true }
 if-watch = { version = "3.2.0", features = ["tokio"] }
 include_dir = "0.7.3"
-mdns-sd = { workspace = true }
+# Waiting for fix for issue https://github.com/keepsimple1/mdns-sd/issues/293 to get released.
+mdns-sd = { git = "https://github.com/keepsimple1/mdns-sd", rev = "a56de72611233a36f5a612ea5f470f85305f50f1" }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true, default-features = false, optional = true }
 net = { package = "ouisync-net", path = "../net" }

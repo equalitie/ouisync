@@ -46,8 +46,6 @@ criterion = "0.5.1"
 futures-util = { version = "0.3.30", default-features = false }
 hex_fmt = "0.3.0"
 indexmap = "2.6.0"
-# Waiting for fix for issue https://github.com/keepsimple1/mdns-sd/issues/293 to get released.
-mdns-sd = { git = "https://github.com/keepsimple1/mdns-sd", rev = "a56de72611233a36f5a612ea5f470f85305f50f1" }
 metrics = "0.22.0"
 metrics-exporter-prometheus = { version = "0.13.0", default-features = false }
 metrics-util = { version = "0.16.0", default-features = false }
