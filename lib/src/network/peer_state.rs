@@ -137,13 +137,13 @@ impl<'de> Deserialize<'de> for PeerState {
 pub enum PeerStateKind {
     /// The peer is known (discovered or explicitly added by the user) but we haven't started
     /// establishing a connection to them yet.
-    Known,
+    Known = 0,
     /// A connection to the peer is being established.
-    Connecting,
+    Connecting = 1,
     /// The peer is connected but the protocol handshake is still in progress.
-    Handshaking,
+    Handshaking = 2,
     /// The peer connection is active.
-    Active,
+    Active = 3,
 }
 
 #[cfg(test)]
