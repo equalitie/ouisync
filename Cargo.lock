@@ -421,7 +421,7 @@ dependencies = [
 [[package]]
 name = "btdht"
 version = "1.0.1"
-source = "git+https://github.com/equalitie/btdht.git?rev=549c62015dffade6e6080f3a746ce551c28f837f#549c62015dffade6e6080f3a746ce551c28f837f"
+source = "git+https://github.com/equalitie/btdht.git?branch=serde-adjacently-tagged-enum-patch#ed593741110f444afb0790ee22dd6cb9e0b31fa1"
 dependencies = [
  "async-trait",
  "crc32c",
@@ -429,11 +429,11 @@ dependencies = [
  "log",
  "rand",
  "serde",
+ "serde_bencode",
  "serde_bytes",
  "sha-1",
  "thiserror 1.0.69",
  "tokio",
- "torrust-serde-bencode",
 ]
 
 [[package]]
@@ -3756,6 +3756,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_bencode"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a70dfc7b7438b99896e7f8992363ab8e2c4ba26aa5ec675d32d1c3c2c33d413e"
+dependencies = [
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "serde_bytes"
 version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4516,16 +4526,6 @@ dependencies = [
  "pin-project-lite",
  "slab",
  "tokio",
-]
-
-[[package]]
-name = "torrust-serde-bencode"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a78af1acec892f737c398d3e903dd0b985d2c10d2bcd3739a891016e14492af"
-dependencies = [
- "serde",
- "serde_bytes",
 ]
 
 [[package]]
@@ -5392,3 +5392,8 @@ dependencies = [
  "quote",
  "syn 2.0.89",
 ]
+
+[[patch.unused]]
+name = "serde"
+version = "1.0.217"
+source = "git+https://github.com/inetic/serde?branch=support-bytes-based-enum-tags#66f78ecdab3f0172ba3026cddefa6beac1e5fc81"

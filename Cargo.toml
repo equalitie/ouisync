@@ -37,7 +37,7 @@ rust-version = "1.80.0"
 anyhow = "1.0.90"
 assert_matches = "1.5"
 async-trait = "0.1.83"
-btdht = { git = "https://github.com/equalitie/btdht.git", rev = "549c62015dffade6e6080f3a746ce551c28f837f" }
+btdht = { git = "https://github.com/equalitie/btdht.git", branch = "serde-adjacently-tagged-enum-patch" }
 bytes = "1.8.0"
 camino = "1.1.6"
 chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
@@ -81,3 +81,11 @@ debug = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+[patch.crates-io]
+# Since version >=1.0.181 serde had an issue with supporting adjacently tagged
+# enum in formats that did not differentiate between strings and bytes. We need
+# that feature in `serde-bencode` used by `btdht`.
+# https://github.com/serde-rs/serde/issues/2881
+# TODO: When the above issue is fixed, also remove this patch in `btdht` and
+# merge inetic's fork of `serde-bencode` to upstream.
+serde = { git = "https://github.com/inetic/serde", branch = "support-bytes-based-enum-tags" }
