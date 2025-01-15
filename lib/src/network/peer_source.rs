@@ -20,15 +20,15 @@ use std::fmt;
 #[serde(into = "u8", try_from = "u8")]
 pub enum PeerSource {
     /// Explicitly added by the user.
-    UserProvided,
+    UserProvided = 0,
     /// Peer connected to us.
-    Listener,
+    Listener = 1,
     /// Discovered on the Local Discovery.
-    LocalDiscovery,
+    LocalDiscovery = 2,
     /// Discovered on the DHT.
-    Dht,
+    Dht = 3,
     /// Discovered on the Peer Exchange.
-    PeerExchange,
+    PeerExchange = 4,
 }
 
 impl fmt::Display for PeerSource {
