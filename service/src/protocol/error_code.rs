@@ -95,17 +95,17 @@ pub(crate) trait ToErrorCode {
 impl ToErrorCode for Error {
     fn to_error_code(&self) -> ErrorCode {
         match self {
+            Self::AlreadyExists => ErrorCode::AlreadyExists,
             Self::Config(_) => ErrorCode::Config,
             Self::CreateMounter(error) => error.to_error_code(),
             Self::InitializeLogger(_) => ErrorCode::InitializeLogger,
             Self::InitializeRuntime(_) => ErrorCode::InitializeRuntime,
             Self::InvalidArgument => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,
+            Self::NotFound => ErrorCode::NotFound,
             Self::OperationNotSupported => ErrorCode::Unsupported,
             Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::Repository(error) => error.to_error_code(),
-            Self::RepositoryExists => ErrorCode::AlreadyExists,
-            Self::RepositoryNotFound => ErrorCode::NotFound,
             Self::Store(_) => ErrorCode::StoreError,
             Self::StoreDirUnspecified => ErrorCode::StoreDirUnspecified,
             Self::TlsCertificatesNotFound => ErrorCode::TlsCertificatesNotFound,

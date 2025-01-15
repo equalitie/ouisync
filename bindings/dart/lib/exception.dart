@@ -18,14 +18,15 @@ class OuisyncException implements Exception {
     List<String> sources = const [],
   ]) =>
       switch (code) {
-        ErrorCode.permissionDenied => PermissionDenied(message, sources),
-        ErrorCode.invalidData => InvalidData(message, sources),
         ErrorCode.alreadyExists => AlreadyExists(message, sources),
-        ErrorCode.vfsDriverInstallError =>
-          VFSDriverInstallError(message, sources),
+        ErrorCode.invalidData => InvalidData(message, sources),
         ErrorCode.listenerBind => ServiceAlreadyRunning(message, sources),
+        ErrorCode.notFound => NotFound(message, sources),
+        ErrorCode.permissionDenied => PermissionDenied(message, sources),
         ErrorCode.serviceAlreadyRunning =>
           ServiceAlreadyRunning(message, sources),
+        ErrorCode.vfsDriverInstallError =>
+          VFSDriverInstallError(message, sources),
         _ => OuisyncException._(code, message, sources),
       };
 
@@ -46,6 +47,11 @@ class InvalidData extends OuisyncException {
 class AlreadyExists extends OuisyncException {
   AlreadyExists([String? message, List<String> sources = const []])
       : super._(ErrorCode.alreadyExists, message, sources);
+}
+
+class NotFound extends OuisyncException {
+  NotFound([String? message, List<String> sources = const []])
+      : super._(ErrorCode.notFound, message, sources);
 }
 
 class ServiceAlreadyRunning extends OuisyncException {

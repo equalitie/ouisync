@@ -407,7 +407,7 @@ class Repository {
   Future<void> setAccessMode(AccessMode accessMode, {LocalSecret? secret}) =>
       _client.invoke('repository_set_access_mode', {
         'repository': _handle,
-        'access_mode': accessMode.encode(),
+        'mode': accessMode.encode(),
         'secret': secret?.encode(),
       });
 

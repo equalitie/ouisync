@@ -1,4 +1,5 @@
-import 'client.dart' show Client;
+import 'client.dart';
+import 'exception.dart';
 
 // Version is incremented every time the monitor or any of it's values or
 // children changes.
@@ -114,15 +115,13 @@ class StateMonitor {
   @override
   String toString() => "StateMonitor($_path)";
 
-  Future<StateMonitorNode> load() async {
+  Future<StateMonitorNode?> load() async {
     try {
       final List<Object?> list = await _client.invoke(
-        "state_monitor_get", _path.map((id) => id.toString())
-      );
+          "state_monitor_get", _path.map((id) => id.toString()));
       return StateMonitorNode._decode(_path, list);
-    } catch (e, st) {
-      final wrapped = Exception('failed to load state monitor node at $_path: ${e.toString()}');
-      Error.throwWithStackTrace(wrapped, st);
+    } on NotFound {
+      return null;
     }
   }
 }
