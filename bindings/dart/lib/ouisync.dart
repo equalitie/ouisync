@@ -22,7 +22,7 @@ export 'bindings.dart'
         PeerSource,
         PeerStateKind;
 export 'exception.dart';
-export 'server.dart' show logInit;
+export 'server.dart' show initLog;
 
 part 'local_secret.dart';
 
@@ -56,7 +56,8 @@ class Session {
     // that one instead. If we do spawn, we are responsible for logging
     if (startServer) {
       try {
-        logInit(callback: logger, tag: 'Server');
+        initLog(callback: logger, tag: 'Server');
+
         server = await Server.start(
           configPath: configPath,
           debugLabel: debugLabel,
@@ -67,6 +68,7 @@ class Session {
     }
 
     final client = await Client.connect(configPath: configPath);
+
     return Session._(client, server);
   }
 
