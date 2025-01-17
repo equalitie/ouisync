@@ -6,17 +6,14 @@
 //!
 //! This local discovery should be used on devices where Zeroconf is not available.
 //!
+use super::mdns_common;
 use crate::network::{
     peer_addr::{PeerAddr, PeerPort},
-    seen_peers::{SeenPeer, SeenPeers},
+    seen_peers::SeenPeer,
 };
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-use rand::Rng;
 use scoped_task::ScopedJoinHandle;
-use std::{
-    collections::{HashMap, HashSet},
-    net::SocketAddr,
-};
+use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
@@ -28,6 +25,8 @@ pub struct LocalDiscovery {
 
 impl LocalDiscovery {
     pub fn new(listener_port: PeerPort) -> Self {
+        let span = tracing::info_span!("mDNS-zeroconf");
+
         // TODO: Unwraps and expects
         let daemon = ServiceDaemon::new().expect("Failed to create daemon");
 
@@ -39,7 +38,9 @@ impl LocalDiscovery {
         // TODO: We could use this to distribute protocol version number.
         let properties: [(&str, &str); 0] = [];
 
-        let instance_name = generate_instance_name();
+        let instance_name = mdns_common::generate_instance_name();
+
+        tracing::debug!(parent: &span, "Service name of this replica: {instance_name:?}");
 
         let service_info = ServiceInfo::new(
             service_type,                       // service_type
@@ -64,8 +65,7 @@ impl LocalDiscovery {
 
         let worker = scoped_task::spawn(
             async move {
-                let seen_peers = SeenPeers::new();
-                let mut table = Table::new();
+                let mut seen_peers = mdns_common::SeenMdnsPeers::new();
 
                 'topmost_loop: while let Ok(event) = receiver.recv_async().await {
                     match event {
@@ -86,9 +86,9 @@ impl LocalDiscovery {
                                     PeerPort::Quic(_) => PeerAddr::Quic(address),
                                 };
 
-                                table.insert(info.get_fullname().to_owned(), address);
-
-                                if let Some(seen_peer) = seen_peers.insert(address) {
+                                if let Some(seen_peer) =
+                                    seen_peers.insert(info.get_fullname().to_owned(), address)
+                                {
                                     if peer_tx.send(seen_peer).is_err() {
                                         break 'topmost_loop;
                                     }
@@ -96,16 +96,14 @@ impl LocalDiscovery {
                             }
                         }
                         ServiceEvent::ServiceRemoved(_, fullname) => {
-                            for addr in table.remove(fullname) {
-                                seen_peers.remove(&addr);
-                            }
+                            seen_peers.remove(fullname);
                         }
                     }
                 }
 
                 tracing::info!("Runner finished");
             }
-            .instrument(tracing::info_span!("mDNS-direct")),
+            .instrument(span),
         );
 
         Self {
@@ -151,80 +149,6 @@ impl Drop for LocalDiscovery {
     fn drop(&mut self) {
         self.shutdown_daemon();
     }
-}
-
-//
-// This maps instance names to `PeerAddr`s and back.
-//
-// Example:
-//   names:
-//     "i1._ouisync._udp._local."     -> { 192.168.1.10:1234, 192.168.1.11:1234 }
-//     "i1 (2)._ouisync._udp._local." -> { 192.168.1.10:1234, 192.168.1.11:1234 }
-//     "i2._ouisync._udp._local."     -> { 192.168.1.20:1234 }
-//
-//   addrs:
-//     192.168.1.10:1234 -> { "i1._ouisync._udp._local.", "i1 (2)._ouisync._udp._local" }
-//     192.168.1.11:1234 -> { "i1._ouisync._udp._local.", "i1 (2)._ouisync._udp._local" }
-//     192.168.1.20:1234 -> { "i2._ouisync._udp._local." }
-//
-struct Table {
-    names: HashMap<String, HashSet<PeerAddr>>,
-    addrs: HashMap<PeerAddr, HashSet<String>>,
-}
-
-impl Table {
-    fn new() -> Self {
-        Self {
-            names: HashMap::new(),
-            addrs: HashMap::new(),
-        }
-    }
-
-    fn insert(&mut self, name: String, addr: PeerAddr) {
-        self.names
-            .entry(name.clone())
-            .or_insert_with(HashSet::new)
-            .insert(addr.clone());
-        self.addrs
-            .entry(addr)
-            .or_insert_with(HashSet::new)
-            .insert(name);
-    }
-
-    // Returns a set of addresses no longer referenced by any "name" after the removal.
-    fn remove(&mut self, name: String) -> HashSet<PeerAddr> {
-        let mut unreferenced_addrs = HashSet::new();
-
-        let Some(removed_addrs) = self.names.remove(&name) else {
-            return unreferenced_addrs;
-        };
-
-        for removed_addr in removed_addrs {
-            if let Some(addr_names) = self.addrs.get_mut(&removed_addr) {
-                addr_names.remove(&name);
-                if addr_names.is_empty() {
-                    self.addrs.remove(&removed_addr);
-                    unreferenced_addrs.insert(removed_addr);
-                }
-            }
-        }
-
-        unreferenced_addrs
-    }
-}
-
-fn generate_instance_name() -> String {
-    // NOTE: The RFC 2763 section 4.1.1 says:
-    //   https://datatracker.ietf.org/doc/html/rfc6763#section-4.1.1
-    //
-    //   The default name should be short and descriptive, and SHOULD NOT include the device's
-    //   Media Access Control (MAC) address, serial number, or any similar incomprehensible
-    //   hexadecimal string in an attempt to make the name globally unique.
-    //
-    // However, the suggestions for the names are to use _device_ types, which is not
-    // what we can use.
-    let bytes: [u8; 16] = rand::thread_rng().gen();
-    format!("{}", hex::encode(&bytes))
 }
 
 #[cfg(test)]
