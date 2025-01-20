@@ -5548,8 +5548,7 @@ dependencies = [
 [[package]]
 name = "zeroconf"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cb02959b84222ea15aae34b32d981a5c37dcf423d096e788ab39b851dc4b288"
+source = "git+https://github.com/inetic/zeroconf-rs?branch=service-remove#2e56e16114808e56dfc9cdccf3da707f33120bf9"
 dependencies = [
  "avahi-sys",
  "bonjour-sys",
@@ -5558,15 +5557,13 @@ dependencies = [
  "derive_builder",
  "libc",
  "log",
- "serde",
  "zeroconf-macros",
 ]
 
 [[package]]
 name = "zeroconf-macros"
 version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e324c4824e4e9db1f2aeeb83dfa1ab57dbe30c2105eb4b5dcd58fc080b4adcdb"
+source = "git+https://github.com/inetic/zeroconf-rs?branch=service-remove#2e56e16114808e56dfc9cdccf3da707f33120bf9"
 dependencies = [
  "quote",
  "syn 2.0.89",

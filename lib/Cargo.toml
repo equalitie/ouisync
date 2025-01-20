@@ -74,7 +74,7 @@ turmoil = { workspace = true, optional = true }
 xxhash-rust = { version = "0.8.12", default-features = false, features = ["xxh3"] }
 urlencoding = "2.1.0"
 vint64 = "1.0.1"
-zeroconf = "0.15.0"
+zeroconf = { git = "https://github.com/inetic/zeroconf-rs", branch = "service-remove" }
 zeroize = "1.6.0"
 
 [dev-dependencies]

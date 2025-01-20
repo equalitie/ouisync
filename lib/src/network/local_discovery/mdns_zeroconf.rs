@@ -12,7 +12,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 use zeroconf::{
-    prelude::*, MdnsBrowser, MdnsService, ServiceDiscovery, ServiceRegistration, ServiceType,
+    prelude::*, BrowserEvent, MdnsBrowser, MdnsService, ServiceRegistration, ServiceType,
 };
 
 pub struct LocalDiscovery {
@@ -79,7 +79,7 @@ impl LocalDiscovery {
             move || {
                 let mut browser = MdnsBrowser::new(service_type);
 
-                browser.set_service_discovered_callback(Box::new(on_service_discovered));
+                browser.set_service_callback(Box::new(on_service_discovered));
                 browser.set_context(Box::new(Arc::new(DiscoveryContext {
                     this_service_name: service_name,
                     peer_tx,
@@ -176,10 +176,7 @@ fn on_service_registered(
     }
 }
 
-fn on_service_discovered(
-    result: zeroconf::Result<ServiceDiscovery>,
-    context: Option<Arc<dyn Any>>,
-) {
+fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option<Arc<dyn Any>>) {
     let context = context
         .as_ref()
         .expect("could not get context")
@@ -189,22 +186,22 @@ fn on_service_discovered(
     let _enter = context.span.enter();
 
     match result {
-        Ok(result) => {
-            if result.name() == &context.this_service_name {
+        Ok(BrowserEvent::New(service)) => {
+            if service.name() == &context.this_service_name {
                 return;
             }
 
-            let ip_addr = match result.address().parse() {
+            let ip_addr = match service.address().parse() {
                 Ok(ip_addr) => ip_addr,
                 Err(_) => {
-                    tracing::warn!("Failed to parse address {:?}", result.address());
+                    tracing::warn!("Failed to parse address {:?}", service.address());
                     return;
                 }
             };
 
-            let sock_addr = SocketAddr::new(ip_addr, *result.port());
+            let sock_addr = SocketAddr::new(ip_addr, *service.port());
 
-            let peer_addr = match result.service_type().protocol().as_ref() {
+            let peer_addr = match service.service_type().protocol().as_ref() {
                 "tcp" => PeerAddr::Tcp(sock_addr),
                 "udp" => PeerAddr::Quic(sock_addr),
                 proto => {
@@ -217,11 +214,18 @@ fn on_service_discovered(
                 .seen_peers
                 .lock()
                 .unwrap()
-                .insert(result.name().into(), peer_addr)
+                .insert(service.name().into(), peer_addr)
             {
-                tracing::debug!("Service discovered: {:?}:{:?}", result.name(), peer_addr);
+                tracing::debug!("Service discovered: {:?}:{:?}", service.name(), peer_addr);
                 context.peer_tx.send(seen_peer).unwrap();
             }
+        }
+        Ok(BrowserEvent::Remove {
+            name,
+            kind: _,
+            domain: _,
+        }) => {
+            context.seen_peers.lock().unwrap().remove(name);
         }
         Err(err) => {
             // The error only contains a string so impractical to distinguis between serious errors
