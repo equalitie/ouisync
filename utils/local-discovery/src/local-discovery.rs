@@ -29,11 +29,12 @@ async fn main() -> io::Result<()> {
         return Ok(());
     };
 
-    println!("ARGS: {args:?}");
     // Create a socket just to get a random and unique port, so that running two or more instances
     // of this utility don't clash.
     let sock = UdpSocket::bind("0.0.0.0:0").await?;
     let addr = sock.local_addr()?;
+
+    println!("Our port is {:?}", addr.port());
 
     let port = PeerPort::Quic(addr.port());
 
@@ -45,11 +46,15 @@ async fn main() -> io::Result<()> {
 
     loop {
         let peer = discovery.recv().await;
-        println!("Found peer {:?}", peer.initial_addr());
+        println!("{}: Found peer {:?}", time_str(), peer.initial_addr());
 
         task::spawn(async move {
             peer.on_unseen().await;
-            println!("Lost peer {:?}", peer.initial_addr());
+            println!("{}: Lost peer {:?}", time_str(), peer.initial_addr());
         });
     }
+}
+
+fn time_str() -> String {
+    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
 }
