@@ -73,6 +73,9 @@ impl LocalDiscovery {
         });
 
         // Discovery
+        // TODO: Sometimes (maybe one out of 30 times) the discovery won't discover anything. I
+        // wonder if we need to start this thread only _after_ the above beacon thread "returns"
+        // success in the `on_service_registered_callback`.
         let _discovery_join_handle = thread::spawn({
             let finished = finished.clone();
 
@@ -186,7 +189,7 @@ fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option
     let _enter = context.span.enter();
 
     match result {
-        Ok(BrowserEvent::New(service)) => {
+        Ok(BrowserEvent::Add(service)) => {
             if service.name() == &context.this_service_name {
                 return;
             }
@@ -220,12 +223,8 @@ fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option
                 context.peer_tx.send(seen_peer).unwrap();
             }
         }
-        Ok(BrowserEvent::Remove {
-            name,
-            kind: _,
-            domain: _,
-        }) => {
-            context.seen_peers.lock().unwrap().remove(name);
+        Ok(BrowserEvent::Remove(service)) => {
+            context.seen_peers.lock().unwrap().remove(service.name().clone());
         }
         Err(err) => {
             // The error only contains a string so impractical to distinguis between serious errors

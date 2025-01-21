@@ -5548,7 +5548,7 @@ dependencies = [
 [[package]]
 name = "zeroconf"
 version = "0.15.0"
-source = "git+https://github.com/inetic/zeroconf-rs?branch=service-remove#2e56e16114808e56dfc9cdccf3da707f33120bf9"
+source = "git+https://github.com/inetic/zeroconf-rs?rev=43b81707f17801d009cd1d1c40f95f44d97b3420#43b81707f17801d009cd1d1c40f95f44d97b3420"
 dependencies = [
  "avahi-sys",
  "bonjour-sys",
@@ -5563,7 +5563,7 @@ dependencies = [
 [[package]]
 name = "zeroconf-macros"
 version = "0.1.4"
-source = "git+https://github.com/inetic/zeroconf-rs?branch=service-remove#2e56e16114808e56dfc9cdccf3da707f33120bf9"
+source = "git+https://github.com/inetic/zeroconf-rs?rev=43b81707f17801d009cd1d1c40f95f44d97b3420#43b81707f17801d009cd1d1c40f95f44d97b3420"
 dependencies = [
  "quote",
  "syn 2.0.89",
