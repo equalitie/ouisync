@@ -5,8 +5,12 @@ use tokio::{net::UdpSocket, task};
 
 #[derive(Subcommand, Debug)]
 enum DiscoveryType {
+    /// Legacy local discovery implementation (custom protocol).
     PoorMan,
+    /// mDNS implementation where this app does the multicasting.
     DirectMDNS,
+    /// mDNS implementation where we connect to a Zeroconf (Avahi or Bonjour) daemon, which does
+    /// the multicasting for us.
     ZeroconfMDNS,
 }
 
@@ -30,7 +34,8 @@ async fn main() -> io::Result<()> {
     let sock = UdpSocket::bind("0.0.0.0:0").await?;
     let addr = sock.local_addr()?;
 
-    println!("Our port is {:?}", addr.port());
+    println!("This app's port is UDP/{:?}", addr.port());
+    println!("Using {:?} discovery type", options.discovery_type);
 
     let port = PeerPort::Quic(addr.port());
 
@@ -51,6 +56,7 @@ async fn main() -> io::Result<()> {
     }
 }
 
+// Useful for debugging how long it takes for a service to disappear.
 fn time_str() -> String {
     chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
 }
