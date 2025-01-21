@@ -20,7 +20,23 @@ impl LocalDiscovery {
     // connection to a zeroconf deamon is successful.
     pub fn new(listener_port: PeerPort, monitor: Option<StateMonitor>) -> Self {
         Self {
-            poor_man: Some(poor_man::LocalDiscovery::new(listener_port, monitor)),
+            poor_man: Some(poor_man::LocalDiscovery::new(
+                listener_port,
+                monitor,
+                poor_man::Mode::ObserveOnly,
+            )),
+            mdns_direct: None,
+            mdns_zeroconf: None,
+        }
+    }
+
+    pub fn new_poor_man(listener_port: PeerPort) -> Self {
+        Self {
+            poor_man: Some(poor_man::LocalDiscovery::new(
+                listener_port,
+                None,
+                poor_man::Mode::ObserveAndSignal,
+            )),
             mdns_direct: None,
             mdns_zeroconf: None,
         }

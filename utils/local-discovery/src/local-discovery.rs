@@ -1,7 +1,7 @@
+use clap::{Parser, Subcommand};
 use ouisync_lib::{self, LocalDiscovery, PeerPort};
 use std::io;
 use tokio::{net::UdpSocket, task};
-use clap::{Parser, Subcommand};
 
 #[derive(Subcommand, Debug)]
 enum DiscoveryType {
@@ -35,7 +35,7 @@ async fn main() -> io::Result<()> {
     let port = PeerPort::Quic(addr.port());
 
     let mut discovery = match options.discovery_type {
-        DiscoveryType::PoorMan => LocalDiscovery::new(port, None),
+        DiscoveryType::PoorMan => LocalDiscovery::new_poor_man(port),
         DiscoveryType::DirectMDNS => LocalDiscovery::new_mdns_direct(port).unwrap(),
         DiscoveryType::ZeroconfMDNS => LocalDiscovery::new_mdns_zeroconf(port),
     };

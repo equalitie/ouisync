@@ -45,13 +45,24 @@ pub struct LocalDiscovery {
     _work_handle: ScopedJoinHandle<()>,
 }
 
+#[derive(Copy, Clone)]
+pub enum Mode {
+    // Full mode where we do multicast on a socket as well as receive signals from others.
+    ObserveAndSignal,
+    // The above is no longer used apart from the local-discovery utility, but for compatibility
+    // with older ouisync version we'll keep observing on the multicast UDP socket (if the OS
+    // permits us) to find those old peers as well.
+    ObserveOnly,
+}
+
 impl LocalDiscovery {
-    pub fn new(listener_port: PeerPort, monitor: Option<StateMonitor>) -> Self {
+    pub fn new(listener_port: PeerPort, monitor: Option<StateMonitor>, mode: Mode) -> Self {
         let (peer_tx, peer_rx) = mpsc::channel(1);
 
         let work_handle = scoped_task::spawn(
             async move {
                 let mut inner = LocalDiscoveryInner {
+                    mode,
                     listener_port,
                     peer_tx,
                     per_interface_discovery: HashMap::default(),
@@ -106,6 +117,7 @@ impl LocalDiscovery {
 }
 
 struct LocalDiscoveryInner {
+    mode: Mode,
     listener_port: PeerPort,
     peer_tx: mpsc::Sender<SeenPeer>,
     per_interface_discovery: HashMap<Ipv4Addr, PerInterfaceLocalDiscovery>,
@@ -127,6 +139,7 @@ impl LocalDiscoveryInner {
             Entry::Vacant(entry) => {
                 let _enter = tracing::info_span!("local_discovery", %interface).entered();
                 let discovery = PerInterfaceLocalDiscovery::new(
+                    self.mode,
                     self.peer_tx.clone(),
                     self.listener_port,
                     interface,
@@ -164,6 +177,7 @@ struct PerInterfaceLocalDiscovery {
 
 impl PerInterfaceLocalDiscovery {
     pub fn new(
+        mode: Mode,
         peer_tx: mpsc::Sender<SeenPeer>,
         listener_port: PeerPort,
         interface: Ipv4Addr,
@@ -180,6 +194,7 @@ impl PerInterfaceLocalDiscovery {
 
         let beacon_handle = scoped_task::spawn(
             run_beacon(
+                mode,
                 socket_provider.clone(),
                 id,
                 listener_port,
@@ -318,6 +333,7 @@ impl Drop for PerInterfaceLocalDiscovery {
 }
 
 async fn run_beacon(
+    mode: Mode,
     socket_provider: Arc<SocketProvider>,
     id: InsecureRuntimeId,
     listener_port: PeerPort,
@@ -334,30 +350,40 @@ async fn run_beacon(
 
         seen_peers.start_new_round();
 
-        let msg = Message::ImHereYouAll {
-            id,
-            port: listener_port,
+        let max_delay_secs = 8;
+
+        let delay = match mode {
+            Mode::ObserveAndSignal => {
+                let msg = Message::ImHereYouAll {
+                    id,
+                    port: listener_port,
+                };
+
+                match send(&socket, msg, multicast_endpoint).await {
+                    Ok(()) => {
+                        error_shown = false;
+                        if let Some(value) = &beacons_sent {
+                            *value.get() += 1;
+                        }
+                    }
+                    Err(error) => {
+                        if !error_shown {
+                            error_shown = true;
+                            tracing::error!("Failed to send discovery message: {}", error);
+                        }
+                        socket_provider.mark_bad(socket).await;
+                        sleep(ERROR_DELAY).await;
+                        continue;
+                    }
+                }
+
+                rand::thread_rng().gen_range(2..max_delay_secs)
+            }
+            // If we're not doing any signalling, we still want to count rounds to remove peers if
+            // they haven't been seen for a while.
+            Mode::ObserveOnly => max_delay_secs,
         };
 
-        match send(&socket, msg, multicast_endpoint).await {
-            Ok(()) => {
-                error_shown = false;
-                if let Some(value) = &beacons_sent {
-                    *value.get() += 1;
-                }
-            }
-            Err(error) => {
-                if !error_shown {
-                    error_shown = true;
-                    tracing::error!("Failed to send discovery message: {}", error);
-                }
-                socket_provider.mark_bad(socket).await;
-                sleep(ERROR_DELAY).await;
-                continue;
-            }
-        }
-
-        let delay = rand::thread_rng().gen_range(2..8);
         sleep(Duration::from_secs(delay)).await;
     }
 }

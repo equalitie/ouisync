@@ -24,7 +24,6 @@ pub struct LocalDiscovery {
 
 impl LocalDiscovery {
     pub fn new(listener_port: PeerPort) -> Self {
-
         // Unwraps are OK because nothing here depends on the function input.
         let service_type = match listener_port {
             PeerPort::Tcp(_) => ServiceType::new("ouisync", "tcp").unwrap(),
@@ -236,7 +235,11 @@ fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option
             }
         }
         Ok(BrowserEvent::Remove(service)) => {
-            context.seen_peers.lock().unwrap().remove(service.name().clone());
+            context
+                .seen_peers
+                .lock()
+                .unwrap()
+                .remove(service.name().clone());
         }
         Err(err) => {
             // The error only contains a string so impractical to distinguis between serious errors
