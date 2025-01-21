@@ -91,10 +91,8 @@ class Server {
 void initLog({
   String? file,
   Function(LogLevel, String)? callback,
-  String tag = '',
 }) {
   final filePtr = file != null ? file.toNativeUtf8(allocator: malloc) : nullptr;
-  final tagPtr = tag.toNativeUtf8(allocator: malloc);
 
   NativeCallable<LogCallback>? nativeCallback;
 
@@ -115,13 +113,10 @@ void initLog({
     Bindings.instance.initLog(
       filePtr.cast(),
       nativeCallback?.nativeFunction ?? nullptr,
-      tagPtr.cast(),
     );
   } finally {
     if (filePtr != nullptr) {
       malloc.free(filePtr);
     }
-
-    malloc.free(tagPtr);
   }
 }

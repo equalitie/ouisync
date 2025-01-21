@@ -67,11 +67,11 @@ impl<'a> MakeWriter<'a> for MakeCallbackWriter {
     type Writer = CallbackWriter<'a>;
 
     fn make_writer(&'a self) -> Self::Writer {
-        CallbackWriter::new(&self, Level::DEBUG)
+        CallbackWriter::new(self, Level::DEBUG)
     }
 
     fn make_writer_for(&'a self, meta: &tracing::Metadata<'_>) -> Self::Writer {
-        CallbackWriter::new(&self, *meta.level())
+        CallbackWriter::new(self, *meta.level())
     }
 }
 

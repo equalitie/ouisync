@@ -152,7 +152,7 @@ fn init(
     let span = if let Some(debug_label) = debug_label {
         tracing::info_span!("service", message = debug_label.into_string()?)
     } else {
-        tracing::info_span!("service")
+        Span::none()
     };
 
     let runtime = runtime::Builder::new_multi_thread()
@@ -168,10 +168,7 @@ fn init(
 
 /// Initialize logging. Should be called before `service_start`.
 ///
-/// Logs using the platforms' default logging infrastructure. If `file` is not null, additionally
-/// logs to that file.
-///
-/// # Callback
+/// If `file` is not null, write log messages to the given file.
 ///
 /// If `callback` is not null, it is invoked for each log message. After the log message has been
 /// processed, it needs to be released by calling `release_log_message`. Failure to do so will
@@ -180,16 +177,19 @@ fn init(
 /// # Safety
 ///
 /// `file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
-/// `tag`  must be non-null and safe to pass to [std::ffi::CStr::from_ptr].
 #[no_mangle]
 pub unsafe extern "C" fn init_log(
     file: *const c_char,
     callback: Option<extern "C" fn(LogMessage)>,
-    tag: *const c_char,
 ) -> ErrorCode {
-    try_init_log(file, callback, tag).to_error_code()
+    try_init_log(file, callback).to_error_code()
 }
 
+/// Release a log message back to the backend. See `init_log` for more details.
+///
+/// # Safety
+///
+/// `message` must have been obtained through the callback to `init_log` and not modified.
 #[no_mangle]
 pub unsafe extern "C" fn release_log_message(message: LogMessage) {
     let message = message.into_message();
@@ -237,11 +237,10 @@ static LOGGER: OnceLock<LoggerWrapper> = OnceLock::new();
 unsafe fn try_init_log(
     file: *const c_char,
     callback: Option<extern "C" fn(LogMessage)>,
-    tag: *const c_char,
 ) -> Result<(), Error> {
-    let builder = Logger::builder().with_tag(CStr::from_ptr(tag).to_str()?);
+    let builder = Logger::builder();
     let builder = if !file.is_null() {
-        builder.with_file(Path::new(CStr::from_ptr(file).to_str()?))
+        builder.file(Path::new(CStr::from_ptr(file).to_str()?))
     } else {
         builder
     };
@@ -252,12 +251,15 @@ unsafe fn try_init_log(
             callback(LogMessage::new(LogLevel::from(level), mem::take(message)));
         });
 
-        (builder.with_callback(callback, pool.clone()), Some(pool))
+        (builder.callback(callback, pool.clone()), Some(pool))
     } else {
         (builder, None)
     };
 
-    let logger = builder.build().map_err(Error::InitializeLogger)?;
+    let logger = builder
+        .redirect()
+        .build()
+        .map_err(Error::InitializeLogger)?;
 
     LOGGER
         .set(LoggerWrapper {
@@ -298,7 +300,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<ErrorCode>();
         let handle = unsafe {
-            service_start(
+            start_service(
                 config_dir.as_ptr(),
                 ptr::null(),
                 callback,
@@ -310,7 +312,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<ErrorCode>();
         unsafe {
-            service_stop(handle, callback, Box::into_raw(Box::new(tx)) as _);
+            stop_service(handle, callback, Box::into_raw(Box::new(tx)) as _);
         }
 
         assert_eq!(rx.recv().unwrap(), ErrorCode::Ok);

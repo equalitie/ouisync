@@ -49,13 +49,11 @@ typedef _StopServiceC = Void Function(
 typedef InitLog = int Function(
   Pointer<Char>,
   Pointer<NativeFunction<LogCallback>>,
-  Pointer<Char>,
 );
 
 typedef _InitLogC = Uint16 Function(
   Pointer<Char>,
   Pointer<NativeFunction<LogCallback>>,
-  Pointer<Char>,
 );
 
 typedef ReleaseLogMessage = void Function(LogMessage);

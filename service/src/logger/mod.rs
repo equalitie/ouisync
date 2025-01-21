@@ -1,11 +1,7 @@
-#[cfg(target_os = "android")]
-mod android;
 mod callback;
 mod color;
 mod format;
-#[cfg(target_os = "android")]
 mod redirect;
-#[cfg(not(target_os = "android"))]
 mod stdout;
 
 pub use callback::{BufferPool, Callback};
@@ -20,7 +16,6 @@ use std::{
     path::Path,
     sync::Mutex,
 };
-use tracing::Subscriber;
 use tracing_subscriber::{
     field::RecordFields,
     fmt::{
@@ -29,50 +24,68 @@ use tracing_subscriber::{
         FormatFields,
     },
     layer::SubscriberExt,
-    registry::LookupSpan,
     util::SubscriberInitExt,
-    EnvFilter, Layer,
+    EnvFilter,
 };
 
 pub struct Builder<'a> {
+    stdout: bool,
     file: Option<&'a Path>,
     callback: Option<(Box<Callback>, BufferPool)>,
     format: LogFormat,
     color: LogColor,
-    tag: &'a str,
+    redirect: bool,
 }
 
 impl<'a> Builder<'a> {
-    pub fn with_file(self, path: &'a Path) -> Self {
+    /// Enable logging to stdout
+    pub fn stdout(self) -> Self {
+        Self {
+            stdout: true,
+            ..self
+        }
+    }
+
+    /// Enable logging to file
+    pub fn file(self, path: &'a Path) -> Self {
         Self {
             file: Some(path),
             ..self
         }
     }
 
-    pub fn with_callback(self, callback: Box<Callback>, pool: BufferPool) -> Self {
+    /// Enable logging via a callback
+    pub fn callback(self, callback: Box<Callback>, pool: BufferPool) -> Self {
         Self {
             callback: Some((callback, pool)),
             ..self
         }
     }
 
-    pub fn with_format(self, format: LogFormat) -> Self {
+    /// Set log format (applies only to the stdout output)
+    pub fn format(self, format: LogFormat) -> Self {
         Self { format, ..self }
     }
 
-    pub fn with_color(self, color: LogColor) -> Self {
+    /// Set whether log messages should be colored (applies only to the stdout output)
+    pub fn color(self, color: LogColor) -> Self {
         Self { color, ..self }
     }
 
-    pub fn with_tag(self, tag: &'a str) -> Self {
-        Self { tag, ..self }
+    /// Redirect stdout and stderr to the log
+    pub fn redirect(self) -> Self {
+        Self {
+            redirect: true,
+            ..self
+        }
     }
 
     pub fn build(self) -> io::Result<Logger> {
         if let Some(parent) = self.file.and_then(|path| path.parent()) {
             fs::create_dir_all(parent)?;
         }
+
+        let stdout_layer = self.stdout.then(|| stdout::layer(self.format, self.color));
 
         // Log to file
         let file_layer = self.file.map(|path| {
@@ -92,7 +105,7 @@ impl<'a> Builder<'a> {
 
         tracing_subscriber::registry()
             .with(create_log_filter())
-            .with(default_layer(self.tag.to_owned(), self.format, self.color))
+            .with(stdout_layer)
             .with(file_layer)
             .with(callback_layer)
             .try_init()
@@ -106,26 +119,27 @@ impl<'a> Builder<'a> {
             default_panic_hook(panic_info);
         }));
 
+        let redirect = self.redirect.then(redirect::Redirect::new).transpose()?;
+
         Ok(Logger {
-            #[cfg(target_os = "android")]
-            _redirect: redirect::Redirect::new()?,
+            _redirect: redirect,
         })
     }
 }
 
 pub struct Logger {
-    #[cfg(target_os = "android")]
-    _redirect: redirect::Redirect,
+    _redirect: Option<redirect::Redirect>,
 }
 
 impl Logger {
     pub fn builder<'a>() -> Builder<'a> {
         Builder {
+            stdout: false,
             file: None,
             callback: None,
             format: LogFormat::Human,
             color: LogColor::Auto,
-            tag: "",
+            redirect: false,
         }
     }
 
@@ -153,24 +167,6 @@ fn create_file_writer(path: &Path) -> FileRotate<AppendCount> {
         #[cfg(unix)]
         None,
     )
-}
-
-#[cfg(target_os = "android")]
-fn default_layer<S>(tag: String, _format: LogFormat, _color: LogColor) -> impl Layer<S>
-where
-    S: Subscriber,
-    for<'a> S: LookupSpan<'a>,
-{
-    android::layer(tag)
-}
-
-#[cfg(not(target_os = "android"))]
-fn default_layer<S>(_tag: String, format: LogFormat, color: LogColor) -> impl Layer<S>
-where
-    S: Subscriber,
-    for<'a> S: LookupSpan<'a>,
-{
-    stdout::layer(format, color)
 }
 
 fn log_panic(info: &PanicHookInfo) {

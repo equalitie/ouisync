@@ -2416,15 +2416,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ndk-sys"
-version = "0.5.0+25.2.9519653"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c196769dd60fd4f363e11d948139556a344e79d451aeb2fa2fd040738ef7691"
-dependencies = [
- "jni-sys",
-]
-
-[[package]]
 name = "netlink-packet-core"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2938,7 +2929,6 @@ dependencies = [
  "ouisync-rand",
  "ouisync-tracing-fmt",
  "ouisync-vfs",
- "paranoid-android",
  "pem",
  "rcgen",
  "rmp-serde",
@@ -3048,20 +3038,6 @@ checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
 dependencies = [
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "paranoid-android"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "101795d63d371b43e38d6e7254677657be82f17022f7f7893c268f33ac0caadc"
-dependencies = [
- "lazy_static",
- "ndk-sys",
- "sharded-slab",
- "smallvec",
- "tracing-core",
- "tracing-subscriber",
 ]
 
 [[package]]
