@@ -105,6 +105,16 @@ impl io::Write for CallbackWriter<'_> {
 
 impl Drop for CallbackWriter<'_> {
     fn drop(&mut self) {
+        // Remove trailing newlines
+        while self
+            .buffer
+            .last()
+            .map(|c| c.is_ascii_whitespace())
+            .unwrap_or(false)
+        {
+            self.buffer.pop();
+        }
+
         (self.make.callback)(self.level, &mut self.buffer);
         self.make.pool.release(mem::take(&mut self.buffer));
     }
