@@ -24,11 +24,10 @@ pub struct LocalDiscovery {
 }
 
 impl LocalDiscovery {
-    pub fn new(listener_port: PeerPort) -> Self {
+    pub fn new(listener_port: PeerPort) -> mdns_sd::Result<Self> {
         let span = tracing::info_span!("mDNS-zeroconf");
 
-        // TODO: Unwraps and expects
-        let daemon = ServiceDaemon::new().expect("Failed to create daemon");
+        let daemon = ServiceDaemon::new()?;
 
         let service_type = match listener_port {
             PeerPort::Tcp(_) => "_ouisync._tcp.local.",
@@ -55,11 +54,9 @@ impl LocalDiscovery {
         .unwrap()
         .enable_addr_auto();
 
-        daemon
-            .register(service_info)
-            .expect("Failed to register service");
+        daemon.register(service_info)?;
 
-        let receiver = daemon.browse(service_type).expect("Failed to browse");
+        let receiver = daemon.browse(service_type)?;
 
         let (peer_tx, peer_rx) = mpsc::unbounded_channel();
 
@@ -106,11 +103,11 @@ impl LocalDiscovery {
             .instrument(span),
         );
 
-        Self {
+        Ok(Self {
             daemon,
             peer_rx,
             _worker: Some(worker),
-        }
+        })
     }
 
     pub async fn recv(&mut self) -> Option<SeenPeer> {

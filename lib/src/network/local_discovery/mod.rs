@@ -26,12 +26,12 @@ impl LocalDiscovery {
         }
     }
 
-    pub fn new_mdns_direct(listener_port: PeerPort) -> Self {
-        Self {
+    pub fn new_mdns_direct(listener_port: PeerPort) -> mdns_sd::Result<Self> {
+        Ok(Self {
             poor_man: None,
-            mdns_direct: Some(mdns_direct::LocalDiscovery::new(listener_port)),
+            mdns_direct: Some(mdns_direct::LocalDiscovery::new(listener_port)?),
             mdns_zeroconf: None,
-        }
+        })
     }
 
     pub fn new_mdns_zeroconf(listener_port: PeerPort) -> Self {

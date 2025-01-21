@@ -1,33 +1,29 @@
 use ouisync_lib::{self, LocalDiscovery, PeerPort};
 use std::io;
 use tokio::{net::UdpSocket, task};
+use clap::{Parser, Subcommand};
 
+#[derive(Subcommand, Debug)]
 enum DiscoveryType {
     PoorMan,
     DirectMDNS,
     ZeroconfMDNS,
 }
 
+/// Command line options.
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Type of discovery to use.
+    #[command(subcommand)]
+    pub discovery_type: DiscoveryType,
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     env_logger::init();
 
-    let args: Vec<String> = std::env::args().collect();
-
-    let discovery_type = if args.len() == 2 {
-        match args[1].as_str() {
-            "poor_man" => DiscoveryType::PoorMan,
-            "direct_mdns" => DiscoveryType::DirectMDNS,
-            "zeroconf_mdns" => DiscoveryType::ZeroconfMDNS,
-            _ => {
-                println!("Wrong args");
-                return Ok(());
-            }
-        }
-    } else {
-        println!("Wrong args");
-        return Ok(());
-    };
+    let options = Args::parse();
 
     // Create a socket just to get a random and unique port, so that running two or more instances
     // of this utility don't clash.
@@ -38,9 +34,9 @@ async fn main() -> io::Result<()> {
 
     let port = PeerPort::Quic(addr.port());
 
-    let mut discovery = match discovery_type {
+    let mut discovery = match options.discovery_type {
         DiscoveryType::PoorMan => LocalDiscovery::new(port, None),
-        DiscoveryType::DirectMDNS => LocalDiscovery::new_mdns_direct(port),
+        DiscoveryType::DirectMDNS => LocalDiscovery::new_mdns_direct(port).unwrap(),
         DiscoveryType::ZeroconfMDNS => LocalDiscovery::new_mdns_zeroconf(port),
     };
 
