@@ -9,13 +9,11 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
         log_color,
     } = command;
 
-    let _logger = Logger::new(
-        None,
-        None,
-        String::new(), // log tag, not used here
-        log_format,
-        log_color,
-    )?;
+    let _logger = Logger::builder()
+        .stdout()
+        .format(log_format)
+        .color(log_color)
+        .build()?;
 
     let mut service = Service::init(config_dir).await?;
 

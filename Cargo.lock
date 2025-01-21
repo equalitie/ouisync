@@ -499,9 +499,6 @@ name = "camino"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b96ec4966b5813e2c0507c1f86115c8c5abaadc3980879c3424042a02fd1ad3"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "cast"
@@ -2419,24 +2416,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ndk-sys"
-version = "0.5.0+25.2.9519653"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c196769dd60fd4f363e11d948139556a344e79d451aeb2fa2fd040738ef7691"
-dependencies = [
- "jni-sys",
-]
-
-[[package]]
-name = "ndk-sys"
-version = "0.6.0+11769913"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
-dependencies = [
- "jni-sys",
-]
-
-[[package]]
 name = "netlink-packet-core"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2815,43 +2794,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ouisync-bridge"
-version = "0.8.10"
-dependencies = [
- "ansi_term",
- "assert_matches",
- "async-trait",
- "bytes",
- "camino",
- "deadlock",
- "file-rotate",
- "futures-util",
- "indexmap 2.6.0",
- "libc",
- "ndk-sys 0.6.0+11769913",
- "num_enum",
- "os_pipe",
- "ouisync",
- "ouisync-rand",
- "ouisync-tracing-fmt",
- "paranoid-android",
- "pem",
- "rcgen",
- "rmp-serde",
- "serde",
- "serde_json",
- "state_monitor",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite",
- "tracing",
- "tracing-subscriber",
- "webpki-roots",
-]
-
-[[package]]
 name = "ouisync-cli"
 version = "0.8.10"
 dependencies = [
@@ -2890,33 +2832,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
-]
-
-[[package]]
-name = "ouisync-ffi"
-version = "0.8.10"
-dependencies = [
- "async-trait",
- "bytes",
- "camino",
- "deadlock",
- "futures-util",
- "hex",
- "num_enum",
- "ouisync",
- "ouisync-bridge",
- "ouisync-vfs",
- "rmp-serde",
- "rustls",
- "scoped_task",
- "serde",
- "serde_bytes",
- "state_monitor",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -3004,17 +2919,14 @@ dependencies = [
  "hyper 1.5.1",
  "indexmap 2.6.0",
  "interprocess",
- "libc",
  "maxminddb",
  "metrics",
  "metrics-exporter-prometheus",
  "num_enum",
- "os_pipe",
  "ouisync",
  "ouisync-rand",
  "ouisync-tracing-fmt",
  "ouisync-vfs",
- "paranoid-android",
  "pem",
  "rcgen",
  "rmp-serde",
@@ -3124,20 +3036,6 @@ checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
 dependencies = [
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "paranoid-android"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "101795d63d371b43e38d6e7254677657be82f17022f7f7893c268f33ac0caadc"
-dependencies = [
- "lazy_static",
- "ndk-sys 0.5.0+25.2.9519653",
- "sharded-slab",
- "smallvec",
- "tracing-core",
- "tracing-subscriber",
 ]
 
 [[package]]

@@ -1,14 +1,9 @@
-#[cfg(target_os = "android")]
-mod android;
 mod callback;
 mod color;
 mod format;
-#[cfg(target_os = "android")]
-mod redirect;
-#[cfg(not(target_os = "android"))]
 mod stdout;
 
-pub use callback::Callback;
+pub use callback::{BufferPool, Callback};
 pub use color::{LogColor, ParseLogColorError};
 pub use format::{LogFormat, ParseLogFormatError};
 
@@ -20,7 +15,6 @@ use std::{
     path::Path,
     sync::Mutex,
 };
-use tracing::Subscriber;
 use tracing_subscriber::{
     field::RecordFields,
     fmt::{
@@ -29,35 +23,62 @@ use tracing_subscriber::{
         FormatFields,
     },
     layer::SubscriberExt,
-    registry::LookupSpan,
     util::SubscriberInitExt,
-    EnvFilter, Layer,
+    EnvFilter,
 };
 
-pub struct Logger {
-    #[cfg(target_os = "android")]
-    _redirect: redirect::Redirect,
+pub struct Builder<'a> {
+    stdout: bool,
+    file: Option<&'a Path>,
+    callback: Option<(Box<Callback>, BufferPool)>,
+    format: LogFormat,
+    color: LogColor,
 }
 
-impl Logger {
-    /// Initializes the logger. By default logs to stdout. If `path` is `Some`, logs also to the
-    /// given file. If `callback` is `Some`, calls it for each log event, passing the log level and
-    /// the formatted log message to it (the message is terminated with a nul-byte, allowing
-    /// zero-cost conversion to a C-style string, which is useful for FFI. If this is not needed,
-    /// the final byte can be chopped off and the rest can be safely converted to a `str`).
-    pub fn new(
-        path: Option<&Path>,
-        callback: Option<Box<Callback>>,
-        tag: String,
-        format: LogFormat,
-        color: LogColor,
-    ) -> Result<Self, io::Error> {
-        if let Some(parent) = path.and_then(|path| path.parent()) {
+impl<'a> Builder<'a> {
+    /// Enable logging to stdout
+    pub fn stdout(self) -> Self {
+        Self {
+            stdout: true,
+            ..self
+        }
+    }
+
+    /// Enable logging to file
+    pub fn file(self, path: &'a Path) -> Self {
+        Self {
+            file: Some(path),
+            ..self
+        }
+    }
+
+    /// Enable logging via a callback
+    pub fn callback(self, callback: Box<Callback>, pool: BufferPool) -> Self {
+        Self {
+            callback: Some((callback, pool)),
+            ..self
+        }
+    }
+
+    /// Set log format (applies only to the stdout output)
+    pub fn format(self, format: LogFormat) -> Self {
+        Self { format, ..self }
+    }
+
+    /// Set whether log messages should be colored (applies only to the stdout output)
+    pub fn color(self, color: LogColor) -> Self {
+        Self { color, ..self }
+    }
+
+    pub fn build(self) -> io::Result<Logger> {
+        if let Some(parent) = self.file.and_then(|path| path.parent()) {
             fs::create_dir_all(parent)?;
         }
 
+        let stdout_layer = self.stdout.then(|| stdout::layer(self.format, self.color));
+
         // Log to file
-        let file_layer = path.map(|path| {
+        let file_layer = self.file.map(|path| {
             tracing_subscriber::fmt::layer()
                 .event_format(Formatter::default().with_timer(SystemTime))
                 .with_ansi(false)
@@ -68,11 +89,13 @@ impl Logger {
         });
 
         // Log by calling the callback
-        let callback_layer = callback.map(|callback| callback::layer(callback));
+        let callback_layer = self
+            .callback
+            .map(|(callback, pool)| callback::layer(callback, pool));
 
         tracing_subscriber::registry()
             .with(create_log_filter())
-            .with(default_layer(tag, format, color))
+            .with(stdout_layer)
             .with(file_layer)
             .with(callback_layer)
             .try_init()
@@ -86,10 +109,25 @@ impl Logger {
             default_panic_hook(panic_info);
         }));
 
-        Ok(Self {
-            #[cfg(target_os = "android")]
-            _redirect: redirect::Redirect::new()?,
-        })
+        Ok(Logger)
+    }
+}
+
+pub struct Logger;
+
+impl Logger {
+    pub fn builder<'a>() -> Builder<'a> {
+        Builder {
+            stdout: false,
+            file: None,
+            callback: None,
+            format: LogFormat::Human,
+            color: LogColor::Auto,
+        }
+    }
+
+    pub fn new() -> io::Result<Self> {
+        Self::builder().build()
     }
 }
 
@@ -112,24 +150,6 @@ fn create_file_writer(path: &Path) -> FileRotate<AppendCount> {
         #[cfg(unix)]
         None,
     )
-}
-
-#[cfg(target_os = "android")]
-fn default_layer<S>(tag: String, _format: LogFormat, _color: LogColor) -> impl Layer<S>
-where
-    S: Subscriber,
-    for<'a> S: LookupSpan<'a>,
-{
-    android::layer(tag)
-}
-
-#[cfg(not(target_os = "android"))]
-fn default_layer<S>(_tag: String, format: LogFormat, color: LogColor) -> impl Layer<S>
-where
-    S: Subscriber,
-    for<'a> S: LookupSpan<'a>,
-{
-    stdout::layer(format, color)
 }
 
 fn log_panic(info: &PanicHookInfo) {

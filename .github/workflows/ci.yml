@@ -64,7 +64,7 @@ jobs:
       - name: Run clippy
         run: >
           ${{ matrix.cargo-command }} clippy
-          --package ouisync --package ouisync-bridge --package ouisync-service
+          --package ouisync --package ouisync-service --package ouisync-cli
           ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
           --all-targets
           --no-deps
@@ -84,7 +84,6 @@ jobs:
         if: matrix.name == 'linux'
         run: ${{ matrix.cargo-command }} test --package ouisync-cli --test cli
 
-  TODO: The kotlin bindings need to be updated to the new service architecture, disabled for now
   check_kotlin_bindings:
     name: check kotlin bindings
     runs-on: ubuntu-24.04

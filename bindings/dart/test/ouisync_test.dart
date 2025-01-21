@@ -15,7 +15,10 @@ void main() {
     session = await Session.create(
       configPath: '${temp.path}/config',
     );
-    await session.setStoreDir('${temp.path}/store');
+
+    final storeDir = '${temp.path}/store';
+    await io.Directory(storeDir).create(recursive: true);
+    await session.setStoreDir(storeDir);
   });
 
   tearDown(() async {

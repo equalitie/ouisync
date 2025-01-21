@@ -22,16 +22,11 @@ export 'bindings.dart'
         PeerSource,
         PeerStateKind;
 export 'exception.dart';
-export 'server.dart' show logInit;
+export 'server.dart' show initLog;
 
 part 'local_secret.dart';
 
 const bool debugTrace = false;
-
-// Default log tag.
-// HACK: if the tag doesn't start with 'flutter' then the logs won't show up in
-// the app if built in release mode.
-const defaultLogTag = 'flutter-ouisync';
 
 /// Entry point to the ouisync bindings. A session should be opened at the start of the application
 /// and closed at the end. There can be only one session at the time.
@@ -48,7 +43,6 @@ class Session {
     required String configPath,
     String? debugLabel,
     bool startServer = true,
-    void Function(LogLevel, String)? logger,
   }) async {
     Server? server;
 
@@ -67,6 +61,7 @@ class Session {
     }
 
     final client = await Client.connect(configPath: configPath);
+
     return Session._(client, server);
   }
 
@@ -407,7 +402,7 @@ class Repository {
   Future<void> setAccessMode(AccessMode accessMode, {LocalSecret? secret}) =>
       _client.invoke('repository_set_access_mode', {
         'repository': _handle,
-        'access_mode': accessMode.encode(),
+        'mode': accessMode.encode(),
         'secret': secret?.encode(),
       });
 

@@ -5,6 +5,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("entry already exists")]
+    AlreadyExists,
     #[error("config error")]
     Config(#[from] ConfigError),
     #[error("failed to create mounter")]
@@ -17,16 +19,14 @@ pub enum Error {
     InvalidArgument,
     #[error("I/O error")]
     Io(#[from] io::Error),
+    #[error("entry not found")]
+    NotFound,
     #[error("operation not supported")]
     OperationNotSupported,
     #[error("permission denied")]
     PermissionDenied,
     #[error("repository error")]
     Repository(#[from] ouisync::Error),
-    #[error("repository already exists")]
-    RepositoryExists,
-    #[error("repository not found")]
-    RepositoryNotFound,
     #[error("store error")]
     Store(#[from] ouisync::StoreError),
     #[error("store dir not specified")]

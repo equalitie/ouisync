@@ -51,11 +51,6 @@ tracing-subscriber          = { workspace = true, features = ["env-filter", "jso
 walkdir                     = "2.5.0"
 webpki-roots                = { workspace = true }
 
-[target.'cfg(target_os = "android")'.dependencies]
-libc                        = "0.2.147"
-os_pipe                     = { version = "1.1.4", features = ["io_safety"] }
-paranoid-android            = "0.2.1"
-
 [dev-dependencies]
 assert_matches              = { workspace = true }
 rcgen                       = { workspace = true, features = ["pem"] }

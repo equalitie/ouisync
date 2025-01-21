@@ -303,12 +303,12 @@ impl State {
         let path = self.normalize_repository_path(path)?;
 
         if self.repos.find_by_path(&path).is_some() {
-            Err(Error::RepositoryExists)?;
+            Err(Error::AlreadyExists)?;
         }
 
         if let Some(token) = &share_token {
             if self.repos.find_by_id(token.id()).is_some() {
-                Err(Error::RepositoryExists)?;
+                Err(Error::AlreadyExists)?;
             }
         }
 
@@ -500,7 +500,7 @@ impl State {
         let dst_parent = dst.parent().ok_or(Error::InvalidArgument)?;
 
         if self.repos.find_by_path(&dst).is_some() {
-            return Err(Error::RepositoryExists);
+            return Err(Error::AlreadyExists);
         }
 
         let holder = self.repos.get_mut(handle).ok_or(Error::InvalidArgument)?;
@@ -1365,7 +1365,7 @@ impl State {
     }
 
     pub fn state_monitor(&self, path: Vec<MonitorId>) -> Result<StateMonitor, Error> {
-        self.root_monitor.locate(path).ok_or(Error::InvalidArgument)
+        self.root_monitor.locate(path).ok_or(Error::NotFound)
     }
 
     pub fn subscribe_to_state_monitor(
@@ -1375,7 +1375,7 @@ impl State {
         Ok(self
             .root_monitor
             .locate(path)
-            .ok_or(Error::InvalidArgument)?
+            .ok_or(Error::NotFound)?
             .subscribe())
     }
 

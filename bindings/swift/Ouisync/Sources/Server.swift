@@ -8,21 +8,19 @@ public typealias OuisyncError = ErrorCode
 // FIXME: updating this at runtime is unsafe and should be cast to atomic
 public var ouisyncLogHandler: ((LogLevel, String) -> Void)?
 
-// log_init is not safe to call repeatedly, should only be called once before the first server is
+// init_log is not safe to call repeatedly, should only be called before the first server is
 // started and provides awkward memory semantics to assist dart, though we may eventually end up
-// using them as well if ever we end up making logging async
-private func directLogHandler(_ level: LogLevel, _ message: UnsafePointer<CChar>?) {
-    if let message {
-        // defer { log_free(message) }
-        ouisyncLogHandler?(level, String(cString: message))
-    }
-    ouisyncLogHandler?(level, "")
+// using them here as well if ever we end up making logging async
+private func directLogHandler(_ message: LogMessage) {
+    defer { release_log_message(message) }
+    ouisyncLogHandler?(message.level, String(cString: message.ptr))
 }
 @MainActor private var loggingConfigured = false
 @MainActor private func setupLogging() async throws {
     if loggingConfigured { return }
     loggingConfigured = true
-    log_init(nil, directLogHandler, "ouisync")
+    let err = init_log(nil, directLogHandler)
+    if err != .Ok { throw err }
 }
 
 
@@ -40,7 +38,7 @@ public class Server {
         self.configDir = URL(fileURLWithPath: configDir)
         self.debugLabel = debugLabel
         try await withUnsafeThrowingContinuation {
-            handle = service_start(configDir, debugLabel, Resume, unsafeBitCast($0, to: UnsafeRawPointer.self))
+            handle = start_service(configDir, debugLabel, Resume, unsafeBitCast($0, to: UnsafeRawPointer.self))
         } as Void
     }
     /// the configDir passed to the constructor when the server was started
@@ -71,7 +69,7 @@ public class Server {
     private var handle: UnsafeMutableRawPointer?;
     deinit {
         guard let handle else { return }
-        service_stop(handle, Ignore, nil)
+        stop_service(handle, Ignore, nil)
     }
 
     /** Stops a running Ouisync server.
@@ -82,27 +80,12 @@ public class Server {
         guard let handle else { return }
         self.handle = nil
         try await withUnsafeThrowingContinuation {
-            service_stop(handle, Resume, unsafeBitCast($0, to: UnsafeRawPointer.self))
+            stop_service(handle, Resume, unsafeBitCast($0, to: UnsafeRawPointer.self))
         } as Void
     }
 
     /** Opens a new client connection to this server. */
     public func connect() async throws -> Client { try await .init(port, authKey) }
-
-    /** Initialize logging to stdout. Should be called before constructing a `Server`.
-     *
-     * If `filename` is not null, additionally logs to that file.
-     * If `handler` is not null, it is called for every message.
-     *
-     * Throws a `OuisyncError` on failure. Should not be called more than once per process!
-     */
-    public static func configureLogging(filename: String? = nil,
-                                        handler: LogHandler? = nil,
-                                        tag: String = "Server") throws {
-        let err = log_init(filename, handler, tag)
-        if err != .Ok { throw err }
-    }
-    public typealias LogHandler = @convention(c) (LogLevel, UnsafePointer<CChar>?) -> Void
 }
 
 /// FFI callback that expects a continuation in the context which it resumes, throwing if necessary

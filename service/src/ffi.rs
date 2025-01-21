@@ -1,6 +1,6 @@
 use std::{
     ffi::{c_char, c_void, CStr, CString},
-    io,
+    io, mem,
     path::Path,
     pin::pin,
     sync::OnceLock,
@@ -12,7 +12,7 @@ use tracing::{Instrument, Span};
 
 use self::callback::Callback;
 use crate::{
-    logger::{LogColor, LogFormat, Logger},
+    logger::{BufferPool, Logger},
     protocol::{ErrorCode, LogLevel, ToErrorCode},
     Error, Service,
 };
@@ -32,7 +32,7 @@ use crate::{
 /// - `debug_label` must be either null or must be safe to pass to [std::ffi::CStr::from_ptr].
 /// - `callback_context` must be either null or it must be safe to access from multiple threads.
 #[no_mangle]
-pub unsafe extern "C" fn service_start(
+pub unsafe extern "C" fn start_service(
     config_dir: *const c_char,
     debug_label: *const c_char,
     callback: extern "C" fn(*const c_void, ErrorCode),
@@ -64,7 +64,7 @@ pub unsafe extern "C" fn service_start(
 /// passed to `ouisync_stop`.
 /// - `callback_context` must be either null of it must be safe to access from multiple threads.
 #[no_mangle]
-pub unsafe extern "C" fn service_stop(
+pub unsafe extern "C" fn stop_service(
     handle: *mut c_void,
     callback: extern "C" fn(*const c_void, ErrorCode),
     callback_context: *const c_void,
@@ -152,7 +152,7 @@ fn init(
     let span = if let Some(debug_label) = debug_label {
         tracing::info_span!("service", message = debug_label.into_string()?)
     } else {
-        tracing::info_span!("service")
+        Span::none()
     };
 
     let runtime = runtime::Builder::new_multi_thread()
@@ -168,52 +168,107 @@ fn init(
 
 /// Initialize logging. Should be called before `service_start`.
 ///
-/// Logs using the platforms' default logging infrastructure. If `file` is not null, additionally
-/// logs to that file.
+/// If `file` is not null, write log messages to the given file.
+///
+/// If `callback` is not null, it is invoked for each log message. After the log message has been
+/// processed, it needs to be released by calling `release_log_message`. Failure to do so will
+/// cause memory leak. The messages can be processed asynchronously (e.g., in another thread).
 ///
 /// # Safety
 ///
 /// `file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
-/// `tag`  must be non-null and safe to pass to [std::ffi::CStr::from_ptr].
 #[no_mangle]
-pub unsafe extern "C" fn log_init(
+pub unsafe extern "C" fn init_log(
     file: *const c_char,
-    callback: Option<extern "C" fn(LogLevel, *const c_char)>,
-    tag: *const c_char,
+    callback: Option<extern "C" fn(LogMessage)>,
 ) -> ErrorCode {
-    try_log_init(file, callback, tag).to_error_code()
+    try_init_log(file, callback).to_error_code()
 }
 
-static LOGGER: OnceLock<Logger> = OnceLock::new();
+/// Release a log message back to the backend. See `init_log` for more details.
+///
+/// # Safety
+///
+/// `message` must have been obtained through the callback to `init_log` and not modified.
+#[no_mangle]
+pub unsafe extern "C" fn release_log_message(message: LogMessage) {
+    let message = message.into_message();
 
-unsafe fn try_log_init(
+    if let Some(pool) = LOGGER.get().and_then(|wrapper| wrapper.pool.as_ref()) {
+        pool.release(message);
+    }
+}
+
+#[repr(C)]
+pub struct LogMessage {
+    level: LogLevel,
+    ptr: *const u8,
+    len: usize,
+    cap: usize,
+}
+
+impl LogMessage {
+    fn new(level: LogLevel, message: Vec<u8>) -> Self {
+        let ptr = message.as_ptr();
+        let len = message.len();
+        let cap = message.capacity();
+        mem::forget(message);
+
+        Self {
+            level,
+            ptr,
+            len,
+            cap,
+        }
+    }
+
+    unsafe fn into_message(self) -> Vec<u8> {
+        Vec::from_raw_parts(self.ptr as _, self.len, self.cap)
+    }
+}
+
+struct LoggerWrapper {
+    _logger: Logger,
+    pool: Option<BufferPool>,
+}
+
+static LOGGER: OnceLock<LoggerWrapper> = OnceLock::new();
+
+unsafe fn try_init_log(
     file: *const c_char,
-    callback: Option<extern "C" fn(LogLevel, *const c_char)>,
-    tag: *const c_char,
+    callback: Option<extern "C" fn(LogMessage)>,
 ) -> Result<(), Error> {
-    let file = if file.is_null() {
-        None
+    let builder = Logger::builder();
+    let builder = if !file.is_null() {
+        builder.file(Path::new(CStr::from_ptr(file).to_str()?))
     } else {
-        Some(Path::new(CStr::from_ptr(file).to_str()?))
+        builder
     };
 
-    let callback = callback.map(|callback| {
-        Box::new(move |level, message: &[u8]| {
-            callback(LogLevel::from(level).into(), message.as_ptr() as _)
-        }) as _
-    });
+    let (builder, pool) = if let Some(callback) = callback {
+        let pool = BufferPool::default();
+        let callback = Box::new(move |level, message: &mut Vec<u8>| {
+            callback(LogMessage::new(LogLevel::from(level), mem::take(message)));
+        });
 
-    let tag = CStr::from_ptr(tag).to_str()?.to_owned();
+        (builder.callback(callback, pool.clone()), Some(pool))
+    } else {
+        (builder, None)
+    };
 
-    let logger = Logger::new(file, callback, tag, LogFormat::Human, LogColor::Always)
-        .map_err(Error::InitializeLogger)?;
+    let logger = builder.build().map_err(Error::InitializeLogger)?;
 
-    LOGGER.set(logger).map_err(|_| {
-        Error::InitializeLogger(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "logger already initialized",
-        ))
-    })?;
+    LOGGER
+        .set(LoggerWrapper {
+            _logger: logger,
+            pool,
+        })
+        .map_err(|_| {
+            Error::InitializeLogger(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "logger already initialized",
+            ))
+        })?;
 
     Ok(())
 }
@@ -242,7 +297,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<ErrorCode>();
         let handle = unsafe {
-            service_start(
+            start_service(
                 config_dir.as_ptr(),
                 ptr::null(),
                 callback,
@@ -254,7 +309,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<ErrorCode>();
         unsafe {
-            service_stop(handle, callback, Box::into_raw(Box::new(tx)) as _);
+            stop_service(handle, callback, Box::into_raw(Box::new(tx)) as _);
         }
 
         assert_eq!(rx.recv().unwrap(), ErrorCode::Ok);

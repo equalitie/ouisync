@@ -63,7 +63,7 @@ async fn non_unique_repository_name() {
         state
             .create_repository(path, None, None, None, false, false, false)
             .await,
-        Err(Error::RepositoryExists)
+        Err(Error::AlreadyExists)
     );
 }
 
@@ -101,7 +101,7 @@ async fn non_unique_repository_id() {
                 false
             )
             .await,
-        Err(Error::RepositoryExists)
+        Err(Error::AlreadyExists)
     );
 }
 

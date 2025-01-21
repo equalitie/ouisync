@@ -1,9 +1,7 @@
 [workspace]
 members = [
-    "bridge",
     "cli",
     "deadlock",
-    "ffi",
     "lib",
     "metrics_ext",
     "net",

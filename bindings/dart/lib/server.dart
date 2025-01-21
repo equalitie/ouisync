@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
@@ -29,7 +30,7 @@ class Server {
     );
 
     try {
-      final handle = Bindings.instance.serviceStart(
+      final handle = Bindings.instance.startService(
         configPathPtr.cast(),
         debugLabelPtr.cast(),
         callback.nativeFunction,
@@ -70,7 +71,7 @@ class Server {
     );
 
     try {
-      Bindings.instance.serviceStop(
+      Bindings.instance.stopService(
         handle,
         callback.nativeFunction,
         nullptr,
@@ -87,38 +88,35 @@ class Server {
   }
 }
 
-void logInit({
+void initLog({
   String? file,
   Function(LogLevel, String)? callback,
-  String tag = '',
 }) {
   final filePtr = file != null ? file.toNativeUtf8(allocator: malloc) : nullptr;
-  final tagPtr = tag.toNativeUtf8(allocator: malloc);
 
   NativeCallable<LogCallback>? nativeCallback;
 
   if (callback != null) {
     nativeCallback = NativeCallable<LogCallback>.listener(
-      (int level, Pointer<Char> message) {
+      (LogMessage message) {
         callback(
-          LogLevel.decode(level),
-          message.cast<Utf8>().toDartString(),
+          LogLevel.decode(message.level),
+          utf8.decode(message.ptr.asTypedList(message.len)),
         );
+
+        Bindings.instance.releaseLogMessage(message);
       },
     );
   }
 
   try {
-    Bindings.instance.logInit(
+    Bindings.instance.initLog(
       filePtr.cast(),
       nativeCallback?.nativeFunction ?? nullptr,
-      tagPtr.cast(),
     );
   } finally {
     if (filePtr != nullptr) {
       malloc.free(filePtr);
     }
-
-    malloc.free(tagPtr);
   }
 }
