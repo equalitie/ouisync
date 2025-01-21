@@ -38,7 +38,12 @@ impl LocalDiscovery {
 
         let finished = Flag::new();
 
-        // Beacon
+        // TODO: Sometimes (maybe one out of 30 times) and when using Bonjour the browser thread
+        // won't discover anything. This channel is me testing whether first initializing the
+        // service and only then the browser helps.
+        let (on_service_init_tx, on_service_init_rx) = std::sync::mpsc::channel();
+
+        // Service: does the beaconing
         let _beacon_join_handle = thread::spawn({
             let service_type = service_type.clone();
             let service_name = service_name.clone();
@@ -50,6 +55,7 @@ impl LocalDiscovery {
                 service.set_name(&service_name);
                 service.set_registered_callback(Box::new(on_service_registered));
                 service.set_context(Box::new(Arc::new(BeaconContext {
+                    on_service_init_tx,
                     finished: finished.clone(),
                 })));
 
@@ -76,14 +82,15 @@ impl LocalDiscovery {
             }
         });
 
-        // Discovery
-        // TODO: Sometimes (maybe one out of 30 times) the discovery won't discover anything. I
-        // wonder if we need to start this thread only _after_ the above beacon thread "returns"
-        // success in the `on_service_registered_callback`.
+        // Browser: receives events when other services are found or lost
         let _discovery_join_handle = thread::spawn({
             let finished = finished.clone();
 
             move || {
+                if on_service_init_rx.recv().is_err() {
+                    return;
+                }
+
                 let mut browser = MdnsBrowser::new(service_type);
 
                 browser.set_service_callback(Box::new(on_service_discovered));
@@ -161,6 +168,7 @@ impl Flag {
 }
 
 struct BeaconContext {
+    on_service_init_tx: std::sync::mpsc::Sender<()>,
     finished: Flag,
 }
 
@@ -190,6 +198,8 @@ fn on_service_registered(
             tracing::debug!("Service registered successfully");
         }
     }
+
+    context.on_service_init_tx.send(()).unwrap_or(());
 }
 
 fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option<Arc<dyn Any>>) {
