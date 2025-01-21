@@ -24,7 +24,6 @@ pub struct LocalDiscovery {
 
 impl LocalDiscovery {
     pub fn new(listener_port: PeerPort) -> Self {
-        let span = tracing::info_span!("mDNS-zeroconf");
 
         let service_type = match listener_port {
             PeerPort::Tcp(_) => ServiceType::new("ouisync", "tcp").unwrap(),
@@ -33,7 +32,7 @@ impl LocalDiscovery {
 
         let service_name = mdns_common::generate_instance_name();
 
-        tracing::debug!(parent: &span, "Service name of this replica: {service_name:?}");
+        tracing::debug!("Service name of this replica: {service_name:?}");
 
         let (peer_tx, peer_rx) = mpsc::unbounded_channel();
 
@@ -44,7 +43,6 @@ impl LocalDiscovery {
             let service_type = service_type.clone();
             let service_name = service_name.clone();
             let finished: Flag = finished.clone();
-            let span = span.clone();
 
             move || {
                 let mut service = MdnsService::new(service_type, listener_port.number());
@@ -53,7 +51,6 @@ impl LocalDiscovery {
                 service.set_registered_callback(Box::new(on_service_registered));
                 service.set_context(Box::new(Arc::new(BeaconContext {
                     finished: finished.clone(),
-                    span: span.clone(),
                 })));
 
                 let event_loop = service.register().unwrap();
@@ -62,7 +59,7 @@ impl LocalDiscovery {
                     // calling `poll()` will keep this service alive
                     if let Err(error) = event_loop.poll(Duration::from_secs(1)) {
                         if !finished.mark_true() {
-                            tracing::warn!(parent: &span, "Beacon stopped with error {error:?}");
+                            tracing::warn!("Beacon stopped with error {error:?}");
                         }
                     }
                     if finished.is_true() {
@@ -87,7 +84,6 @@ impl LocalDiscovery {
                     this_service_name: service_name,
                     peer_tx,
                     seen_peers: Mutex::new(mdns_common::SeenMdnsPeers::new()),
-                    span: span.clone(),
                 })));
 
                 let event_loop = browser.browse_services().unwrap();
@@ -96,7 +92,7 @@ impl LocalDiscovery {
                     // calling `poll()` will keep this browser alive
                     if let Err(error) = event_loop.poll(Duration::from_secs(1)) {
                         if !finished.mark_true() {
-                            tracing::warn!(parent: &span, "Discovery stopped with error {error:?}");
+                            tracing::warn!("Discovery stopped with error {error:?}");
                         }
                     }
                     if finished.is_true() {
@@ -152,14 +148,12 @@ impl Flag {
 
 struct BeaconContext {
     finished: Flag,
-    span: tracing::Span,
 }
 
 struct DiscoveryContext {
     this_service_name: String,
     peer_tx: mpsc::UnboundedSender<SeenPeer>,
     seen_peers: Mutex<mdns_common::SeenMdnsPeers>,
-    span: tracing::Span,
 }
 
 fn on_service_registered(
@@ -172,9 +166,14 @@ fn on_service_registered(
         .downcast_ref::<Arc<BeaconContext>>()
         .expect("error down-casting beacon context");
 
-    if let Err(error) = result {
-        if !context.finished.mark_true() {
-            tracing::error!(parent: &context.span, "Service failed to register: {error:?}");
+    match result {
+        Err(error) => {
+            if !context.finished.mark_true() {
+                tracing::error!("Service failed to register: {error:?}");
+            }
+        }
+        Ok(_) => {
+            tracing::debug!("Service registered successfully");
         }
     }
 }
@@ -185,8 +184,6 @@ fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option
         .expect("could not get context")
         .downcast_ref::<Arc<DiscoveryContext>>()
         .expect("error down-casting discovery context");
-
-    let _enter = context.span.enter();
 
     match result {
         Ok(BrowserEvent::Add(service)) => {
