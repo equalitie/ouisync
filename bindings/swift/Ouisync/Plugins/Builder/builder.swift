@@ -22,23 +22,9 @@ import PackagePlugin
 @main struct Builder: BuildToolPlugin {
     func createBuildCommands(context: PackagePlugin.PluginContext,
                              target: PackagePlugin.Target) async throws -> [PackagePlugin.Command] {
-        let build = context.pluginWorkDirectory
-
-        // FIXME: this path is very unstable; we might need to search the tree instead
-        let update = build
-            .removingLastComponent() // FFIBuilder
-            .removingLastComponent() // OuisyncLibFFI
-            .removingLastComponent() // ouisync.output
-            .appending("Update rust dependencies.output")
-
-        guard FileManager.default.fileExists(atPath: update.string) else {
-            Diagnostics.error("Please run `Update rust dependencies` on the OuisyncLib package")
-            fatalError("Unable to build LibOuisyncFFI.xcframework")
-        }
-
-        return [.prebuildCommand(displayName: "Build OuisyncLibFFI.xcframework",
-                                 executable: context.package.directory.appending(["Plugins", "build.sh"]),
-                                 arguments: [update.string, build.string],
-                                 outputFilesDirectory: build.appending("dummy"))]
+        [.prebuildCommand(displayName: "Build OuisyncService.xcframework",
+                          executable: context.package.directory.appending(["Plugins", "build.sh"]),
+                          arguments: [context.pluginWorkDirectory.string],
+                          outputFilesDirectory: context.pluginWorkDirectory.appending("dummy"))]
     }
 }

@@ -1,6 +1,6 @@
 import CryptoKit
 import Foundation
-import OuisyncLibFFI
+import OuisyncService
 
 extension ErrorCode: Error {} // @retroactive doesn't work in Ventura, which I still use
 public typealias OuisyncError = ErrorCode

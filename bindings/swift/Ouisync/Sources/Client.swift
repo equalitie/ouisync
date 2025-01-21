@@ -21,7 +21,7 @@ import Network
         sock.start(queue: .main)
 
         // generate and send client challenge; 256 bytes is a bit large, but we'll probably...
-        var clientChallenge = Data.secureRandom(256) // ... reserve portions for non-random headers
+        let clientChallenge = try Data.secureRandom(256) // ... reserve portions for non-random headers
         try await send(clientChallenge)
 
         // receive server challenge and send proof

@@ -45,7 +45,6 @@ public struct Salt: Secret {
     public init(_ bytes: Data) { value = .binary(bytes) }
     /// Generates a random 128-bit nonce as recommended by the Argon2 KDF used by Ouisync.
     public static var random: Self { get throws { try Self(.secureRandom(16)) } }
-
 }
 
 public struct SaltedSecretKey: Secret {
