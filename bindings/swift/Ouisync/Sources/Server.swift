@@ -5,6 +5,27 @@ import OuisyncService
 extension ErrorCode: Error {} // @retroactive doesn't work in Ventura, which I still use
 public typealias OuisyncError = ErrorCode
 
+// FIXME: updating this at runtime is unsafe and should be cast to atomic
+public var ouisyncLogHandler: ((LogLevel, String) -> Void)?
+
+// log_init is not safe to call repeatedly, should only be called once before the first server is
+// started and provides awkward memory semantics to assist dart, though we may eventually end up
+// using them as well if ever we end up making logging async
+private func directLogHandler(_ level: LogLevel, _ message: UnsafePointer<CChar>?) {
+    if let message {
+        // defer { log_free(message) }
+        ouisyncLogHandler?(level, String(cString: message))
+    }
+    ouisyncLogHandler?(level, "")
+}
+@MainActor private var loggingConfigured = false
+@MainActor private func setupLogging() async throws {
+    if loggingConfigured { return }
+    loggingConfigured = true
+    log_init(nil, directLogHandler, "ouisync")
+}
+
+
 public class Server {
     /** Starts a Ouisync server in a new thread and binds it to the port set in `configDir`.
      *
@@ -15,11 +36,12 @@ public class Server {
      * stop the server once all references are dropped, however this is strongly discouraged since
      * in this case it's not possible to determine whether the shutdown was successful or not. */
     public init(configDir: String, debugLabel: String) async throws {
+        try await setupLogging()
         self.configDir = URL(fileURLWithPath: configDir)
         self.debugLabel = debugLabel
-        handle = try await withUnsafeThrowingContinuation {
-            service_start(configDir, debugLabel, Resume, unsafeBitCast($0, to: UnsafeRawPointer.self))
-        }
+        try await withUnsafeThrowingContinuation {
+            handle = service_start(configDir, debugLabel, Resume, unsafeBitCast($0, to: UnsafeRawPointer.self))
+        } as Void
     }
     /// the configDir passed to the constructor when the server was started
     public let configDir: URL
