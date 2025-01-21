@@ -23,7 +23,6 @@ hmac                        = { workspace = true }
 hyper                       = { version = "1.4.1", features = ["server", "http1"] }
 indexmap                    = { workspace = true }
 interprocess                = { version = "2.2.2", features = ["tokio"] }
-libc                        = "0.2.147"
 maxminddb                   = "0.24.0"
 metrics                     = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
@@ -31,7 +30,6 @@ num_enum                    = { workspace = true }
 ouisync                     = { path = "../lib" }
 ouisync-tracing-fmt         = { path = "../tracing_fmt" }
 ouisync-vfs                 = { path = "../vfs" }
-os_pipe                     = { version = "1.1.4", features = ["io_safety"] }
 pem                         = { workspace = true }
 rand                        = { workspace = true }
 rmp-serde                   = { workspace = true }

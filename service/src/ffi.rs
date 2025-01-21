@@ -256,10 +256,7 @@ unsafe fn try_init_log(
         (builder, None)
     };
 
-    let logger = builder
-        .redirect()
-        .build()
-        .map_err(Error::InitializeLogger)?;
+    let logger = builder.build().map_err(Error::InitializeLogger)?;
 
     LOGGER
         .set(LoggerWrapper {

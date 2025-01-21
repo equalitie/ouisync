@@ -1,7 +1,6 @@
 mod callback;
 mod color;
 mod format;
-mod redirect;
 mod stdout;
 
 pub use callback::{BufferPool, Callback};
@@ -34,7 +33,6 @@ pub struct Builder<'a> {
     callback: Option<(Box<Callback>, BufferPool)>,
     format: LogFormat,
     color: LogColor,
-    redirect: bool,
 }
 
 impl<'a> Builder<'a> {
@@ -70,14 +68,6 @@ impl<'a> Builder<'a> {
     /// Set whether log messages should be colored (applies only to the stdout output)
     pub fn color(self, color: LogColor) -> Self {
         Self { color, ..self }
-    }
-
-    /// Redirect stdout and stderr to the log
-    pub fn redirect(self) -> Self {
-        Self {
-            redirect: true,
-            ..self
-        }
     }
 
     pub fn build(self) -> io::Result<Logger> {
@@ -119,17 +109,11 @@ impl<'a> Builder<'a> {
             default_panic_hook(panic_info);
         }));
 
-        let redirect = self.redirect.then(redirect::Redirect::new).transpose()?;
-
-        Ok(Logger {
-            _redirect: redirect,
-        })
+        Ok(Logger)
     }
 }
 
-pub struct Logger {
-    _redirect: Option<redirect::Redirect>,
-}
+pub struct Logger;
 
 impl Logger {
     pub fn builder<'a>() -> Builder<'a> {
@@ -139,7 +123,6 @@ impl Logger {
             callback: None,
             format: LogFormat::Human,
             color: LogColor::Auto,
-            redirect: false,
         }
     }
 
