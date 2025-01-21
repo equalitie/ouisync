@@ -25,6 +25,7 @@ pub struct LocalDiscovery {
 impl LocalDiscovery {
     pub fn new(listener_port: PeerPort) -> Self {
 
+        // Unwraps are OK because nothing here depends on the function input.
         let service_type = match listener_port {
             PeerPort::Tcp(_) => ServiceType::new("ouisync", "tcp").unwrap(),
             PeerPort::Quic(_) => ServiceType::new("ouisync", "udp").unwrap(),
@@ -53,7 +54,14 @@ impl LocalDiscovery {
                     finished: finished.clone(),
                 })));
 
-                let event_loop = service.register().unwrap();
+                let event_loop = match service.register() {
+                    Ok(event_loop) => event_loop,
+                    Err(error) => {
+                        tracing::error!("Failed to register beacon service {error:?}");
+                        finished.mark_true();
+                        return;
+                    }
+                };
 
                 loop {
                     // calling `poll()` will keep this service alive
@@ -86,7 +94,14 @@ impl LocalDiscovery {
                     seen_peers: Mutex::new(mdns_common::SeenMdnsPeers::new()),
                 })));
 
-                let event_loop = browser.browse_services().unwrap();
+                let event_loop = match browser.browse_services() {
+                    Ok(event_loop) => event_loop,
+                    Err(error) => {
+                        tracing::error!("Failed to register browser service {error:?}");
+                        finished.mark_true();
+                        return;
+                    }
+                };
 
                 loop {
                     // calling `poll()` will keep this browser alive
@@ -217,7 +232,7 @@ fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option
                 .insert(service.name().into(), peer_addr)
             {
                 tracing::debug!("Service discovered: {:?}:{:?}", service.name(), peer_addr);
-                context.peer_tx.send(seen_peer).unwrap();
+                context.peer_tx.send(seen_peer).unwrap_or(());
             }
         }
         Ok(BrowserEvent::Remove(service)) => {
