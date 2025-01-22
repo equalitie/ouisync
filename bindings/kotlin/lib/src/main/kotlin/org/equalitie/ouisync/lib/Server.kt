@@ -13,7 +13,7 @@ class Server private constructor(private val handle: Pointer) {
             debugLabel: String? = null,
         ): Server {
             val result = ResultHandler()
-            val handle = bindings.service_start(configPath, debugLabel, result, null)
+            val handle = bindings.start_service(configPath, debugLabel, result, null)
             result.await()
 
             return Server(handle)
@@ -22,7 +22,7 @@ class Server private constructor(private val handle: Pointer) {
 
     suspend fun stop() {
         val result = ResultHandler()
-        bindings.service_stop(handle, result, null)
+        bindings.stop_service(handle, result, null)
         result.await()
     }
 }
@@ -32,13 +32,8 @@ typealias LogFunction = (level: LogLevel, message: String) -> Unit
 fun initLog(
     file: String? = null,
     callback: LogFunction? = null,
-    tag: String = "",
 ) {
-    bindings.log_init(
-        file,
-        callback?.let(::LogHandler),
-        tag,
-    )
+    bindings.init_log(file, callback?.let(::LogHandler))
 }
 
 private class ResultHandler() : StatusCallback {

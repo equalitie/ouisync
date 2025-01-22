@@ -13,23 +13,22 @@ internal interface Bindings : Library {
         }
     }
 
-    fun service_start(
+    fun start_service(
         config_dir: String,
         debug_label: String?,
         callback: StatusCallback,
         callback_context: Pointer?,
     ): Pointer
 
-    fun service_stop(
+    fun stop_service(
         handle: Pointer,
         callback: StatusCallback,
         callback_context: Pointer?,
     )
 
-    fun log_init(
+    fun init_log(
         file: String?,
         callback: LogCallback?,
-        tag: String,
     ): Short
 }
 
