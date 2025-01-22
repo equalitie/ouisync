@@ -313,7 +313,6 @@ class Repository {
     final handle = await client.invoke<int>('repository_open', {
       'path': path,
       'secret': secret?.encode(),
-      'sync_enabled': false,
     });
 
     final fullPath = await client.invoke<String>('repository_get_path', handle);
