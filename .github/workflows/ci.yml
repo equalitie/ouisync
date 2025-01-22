@@ -179,6 +179,8 @@ jobs:
               DOKAN_DLL_OUTPUT_PATH: C:\Windows\System32
             cargo-dir: ~\cargo
 
+    env: ${{ matrix.env }}
+
     steps:
       - uses: actions/checkout@v4
 
