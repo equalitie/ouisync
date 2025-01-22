@@ -9,8 +9,6 @@ void main() {
   late Session session;
 
   setUp(() async {
-    logInit();
-
     temp = await io.Directory.systemTemp.createTemp();
     session = await Session.create(
       configPath: '${temp.path}/config',

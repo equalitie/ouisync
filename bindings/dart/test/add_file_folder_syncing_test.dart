@@ -27,8 +27,6 @@ void main() {
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
 
-    logInit();
-
     session = await Session.create(
       configPath: '${temp.path}/device_id.conf',
     );
