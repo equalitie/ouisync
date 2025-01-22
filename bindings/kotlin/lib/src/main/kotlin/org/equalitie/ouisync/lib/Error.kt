@@ -16,6 +16,7 @@ open class Error internal constructor(
             ErrorCode.NOT_FOUND -> NotFound(message, sources)
             ErrorCode.STORE_ERROR -> StoreError(message, sources)
             ErrorCode.SERVICE_ALREADY_RUNNING -> ServiceAlreadyRunning(message, sources)
+            ErrorCode.UNSUPPORTED -> Unsupported(message, sources)
             else -> Error(code, message, sources)
         }
     }
@@ -36,4 +37,6 @@ open class Error internal constructor(
 
     class ServiceAlreadyRunning(message: String? = null, sources: List<String> = emptyList()) :
         Error(ErrorCode.SERVICE_ALREADY_RUNNING, message, sources)
+
+    class Unsupported(message: String? = null, sources: List<String> = emptyList()) : Error(ErrorCode.UNSUPPORTED, message, sources)
 }

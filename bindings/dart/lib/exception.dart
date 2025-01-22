@@ -25,6 +25,7 @@ class OuisyncException implements Exception {
         ErrorCode.permissionDenied => PermissionDenied(message, sources),
         ErrorCode.serviceAlreadyRunning =>
           ServiceAlreadyRunning(message, sources),
+        ErrorCode.unsupported => Unsupported(message, sources),
         ErrorCode.vfsDriverInstallError =>
           VFSDriverInstallError(message, sources),
         _ => OuisyncException._(code, message, sources),
@@ -34,9 +35,9 @@ class OuisyncException implements Exception {
   String toString() => [message].followedBy(sources).join(' → ');
 }
 
-class PermissionDenied extends OuisyncException {
-  PermissionDenied([String? message, List<String> sources = const []])
-      : super._(ErrorCode.permissionDenied, message, sources);
+class AlreadyExists extends OuisyncException {
+  AlreadyExists([String? message, List<String> sources = const []])
+      : super._(ErrorCode.alreadyExists, message, sources);
 }
 
 class InvalidData extends OuisyncException {
@@ -44,19 +45,24 @@ class InvalidData extends OuisyncException {
       : super._(ErrorCode.invalidData, message, sources);
 }
 
-class AlreadyExists extends OuisyncException {
-  AlreadyExists([String? message, List<String> sources = const []])
-      : super._(ErrorCode.alreadyExists, message, sources);
-}
-
 class NotFound extends OuisyncException {
   NotFound([String? message, List<String> sources = const []])
       : super._(ErrorCode.notFound, message, sources);
 }
 
+class PermissionDenied extends OuisyncException {
+  PermissionDenied([String? message, List<String> sources = const []])
+      : super._(ErrorCode.permissionDenied, message, sources);
+}
+
 class ServiceAlreadyRunning extends OuisyncException {
   ServiceAlreadyRunning([String? message, List<String> sources = const []])
       : super._(ErrorCode.serviceAlreadyRunning, message, sources);
+}
+
+class Unsupported extends OuisyncException {
+  Unsupported([String? message, List<String> sources = const []])
+      : super._(ErrorCode.unsupported, message, sources);
 }
 
 class VFSDriverInstallError extends OuisyncException {
