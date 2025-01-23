@@ -3,14 +3,14 @@ use crate::network::{
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::SeenPeer,
 };
+use scoped_task;
 use std::{
     any::Any,
     net::SocketAddr,
     sync::{Arc, Mutex},
-    thread,
     time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task, time::sleep};
 use zeroconf::{
     prelude::*, BrowserEvent, MdnsBrowser, MdnsService, ServiceDiscovery, ServiceRegistration,
     ServiceType,
@@ -19,13 +19,12 @@ use zeroconf::{
 pub struct LocalDiscovery {
     peer_rx: mpsc::UnboundedReceiver<SeenPeer>,
     finished: Flag,
-    _beacon_join_handle: thread::JoinHandle<()>,
-    _discovery_join_handle: thread::JoinHandle<()>,
+    _service_watcher: scoped_task::ScopedJoinHandle<()>,
 }
 
 impl LocalDiscovery {
     pub fn new(listener_port: PeerPort) -> Self {
-        // Unwraps are OK because nothing here depends on the function input.
+        // Unwraps are OK because the input to Service::new is hardcoded.
         let service_type = match listener_port {
             PeerPort::Tcp(_) => ServiceType::new("ouisync", "tcp").unwrap(),
             PeerPort::Quic(_) => ServiceType::new("ouisync", "udp").unwrap(),
@@ -37,103 +36,39 @@ impl LocalDiscovery {
 
         let (peer_tx, peer_rx) = mpsc::unbounded_channel();
 
-        let finished = Flag::new();
+        let _service_watcher = scoped_task::spawn(async move {
+            loop {
+                let finished = Flag::new();
 
-        // TODO: Sometimes (maybe one out of 30 times) and when using Bonjour the browser thread
-        // won't discover anything. This channel is me testing whether first initializing the
-        // service and only then the browser helps.
-        let (on_service_init_tx, on_service_init_rx) = std::sync::mpsc::channel();
+                tracing::debug!("Starting service");
 
-        // Service: does the beaconing
-        let _beacon_join_handle = thread::spawn({
-            let service_type = service_type.clone();
-            let service_name = service_name.clone();
-            let finished: Flag = finished.clone();
+                let publish_finished = start_publishing_service_thread(
+                    service_name.clone(),
+                    service_type.clone(),
+                    listener_port.number(),
+                    finished.clone(),
+                );
 
-            move || {
-                let mut service = MdnsService::new(service_type, listener_port.number());
+                let browser_finished = start_browser_service_thread(
+                    service_name.clone(),
+                    service_type.clone(),
+                    peer_tx.clone(),
+                    finished.clone(),
+                );
 
-                service.set_name(&service_name);
-                service.set_registered_callback(Box::new(on_service_registered));
-                service.set_context(Box::new(Arc::new(BeaconContext {
-                    on_service_init_tx,
-                    finished: finished.clone(),
-                })));
+                publish_finished.await.unwrap_or(());
+                browser_finished.await.unwrap_or(());
 
-                let event_loop = match service.register() {
-                    Ok(event_loop) => event_loop,
-                    Err(error) => {
-                        tracing::error!("Failed to register beacon service {error:?}");
-                        finished.mark_true();
-                        return;
-                    }
-                };
+                tracing::debug!("Service stopped");
 
-                loop {
-                    // calling `poll()` will keep this service alive
-                    if let Err(error) = event_loop.poll(Duration::from_secs(1)) {
-                        if !finished.mark_true() {
-                            tracing::warn!("Beacon stopped with error {error:?}");
-                        }
-                    }
-                    if finished.is_true() {
-                        break;
-                    }
-                }
-
-                tracing::debug!("Beacon service finished");
-            }
-        });
-
-        // Browser: receives events when other services are found or lost
-        let _discovery_join_handle = thread::spawn({
-            let finished = finished.clone();
-
-            move || {
-                if on_service_init_rx.recv().is_err() {
-                    return;
-                }
-
-                let mut browser = MdnsBrowser::new(service_type);
-
-                browser.set_service_callback(Box::new(on_service_discovered));
-                browser.set_context(Box::new(Arc::new(DiscoveryContext {
-                    this_service_name: service_name,
-                    peer_tx,
-                    seen_peers: Mutex::new(mdns_common::SeenMdnsPeers::new()),
-                    finished: finished.clone(),
-                })));
-
-                let event_loop = match browser.browse_services() {
-                    Ok(event_loop) => event_loop,
-                    Err(error) => {
-                        tracing::error!("Failed to register browser service {error:?}");
-                        finished.mark_true();
-                        return;
-                    }
-                };
-
-                loop {
-                    // calling `poll()` will keep this browser alive
-                    if let Err(error) = event_loop.poll(Duration::from_secs(1)) {
-                        if !finished.mark_true() {
-                            tracing::warn!("Discovery stopped with error {error:?}");
-                        }
-                    }
-                    if finished.is_true() {
-                        break;
-                    }
-                }
-
-                tracing::debug!("Browser service finished");
+                sleep(Duration::from_secs(3)).await;
             }
         });
 
         Self {
             peer_rx,
-            finished,
-            _beacon_join_handle,
-            _discovery_join_handle,
+            finished: Flag::new(), // FIXME
+            _service_watcher,
         }
     }
 
@@ -146,6 +81,91 @@ impl Drop for LocalDiscovery {
     fn drop(&mut self) {
         self.finished.mark_true();
     }
+}
+
+// This thread tells Zeroconf about our service so that others can find us.
+fn start_publishing_service_thread(
+    service_name: String,
+    service_type: ServiceType,
+    listener_port: u16,
+    finished: Flag,
+) -> task::JoinHandle<()> {
+    task::spawn_blocking(move || {
+        let mut service = MdnsService::new(service_type, listener_port);
+
+        service.set_name(&service_name);
+        service.set_registered_callback(Box::new(on_service_registered));
+        service.set_context(Box::new(Arc::new(BeaconContext {
+            finished: finished.clone(),
+        })));
+
+        let event_loop = match service.register() {
+            Ok(event_loop) => event_loop,
+            Err(error) => {
+                if !finished.mark_true() {
+                    tracing::error!("Failed to register beacon service {error:?}");
+                }
+                return;
+            }
+        };
+
+        loop {
+            // calling `poll()` will keep this service alive
+            if let Err(error) = event_loop.poll(Duration::from_secs(1)) {
+                if !finished.mark_true() {
+                    tracing::warn!("Beacon stopped with error {error:?}");
+                }
+            }
+            if finished.is_true() {
+                break;
+            }
+        }
+
+        tracing::debug!("Beacon service finished");
+    })
+}
+
+fn start_browser_service_thread(
+    this_service_name: String,
+    service_type: ServiceType,
+    peer_tx: mpsc::UnboundedSender<SeenPeer>,
+    finished: Flag,
+) -> task::JoinHandle<()> {
+    task::spawn_blocking(move || {
+        let mut browser = MdnsBrowser::new(service_type);
+
+        browser.set_service_callback(Box::new(on_service_discovered));
+        browser.set_context(Box::new(Arc::new(DiscoveryContext {
+            this_service_name,
+            peer_tx,
+            seen_peers: Mutex::new(mdns_common::SeenMdnsPeers::new()),
+            finished: finished.clone(),
+        })));
+
+        let event_loop = match browser.browse_services() {
+            Ok(event_loop) => event_loop,
+            Err(error) => {
+                if !finished.mark_true() {
+                    tracing::error!("Failed to register browser service {error:?}");
+                }
+                return;
+            }
+        };
+
+        loop {
+            // calling `poll()` will keep this browser alive
+            if let Err(error) = event_loop.poll(Duration::from_secs(1)) {
+                if !finished.mark_true() {
+                    tracing::warn!("Discovery stopped with error {error:?}");
+                }
+            }
+            if finished.is_true() {
+                break;
+            }
+        }
+
+        tracing::debug!("Browser service finished");
+    })
 }
 
 #[derive(Clone)]
@@ -174,7 +194,6 @@ impl Flag {
 }
 
 struct BeaconContext {
-    on_service_init_tx: std::sync::mpsc::Sender<()>,
     finished: Flag,
 }
 
@@ -206,7 +225,7 @@ fn on_service_registered(
         }
     }
 
-    context.on_service_init_tx.send(()).unwrap_or(());
+    //context.on_service_init_tx.send(()).unwrap_or(());
 }
 
 fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option<Arc<dyn Any>>) {
