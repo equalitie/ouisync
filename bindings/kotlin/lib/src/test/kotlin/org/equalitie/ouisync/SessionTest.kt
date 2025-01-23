@@ -2,7 +2,6 @@ package org.equalitie.ouisync.lib
 
 import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.yield
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -63,7 +62,8 @@ class SessionTest {
             session.subscribeToNetworkEvents().collect(::send)
         }
 
-        yield()
+        // Wait for the initial event indicating that the subscription has been created
+        assertEquals(NetworkEvent.PEER_SET_CHANGE, events.receive())
 
         session.addUserProvidedPeers(listOf(addr))
         assertEquals(NetworkEvent.PEER_SET_CHANGE, events.receive())

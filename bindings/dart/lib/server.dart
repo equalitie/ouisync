@@ -98,13 +98,13 @@ void initLog({
 
   if (callback != null) {
     nativeCallback = NativeCallable<LogCallback>.listener(
-      (LogMessage message) {
+      (int level, Pointer<Uint8> ptr, int len, int cap) {
         callback(
-          LogLevel.decode(message.level),
-          utf8.decode(message.ptr.asTypedList(message.len)),
+          LogLevel.decode(level),
+          utf8.decode(ptr.asTypedList(len)),
         );
 
-        Bindings.instance.releaseLogMessage(message);
+        Bindings.instance.releaseLogMessage(ptr, len, cap);
       },
     );
   }

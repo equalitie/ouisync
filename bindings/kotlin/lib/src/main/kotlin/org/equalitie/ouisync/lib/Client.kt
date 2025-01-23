@@ -64,15 +64,27 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         }
     }
 
-    suspend fun invoke(request: Request): Any =
-        invoke(messageMatcher.nextId(), request)
+    suspend fun invoke(request: Request): Any {
+        val id = messageMatcher.nextId()
+        val deferred = CompletableDeferred<Response>()
+        messageMatcher.register(id, deferred)
+
+        send(id, request)
+
+        val response = deferred.await()
+
+        when (response) {
+            is Success -> return response.value
+            is Failure -> throw response.error
+        }
+    }
 
     fun subscribe(request: Request): Flow<Any> = channelFlow {
         val id = messageMatcher.nextId()
+        messageMatcher.register(id, channel)
 
         try {
-            invoke(id, request)
-            messageMatcher.register(id, channel)
+            send(id, request)
             awaitClose()
         } finally {
             messageMatcher.deregister(id)
@@ -90,20 +102,6 @@ internal class Client private constructor(private val socket: AsynchronousSocket
     suspend fun close() {
         coroutineScope.cancel()
         socket.close()
-    }
-
-    private suspend fun invoke(id: Long, request: Request): Any {
-        val deferred = CompletableDeferred<Response>()
-        messageMatcher.register(id, deferred)
-
-        send(id, request)
-
-        val response = deferred.await()
-
-        when (response) {
-            is Success -> return response.value
-            is Failure -> throw response.error
-        }
     }
 
     private suspend fun send(id: Long, request: Request) {
