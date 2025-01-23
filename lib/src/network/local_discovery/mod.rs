@@ -19,14 +19,28 @@ impl LocalDiscovery {
     // It should also initialize either `mdns_direct` or a daemon based mdns depending on whether
     // connection to a zeroconf deamon is successful.
     pub fn new(listener_port: PeerPort, monitor: Option<StateMonitor>) -> Self {
+        // We still use the legacy local discovery mechanism but in the `ObserveOnly` mode to be
+        // able to find older Ouisync versions which did not use mDNS.
+        let poor_man =
+            poor_man::LocalDiscovery::new(listener_port, monitor, poor_man::Mode::ObserveOnly);
+
+        // The "direct" mDNS won't work on iOS because the OS won't let us do multicasting.
+        // On macOS (and iOS) the Zeroconf/Bonjour implementation seems to work good so we can use
+        // it there. Zeroconf/Avahi has a problem that sometimes (specially when working
+        // discovering mdns_direct peers) it detects service removal only after about 1 hour. So
+        // it's up to consideration whether Zeroconf/Avahi should be preferred over mdns_direct.
+        let mdns_direct = mdns_direct::LocalDiscovery::new(listener_port).ok();
+
+        let mdns_zeroconf = if mdns_direct.is_none() {
+            Some(mdns_zeroconf::LocalDiscovery::new(listener_port))
+        } else {
+            None
+        };
+
         Self {
-            poor_man: Some(poor_man::LocalDiscovery::new(
-                listener_port,
-                monitor,
-                poor_man::Mode::ObserveOnly,
-            )),
-            mdns_direct: None,
-            mdns_zeroconf: None,
+            poor_man: Some(poor_man),
+            mdns_direct: mdns_direct,
+            mdns_zeroconf: mdns_zeroconf,
         }
     }
 
