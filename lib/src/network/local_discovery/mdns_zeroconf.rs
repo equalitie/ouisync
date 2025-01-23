@@ -12,7 +12,8 @@ use std::{
 };
 use tokio::sync::mpsc;
 use zeroconf::{
-    prelude::*, BrowserEvent, MdnsBrowser, MdnsService, ServiceRegistration, ServiceType,
+    prelude::*, BrowserEvent, MdnsBrowser, MdnsService, ServiceDiscovery, ServiceRegistration,
+    ServiceType,
 };
 
 pub struct LocalDiscovery {
@@ -221,23 +222,8 @@ fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option
                 return;
             }
 
-            let ip_addr = match service.address().parse() {
-                Ok(ip_addr) => ip_addr,
-                Err(_) => {
-                    tracing::warn!("Failed to parse address {:?}", service.address());
-                    return;
-                }
-            };
-
-            let sock_addr = SocketAddr::new(ip_addr, *service.port());
-
-            let peer_addr = match service.service_type().protocol().as_ref() {
-                "tcp" => PeerAddr::Tcp(sock_addr),
-                "udp" => PeerAddr::Quic(sock_addr),
-                proto => {
-                    tracing::warn!("Invalid protocol {proto:?}");
-                    return;
-                }
+            let Some(peer_addr) = parse_peer_addr(&service) else {
+                return;
             };
 
             if let Some(seen_peer) = context
@@ -264,6 +250,27 @@ fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option
             if !context.finished.mark_true() {
                 tracing::debug!("Service discover error: {:?}", err);
             }
+        }
+    }
+}
+
+fn parse_peer_addr(service: &ServiceDiscovery) -> Option<PeerAddr> {
+    let ip_addr = match service.address().parse() {
+        Ok(ip_addr) => ip_addr,
+        Err(_) => {
+            tracing::warn!("Failed to parse address {:?}", service.address());
+            return None;
+        }
+    };
+
+    let sock_addr = SocketAddr::new(ip_addr, *service.port());
+
+    match service.service_type().protocol().as_ref() {
+        "tcp" => Some(PeerAddr::Tcp(sock_addr)),
+        "udp" => Some(PeerAddr::Quic(sock_addr)),
+        proto => {
+            tracing::warn!("Invalid protocol {proto:?}");
+            return None;
         }
     }
 }
