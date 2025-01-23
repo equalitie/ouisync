@@ -79,6 +79,8 @@ impl LocalDiscovery {
                         break;
                     }
                 }
+
+                tracing::debug!("Beacon service finished");
             }
         });
 
@@ -98,6 +100,7 @@ impl LocalDiscovery {
                     this_service_name: service_name,
                     peer_tx,
                     seen_peers: Mutex::new(mdns_common::SeenMdnsPeers::new()),
+                    finished: finished.clone(),
                 })));
 
                 let event_loop = match browser.browse_services() {
@@ -120,6 +123,8 @@ impl LocalDiscovery {
                         break;
                     }
                 }
+
+                tracing::debug!("Browser service finished");
             }
         });
 
@@ -176,6 +181,7 @@ struct DiscoveryContext {
     this_service_name: String,
     peer_tx: mpsc::UnboundedSender<SeenPeer>,
     seen_peers: Mutex<mdns_common::SeenMdnsPeers>,
+    finished: Flag,
 }
 
 fn on_service_registered(
@@ -255,7 +261,9 @@ fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option
             // The error only contains a string so impractical to distinguis between serious errors
             // and those that only tell us that some replica can't be resolved (e.g. because it's
             // no longer online).
-            tracing::debug!("Service discover error: {:?}", err);
+            if !context.finished.mark_true() {
+                tracing::debug!("Service discover error: {:?}", err);
+            }
         }
     }
 }

@@ -3408,7 +3408,7 @@ dependencies = [
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
- "rustc-hash 2.0.0",
+ "rustc-hash 2.1.0",
  "rustls",
  "socket2",
  "thiserror 2.0.3",
@@ -3426,7 +3426,7 @@ dependencies = [
  "getrandom",
  "rand",
  "ring",
- "rustc-hash 2.0.0",
+ "rustc-hash 2.1.0",
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
@@ -3776,9 +3776,9 @@ checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
-version = "2.0.0"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "583034fd73374156e66797ed8e5b0d5690409c9226b22d87cb7f19821c05d152"
+checksum = "c7fb8039b3032c191086b10f11f319a6e99e1e82889c5cc6046f515c9db1d497"
 
 [[package]]
 name = "rustc_version"
@@ -5549,7 +5549,7 @@ dependencies = [
 [[package]]
 name = "zeroconf"
 version = "0.15.0"
-source = "git+https://github.com/inetic/zeroconf-rs?rev=43b81707f17801d009cd1d1c40f95f44d97b3420#43b81707f17801d009cd1d1c40f95f44d97b3420"
+source = "git+https://github.com/inetic/zeroconf-rs?rev=9e66dc1292b29548b12b3588aa89923502ab3f03#9e66dc1292b29548b12b3588aa89923502ab3f03"
 dependencies = [
  "avahi-sys",
  "bonjour-sys",
@@ -5564,7 +5564,7 @@ dependencies = [
 [[package]]
 name = "zeroconf-macros"
 version = "0.1.4"
-source = "git+https://github.com/inetic/zeroconf-rs?rev=43b81707f17801d009cd1d1c40f95f44d97b3420#43b81707f17801d009cd1d1c40f95f44d97b3420"
+source = "git+https://github.com/inetic/zeroconf-rs?rev=9e66dc1292b29548b12b3588aa89923502ab3f03#9e66dc1292b29548b12b3588aa89923502ab3f03"
 dependencies = [
  "quote",
  "syn 2.0.89",
