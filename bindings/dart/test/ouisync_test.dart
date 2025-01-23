@@ -8,6 +8,11 @@ void main() {
   late io.Directory temp;
   late Session session;
 
+  initLog(callback: (level, message) {
+    // ignore: avoid_print
+    print('${level.name.toUpperCase()} $message');
+  });
+
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
     session = await Session.create(

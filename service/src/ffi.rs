@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_char, c_void, CStr, CString},
+    ffi::{c_char, c_uchar, c_ulong, c_void, CStr, CString},
     io, mem,
     path::Path,
     pin::pin,
@@ -166,6 +166,8 @@ fn init(
     Ok((runtime, service, span))
 }
 
+pub type LogCallback = extern "C" fn(LogLevel, *const c_uchar, c_ulong, c_ulong);
+
 /// Initialize logging. Should be called before `service_start`.
 ///
 /// If `file` is not null, write log messages to the given file.
@@ -178,10 +180,7 @@ fn init(
 ///
 /// `file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
 #[no_mangle]
-pub unsafe extern "C" fn init_log(
-    file: *const c_char,
-    callback: Option<extern "C" fn(LogMessage)>,
-) -> ErrorCode {
+pub unsafe extern "C" fn init_log(file: *const c_char, callback: Option<LogCallback>) -> ErrorCode {
     try_init_log(file, callback).to_error_code()
 }
 
@@ -189,41 +188,14 @@ pub unsafe extern "C" fn init_log(
 ///
 /// # Safety
 ///
-/// `message` must have been obtained through the callback to `init_log` and not modified.
+/// `ptr`, `len` and `cap` must have been obtained through the callback to `init_log` and not
+/// modified.
 #[no_mangle]
-pub unsafe extern "C" fn release_log_message(message: LogMessage) {
-    let message = message.into_message();
+pub unsafe extern "C" fn release_log_message(ptr: *const c_uchar, len: c_ulong, cap: c_ulong) {
+    let message = Vec::from_raw_parts(ptr as _, len as _, cap as _);
 
     if let Some(pool) = LOGGER.get().and_then(|wrapper| wrapper.pool.as_ref()) {
         pool.release(message);
-    }
-}
-
-#[repr(C)]
-pub struct LogMessage {
-    level: LogLevel,
-    ptr: *const u8,
-    len: usize,
-    cap: usize,
-}
-
-impl LogMessage {
-    fn new(level: LogLevel, message: Vec<u8>) -> Self {
-        let ptr = message.as_ptr();
-        let len = message.len();
-        let cap = message.capacity();
-        mem::forget(message);
-
-        Self {
-            level,
-            ptr,
-            len,
-            cap,
-        }
-    }
-
-    unsafe fn into_message(self) -> Vec<u8> {
-        Vec::from_raw_parts(self.ptr as _, self.len, self.cap)
     }
 }
 
@@ -234,10 +206,7 @@ struct LoggerWrapper {
 
 static LOGGER: OnceLock<LoggerWrapper> = OnceLock::new();
 
-unsafe fn try_init_log(
-    file: *const c_char,
-    callback: Option<extern "C" fn(LogMessage)>,
-) -> Result<(), Error> {
+unsafe fn try_init_log(file: *const c_char, callback: Option<LogCallback>) -> Result<(), Error> {
     let builder = Logger::builder();
     let builder = if !file.is_null() {
         builder.file(Path::new(CStr::from_ptr(file).to_str()?))
@@ -248,7 +217,13 @@ unsafe fn try_init_log(
     let (builder, pool) = if let Some(callback) = callback {
         let pool = BufferPool::default();
         let callback = Box::new(move |level, message: &mut Vec<u8>| {
-            callback(LogMessage::new(LogLevel::from(level), mem::take(message)));
+            let message = mem::take(message);
+            let ptr = message.as_ptr();
+            let len = message.len();
+            let cap = message.capacity();
+            mem::forget(message);
+
+            callback(LogLevel::from(level), ptr, len as _, cap as _);
         });
 
         (builder.callback(callback, pool.clone()), Some(pool))

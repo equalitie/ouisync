@@ -1,3 +1,7 @@
+mod move_repository;
+#[cfg(test)]
+mod tests;
+
 use crate::{
     config_keys::{
         BIND_KEY, DEFAULT_BLOCK_EXPIRATION_MILLIS, DEFAULT_QUOTA_KEY,
@@ -39,9 +43,6 @@ use tokio::{
 use tokio_rustls::rustls;
 use tokio_stream::StreamExt;
 
-#[cfg(test)]
-mod tests;
-
 const AUTOMOUNT_KEY: &str = "automount";
 const DHT_ENABLED_KEY: &str = "dht_enabled";
 const PEX_ENABLED_KEY: &str = "pex_enabled";
@@ -51,7 +52,7 @@ const REPOSITORY_FILE_EXTENSION: &str = "ouisyncdb";
 pub(crate) struct State {
     pub config: ConfigStore,
     pub network: Network,
-    store_dir: Option<PathBuf>,
+    store: Store,
     mounter: Option<MultiRepoVFS>,
     repos: RepositorySet,
     files: FileSet,
@@ -79,6 +80,8 @@ impl State {
             Err(error) => return Err(error.into()),
         };
 
+        let store = Store { dir: store_dir };
+
         let mount_dir = match config.entry(MOUNT_DIR_KEY).get().await {
             Ok(dir) => Some(dir),
             Err(ConfigError::NotFound) => None,
@@ -96,7 +99,7 @@ impl State {
         let mut state = Self {
             config,
             network,
-            store_dir,
+            store,
             mounter,
             root_monitor,
             repos_monitor,
@@ -224,16 +227,16 @@ impl State {
     }
 
     pub fn store_dir(&self) -> Option<&Path> {
-        self.store_dir.as_deref()
+        self.store.dir.as_deref()
     }
 
     pub async fn set_store_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
-        if Some(dir.as_path()) == self.store_dir.as_deref() {
+        if Some(dir.as_path()) == self.store.dir.as_deref() {
             return Ok(());
         }
 
         self.config.entry(STORE_DIR_KEY).set(&dir).await?;
-        self.store_dir = Some(dir);
+        self.store.dir = Some(dir);
 
         // Close repos from the previous store dir and load repos from the new dir.
         self.close_repositories().await;
@@ -300,7 +303,7 @@ impl State {
         dht_enabled: bool,
         pex_enabled: bool,
     ) -> Result<RepositoryHandle, Error> {
-        let path = self.normalize_repository_path(path)?;
+        let path = self.store.normalize_repository_path(path)?;
 
         if self.repos.find_by_path(&path).is_some() {
             Err(Error::AlreadyExists)?;
@@ -377,7 +380,7 @@ impl State {
 
         holder.close().await?;
 
-        for path in ouisync::repository_files(holder.path()) {
+        for path in ouisync::database_files(holder.path()) {
             match fs::remove_file(path).await {
                 Ok(()) => (),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => (),
@@ -385,7 +388,7 @@ impl State {
             }
         }
 
-        self.remove_empty_ancestor_dirs(holder.path()).await?;
+        self.store.remove_empty_ancestor_dirs(holder.path()).await?;
 
         tracing::info!(name = holder.short_name(), "repository deleted");
 
@@ -397,7 +400,7 @@ impl State {
         path: &Path,
         local_secret: Option<LocalSecret>,
     ) -> Result<RepositoryHandle, Error> {
-        let path = self.normalize_repository_path(path)?;
+        let path = self.store.normalize_repository_path(path)?;
         let handle = if let Some((handle, holder)) = self.repos.find_by_path(&path) {
             // If `local_secret` provides higher access mode than what the repo currently has,
             // increase it. If not, the access mode remains unchanged.
@@ -494,57 +497,7 @@ impl State {
         handle: RepositoryHandle,
         dst: &Path,
     ) -> Result<(), Error> {
-        // This function is "best effort atomic".
-
-        let dst = self.normalize_repository_path(dst)?;
-        let dst_parent = dst.parent().ok_or(Error::InvalidArgument)?;
-
-        if self.repos.find_by_path(&dst).is_some() {
-            return Err(Error::AlreadyExists);
-        }
-
-        let holder = self.repos.get_mut(handle).ok_or(Error::InvalidArgument)?;
-        // Preserve access mode after the move
-        let credentials = holder.repository().credentials();
-        let sync_enabled = holder.registration().is_some();
-
-        // TODO: close all open files of this repo
-
-        if let Some(mounter) = &self.mounter {
-            mounter.remove(holder.short_name())?;
-        }
-
-        fs::create_dir_all(dst_parent).await?;
-
-        if let Err(error) = holder.close().await {
-            // Try to revert creating the dst parent directory but if it fails still return the
-            // close error because it's more important.
-            self.remove_empty_ancestor_dirs(dst_parent).await.ok();
-            return Err(error);
-        }
-
-        let src = holder.path().to_owned();
-
-        let (old_path, new_path, result) = match move_file(&src, &dst).await {
-            Ok(()) => (src, dst, Ok(())),
-            Err(error) => (dst, src, Err(error.into())), // Restore the original repo
-        };
-
-        *holder = load_repository(
-            &new_path,
-            None,
-            sync_enabled,
-            &self.config,
-            &self.network,
-            &self.repos_monitor,
-            self.mounter.as_ref(),
-        )
-        .await?;
-        holder.repository().set_credentials(credentials).await?;
-
-        self.remove_empty_ancestor_dirs(&old_path).await?;
-
-        result
+        move_repository::invoke(self, handle, dst).await
     }
 
     pub async fn reset_repository_access(
@@ -1386,7 +1339,7 @@ impl State {
 
     // Find all repositories in the store dir and open them.
     async fn load_repositories(&mut self) {
-        let Some(store_dir) = self.store_dir.as_deref() else {
+        let Some(store_dir) = self.store.dir.as_deref() else {
             tracing::warn!("store dir not specified");
             return;
         };
@@ -1472,12 +1425,22 @@ impl State {
         .await
     }
 
+    async fn connect_remote_client(&self, host: &str) -> Result<RemoteClient, Error> {
+        Ok(RemoteClient::connect(host, self.remote_client_config().await?).await?)
+    }
+}
+
+struct Store {
+    dir: Option<PathBuf>,
+}
+
+impl Store {
     fn normalize_repository_path(&self, path: &Path) -> Result<PathBuf, Error> {
         let path = if path.is_absolute() {
             Cow::Borrowed(path)
         } else {
             Cow::Owned(
-                self.store_dir
+                self.dir
                     .as_deref()
                     .ok_or(Error::StoreDirUnspecified)?
                     .join(path),
@@ -1499,7 +1462,7 @@ impl State {
 
     // Remove ancestors directories up to `store_dir` but only if they are empty.
     async fn remove_empty_ancestor_dirs(&self, path: &Path) -> Result<(), io::Error> {
-        let Some(store_dir) = &self.store_dir else {
+        let Some(store_dir) = &self.dir else {
             return Ok(());
         };
 
@@ -1520,10 +1483,6 @@ impl State {
         }
 
         Ok(())
-    }
-
-    async fn connect_remote_client(&self, host: &str) -> Result<RemoteClient, Error> {
-        Ok(RemoteClient::connect(host, self.remote_client_config().await?).await?)
     }
 }
 
@@ -1592,25 +1551,6 @@ async fn set_metadata_bool(repo: &Repository, key: &str, value: bool) -> Result<
     } else {
         repo.metadata().remove(key).await?;
     }
-
-    Ok(())
-}
-
-/// Move file from `src` to `dst`. If they are on the same filesystem, it does a simple rename.
-/// Otherwise it copies `src` to `dst` first and then deletes `src`.
-async fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
-    // First try rename
-    match fs::rename(src, dst).await {
-        Ok(()) => return Ok(()),
-        Err(_error) => {
-            // TODO: we should only fallback on `io::ErrorKind::CrossesDevices` but that variant is
-            // currently unstable.
-        }
-    }
-
-    // If that didn't work, fallback to copy + remove
-    fs::copy(src, dst).await?;
-    fs::remove_file(src).await?;
 
     Ok(())
 }

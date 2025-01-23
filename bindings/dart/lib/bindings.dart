@@ -6,24 +6,11 @@ import 'package:path/path.dart';
 
 export 'bindings.g.dart';
 
-final class LogMessage extends Struct {
-  @Uint8()
-  external int level;
-
-  external Pointer<Uint8> ptr;
-
-  @Uint64()
-  external int len;
-
-  @Uint64()
-  external int cap;
-}
-
-/// Callback for `service_start` and `service_stop`.
+/// Callback for `start_service` and `stop_service`.
 typedef StatusCallback = Void Function(Pointer<Void>, Uint16);
 
-/// Callback for `log_init`.
-typedef LogCallback = Void Function(LogMessage);
+/// Callback for `init_log`.
+typedef LogCallback = Void Function(Uint8, Pointer<Uint8>, Uint64, Uint64);
 
 ///
 typedef StartService = Pointer<Void> Function(
@@ -56,8 +43,8 @@ typedef _InitLogC = Uint16 Function(
   Pointer<NativeFunction<LogCallback>>,
 );
 
-typedef ReleaseLogMessage = void Function(LogMessage);
-typedef _ReleaseLogMessageC = Void Function(LogMessage);
+typedef ReleaseLogMessage = void Function(Pointer<Uint8>, int, int);
+typedef _ReleaseLogMessageC = Void Function(Pointer<Uint8>, Uint64, Uint64);
 
 class Bindings {
   Bindings(DynamicLibrary library)

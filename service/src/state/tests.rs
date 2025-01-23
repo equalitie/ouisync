@@ -13,34 +13,35 @@ use tracing::Instrument;
 
 #[tokio::test]
 async fn normalize_repository_path() {
-    let (temp_dir, mut state) = setup().await;
-    let store_dir = temp_dir.path().join("store");
-    state.set_store_dir(store_dir.clone()).await.unwrap();
+    let store_dir = PathBuf::from("/home/alice/ouisync");
+    let store = Store {
+        dir: Some(store_dir.clone()),
+    };
 
     assert_eq!(
-        state.normalize_repository_path(Path::new("foo")).unwrap(),
+        store.normalize_repository_path(Path::new("foo")).unwrap(),
         store_dir.join("foo.ouisyncdb")
     );
     assert_eq!(
-        state
+        store
             .normalize_repository_path(Path::new("foo/bar"))
             .unwrap(),
         store_dir.join("foo/bar.ouisyncdb")
     );
     assert_eq!(
-        state
+        store
             .normalize_repository_path(Path::new("foo/bar.baz"))
             .unwrap(),
         store_dir.join("foo/bar.baz.ouisyncdb")
     );
     assert_eq!(
-        state
+        store
             .normalize_repository_path(Path::new("foo.ouisyncdb"))
             .unwrap(),
         store_dir.join("foo.ouisyncdb")
     );
     assert_eq!(
-        state
+        store
             .normalize_repository_path(Path::new("/home/alice/repos/foo"))
             .unwrap(),
         Path::new("/home/alice/repos/foo.ouisyncdb")
@@ -295,6 +296,8 @@ async fn expire_synced_repository() {
 
 #[tokio::test]
 async fn move_repository() {
+    test_utils::init_log();
+
     let (_temp_dir, mut state) = setup().await;
     let src = Path::new("foo");
     let dst = Path::new("bar");

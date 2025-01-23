@@ -29,11 +29,15 @@ class Server private constructor(private val handle: Pointer) {
 
 typealias LogFunction = (level: LogLevel, message: String) -> Unit
 
+// Need to keep the callback referenced to prevent it from being GC'd.
+private var logHandler: LogHandler? = null
+
 fun initLog(
     file: String? = null,
     callback: LogFunction? = null,
 ) {
-    bindings.init_log(file, callback?.let(::LogHandler))
+    logHandler = logHandler ?: callback?.let(::LogHandler)
+    bindings.init_log(file, logHandler)
 }
 
 private class ResultHandler() : StatusCallback {
@@ -53,7 +57,14 @@ private class ResultHandler() : StatusCallback {
 }
 
 private class LogHandler(val function: LogFunction) : LogCallback {
-    override fun invoke(level: Byte, message: String) {
-        function(LogLevel.decode(level), message)
+    override fun invoke(level: Byte, ptr: Pointer, len: Long, cap: Long) {
+        val level = LogLevel.decode(level)
+        val message = ptr.getByteArray(0, len.toInt()).decodeToString()
+
+        try {
+            function(level, message)
+        } finally {
+            bindings.release_log_message(ptr, len, cap)
+        }
     }
 }

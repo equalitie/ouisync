@@ -2,6 +2,7 @@ package org.equalitie.ouisync.lib
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.mapNotNull
 
 /**
  * The entry point to the ouisync library.
@@ -115,7 +116,14 @@ class Session private constructor(
      * Note the event subscription is created only after the flow starts being consumed.
      **/
     fun subscribeToNetworkEvents(): Flow<NetworkEvent> =
-        client.subscribe(NetworkSubscribe()).filterIsInstance<NetworkEvent>()
+        client.subscribe(NetworkSubscribe())
+            .mapNotNull {
+                when (it) {
+                    is NetworkEvent -> it
+                    is Any -> NetworkEvent.PEER_SET_CHANGE
+                    else -> null
+                }
+            }
 
     /**
      * Returns the listener interface addresses.

@@ -30,14 +30,16 @@ internal interface Bindings : Library {
         file: String?,
         callback: LogCallback?,
     ): Short
+
+    fun release_log_message(ptr: Pointer, len: Long, cap: Long)
 }
 
 internal typealias Handle = Long
 
-interface StatusCallback : JnaCallback {
+internal interface StatusCallback : JnaCallback {
     fun invoke(context: Pointer?, error_code: Short)
 }
 
-interface LogCallback : JnaCallback {
-    fun invoke(level: Byte, message: String)
+internal interface LogCallback : JnaCallback {
+    fun invoke(level: Byte, ptr: Pointer, len: Long, cap: Long)
 }
