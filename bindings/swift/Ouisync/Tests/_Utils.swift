@@ -3,7 +3,7 @@ import XCTest
 
 
 func startServer(_ test: XCTestCase, suffix: String = "") async throws -> (Server, Client, String) {
-    //ouisyncLogHandler = { level, message in print(message) }
+    if envFlag("ENABLE_LOGGING") { ouisyncLogHandler = { level, message in print(message) } }
     let path = test.name.replacingOccurrences(of: "-[", with: "")
                         .replacingOccurrences(of: "]", with: "")
                         .replacingOccurrences(of: " ", with: "_") + suffix

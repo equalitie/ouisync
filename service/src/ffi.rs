@@ -166,7 +166,8 @@ fn init(
     Ok((runtime, service, span))
 }
 
-pub type LogCallback = extern "C" fn(LogLevel, *const c_uchar, c_ulong, c_ulong);
+// hoist Option here as a workaround for https://github.com/mozilla/cbindgen/issues/326
+pub type OptionLogCallback = Option<extern "C" fn(LogLevel, *const c_uchar, c_ulong, c_ulong) -> ()>;
 
 /// Initialize logging. Should be called before `service_start`.
 ///
@@ -180,7 +181,7 @@ pub type LogCallback = extern "C" fn(LogLevel, *const c_uchar, c_ulong, c_ulong)
 ///
 /// `file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
 #[no_mangle]
-pub unsafe extern "C" fn init_log(file: *const c_char, callback: Option<LogCallback>) -> ErrorCode {
+pub unsafe extern "C" fn init_log(file: *const c_char, callback: OptionLogCallback) -> ErrorCode {
     try_init_log(file, callback).to_error_code()
 }
 
@@ -206,7 +207,7 @@ struct LoggerWrapper {
 
 static LOGGER: OnceLock<LoggerWrapper> = OnceLock::new();
 
-unsafe fn try_init_log(file: *const c_char, callback: Option<LogCallback>) -> Result<(), Error> {
+unsafe fn try_init_log(file: *const c_char, callback: OptionLogCallback) -> Result<(), Error> {
     let builder = Logger::builder();
     let builder = if !file.is_null() {
         builder.file(Path::new(CStr::from_ptr(file).to_str()?))

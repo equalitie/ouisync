@@ -11,9 +11,9 @@ public var ouisyncLogHandler: ((LogLevel, String) -> Void)?
 // init_log is not safe to call repeatedly, should only be called before the first server is
 // started and provides awkward memory semantics to assist dart, though we may eventually end up
 // using them here as well if ever we end up making logging async
-private func directLogHandler(_ message: LogMessage) {
-    defer { release_log_message(message) }
-    ouisyncLogHandler?(message.level, String(cString: message.ptr))
+private func directLogHandler(_ level: LogLevel, _ ptr: UnsafePointer<UInt8>?, _ len: UInt, _ cap: UInt) {
+    defer { release_log_message(ptr, len, cap) }
+    if let ptr { ouisyncLogHandler?(level, String(cString: ptr)) }
 }
 @MainActor private var loggingConfigured = false
 @MainActor private func setupLogging() async throws {
