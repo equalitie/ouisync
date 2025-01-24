@@ -14,10 +14,6 @@ pub struct LocalDiscovery {
 }
 
 impl LocalDiscovery {
-    // TODO: This function should initialize `poor_man` in a "legacy compatibility mode" where it
-    // only listens to beacons from older ouisync versions but does not do any multicasting.
-    // It should also initialize either `mdns_direct` or a daemon based mdns depending on whether
-    // connection to a zeroconf deamon is successful.
     pub fn new(listener_port: PeerPort, monitor: Option<StateMonitor>) -> Self {
         // We still use the legacy local discovery mechanism but in the `ObserveOnly` mode to be
         // able to find older Ouisync versions which did not use mDNS.
@@ -77,6 +73,8 @@ impl LocalDiscovery {
         // `None` we wait forever.  However, this happens only during runtime shutdown so in
         // practice we don't wait at all.
 
+        // TODO: Since these may run in parallel, we may get the same peers from each, we should
+        // filter them to avoid unnecessary trafic.
         let poor_man_recv = async {
             let Some(poor_man) = self.poor_man.as_mut() else {
                 std::future::pending::<()>().await;

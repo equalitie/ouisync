@@ -6,11 +6,14 @@ use crate::network::{
 use scoped_task;
 use std::{
     any::Any,
+    future::Future,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    pin::Pin,
+    sync::{Arc, Mutex, Weak},
+    task::{Context, Poll, Waker},
     time::Duration,
 };
-use tokio::{sync::mpsc, task, time::sleep};
+use tokio::{select, sync::mpsc, task, time::sleep};
 use zeroconf::{
     prelude::*, BrowserEvent, MdnsBrowser, MdnsService, ServiceDiscovery, ServiceRegistration,
     ServiceType,
@@ -18,7 +21,7 @@ use zeroconf::{
 
 pub struct LocalDiscovery {
     peer_rx: mpsc::UnboundedReceiver<SeenPeer>,
-    finished: Flag,
+    watcher_finished: Arc<Flag>,
     _service_watcher: scoped_task::ScopedJoinHandle<()>,
 }
 
@@ -36,38 +39,52 @@ impl LocalDiscovery {
 
         let (peer_tx, peer_rx) = mpsc::unbounded_channel();
 
-        let _service_watcher = scoped_task::spawn(async move {
-            loop {
-                let finished = Flag::new();
+        let watcher_finished = Arc::new(Flag::new());
 
-                tracing::debug!("Starting service");
+        let _service_watcher = scoped_task::spawn({
+            let watcher_finished = watcher_finished.clone();
 
-                let publish_finished = start_publishing_service_thread(
-                    service_name.clone(),
-                    service_type.clone(),
-                    listener_port.number(),
-                    finished.clone(),
-                );
+            async move {
+                loop {
+                    let service_finished = watcher_finished.child();
 
-                let browser_finished = start_browser_service_thread(
-                    service_name.clone(),
-                    service_type.clone(),
-                    peer_tx.clone(),
-                    finished.clone(),
-                );
+                    tracing::debug!("Starting service");
 
-                publish_finished.await.unwrap_or(());
-                browser_finished.await.unwrap_or(());
+                    let publish_finished = start_publishing_service_thread(
+                        service_name.clone(),
+                        service_type.clone(),
+                        listener_port.number(),
+                        service_finished.clone(),
+                    );
 
-                tracing::debug!("Service stopped");
+                    let browser_finished = start_browser_service_thread(
+                        service_name.clone(),
+                        service_type.clone(),
+                        peer_tx.clone(),
+                        service_finished.clone(),
+                    );
 
-                sleep(Duration::from_secs(3)).await;
+                    publish_finished.await.unwrap_or(());
+                    browser_finished.await.unwrap_or(());
+
+                    tracing::debug!("Service stopped");
+
+                    select! {
+                        // TODO: Exponential backoff?
+                        _ = sleep(Duration::from_secs(5)) => {},
+                        _ = watcher_finished.becomes_true() => {
+                            break;
+                        }
+                    }
+                }
+
+                tracing::debug!("Service finished (won't restart)");
             }
         });
 
         Self {
             peer_rx,
-            finished: Flag::new(), // FIXME
+            watcher_finished,
             _service_watcher,
         }
     }
@@ -79,7 +96,7 @@ impl LocalDiscovery {
 
 impl Drop for LocalDiscovery {
     fn drop(&mut self) {
-        self.finished.mark_true();
+        self.watcher_finished.mark_true();
     }
 }
 
@@ -94,7 +111,7 @@ fn start_publishing_service_thread(
         let mut service = MdnsService::new(service_type, listener_port);
 
         service.set_name(&service_name);
-        service.set_registered_callback(Box::new(on_service_registered));
+        service.set_registered_callback(Box::new(on_publish_event));
         service.set_context(Box::new(Arc::new(BeaconContext {
             finished: finished.clone(),
         })));
@@ -103,7 +120,7 @@ fn start_publishing_service_thread(
             Ok(event_loop) => event_loop,
             Err(error) => {
                 if !finished.mark_true() {
-                    tracing::error!("Failed to register beacon service {error:?}");
+                    tracing::error!("Service/Publish failed to register {error:?}");
                 }
                 return;
             }
@@ -113,15 +130,14 @@ fn start_publishing_service_thread(
             // calling `poll()` will keep this service alive
             if let Err(error) = event_loop.poll(Duration::from_secs(1)) {
                 if !finished.mark_true() {
-                    tracing::warn!("Beacon stopped with error {error:?}");
+                    tracing::warn!("Service/Publish stopped with error {error:?}");
                 }
             }
             if finished.is_true() {
+                tracing::debug!("Service/Publish finished");
                 break;
             }
         }
-
-        tracing::debug!("Beacon service finished");
     })
 }
 
@@ -134,7 +150,7 @@ fn start_browser_service_thread(
     task::spawn_blocking(move || {
         let mut browser = MdnsBrowser::new(service_type);
 
-        browser.set_service_callback(Box::new(on_service_discovered));
+        browser.set_service_callback(Box::new(on_browser_event));
         browser.set_context(Box::new(Arc::new(DiscoveryContext {
             this_service_name,
             peer_tx,
@@ -146,7 +162,7 @@ fn start_browser_service_thread(
             Ok(event_loop) => event_loop,
             Err(error) => {
                 if !finished.mark_true() {
-                    tracing::error!("Failed to register browser service {error:?}");
+                    tracing::error!("Service/Browse failed to register {error:?}");
                 }
                 return;
             }
@@ -156,27 +172,38 @@ fn start_browser_service_thread(
             // calling `poll()` will keep this browser alive
             if let Err(error) = event_loop.poll(Duration::from_secs(1)) {
                 if !finished.mark_true() {
-                    tracing::warn!("Discovery stopped with error {error:?}");
+                    tracing::warn!("Service/Browse stopped with error {error:?}");
                 }
             }
             if finished.is_true() {
+                tracing::debug!("Service/Browse finished");
                 break;
             }
         }
-
-        tracing::debug!("Browser service finished");
     })
 }
 
 #[derive(Clone)]
 struct Flag {
+    parent: Option<Weak<Flag>>,
     flag: Arc<Mutex<bool>>,
+    changed: Changed,
 }
 
 impl Flag {
     fn new() -> Self {
         Self {
+            parent: None,
             flag: Arc::new(Mutex::new(false)),
+            changed: Changed::new(),
+        }
+    }
+
+    fn child(self: &Arc<Self>) -> Self {
+        Self {
+            parent: Some(Arc::downgrade(self)),
+            flag: Arc::new(Mutex::new(false)),
+            changed: Changed::new(),
         }
     }
 
@@ -185,11 +212,95 @@ impl Flag {
         let mut lock = self.flag.lock().unwrap();
         let prev = *lock;
         *lock = true;
+        self.changed.mark_changed();
         return prev;
     }
 
     fn is_true(&self) -> bool {
-        *self.flag.lock().unwrap()
+        if *self.flag.lock().unwrap() {
+            return true;
+        }
+        let Some(parent) = &self.parent else {
+            // This is the root.
+            return false;
+        };
+        // Check parents recursively
+        match parent.upgrade() {
+            Some(parent) => parent.is_true(),
+            // Parent got destroyed
+            None => true,
+        }
+    }
+
+    async fn becomes_true(&self) {
+        let mut up_to_parent = Vec::new();
+
+        up_to_parent.push(self.changed.clone());
+
+        let mut current_opt = self.parent.clone();
+
+        while let Some(current) = &current_opt {
+            let Some(current) = current.upgrade() else {
+                return;
+            };
+            up_to_parent.push(current.changed.clone());
+            current_opt = current.parent.clone();
+        }
+
+        futures_util::future::select_all(up_to_parent.iter()).await;
+    }
+}
+
+#[derive(Clone)]
+struct Changed {
+    inner: Arc<Mutex<ChangedInner>>,
+}
+
+impl Changed {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(ChangedInner {
+                changed: false,
+                wakers: Default::default(),
+            })),
+        }
+    }
+
+    fn mark_changed(&self) {
+        self.inner.lock().unwrap().mark_changed();
+    }
+}
+
+struct ChangedInner {
+    changed: bool,
+    wakers: Vec<Waker>,
+}
+
+impl ChangedInner {
+    fn mark_changed(&mut self) {
+        self.changed = true;
+        for waker in self.wakers.drain(..) {
+            waker.wake();
+        }
+    }
+}
+
+impl Drop for ChangedInner {
+    fn drop(&mut self) {
+        self.mark_changed();
+    }
+}
+
+impl Future for &Changed {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.changed {
+            return Poll::Ready(());
+        }
+        inner.wakers.push(cx.waker().clone());
+        Poll::Pending
     }
 }
 
@@ -204,10 +315,7 @@ struct DiscoveryContext {
     finished: Flag,
 }
 
-fn on_service_registered(
-    result: zeroconf::Result<ServiceRegistration>,
-    context: Option<Arc<dyn Any>>,
-) {
+fn on_publish_event(result: zeroconf::Result<ServiceRegistration>, context: Option<Arc<dyn Any>>) {
     let context = context
         .as_ref()
         .expect("could not get context")
@@ -217,32 +325,49 @@ fn on_service_registered(
     match result {
         Err(error) => {
             if !context.finished.mark_true() {
-                tracing::error!("Service failed to register: {error:?}");
+                tracing::error!("Service/Publish failed to register: {error:?}");
             }
         }
         Ok(_) => {
-            tracing::debug!("Service registered successfully");
+            tracing::debug!("Service/Publish registered successfully");
         }
     }
-
-    //context.on_service_init_tx.send(()).unwrap_or(());
 }
 
-fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option<Arc<dyn Any>>) {
+fn on_browser_event(result: zeroconf::Result<BrowserEvent>, context: Option<Arc<dyn Any>>) {
     let context = context
         .as_ref()
         .expect("could not get context")
         .downcast_ref::<Arc<DiscoveryContext>>()
         .expect("error down-casting discovery context");
 
-    match result {
-        Ok(BrowserEvent::Add(service)) => {
+    let event = match result {
+        Ok(event) => event,
+        Err(err) => {
+            // TODO: We get serious and non-serious errors here and we should only finish this
+            // service on the serious ones. The serious one that I know of is when the daemon stops
+            // and a non serious one is when a service is non-resolvable (e.g. because a replica
+            // shuts down but its service name is still in some cache).
+            if !context.finished.mark_true() {
+                tracing::debug!("Service/Browse discover error: {:?}", err);
+            }
+            return;
+        }
+    };
+
+    match event {
+        BrowserEvent::Add(service) => {
             if service.name() == &context.this_service_name {
+                tracing::trace!("Service/Browse ignoring same instance name");
                 return;
             }
 
-            let Some(peer_addr) = parse_peer_addr(&service) else {
-                return;
+            let peer_addr = match parse_peer_addr(&service) {
+                Ok(peer_addr) => peer_addr,
+                Err(reason) => {
+                    tracing::debug!("Service/Browse failed to parse peer address: {reason}");
+                    return;
+                }
             };
 
             if let Some(seen_peer) = context
@@ -251,45 +376,39 @@ fn on_service_discovered(result: zeroconf::Result<BrowserEvent>, context: Option
                 .unwrap()
                 .insert(service.name().into(), peer_addr)
             {
-                tracing::debug!("Service discovered: {:?}:{:?}", service.name(), peer_addr);
+                tracing::debug!(
+                    "Service/Browse discovered: {:?}:{:?}",
+                    service.name(),
+                    peer_addr
+                );
                 context.peer_tx.send(seen_peer).unwrap_or(());
             }
         }
-        Ok(BrowserEvent::Remove(service)) => {
+        BrowserEvent::Remove(service) => {
             context
                 .seen_peers
                 .lock()
                 .unwrap()
                 .remove(service.name().clone());
         }
-        Err(err) => {
-            // The error only contains a string so impractical to distinguis between serious errors
-            // and those that only tell us that some replica can't be resolved (e.g. because it's
-            // no longer online).
-            if !context.finished.mark_true() {
-                tracing::debug!("Service discover error: {:?}", err);
-            }
-        }
     }
 }
 
-fn parse_peer_addr(service: &ServiceDiscovery) -> Option<PeerAddr> {
+fn parse_peer_addr(service: &ServiceDiscovery) -> Result<PeerAddr, String> {
     let ip_addr = match service.address().parse() {
         Ok(ip_addr) => ip_addr,
         Err(_) => {
-            tracing::warn!("Failed to parse address {:?}", service.address());
-            return None;
+            return Err(format!("Failed to parse address {:?}", service.address()));
         }
     };
 
     let sock_addr = SocketAddr::new(ip_addr, *service.port());
 
     match service.service_type().protocol().as_ref() {
-        "tcp" => Some(PeerAddr::Tcp(sock_addr)),
-        "udp" => Some(PeerAddr::Quic(sock_addr)),
+        "tcp" => Ok(PeerAddr::Tcp(sock_addr)),
+        "udp" => Ok(PeerAddr::Quic(sock_addr)),
         proto => {
-            tracing::warn!("Invalid protocol {proto:?}");
-            return None;
+            return Err(format!("Invalid protocol {proto:?}"));
         }
     }
 }
