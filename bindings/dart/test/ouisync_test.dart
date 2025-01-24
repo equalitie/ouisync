@@ -8,9 +8,12 @@ void main() {
   late io.Directory temp;
   late Session session;
 
-  setUp(() async {
-    logInit();
+  initLog(callback: (level, message) {
+    // ignore: avoid_print
+    print('${level.name.toUpperCase()} $message');
+  });
 
+  setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
     session = await Session.create(
       configPath: '${temp.path}/config',

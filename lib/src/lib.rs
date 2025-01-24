@@ -61,7 +61,7 @@ pub use self::{
     progress::Progress,
     protocol::{RepositoryId, StorageSize, BLOCK_SIZE},
     repository::{
-        repository_files, Credentials, Metadata, Repository, RepositoryHandle, RepositoryParams,
+        database_files, Credentials, Metadata, Repository, RepositoryHandle, RepositoryParams,
     },
     store::{Error as StoreError, DATA_VERSION},
     version_vector::VersionVector,

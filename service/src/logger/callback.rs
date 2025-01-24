@@ -159,19 +159,19 @@ mod tests {
             [
                 (
                     Level::TRACE,
-                    format!("foo :: {}:{}\0", file!(), base_line + 2)
+                    format!("foo :: {}:{}", file!(), base_line + 2)
                 ),
                 (
                     Level::DEBUG,
-                    format!("bar 42 :: {}:{}\0", file!(), base_line + 3)
+                    format!("bar 42 :: {}:{}", file!(), base_line + 3)
                 ),
                 (
                     Level::INFO,
-                    format!("baz a=1 b=false :: {}:{}\0", file!(), base_line + 4),
+                    format!("baz a=1 b=false :: {}:{}", file!(), base_line + 4),
                 ),
                 (
                     Level::WARN,
-                    format!("in span :: span :: {}:{}\0", file!(), base_line + 6)
+                    format!("in span :: span :: {}:{}", file!(), base_line + 6)
                 )
             ]
         );

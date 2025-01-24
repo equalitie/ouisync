@@ -11,8 +11,6 @@ void main() {
   late Repository repo2;
 
   setUp(() async {
-    logInit();
-
     temp = await io.Directory.systemTemp.createTemp();
 
     await io.Directory('${temp.path}/1').create();

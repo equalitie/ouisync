@@ -13,32 +13,33 @@ internal interface Bindings : Library {
         }
     }
 
-    fun service_start(
+    fun start_service(
         config_dir: String,
         debug_label: String?,
         callback: StatusCallback,
         callback_context: Pointer?,
     ): Pointer
 
-    fun service_stop(
+    fun stop_service(
         handle: Pointer,
         callback: StatusCallback,
         callback_context: Pointer?,
     )
 
-    fun log_init(
+    fun init_log(
         file: String?,
         callback: LogCallback?,
-        tag: String,
     ): Short
+
+    fun release_log_message(ptr: Pointer, len: Long, cap: Long)
 }
 
 internal typealias Handle = Long
 
-interface StatusCallback : JnaCallback {
+internal interface StatusCallback : JnaCallback {
     fun invoke(context: Pointer?, error_code: Short)
 }
 
-interface LogCallback : JnaCallback {
-    fun invoke(level: Byte, message: String)
+internal interface LogCallback : JnaCallback {
+    fun invoke(level: Byte, ptr: Pointer, len: Long, cap: Long)
 }

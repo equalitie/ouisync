@@ -64,9 +64,17 @@ pub struct Repository {
     progress_reporter_handle: BlockingMutex<Option<ScopedJoinHandle<()>>>,
 }
 
-/// Given a path to the main repository file, return paths to all the repository files (the main db
-/// file and all auxiliary files).
-pub fn repository_files(store_path: impl AsRef<Path>) -> Vec<PathBuf> {
+/// List of repository database files. Includes the main db file and any auxiliary files.
+///
+/// The aux files don't always exists but when they do and one wants to rename, move or delete the
+/// repository, they should rename/move/delete these files as well.
+///
+/// Note ideally the aux files should be deleted automatically when the repo has been closed. But
+/// because of a [bug][1] in sqlx, they are sometimes not and need to be handled
+/// (move,deleted) manually. When the bug is fixed, this function can be removed.
+///
+/// [1]: https://github.com/launchbadge/sqlx/issues/3217
+pub fn database_files(store_path: impl AsRef<Path>) -> Vec<PathBuf> {
     // Sqlite database consists of up to three files: main db (always present), WAL and WAL-index.
     ["", "-wal", "-shm"]
         .into_iter()

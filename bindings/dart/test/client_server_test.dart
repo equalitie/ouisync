@@ -48,8 +48,6 @@ void main() {
   });
 
   test('server already running', () async {
-    logInit();
-
     final configPath = '${temp.path}/config';
 
     final server0 = await Server.start(

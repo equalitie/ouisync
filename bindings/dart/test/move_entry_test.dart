@@ -17,8 +17,6 @@ void main() {
   final fileContent = 'hello world';
 
   setUp(() async {
-    logInit();
-
     temp = await io.Directory.systemTemp.createTemp();
 
     session = await Session.create(
