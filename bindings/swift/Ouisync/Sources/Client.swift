@@ -1,6 +1,6 @@
 import CryptoKit
 import Foundation
-import MessagePack
+@preconcurrency import MessagePack
 import Network
 
 
@@ -20,18 +20,18 @@ import Network
                             using: .tcp)
         sock.start(queue: .main)
 
-        // generate and send client challenge; 256 bytes is a bit large, but we'll probably...
-        let clientChallenge = try Data.secureRandom(256) // ... reserve portions for non-random headers
+        // generate and send client challenge; 256 bytes is a bit large, but we might reserve...
+        let clientChallenge = try Data.secureRandom(256) // ... some portions for protocol headers
         try await send(clientChallenge)
-
-        // receive server challenge and send proof
-        let serverChallenge = try await recv(exactly: clientChallenge.count)
-        try await send(Data(HMAC<SHA256>.authenticationCode(for: serverChallenge, using: key)))
 
         // receive and validate server proof
         guard HMAC<SHA256>.isValidAuthenticationCode(try await recv(exactly: SHA256.byteCount),
                                                      authenticating: clientChallenge, using: key)
         else { throw CryptoKitError.authenticationFailure } // early eof or key mismatch
+
+        // receive server challenge and send proof
+        let serverChallenge = try await recv(exactly: clientChallenge.count)
+        try await send(Data(HMAC<SHA256>.authenticationCode(for: serverChallenge, using: key)))
 
         read() // this keeps calling itself until the socket is closed
 
@@ -109,7 +109,8 @@ import Network
         guard case .ready = sock.state else { throw OuisyncError.ConnectionAborted }
         return try await withUnsafeThrowingContinuation {
             let id = `as` ?? Self.next()
-            let body = pack(arg)
+//            print("\(id) -> \(method)(\(arg))")
+            let body = pack([.string(method): arg])
             var message = Data(count: 12)
             message.withUnsafeMutableBytes {
                 $0.storeBytes(of: UInt32(exactly: body.count + 8)!.bigEndian, as: UInt32.self)
@@ -131,21 +132,20 @@ import Network
      * Completes normally if the `cancel()` method is called while the subscription is active.
      *
      * The subscription retains the client and until it either goes out of scope. */
-    func subscribe(to topic: String, with arg: MessagePackValue = .nil) -> Subscription {
-        let id = Self.next()
-        let result = Subscription {
-            subscriptions[id] = $0
-            $0.onTermination = { _ in Task { @MainActor in
+    nonisolated func subscribe(to topic: String, with arg: MessagePackValue = .nil) -> Subscription {
+        Subscription { sub in DispatchQueue.main.async { MainActor.assumeIsolated {
+            let id = Self.next()
+            self.subscriptions[id] = sub
+            sub.onTermination = { _ in Task { @MainActor in
                 self.subscriptions.removeValue(forKey: id)
                 do { try await self.invoke("unsubscribe", with: .uint(id)) }
                 catch { print("Unexpected error during unsubscribe: \(error)") }
             } }
-        }
-        Task {
-            do { try await invoke("\(topic)_subscribe", with: arg, as: id) }
-            catch { subscriptions.removeValue(forKey: id)?.finish(throwing: error) }
-        }
-        return result
+            Task {
+                do { try await self.invoke("\(topic)_subscribe", with: arg, as: id) }
+                catch { self.subscriptions.removeValue(forKey: id)?.finish(throwing: error) }
+            }
+        } } }
     }
     public typealias Subscription = AsyncThrowingStream<MessagePackValue, any Error>
 
@@ -154,8 +154,9 @@ import Network
      * Implemented using callbacks here because while continuations are _cheap_, they are not
      * _free_ and non-main actors are still a bit too thread-hoppy with regards to performance */
     private func read() {
-        sock.receive(minimumIncompleteLength: 12, maximumLength: 12) { header, _ , _, err in
-            MainActor.assumeIsolated {
+        sock.receive(minimumIncompleteLength: 12, maximumLength: 12) {
+            [weak self] header, _ , _, err in MainActor.assumeIsolated {
+                guard let self else { return }
                 guard err == nil else {
                     return self.abort("Unexpected IO error while reading header: \(err!)")
                 }
@@ -166,18 +167,20 @@ import Network
                 var size = Int(0)
                 var id = UInt64(0)
                 header.withUnsafeBytes {
-                    size = Int(UInt32(bigEndian: $0.load(as: UInt32.self)))
-                    id = $0.load(fromByteOffset: 4, as: UInt64.self)
+                    size = Int(UInt32(bigEndian: $0.loadUnaligned(as: UInt32.self)))
+                    id = $0.loadUnaligned(fromByteOffset: 4, as: UInt64.self)
                 }
-                guard size <= self.limit else {
-                    return self.abort("Received \(size) byte packet which exceeds \(self.limit)")
+                guard (9...self.limit).contains(size) else {
+                    return self.abort("Received \(size) byte packet (must be in 9...\(self.limit))")
                 }
-                self.sock.receive(minimumIncompleteLength: size, maximumLength: size) { body, _, _, err in
-                    MainActor.assumeIsolated {
+                size -= 8 // messageid was already read
+                self.sock.receive(minimumIncompleteLength: size, maximumLength: size) {
+                    [weak self] body, _, _, err in MainActor.assumeIsolated {
+                        guard let self else { return }
                         guard err == nil else {
                             return self.abort("Unexpected IO error while reading body: \(err!)")
                         }
-                        guard let body, header.count == size else {
+                        guard let body, body.count == size else {
                             return self.abort("Unexpected EOF while reading body")
                         }
                         guard let (message, rest) = try? unpack(body) else {
@@ -208,12 +211,13 @@ import Network
                             result = .failure(err)
                         } else { return self.abort("Received unercognized message: \(payload)") }
 
+//                        print("\(id)<-\(result)")
                         if let callback = self.invocations.removeValue(forKey: id) {
                             callback.resume(with: result)
                         } else if let subscription = self.subscriptions[id] {
                             subscription.yield(with: result)
                         } else {
-                            print("Ignoring unexpected message with \(id)")
+                            print("Ignoring unexpected message with id \(id)")
                         }
                         DispatchQueue.main.async{ self.read() }
                     }

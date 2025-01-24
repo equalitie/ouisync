@@ -1,33 +1,28 @@
 import XCTest
-@testable import Ouisync
+import Ouisync
 
 
 final class SessionTests: XCTestCase {
-    var server: Server!
-
-    override func setUp() async throws {
-        server = try await startServer(self)
-    }
-
-    override func tearDown() async throws {
-        try await server.destroy()
-    }
+    var server: Server!, client: Client!, temp: String!
+    override func setUp() async throws { (server, client, temp) = try await startServer(self) }
+    override func tearDown() async throws { try await cleanupServer(server, temp) }
 
     func testThrowsWhenStartedTwice() async throws {
-        do {
-            let server2 = try await startServer(self)
-            XCTFail("Did not throw")
-        } catch OuisyncError.ServiceAlreadyRunning {
-            // expected outcome, other errors should propagate and fail
-        }
+        try await XCTAssertThrows(try await startServer(self), OuisyncError.ServiceAlreadyRunning)
     }
 
-    func testMultiSession() async throws {
-        let client0 = try await server.connect()
-        let client1 = try await server.connect()
+    func testMultiClient() async throws {
+        let other = try await server.connect()
 
-        // this is a bit verbose to do concurrently because XCTAssertEqual uses non-async autoclosures
-        let pair = try await (client0.currentProtocolVersion, client1.currentProtocolVersion)
+        // this is a bit verbose to do concurrently because XCTAssert* uses non-async autoclosures
+        async let future0 = client.currentProtocolVersion
+        async let future1 = other.currentProtocolVersion
+        let pair = try await (future0, future1)
         XCTAssertEqual(pair.0, pair.1)
+    }
+
+    func testUseAfterClose() async throws {
+        try await server.stop()
+        try await XCTAssertThrows(try await client.runtimeId, OuisyncError.ConnectionAborted)
     }
 }

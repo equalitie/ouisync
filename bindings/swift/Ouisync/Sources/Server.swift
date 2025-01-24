@@ -35,32 +35,32 @@ public class Server {
      * in this case it's not possible to determine whether the shutdown was successful or not. */
     public init(configDir: String, debugLabel: String) async throws {
         try await setupLogging()
-        self.configDir = URL(fileURLWithPath: configDir)
+        self.configDir = configDir
         self.debugLabel = debugLabel
         try await withUnsafeThrowingContinuation {
             handle = start_service(configDir, debugLabel, Resume, unsafeBitCast($0, to: UnsafeRawPointer.self))
         } as Void
     }
-    /// the configDir passed to the constructor when the server was started
-    public let configDir: URL
-    /// the debugLabel passed to the constructor when the server was started
+    /// the `configDir` passed to the constructor when the server was started
+    public let configDir: String
+    /// the `debugLabel` passed to the constructor when the server was started
     public let debugLabel: String
-    /// The localhost port that can be used to interact with the server
+    /// The localhost `port` that can be used to interact with the server (IPv4)
     public var port: UInt16 { get async throws { try JSONDecoder().decode(UInt16.self, from:
-        Data(contentsOf: configDir.appending(component: "local_control_port.conf")))
+        Data(contentsOf: URL(fileURLWithPath: configDir.appending("/local_control_port.conf"))))
     } }
     /// The HMAC key required to authenticate to the server listening on `port`
     public var authKey: SymmetricKey { get async throws {
-        let file = configDir.appending(component: "local_control_auth_key.conf")
+        let file = URL(fileURLWithPath: configDir.appending("/local_control_auth_key.conf"))
         let str = try JSONDecoder().decode(String.self, from: Data(contentsOf: file))
         guard str.count&1 == 0 else { throw CryptoKitError.incorrectParameterSize }
 
         // unfortunately, swift doesn't provide an (easy) way to do hex decoding
         var curr = str.startIndex
         return try SymmetricKey(data: (0..<str.count>>1).map { _ in
-            let next = str.index(after: curr)
+            let next = str.index(curr, offsetBy: 2)
             defer { curr = next }
-            if let res = UInt8(str[curr...next], radix: 16) { return res }
+            if let res = UInt8(str[curr..<next], radix: 16) { return res }
             throw CryptoKitError.invalidParameter
         })
     } }

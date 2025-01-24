@@ -8,6 +8,9 @@ public extension Client {
       * If a `token` is provided, the operation will be an `import`. Otherwise, a new, empty,
       * fully writable repository is created at `path`.
       *
+      * If `path` is not absolute, it is interpreted as relative to `storeDir`. If it does not end
+      * with `".ouisyncdb"`, it will be added to the resulting `Repository.path`
+      *
       * The optional `readSecret` and `writeSecret` are intended to function as a second
       * authentication factor and are used to encrypt the repository's true access keys. Secrets
       * are ignored when the underlying `token` doesn't contain the corresponding key (e.g. for
@@ -17,33 +20,46 @@ public extension Client {
       * when a `readSecret` is set. You may reuse the same secret for both values. */
     func createRepository(at path: String,
                           importingFrom token: ShareToken? = nil,
-                          readSecret: Secret? = nil,
-                          writeSecret: Secret? = nil) async throws {
+                          readSecret: CreateSecret? = nil,
+                          writeSecret: CreateSecret? = nil) async throws -> Repository {
         // FIXME: the backend does buggy things here, so we bail out; see also `unsafeSetSecrets`
-        if readSecret != nil && writeSecret == nil { throw OuisyncError.Unsupported }
-        try await invoke("repository_create", with: ["path": .string(path),
-                                                     "read_secret": readSecret?.value ?? .nil,
-                                                     "write_secret": writeSecret?.value ?? .nil,
-                                                     "token": token?.value ?? .nil,
-                                                     "sync_enabled": false,
-                                                     "dht_enabled": false,
-                                                     "pex_enabled": false])
+        if readSecret != nil && writeSecret == nil { throw OuisyncError.InvalidInput }
+        return try await Repository(self, invoke("repository_create",
+                                                 with: ["path": .string(path),
+                                                        "read_secret": readSecret?.value ?? .nil,
+                                                        "write_secret": writeSecret?.value ?? .nil,
+                                                        "token": token?.value ?? .nil,
+                                                        "sync_enabled": false,
+                                                        "dht_enabled": false,
+                                                        "pex_enabled": false]))
     }
 
-    /** Opens an existing repository from a `path`, optionally using a known `secret`.
+    // FIXME: bring this back if we decide on different open / close semantics
+    /* /** Opens an existing repository from a `path`, optionally using a known `secret`.
      *
      * If the same repository is opened again, a new handle pointing to the same underlying
      * repository is returned. Closed automatically when all references go out of scope. */
-    func openRepository(at path: String, using secret: Secret? = nil) async throws -> Repository {
+    func openRepository(at path: String, using secret: OpenSecret? = nil) async throws -> Repository {
         try await Repository(self, invoke("repository_open", with: ["path": .string(path),
-                                                                    "secret": secret?.value ?? .nil,
-                                                                    "sync_enabled": false]))
-    }
+                                                                    "secret": secret?.value ?? .nil]))
+    } */
 
     /// All currently open repositories.
     var repositories: [Repository] { get async throws {
-        try await invoke("repository_list").arrayValue.orThrow.map { try Repository(self, $0) }
+        try await invoke("repository_list").dictionaryValue.orThrow.values.map { try Repository(self, $0) }
     } }
+}
+
+/// A typed remotely stored dictionary that supports multi-value atomic updates
+public protocol Metadata<Key, Value> where Key: Hashable {
+    associatedtype Key
+    associatedtype Value
+
+    // Returns the remote value for `key` or nil if it doesn't exist
+    subscript(_ key: Key) -> Value? { get async throws }
+
+    /// Performs an atomic CAS on `edits`, returning `true` if all updates were successful
+    func update(_ edits: [Key: (from: Value?, to: Value?)]) async throws -> Bool
 }
 
 
@@ -56,11 +72,12 @@ public class Repository {
         self.handle = handle
     }
 
-    deinit {
+    // FIXME: bring this back if we decide on different open / close semantics
+    /* deinit {
         // we're going out of scope so we need to copy the state that the async closure will capture
         let client = client, handle = handle
         Task { try await client.invoke("repository_close", with: handle) }
-    }
+    } */
 }
 
 
@@ -113,10 +130,10 @@ public extension Repository {
         try await AccessMode(rawValue: client.invoke("repository_get_access_mode",
                                                      with: handle).uint8Value.orThrow).orThrow
     } }
-    func setAccessMode(to mode: AccessMode, using secret: Secret? = nil) async throws {
+    func setAccessMode(to mode: AccessMode, using secret: OpenSecret? = nil) async throws {
         try await client.invoke("repository_set_access_mode",
                                 with: ["repository": handle,
-                                       "access_mode": .uint(UInt64(mode.rawValue)),
+                                       "mode": .uint(UInt64(mode.rawValue)),
                                        "secret": secret?.value ?? .nil])
     }
 
@@ -140,8 +157,8 @@ public extension Repository {
     }
 
     /// This is a lot of overhead for a glorified event handler
-    @MainActor var events: AsyncThrowingMapSequence<Client.Subscription, Void> {
-        client.subscribe(to: "repository").map { _ in () }
+    var events: AsyncThrowingMapSequence<Client.Subscription, Void> {
+        client.subscribe(to: "repository", with: handle).map { _ in () }
     }
 
     var dht: Bool { get async throws {
@@ -161,7 +178,7 @@ public extension Repository {
     }
 
     /// Create a share token providing access to this repository with the given mode.
-    func share(for mode: AccessMode, using secret: Secret? = nil) async throws -> ShareToken {
+    func share(for mode: AccessMode, using secret: OpenSecret? = nil) async throws -> ShareToken {
         try await ShareToken(client, client.invoke("repository_share",
                                                    with: ["repository": handle,
                                                           "secret": secret?.value ?? .nil,
@@ -195,21 +212,29 @@ public extension Repository {
                                                                    "host": .string(host)])
     }
 
-    func metadata(for key: String) async throws -> String? {
-        let res = try await client.invoke("repository_get_metadata", with: ["repository": handle,
-                                                                            "key": .string(key)])
-        if case .nil = res { return nil }
-        return try res.stringValue.orThrow
-    }
+    var metadata: any Metadata<String, String> { get { Meta(repository: self) } }
+    private struct Meta: Metadata {
+        @usableFromInline let repository: Repository
+        public subscript(_ key: String) -> String? { get async throws {
+            let res = try await repository.client.invoke("repository_get_metadata",
+                                                         with: ["repository": repository.handle,
+                                                                "key": .string(key)])
+            if case .nil = res { return nil }
+            return try res.stringValue.orThrow
+        } }
 
-    /// Performs an (presumably atomic) CAS on `edits`, returning `true` if they were updated
-    func updateMetadata(with edits: [String:(from: String, to: String)]) async throws -> Bool {
-        try await client.invoke("repository_set_metadata",
-                                with: ["repository": handle,
-                                       "edits": .array(edits.map {["key": .string($0.key),
-                                                                   "old": .string($0.value.from),
-                                                                   "new": .string($0.value.to)]})]
-        ).boolValue.orThrow
+        @usableFromInline static func cast(e: (String, (String?, String?))) -> MessagePackValue {[
+            "key": .string(e.0),
+            "old": e.1.0 == nil ? .nil : .string(e.1.0!),
+            "new": e.1.1 == nil ? .nil : .string(e.1.1!)
+        ]}
+
+        public func update(_ edits: [String: (from: String?, to: String?)]) async throws -> Bool {
+            try await repository.client.invoke("repository_set_metadata",
+                                               with: ["repository": repository.handle,
+                                                     "edits": .array(edits.map(Self.cast))]
+            ).boolValue.orThrow
+        }
     }
 
     /// Mount the repository if supported by the platform.
@@ -244,8 +269,8 @@ public extension Repository {
      * `Known issue`: keeping an existing `read password` while removing the `write password` can
      * result in a `read-only` repository. If you break it, you get to keep all the pieces!
      */
-    func unsafeSetSecrets(readSecret: Secret? = KEEP_EXISTING,
-                          writeSecret: Secret? = KEEP_EXISTING) async throws {
+    func unsafeSetSecrets(readSecret: CreateSecret? = KEEP_EXISTING,
+                          writeSecret: CreateSecret? = KEEP_EXISTING) async throws {
         // FIXME: the implementation requires a distinction between "no key" and "remove key"...
         /** ...which is currently implemented in terms of a `well known` default value
          *
@@ -257,7 +282,7 @@ public extension Repository {
          *
          * If we agree that a secret of length `0` means `no password`, we can then use `nil` here
          * as a default argument for `keep existing secret` on both sides of the ffi */
-        func encode(_ arg: Secret?) -> MessagePackValue {
+        func encode(_ arg: CreateSecret?) -> MessagePackValue {
             guard let arg else { return .string("disable") }
             return arg.value == KEEP_EXISTING.value ? .nil : ["enable": readSecret!.value]
         }

@@ -40,9 +40,10 @@ public struct PeerInfo {
         if let kind = arr[2].uint8Value {
             state = try PeerStateKind(rawValue: kind).orThrow
             runtimeId = nil
-        } else if let arr = arr[2].arrayValue, arr.count == 2 {
+        } else if let arr = arr[2].arrayValue, arr.count >= 2 {
             state = try PeerStateKind(rawValue: arr[0].uint8Value.orThrow).orThrow
             runtimeId = try arr[1].dataValue.orThrow.map({ String(format: "%02hhx", $0) }).joined()
+            // FIXME: arr[3] seems to be an undocumented timestamp in milliseconds
         } else {
             throw OuisyncError.InvalidData
         }

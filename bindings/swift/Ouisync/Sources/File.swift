@@ -22,7 +22,7 @@ public extension Repository {
     /** Creates a new file at `path`.
      *
      * Throws `OuisyncError` if `path` already exists of if the parent folder doesn't exist. */
-    func createFile(at Path: String) async throws -> File {
+    func createFile(at path: String) async throws -> File {
         try await File(self, client.invoke("file_create", with: ["repository": handle,
                                                                  "path": .string(path)]))
     }
@@ -61,15 +61,15 @@ public extension File {
         try await repository.client.invoke("file_read",
                                            with: ["file": handle,
                                                   "offset": .uint(offset),
-                                                  "size": .uint(size)]).dataValue.orThrow
+                                                  "len": .uint(size)]).dataValue.orThrow
     }
 
     /// Writes `data` to this file, starting at `offset`
-    func write(_ data: Data, toOffset offset: UInt64) async throws -> Data {
+    func write(_ data: Data, toOffset offset: UInt64) async throws {
         try await repository.client.invoke("file_write",
                                            with: ["file": handle,
                                                   "offset": .uint(offset),
-                                                  "data": .binary(data)]).dataValue.orThrow
+                                                  "data": .binary(data)])
     }
 
     /// Flushes any pending writes to persistent storage.
@@ -77,13 +77,13 @@ public extension File {
         try await repository.client.invoke("file_flush", with: handle)
     }
 
-    /// Truncates the file to `len` bytes.
-    func truncate(to len: UInt64 = 0) async throws {
+    /// Truncates the file to `length` bytes.
+    func truncate(to length: UInt64 = 0) async throws {
         try await repository.client.invoke("file_truncate", with: ["file": handle,
-                                                                   "len": .uint(len)])
+                                                                   "len": .uint(length)])
     }
 
-    var len: UInt64 { get async throws {
+    var length: UInt64 { get async throws {
         try await repository.client.invoke("file_len", with: handle).uint64Value.orThrow
     } }
 

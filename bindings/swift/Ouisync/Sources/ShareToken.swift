@@ -8,16 +8,21 @@ public extension Client {
 }
 
 
-// this is a fucking secret too
 public struct ShareToken: Secret {
+    // FIXME: should this retain the Client unless cast to string?
     let client: Client
-    public let value: MessagePackValue
+    /// The (nominally secret) token value that should be stored or shared somewhere safe
+    public let string: String
+    public var value: MessagePackValue { .string(string) }
 
-    init(_ client: Client, _ value: MessagePackValue) {
+    init(_ client: Client, _ value: MessagePackValue) throws {
         self.client = client
-        self.value = value
+        string = try value.stringValue.orThrow
     }
+}
 
+
+public extension ShareToken {
     /// The repository name suggested from this token.
     var suggestedName: String { get async throws {
         try await client.invoke("share_token_get_suggested_name", with: value).stringValue.orThrow

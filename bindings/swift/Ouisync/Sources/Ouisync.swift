@@ -59,7 +59,7 @@ public extension Client {
         try await invoke("network_set_local_discovery_enabled", with: .bool(enabled))
     }
 
-    var networkEvents: AsyncThrowingMapSequence<Subscription, NetworkEvent> {
+    nonisolated var networkEvents: AsyncThrowingMapSequence<Subscription, NetworkEvent> {
         subscribe(to: "network").map { try NetworkEvent(rawValue: $0.uint8Value.orThrow).orThrow }
     }
 
