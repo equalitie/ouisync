@@ -343,14 +343,18 @@ fn on_browser_event(result: zeroconf::Result<BrowserEvent>, context: Option<Arc<
 
     let event = match result {
         Ok(event) => event,
-        Err(err) => {
-            // TODO: We get serious and non-serious errors here and we should only finish this
-            // service on the serious ones. The serious one that I know of is when the daemon stops
-            // and a non serious one is when a service is non-resolvable (e.g. because a replica
-            // shuts down but its service name is still in some cache).
+        Err(error @ zeroconf::Error::MdnsSystemError { .. }) => {
+            // Likely a serious error such as disconnection from the daemon. We need to stop the
+            // threads and restart it the whole thing.
             if !context.finished.mark_true() {
-                tracing::debug!("Service/Browse discover error: {:?}", err);
+                tracing::error!("Service/Browse mDNS system error: {:?}", error);
             }
+            return;
+        }
+        Err(error) => {
+            // Many errors such as failing to resolve service's address are non fatal and can be
+            // ignored.
+            tracing::debug!("Service/Browse discover error: {:?}", error);
             return;
         }
     };

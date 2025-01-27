@@ -74,9 +74,10 @@ turmoil = { workspace = true, optional = true }
 xxhash-rust = { version = "0.8.12", default-features = false, features = ["xxh3"] }
 urlencoding = "2.1.0"
 vint64 = "1.0.1"
-# Our "service-remove" branch with support for peer removal.
+# Our for with support for peer removal and non-string error types.
 # https://github.com/windy1/zeroconf-rs/issues/67
-zeroconf = { git = "https://github.com/inetic/zeroconf-rs", rev = "9e66dc1292b29548b12b3588aa89923502ab3f03" }
+# https://github.com/windy1/zeroconf-rs/pull/73
+zeroconf = { git = "https://github.com/inetic/zeroconf-rs", rev = "11ce6b47a7b7ffa8a50a2c20521db3dcdf559c86" }
 zeroize = "1.6.0"
 
 [dev-dependencies]

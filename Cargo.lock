@@ -5549,7 +5549,7 @@ dependencies = [
 [[package]]
 name = "zeroconf"
 version = "0.15.0"
-source = "git+https://github.com/inetic/zeroconf-rs?rev=9e66dc1292b29548b12b3588aa89923502ab3f03#9e66dc1292b29548b12b3588aa89923502ab3f03"
+source = "git+https://github.com/inetic/zeroconf-rs?rev=11ce6b47a7b7ffa8a50a2c20521db3dcdf559c86#11ce6b47a7b7ffa8a50a2c20521db3dcdf559c86"
 dependencies = [
  "avahi-sys",
  "bonjour-sys",
@@ -5558,13 +5558,14 @@ dependencies = [
  "derive_builder",
  "libc",
  "log",
+ "thiserror 1.0.69",
  "zeroconf-macros",
 ]
 
 [[package]]
 name = "zeroconf-macros"
 version = "0.1.4"
-source = "git+https://github.com/inetic/zeroconf-rs?rev=9e66dc1292b29548b12b3588aa89923502ab3f03#9e66dc1292b29548b12b3588aa89923502ab3f03"
+source = "git+https://github.com/inetic/zeroconf-rs?rev=11ce6b47a7b7ffa8a50a2c20521db3dcdf559c86#11ce6b47a7b7ffa8a50a2c20521db3dcdf559c86"
 dependencies = [
  "quote",
  "syn 2.0.89",
