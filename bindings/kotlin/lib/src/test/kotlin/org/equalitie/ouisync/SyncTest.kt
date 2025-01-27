@@ -57,7 +57,7 @@ class SyncTest {
         sessionA.bindNetwork(listOf("quic/127.0.0.1:0"))
         sessionB.bindNetwork(listOf("quic/127.0.0.1:0"))
 
-        val addrsA = sessionA.networkListenerAddrs()
+        val addrsA = sessionA.networkLocalListenerAddrs()
         sessionB.addUserProvidedPeers(addrsA)
 
         repoA.setSyncEnabled(true)

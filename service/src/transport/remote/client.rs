@@ -1,6 +1,6 @@
 use std::{borrow::Cow, io, sync::Arc};
 
-use ouisync::{crypto::sign::Signature, RepositoryId, WriteSecrets};
+use ouisync::{crypto::sign::Signature, PeerAddr, RepositoryId, WriteSecrets};
 
 use futures_util::{
     stream::{SplitSink, SplitStream},
@@ -117,6 +117,13 @@ impl RemoteClient {
             Err(ClientError::Response(error)) if error.code() == ErrorCode::NotFound => Ok(false),
             Err(error) => Err(error),
         }
+    }
+
+    pub async fn get_listener_addrs(&mut self) -> Result<Vec<PeerAddr>, ClientError> {
+        Ok(self
+            .invoke(protocol::v1::Request::GetListenerAddrs)
+            .await?
+            .try_into()?)
     }
 
     pub async fn close(&mut self) {

@@ -70,7 +70,8 @@ pub enum Request {
     NetworkGetExternalAddrV4,
     NetworkGetExternalAddrV6,
     NetworkGetHighestSeenProtocolVersion,
-    NetworkGetListenerAddrs,
+    NetworkGetLocalListenerAddrs,
+    NetworkGetRemoteListenerAddrs(String),
     NetworkGetNatBehavior,
     NetworkGetPeers,
     NetworkGetRuntimeId,
@@ -289,8 +290,8 @@ mod tests {
                 "81ac6e6574776f726b5f62696e6491b2717569632f302e302e302e303a3132333435",
             ),
             (
-                Request::NetworkGetListenerAddrs,
-                "ba6e6574776f726b5f6765745f6c697374656e65725f6164647273",
+                Request::NetworkGetLocalListenerAddrs,
+                "d9206e6574776f726b5f6765745f6c6f63616c5f6c697374656e65725f6164647273",
             ),
             (
                 Request::RepositoryCreate {

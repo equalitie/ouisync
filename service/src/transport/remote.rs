@@ -119,10 +119,13 @@ fn into_write_error(src: ws::Error) -> WriteError {
 #[cfg(test)]
 mod tests {
     use super::RemoteClient;
-    use std::{net::Ipv4Addr, sync::Arc};
+    use std::{
+        net::{Ipv4Addr, Ipv6Addr},
+        sync::Arc,
+    };
 
     use assert_matches::assert_matches;
-    use ouisync::WriteSecrets;
+    use ouisync::{PeerAddr, WriteSecrets};
     use tempfile::TempDir;
     use tokio::fs;
     use tokio_rustls::rustls::{self, ClientConfig};
@@ -217,6 +220,35 @@ mod tests {
         let repository_id = WriteSecrets::random().id;
 
         assert_matches!(client.mirror_exists(&repository_id).await, Ok(false));
+
+        runner.stop().await.close().await;
+    }
+
+    #[tokio::test]
+    async fn get_listener_addrs() {
+        let (_temp_dir, runner, mut client) = setup().await;
+
+        assert_matches!(
+            client.get_listener_addrs().await,
+            Ok(addrs) => assert_eq!(addrs, vec![])
+        );
+
+        let service = runner.stop().await;
+        service
+            .state()
+            .bind_network(&[
+                PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into()),
+                PeerAddr::Quic((Ipv6Addr::LOCALHOST, 0).into()),
+            ])
+            .await;
+        let expected_addrs = service.state().network.listener_local_addrs();
+
+        let runner = ServiceRunner::start(service);
+
+        assert_matches!(
+            client.get_listener_addrs().await,
+            Ok(actual_addrs) => assert_eq!(actual_addrs, expected_addrs)
+        );
 
         runner.stop().await.close().await;
     }

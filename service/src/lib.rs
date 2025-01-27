@@ -394,8 +394,11 @@ impl Service {
             Request::NetworkGetHighestSeenProtocolVersion => {
                 Ok(self.state.network.highest_seen_protocol_version().into())
             }
-            Request::NetworkGetListenerAddrs => {
+            Request::NetworkGetLocalListenerAddrs => {
                 Ok(self.state.network.listener_local_addrs().into())
+            }
+            Request::NetworkGetRemoteListenerAddrs(host) => {
+                Ok(self.state.remote_listener_addrs(&host).await?.into())
             }
             Request::NetworkGetNatBehavior => Ok(self.state.network.nat_behavior().await.into()),
             Request::NetworkGetPeers => {

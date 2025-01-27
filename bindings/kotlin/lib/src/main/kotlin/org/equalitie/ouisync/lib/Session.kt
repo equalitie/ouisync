@@ -120,16 +120,26 @@ class Session private constructor(
             .mapNotNull {
                 when (it) {
                     is NetworkEvent -> it
-                    is Any -> NetworkEvent.PEER_SET_CHANGE
+                    is Unit -> NetworkEvent.PEER_SET_CHANGE
                     else -> null
                 }
             }
 
     /**
-     * Returns the listener interface addresses.
+     * Returns the listener addresses of this Ouisync instance.
      */
-    suspend fun networkListenerAddrs(): List<String> {
-        val list = client.invoke(NetworkGetListenerAddrs()) as List<*>
+    suspend fun networkLocalListenerAddrs(): List<String> {
+        val list = client.invoke(NetworkGetLocalListenerAddrs()) as List<*>
+        return list.filterIsInstance<String>()
+    }
+
+    /**
+     * Returns the listener addresses of the specified remote Ouisync instance.
+     * Works only if the remote control API is enabled on the remote instance. Typically used with
+     * cache servers.
+     */
+    suspend fun networkRemoteListenerAddrs(host: String): List<String> {
+        val list = client.invoke(NetworkGetRemoteListenerAddrs(host)) as List<*>
         return list.filterIsInstance<String>()
     }
 

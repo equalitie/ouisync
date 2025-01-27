@@ -44,7 +44,7 @@ class SessionTest {
     fun bindNetwork() = runTest {
         session.bindNetwork(listOf("quic/0.0.0.0:0"))
 
-        val addrs = session.networkListenerAddrs()
+        val addrs = session.networkLocalListenerAddrs()
         assertEquals(1, addrs.size)
         assertTrue(addrs[0].startsWith("quic/0.0.0.0"))
     }

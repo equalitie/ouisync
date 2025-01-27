@@ -65,7 +65,7 @@ void main() {
     // One event for each block created (one for the root directory and one for the file)
     final expect = expectLater(repo2.events, emitsInOrder([null, null]));
 
-    final addrs = await session1.listenerAddrs;
+    final addrs = await session1.localListenerAddrs;
     await session2.addUserProvidedPeers(addrs);
 
     final file = await File.create(repo1, "file.txt");
@@ -75,7 +75,7 @@ void main() {
   });
 
   test('notification on peers change', () async {
-    final addr = await session1.listenerAddrs.then((addrs) => addrs.first);
+    final addr = await session1.localListenerAddrs.then((addrs) => addrs.first);
 
     final expect = expectLater(
       session2.networkEvents.asyncMap((_) => session2.peers),
@@ -93,7 +93,7 @@ void main() {
   });
 
   test('network stats', () async {
-    final addr = await session1.listenerAddrs.then((addrs) => addrs.first);
+    final addr = await session1.localListenerAddrs.then((addrs) => addrs.first);
     await session2.addUserProvidedPeers([addr]);
 
     final file = await File.create(repo1, 'file.txt');

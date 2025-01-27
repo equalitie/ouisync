@@ -430,7 +430,7 @@ mod tests {
 
         // Connect A and B
         let addrs_a: Vec<PeerAddr> = client_a
-            .invoke(MessageId::next(), Request::NetworkGetListenerAddrs)
+            .invoke(MessageId::next(), Request::NetworkGetLocalListenerAddrs)
             .await
             .unwrap();
         let () = client_b
