@@ -370,7 +370,7 @@ async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfi
     let key = keys.into_iter().next().ok_or_else(|| {
         tracing::error!(
             "failed to load TLS key from {}: no keys found",
-            cert_path.display()
+            key_path.display()
         );
 
         Error::TlsKeysNotFound

@@ -43,7 +43,7 @@ pin_project! {
     }
 }
 
-impl<'a, S, D> Future for TryCollectInto<'a, S, D>
+impl<S, D> Future for TryCollectInto<'_, S, D>
 where
     S: TryStream,
     D: Extend<S::Ok>,

@@ -34,21 +34,24 @@ pub async fn load_certificates_from_dir(dir: &Path) -> io::Result<Vec<Certificat
 
 /// Loads certificates from the given file.
 pub async fn load_certificates_from_file(path: impl AsRef<Path>) -> io::Result<Vec<Certificate>> {
-    load_pems(path.as_ref(), "CERTIFICATE")
+    load_pems(path.as_ref(), &["CERTIFICATE"])
         .await
         .map(|pems| pems.map(Certificate).collect())
 }
 
 /// Loads private keys from the given file.
 pub async fn load_keys_from_file(path: impl AsRef<Path>) -> io::Result<Vec<PrivateKey>> {
-    load_pems(path.as_ref(), "PRIVATE KEY")
-        .await
-        .map(|pems| pems.map(PrivateKey).collect())
+    load_pems(
+        path.as_ref(),
+        &["PRIVATE KEY", "EC PRIVATE KEY", "RSA PRIVATE KEY"],
+    )
+    .await
+    .map(|pems| pems.map(PrivateKey).collect())
 }
 
 async fn load_pems<'a>(
     path: &Path,
-    tag: &'a str,
+    tags: &'a [&'a str],
 ) -> io::Result<impl Iterator<Item = Vec<u8>> + 'a> {
     let content = fs::read(path).await?;
 
@@ -56,7 +59,7 @@ async fn load_pems<'a>(
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
         .map(move |pems| {
             pems.into_iter()
-                .filter(move |pem| pem.tag() == tag)
+                .filter(move |pem| tags.contains(&pem.tag()))
                 .map(|pem| pem.into_contents())
         })
 }

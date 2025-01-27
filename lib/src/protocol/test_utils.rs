@@ -125,7 +125,7 @@ impl Snapshot {
 
 pub(crate) struct InnerLayer<'a>(&'a Snapshot, usize);
 
-impl<'a> InnerLayer<'a> {
+impl InnerLayer<'_> {
     pub fn inner_maps(&self) -> impl Iterator<Item = (&Hash, &InnerNodes)> {
         self.0.inners[self.1].iter().map(move |(path, nodes)| {
             let parent_hash = self.0.parent_hash(self.1, path);

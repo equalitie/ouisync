@@ -1,3 +1,7 @@
+//! These structures are used to generate ephemeral id that uniquely identifies a replica. Changes
+//! every time the replica is restarted. The cryptography involved is to ensure one replica can't
+//! claim to be another one.
+
 use crate::crypto::{
     sign::{Keypair, PublicKey, Signature},
     Digest, Hashable,
@@ -6,10 +10,6 @@ use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-
-/// These structures are used to generate ephemeral id that uniquely identifies a replica. Changes
-/// every time the replica is restarted. The cryptography involved is to ensure one replica can't
-/// claim to be another one.
 
 pub struct SecretRuntimeId {
     keypair: Keypair,

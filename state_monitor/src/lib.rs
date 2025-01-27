@@ -436,7 +436,7 @@ pub struct MutexGuardWrap<'a, T> {
     guard: BlockingMutexGuard<'a, T>,
 }
 
-impl<'a, T> core::ops::Deref for MutexGuardWrap<'a, T> {
+impl<T> core::ops::Deref for MutexGuardWrap<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -444,13 +444,13 @@ impl<'a, T> core::ops::Deref for MutexGuardWrap<'a, T> {
     }
 }
 
-impl<'a, T> core::ops::DerefMut for MutexGuardWrap<'a, T> {
+impl<T> core::ops::DerefMut for MutexGuardWrap<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.guard
     }
 }
 
-impl<'a, T> Drop for MutexGuardWrap<'a, T> {
+impl<T> Drop for MutexGuardWrap<'_, T> {
     fn drop(&mut self) {
         self.monitor.shared.changed();
     }
@@ -531,7 +531,7 @@ impl Serialize for StateMonitor {
 struct ValuesSerializer<'a>(&'a IndexMap<String, MonitoredValueHandle>);
 struct ChildrenSerializer<'a>(&'a IndexMap<MonitorId, ChildEntry>);
 
-impl<'a> Serialize for ValuesSerializer<'a> {
+impl Serialize for ValuesSerializer<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -545,7 +545,7 @@ impl<'a> Serialize for ValuesSerializer<'a> {
     }
 }
 
-impl<'a> Serialize for ChildrenSerializer<'a> {
+impl Serialize for ChildrenSerializer<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

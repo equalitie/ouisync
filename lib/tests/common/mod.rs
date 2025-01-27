@@ -489,7 +489,6 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) -> Option<Payload>
 
 /// Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 /// file content matches.
-
 pub(crate) async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
     expect_file_version_content(repo, path, None, expected_content).await
 }

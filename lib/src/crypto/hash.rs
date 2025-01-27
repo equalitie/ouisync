@@ -139,7 +139,7 @@ pub trait Hashable {
     }
 }
 
-impl<'a, T> Hashable for &'a T
+impl<T> Hashable for &'_ T
 where
     T: Hashable + ?Sized,
 {
