@@ -32,20 +32,22 @@ final class RepositoryTests: XCTestCase {
     func testDirectoryCreateAndRemove() async throws {
         let repo = try await client.createRepository(at: "baz")
         var stat = try await repo.entryType(at: "dir")
-        XCTAssertEqual(stat, .none)
+        XCTAssertNil(stat)
         var entries = try await repo.listDirectory(at: "/")
         XCTAssertEqual(entries.count, 0)
 
         try await repo.createDirectory(at: "dir")
-        stat = try await repo.entryType(at: "dir")
-        XCTAssertEqual(stat, .Directory)
+        switch try await repo.entryType(at: "dir") {
+        case .Directory: break
+        default: XCTFail("Not a folder")
+        }
         entries = try await repo.listDirectory(at: "/")
         XCTAssertEqual(entries.count, 1)
         XCTAssertEqual(entries[0].name, "dir")
 
         try await repo.removeDirectory(at: "dir")
         stat = try await repo.entryType(at: "dir")
-        XCTAssertEqual(stat, .none)
+        XCTAssertNil(stat)
         entries = try await repo.listDirectory(at: "/")
         XCTAssertEqual(entries.count, 0)
     }

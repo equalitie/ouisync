@@ -16,6 +16,8 @@ export 'bindings.dart'
     show
         AccessMode,
         EntryType,
+        EntryType_File,
+        EntryType_Directory,
         ErrorCode,
         LogLevel,
         NetworkEvent,
@@ -408,7 +410,7 @@ class Repository {
   /// Returns the type (file, directory, ..) of the entry at [path]. Returns `null` if the entry
   /// doesn't exists.
   Future<EntryType?> entryType(String path) async {
-    final raw = await _client.invoke<int?>('repository_entry_type', {
+    final raw = await _client.invoke<Object?>('repository_entry_type', {
       'repository': _handle,
       'path': path,
     });
@@ -634,13 +636,13 @@ class DirEntry {
   static DirEntry decode(Object? raw) {
     final map = raw as List<Object?>;
     final name = map[0] as String;
-    final type = map[1] as int;
+    final type = map[1] as Object;
 
     return DirEntry(name, EntryType.decode(type));
   }
 
   @override
-  String toString() => '$name (${entryType.name})';
+  String toString() => '$name ($entryType)';
 }
 
 /// A reference to a directory (folder) in a [Repository].

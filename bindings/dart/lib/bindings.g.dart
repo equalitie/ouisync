@@ -23,28 +23,6 @@ enum AccessMode {
 
 }
 
-enum EntryType {
-  file,
-  directory,
-  ;
-
-  static EntryType decode(int n) {
-    switch (n) {
-      case 1: return EntryType.file;
-      case 2: return EntryType.directory;
-      default: throw ArgumentError('invalid value: $n');
-    }
-  }
-
-  int encode() {
-    switch (this) {
-      case EntryType.file: return 1;
-      case EntryType.directory: return 2;
-    }
-  }
-
-}
-
 enum ErrorCode {
   ok,
   permissionDenied,

@@ -2,11 +2,13 @@ import CryptoKit
 import Foundation
 import OuisyncService
 
+
 // @retroactive doesn't work in Ventura, which I still use
 extension ErrorCode: Error, CustomDebugStringConvertible {
     public var debugDescription: String { "OuisyncError(code=\(rawValue))" }
 }
 public typealias OuisyncError = ErrorCode
+
 
 // FIXME: updating this at runtime is unsafe and should be cast to atomic
 public var ouisyncLogHandler: ((LogLevel, String) -> Void)?

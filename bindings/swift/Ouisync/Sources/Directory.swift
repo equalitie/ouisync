@@ -11,8 +11,7 @@ public extension Repository {
         try await client.invoke("directory_read", with: ["repository": handle,
                                                          "path": .string(path)]).arrayValue.orThrow.map {
             guard let arr = $0.arrayValue, arr.count == 2 else { throw OuisyncError.InvalidData }
-            return try (name: arr[0].stringValue.orThrow,
-                        type: EntryType(rawValue: arr[1].uint8Value.orThrow).orThrow)
+            return try (name: arr[0].stringValue.orThrow, type: .init(arr[1]).orThrow)
         }
     }
 

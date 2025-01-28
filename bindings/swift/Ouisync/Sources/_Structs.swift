@@ -1,4 +1,5 @@
 import MessagePack
+import Foundation
 
 
 extension Optional {
@@ -52,7 +53,29 @@ public struct PeerInfo {
 }
 
 
-public struct Progress {
+public enum EntryType: Equatable {
+    case File(_ version: Data)
+    case Directory(_ version: Data)
+
+    init?(_ value: MessagePackValue) throws {
+        switch value {
+        case .nil:
+            return nil
+        case .map(let fields):
+            guard fields.count == 1, let pair = fields.first, let version = pair.value.dataValue,
+                  version.count == 32 else { throw OuisyncError.InvalidData }
+            switch try pair.key.stringValue.orThrow {
+            case "File": self = .File(version)
+            case "Directory": self = .Directory(version)
+            default: throw OuisyncError.InvalidData
+            }
+        default: throw OuisyncError.InvalidData
+        }
+    }
+}
+
+
+public struct SyncProgress {
     public let value: UInt64
     public let total: UInt64
 
@@ -72,11 +95,6 @@ public enum AccessMode: UInt8 {
     case Read = 1
     /// Repository is both readable and writable.
     case Write = 2
-}
-
-public enum EntryType: UInt8 {
-    case File = 1
-    case Directory = 2
 }
 
 public enum NetworkEvent: UInt8 {

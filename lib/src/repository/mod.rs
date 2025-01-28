@@ -21,7 +21,7 @@ use crate::{
     access_control::{Access, AccessChange, AccessKeys, AccessMode, AccessSecrets, LocalSecret},
     block_tracker::BlockRequestMode,
     branch::{Branch, BranchShared},
-    crypto::{sign::PublicKey, PasswordSalt},
+    crypto::{Hash, Hashable, PasswordSalt, sign::PublicKey},
     db::{self, DatabaseId},
     debug::DebugPrinter,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef, EntryType},
@@ -585,14 +585,19 @@ impl Repository {
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
-    /// If the entry exists, returns its `EntryType`, otherwise returns `EntryNotFound`.
-    pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
+    /// If the entry exists, returns its `EntryType`, as well as it's version hash,
+    /// otherwise fails with `EntryNotFound`.
+    pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<(EntryType, Hash)> {
         match path::decompose(path.as_ref()) {
-            Some((parent, name)) => {
-                let parent = self.open_directory(parent).await?;
-                Ok(parent.lookup_unique(name)?.entry_type())
-            }
-            None => Ok(EntryType::Directory),
+            None => Ok((EntryType::Directory, self.get_merged_version_vector().await?.hash())),
+            Some((parent, name)) => self
+                .open_directory(parent)
+                .await?
+                .lookup_unique(name)
+                .map(|child| match child.entry_type() {
+                    EntryType::File => (EntryType::File, child.version_vector().hash()),
+                    EntryType::Directory => (EntryType::Directory, child.version_vector().hash()),
+                }),
         }
     }
 

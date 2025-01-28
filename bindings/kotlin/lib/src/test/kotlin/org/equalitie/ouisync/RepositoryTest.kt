@@ -160,7 +160,7 @@ class RepositoryTest {
     @Test
     fun entryType() = runTest {
         withRepo {
-            assertEquals(EntryType.DIRECTORY, it.entryType("/"))
+            assertTrue(it.entryType("/") is EntryType.Directory)
             assertNull(it.entryType("missing.txt"))
         }
     }
@@ -171,7 +171,7 @@ class RepositoryTest {
             File.create(repo, "foo.txt").close()
 
             repo.moveEntry("foo.txt", "bar.txt")
-            assertEquals(EntryType.FILE, repo.entryType("bar.txt"))
+            assertTrue(repo.entryType("bar.txt") is EntryType.File)
             assertNull(repo.entryType("foo.txt"))
         }
     }
@@ -204,7 +204,7 @@ class RepositoryTest {
 
             val file = File.create(repo, name)
             file.close()
-            assertEquals(EntryType.FILE, repo.entryType(name))
+            assertTrue(repo.entryType(name) is EntryType.File)
 
             File.remove(repo, name)
             assertNull(repo.entryType(name))
@@ -259,7 +259,7 @@ class RepositoryTest {
             assertNull(repo.entryType(dirName))
 
             Directory.create(repo, dirName)
-            assertEquals(EntryType.DIRECTORY, repo.entryType(dirName))
+            assertTrue(repo.entryType(dirName) is EntryType.Directory)
 
             val dir0 = Directory.read(repo, dirName)
             assertEquals(0, dir0.size)
@@ -269,7 +269,7 @@ class RepositoryTest {
             val dir1 = Directory.read(repo, dirName)
             assertEquals(1, dir1.size)
             assertEquals(fileName, dir1.elementAt(0).name)
-            assertEquals(EntryType.FILE, dir1.elementAt(0).entryType)
+            assertTrue(dir1.elementAt(0).entryType is EntryType.File)
 
             Directory.remove(repo, dirName, recursive = true)
             assertNull(repo.entryType(dirName))

@@ -2,9 +2,34 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:ouisync/exception.dart';
 import 'package:path/path.dart';
 
 export 'bindings.g.dart';
+
+sealed class EntryType {
+  static EntryType decode(Object foo) {
+    if (foo is! Map || foo.length != 1) { throw InvalidData("Not a one entry map"); }
+    return switch (foo.entries.first.key) {
+      "File" => EntryType_File(foo.entries.first.value),
+      "Directory" => EntryType_Directory(foo.entries.first.value),
+      final key => throw InvalidData("Unknown EntryType: $key")
+    };
+  }
+}
+
+// ignore: camel_case_types
+class EntryType_File extends EntryType {
+  final Uint8List version;
+  EntryType_File(this.version);
+}
+
+// ignore: camel_case_types
+class EntryType_Directory extends EntryType {
+  final Uint8List version;
+  EntryType_Directory(this.version);
+}
+
 
 /// Callback for `start_service` and `stop_service`.
 typedef StatusCallback = Void Function(Pointer<Void>, Uint16);

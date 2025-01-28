@@ -1,6 +1,6 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{
-    AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress, ShareToken,
+    AccessMode, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress, ShareToken,
     Stats, StorageSize,
 };
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,7 @@ pub enum Response {
     Bytes(Bytes),
     Directory(Vec<DirectoryEntry>),
     Duration(Duration),
-    EntryType(EntryType),
+    EntryType(StatEntry),
     File(FileHandle),
     NetworkEvent(NetworkEvent),
     NetworkStats(Stats),
@@ -177,7 +177,7 @@ impl_response_conversion!(AccessMode(AccessMode));
 impl_response_conversion!(Bool(bool));
 impl_response_conversion!(Directory(Vec<DirectoryEntry>));
 impl_response_conversion!(Duration(Duration));
-impl_response_conversion!(EntryType(EntryType));
+impl_response_conversion!(EntryType(StatEntry));
 impl_response_conversion!(File(FileHandle));
 impl_response_conversion!(NetworkEvent(NetworkEvent));
 impl_response_conversion!(NetworkStats(Stats));
@@ -201,9 +201,15 @@ impl_response_conversion!(U64(u64));
 pub struct UnexpectedResponse;
 
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub enum StatEntry {
+    File(#[serde(with = "serde_bytes")] [u8; 32]),
+    Directory(#[serde(with = "serde_bytes")] [u8; 32]),
+}
+
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct DirectoryEntry {
     pub name: String,
-    pub entry_type: EntryType,
+    pub entry_type: StatEntry,
 }
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]

@@ -139,10 +139,8 @@ public extension Repository {
 
     /// Returns the `EntryType` at `path`, or `nil` if there's nothing that location
     func entryType(at path: String) async throws -> EntryType? {
-        let res = try await client.invoke("repository_entry_type", with: ["repository": handle,
-                                                                          "path": .string(path)])
-        if case .nil = res { return nil } // FIXME: this should just be an enum type
-        return try EntryType(rawValue: res.uint8Value.orThrow).orThrow
+        try await .init(client.invoke("repository_entry_type", with: ["repository": handle,
+                                                                      "path": .string(path)]))
     }
 
     /// Returns whether the entry (file or directory) at `path` exists.
@@ -185,8 +183,8 @@ public extension Repository {
                                                           "mode": .uint(UInt64(mode.rawValue))]))
     }
 
-    var syncProgress: Progress { get async throws {
-        try await Progress(client.invoke("repository_sync_progress", with: handle))
+    var syncProgress: SyncProgress { get async throws {
+        try await .init(client.invoke("repository_sync_progress", with: handle))
     } }
 
     var infoHash: String { get async throws {
