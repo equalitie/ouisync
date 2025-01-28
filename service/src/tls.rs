@@ -48,7 +48,7 @@ pub(crate) async fn make_server_config(
     let key = keys.into_iter().next().ok_or_else(|| {
         tracing::error!(
             "failed to load TLS key from {}: no keys found",
-            cert_path.display()
+            key_path.display()
         );
 
         Error::TlsKeysNotFound
@@ -125,7 +125,7 @@ async fn load_certificates_from_dir(dir: &Path) -> io::Result<Vec<CertificateDer
 async fn load_certificates_from_file(
     path: impl AsRef<Path>,
 ) -> io::Result<Vec<CertificateDer<'static>>> {
-    load_pems(path.as_ref(), "CERTIFICATE")
+    load_pems(path.as_ref(), &["CERTIFICATE"])
         .await
         .map(|pems| pems.map(|content| content.into()).collect())
 }
@@ -134,7 +134,12 @@ async fn load_certificates_from_file(
 pub async fn load_keys_from_file(
     path: impl AsRef<Path>,
 ) -> io::Result<Vec<PrivateKeyDer<'static>>> {
-    load_pems(path.as_ref(), "PRIVATE KEY").await.map(|pems| {
+    load_pems(
+        path.as_ref(),
+        &["PRIVATE KEY", "EC PRIVATE KEY", "RSA PRIVATE KEY"],
+    )
+    .await
+    .map(|pems| {
         pems.map(|content| PrivatePkcs8KeyDer::from(content).into())
             .collect()
     })
@@ -142,7 +147,7 @@ pub async fn load_keys_from_file(
 
 async fn load_pems<'a>(
     path: &Path,
-    tag: &'a str,
+    tags: &'a [&str],
 ) -> io::Result<impl Iterator<Item = Vec<u8>> + 'a> {
     let content = fs::read(path).await?;
 
@@ -150,7 +155,7 @@ async fn load_pems<'a>(
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
         .map(move |pems| {
             pems.into_iter()
-                .filter(move |pem| pem.tag() == tag)
+                .filter(move |pem| tags.contains(&pem.tag()))
                 .map(|pem| pem.into_contents())
         })
 }
