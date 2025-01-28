@@ -12,16 +12,12 @@ FROM scratch AS runtime
 
 EXPOSE 20209/tcp 20209/udp
 
-ENV PATH=/                       \
-    OUISYNC_CONFIG_DIR=/config   \
-    OUISYNC_STORE_DIR=/store     \
-    OUISYNC_MOUNT_DIR=/mount     \
-    OUISYNC_SOCKET=/ouisync.sock \
+ENV PATH=/                     \
+    OUISYNC_CONFIG_DIR=/config \
     RUST_LOG=ouisync=debug
 
 COPY --from=builder /usr/bin/ouisync /
-
-RUN ["ouisync", "bind", "quic/0.0.0.0:20209", "quic/[::]:20209", "tcp/[::]:20209"]
+COPY docker/config /config
 
 ENTRYPOINT ["ouisync"]
 CMD ["start"]

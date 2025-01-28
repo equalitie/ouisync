@@ -141,7 +141,7 @@ pub enum ClientError {
     #[error("failed to receive response")]
     Read(#[from] ReadError),
     #[error("server responded with error")]
-    Response(ProtocolError),
+    Response(#[source] ProtocolError),
     #[error("unexpected response")]
     UnexpectedResponse,
     #[error("failed to send request")]

@@ -371,7 +371,9 @@ internal class NetworkBind(val addrs: List<String>) : Request() {
 
 internal class NetworkSubscribe : EmptyRequest()
 
-internal class NetworkGetListenerAddrs : EmptyRequest()
+internal class NetworkGetLocalListenerAddrs : EmptyRequest()
+
+internal class NetworkGetRemoteListenerAddrs(host: String) : ValueRequest<String>(host)
 
 internal class NetworkAddUserProvidedPeers : ValueRequest<List<String>> {
     constructor(value: List<String>) : super(value)

@@ -32,6 +32,8 @@ pub(super) mod v1 {
         },
         /// Check that the repository exists on the remote server.
         Exists { repository_id: RepositoryId },
+        /// Gets the listener addresses of the remote server
+        GetListenerAddrs,
     }
 }
 
