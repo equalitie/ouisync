@@ -223,17 +223,16 @@ public extension Repository {
             return try res.stringValue.orThrow
         } }
 
-        @usableFromInline static func cast(e: (String, (String?, String?))) -> MessagePackValue {[
-            "key": .string(e.0),
-            "old": e.1.0 == nil ? .nil : .string(e.1.0!),
-            "new": e.1.1 == nil ? .nil : .string(e.1.1!)
-        ]}
-
         public func update(_ edits: [String: (from: String?, to: String?)]) async throws -> Bool {
-            try await repository.client.invoke("repository_set_metadata",
-                                               with: ["repository": repository.handle,
-                                                     "edits": .array(edits.map(Self.cast))]
-            ).boolValue.orThrow
+            func toString(_ val: String?) -> MessagePackValue {
+                guard let val else { return .nil }
+                return .string(val)
+            }
+            return try await repository.client.invoke("repository_set_metadata", with: [
+                "repository": repository.handle,
+                "edits": .array(edits.map {["key": .string($0.key),
+                                            "old": toString($0.value.from),
+                                            "new": toString($0.value.to)]})]).boolValue.orThrow
         }
     }
 
@@ -284,7 +283,7 @@ public extension Repository {
          * as a default argument for `keep existing secret` on both sides of the ffi */
         func encode(_ arg: CreateSecret?) -> MessagePackValue {
             guard let arg else { return .string("disable") }
-            return arg.value == KEEP_EXISTING.value ? .nil : ["enable": readSecret!.value]
+            return arg.value == KEEP_EXISTING.value ? .nil : ["enable": arg.value]
         }
         try await client.invoke("repository_set_access", with: ["repository": handle,
                                                                 "read": encode(readSecret),

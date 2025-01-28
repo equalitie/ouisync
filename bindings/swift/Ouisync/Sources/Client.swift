@@ -108,12 +108,17 @@ import Network
                                    as: UInt64? = nil) async throws -> MessagePackValue {
         guard case .ready = sock.state else { throw OuisyncError.ConnectionAborted }
         return try await withUnsafeThrowingContinuation {
-            let id = `as` ?? Self.next()
-//            print("\(id) -> \(method)(\(arg))")
+            // serialize and ensure outgoing message size is below `limit`
             let body = pack([.string(method): arg])
+            guard let size = UInt32(exactly: body.count), size < limit
+            else { return $0.resume(throwing: OuisyncError.InvalidInput) }
+
+            // allocate id and create length-prefixed payload
+            let id = `as` ?? Self.next()
+            //            print("\(id) -> \(method)(\(arg))")
             var message = Data(count: 12)
             message.withUnsafeMutableBytes {
-                $0.storeBytes(of: UInt32(exactly: body.count + 8)!.bigEndian, as: UInt32.self)
+                $0.storeBytes(of: (size + 8).bigEndian, as: UInt32.self)
                 $0.storeBytes(of: id, toByteOffset: 4, as: UInt64.self)
             }
             message.append(body)
@@ -157,8 +162,8 @@ import Network
         sock.receive(minimumIncompleteLength: 12, maximumLength: 12) {
             [weak self] header, _ , _, err in MainActor.assumeIsolated {
                 guard let self else { return }
-                guard err == nil else {
-                    return self.abort("Unexpected IO error while reading header: \(err!)")
+                if let err {
+                    return self.abort("Unexpected IO error while reading header: \(err)")
                 }
                 guard let header, header.count == 12 else {
                     return self.abort("Unexpected EOF while reading header")
@@ -177,8 +182,8 @@ import Network
                 self.sock.receive(minimumIncompleteLength: size, maximumLength: size) {
                     [weak self] body, _, _, err in MainActor.assumeIsolated {
                         guard let self else { return }
-                        guard err == nil else {
-                            return self.abort("Unexpected IO error while reading body: \(err!)")
+                        if let err {
+                            return self.abort("Unexpected IO error while reading body: \(err)")
                         }
                         guard let body, body.count == size else {
                             return self.abort("Unexpected EOF while reading body")
@@ -198,8 +203,10 @@ import Network
                         if let success = payload["success"] {
                             if success.stringValue != nil {
                                 result = .success(.nil)
-                            } else if let sub = success.dictionaryValue, sub.count == 1 {
-                                result = .success(sub.values.first!)
+                            } else if let sub = success.dictionaryValue,
+                                      sub.count == 1,
+                                      let val = sub.values.first {
+                                result = .success(val)
                             } else {
                                 return self.abort("Received unrecognized result: \(success)")
                             }

@@ -2,7 +2,10 @@ import CryptoKit
 import Foundation
 import OuisyncService
 
-extension ErrorCode: Error {} // @retroactive doesn't work in Ventura, which I still use
+// @retroactive doesn't work in Ventura, which I still use
+extension ErrorCode: Error, CustomDebugStringConvertible {
+    public var debugDescription: String { "OuisyncError(code=\(rawValue))" }
+}
 public typealias OuisyncError = ErrorCode
 
 // FIXME: updating this at runtime is unsafe and should be cast to atomic
@@ -20,7 +23,7 @@ private func directLogHandler(_ level: LogLevel, _ ptr: UnsafePointer<UInt8>?, _
     if loggingConfigured { return }
     loggingConfigured = true
     let err = init_log(nil, directLogHandler)
-    if err != .Ok { throw err }
+    guard case .Ok = err else { throw err }
 }
 
 
