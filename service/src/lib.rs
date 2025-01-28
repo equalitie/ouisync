@@ -46,7 +46,6 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
-use tracing::instrument;
 use transport::{
     local::{AuthKey, LocalServer},
     remote::{AcceptedRemoteConnection, RemoteServer},
@@ -250,7 +249,6 @@ impl Service {
         &mut self.state
     }
 
-    #[instrument(skip(self))]
     async fn handle_message(
         &mut self,
         conn_id: ConnectionId,
@@ -258,10 +256,11 @@ impl Service {
     ) {
         match message {
             Ok(message) => {
+                let span = tracing::trace_span!("request", message = ?message.payload);
                 let id = message.id;
                 let result = self.dispatch_message(conn_id, message).await;
 
-                tracing::debug!(?result);
+                span.in_scope(|| tracing::trace!(?result));
 
                 let message = Message {
                     id,
