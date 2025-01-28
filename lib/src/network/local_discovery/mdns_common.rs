@@ -103,3 +103,48 @@ impl Table {
         unreferenced_addrs
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_test() {
+        {
+            let mut table = Table::new();
+
+            let foo_name = "foo".to_owned();
+            let foo_addr = PeerAddr::Quic(([192, 168, 1, 2], 1000).into());
+
+            table.insert(foo_name.clone(), foo_addr.clone());
+
+            assert_eq!(table.remove(foo_name), [foo_addr].into());
+        }
+        {
+            let mut table = Table::new();
+
+            let foo_name = "foo".to_owned();
+            let foo_addr1 = PeerAddr::Quic(([192, 168, 1, 2], 1000).into());
+            let foo_addr2 = PeerAddr::Quic(([192, 168, 1, 3], 1000).into());
+
+            table.insert(foo_name.clone(), foo_addr1.clone());
+            table.insert(foo_name.clone(), foo_addr2.clone());
+
+            assert_eq!(table.remove(foo_name), [foo_addr1, foo_addr2].into());
+        }
+
+        {
+            let mut table = Table::new();
+
+            let foo_name = "foo".to_owned();
+            let bar_name = "bar".to_owned();
+            let addr = PeerAddr::Quic(([192, 168, 1, 2], 1000).into());
+
+            table.insert(foo_name.clone(), addr.clone());
+            table.insert(bar_name.clone(), addr.clone());
+
+            assert_eq!(table.remove(foo_name), [].into());
+            assert_eq!(table.remove(bar_name), [addr].into());
+        }
+    }
+}
