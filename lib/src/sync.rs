@@ -103,48 +103,6 @@ impl Future for AwaitDrop {
     }
 }
 
-/// Wrapper that allows non-blocking concurrent read or replace of the underlying value.
-pub(crate) mod atomic_slot {
-    use deadlock::BlockingMutex;
-    use std::{mem, ops::Deref, sync::Arc};
-
-    pub struct AtomicSlot<T>(BlockingMutex<Arc<T>>);
-
-    impl<T> AtomicSlot<T> {
-        pub fn new(value: T) -> Self {
-            Self(BlockingMutex::new(Arc::new(value)))
-        }
-
-        /// Obtain read access to the underlying value without blocking.
-        pub fn read(&self) -> Guard<T> {
-            Guard(self.0.lock().unwrap().clone())
-        }
-
-        /// Atomically replace the current value with the provided one and returns the previous one.
-        pub fn swap(&self, value: T) -> Guard<T> {
-            let value = Arc::new(value);
-            Guard(mem::replace(&mut *self.0.lock().unwrap(), value))
-        }
-    }
-
-    /// Handle to provide read access to a value stored in `AtomicSlot`.
-    pub struct Guard<T>(Arc<T>);
-
-    impl<T> From<T> for Guard<T> {
-        fn from(value: T) -> Self {
-            Self(Arc::new(value))
-        }
-    }
-
-    impl<T> Deref for Guard<T> {
-        type Target = T;
-
-        fn deref(&self) -> &Self::Target {
-            self.0.deref()
-        }
-    }
-}
-
 /// Similar to `tokio::sync::broadcast` but does not enqueue the values. Instead, it "accumulates"
 /// them into a set. Advantages include that one doesn't need to specify the recv buffer size and
 /// the `insert` (analogue to `broadcast::send`) is non-async and never fails.
