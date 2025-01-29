@@ -34,10 +34,14 @@ pub fn configure(
 pub struct Connector;
 
 impl Connector {
-    pub async fn connect(&self, addr: SocketAddr) -> Result<Connection, Error> {
-        let stream = TcpStream::connect(addr).await?;
-
-        Ok(Connection::new(stream, yamux::Mode::Client, addr))
+    pub fn connect(
+        &self,
+        addr: SocketAddr,
+    ) -> impl Future<Output = Result<Connection, Error>> + Send + 'static {
+        async move {
+            let stream = TcpStream::connect(addr).await?;
+            Ok(Connection::new(stream, yamux::Mode::Client, addr))
+        }
     }
 }
 
