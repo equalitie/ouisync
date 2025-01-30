@@ -52,7 +52,6 @@ class Session {
     // that one instead. If we do spawn, we are responsible for logging
     if (startServer) {
       try {
-        logInit(callback: logger, tag: 'Server');
         server = await Server.start(
           configPath: configPath,
           debugLabel: debugLabel,
