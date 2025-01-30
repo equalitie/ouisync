@@ -19,5 +19,5 @@ clap = { workspace = true  }
 ctrlc = { version = "3.4.5", features = ["termination"] }
 os_pipe = "1.1.4"
 
-[target.'cfg(any(target_os = "linux", target_os = "osx"))'.dependencies]
-libc = "0.2.126"
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))'.dependencies]
+libc = "0.2.129"

@@ -25,6 +25,7 @@ pub use dummy::{mount, MountGuard, MultiRepoVFS};
 // ---------------------------------------------------------------------------------
 
 #[cfg(test)]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod tests;
 
 use ouisync_lib::Repository;

@@ -1,4 +1,5 @@
-mod utils;
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+mod utils {
 
 use self::utils::{check_eq, eventually, Bin, CountWrite, RngRead};
 use anyhow::{format_err, Result};
@@ -398,4 +399,6 @@ fn setup() -> (Bin, Bin) {
     b.mount();
 
     (a, b)
+}
+
 }
