@@ -93,21 +93,22 @@ impl<'a> Builder<'a> {
             .callback
             .map(|(callback, pool)| callback::layer(callback, pool));
 
-        tracing_subscriber::registry()
+        let result = tracing_subscriber::registry()
             .with(create_log_filter())
             .with(stdout_layer)
             .with(file_layer)
             .with(callback_layer)
-            .try_init()
-            // `Err` here just means the logger is already initialized, it's OK to ignore it.
-            .unwrap_or(());
+            .try_init();
 
-        // Log panics
-        let default_panic_hook = panic::take_hook();
-        panic::set_hook(Box::new(move |panic_info| {
-            log_panic(panic_info);
-            default_panic_hook(panic_info);
-        }));
+        // `Err` here means the logger is already initialized. Use it to ensure the panic hook is set up only once.
+        if result.is_ok() {
+            // Log panics
+            let default_panic_hook = panic::take_hook();
+            panic::set_hook(Box::new(move |panic_info| {
+                log_panic(panic_info);
+                default_panic_hook(panic_info);
+            }));
+        }
 
         Ok(Logger)
     }

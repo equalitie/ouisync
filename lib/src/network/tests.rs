@@ -58,11 +58,6 @@ async fn transfer_snapshot_between_two_replicas(
     .await
 }
 
-#[tokio::test]
-async fn debug() {
-    transfer_snapshot_between_two_replicas_case(1, 1, 1, 0).await
-}
-
 async fn transfer_snapshot_between_two_replicas_case(
     leaf_count: usize,
     changeset_count: usize,
