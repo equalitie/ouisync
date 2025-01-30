@@ -1,12 +1,15 @@
-/* Swift package manager command plugin: Used to download and compile any rust dependencies
-
- Due to apple's policies regarding plugin access, this must be run manually manually and granted
- permission to bypass the sandbox restrictions. Can be run by right clicking OuisyncLib from Xcode
- or directly from the command line via: `swift package cargo-fetch`.
-
- For automated tasks, the permissions can be automatically granted on invocation via the
- `--allow-network-connections` and `--allow-writing-to-package-directory` flags respectively or
- the sandbox can be disabled altogether via `--disable-sandbox` though the latter is untested. */
+/* Swift package manager command plugin: invokes `update.sh` to download and compile rust deps.
+ *
+ * Because the companion build plugin cannot access the network, this plugin must be run every time
+ * either `Cargo.toml` or `Cargo.lock` is updated, or the next build will fail.
+ *
+ * Can be run from Xcode by right clicking on the "Ouisync" package and picking
+ * "Update rust dependencies" or directly via the command line:
+ * `swift package plugin cargo-fetch --allow-network-connections all`.
+ *
+ * After a fresh `git clone` (or `git clean` or `flutter clean` or after using the
+ * `Product > Clear Build Folder` menu action in Xcode, the `init` shell script from the swift
+ * package root MUST be run before attempting a new build (it will run this script as well) */
 import Foundation
 import PackagePlugin
 

@@ -1,4 +1,4 @@
-/* Swift package manager build plugin: currently invokes `build.sh` before every build.
+/* Swift package manager build plugin: invokes `build.sh` before every build.
 
  Ideally, a `.buildTool()`[1] plugin[2][3][4] is expected to provide makefile-like rules mapping
  supplied files to their requirements, which are then used by the build system to only compile the
