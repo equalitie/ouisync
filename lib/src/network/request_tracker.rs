@@ -401,15 +401,11 @@ impl Worker {
         client_id: ClientId,
         request_tx: mpsc::UnboundedSender<PendingRequest>,
     ) {
-        // tracing::trace!("insert_client");
-
         self.clients.insert(client_id, ClientState::new(request_tx));
     }
 
     #[instrument(skip(self))]
     fn remove_client(&mut self, client_id: ClientId) {
-        // tracing::trace!("remove_client");
-
         let Some(client_state) = self.clients.remove(&client_id) else {
             return;
         };
@@ -421,8 +417,6 @@ impl Worker {
 
     #[instrument(skip(self))]
     fn handle_initial(&mut self, client_id: ClientId, request: CandidateRequest) {
-        // tracing::trace!("initial");
-
         self.insert_request(client_id, request, None)
     }
 
@@ -433,8 +427,6 @@ impl Worker {
         request_key: MessageKey,
         requests: Vec<CandidateRequest>,
     ) {
-        // tracing::trace!("success");
-
         let node_key = self
             .clients
             .get(&client_id)
@@ -510,8 +502,6 @@ impl Worker {
         request_key: MessageKey,
         reason: FailureReason,
     ) {
-        // tracing::trace!("failure");
-
         let client_state = self.clients.get_mut(&client_id).expect(CLIENT_NOT_FOUND);
 
         let Some(node_key) = client_state.requests.remove(&request_key) else {
@@ -546,15 +536,17 @@ impl Worker {
 
     #[instrument(skip(self))]
     fn commit(&mut self, client_id: ClientId) {
-        // tracing::trace!("commit");
-
         // Collect all requests completed by this client.
+        //
+        // Note: `commit` is invoked via `RequestTrackerCommitter` possibly from another
+        // task/thread. This means it might be invoked out of order with the other commands and so
+        // it's possible the client might have been already removed. We need to handle that case
+        // gracefully.
         let requests: Vec<_> = self
             .clients
             .get_mut(&client_id)
-            .expect(CLIENT_NOT_FOUND)
-            .requests
-            .iter()
+            .into_iter()
+            .flat_map(|client_state| client_state.requests.iter())
             .filter(|(_, node_key)| {
                 match self
                     .requests
@@ -767,11 +759,17 @@ impl Worker {
         if send {
             let in_flight_waiters = match node.value_mut() {
                 RequestState::Suspended { waiters } | RequestState::InFlight { waiters, .. } => {
+                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+                    assert!(!waiters.contains(&client_id));
+
                     client_state.increment_pending();
                     waiters.push_back(client_id);
                     None
                 }
                 RequestState::Complete { waiters, .. } => {
+                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+                    assert!(!waiters.contains(&client_id));
+
                     client_state.increment_pending();
                     waiters.push_back(client_id);
                     None
@@ -801,6 +799,9 @@ impl Worker {
                     client_state.increment_pending();
 
                     if client_state.choked {
+                        // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+                        assert!(!waiters.contains(&client_id));
+
                         waiters.push_back(client_id);
                         None
                     } else {
@@ -810,6 +811,9 @@ impl Worker {
             };
 
             if let Some(waiters) = in_flight_waiters {
+                // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+                assert!(!waiters.contains(&client_id));
+
                 *node.value_mut() = RequestState::InFlight {
                     sender_client_id: client_id,
                     sender_timer_key: self.flight.send(client_id, request_key),
@@ -834,13 +838,20 @@ impl Worker {
 
     // Cancels a tracked request. This is a helper function that gets called after the request's
     // been already removed from the client.
+    #[instrument(skip(self))]
     fn cancel_request(
         &mut self,
         client_id: ClientId,
         node_key: GraphKey,
         reason: Option<FailureReason>,
     ) {
-        let node = self.requests.get_mut(node_key).unwrap();
+        let Some(node) = self.requests.get_mut(node_key) else {
+            // If this request is being cancelled because its client is being removed, it's possible
+            // that it's already been removed due to being ancestor of another cancelled request of
+            // the same client.
+            return;
+        };
+
         let request_key = MessageKey::from(&node.request().payload);
 
         // The client state might've been already removed at this point.
@@ -1199,6 +1210,9 @@ fn promote_waiter(
         waiters.remove(waiter_index).unwrap();
 
         client_state.send(request.clone());
+
+        // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+        assert!(!waiters.contains(&client_id));
 
         RequestState::InFlight {
             sender_client_id: client_id,
