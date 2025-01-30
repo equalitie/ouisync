@@ -203,7 +203,7 @@ impl Gateway {
 
                     match backoff.next_backoff() {
                         Some(duration) => {
-                            tracing::debug!(
+                            tracing::trace!(
                                 ?error,
                                 "Connection failed. Next attempt in {:?}",
                                 duration
