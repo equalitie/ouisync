@@ -6,14 +6,14 @@ import Network
 
 @MainActor public class Client {
     let sock: NWConnection
-    let limit: Int
+    let limit: UInt32
     private(set) var invocations = [UInt64: UnsafeContinuation<MessagePackValue, any Error>]()
     private(set) var subscriptions = [UInt64: Subscription.Continuation]()
 
     /** Connects to `127.0.0.1:port` and attempts to authenticate the peer using `key`.
      *
      * Throws on connection error or if the peer could not be authenticated. */
-    public init(_ port: UInt16, _ key: SymmetricKey, maxMessageSize: Int = 1<<18) async throws {
+    public init(_ port: UInt16, _ key: SymmetricKey, maxMessageSize: UInt32 = 1<<18) async throws {
         limit = maxMessageSize
         sock = NWConnection(to: .hostPort(host: .ipv4(.loopback),
                                           port: .init(rawValue: port)!),
@@ -83,10 +83,11 @@ import Network
     }
 
     /** Deinitializers are currently synchronous so we can't gracefully unsubscribe, but we can
-     * schedule a `RST` packet in order to allow  the server to clean up after this connection */
+     * schedule a `RST` packet in order to allow the server to clean up after this connection */
     deinit { sock.cancel() }
 
     // MARK: end of public API
+
     /** This internal function prints `reason` to the standard log, then closes the socket and fails
      * all outstanding requests with `OuisyncError.ConnectionAborted`; intended for use as a generic
      * __panic handler__ whenever a non-recoverable protocol error occurs. */
@@ -115,7 +116,7 @@ import Network
 
             // allocate id and create length-prefixed payload
             let id = `as` ?? Self.next()
-            //            print("\(id) -> \(method)(\(arg))")
+//            print("\(id) -> \(method)(\(arg))")
             var message = Data(count: 12)
             message.withUnsafeMutableBytes {
                 $0.storeBytes(of: (size + 8).bigEndian, as: UInt32.self)
@@ -165,21 +166,22 @@ import Network
                 if let err {
                     return self.abort("Unexpected IO error while reading header: \(err)")
                 }
+
                 guard let header, header.count == 12 else {
                     return self.abort("Unexpected EOF while reading header")
                 }
-
-                var size = Int(0)
-                var id = UInt64(0)
+                var size = UInt32(0), id = UInt64(0)
                 header.withUnsafeBytes {
-                    size = Int(UInt32(bigEndian: $0.loadUnaligned(as: UInt32.self)))
+                    size = UInt32(bigEndian: $0.loadUnaligned(as: UInt32.self))
                     id = $0.loadUnaligned(fromByteOffset: 4, as: UInt64.self)
                 }
+
                 guard (9...self.limit).contains(size) else {
                     return self.abort("Received \(size) byte packet (must be in 9...\(self.limit))")
                 }
-                size -= 8 // messageid was already read
-                self.sock.receive(minimumIncompleteLength: size, maximumLength: size) {
+                size -= 8 // messageId was already read so it's not part of the remaining count
+
+                self.sock.receive(minimumIncompleteLength: Int(size), maximumLength: Int(size)) {
                     [weak self] body, _, _, err in MainActor.assumeIsolated {
                         guard let self else { return }
                         if let err {
