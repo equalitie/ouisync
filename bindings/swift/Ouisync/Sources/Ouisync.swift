@@ -31,8 +31,8 @@ public extension Client {
                                                 "local_discovery_enabled": .bool(localDiscovery)])
     }
 
-    var listenerAddrs: [String] { get async throws {
-        try await invoke("network_get_listener_addrs").arrayValue.orThrow.map {
+    var localListenerAddrs: [String] { get async throws {
+        try await invoke("network_get_local_listener_addrs").arrayValue.orThrow.map {
             try $0.stringValue.orThrow
         }
     } }

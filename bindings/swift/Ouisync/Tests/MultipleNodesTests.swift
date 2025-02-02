@@ -2,7 +2,7 @@ import XCTest
 import Ouisync
 
 
-final class MultiplenodesTests: XCTestCase {
+final class MultipleNodesTests: XCTestCase {
     var server1: Server!, client1: Client!, temp1: String!
     var server2: Server!, client2: Client!, temp2: String!
     var repo1, repo2: Repository!
@@ -34,13 +34,13 @@ final class MultiplenodesTests: XCTestCase {
                 if count == 2 { break }
             }
         }
-        try await client2.addUserProvidedPeers(from: client1.listenerAddrs)
+        try await client2.addUserProvidedPeers(from: client1.localListenerAddrs)
         _ = try await repo1.createFile(at: "file.txt")
         try await stream.value
     }
 
     func testNotificationOnPeersChange() async throws {
-        let addr = try await client1.listenerAddrs[0]
+        let addr = try await client1.localListenerAddrs[0]
         let stream = Task {
             for try await _ in client2.networkEvents {
                 for peer in try await client2.peers {
@@ -56,7 +56,7 @@ final class MultiplenodesTests: XCTestCase {
     }
 
     func testNetworkStats() async throws {
-        let addr = try await client1.listenerAddrs[0]
+        let addr = try await client1.localListenerAddrs[0]
         try await client2.addUserProvidedPeers(from: [addr])
         try await repo1.createFile(at: "file.txt").flush()
 
