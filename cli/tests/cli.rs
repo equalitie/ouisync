@@ -1,5 +1,4 @@
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-mod utils {
+mod utils;
 
 use self::utils::{check_eq, eventually, Bin, CountWrite, RngRead};
 use anyhow::{format_err, Result};
@@ -13,6 +12,7 @@ use std::{
 };
 
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn transfer_single_small_file() {
     let (a, b) = setup();
 
@@ -28,6 +28,7 @@ fn transfer_single_small_file() {
 }
 
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn transfer_single_large_file() {
     let (a, b) = setup();
 
@@ -52,6 +53,7 @@ fn transfer_single_large_file() {
 }
 
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn sequential_write_to_the_same_file() {
     let (a, b) = setup();
 
@@ -79,6 +81,7 @@ fn sequential_write_to_the_same_file() {
 }
 
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn fast_sequential_writes() {
     // There used to be a deadlock which would manifest whenever one of the connected replicas
     // perfomed more than one write operation (mkdir, echo foo > bar,...) quickly one after another
@@ -98,11 +101,13 @@ fn fast_sequential_writes() {
 }
 
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn concurrent_read_and_write_small_file() {
     concurrent_read_and_write_file(32);
 }
 
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn concurrent_read_and_write_large_file() {
     concurrent_read_and_write_file(1024 * 1024);
 }
@@ -141,6 +146,7 @@ fn concurrent_read_and_write_file(size: usize) {
 // large enough so that the number of blocks it consists of is greater than the capacity of the
 // notification channel.
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn concurrent_read_and_delete_file() {
     let (a, b) = setup();
 
@@ -183,6 +189,7 @@ fn concurrent_read_and_delete_file() {
 }
 
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn relay() {
     // Create three nodes: A, B and R where A and B are connected only to R but not to each other.
     // Then create a file by A and let it be received by B which requires the file to pass through
@@ -227,6 +234,7 @@ fn relay() {
 }
 
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn concurrent_update() {
     let (a, b) = setup();
 
@@ -344,6 +352,7 @@ fn check_concurrent_versions(file_path: &Path, expected_contents: &[&[u8]]) -> R
 // This test is similar to the `relay` test but using a "cache server" for the relay node instead
 // of a regular peer.
 #[test]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), ignore)]
 fn mirror() {
     // the cache server
     let r = Bin::start();
@@ -399,6 +408,4 @@ fn setup() -> (Bin, Bin) {
     b.mount();
 
     (a, b)
-}
-
 }
