@@ -33,12 +33,18 @@ pub struct Connector {
 }
 
 impl Connector {
-    pub async fn connect(&self, remote_addr: SocketAddr) -> Result<Connection, Error> {
-        self.endpoint
-            .connect(remote_addr, CERT_DOMAIN)?
-            .await
-            .map(|inner| Connection { inner })
-            .map_err(Into::into)
+    pub fn connect(
+        &self,
+        remote_addr: SocketAddr,
+    ) -> impl Future<Output = Result<Connection, Error>> + Send + 'static {
+        let connect = self.endpoint.connect(remote_addr, CERT_DOMAIN);
+
+        async move {
+            connect?
+                .await
+                .map(|inner| Connection { inner })
+                .map_err(Into::into)
+        }
     }
 
     // forcefully close all connections (any pending operation on any connection will immediatelly

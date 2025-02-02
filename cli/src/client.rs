@@ -35,7 +35,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 let () = client.invoke(Request::NetworkBind(addrs)).await?;
             }
 
-            let addrs: Vec<PeerAddr> = client.invoke(Request::NetworkGetListenerAddrs).await?;
+            let addrs: Vec<PeerAddr> = client.invoke(Request::NetworkGetLocalListenerAddrs).await?;
 
             for addr in addrs {
                 println!("{}", PeerAddrDisplay(&addr));

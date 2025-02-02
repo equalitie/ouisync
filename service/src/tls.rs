@@ -3,7 +3,7 @@ use std::{io, path::Path, sync::Arc};
 use tokio::fs;
 use tokio_rustls::rustls::{
     self,
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+    pki_types::{CertificateDer, PrivateKeyDer},
 };
 
 use crate::Error;
@@ -18,9 +18,9 @@ pub(crate) async fn make_server_config(
         .await
         .map_err(|error| {
             tracing::error!(
-                "failed to load TLS certificate from {}: {}",
-                cert_path.display(),
-                error,
+                ?error,
+                "failed to load TLS certificate from {}",
+                cert_path.display()
             );
 
             Error::TlsCertificatesNotFound
@@ -36,11 +36,7 @@ pub(crate) async fn make_server_config(
     }
 
     let keys = load_keys_from_file(&key_path).await.map_err(|error| {
-        tracing::error!(
-            "failed to load TLS key from {}: {}",
-            key_path.display(),
-            error
-        );
+        tracing::error!(?error, "failed to load TLS key from {}", key_path.display(),);
 
         Error::TlsKeysNotFound
     })?;
@@ -48,7 +44,7 @@ pub(crate) async fn make_server_config(
     let key = keys.into_iter().next().ok_or_else(|| {
         tracing::error!(
             "failed to load TLS key from {}: no keys found",
-            cert_path.display()
+            key_path.display()
         );
 
         Error::TlsKeysNotFound
@@ -57,7 +53,10 @@ pub(crate) async fn make_server_config(
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
-        .map_err(Error::TlsConfig)?;
+        .map_err(|error| {
+            tracing::error!(?error, "failed to create server TLS config");
+            Error::TlsConfig(error)
+        })?;
 
     Ok(Arc::new(config))
 }
@@ -68,6 +67,7 @@ pub(crate) async fn make_client_config(
     // Load custom root certificates (if any)
     let additional_root_certs = load_certificates_from_dir(&config_dir.join("root_certs"))
         .await
+        .inspect_err(|error| tracing::error!(?error, "failed to load TLS root certificates"))
         .map_err(Error::TlsCertificatesInvalid)?;
 
     let mut root_cert_store = rustls::RootCertStore::empty();
@@ -83,6 +83,7 @@ pub(crate) async fn make_client_config(
     for cert in additional_root_certs {
         root_cert_store
             .add(cert.clone())
+            .inspect_err(|error| tracing::error!(?error, "failed to add TLS root certificate"))
             .map_err(Error::TlsConfig)?;
     }
 
@@ -125,7 +126,7 @@ async fn load_certificates_from_dir(dir: &Path) -> io::Result<Vec<CertificateDer
 async fn load_certificates_from_file(
     path: impl AsRef<Path>,
 ) -> io::Result<Vec<CertificateDer<'static>>> {
-    load_pems(path.as_ref(), "CERTIFICATE")
+    load_pems(path.as_ref(), &["CERTIFICATE"])
         .await
         .map(|pems| pems.map(|content| content.into()).collect())
 }
@@ -134,23 +135,30 @@ async fn load_certificates_from_file(
 pub async fn load_keys_from_file(
     path: impl AsRef<Path>,
 ) -> io::Result<Vec<PrivateKeyDer<'static>>> {
-    load_pems(path.as_ref(), "PRIVATE KEY").await.map(|pems| {
-        pems.map(|content| PrivatePkcs8KeyDer::from(content).into())
-            .collect()
+    let pems = load_pems(
+        path.as_ref(),
+        &["PRIVATE KEY", "EC PRIVATE KEY", "RSA PRIVATE KEY"],
+    )
+    .await?;
+
+    pems.map(|content| {
+        PrivateKeyDer::try_from(content)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     })
+    .collect()
 }
 
 async fn load_pems<'a>(
     path: &Path,
-    tag: &'a str,
+    tags: &'a [&str],
 ) -> io::Result<impl Iterator<Item = Vec<u8>> + 'a> {
     let content = fs::read(path).await?;
 
-    pem::parse_many(content)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
-        .map(move |pems| {
-            pems.into_iter()
-                .filter(move |pem| pem.tag() == tag)
-                .map(|pem| pem.into_contents())
-        })
+    let pems = pem::parse_many(content)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+
+    Ok(pems
+        .into_iter()
+        .filter(move |pem| tags.contains(&pem.tag()))
+        .map(|pem| pem.into_contents()))
 }

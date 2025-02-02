@@ -26,7 +26,10 @@ use config_store::{ConfigError, ConfigKey, ConfigStore};
 use futures_util::{stream::FuturesUnordered, SinkExt};
 use metrics::MetricsServer;
 use ouisync::crypto::{cipher::SecretKey, PasswordSalt};
-use protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response, ResponseResult};
+use protocol::{
+    DecodeError, Message, MessageId, NetworkDefaults, ProtocolError, Request, Response,
+    ResponseResult,
+};
 use rand::{rngs::OsRng, Rng};
 use slab::Slab;
 use state::State;
@@ -195,6 +198,17 @@ impl Service {
         self.state.set_store_dir(path.into()).await
     }
 
+    /// Initialize network according to the stored config.
+    pub async fn init_network(&mut self) {
+        self.state
+            .init_network(NetworkDefaults {
+                bind: vec![],
+                port_forwarding_enabled: false,
+                local_discovery_enabled: false,
+            })
+            .await
+    }
+
     /// Enable or disable syncing for all currently open repos.
     pub async fn set_sync_enabled_all(&mut self, enabled: bool) -> Result<(), Error> {
         self.state.set_all_repositories_sync_enabled(enabled).await
@@ -242,11 +256,15 @@ impl Service {
     ) {
         match message {
             Ok(message) => {
+                let span = tracing::trace_span!("request", message = ?message.payload);
                 let id = message.id;
-                let payload = self.dispatch_message(conn_id, message).await;
+                let result = self.dispatch_message(conn_id, message).await;
+
+                span.in_scope(|| tracing::trace!(?result));
+
                 let message = Message {
                     id,
-                    payload: payload.into(),
+                    payload: result.into(),
                 };
 
                 self.send_message(conn_id, message).await;
@@ -291,8 +309,6 @@ impl Service {
         conn_id: ConnectionId,
         message: Message<Request>,
     ) -> Result<Response, ProtocolError> {
-        tracing::trace!(?message, "received");
-
         match message.payload {
             Request::DirectoryCreate { repository, path } => {
                 self.state.create_directory(repository, path).await?;
@@ -377,8 +393,11 @@ impl Service {
             Request::NetworkGetHighestSeenProtocolVersion => {
                 Ok(self.state.network.highest_seen_protocol_version().into())
             }
-            Request::NetworkGetListenerAddrs => {
+            Request::NetworkGetLocalListenerAddrs => {
                 Ok(self.state.network.listener_local_addrs().into())
+            }
+            Request::NetworkGetRemoteListenerAddrs(host) => {
+                Ok(self.state.remote_listener_addrs(&host).await?.into())
             }
             Request::NetworkGetNatBehavior => Ok(self.state.network.nat_behavior().await.into()),
             Request::NetworkGetPeers => {

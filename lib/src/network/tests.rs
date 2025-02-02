@@ -58,11 +58,6 @@ async fn transfer_snapshot_between_two_replicas(
     .await
 }
 
-#[tokio::test]
-async fn debug() {
-    transfer_snapshot_between_two_replicas_case(1, 1, 1, 0).await
-}
-
 async fn transfer_snapshot_between_two_replicas_case(
     leaf_count: usize,
     changeset_count: usize,
@@ -220,6 +215,8 @@ async fn failed_block_only_peer() {
 // for the whole duration of the test. This is to uncover any potential request caching issues.
 #[tokio::test]
 async fn failed_block_same_peer() {
+    test_utils::init_log();
+
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);

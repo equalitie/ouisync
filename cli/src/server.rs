@@ -21,6 +21,7 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
         service.set_store_dir(defaults::store_dir()).await?;
     }
 
+    service.init_network().await;
     service.set_sync_enabled_all(true).await?;
 
     select! {

@@ -109,8 +109,16 @@ class Session {
       .invoke<List<Object?>>('network_get_user_provided_peers')
       .then((list) => list.cast<String>());
 
-  Future<List<String>> get listenerAddrs => _client
-      .invoke<List<Object?>>('network_get_listener_addrs')
+  /// Returns the listener addresses of this Ouisync instance.
+  Future<List<String>> get localListenerAddrs => _client
+      .invoke<List<Object?>>('network_get_local_listener_addrs')
+      .then((list) => list.cast<String>());
+
+  /// Returns the listener addresses of the specified remote Ouisync instance.
+  /// Works only if the remote control API is enabled on the remote instance. Typically used with
+  /// cache servers.
+  Future<List<String>> remoteListenerAddrs(String host) => _client
+      .invoke<List<Object?>>('network_get_remote_listener_addrs', host)
       .then((list) => list.cast<String>());
 
   Future<String?> get externalAddressV4 =>

@@ -836,6 +836,14 @@ impl State {
         Ok(result?)
     }
 
+    pub async fn remote_listener_addrs(&self, host: &str) -> Result<Vec<PeerAddr>, Error> {
+        let mut client = self.connect_remote_client(host).await?;
+        let result = client.get_listener_addrs().await;
+        client.close().await;
+
+        Ok(result?)
+    }
+
     pub async fn share_token_mirror_exists(
         &self,
         token: &ShareToken,

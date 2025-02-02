@@ -4,9 +4,9 @@ The command line version of Ouisync.
 
 ## Installation
 
-Ouisync can be build from source or installed as a docker container.
+Ouisync can be built from source or installed as a docker container.
 
-### Build from source
+### Build from source (recommended)
 
 1. Install dependencies:
    
@@ -40,7 +40,7 @@ Run
 
     ./ouisync start
 
-Which runs Ouisync it in the foreground. To run in the background use e.g. systemd or similar.
+Which runs Ouisync in the foreground. To run it in the background use e.g. systemd or similar.
 
 #### Docker
 
@@ -68,9 +68,9 @@ It's recommended to setup docker volumes or bind mounts for these directories:
 ### Bind
 
 Before Ouisync can start syncing repositories with other peers it needs to be bound to a network
-interface and port using the `bind` command. Up to found endpoints can be specified at a time - one
+interface and port using the `bind` command. Up to four endpoints can be specified at a time - one
 for each combination of supported protocols (TCP and QUIC) and IP versions (IPv4 and IPv6). For
-example, to bind to all interfaces and random port using the QUIC protocol on both IP versions,
+example, to bind to all interfaces and a random port using the QUIC protocol on both IP versions,
 run:
 
     ouisync bind quic/0.0.0.0:0 quic/[::]:0
@@ -86,7 +86,7 @@ To create a repository, run
 
     ouisync create --name NAME
 
-This command is also used to import repositories using their share tokens
+This command is also used to import repositories using their share tokens:
 
     ouisync create --name NAME --share-token TOKEN
 
@@ -96,7 +96,7 @@ To obtain the share token of a repository, run
 
     ouisync share --name NAME
 
-Note the `--name` argument works also with prefix of the name as long as it's unique.
+Note the `--name` argument works also with a prefix of the name as long as it's unique.
 
 The share token can be optionally converted to a QR-code using e.g, [qrencode](https://fukuchi.org/works/qrencode/):
 
@@ -104,14 +104,14 @@ The share token can be optionally converted to a QR-code using e.g, [qrencode](h
 
 #### Mount
 
-To access the repository files it needs to be mounted first
+To access a repository's files, first mount the repository with:
 
     ouisync mount --name NAME
 
 This mounts the repository NAME to its default mount point (`$OUISYNC_MOUNT_DIR`/NAME). The repository
 can then be accessed like a regular directory on the filesystem.
 
-One can also mount all the repositories at once
+One can also mount all the repositories at once:
 
     ouisync mount --all
 
@@ -121,7 +121,7 @@ To list all repositories, run
 
     ouisync list-repositories
 
-or short
+or simply:
 
     ouisync ls
 
@@ -133,11 +133,11 @@ This is useful for executing bulk commands, e.g,:
 
 #### Export and import
 
-A Ouisync repository can be exported to a file in order to back it up, transfer it on a thumbdrive, etc...:
+A Ouisync repository can be exported to a file in order to back it up, transfer it onto a thumbdrive, etc...:
 
     ouisync export --name NAME path/to/file
 
-To import the file back to Ouisync (on another device, say), use:
+To import the repository's backup file back into Ouisync (on another device, for instance), use:
 
     ouisync import path/to/file
 
@@ -145,7 +145,7 @@ To import the file back to Ouisync (on another device, say), use:
 
 Run `ouisync help` to see all available commands.
 
-### Peers
+### Peer Discovery
 
 Ouisync discovers peers for repositories automatically using *Local Discovery*, *Distributed Hash Table*
 (DHT) and *Peer Discovery* (PEX). Local discovery is enabled globally:
@@ -164,12 +164,12 @@ the discovery mechanisms:
 
 ### Cache servers
 
-Cache server is an Ouisync instance that runs on a server exposed to the internet and which has the
+A cache server is a Ouisync instance that runs on a server exposed to the internet and which has the
 cache server remote API enabled. This API is used by other Ouisync instances to create temporary
-replicas of their repositories on the server. The purpose of such server is improving connectivity
+replicas of their repositories on the server. The purpose of such a server is improving connectivity
 and availability.
 
-The cache server API requires TLS and so TLS certificate must be provisioned before enabling it. The
+The cache server API requires TLS, and so a TLS certificate must be provisioned before enabling it. The
 certificate and the private key must be placed (or symlinked) to `$OUISYNC_CONFIG_DIR/cert.pem` and
 `$OUISYNC_CONFIG_DIR/key.pem` respectively. Then the API needs to be bound to an interface and
 port, e.g.:
@@ -180,28 +180,26 @@ When running a cache server, it's highly recommended to enable *storage quota* a
 expiration* to prevent the server from running out of storage space when lot of users start using
 it.
 
-*Storage quota* is a limit on the amount of data a repository can contain. It can be enabled
- gobally
+*Storage quota* is a limit on the amount of data a repository can contain. It can be enabled globally with:
 
     ouisync quota --default 100MiB
 
-or per repository
+or per repository:
 
     ouisync quota --name NAME 1GiB
 
-The global quota is applied only to the newly created repositories, not the already existing ones.
+**Note**: The global quota is applied only to newly-created repositories, not already existing ones.
 
 *Block expiration* removes blocks (pieces of files in a repository) that haven't been accessed in
  the given time period. When a block is expired and then requested again, the cache server will try
- to restore it by requesting it again from other peers. Same like storage quota, block expiration
- can be enabled globally
+ to restore it by requesting it again from other peers. Same as storage quota, block expiration
+ can be enabled globally:
 
     ouisync block-expiration --default 43200
 
-or per repository
+or per repository:
 
     ouisync block-expiration --name NAME 86400
 
 The expiration is specified in seconds.
-
 

@@ -7,7 +7,8 @@ mod server;
 use clap::Parser;
 use options::{Command, Options};
 use ouisync_service::{transport::ClientError, Error as ServerError};
-use std::{fmt, process::ExitCode};
+use std::{error::Error as _, process::ExitCode};
+use thiserror::Error;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -25,35 +26,26 @@ async fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{:#}", error);
+            let mut source = error.source();
+            let mut first = true;
+
+            while let Some(error) = source {
+                eprint!("{}{}", if first { "" } else { " → " }, error);
+                source = error.source();
+                first = false;
+            }
+
+            eprintln!();
+
             ExitCode::FAILURE
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 enum Error {
-    Server(ServerError),
-    Client(ClientError),
-}
-
-impl From<ServerError> for Error {
-    fn from(src: ServerError) -> Self {
-        Self::Server(src)
-    }
-}
-
-impl From<ClientError> for Error {
-    fn from(src: ClientError) -> Self {
-        Self::Client(src)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Server(error) => error.fmt(f),
-            Self::Client(error) => error.fmt(f),
-        }
-    }
+    #[error("server error")]
+    Server(#[from] ServerError),
+    #[error("client error")]
+    Client(#[from] ClientError),
 }

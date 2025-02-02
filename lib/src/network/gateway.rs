@@ -1,13 +1,16 @@
 use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, seen_peers::SeenPeer};
-use crate::sync::atomic_slot::AtomicSlot;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use futures_util::future::Either;
 use net::{
     quic, tcp,
     unified::{Acceptor, Connection},
     SocketOptions,
 };
 use scoped_task::ScopedJoinHandle;
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    future::Future,
+    net::{IpAddr, SocketAddr},
+};
 use thiserror::Error;
 use tokio::{
     select,
@@ -19,9 +22,8 @@ use tracing::{field, Instrument, Span};
 
 /// Established incoming and outgoing connections.
 pub(super) struct Gateway {
-    stacks: AtomicSlot<Stacks>,
+    stacks: watch::Sender<Stacks>,
     incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
-    connectivity_tx: watch::Sender<Connectivity>,
 }
 
 impl Gateway {
@@ -30,17 +32,16 @@ impl Gateway {
     /// `incoming_tx` is the sender for the incoming connections.
     pub fn new(incoming_tx: mpsc::Sender<(Connection, PeerAddr)>) -> Self {
         let stacks = Stacks::unbound();
-        let stacks = AtomicSlot::new(stacks);
+        let stacks = watch::Sender::new(stacks);
 
         Self {
             stacks,
             incoming_tx,
-            connectivity_tx: watch::channel(Connectivity::Disabled).0,
         }
     }
 
     pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
-        let stacks = self.stacks.read();
+        let stacks = self.stacks.borrow();
         [
             stacks
                 .quic_listener_local_addr_v4()
@@ -75,8 +76,8 @@ impl Gateway {
         let (next, side_channel_maker_v4, side_channel_maker_v6) =
             Stacks::bind(bind, self.incoming_tx.clone());
 
-        let prev = self.stacks.swap(next);
-        let next = self.stacks.read();
+        let prev = self.stacks.send_replace(next);
+        let next = self.stacks.borrow();
 
         if prev.quic_v4.is_some() && next.quic_v4.is_none() {
             tracing::info!("Terminated IPv4 QUIC stack");
@@ -94,15 +95,16 @@ impl Gateway {
             tracing::info!("Terminated IPv6 TCP stack");
         }
 
-        self.connectivity_tx.send_if_modified(|conn| {
-            let old_conn = *conn;
-            *conn = Connectivity::infer(&next.addresses().ip_addrs());
-            let changed = *conn != old_conn;
-            if changed {
-                tracing::info!("Changed connectivity from {:?} to {:?}", old_conn, *conn);
-            }
-            changed
-        });
+        let prev_conn = prev.connectivity();
+        let next_conn = next.connectivity();
+
+        if prev_conn != next_conn {
+            tracing::info!(
+                "Changed connectivity from {:?} to {:?}",
+                prev_conn,
+                next_conn
+            );
+        }
 
         prev.close();
 
@@ -110,11 +112,7 @@ impl Gateway {
     }
 
     pub fn connectivity(&self) -> Connectivity {
-        *self.connectivity_tx.borrow()
-    }
-
-    pub fn connectivity_subscribe(&self) -> watch::Receiver<Connectivity> {
-        self.connectivity_tx.subscribe()
+        self.stacks.borrow().connectivity()
     }
 
     pub async fn connect_with_retries(
@@ -139,8 +137,8 @@ impl Gateway {
         let mut backoff = create_backoff();
 
         let mut hole_punching_task = None;
-        let mut last_conn = Connectivity::Disabled;
-        let mut connectivity_rx = self.connectivity_subscribe();
+        let mut prev_conn = Connectivity::Disabled;
+        let mut stacks_rx = self.stacks.subscribe();
 
         loop {
             // Note: This needs to be probed each time the loop starts. When the `addr` fn returns
@@ -148,38 +146,38 @@ impl Gateway {
             // found it is no longer seeing it.
             let addr = *peer.addr_if_seen()?;
 
-            // Wait for `Connectivity` to be such that it allows us to connect. E.g. if it's
-            // `Connectivity::LocalOnly` then we can't connect to global addresses.
-            loop {
-                let conn = *connectivity_rx.borrow_and_update();
+            // Wait for a connector matching the address (in protocol and ip version) to become
+            // available. Also wait for `Connectivity` to be such that it allows us to connect.
+            // E.g. if it's `Connectivity::LocalOnly` then we can't connect to global addresses.
+            let wait_for_connectivity =
+                stacks_rx.wait_for(|stacks| stacks.allows_connection_to(&addr));
 
-                if conn.allows_connection_to(addr) {
-                    if conn.is_less_restrictive_than(last_conn) {
-                        backoff = create_backoff();
-                    }
-                    last_conn = conn;
-                    break;
-                }
-
-                select! {
-                    result = connectivity_rx.changed() => {
-                        // Unwrap is OK because `connectivity_tx` lives in `self` so it can't be
-                        // destroyed while this function is being executed.
-                        result.unwrap();
+            // Ensure `stacks` is not borrowed across `await`.
+            let connect = {
+                let stacks = select! {
+                    result = wait_for_connectivity => {
+                        // unwrap is OK here because `self.stacks` still lives.
+                        result.unwrap()
                     },
-                    _ = peer.on_unseen() => return None
+                    _ = peer.on_unseen() => return None,
+                };
+
+                let next_conn = stacks.connectivity();
+
+                if next_conn.is_less_restrictive_than(prev_conn) {
+                    backoff = create_backoff();
                 }
-            }
 
-            // Note: we need to grab fresh stacks on each loop because the network might get
-            // re-bound in the meantime which would change the connectors.
-            let stacks = self.stacks.read();
+                prev_conn = next_conn;
 
-            if hole_punching_task.is_none() {
-                hole_punching_task = stacks.start_punching_holes(addr);
-            }
+                if hole_punching_task.is_none() {
+                    hole_punching_task = stacks.start_punching_holes(addr);
+                }
 
-            match stacks.connect(addr).await {
+                stacks.connect(addr)
+            };
+
+            match connect.await {
                 Ok(socket) => {
                     // This condition is to avoid a race condition for when `Connectivity` grants
                     // us connection, but then there is a re-`bind` after which the connection
@@ -191,15 +189,13 @@ impl Gateway {
                     // (note this already works for QUIC connections because they share a common
                     // UDP socket inside `stack`, but it does not work this way for TCP
                     // connections).
-                    if !connectivity_rx.borrow().allows_connection_to(addr) {
+                    if !stacks_rx.borrow().allows_connection_to(&addr) {
                         continue;
                     }
 
                     return Some(socket);
                 }
                 Err(error) => {
-                    tracing::debug!(?error, "Connection failed");
-
                     if error.is_localy_closed() {
                         // Connector locally closed - no point in retrying.
                         return None;
@@ -207,7 +203,11 @@ impl Gateway {
 
                     match backoff.next_backoff() {
                         Some(duration) => {
-                            tracing::debug!("Next connection attempt in {:?}", duration);
+                            tracing::trace!(
+                                ?error,
+                                "Connection failed. Next attempt in {:?}",
+                                duration
+                            );
                             time::sleep(duration).await;
                         }
                         // We set max elapsed time to None above.
@@ -219,7 +219,7 @@ impl Gateway {
     }
 
     pub fn addresses(&self) -> StackAddresses {
-        self.stacks.read().addresses()
+        self.stacks.borrow().addresses()
     }
 }
 
@@ -316,6 +316,21 @@ impl Stacks {
         }
     }
 
+    fn connectivity(&self) -> Connectivity {
+        Connectivity::infer(&self.addresses())
+    }
+
+    fn allows_connection_to(&self, addr: &PeerAddr) -> bool {
+        let has_connector = match addr {
+            PeerAddr::Tcp(SocketAddr::V4(_)) => self.tcp_v4.is_some(),
+            PeerAddr::Tcp(SocketAddr::V6(_)) => self.tcp_v6.is_some(),
+            PeerAddr::Quic(SocketAddr::V4(_)) => self.quic_v4.is_some(),
+            PeerAddr::Quic(SocketAddr::V6(_)) => self.quic_v6.is_some(),
+        };
+
+        has_connector && self.connectivity().allows_connection_to(addr.ip())
+    }
+
     fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
         self.quic_v4
             .as_ref()
@@ -336,25 +351,39 @@ impl Stacks {
         self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
     }
 
-    async fn connect(&self, addr: PeerAddr) -> Result<Connection, ConnectError> {
+    fn connect(
+        &self,
+        addr: PeerAddr,
+    ) -> impl Future<Output = Result<Connection, ConnectError>> + Send + 'static {
         match addr {
-            PeerAddr::Tcp(addr) => self
-                .tcp_stack_for(&addr.ip())
-                .ok_or(ConnectError::NoSuitableConnector)?
-                .connector
-                .connect(addr)
-                .await
-                .map(Connection::Tcp)
-                .map_err(ConnectError::Tcp),
+            PeerAddr::Tcp(addr) => {
+                let connect = self
+                    .tcp_stack_for(&addr.ip())
+                    .ok_or(ConnectError::NoSuitableConnector)
+                    .map(|stack| stack.connector.connect(addr));
+                let connect = async move {
+                    connect?
+                        .await
+                        .map(Connection::Tcp)
+                        .map_err(ConnectError::Tcp)
+                };
 
-            PeerAddr::Quic(addr) => self
-                .quic_stack_for(&addr.ip())
-                .ok_or(ConnectError::NoSuitableConnector)?
-                .connector
-                .connect(addr)
-                .await
-                .map(Connection::Quic)
-                .map_err(ConnectError::Quic),
+                Either::Left(connect)
+            }
+            PeerAddr::Quic(addr) => {
+                let connect = self
+                    .quic_stack_for(&addr.ip())
+                    .ok_or(ConnectError::NoSuitableConnector)
+                    .map(|stack| stack.connector.connect(addr));
+                let connect = async move {
+                    connect?
+                        .await
+                        .map(Connection::Quic)
+                        .map_err(ConnectError::Quic)
+                };
+
+                Either::Right(connect)
+            }
         }
     }
 
@@ -641,14 +670,16 @@ impl StackAddresses {
             || needs_rebind(&self.tcp_v6, &new_stack_addresses.tcp_v6)
     }
 
-    fn ip_addrs(&self) -> Vec<IpAddr> {
+    fn is_empty(&self) -> bool {
+        self.iter().next().is_none()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &SocketAddr> {
         self.quic_v4
             .iter()
-            .chain(self.quic_v6.iter())
-            .chain(self.tcp_v4.iter())
-            .chain(self.tcp_v6.iter())
-            .map(|addr| addr.ip())
-            .collect()
+            .chain(&self.quic_v6)
+            .chain(&self.tcp_v4)
+            .chain(&self.tcp_v6)
     }
 }
 
@@ -732,14 +763,15 @@ pub(crate) enum Connectivity {
 
 impl Connectivity {
     // `addrs` are the local addresses we're binding to.
-    pub fn infer(addrs: &[IpAddr]) -> Self {
+    pub fn infer(addrs: &StackAddresses) -> Self {
         if addrs.is_empty() {
             return Self::Disabled;
         }
 
         let global = addrs
             .iter()
-            .any(|ip| ip.is_unspecified() || ip::is_global(ip));
+            .map(|addr| addr.ip())
+            .any(|ip| ip.is_unspecified() || ip::is_global(&ip));
 
         if global {
             Self::Full
@@ -748,10 +780,10 @@ impl Connectivity {
         }
     }
 
-    pub fn allows_connection_to(&self, addr: PeerAddr) -> bool {
+    pub fn allows_connection_to(&self, addr: IpAddr) -> bool {
         match self {
             Self::Disabled => false,
-            Self::LocalOnly => !ip::is_global(&addr.ip()),
+            Self::LocalOnly => !ip::is_global(&addr),
             Self::Full => true,
         }
     }

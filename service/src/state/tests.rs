@@ -392,7 +392,11 @@ async fn delete_repository_in_subdir_of_store_dir() {
             break;
         }
 
-        assert!(!fs::try_exists(path).await.unwrap());
+        assert!(
+            !fs::try_exists(path).await.unwrap(),
+            "{:?} should not exist",
+            path
+        );
     }
 
     assert!(fs::try_exists(state.store_dir().unwrap()).await.unwrap());

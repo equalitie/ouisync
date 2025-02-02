@@ -159,6 +159,7 @@ impl RemoteServerReader {
                 protocol::v1::Request::Exists { repository_id } => {
                     Request::RepositoryFind(make_repository_name(&repository_id))
                 }
+                protocol::v1::Request::GetListenerAddrs => Request::NetworkGetLocalListenerAddrs,
             },
         };
 
