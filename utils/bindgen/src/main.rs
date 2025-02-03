@@ -12,7 +12,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source_files = [
         "service/src/protocol.rs",
         "lib/src/access_control/access_mode.rs",
-        "lib/src/directory/entry_type.rs",
         "lib/src/network/event.rs",
         "lib/src/network/peer_source.rs",
         "lib/src/network/peer_state.rs",

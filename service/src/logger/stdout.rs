@@ -30,7 +30,7 @@ where
             //
             // TODO: consider using `ansi_term::enable_ansi_support()`
             // (see https://github.com/ogham/rust-ansi-term#basic-usage for more info)
-            !cfg!(any(target_os = "windows", target_os = "macos")) && io::stdout().is_terminal()
+            !cfg!(any(target_os = "windows", target_os = "macos", target_os = "ios")) && io::stdout().is_terminal()
         }
     };
 

@@ -25,6 +25,11 @@ sealed class PeerState {
     class Active(val runtimeId: String) : PeerState()
 }
 
+sealed class EntryType {
+    class File(var version: ByteArray) : EntryType()
+    class Directory(var version: ByteArray) : EntryType()
+}
+
 data class Progress(val value: Long, val total: Long)
 
 internal sealed interface Response {
@@ -73,7 +78,7 @@ internal sealed interface Response {
                         "bytes" -> unpacker.unpackByteArray()
                         "directory" -> unpacker.unpackDirectory()
                         // Duration(Duration),
-                        "entry_type" -> EntryType.decode(unpacker.unpackByte())
+                        "entry_type" -> unpacker.unpackEntryType()
                         "file", "repository", "u64" -> unpacker.unpackLong()
                         "network_event" -> NetworkEvent.decode(unpacker.unpackByte())
                         // NetworkStats(Stats),
@@ -217,13 +222,36 @@ private fun MessageUnpacker.unpackDirectory(): Directory {
     return Directory(entries)
 }
 
+internal fun MessageUnpacker.unpackEntryType(): EntryType {
+    val type = getNextFormat().getValueType()
+    return when (type) {
+        ValueType.NIL -> {
+            unpackNil()
+            throw IllegalArgumentException() // this is awkward but that's how bindgen does it too
+        }
+        ValueType.MAP -> {
+            val size = unpackMapHeader()
+            if (size != 1) {
+                throw Error.InvalidData("invalid EntryType payload: expected map of size 1, was $size")
+            }
+            val key = unpackString()
+            when (key) {
+                "File" -> EntryType.File(unpackByteArray())
+                "Directory" -> EntryType.Directory(unpackByteArray())
+                else -> throw Error.InvalidData("invalid EntryType case: '$key'")
+            }
+        }
+        else -> throw Error.InvalidData("invalid EntryType payload: expected NIL or MAP, was $type")
+    }
+}
+
 internal fun MessageUnpacker.unpackDirectoryEntry(): DirectoryEntry {
     if (unpackArrayHeader() < 2) {
         throw Error.InvalidData("invalid DirectoryEntry: too few elements")
     }
 
     val name = unpackString()
-    val entryType = EntryType.decode(unpackByte())
+    val entryType = unpackEntryType()
 
     return DirectoryEntry(name, entryType)
 }

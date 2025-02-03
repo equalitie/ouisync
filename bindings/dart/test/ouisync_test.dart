@@ -97,7 +97,7 @@ void main() {
       expect(await repo.entryType('dir'), isNull);
 
       await Directory.create(repo, 'dir');
-      expect(await repo.entryType('dir'), equals(EntryType.directory));
+      expect(await repo.entryType('dir'), isA<EntryType_Directory>());
 
       await Directory.remove(repo, 'dir');
       expect(await repo.entryType('dir'), isNull);

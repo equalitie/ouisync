@@ -277,10 +277,10 @@ fun FolderScreen(
                 path = path,
                 onEntryClicked = { entry ->
                     when (entry.entryType) {
-                        EntryType.FILE -> {
+                        is EntryType.File -> {
                             navController.navigate(FileRoute(repositoryName, "$path/${entry.name}"))
                         }
-                        EntryType.DIRECTORY -> {
+                        is EntryType.Directory -> {
                             navController.navigate(FolderRoute(repositoryName, "$path/${entry.name}"))
                         }
                     }
@@ -324,8 +324,8 @@ fun FolderDetail(
                     modifier = Modifier.padding(PADDING).fillMaxWidth(),
                 ) {
                     when (entry.entryType) {
-                        EntryType.FILE -> Icon(Icons.Default.Description, "File")
-                        EntryType.DIRECTORY -> Icon(Icons.Default.Folder, "Folder")
+                        is EntryType.File -> Icon(Icons.Default.Description, "File")
+                        is EntryType.Directory -> Icon(Icons.Default.Folder, "Folder")
                     }
 
                     Text(

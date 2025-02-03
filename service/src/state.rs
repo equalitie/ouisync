@@ -13,16 +13,17 @@ use crate::{
     error::Error,
     file::{FileHandle, FileHolder, FileSet},
     network::{self, PexConfig},
-    protocol::{DirectoryEntry, MetadataEdit, NetworkDefaults, QuotaInfo},
+    protocol::{DirectoryEntry, MetadataEdit, NetworkDefaults, QuotaInfo, StatEntry},
     repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
     tls,
     transport::remote::RemoteClient,
     utils,
 };
 use ouisync::{
-    Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
-    Network, PeerAddr, Progress, Repository, RepositoryParams, SetLocalSecret, ShareToken, Stats,
-    StorageSize,
+    crypto::Hashable,
+    Access, AccessChange, AccessMode, AccessSecrets, Credentials, JointEntryRef,
+    EntryType, Event, LocalSecret, Network, PeerAddr, Progress, Repository,
+    RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize
 };
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use state_monitor::{MonitorId, StateMonitor};
@@ -1062,13 +1063,13 @@ impl State {
         Ok(true)
     }
 
-    /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
-    /// exist.
+    /// Returns the type of repository entry (file, directory, ...) as well as its version hash
+    /// or `None` if the entry doesn't exist.
     pub async fn repository_entry_type(
         &self,
         handle: RepositoryHandle,
         path: String,
-    ) -> Result<Option<EntryType>, Error> {
+    ) -> Result<Option<StatEntry>, Error> {
         match self
             .repos
             .get(handle)
@@ -1077,7 +1078,10 @@ impl State {
             .lookup_type(path)
             .await
         {
-            Ok(entry_type) => Ok(Some(entry_type)),
+            Ok((entry_type, hash)) => Ok(Some(match entry_type {
+                EntryType::File => StatEntry::File(hash.into()),
+                EntryType::Directory => StatEntry::Directory(hash.into())
+            })),
             Err(ouisync::Error::EntryNotFound) => Ok(None),
             Err(error) => Err(error.into()),
         }
@@ -1119,22 +1123,23 @@ impl State {
         repo: RepositoryHandle,
         path: String,
     ) -> Result<Vec<DirectoryEntry>, Error> {
-        let repo = self
+        Ok(self
             .repos
             .get(repo)
             .ok_or(Error::InvalidArgument)?
-            .repository();
-
-        let dir = repo.open_directory(path).await?;
-        let entries = dir
+            .repository()
+            .open_directory(path).await?
             .entries()
             .map(|entry| DirectoryEntry {
                 name: entry.unique_name().into_owned(),
-                entry_type: entry.entry_type(),
+                entry_type: match entry {
+                    JointEntryRef::File(item) =>
+                        StatEntry::File(item.version_vector().hash().into()),
+                    JointEntryRef::Directory(item) =>
+                        StatEntry::Directory(item.version_vector().hash().into())
+                    }
             })
-            .collect();
-
-        Ok(entries)
+            .collect())
     }
 
     /// Removes the directory at the given path from the repository. If `recursive` is true it removes
@@ -1254,8 +1259,8 @@ impl State {
             .repository();
 
         match repo.lookup_type(&path).await {
-            Ok(EntryType::File) => Ok(true),
-            Ok(EntryType::Directory) => Ok(false),
+            Ok((EntryType::File, _)) => Ok(true),
+            Ok((EntryType::Directory, _)) => Ok(false),
             Err(ouisync::Error::EntryNotFound) => Ok(false),
             Err(ouisync::Error::AmbiguousEntry) => Ok(false),
             Err(error) => Err(error.into()),

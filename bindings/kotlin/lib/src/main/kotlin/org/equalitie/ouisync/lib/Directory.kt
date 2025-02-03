@@ -4,7 +4,7 @@ package org.equalitie.ouisync.lib
  * A directory entry
  *
  * @property name      name of the entry.
- * @property entryType type of the entry (i.e., file or directory).
+ * @property entryType type of the entry (i.e., file or directory) and version.
  */
 data class DirectoryEntry(val name: String, val entryType: EntryType)
 
