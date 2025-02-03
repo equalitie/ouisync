@@ -6,7 +6,7 @@ public extension Repository {
     /** Lists all entries from an existing directory at `path`.
      *
      * Throws `OuisyncError` if `path` doesn't exist or is not a directory. */
-    func listDirectory(at path: String) async throws -> [(name: String, type: EntryType)] {
+    func listDirectory(at path: String) async throws -> [DirectoryEntry] {
         // FIXME: replace this with an AsyncStream to future-proof the API
         try await client.invoke("directory_read", with: ["repository": handle,
                                                          "path": .string(path)]).arrayValue.orThrow.map {

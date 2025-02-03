@@ -75,6 +75,9 @@ public enum EntryType: Equatable {
 }
 
 
+public typealias DirectoryEntry = (name: String, type: EntryType)
+
+
 public struct SyncProgress {
     public let value: UInt64
     public let total: UInt64
