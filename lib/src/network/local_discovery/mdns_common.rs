@@ -16,7 +16,7 @@ pub(crate) fn generate_instance_name() -> String {
     // However, the suggestions for the names are to use _device_ types, which is not
     // what we can use.
     let bytes: [u8; 16] = rand::thread_rng().gen();
-    format!("{}", hex::encode(&bytes))
+    hex::encode(bytes)
 }
 
 pub(crate) struct SeenMdnsPeers {
@@ -72,14 +72,8 @@ impl Table {
     }
 
     pub(crate) fn insert(&mut self, name: String, addr: PeerAddr) {
-        self.names
-            .entry(name.clone())
-            .or_insert_with(HashSet::new)
-            .insert(addr.clone());
-        self.addrs
-            .entry(addr)
-            .or_insert_with(HashSet::new)
-            .insert(name);
+        self.names.entry(name.clone()).or_default().insert(addr);
+        self.addrs.entry(addr).or_default().insert(name);
     }
 
     // Returns a set of addresses no longer referenced by any "name" after the removal.
@@ -116,7 +110,7 @@ mod tests {
             let foo_name = "foo".to_owned();
             let foo_addr = PeerAddr::Quic(([192, 168, 1, 2], 1000).into());
 
-            table.insert(foo_name.clone(), foo_addr.clone());
+            table.insert(foo_name.clone(), foo_addr);
 
             assert_eq!(table.remove(foo_name), [foo_addr].into());
         }
@@ -127,8 +121,8 @@ mod tests {
             let foo_addr1 = PeerAddr::Quic(([192, 168, 1, 2], 1000).into());
             let foo_addr2 = PeerAddr::Quic(([192, 168, 1, 3], 1000).into());
 
-            table.insert(foo_name.clone(), foo_addr1.clone());
-            table.insert(foo_name.clone(), foo_addr2.clone());
+            table.insert(foo_name.clone(), foo_addr1);
+            table.insert(foo_name.clone(), foo_addr2);
 
             assert_eq!(table.remove(foo_name), [foo_addr1, foo_addr2].into());
         }
@@ -140,8 +134,8 @@ mod tests {
             let bar_name = "bar".to_owned();
             let addr = PeerAddr::Quic(([192, 168, 1, 2], 1000).into());
 
-            table.insert(foo_name.clone(), addr.clone());
-            table.insert(bar_name.clone(), addr.clone());
+            table.insert(foo_name.clone(), addr);
+            table.insert(bar_name.clone(), addr);
 
             assert_eq!(table.remove(foo_name), [].into());
             assert_eq!(table.remove(bar_name), [addr].into());

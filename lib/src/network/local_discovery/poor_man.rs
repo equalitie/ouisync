@@ -303,10 +303,8 @@ impl PerInterfaceLocalDiscovery {
                     tracing::error!("Failed to send discovery message: {}", error);
                     socket_provider.mark_bad(socket).await;
                 }
-            } else {
-                if let Some(value) = &beacon_responses_received {
-                    *value.get() += 1;
-                }
+            } else if let Some(value) = &beacon_responses_received {
+                *value.get() += 1;
             }
 
             let addr = match port {

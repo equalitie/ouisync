@@ -35,8 +35,8 @@ impl LocalDiscovery {
 
         Self {
             poor_man: Some(poor_man),
-            mdns_direct: mdns_direct,
-            mdns_zeroconf: mdns_zeroconf,
+            mdns_direct,
+            mdns_zeroconf,
         }
     }
 

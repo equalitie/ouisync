@@ -213,7 +213,7 @@ impl Flag {
         let prev = *lock;
         *lock = true;
         self.changed.mark_changed();
-        return prev;
+        prev
     }
 
     fn is_true(&self) -> bool {
@@ -411,8 +411,6 @@ fn parse_peer_addr(service: &ServiceDiscovery) -> Result<PeerAddr, String> {
     match service.service_type().protocol().as_ref() {
         "tcp" => Ok(PeerAddr::Tcp(sock_addr)),
         "udp" => Ok(PeerAddr::Quic(sock_addr)),
-        proto => {
-            return Err(format!("Invalid protocol {proto:?}"));
-        }
+        proto => Err(format!("Invalid protocol {proto:?}")),
     }
 }
