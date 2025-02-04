@@ -1,5 +1,6 @@
 mod mdns_common;
 mod mdns_direct;
+#[cfg(not(any(target_os = "android", target_os = "windows")))]
 mod mdns_zeroconf;
 mod poor_man;
 
@@ -7,10 +8,36 @@ use crate::network::{peer_addr::PeerPort, seen_peers::SeenPeer};
 use state_monitor::StateMonitor;
 use tokio::select;
 
+#[cfg(not(any(target_os = "android", target_os = "windows")))]
+mod platform_zeroconf {
+    pub use super::mdns_zeroconf::LocalDiscovery;
+    use super::*;
+
+    pub fn new(listener_port: PeerPort) -> Option<LocalDiscovery> {
+        Some(LocalDiscovery::new(listener_port))
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "windows"))]
+mod platform_zeroconf {
+    use super::*;
+    pub struct LocalDiscovery {}
+
+    impl LocalDiscovery {
+        pub async fn recv(&mut self) -> Option<SeenPeer> {
+            unreachable!();
+        }
+    }
+
+    pub fn new(_listener_port: super::PeerPort) -> Option<LocalDiscovery> {
+        None
+    }
+}
+
 pub struct LocalDiscovery {
     poor_man: Option<poor_man::LocalDiscovery>,
     mdns_direct: Option<mdns_direct::LocalDiscovery>,
-    mdns_zeroconf: Option<mdns_zeroconf::LocalDiscovery>,
+    mdns_zeroconf: Option<platform_zeroconf::LocalDiscovery>,
 }
 
 impl LocalDiscovery {
@@ -28,7 +55,7 @@ impl LocalDiscovery {
         let mdns_direct = mdns_direct::LocalDiscovery::new(listener_port).ok();
 
         let mdns_zeroconf = if mdns_direct.is_none() {
-            Some(mdns_zeroconf::LocalDiscovery::new(listener_port))
+            platform_zeroconf::new(listener_port)
         } else {
             None
         };
@@ -64,7 +91,7 @@ impl LocalDiscovery {
         Self {
             poor_man: None,
             mdns_direct: None,
-            mdns_zeroconf: Some(mdns_zeroconf::LocalDiscovery::new(listener_port)),
+            mdns_zeroconf: platform_zeroconf::new(listener_port),
         }
     }
 

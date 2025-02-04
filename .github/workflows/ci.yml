@@ -52,10 +52,7 @@ jobs:
 
       - name: Install system dependencies
         if: matrix.name == 'linux'
-        # NOTE: libfuse-dev is required only to build and run the ouisync
-        # application. It is not required for building and using the ouisync
-        # library.
-        run: sudo apt-get install libfuse-dev
+        run: sudo apt-get install libfuse-dev libavahi-client-dev libavahi-core-dev
 
       - name: Install cross
         if: matrix.cargo-command == 'cross'
@@ -106,7 +103,7 @@ jobs:
         # NOTE: fuse isn't used by the bindings themselves but it's required for the unit tests
         # because they use the linux version of the ouisync_ffi library, not the android one and
         # the linux version does currently unconditionally depend on fuse.
-        run: sudo apt-get install libfuse-dev
+        run: sudo apt-get install libfuse-dev libavahi-client-dev libavahi-core-dev
 
       # - name: Install NDK
       #   uses: nttld/setup-ndk@v1
@@ -181,7 +178,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
       - name: Install system dependencies
-        run: sudo apt-get install libfuse-dev
+        run: sudo apt-get install libfuse-dev libavahi-client-dev libavahi-core-dev
 
       - name: Get dart dependencies
         working-directory: bindings/dart
