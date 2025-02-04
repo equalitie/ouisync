@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_char, c_uchar, c_ulong, c_void, CStr, CString},
+    ffi::{c_char, c_uchar, c_void, CStr, CString},
     io, mem,
     path::Path,
     pin::pin,
@@ -166,7 +166,7 @@ fn init(
     Ok((runtime, service, span))
 }
 
-pub type LogCallback = extern "C" fn(LogLevel, *const c_uchar, c_ulong, c_ulong);
+pub type LogCallback = extern "C" fn(LogLevel, *const c_uchar, u64, u64);
 
 /// Initialize logging. Should be called before `service_start`.
 ///
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn init_log(file: *const c_char, callback: Option<LogCallb
 /// `ptr`, `len` and `cap` must have been obtained through the callback to `init_log` and not
 /// modified.
 #[no_mangle]
-pub unsafe extern "C" fn release_log_message(ptr: *const c_uchar, len: c_ulong, cap: c_ulong) {
+pub unsafe extern "C" fn release_log_message(ptr: *const c_uchar, len: u64, cap: u64) {
     let message = Vec::from_raw_parts(ptr as _, len as _, cap as _);
 
     if let Some(pool) = LOGGER.get().and_then(|wrapper| wrapper.pool.as_ref()) {
