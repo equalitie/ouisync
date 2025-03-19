@@ -130,7 +130,7 @@ pub(crate) mod env {
         runner: turmoil::Sim<'a>,
     }
 
-    impl<'a> Env<'a> {
+    impl Env<'_> {
         pub fn new() -> Self {
             let context = Context::new(&Handle::current());
             let runner = turmoil::Builder::new()

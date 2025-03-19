@@ -6,6 +6,7 @@ pub(crate) use self::{hash_map::HashMap, hash_set::HashSet};
 
 pub(crate) mod hash_map {
     pub use rand::RandomState;
+    pub use std::collections::hash_map::Entry;
 
     pub type HashMap<K, V, S = RandomState> = std::collections::HashMap<K, V, S>;
 }

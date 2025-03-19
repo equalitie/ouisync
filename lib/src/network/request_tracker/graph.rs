@@ -1,10 +1,9 @@
 use super::{MessageKey, PendingRequest, RequestVariant};
 use crate::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap, HashSet},
     network::message::Request,
 };
 use slab::Slab;
-use std::collections::hash_map::Entry;
 
 /// DAG for storing data for the request tracker.
 pub(super) struct Graph<T> {
@@ -302,7 +301,7 @@ mod tests {
                     .unwrap()
                     .children()
                     .collect::<HashSet<_>>(),
-                HashSet::from([child_key_0])
+                [child_key_0].into_iter().collect::<HashSet<_>>(),
             );
         }
 
@@ -312,7 +311,9 @@ mod tests {
                 .unwrap()
                 .parents()
                 .collect::<HashSet<_>>(),
-            HashSet::from([parent_key_0, parent_key_1])
+            [parent_key_0, parent_key_1]
+                .into_iter()
+                .collect::<HashSet<_>>(),
         );
 
         graph.remove(parent_key_0);
@@ -323,7 +324,7 @@ mod tests {
                 .unwrap()
                 .parents()
                 .collect::<HashSet<_>>(),
-            HashSet::from([parent_key_1])
+            [parent_key_1].into_iter().collect::<HashSet<_>>(),
         );
 
         graph.remove(parent_key_1);
@@ -368,7 +369,9 @@ mod tests {
                 .unwrap()
                 .children()
                 .collect::<HashSet<_>>(),
-            HashSet::from([child_key_0, child_key_1])
+            [child_key_0, child_key_1]
+                .into_iter()
+                .collect::<HashSet<_>>(),
         );
 
         for child_key in [child_key_0, child_key_1] {
@@ -378,7 +381,7 @@ mod tests {
                     .unwrap()
                     .parents()
                     .collect::<HashSet<_>>(),
-                HashSet::from([parent_key])
+                [parent_key].into_iter().collect::<HashSet<_>>(),
             );
         }
 
@@ -390,7 +393,7 @@ mod tests {
                 .unwrap()
                 .children()
                 .collect::<HashSet<_>>(),
-            HashSet::from([child_key_1])
+            [child_key_1].into_iter().collect::<HashSet<_>>(),
         );
 
         graph.remove(child_key_1);

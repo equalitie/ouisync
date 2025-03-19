@@ -7,12 +7,11 @@ use super::{
     stats::{ByteCounters, StatsTracker},
 };
 use crate::{
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
     sync::{AwaitDrop, DropAwaitable, WatchSenderExt},
 };
 use serde::Serialize;
 use std::{
-    collections::hash_map::Entry,
     fmt,
     sync::{
         atomic::{AtomicU64, Ordering},

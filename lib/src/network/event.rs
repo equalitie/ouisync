@@ -1,8 +1,8 @@
+use crate::collections::HashMap;
 use futures_util::{stream, Stream, StreamExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     pin::Pin,
     task::{Context, Poll},
 };
