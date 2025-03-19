@@ -15,7 +15,7 @@ file(CREATE_LINK ${CMAKE_SOURCE_DIR}/../ouisync ${CMAKE_SOURCE_DIR}/../ouisync/b
 FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.5.0 # Optionally specify a commit hash, version tag or branch here
+    GIT_TAG v0.5.1 # Optionally specify a commit hash, version tag or branch here
 )
 # Set any global configuration variables such as `Rust_TOOLCHAIN` before this line!
 FetchContent_MakeAvailable(Corrosion)
