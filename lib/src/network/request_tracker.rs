@@ -638,6 +638,11 @@ impl Worker {
                     // current sender (who's just been choked) to a waiter.
 
                     let mut waiters = mem::take(waiters);
+
+                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant
+                    // breaking bug is fixed.
+                    assert!(!waiters.contains(&client_id));
+
                     waiters.push_back(client_id);
 
                     self.flight
@@ -668,6 +673,7 @@ impl Worker {
         }
     }
 
+    #[instrument(skip(self))]
     fn insert_request(
         &mut self,
         client_id: ClientId,
@@ -686,6 +692,7 @@ impl Worker {
         self.update_request(client_id, node_key, request.state);
     }
 
+    #[instrument(skip(self))]
     fn update_request(
         &mut self,
         client_id: ClientId,
@@ -759,7 +766,8 @@ impl Worker {
         if send {
             let in_flight_waiters = match node.value_mut() {
                 RequestState::Suspended { waiters } | RequestState::InFlight { waiters, .. } => {
-                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant
+                    // breaking bug is fixed.
                     assert!(!waiters.contains(&client_id));
 
                     client_state.increment_pending();
@@ -767,7 +775,8 @@ impl Worker {
                     None
                 }
                 RequestState::Complete { waiters, .. } => {
-                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant
+                    // breaking bug is fixed.
                     assert!(!waiters.contains(&client_id));
 
                     client_state.increment_pending();
@@ -799,7 +808,8 @@ impl Worker {
                     client_state.increment_pending();
 
                     if client_state.choked {
-                        // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+                        // FIXME: remove this assert (or change to `debug_assert`) when the
+                        // invariant breaking bug is fixed.
                         assert!(!waiters.contains(&client_id));
 
                         waiters.push_back(client_id);
@@ -811,7 +821,8 @@ impl Worker {
             };
 
             if let Some(waiters) = in_flight_waiters {
-                // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+                // FIXME: remove this assert (or change to `debug_assert`) when the invariant
+                // breaking bug is fixed.
                 assert!(!waiters.contains(&client_id));
 
                 *node.value_mut() = RequestState::InFlight {
@@ -1177,6 +1188,10 @@ fn remove_waiter(waiters: &mut VecDeque<ClientId>, client_id: ClientId) {
         .position(|waiter_id| *waiter_id == client_id)
         .unwrap();
     waiters.remove(index).unwrap();
+
+    // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug
+    // is fixed.
+    assert!(!waiters.contains(&client_id));
 }
 
 fn remove_request_from_clients(
@@ -1211,7 +1226,8 @@ fn promote_waiter(
 
         client_state.send(request.clone());
 
-        // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug is fixed.
+        // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug
+        // is fixed.
         assert!(!waiters.contains(&client_id));
 
         RequestState::InFlight {

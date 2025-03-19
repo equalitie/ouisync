@@ -38,7 +38,7 @@ use std::{
     future, io,
     net::SocketAddr,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use subscription::SubscriptionStream;
 use tokio::{
@@ -153,6 +153,8 @@ impl Service {
                     }
                 }
                 Some(((conn_id, message_id), response)) = self.subscriptions.next() => {
+                    tracing::trace!(id = ?message_id, payload = ?response, "sending notification");
+
                     self.send_message(
                         conn_id,
                         Message {
@@ -258,9 +260,11 @@ impl Service {
             Ok(message) => {
                 let span = tracing::trace_span!("request", message = ?message.payload);
                 let id = message.id;
+                let start = Instant::now();
+
                 let result = self.dispatch_message(conn_id, message).await;
 
-                span.in_scope(|| tracing::trace!(?result));
+                span.in_scope(|| tracing::trace!(?result, elapsed = ?start.elapsed()));
 
                 let message = Message {
                     id,
@@ -748,8 +752,6 @@ impl Service {
             tracing::error!("connection not found");
             return;
         };
-
-        tracing::trace!(?message, "sending");
 
         match writer.send(message).await {
             Ok(()) => (),

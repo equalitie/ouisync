@@ -22,7 +22,7 @@ use bytes::{BufMut, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use net::{bus::TopicId, unified::Connection};
 use state_monitor::StateMonitor;
-use std::{collections::hash_map::Entry, sync::Arc, time::Instant};
+use std::{collections::hash_map::Entry, net::SocketAddr, sync::Arc, time::Instant};
 use tokio::{
     select,
     sync::{
@@ -55,7 +55,7 @@ impl MessageBroker {
         total_counters: Arc<ByteCounters>,
         peer_counters: Arc<ByteCounters>,
     ) -> Self {
-        let span = SpanGuard::new(&that_runtime_id);
+        let span = SpanGuard::new(&that_runtime_id, &connection.remote_addr());
 
         Self {
             this_runtime_id,
@@ -161,11 +161,9 @@ impl MessageBroker {
 struct SpanGuard(Span);
 
 impl SpanGuard {
-    fn new(that_runtime_id: &PublicRuntimeId) -> Self {
-        let span = tracing::info_span!(
-            "peer",
-            message = ?that_runtime_id.as_public_key(),
-        );
+    fn new(runtime_id: &PublicRuntimeId, addr: &SocketAddr) -> Self {
+        let span = tracing::info_span!("peer", message = ?runtime_id.as_public_key());
+        let span = tracing::info_span!(parent: &span, "conn", message = ?addr);
 
         tracing::info!(parent: &span, "Message broker created");
 
