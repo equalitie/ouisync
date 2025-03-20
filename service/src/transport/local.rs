@@ -223,7 +223,7 @@ mod tests {
         let auth_key = *service.local_auth_key();
         service
             .state_mut()
-            .set_store_dir(store_dir.clone())
+            .repository_set_store_dir(store_dir.clone())
             .await
             .unwrap();
 
@@ -274,7 +274,11 @@ mod tests {
         let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
         let port = service.local_port();
         let auth_key = *service.local_auth_key();
-        service.state_mut().set_store_dir(store_dir).await.unwrap();
+        service
+            .state_mut()
+            .repository_set_store_dir(store_dir)
+            .await
+            .unwrap();
 
         let runner = ServiceRunner::start(service);
 
@@ -299,7 +303,7 @@ mod tests {
         // Subscribe to repository event notifications
         let sub_id = MessageId::next();
         let () = client
-            .invoke(sub_id, Request::RepositorySubscribe(repo_handle))
+            .invoke(sub_id, Request::RepositorySubscribe { repo: repo_handle })
             .await
             .unwrap();
         assert_eq!(client.unsolicited_responses, []);
@@ -309,14 +313,14 @@ mod tests {
             .invoke(
                 MessageId::next(),
                 Request::FileCreate {
-                    repository: repo_handle,
+                    repo: repo_handle,
                     path: "a.txt".to_owned(),
                 },
             )
             .await
             .unwrap();
         let () = client
-            .invoke(MessageId::next(), Request::FileClose(file_handle))
+            .invoke(MessageId::next(), Request::FileClose { file: file_handle })
             .await
             .unwrap();
 
@@ -329,7 +333,7 @@ mod tests {
 
         // Unsubscribe
         let () = client
-            .invoke(MessageId::next(), Request::Unsubscribe(sub_id))
+            .invoke(MessageId::next(), Request::Unsubscribe { id: sub_id })
             .await
             .unwrap();
 
@@ -348,14 +352,14 @@ mod tests {
             .invoke(
                 MessageId::next(),
                 Request::FileCreate {
-                    repository: repo_handle,
+                    repo: repo_handle,
                     path: "b.txt".to_owned(),
                 },
             )
             .await
             .unwrap();
         let () = client
-            .invoke(MessageId::next(), Request::FileClose(file_handle))
+            .invoke(MessageId::next(), Request::FileClose { file: file_handle })
             .await
             .unwrap();
 
@@ -385,7 +389,7 @@ mod tests {
             let auth_key = *service.local_auth_key();
             service
                 .state_mut()
-                .set_store_dir(temp_dir.path().join("store_a"))
+                .repository_set_store_dir(temp_dir.path().join("store_a"))
                 .await
                 .unwrap();
             let runner = ServiceRunner::start(service);
@@ -403,7 +407,7 @@ mod tests {
             let auth_key = *service.local_auth_key();
             service
                 .state_mut()
-                .set_store_dir(temp_dir.path().join("store_b"))
+                .repository_set_store_dir(temp_dir.path().join("store_b"))
                 .await
                 .unwrap();
             let runner = ServiceRunner::start(service);
@@ -419,12 +423,22 @@ mod tests {
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 
         let () = client_a
-            .invoke(MessageId::next(), Request::NetworkBind(vec![bind_addr]))
+            .invoke(
+                MessageId::next(),
+                Request::NetworkBind {
+                    addrs: vec![bind_addr],
+                },
+            )
             .await
             .unwrap();
 
         let () = client_b
-            .invoke(MessageId::next(), Request::NetworkBind(vec![bind_addr]))
+            .invoke(
+                MessageId::next(),
+                Request::NetworkBind {
+                    addrs: vec![bind_addr],
+                },
+            )
             .await
             .unwrap();
 
@@ -436,7 +450,7 @@ mod tests {
         let () = client_b
             .invoke(
                 MessageId::next(),
-                Request::NetworkAddUserProvidedPeers(addrs_a),
+                Request::NetworkAddUserProvidedPeers { addrs: addrs_a },
             )
             .await
             .unwrap();
@@ -479,7 +493,12 @@ mod tests {
         // B subscribes to the repo notifications
         let sub_id_b = MessageId::next();
         let () = client_b
-            .invoke(sub_id_b, Request::RepositorySubscribe(repo_handle_b))
+            .invoke(
+                sub_id_b,
+                Request::RepositorySubscribe {
+                    repo: repo_handle_b,
+                },
+            )
             .await
             .unwrap();
 
@@ -488,7 +507,7 @@ mod tests {
             .invoke(
                 MessageId::next(),
                 Request::FileCreate {
-                    repository: repo_handle_a,
+                    repo: repo_handle_a,
                     path: "test.txt".to_owned(),
                 },
             )

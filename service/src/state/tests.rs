@@ -55,14 +55,14 @@ async fn non_unique_repository_name() {
 
     assert_matches!(
         state
-            .create_repository(path, None, None, None, false, false, false)
+            .repository_create(path.into(), None, None, None, false, false, false)
             .await,
         Ok(_)
     );
 
     assert_matches!(
         state
-            .create_repository(path, None, None, None, false, false, false)
+            .repository_create(path.into(), None, None, None, false, false, false)
             .await,
         Err(Error::AlreadyExists)
     );
@@ -76,8 +76,8 @@ async fn non_unique_repository_id() {
 
     assert_matches!(
         state
-            .create_repository(
-                Path::new("foo"),
+            .repository_create(
+                PathBuf::from("foo"),
                 None,
                 None,
                 Some(token.clone()),
@@ -92,8 +92,8 @@ async fn non_unique_repository_id() {
     // different name but same token
     assert_matches!(
         state
-            .create_repository(
-                Path::new("bar"),
+            .repository_create(
+                PathBuf::from("bar"),
                 None,
                 None,
                 Some(token),
@@ -114,14 +114,14 @@ async fn open_already_opened_repository() {
 
     let name = "foo";
     let handle0 = state
-        .create_repository(Path::new(name), None, None, None, false, false, false)
+        .repository_create(PathBuf::from(name), None, None, None, false, false, false)
         .await
         .unwrap();
 
     // Open by full path
     let handle1 = state
-        .open_repository(
-            &state
+        .repository_open(
+            state
                 .store_dir()
                 .unwrap()
                 .join(name)
@@ -133,7 +133,10 @@ async fn open_already_opened_repository() {
     assert_eq!(handle1, handle0);
 
     // Open by partial path
-    let handle2 = state.open_repository(Path::new(name), None).await.unwrap();
+    let handle2 = state
+        .repository_open(PathBuf::from(name), None)
+        .await
+        .unwrap();
     assert_eq!(handle2, handle0);
 }
 
@@ -149,8 +152,8 @@ async fn expire_empty_repository() {
 
     let name = "foo";
     let handle = state
-        .create_repository(
-            Path::new(name),
+        .repository_create(
+            PathBuf::from(name),
             None,
             None,
             Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
@@ -163,12 +166,12 @@ async fn expire_empty_repository() {
 
     // Repository expiration requires block expiration to be enabled as well.
     state
-        .set_block_expiration(handle, Some(Duration::from_millis(100)))
+        .repository_set_block_expiration(handle, Some(Duration::from_millis(100)))
         .await
         .unwrap();
 
     state
-        .set_repository_expiration(handle, Some(Duration::from_millis(100)))
+        .repository_set_expiration(handle, Some(Duration::from_millis(100)))
         .await
         .unwrap();
 
@@ -176,7 +179,7 @@ async fn expire_empty_repository() {
 
     state.delete_expired_repositories().await;
 
-    assert_eq!(state.find_repository(name), Err(FindError::NotFound));
+    assert_matches!(state.repository_find(name.to_owned()), Err(Error::NotFound));
     assert_eq!(
         read_dir(state.store_dir().unwrap(), "").await,
         Vec::<PathBuf>::new()
@@ -233,18 +236,18 @@ async fn expire_synced_repository() {
         .unwrap();
 
     local_state
-        .set_store_dir(temp_dir.path().join("local/store"))
+        .repository_set_store_dir(temp_dir.path().join("local/store"))
         .await
         .unwrap();
     local_state
-        .bind_network(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .network_bind(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;
     local_state.network.add_user_provided_peer(&remote_addr);
 
     let name = "foo";
     let handle = local_state
-        .create_repository(
-            Path::new(name),
+        .repository_create(
+            PathBuf::from(name),
             None,
             None,
             Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
@@ -275,11 +278,11 @@ async fn expire_synced_repository() {
 
     // Enable expiration
     local_state
-        .set_block_expiration(handle, Some(Duration::from_millis(100)))
+        .repository_set_block_expiration(handle, Some(Duration::from_millis(100)))
         .await
         .unwrap();
     local_state
-        .set_repository_expiration(handle, Some(Duration::from_millis(100)))
+        .repository_set_expiration(handle, Some(Duration::from_millis(100)))
         .await
         .unwrap();
 
@@ -287,7 +290,10 @@ async fn expire_synced_repository() {
 
     local_state.delete_expired_repositories().await;
 
-    assert_eq!(local_state.find_repository(name), Err(FindError::NotFound));
+    assert_matches!(
+        local_state.repository_find(name.to_owned()),
+        Err(Error::NotFound)
+    );
     assert_eq!(
         read_dir(local_state.store_dir().unwrap(), "").await,
         Vec::<PathBuf>::new(),
@@ -303,21 +309,21 @@ async fn move_repository() {
     let dst = Path::new("bar");
 
     let repo = state
-        .create_repository(src, None, None, None, false, false, false)
+        .repository_create(src.into(), None, None, None, false, false, false)
         .await
         .unwrap();
-    let src_full = state.repository_path(repo).unwrap();
+    let src_full = state.repository_get_path(repo).unwrap();
 
-    let file = state.create_file(repo, "test.txt".into()).await.unwrap();
-    state.write_file(file, 0, b"hello").await.unwrap();
-    state.close_file(file).await.unwrap();
+    let file = state.file_create(repo, "test.txt".into()).await.unwrap();
+    state.file_write(file, 0, b"hello".to_vec()).await.unwrap();
+    state.file_close(file).await.unwrap();
 
-    state.move_repository(repo, dst).await.unwrap();
-    let dst_full = state.repository_path(repo).unwrap();
+    state.repository_move(repo, dst.into()).await.unwrap();
+    let dst_full = state.repository_get_path(repo).unwrap();
 
-    let file = state.open_file(repo, "test.txt").await.unwrap();
+    let file = state.file_open(repo, "test.txt".to_owned()).await.unwrap();
     let len = state.file_len(file).unwrap();
-    let content = state.read_file(file, 0, len).await.unwrap();
+    let content = state.file_read(file, 0, len).await.unwrap();
     assert_eq!(content, b"hello");
 
     assert!(fs::try_exists(dst_full).await.unwrap());
@@ -348,19 +354,19 @@ async fn delete_repository_with_simple_name() {
 
     let name0 = "foo";
     let repo0 = state
-        .create_repository(Path::new(name0), None, None, None, false, false, false)
+        .repository_create(PathBuf::from(name0), None, None, None, false, false, false)
         .await
         .unwrap();
-    let path0 = state.repository_path(repo0).unwrap();
+    let path0 = state.repository_get_path(repo0).unwrap();
 
     let name1 = "bar";
     let repo1 = state
-        .create_repository(Path::new(name1), None, None, None, false, false, false)
+        .repository_create(PathBuf::from(name1), None, None, None, false, false, false)
         .await
         .unwrap();
-    let path1 = state.repository_path(repo1).unwrap();
+    let path1 = state.repository_get_path(repo1).unwrap();
 
-    state.delete_repository(repo0).await.unwrap();
+    state.repository_delete(repo0).await.unwrap();
 
     // Check none of the repo0's files (including the aux files) exist anymore
     assert_eq!(
@@ -378,12 +384,12 @@ async fn delete_repository_in_subdir_of_store_dir() {
 
     let name = "foo/bar/baz";
     let repo = state
-        .create_repository(Path::new(name), None, None, None, false, false, false)
+        .repository_create(PathBuf::from(name), None, None, None, false, false, false)
         .await
         .unwrap();
-    let path = state.repository_path(repo).unwrap();
+    let path = state.repository_get_path(repo).unwrap();
 
-    state.delete_repository(repo).await.unwrap();
+    state.repository_delete(repo).await.unwrap();
 
     assert!(!fs::try_exists(&path).await.unwrap());
 
@@ -409,20 +415,12 @@ async fn delete_repository_outside_of_store_dir() {
 
     let name = "foo";
     let repo = state
-        .create_repository(
-            &parent_dir.join(name),
-            None,
-            None,
-            None,
-            false,
-            false,
-            false,
-        )
+        .repository_create(parent_dir.join(name), None, None, None, false, false, false)
         .await
         .unwrap();
-    let path = state.repository_path(repo).unwrap();
+    let path = state.repository_get_path(repo).unwrap();
 
-    state.delete_repository(repo).await.unwrap();
+    state.repository_delete(repo).await.unwrap();
 
     assert!(!fs::try_exists(&path).await.unwrap());
     assert!(fs::try_exists(parent_dir).await.unwrap());
@@ -432,7 +430,7 @@ async fn setup() -> (TempDir, State) {
     let temp_dir = TempDir::new().unwrap();
     let mut state = State::init(temp_dir.path().join("config")).await.unwrap();
     state
-        .set_store_dir(temp_dir.path().join("store"))
+        .repository_set_store_dir(temp_dir.path().join("store"))
         .await
         .unwrap();
 

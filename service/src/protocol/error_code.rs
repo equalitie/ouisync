@@ -103,6 +103,7 @@ impl ToErrorCode for Error {
             Self::InvalidArgument => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,
             Self::NotFound => ErrorCode::NotFound,
+            Self::Ambiguous => ErrorCode::Ambiguous,
             Self::OperationNotSupported => ErrorCode::Unsupported,
             Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::Repository(error) => error.to_error_code(),

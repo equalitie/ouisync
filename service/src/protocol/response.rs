@@ -1,5 +1,6 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{
+    crypto::{cipher::SecretKey, PasswordSalt},
     AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress, ShareToken,
     Stats, StorageSize,
 };
@@ -17,6 +18,10 @@ use super::{
     helpers::{self, Bytes},
     ProtocolError,
 };
+
+// The `Response` enum is auto-generated in `build.rs` from the `#[api]` annotated methods in `impl
+// State` and `impl Service`.
+include!(concat!(env!("OUT_DIR"), "/response.rs"));
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,71 +46,6 @@ impl From<ResponseResult> for Result<Response, ProtocolError> {
             ResponseResult::Failure(error) => Err(error),
         }
     }
-}
-
-#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[expect(clippy::large_enum_variant)]
-pub enum Response {
-    None,
-    AccessMode(AccessMode),
-    Bool(bool),
-    Bytes(Bytes),
-    Directory(Vec<DirectoryEntry>),
-    Duration(Duration),
-    EntryType(EntryType),
-    File(FileHandle),
-    NetworkEvent(NetworkEvent),
-    NetworkStats(Stats),
-    Path(PathBuf),
-    PeerAddrs(#[serde(with = "helpers::strs")] Vec<PeerAddr>),
-    PeerInfo(Vec<PeerInfo>),
-    Progress(Progress),
-    QuotaInfo(QuotaInfo),
-    Repository(RepositoryHandle),
-    RepositoryEvent,
-    Repositories(BTreeMap<PathBuf, RepositoryHandle>),
-    ShareToken(ShareToken),
-    SocketAddr(#[serde(with = "helpers::str")] SocketAddr),
-    StateMonitor(StateMonitor),
-    StateMonitorEvent,
-    StorageSize(StorageSize),
-    String(String),
-    U32(u32),
-    U64(u64),
-}
-
-macro_rules! impl_response_conversion {
-    ($variant:ident ( $ty:ty )) => {
-        impl From<$ty> for Response {
-            fn from(value: $ty) -> Self {
-                Self::$variant(value)
-            }
-        }
-
-        impl TryFrom<Response> for $ty {
-            type Error = UnexpectedResponse;
-
-            fn try_from(response: Response) -> Result<Self, Self::Error> {
-                match response {
-                    Response::$variant(value) => Ok(value),
-                    _ => Err(UnexpectedResponse),
-                }
-            }
-        }
-
-        impl TryFrom<Response> for Option<$ty> {
-            type Error = UnexpectedResponse;
-
-            fn try_from(value: Response) -> Result<Self, Self::Error> {
-                match value {
-                    Response::$variant(value) => Ok(Some(value)),
-                    Response::None => Ok(None),
-                    _ => Err(UnexpectedResponse),
-                }
-            }
-        }
-    };
 }
 
 impl From<()> for Response {
@@ -166,35 +106,6 @@ impl From<SocketAddrV6> for Response {
         Self::SocketAddr(value.into())
     }
 }
-
-impl From<NatBehavior> for Response {
-    fn from(value: NatBehavior) -> Self {
-        value.to_string().into()
-    }
-}
-
-impl_response_conversion!(AccessMode(AccessMode));
-impl_response_conversion!(Bool(bool));
-impl_response_conversion!(Directory(Vec<DirectoryEntry>));
-impl_response_conversion!(Duration(Duration));
-impl_response_conversion!(EntryType(EntryType));
-impl_response_conversion!(File(FileHandle));
-impl_response_conversion!(NetworkEvent(NetworkEvent));
-impl_response_conversion!(NetworkStats(Stats));
-impl_response_conversion!(Path(PathBuf));
-impl_response_conversion!(Progress(Progress));
-impl_response_conversion!(Repository(RepositoryHandle));
-impl_response_conversion!(Repositories(BTreeMap<PathBuf, RepositoryHandle>));
-impl_response_conversion!(PeerInfo(Vec<PeerInfo>));
-impl_response_conversion!(PeerAddrs(Vec<PeerAddr>));
-impl_response_conversion!(ShareToken(ShareToken));
-impl_response_conversion!(SocketAddr(SocketAddr));
-impl_response_conversion!(StateMonitor(StateMonitor));
-impl_response_conversion!(StorageSize(StorageSize));
-impl_response_conversion!(String(String));
-impl_response_conversion!(QuotaInfo(QuotaInfo));
-impl_response_conversion!(U32(u32));
-impl_response_conversion!(U64(u64));
 
 #[derive(Error, Debug)]
 #[error("unexpected response")]
@@ -265,7 +176,7 @@ mod tests {
                 "81ac7265706f7369746f7269657382a36f6e6501a374776f02",
             ),
             (
-                Response::PeerInfo(vec![PeerInfo {
+                Response::PeerInfos(vec![PeerInfo {
                     addr: PeerAddr::Quic((Ipv4Addr::LOCALHOST, 12345).into()),
                     source: PeerSource::Listener,
                     state: PeerState::Connecting,
@@ -276,7 +187,7 @@ mod tests {
                         throughput_rx: 0,
                     },
                 }]),
-                "81a9706565725f696e666f9194b4717569632f3132372e302e302e313a3132333435010194000000\
+                "81aa706565725f696e666f739194b4717569632f3132372e302e302e313a3132333435010194000000\
                  00",
             ),
             (
@@ -300,7 +211,7 @@ mod tests {
                 Response::StorageSize(StorageSize::from_bytes(1024)),
                 "81ac73746f726167655f73697a65cd0400",
             ),
-            (Response::U32(3), "81a375333203"),
+            (Response::U16(3), "81a375313603"),
         ];
 
         for (response, expected_encoded) in test_vectors {

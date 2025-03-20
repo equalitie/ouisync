@@ -12,242 +12,9 @@ use super::{
     MessageId, MetadataEdit,
 };
 
-#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Request {
-    DirectoryCreate {
-        repository: RepositoryHandle,
-        path: String,
-    },
-    DirectoryRead {
-        repository: RepositoryHandle,
-        path: String,
-    },
-    DirectoryRemove {
-        repository: RepositoryHandle,
-        path: String,
-        recursive: bool,
-    },
-    FileClose(FileHandle),
-    FileCreate {
-        repository: RepositoryHandle,
-        path: String,
-    },
-    FileExists {
-        repository: RepositoryHandle,
-        path: String,
-    },
-    FileFlush(FileHandle),
-    FileOpen {
-        repository: RepositoryHandle,
-        path: String,
-    },
-    FileLen(FileHandle),
-    FileProgress(FileHandle),
-    FileRead {
-        file: FileHandle,
-        offset: u64,
-        len: u64,
-    },
-    FileRemove {
-        repository: RepositoryHandle,
-        path: String,
-    },
-    FileTruncate {
-        file: FileHandle,
-        len: u64,
-    },
-    FileWrite {
-        file: FileHandle,
-        offset: u64,
-        data: Bytes,
-    },
-    MetricsBind(Option<SocketAddr>),
-    MetricsGetListenerAddr,
-    NetworkAddUserProvidedPeers(#[serde(with = "helpers::strs")] Vec<PeerAddr>),
-    NetworkBind(#[serde(with = "helpers::strs")] Vec<PeerAddr>),
-    NetworkGetCurrentProtocolVersion,
-    NetworkGetExternalAddrV4,
-    NetworkGetExternalAddrV6,
-    NetworkGetHighestSeenProtocolVersion,
-    NetworkGetLocalListenerAddrs,
-    NetworkGetRemoteListenerAddrs(String),
-    NetworkGetNatBehavior,
-    NetworkGetPeers,
-    NetworkGetRuntimeId,
-    NetworkGetUserProvidedPeers,
-    NetworkInit(NetworkDefaults),
-    NetworkIsLocalDiscoveryEnabled,
-    NetworkIsPexRecvEnabled,
-    NetworkIsPexSendEnabled,
-    NetworkIsPortForwardingEnabled,
-    NetworkRemoveUserProvidedPeers(#[serde(with = "helpers::strs")] Vec<PeerAddr>),
-    NetworkSetLocalDiscoveryEnabled(bool),
-    NetworkSetPexRecvEnabled(bool),
-    NetworkSetPexSendEnabled(bool),
-    NetworkSetPortForwardingEnabled(bool),
-    NetworkStats,
-    NetworkSubscribe,
-    PasswordGenerateSalt,
-    PasswordDeriveSecretKey {
-        password: String,
-        salt: PasswordSalt,
-    },
-    RemoteControlBind(Option<SocketAddr>),
-    RemoteControlGetListenerAddr,
-    RepositoryClose(RepositoryHandle),
-    RepositoryCreate {
-        path: PathBuf,
-        read_secret: Option<SetLocalSecret>,
-        write_secret: Option<SetLocalSecret>,
-        token: Option<ShareToken>,
-        sync_enabled: bool,
-        dht_enabled: bool,
-        pex_enabled: bool,
-    },
-    RepositoryCreateMirror {
-        repository: RepositoryHandle,
-        host: String,
-    },
-    RepositoryCredentials(RepositoryHandle),
-    /// Delete a repository
-    RepositoryDelete(RepositoryHandle),
-    /// Delete a repository with the given name.
-    RepositoryDeleteByName(String),
-    RepositoryDeleteMirror {
-        repository: RepositoryHandle,
-        host: String,
-    },
-    RepositoryEntryType {
-        repository: RepositoryHandle,
-        path: String,
-    },
-    /// Export repository to a file
-    RepositoryExport {
-        repository: RepositoryHandle,
-        output: PathBuf,
-    },
-    /// Find repository whose path uniquely matches the given string.
-    RepositoryFind(String),
-    RepositoryGetAccessMode(RepositoryHandle),
-    RepositoryGetBlockExpiration(RepositoryHandle),
-    RepositoryGetDefaultBlockExpiration,
-    RepositoryGetDefaultQuota,
-    RepositoryGetDefaultRepositoryExpiration,
-    RepositoryGetInfoHash(RepositoryHandle),
-    RepositoryGetMetadata {
-        repository: RepositoryHandle,
-        key: String,
-    },
-    RepositoryGetMountPoint(RepositoryHandle),
-    RepositoryGetMountRoot,
-    RepositoryGetPath(RepositoryHandle),
-    RepositoryGetQuota(RepositoryHandle),
-    RepositoryGetRepositoryExpiration(RepositoryHandle),
-    RepositoryGetStats(RepositoryHandle),
-    RepositoryGetStoreDir,
-    RepositoryIsDhtEnabled(RepositoryHandle),
-    RepositoryIsPexEnabled(RepositoryHandle),
-    RepositoryIsSyncEnabled(RepositoryHandle),
-    RepositoryList,
-    RepositoryMirrorExists {
-        repository: RepositoryHandle,
-        host: String,
-    },
-    RepositoryMount(RepositoryHandle),
-    RepositoryMove {
-        repository: RepositoryHandle,
-        to: PathBuf,
-    },
-    RepositoryMoveEntry {
-        repository: RepositoryHandle,
-        src: String,
-        dst: String,
-    },
-    RepositoryOpen {
-        path: PathBuf,
-        secret: Option<LocalSecret>,
-    },
-    RepositoryResetAccess {
-        repository: RepositoryHandle,
-        token: ShareToken,
-    },
-    RepositorySetAccess {
-        repository: RepositoryHandle,
-        read: Option<AccessChange>,
-        write: Option<AccessChange>,
-    },
-    RepositorySetAccessMode {
-        repository: RepositoryHandle,
-        mode: AccessMode,
-        secret: Option<LocalSecret>,
-    },
-    RepositorySetBlockExpiration {
-        repository: RepositoryHandle,
-        value: Option<Duration>,
-    },
-    RepositorySetCredentials {
-        repository: RepositoryHandle,
-        credentials: Bytes,
-    },
-    RepositorySetDefaultBlockExpiration {
-        value: Option<Duration>,
-    },
-    RepositorySetDefaultQuota {
-        quota: Option<StorageSize>,
-    },
-    RepositorySetDefaultRepositoryExpiration {
-        value: Option<Duration>,
-    },
-    RepositorySetDhtEnabled {
-        repository: RepositoryHandle,
-        enabled: bool,
-    },
-    RepositorySetMetadata {
-        repository: RepositoryHandle,
-        edits: Vec<MetadataEdit>,
-    },
-    RepositorySetMountRoot(Option<PathBuf>),
-    RepositorySetPexEnabled {
-        repository: RepositoryHandle,
-        enabled: bool,
-    },
-    RepositorySetQuota {
-        repository: RepositoryHandle,
-        quota: Option<StorageSize>,
-    },
-    RepositorySetRepositoryExpiration {
-        repository: RepositoryHandle,
-        value: Option<Duration>,
-    },
-    RepositorySetStoreDir(PathBuf),
-    RepositorySetSyncEnabled {
-        repository: RepositoryHandle,
-        enabled: bool,
-    },
-    RepositoryShare {
-        repository: RepositoryHandle,
-        secret: Option<LocalSecret>,
-        mode: AccessMode,
-    },
-    RepositorySubscribe(RepositoryHandle),
-    RepositorySyncProgress(RepositoryHandle),
-    RepositoryUnmount(RepositoryHandle),
-    ShareTokenGetInfoHash(#[serde(with = "helpers::str")] ShareToken),
-    ShareTokenGetAccessMode(#[serde(with = "helpers::str")] ShareToken),
-    ShareTokenGetSuggestedName(#[serde(with = "helpers::str")] ShareToken),
-    ShareTokenMirrorExists {
-        #[serde(with = "helpers::str")]
-        token: ShareToken,
-        host: String,
-    },
-    ShareTokenNormalize(#[serde(with = "helpers::str")] ShareToken),
-    StateMonitorGet(Vec<MonitorId>),
-    StateMonitorSubscribe(Vec<MonitorId>),
-    /// Cancel a subscription identified by the given message id. The message id should be the same
-    /// that was used for sending the corresponding subscribe request.
-    Unsubscribe(MessageId),
-}
+// The `Request` enum is auto-generated in `build.rs` from the `#[api]` annotated methods in `impl
+// State` and `impl Service`.
+include!(concat!(env!("OUT_DIR"), "/request.rs"));
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NetworkDefaults {
@@ -271,23 +38,25 @@ mod tests {
 
         let test_vectors = [
             (
-                Request::NetworkAddUserProvidedPeers(vec![]),
-                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f706565727390",
+                Request::NetworkAddUserProvidedPeers { addrs: vec![] },
+                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f70656572739190",
             ),
             (
-                Request::NetworkAddUserProvidedPeers(vec![PeerAddr::Quic(SocketAddr::from((
-                    Ipv4Addr::LOCALHOST,
-                    12345,
-                )))]),
-                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f706565727391b4717569632f31\
-                 32372e302e302e313a3132333435",
+                Request::NetworkAddUserProvidedPeers {
+                    addrs: vec![PeerAddr::Quic(SocketAddr::from((
+                        Ipv4Addr::LOCALHOST,
+                        12345,
+                    )))]
+                },
+                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f70656572739191b4717569632f\
+                 3132372e302e302e313a3132333435",
             ),
             (
-                Request::NetworkBind(vec![PeerAddr::Quic(SocketAddr::from((
+                Request::NetworkBind { addrs: vec![PeerAddr::Quic(SocketAddr::from((
                     Ipv4Addr::UNSPECIFIED,
                     12345,
-                )))]),
-                "81ac6e6574776f726b5f62696e6491b2717569632f302e302e302e303a3132333435",
+                )))]},
+                "81ac6e6574776f726b5f62696e649191b2717569632f302e302e302e303a3132333435",
             ),
             (
                 Request::NetworkGetLocalListenerAddrs,

@@ -12,6 +12,7 @@ bytecodec          = "0.4.15"
 bytes              = "1.1.0"
 futures-util       = { workspace = true }
 hex_fmt            = { workspace = true }
+num_enum           = { workspace = true }
 pin-project-lite   = { workspace = true }
 # The quinn-udp package that comes in quinn version 0.11.4 - 0.11.6 (inclusive)
 # has an issue causing large packets to not be delivered between Linux and
@@ -22,6 +23,7 @@ quinn-udp          = "0.5.8"
 quinn              = "0.11.6"
 rand               = { package = "ouisync-rand", path = "../rand" }
 rcgen              = { workspace = true }
+serde              = { workspace = true }
 slab               = { workspace = true }
 socket2            = "0.5.7" # To be able to setsockopts before a socket is bound
 stun_codec         = "0.3.4"

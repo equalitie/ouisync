@@ -154,11 +154,13 @@ impl RemoteServerReader {
                     proof,
                 } => {
                     self.verify_proof(message.id, &repository_id, &proof)?;
-                    Request::RepositoryDeleteByName(make_repository_name(&repository_id))
+                    Request::RepositoryDeleteByName {
+                        name: make_repository_name(&repository_id),
+                    }
                 }
-                protocol::v1::Request::Exists { repository_id } => {
-                    Request::RepositoryFind(make_repository_name(&repository_id))
-                }
+                protocol::v1::Request::Exists { repository_id } => Request::RepositoryFind {
+                    name: make_repository_name(&repository_id),
+                },
                 protocol::v1::Request::GetListenerAddrs => Request::NetworkGetLocalListenerAddrs,
             },
         };
