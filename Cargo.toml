@@ -3,6 +3,7 @@ members = [
     "cli",
     "deadlock",
     "lib",
+    "macros",
     "metrics_ext",
     "net",
     "rand",

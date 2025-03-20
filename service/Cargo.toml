@@ -28,6 +28,7 @@ metrics                     = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 num_enum                    = { workspace = true }
 ouisync                     = { path = "../lib" }
+ouisync-macros              = { path = "../macros"}
 ouisync-tracing-fmt         = { path = "../tracing_fmt" }
 ouisync-vfs                 = { path = "../vfs" }
 pem                         = { workspace = true }

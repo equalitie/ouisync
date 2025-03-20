@@ -24,6 +24,7 @@ use ouisync::{
     Network, PeerAddr, Progress, Repository, RepositoryParams, SetLocalSecret, ShareToken, Stats,
     StorageSize,
 };
+use ouisync_macros::api;
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use state_monitor::{MonitorId, StateMonitor};
 use std::{
@@ -130,6 +131,9 @@ impl State {
 
     /// Initializes the network according to the stored configuration. If a particular network
     /// parameter is not yet configured, falls back to the given defaults.
+    // TODO: This is just an experiment for now. Eventually we'll annotate all the API functions
+    // like this.
+    #[api]
     pub async fn init_network(&self, defaults: NetworkDefaults) {
         let bind_addrs = self
             .config
