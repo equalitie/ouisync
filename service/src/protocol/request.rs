@@ -38,32 +38,33 @@ mod tests {
 
         let test_vectors = [
             (
-                Request::NetworkAddUserProvidedPeers { addrs: vec![] },
-                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f70656572739190",
+                Request::SessionAddUserProvidedPeers { addrs: vec![] },
+                "81bf73657373696f6e5f6164645f757365725f70726f76696465645f70656572739190",
             ),
             (
-                Request::NetworkAddUserProvidedPeers {
+                Request::SessionAddUserProvidedPeers {
                     addrs: vec![PeerAddr::Quic(SocketAddr::from((
                         Ipv4Addr::LOCALHOST,
                         12345,
                     )))]
                 },
-                "81bf6e6574776f726b5f6164645f757365725f70726f76696465645f70656572739191b4717569632f\
+                "81bf73657373696f6e5f6164645f757365725f70726f76696465645f70656572739191b4717569632f\
                  3132372e302e302e313a3132333435",
             ),
             (
-                Request::NetworkBind { addrs: vec![PeerAddr::Quic(SocketAddr::from((
+                Request::SessionBindNetwork { addrs: vec![PeerAddr::Quic(SocketAddr::from((
                     Ipv4Addr::UNSPECIFIED,
                     12345,
                 )))]},
-                "81ac6e6574776f726b5f62696e649191b2717569632f302e302e302e303a3132333435",
+                "81b473657373696f6e5f62696e645f6e6574776f726b9191b2717569632f302e302e302e303a313233\
+                 3435",
             ),
             (
-                Request::NetworkGetLocalListenerAddrs,
-                "d9206e6574776f726b5f6765745f6c6f63616c5f6c697374656e65725f6164647273",
+                Request::SessionGetLocalListenerAddrs,
+                "d92073657373696f6e5f6765745f6c6f63616c5f6c697374656e65725f6164647273",
             ),
             (
-                Request::RepositoryCreate {
+                Request::SessionCreateRepository {
                     path: "foo".into(),
                     read_secret: None,
                     write_secret: None,
@@ -72,10 +73,10 @@ mod tests {
                     dht_enabled: false,
                     pex_enabled: false,
                 },
-                "81b17265706f7369746f72795f63726561746597a3666f6fc0c0c0c3c2c2",
+                "81b973657373696f6e5f6372656174655f7265706f7369746f727997a3666f6fc0c0c0c3c2c2",
             ),
             (
-                Request::RepositoryCreate {
+                Request::SessionCreateRepository {
                     path: "foo".into(),
                     read_secret: None,
                     write_secret: None,
@@ -84,9 +85,9 @@ mod tests {
                     dht_enabled: false,
                     pex_enabled: false,
                 },
-                "81b17265706f7369746f72795f63726561746597a3666f6fc0c0d94568747470733a2f2f6f75697379\
-                 6e632e6e65742f722341774967663238737a62495f4b7274376153654f6c4877427868594b4d633843\
-                 775a30473050626c71783132693555c3c2c2",
+                "81b973657373696f6e5f6372656174655f7265706f7369746f727997a3666f6fc0c0d9456874747073\
+                 3a2f2f6f756973796e632e6e65742f722341774967663238737a62495f4b7274376153654f6c487742\
+                 7868594b4d633843775a30473050626c71783132693555c3c2c2",
             ),
         ];
 

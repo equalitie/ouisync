@@ -155,7 +155,7 @@ mod tests {
         assert_matches!(client.create_mirror(&secrets).await, Ok(_));
 
         let service = runner.stop().await;
-        let repos_before = service.state().repository_list();
+        let repos_before = service.state().session_list_repositories();
 
         let runner = ServiceRunner::start(service);
 
@@ -163,7 +163,7 @@ mod tests {
         assert_matches!(client.create_mirror(&secrets).await, Ok(()));
 
         let mut service = runner.stop().await;
-        let repos_after = service.state().repository_list();
+        let repos_after = service.state().session_list_repositories();
         assert_eq!(repos_before, repos_after);
 
         service.close().await;
@@ -177,13 +177,13 @@ mod tests {
         client.create_mirror(&secrets).await.unwrap();
 
         let service = runner.stop().await;
-        assert_eq!(service.state().repository_list().len(), 1);
+        assert_eq!(service.state().session_list_repositories().len(), 1);
 
         let runner = ServiceRunner::start(service);
         client.delete_mirror(&secrets).await.unwrap();
 
         let mut service = runner.stop().await;
-        assert_eq!(service.state().repository_list().len(), 0);
+        assert_eq!(service.state().session_list_repositories().len(), 0);
 
         service.close().await;
     }
@@ -236,7 +236,7 @@ mod tests {
         let service = runner.stop().await;
         service
             .state()
-            .network_bind(vec![
+            .session_bind_network(vec![
                 PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into()),
                 PeerAddr::Quic((Ipv6Addr::LOCALHOST, 0).into()),
             ])

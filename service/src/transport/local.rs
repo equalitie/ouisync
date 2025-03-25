@@ -223,7 +223,7 @@ mod tests {
         let auth_key = *service.local_auth_key();
         service
             .state_mut()
-            .repository_set_store_dir(store_dir.clone())
+            .session_set_store_dir(store_dir.clone())
             .await
             .unwrap();
 
@@ -233,7 +233,7 @@ mod tests {
 
         let message_id = MessageId::next();
         let value: Option<PathBuf> = client
-            .invoke(message_id, Request::RepositoryGetStoreDir)
+            .invoke(message_id, Request::SessionGetStoreDir)
             .await
             .unwrap();
         assert_eq!(client.unsolicited_responses, []);
@@ -276,7 +276,7 @@ mod tests {
         let auth_key = *service.local_auth_key();
         service
             .state_mut()
-            .repository_set_store_dir(store_dir)
+            .session_set_store_dir(store_dir)
             .await
             .unwrap();
 
@@ -287,7 +287,7 @@ mod tests {
         let repo_handle: RepositoryHandle = client
             .invoke(
                 MessageId::next(),
-                Request::RepositoryCreate {
+                Request::SessionCreateRepository {
                     path: "foo".into(),
                     read_secret: None,
                     write_secret: None,
@@ -312,7 +312,7 @@ mod tests {
         let file_handle: FileHandle = client
             .invoke(
                 MessageId::next(),
-                Request::FileCreate {
+                Request::RepositoryCreateFile {
                     repo: repo_handle,
                     path: "a.txt".to_owned(),
                 },
@@ -351,7 +351,7 @@ mod tests {
         let file_handle: FileHandle = client
             .invoke(
                 MessageId::next(),
-                Request::FileCreate {
+                Request::RepositoryCreateFile {
                     repo: repo_handle,
                     path: "b.txt".to_owned(),
                 },
@@ -366,7 +366,7 @@ mod tests {
         // Verify we didn't receive any further notifications by sending some request and checking
         // we only received response to that request and nothing else.
         let _: PathBuf = client
-            .invoke(MessageId::next(), Request::RepositoryGetStoreDir)
+            .invoke(MessageId::next(), Request::SessionGetStoreDir)
             .await
             .unwrap();
         assert_eq!(client.unsolicited_responses, []);
@@ -389,7 +389,7 @@ mod tests {
             let auth_key = *service.local_auth_key();
             service
                 .state_mut()
-                .repository_set_store_dir(temp_dir.path().join("store_a"))
+                .session_set_store_dir(temp_dir.path().join("store_a"))
                 .await
                 .unwrap();
             let runner = ServiceRunner::start(service);
@@ -407,7 +407,7 @@ mod tests {
             let auth_key = *service.local_auth_key();
             service
                 .state_mut()
-                .repository_set_store_dir(temp_dir.path().join("store_b"))
+                .session_set_store_dir(temp_dir.path().join("store_b"))
                 .await
                 .unwrap();
             let runner = ServiceRunner::start(service);
@@ -425,7 +425,7 @@ mod tests {
         let () = client_a
             .invoke(
                 MessageId::next(),
-                Request::NetworkBind {
+                Request::SessionBindNetwork {
                     addrs: vec![bind_addr],
                 },
             )
@@ -435,7 +435,7 @@ mod tests {
         let () = client_b
             .invoke(
                 MessageId::next(),
-                Request::NetworkBind {
+                Request::SessionBindNetwork {
                     addrs: vec![bind_addr],
                 },
             )
@@ -444,13 +444,13 @@ mod tests {
 
         // Connect A and B
         let addrs_a: Vec<PeerAddr> = client_a
-            .invoke(MessageId::next(), Request::NetworkGetLocalListenerAddrs)
+            .invoke(MessageId::next(), Request::SessionGetLocalListenerAddrs)
             .await
             .unwrap();
         let () = client_b
             .invoke(
                 MessageId::next(),
-                Request::NetworkAddUserProvidedPeers { addrs: addrs_a },
+                Request::SessionAddUserProvidedPeers { addrs: addrs_a },
             )
             .await
             .unwrap();
@@ -461,7 +461,7 @@ mod tests {
         let repo_handle_a: RepositoryHandle = client_a
             .invoke(
                 MessageId::next(),
-                Request::RepositoryCreate {
+                Request::SessionCreateRepository {
                     path: "repo".into(),
                     read_secret: None,
                     write_secret: None,
@@ -477,7 +477,7 @@ mod tests {
         let repo_handle_b: RepositoryHandle = client_b
             .invoke(
                 MessageId::next(),
-                Request::RepositoryCreate {
+                Request::SessionCreateRepository {
                     path: "repo".into(),
                     read_secret: None,
                     write_secret: None,
@@ -506,7 +506,7 @@ mod tests {
         let _: FileHandle = client_a
             .invoke(
                 MessageId::next(),
-                Request::FileCreate {
+                Request::RepositoryCreateFile {
                     repo: repo_handle_a,
                     path: "test.txt".to_owned(),
                 },

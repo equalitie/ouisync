@@ -25,19 +25,19 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
     match command {
         ClientCommand::AddPeers { addrs } => {
             let () = client
-                .invoke(Request::NetworkAddUserProvidedPeers { addrs })
+                .invoke(Request::SessionAddUserProvidedPeers { addrs })
                 .await?;
         }
         ClientCommand::Bind { addrs, disable } => {
             if disable {
                 let () = client
-                    .invoke(Request::NetworkBind { addrs: vec![] })
+                    .invoke(Request::SessionBindNetwork { addrs: vec![] })
                     .await?;
             } else if !addrs.is_empty() {
-                let () = client.invoke(Request::NetworkBind { addrs }).await?;
+                let () = client.invoke(Request::SessionBindNetwork { addrs }).await?;
             }
 
-            let addrs: Vec<PeerAddr> = client.invoke(Request::NetworkGetLocalListenerAddrs).await?;
+            let addrs: Vec<PeerAddr> = client.invoke(Request::SessionGetLocalListenerAddrs).await?;
 
             for addr in addrs {
                 println!("{}", PeerAddrDisplay(&addr));
@@ -85,7 +85,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 .ok_or_else(|| ProtocolError::new(ErrorCode::InvalidInput, "name is missing"))?;
 
             let _: RepositoryHandle = client
-                .invoke(Request::RepositoryCreate {
+                .invoke(Request::SessionCreateRepository {
                     path: name.into(),
                     token,
                     read_secret,
@@ -167,16 +167,16 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             } else {
                 if remove {
                     let () = client
-                        .invoke(Request::RepositorySetDefaultBlockExpiration { value: None })
+                        .invoke(Request::SessionSetDefaultBlockExpiration { value: None })
                         .await?;
 
                     let () = client
-                        .invoke(Request::RepositorySetDefaultExpiration { value: None })
+                        .invoke(Request::SessionSetDefaultRepositoryExpiration { value: None })
                         .await?;
                 } else {
                     if let Some(expiration) = block {
                         let () = client
-                            .invoke(Request::RepositorySetDefaultBlockExpiration {
+                            .invoke(Request::SessionSetDefaultBlockExpiration {
                                 value: Some(Duration::from_secs(expiration)),
                             })
                             .await?;
@@ -184,7 +184,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
 
                     if let Some(expiration) = repository {
                         let () = client
-                            .invoke(Request::RepositorySetDefaultExpiration {
+                            .invoke(Request::SessionSetDefaultRepositoryExpiration {
                                 value: Some(Duration::from_secs(expiration)),
                             })
                             .await?;
@@ -192,10 +192,10 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 }
 
                 let block = client
-                    .invoke(Request::RepositoryGetDefaultBlockExpiration)
+                    .invoke(Request::SessionGetDefaultBlockExpiration)
                     .await?;
                 let repository = client
-                    .invoke(Request::RepositoryGetDefaultExpiration)
+                    .invoke(Request::SessionGetDefaultRepositoryExpiration)
                     .await?;
 
                 println!("block expiration:      {}", OptionSecondsDisplay(block));
@@ -217,7 +217,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             println!("{}", path.display());
         }
         ClientCommand::ListPeers => {
-            let infos: Vec<PeerInfo> = client.invoke(Request::NetworkGetPeers).await?;
+            let infos: Vec<PeerInfo> = client.invoke(Request::SessionGetPeers).await?;
 
             for info in infos {
                 println!("{}", PeerInfoDisplay(&info));
@@ -225,7 +225,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::ListRepositories => {
             let repos: BTreeMap<PathBuf, RepositoryHandle> =
-                client.invoke(Request::RepositoryList).await?;
+                client.invoke(Request::SessionListRepositories).await?;
 
             for path in repos.keys() {
                 println!("{}", path.display());
@@ -234,11 +234,11 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         ClientCommand::LocalDiscovery { enabled } => {
             if let Some(enabled) = enabled {
                 let () = client
-                    .invoke(Request::NetworkSetLocalDiscoveryEnabled { enabled })
+                    .invoke(Request::SessionSetLocalDiscoveryEnabled { enabled })
                     .await?;
             } else {
                 let value: bool = client
-                    .invoke(Request::NetworkIsLocalDiscoveryEnabled)
+                    .invoke(Request::SessionIsLocalDiscoveryEnabled)
                     .await?;
 
                 println!("{value}");
@@ -302,10 +302,10 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         ClientCommand::MountDir { path } => {
             if let Some(path) = path {
                 let () = client
-                    .invoke(Request::RepositorySetMountRoot { path: Some(path) })
+                    .invoke(Request::SessionSetMountRoot { path: Some(path) })
                     .await?;
             } else {
-                let path: Option<PathBuf> = client.invoke(Request::RepositoryGetMountRoot).await?;
+                let path: Option<PathBuf> = client.invoke(Request::SessionGetMountRoot).await?;
 
                 if let Some(path) = path {
                     println!("{}", path.display());
@@ -317,7 +317,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             let local_secret = password.map(Password::from).map(LocalSecret::Password);
 
             let _: RepositoryHandle = client
-                .invoke(Request::RepositoryOpen { path, local_secret })
+                .invoke(Request::SessionOpenRepository { path, local_secret })
                 .await?;
         }
         ClientCommand::Pex {
@@ -343,18 +343,18 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             } else if send.is_some() || recv.is_some() {
                 if let Some(send) = send {
                     let () = client
-                        .invoke(Request::NetworkSetPexSendEnabled { enabled: send })
+                        .invoke(Request::SessionSetPexSendEnabled { enabled: send })
                         .await?;
                 }
 
                 if let Some(recv) = recv {
                     let () = client
-                        .invoke(Request::NetworkSetPexRecvEnabled { enabled: recv })
+                        .invoke(Request::SessionSetPexRecvEnabled { enabled: recv })
                         .await?;
                 }
             } else {
-                let send: bool = client.invoke(Request::NetworkIsPexSendEnabled).await?;
-                let recv: bool = client.invoke(Request::NetworkIsPexRecvEnabled).await?;
+                let send: bool = client.invoke(Request::SessionIsPexSendEnabled).await?;
+                let recv: bool = client.invoke(Request::SessionIsPexRecvEnabled).await?;
 
                 println!("send: {send} recv: {recv}");
             }
@@ -362,11 +362,11 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         ClientCommand::PortForwarding { enabled } => {
             if let Some(enabled) = enabled {
                 let () = client
-                    .invoke(Request::NetworkSetPortForwardingEnabled { enabled })
+                    .invoke(Request::SessionSetPortForwardingEnabled { enabled })
                     .await?;
             } else {
                 let value: bool = client
-                    .invoke(Request::NetworkIsPortForwardingEnabled)
+                    .invoke(Request::SessionIsPortForwardingEnabled)
                     .await?;
 
                 println!("{value}");
@@ -398,14 +398,14 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 }
             } else if remove {
                 let () = client
-                    .invoke(Request::RepositorySetDefaultQuota { value: None })
+                    .invoke(Request::SessionSetDefaultQuota { value: None })
                     .await?;
             } else if let Some(value) = value {
                 let () = client
-                    .invoke(Request::RepositorySetDefaultQuota { value: Some(value) })
+                    .invoke(Request::SessionSetDefaultQuota { value: Some(value) })
                     .await?;
             } else {
-                let value: QuotaInfo = client.invoke(Request::RepositoryGetDefaultQuota).await?;
+                let value: QuotaInfo = client.invoke(Request::SessionGetDefaultQuota).await?;
                 println!("{}", QuotaInfoDisplay(&value));
             }
         }
@@ -429,7 +429,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::RemovePeers { addrs } => {
             let () = client
-                .invoke(Request::NetworkRemoveUserProvidedPeers { addrs })
+                .invoke(Request::SessionRemoveUserProvidedPeers { addrs })
                 .await?;
         }
         ClientCommand::ResetAccess { name, token } => {
@@ -461,11 +461,9 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::StoreDir { path } => {
             if let Some(path) = path {
-                let () = client
-                    .invoke(Request::RepositorySetStoreDir { path })
-                    .await?;
+                let () = client.invoke(Request::SessionSetStoreDir { path }).await?;
             } else {
-                let path: Option<PathBuf> = client.invoke(Request::RepositoryGetStoreDir).await?;
+                let path: Option<PathBuf> = client.invoke(Request::SessionGetStoreDir).await?;
 
                 if let Some(path) = path {
                     println!("{}", path.display());
@@ -525,12 +523,12 @@ impl LocalClient {
     }
 
     async fn find_repository(&mut self, name: String) -> Result<RepositoryHandle, ClientError> {
-        self.invoke(Request::RepositoryFind { name }).await
+        self.invoke(Request::SessionFindRepository { name }).await
     }
 
     async fn list_repositories(&mut self) -> Result<Vec<RepositoryHandle>, ClientError> {
         let repos: BTreeMap<PathBuf, RepositoryHandle> =
-            self.invoke(Request::RepositoryList).await?;
+            self.invoke(Request::SessionListRepositories).await?;
         Ok(repos.into_values().collect())
     }
 

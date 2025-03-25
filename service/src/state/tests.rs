@@ -55,14 +55,14 @@ async fn non_unique_repository_name() {
 
     assert_matches!(
         state
-            .repository_create(path.into(), None, None, None, false, false, false)
+            .session_create_repository(path.into(), None, None, None, false, false, false)
             .await,
         Ok(_)
     );
 
     assert_matches!(
         state
-            .repository_create(path.into(), None, None, None, false, false, false)
+            .session_create_repository(path.into(), None, None, None, false, false, false)
             .await,
         Err(Error::AlreadyExists)
     );
@@ -76,7 +76,7 @@ async fn non_unique_repository_id() {
 
     assert_matches!(
         state
-            .repository_create(
+            .session_create_repository(
                 PathBuf::from("foo"),
                 None,
                 None,
@@ -92,7 +92,7 @@ async fn non_unique_repository_id() {
     // different name but same token
     assert_matches!(
         state
-            .repository_create(
+            .session_create_repository(
                 PathBuf::from("bar"),
                 None,
                 None,
@@ -114,13 +114,13 @@ async fn open_already_opened_repository() {
 
     let name = "foo";
     let handle0 = state
-        .repository_create(PathBuf::from(name), None, None, None, false, false, false)
+        .session_create_repository(PathBuf::from(name), None, None, None, false, false, false)
         .await
         .unwrap();
 
     // Open by full path
     let handle1 = state
-        .repository_open(
+        .session_open_repository(
             state
                 .store_dir()
                 .unwrap()
@@ -134,7 +134,7 @@ async fn open_already_opened_repository() {
 
     // Open by partial path
     let handle2 = state
-        .repository_open(PathBuf::from(name), None)
+        .session_open_repository(PathBuf::from(name), None)
         .await
         .unwrap();
     assert_eq!(handle2, handle0);
@@ -152,7 +152,7 @@ async fn expire_empty_repository() {
 
     let name = "foo";
     let handle = state
-        .repository_create(
+        .session_create_repository(
             PathBuf::from(name),
             None,
             None,
@@ -179,7 +179,10 @@ async fn expire_empty_repository() {
 
     state.delete_expired_repositories().await;
 
-    assert_matches!(state.repository_find(name.to_owned()), Err(Error::NotFound));
+    assert_matches!(
+        state.session_find_repository(name.to_owned()),
+        Err(Error::NotFound)
+    );
     assert_eq!(
         read_dir(state.store_dir().unwrap(), "").await,
         Vec::<PathBuf>::new()
@@ -236,17 +239,17 @@ async fn expire_synced_repository() {
         .unwrap();
 
     local_state
-        .repository_set_store_dir(temp_dir.path().join("local/store"))
+        .session_set_store_dir(temp_dir.path().join("local/store"))
         .await
         .unwrap();
     local_state
-        .network_bind(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;
     local_state.network.add_user_provided_peer(&remote_addr);
 
     let name = "foo";
     let handle = local_state
-        .repository_create(
+        .session_create_repository(
             PathBuf::from(name),
             None,
             None,
@@ -291,7 +294,7 @@ async fn expire_synced_repository() {
     local_state.delete_expired_repositories().await;
 
     assert_matches!(
-        local_state.repository_find(name.to_owned()),
+        local_state.session_find_repository(name.to_owned()),
         Err(Error::NotFound)
     );
     assert_eq!(
@@ -309,19 +312,25 @@ async fn move_repository() {
     let dst = Path::new("bar");
 
     let repo = state
-        .repository_create(src.into(), None, None, None, false, false, false)
+        .session_create_repository(src.into(), None, None, None, false, false, false)
         .await
         .unwrap();
     let src_full = state.repository_get_path(repo).unwrap();
 
-    let file = state.file_create(repo, "test.txt".into()).await.unwrap();
+    let file = state
+        .repository_create_file(repo, "test.txt".into())
+        .await
+        .unwrap();
     state.file_write(file, 0, b"hello".to_vec()).await.unwrap();
     state.file_close(file).await.unwrap();
 
     state.repository_move(repo, dst.into()).await.unwrap();
     let dst_full = state.repository_get_path(repo).unwrap();
 
-    let file = state.file_open(repo, "test.txt".to_owned()).await.unwrap();
+    let file = state
+        .repository_open_file(repo, "test.txt".to_owned())
+        .await
+        .unwrap();
     let len = state.file_len(file).unwrap();
     let content = state.file_read(file, 0, len).await.unwrap();
     assert_eq!(content, b"hello");
@@ -354,14 +363,14 @@ async fn delete_repository_with_simple_name() {
 
     let name0 = "foo";
     let repo0 = state
-        .repository_create(PathBuf::from(name0), None, None, None, false, false, false)
+        .session_create_repository(PathBuf::from(name0), None, None, None, false, false, false)
         .await
         .unwrap();
     let path0 = state.repository_get_path(repo0).unwrap();
 
     let name1 = "bar";
     let repo1 = state
-        .repository_create(PathBuf::from(name1), None, None, None, false, false, false)
+        .session_create_repository(PathBuf::from(name1), None, None, None, false, false, false)
         .await
         .unwrap();
     let path1 = state.repository_get_path(repo1).unwrap();
@@ -384,7 +393,7 @@ async fn delete_repository_in_subdir_of_store_dir() {
 
     let name = "foo/bar/baz";
     let repo = state
-        .repository_create(PathBuf::from(name), None, None, None, false, false, false)
+        .session_create_repository(PathBuf::from(name), None, None, None, false, false, false)
         .await
         .unwrap();
     let path = state.repository_get_path(repo).unwrap();
@@ -415,7 +424,7 @@ async fn delete_repository_outside_of_store_dir() {
 
     let name = "foo";
     let repo = state
-        .repository_create(parent_dir.join(name), None, None, None, false, false, false)
+        .session_create_repository(parent_dir.join(name), None, None, None, false, false, false)
         .await
         .unwrap();
     let path = state.repository_get_path(repo).unwrap();
@@ -430,7 +439,7 @@ async fn setup() -> (TempDir, State) {
     let temp_dir = TempDir::new().unwrap();
     let mut state = State::init(temp_dir.path().join("config")).await.unwrap();
     state
-        .repository_set_store_dir(temp_dir.path().join("store"))
+        .session_set_store_dir(temp_dir.path().join("store"))
         .await
         .unwrap();
 

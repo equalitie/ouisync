@@ -197,13 +197,13 @@ impl Service {
     }
 
     pub async fn set_store_dir(&mut self, path: impl Into<PathBuf>) -> Result<(), Error> {
-        self.state.repository_set_store_dir(path.into()).await
+        self.state.session_set_store_dir(path.into()).await
     }
 
     /// Initialize network according to the stored config.
     pub async fn init_network(&mut self) {
         self.state
-            .network_init(NetworkDefaults {
+            .session_init_network(NetworkDefaults {
                 bind: vec![],
                 port_forwarding_enabled: false,
                 local_discovery_enabled: false,
