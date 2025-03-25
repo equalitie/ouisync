@@ -707,7 +707,7 @@ pub(crate) fn init_log_with_writer<W>(writer: W)
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
-    tracing_subscriber::fmt()
+    let result = tracing_subscriber::fmt()
         .event_format(Formatter::default().with_timer(SystemTime))
         .with_writer(writer)
         .with_env_filter(
@@ -716,9 +716,9 @@ where
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
-        .try_init()
         // `Err` here just means the logger is already initialized, it's OK to ignore it.
-        .unwrap_or(());
+        .try_init()
+        .ok();
 }
 
 #[cfg(all(feature = "prometheus", not(feature = "influxdb")))]

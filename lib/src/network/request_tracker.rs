@@ -595,7 +595,7 @@ impl Worker {
             if node.children().len() == 0 {
                 self.remove_request(node_key);
             } else {
-                remove_request_from_clients(&mut self.clients, request_key, node.value());
+                remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());
                 *node.value_mut() = RequestState::Committed;
             }
         }
@@ -935,7 +935,7 @@ impl Worker {
         // No waiter found. If this request has no children, we can remove it, otherwise we mark it
         // as cancelled.
         if node.children().len() > 0 {
-            remove_request_from_clients(&mut self.clients, request_key, node.value());
+            remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());
             *node.value_mut() = RequestState::Cancelled;
         } else {
             self.remove_request(node_key);
@@ -948,7 +948,7 @@ impl Worker {
         };
 
         let request_key = MessageKey::from(&node.request().payload);
-        remove_request_from_clients(&mut self.clients, request_key, node.value());
+        remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());
 
         for parent_key in node.parents() {
             let parent_node = self.requests.get(parent_key).expect(BROKEN_INVARIANT);
@@ -1197,11 +1197,19 @@ fn remove_waiter(waiters: &mut VecDeque<ClientId>, client_id: ClientId) {
 fn remove_request_from_clients(
     clients: &mut HashMap<ClientId, ClientState>,
     request_key: MessageKey,
+    node_key: GraphKey,
     state: &RequestState,
 ) {
     for client_id in state.clients() {
         if let Some(client_state) = clients.get_mut(client_id) {
-            client_state.requests.remove(&request_key);
+            match client_state.requests.entry(request_key) {
+                Entry::Occupied(entry) => {
+                    if *entry.get() == node_key {
+                        entry.remove();
+                    }
+                }
+                Entry::Vacant(_) => (),
+            }
         }
     }
 }
