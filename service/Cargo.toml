@@ -60,4 +60,4 @@ tempfile                    = { workspace = true }
 [build-dependencies]
 anyhow                      = { workspace = true }
 heck                        = { workspace = true }
-syn                         = { workspace = true, features = ["printing"] }
+ouisync-api-parser          = { path = "../api_parser" }

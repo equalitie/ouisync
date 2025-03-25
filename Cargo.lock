@@ -2778,6 +2778,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ouisync-api-parser"
+version = "0.8.11"
+dependencies = [
+ "anyhow",
+ "heck 0.5.0",
+ "serde",
+ "syn 2.0.100",
+]
+
+[[package]]
 name = "ouisync-bindgen"
 version = "0.8.11"
 dependencies = [
@@ -2926,6 +2936,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "num_enum",
  "ouisync",
+ "ouisync-api-parser",
  "ouisync-macros",
  "ouisync-rand",
  "ouisync-tracing-fmt",
@@ -2940,7 +2951,6 @@ dependencies = [
  "sha2",
  "slab",
  "state_monitor",
- "syn 2.0.100",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
