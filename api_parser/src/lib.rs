@@ -156,13 +156,7 @@ pub struct ComplexEnum {
 #[derive(Debug)]
 pub struct ComplexVariant {
     pub docs: Docs,
-    pub fields: Fields,
-}
-
-#[derive(Debug)]
-pub enum Fields {
-    Named(Vec<(String, Field)>),
-    Unnamed(Vec<Field>),
+    pub fields: Vec<(String, Field)>,
 }
 
 #[derive(Debug)]

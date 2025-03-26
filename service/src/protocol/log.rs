@@ -1,8 +1,10 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ouisync_macros::api;
 use tracing::Level;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
+#[api]
 pub enum LogLevel {
     Error = 1,
     Warn = 2,

@@ -1,4 +1,5 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use thiserror::Error;
@@ -19,6 +20,7 @@ use thiserror::Error;
 )]
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
+#[api]
 pub enum AccessMode {
     /// Repository is neither readable not writtable (but can still be synced).
     Blind = 0,

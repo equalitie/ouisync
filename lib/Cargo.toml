@@ -49,6 +49,7 @@ net = { package = "ouisync-net", path = "../net" }
 noise-protocol = "0.2.0"
 noise-rust-crypto = { version = "0.6.1", default-features = false, features = ["use-x25519", "use-chacha20poly1305", "use-blake2"] }
 num_enum = { workspace = true }
+ouisync-macros = { path = "../macros" }
 parse-size = { version = "1.0.0", features = ["std"] }
 pin-project-lite = { workspace = true }
 rand = { workspace = true }
@@ -82,9 +83,9 @@ hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"
 metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = { workspace = true }
+rmp = { workspace = true }
 rmp-serde = { workspace = true }
 serde_json = { workspace = true }
-serde_test = "1.0.177"
 similar-asserts = { workspace = true }
 tempfile = { workspace = true }
 test-strategy = { workspace = true }

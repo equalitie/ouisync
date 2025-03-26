@@ -1,6 +1,7 @@
 use crate::collections::HashMap;
 use futures_util::{stream, Stream, StreamExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use std::{
     pin::Pin,
@@ -33,6 +34,7 @@ impl ProtocolVersions {
 )]
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
+#[api]
 pub enum NetworkEvent {
     /// A peer has appeared with higher protocol version than us. Probably means we are using
     /// outdated library. This event can be used to notify the user that they should update the app.

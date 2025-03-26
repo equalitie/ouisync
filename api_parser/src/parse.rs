@@ -8,8 +8,8 @@ use syn::{
 };
 
 use crate::{
-    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Fields, RequestVariant,
-    SimpleEnum, SimpleVariant, Type,
+    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, RequestVariant, SimpleEnum,
+    SimpleVariant, Type,
 };
 
 pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool) -> Result<bool> {
@@ -210,9 +210,8 @@ fn parse_enum(item: ItemEnum) -> Result<Enum> {
                 let fields = parse_fields(fields.named)?;
                 Variant::Complex(ComplexVariant { docs, fields })
             }
-            syn::Fields::Unnamed(fields) => {
-                let fields = parse_fields(fields.unnamed)?;
-                Variant::Complex(ComplexVariant { docs, fields })
+            syn::Fields::Unnamed(_) => {
+                bail!("unnamed fields not supported");
             }
             syn::Fields::Unit => {
                 let value = if let Some((_, expr)) = variant.discriminant {
@@ -303,35 +302,30 @@ fn infer_enum_repr(variants: &[(String, SimpleVariant)]) -> EnumRepr {
     }
 }
 
-fn parse_fields(fields: Punctuated<syn::Field, Token![,]>) -> Result<Fields> {
-    let mut named = Vec::new();
-    let mut unnamed = Vec::new();
+fn parse_fields(fields: Punctuated<syn::Field, Token![,]>) -> Result<Vec<(String, Field)>> {
+    let mut out = Vec::new();
 
     for field in fields {
-        let name = field.ident.map(|ident| ident.to_string());
+        let name = if let Some(ident) = &field.ident {
+            ident.to_string()
+        } else {
+            continue;
+        };
 
         let docs = parse_docs(&field.attrs)?;
         let ty = parse_type(&field.ty)?;
         let field = Field { docs, ty };
 
-        if let Some(name) = name {
-            named.push((name, field));
-        } else {
-            unnamed.push(field);
-        }
+        out.push((name, field));
     }
 
-    match (named.is_empty(), unnamed.is_empty()) {
-        (false, true) => Ok(Fields::Named(named)),
-        (true, false) | (true, true) => Ok(Fields::Unnamed(unnamed)),
-        (false, false) => bail!("can't mix named and unnamed fields"),
-    }
+    Ok(out)
 }
 
 fn into_complex_variant(v: SimpleVariant) -> ComplexVariant {
     ComplexVariant {
         docs: v.docs,
-        fields: Fields::Unnamed(Vec::new()),
+        fields: Vec::new(),
     }
 }
 
