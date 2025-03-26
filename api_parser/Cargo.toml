@@ -10,5 +10,4 @@ version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 heck   = { workspace = true }
-serde  = { workspace = true }
 syn    = { workspace = true, features = ["extra-traits", "parsing", "full"] }

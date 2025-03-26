@@ -1,4 +1,5 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ouisync_macros::api;
 use ouisync_vfs::MountError;
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +17,7 @@ use super::UnexpectedResponse;
 )]
 #[repr(u16)]
 #[serde(into = "u16", try_from = "u16")]
+#[api]
 pub enum ErrorCode {
     /// No error
     Ok = 0,

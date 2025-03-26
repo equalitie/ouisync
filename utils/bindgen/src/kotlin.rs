@@ -1,33 +1,33 @@
 use heck::AsShoutySnakeCase;
 
-use crate::parse::{Enum, EnumRepr, Source};
+use ouisync_api_parser::{Context, Docs, EnumRepr, SimpleEnum};
 use std::io::{self, Write};
 
-pub(crate) fn generate(source: &Source, out: &mut dyn Write) -> io::Result<()> {
+pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> io::Result<()> {
     writeln!(out, "package org.equalitie.ouisync.lib")?;
     writeln!(out)?;
 
-    for (name, value) in &source.enums {
-        generate_enum(name, value, out)?;
+    for (name, item) in &ctx.simple_enums {
+        generate_enum(name, item, out)?;
     }
 
     Ok(())
 }
 
-fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()> {
-    let repr = match value.repr {
+fn generate_enum(name: &str, item: &SimpleEnum, out: &mut dyn Write) -> io::Result<()> {
+    let repr = match item.repr {
         EnumRepr::U8 => "Byte",
         EnumRepr::U16 => "Short",
         EnumRepr::U32 => "Int",
         EnumRepr::U64 => "Long",
     };
 
-    write_doc(out, "", &value.doc)?;
+    write_docs(out, "", &item.docs)?;
     writeln!(out, "enum class {name} {{")?;
 
-    for variant in &value.variants {
-        write_doc(out, "    ", &variant.doc)?;
-        writeln!(out, "    {},", AsShoutySnakeCase(&variant.name))?;
+    for (variant_name, variant) in &item.variants {
+        write_docs(out, "    ", &variant.docs)?;
+        writeln!(out, "    {},", AsShoutySnakeCase(variant_name))?;
     }
 
     writeln!(out)?;
@@ -39,12 +39,12 @@ fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()
 
     writeln!(out, "        fun decode(n: {repr}): {name} = when (n) {{")?;
 
-    for variant in &value.variants {
+    for (variant_name, variant) in &item.variants {
         writeln!(
             out,
             "            {}.to{repr}() -> {}",
             variant.value,
-            AsShoutySnakeCase(&variant.name)
+            AsShoutySnakeCase(variant_name)
         )?;
     }
 
@@ -57,11 +57,11 @@ fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()
     // encode
     writeln!(out, "    fun encode(): {repr} = when (this) {{")?;
 
-    for variant in &value.variants {
+    for (variant_name, variant) in &item.variants {
         writeln!(
             out,
             "        {} -> {}",
-            AsShoutySnakeCase(&variant.name),
+            AsShoutySnakeCase(variant_name),
             variant.value
         )?;
     }
@@ -74,14 +74,14 @@ fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()
     Ok(())
 }
 
-fn write_doc(out: &mut dyn Write, prefix: &str, doc: &str) -> io::Result<()> {
-    if doc.is_empty() {
+fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> io::Result<()> {
+    if docs.lines.is_empty() {
         return Ok(());
     }
 
     writeln!(out, "{prefix}/**")?;
 
-    for line in doc.lines() {
+    for line in &docs.lines {
         writeln!(out, "{prefix} *{}", line)?;
     }
 

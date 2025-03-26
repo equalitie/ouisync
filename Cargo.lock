@@ -2783,7 +2783,6 @@ version = "0.8.11"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
- "serde",
  "syn 2.0.100",
 ]
 
@@ -2791,8 +2790,10 @@ dependencies = [
 name = "ouisync-bindgen"
 version = "0.8.11"
 dependencies = [
+ "anyhow",
  "clap 4.5.21",
  "heck 0.5.0",
+ "ouisync-api-parser",
  "syn 2.0.100",
  "thiserror 1.0.69",
 ]

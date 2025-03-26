@@ -14,7 +14,9 @@ name = "bindgen"
 path = "src/main.rs"
 
 [dependencies]
-clap      = { workspace = true }
-heck      = { workspace = true }
-syn       = { workspace = true, features = ["parsing", "full", "extra-traits"] }
-thiserror = { workspace = true }
+anyhow             = { workspace = true }
+clap               = { workspace = true }
+heck               = { workspace = true }
+ouisync-api-parser = { path = "../../api_parser" }
+syn                = { workspace = true, features = ["parsing", "full", "extra-traits"] }
+thiserror          = { workspace = true }

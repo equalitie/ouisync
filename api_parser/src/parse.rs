@@ -3,11 +3,14 @@ use std::{fs, io, path::Path};
 use anyhow::{bail, format_err, Context as _, Result};
 use heck::AsPascalCase;
 use syn::{
-    Attribute, Expr, FnArg, GenericArgument, ImplItem, Item, Lit, Meta, Pat, PathArguments,
-    ReturnType, Signature,
+    punctuated::Punctuated, Attribute, BinOp, Expr, ExprBinary, FnArg, GenericArgument, ImplItem,
+    Item, ItemEnum, Lit, Meta, Pat, PathArguments, ReturnType, Signature, Token,
 };
 
-use crate::{Context, Docs, RequestVariant, Type};
+use crate::{
+    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Fields, RequestVariant,
+    SimpleEnum, SimpleVariant, Type,
+};
 
 pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool) -> Result<bool> {
     let content = match fs::read_to_string(path) {
@@ -31,13 +34,22 @@ pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool
 fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<Item>) -> Result<()> {
     for item in items {
         match item {
-            // Item::Enum(item) => {
-            //     let name = item.ident.to_string();
+            Item::Enum(item) => {
+                if !is_api_item(&item.attrs) {
+                    continue;
+                }
 
-            //     if let Some(value) = parse_enum(item) {
-            //         source.enums.insert(name, value);
-            //     }
-            // }
+                let name = item.ident.to_string();
+
+                match parse_enum(item)? {
+                    Enum::Simple(item) => {
+                        ctx.simple_enums.push((name, item));
+                    }
+                    Enum::Complex(item) => {
+                        ctx.complex_enums.push((name, item));
+                    }
+                }
+            }
             Item::Mod(item) => match item.content {
                 Some((_, items)) => parse_mod(ctx, path, items)?,
                 None => parse_mod_in_file(ctx, path, &item.ident.to_string())?,
@@ -170,6 +182,157 @@ fn parse_request_variant(
 
 fn ignore_request_arg(scope: &str, name: &str) -> bool {
     scope == "Service" && (name == "conn_id" || name == "message_id")
+}
+
+enum Enum {
+    Simple(SimpleEnum),
+    Complex(ComplexEnum),
+}
+
+enum Variant {
+    Simple(SimpleVariant),
+    Complex(ComplexVariant),
+}
+
+fn parse_enum(item: ItemEnum) -> Result<Enum> {
+    let docs = parse_docs(&item.attrs)?;
+    let repr = parse_enum_repr(&item.attrs)?;
+
+    let mut next_value = 0;
+    let mut variants = Vec::new();
+
+    for variant in item.variants {
+        let docs = parse_docs(&variant.attrs)?;
+        let name = variant.ident.to_string();
+
+        let variant = match variant.fields {
+            syn::Fields::Named(fields) => {
+                let fields = parse_fields(fields.named)?;
+                Variant::Complex(ComplexVariant { docs, fields })
+            }
+            syn::Fields::Unnamed(fields) => {
+                let fields = parse_fields(fields.unnamed)?;
+                Variant::Complex(ComplexVariant { docs, fields })
+            }
+            syn::Fields::Unit => {
+                let value = if let Some((_, expr)) = variant.discriminant {
+                    parse_const_int_expr(expr)?
+                } else {
+                    next_value
+                };
+
+                next_value = value + 1;
+
+                Variant::Simple(SimpleVariant { docs, value })
+            }
+        };
+
+        variants.push((name, variant));
+    }
+
+    if variants
+        .iter()
+        .any(|(_, variant)| matches!(variant, Variant::Complex(_)))
+    {
+        // convert all variants to complex
+        let variants = variants
+            .into_iter()
+            .map(|(name, variant)| {
+                (
+                    name,
+                    match variant {
+                        Variant::Simple(v) => into_complex_variant(v),
+                        Variant::Complex(v) => v,
+                    },
+                )
+            })
+            .collect();
+
+        Ok(Enum::Complex(ComplexEnum { docs, variants }))
+    } else {
+        let variants: Vec<_> = variants
+            .into_iter()
+            .map(|(name, variant)| {
+                (
+                    name,
+                    match variant {
+                        Variant::Simple(v) => v,
+                        Variant::Complex(_) => unreachable!(),
+                    },
+                )
+            })
+            .collect();
+
+        let repr = repr.unwrap_or_else(|| infer_enum_repr(&variants));
+
+        Ok(Enum::Simple(SimpleEnum {
+            docs,
+            repr,
+            variants,
+        }))
+    }
+}
+
+fn parse_enum_repr(attrs: &[Attribute]) -> Result<Option<EnumRepr>> {
+    for attr in attrs {
+        let Meta::List(meta) = &attr.meta else {
+            continue;
+        };
+
+        if !meta.path.is_ident("repr") {
+            continue;
+        }
+
+        return Ok(Some(meta.tokens.to_string().parse()?));
+    }
+
+    Ok(None)
+}
+
+fn infer_enum_repr(variants: &[(String, SimpleVariant)]) -> EnumRepr {
+    let max = variants.iter().map(|(_, v)| v.value).max().unwrap_or(0);
+
+    if max <= u8::MAX as u64 {
+        EnumRepr::U8
+    } else if max <= u16::MAX as u64 {
+        EnumRepr::U16
+    } else if max <= u32::MAX as u64 {
+        EnumRepr::U32
+    } else {
+        EnumRepr::U64
+    }
+}
+
+fn parse_fields(fields: Punctuated<syn::Field, Token![,]>) -> Result<Fields> {
+    let mut named = Vec::new();
+    let mut unnamed = Vec::new();
+
+    for field in fields {
+        let name = field.ident.map(|ident| ident.to_string());
+
+        let docs = parse_docs(&field.attrs)?;
+        let ty = parse_type(&field.ty)?;
+        let field = Field { docs, ty };
+
+        if let Some(name) = name {
+            named.push((name, field));
+        } else {
+            unnamed.push(field);
+        }
+    }
+
+    match (named.is_empty(), unnamed.is_empty()) {
+        (false, true) => Ok(Fields::Named(named)),
+        (true, false) | (true, true) => Ok(Fields::Unnamed(unnamed)),
+        (false, false) => bail!("can't mix named and unnamed fields"),
+    }
+}
+
+fn into_complex_variant(v: SimpleVariant) -> ComplexVariant {
+    ComplexVariant {
+        docs: v.docs,
+        fields: Fields::Unnamed(Vec::new()),
+    }
 }
 
 fn parse_docs(attrs: &[Attribute]) -> Result<Docs> {
@@ -319,5 +482,48 @@ fn parse_generic_type(arg: &GenericArgument) -> Result<Type> {
     match arg {
         GenericArgument::Type(ty) => parse_type(ty),
         _ => bail!("unsupported generic argument: {:?}", arg),
+    }
+}
+
+fn parse_const_int_expr(expr: Expr) -> Result<u64> {
+    match expr {
+        Expr::Lit(expr) => parse_int_lit(expr.lit),
+        Expr::Binary(expr) => parse_const_int_binary_expr(expr),
+        _ => bail!("unsupported integer expr: {:?}", expr),
+    }
+}
+
+fn parse_int_lit(lit: Lit) -> Result<u64> {
+    match lit {
+        Lit::Int(lit) => {
+            if let Ok(value) = lit.base10_parse() {
+                Ok(value)
+            } else {
+                bail!("int literal overflow: {}", lit.base10_digits());
+            }
+        }
+        Lit::Byte(lit) => Ok(lit.value() as _),
+        _ => {
+            bail!("not an int or byte literal: {:?}", lit);
+        }
+    }
+}
+
+fn parse_const_int_binary_expr(expr: ExprBinary) -> Result<u64> {
+    let lhs = parse_const_int_expr(*expr.left)?;
+    let rhs = parse_const_int_expr(*expr.right)?;
+
+    match expr.op {
+        BinOp::Add(_) => Ok(lhs + rhs),
+        BinOp::Sub(_) => Ok(lhs - rhs),
+        BinOp::Mul(_) => Ok(lhs * rhs),
+        BinOp::Div(_) => Ok(lhs / rhs),
+        BinOp::Rem(_) => Ok(lhs % rhs),
+        BinOp::BitXor(_) => Ok(lhs ^ rhs),
+        BinOp::BitAnd(_) => Ok(lhs & rhs),
+        BinOp::BitOr(_) => Ok(lhs & rhs),
+        BinOp::Shl(_) => Ok(lhs << rhs),
+        BinOp::Shr(_) => Ok(lhs >> rhs),
+        _ => bail!("unsupported binary op: {:?}", expr.op),
     }
 }

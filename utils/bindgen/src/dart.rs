@@ -1,20 +1,22 @@
-use crate::parse::{Enum, Source};
 use heck::AsLowerCamelCase;
+use ouisync_api_parser::{Context, Docs, SimpleEnum};
 use std::io::{self, Write};
 
-pub(crate) fn generate(source: &Source, out: &mut dyn Write) -> io::Result<()> {
-    for (name, value) in &source.enums {
-        generate_enum(name, value, out)?;
+pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> io::Result<()> {
+    for (name, item) in &ctx.simple_enums {
+        generate_enum(out, name, item)?;
     }
 
     Ok(())
 }
 
-fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()> {
+fn generate_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> io::Result<()> {
+    write_docs(out, "", &item.docs)?;
     writeln!(out, "enum {name} {{")?;
 
-    for variant in &value.variants {
-        writeln!(out, "  {},", AsLowerCamelCase(&variant.name))?;
+    for (name, variant) in &item.variants {
+        write_docs(out, "  ", &variant.docs)?;
+        writeln!(out, "  {},", AsLowerCamelCase(name))?;
     }
 
     writeln!(out, "  ;")?;
@@ -24,13 +26,13 @@ fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()
     writeln!(out, "  static {} decode(int n) {{", name)?;
     writeln!(out, "    switch (n) {{")?;
 
-    for variant in &value.variants {
+    for (variant_name, variant) in &item.variants {
         writeln!(
             out,
             "      case {}: return {}.{};",
             variant.value,
             name,
-            AsLowerCamelCase(&variant.name)
+            AsLowerCamelCase(variant_name)
         )?;
     }
 
@@ -46,12 +48,12 @@ fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()
     writeln!(out, "  int encode() {{")?;
     writeln!(out, "    switch (this) {{")?;
 
-    for variant in &value.variants {
+    for (variant_name, variant) in &item.variants {
         writeln!(
             out,
             "      case {}.{}: return {};",
             name,
-            AsLowerCamelCase(&variant.name),
+            AsLowerCamelCase(variant_name),
             variant.value
         )?;
     }
@@ -62,6 +64,14 @@ fn generate_enum(name: &str, value: &Enum, out: &mut dyn Write) -> io::Result<()
 
     writeln!(out, "}}")?;
     writeln!(out)?;
+
+    Ok(())
+}
+
+fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> io::Result<()> {
+    for line in &docs.lines {
+        writeln!(out, "{prefix}///{}", line)?;
+    }
 
     Ok(())
 }

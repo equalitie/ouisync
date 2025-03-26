@@ -1,16 +1,17 @@
 mod parse;
 
-use std::{collections::HashSet, fmt, path::Path};
+use std::{collections::HashSet, fmt, path::Path, str::FromStr};
 
-use anyhow::Result;
+use anyhow::{format_err, Error, Result};
 use heck::ToPascalCase;
-use serde::Serialize;
 
 /// Items extracted from the rust codebase used as the source for codegen.
-#[derive(Default, Debug, Serialize)]
+#[derive(Default, Debug)]
 pub struct Context {
     pub request: Request,
     pub response: Response,
+    pub simple_enums: Vec<(String, SimpleEnum)>,
+    pub complex_enums: Vec<(String, ComplexEnum)>,
 }
 
 impl Context {
@@ -28,7 +29,7 @@ impl Context {
     }
 }
 
-#[derive(Default, Debug, Serialize)]
+#[derive(Default, Debug)]
 pub struct Request {
     pub variants: Vec<(String, RequestVariant)>,
 }
@@ -39,7 +40,7 @@ impl Request {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct RequestVariant {
     pub docs: Docs,
     pub fields: Vec<(String, Type)>,
@@ -51,7 +52,7 @@ pub struct RequestVariant {
     pub scope: String,
 }
 
-#[derive(Default, Debug, Serialize)]
+#[derive(Default, Debug)]
 pub struct Response {
     pub variants: Vec<(String, Type)>,
 }
@@ -107,37 +108,75 @@ fn pluralize(word: &str) -> String {
     }
 }
 
-// /// Enum with data
-// #[derive(Serialize, Debug)]
-// pub struct Union {
-//     docs: Docs,
-//     variants: Vec<(String, UnionVariant)>,
-// }
+/// Simple enum (C-style enums)
+#[derive(Debug)]
+pub struct SimpleEnum {
+    pub docs: Docs,
+    pub repr: EnumRepr,
+    pub variants: Vec<(String, SimpleVariant)>,
+}
 
-// #[derive(Serialize, Debug)]
-// pub struct UnionVariant {
-//     docs: Docs,
-//     fields: Fields,
-// }
+#[derive(Debug)]
+pub struct SimpleVariant {
+    pub docs: Docs,
+    pub value: u64,
+}
 
-// #[derive(Serialize, Debug)]
-// pub enum Fields {
-//     Named(Vec<(String, Arg)>),
-//     Unnamed(Vec<Arg>),
-// }
+#[derive(Debug)]
+pub enum EnumRepr {
+    U8,
+    U16,
+    U32,
+    U64,
+}
 
-// #[derive(Serialize, Debug)]
-// pub struct Arg {
-//     pub docs: Docs,
-//     pub ty: Ty,
-// }
+impl FromStr for EnumRepr {
+    type Err = Error;
 
-#[derive(Default, Debug, Serialize)]
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+
+        match input {
+            "u8" => Ok(Self::U8),
+            "u16" => Ok(Self::U16),
+            "u32" => Ok(Self::U32),
+            "u64" => Ok(Self::U64),
+            _ => Err(format_err!("unsupported enum repr: {input}")),
+        }
+    }
+}
+
+/// Complex enum (discriminated union / algebraic data type / sum type)
+#[derive(Debug)]
+pub struct ComplexEnum {
+    pub docs: Docs,
+    pub variants: Vec<(String, ComplexVariant)>,
+}
+
+#[derive(Debug)]
+pub struct ComplexVariant {
+    pub docs: Docs,
+    pub fields: Fields,
+}
+
+#[derive(Debug)]
+pub enum Fields {
+    Named(Vec<(String, Field)>),
+    Unnamed(Vec<Field>),
+}
+
+#[derive(Debug)]
+pub struct Field {
+    pub docs: Docs,
+    pub ty: Type,
+}
+
+#[derive(Default, Debug)]
 pub struct Docs {
     pub lines: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Type {
     Unit,
     Scalar(String),
