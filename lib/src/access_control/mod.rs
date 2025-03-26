@@ -14,6 +14,7 @@ use crate::{
     protocol::RepositoryId,
     Result,
 };
+use ouisync_macros::api;
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::Utf8Error, string::FromUtf8Error, sync::Arc};
@@ -409,6 +410,7 @@ impl Access {
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[api]
 pub enum AccessChange {
     Enable(Option<SetLocalSecret>),
     Disable,

@@ -1,3 +1,4 @@
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -6,6 +7,7 @@ use std::{
 
 /// Progress of a task.
 #[derive(Default, Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[api]
 pub struct Progress {
     pub value: u64,
     pub total: u64,

@@ -10,8 +10,7 @@ use heck::ToPascalCase;
 pub struct Context {
     pub request: Request,
     pub response: Response,
-    pub simple_enums: Vec<(String, SimpleEnum)>,
-    pub complex_enums: Vec<(String, ComplexEnum)>,
+    pub items: Vec<(String, Item)>,
 }
 
 impl Context {
@@ -108,6 +107,13 @@ fn pluralize(word: &str) -> String {
     }
 }
 
+#[derive(Debug)]
+pub enum Item {
+    SimpleEnum(SimpleEnum),
+    ComplexEnum(ComplexEnum),
+    Struct(Struct),
+}
+
 /// Simple enum (C-style enums)
 #[derive(Debug)]
 pub struct SimpleEnum {
@@ -155,6 +161,12 @@ pub struct ComplexEnum {
 
 #[derive(Debug)]
 pub struct ComplexVariant {
+    pub docs: Docs,
+    pub fields: Vec<(String, Field)>,
+}
+
+#[derive(Debug)]
+pub struct Struct {
     pub docs: Docs,
     pub fields: Vec<(String, Field)>,
 }

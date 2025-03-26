@@ -4,6 +4,7 @@ use ouisync::{
     AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress, ShareToken,
     Stats, StorageSize,
 };
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use state_monitor::StateMonitor;
 use std::{
@@ -112,6 +113,7 @@ impl From<SocketAddrV6> for Response {
 pub struct UnexpectedResponse;
 
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[api]
 pub struct DirectoryEntry {
     pub name: String,
     pub entry_type: EntryType,

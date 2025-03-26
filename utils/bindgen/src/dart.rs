@@ -1,16 +1,22 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context as _, Result};
 use heck::AsLowerCamelCase;
-use ouisync_api_parser::{ComplexEnum, Context, Docs, SimpleEnum, Type};
+use ouisync_api_parser::{ComplexEnum, Context, Docs, Field, Item, SimpleEnum, Struct, Type};
 use std::io::Write;
 
 pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
-    for (name, item) in &ctx.simple_enums {
-        write_simple_enum(out, name, item)?;
+    for (name, item) in &ctx.items {
+        let result = match item {
+            Item::SimpleEnum(item) => write_simple_enum(out, name, item),
+            Item::ComplexEnum(item) => write_complex_enum(out, name, item),
+            Item::Struct(item) => write_struct(out, name, item),
+        };
+
+        result.with_context(|| format!("failed to write {name}"))?;
     }
 
-    for (name, item) in &ctx.complex_enums {
-        write_complex_enum(out, name, item)?;
-    }
+    writeln!(out, "class DecodeError extends ArgumentError {{")?;
+    writeln!(out, "{I}DecodeError() : super('decode error');")?;
+    writeln!(out, "}}")?;
 
     Ok(())
 }
@@ -20,51 +26,49 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
     writeln!(out, "enum {name} {{")?;
 
     for (name, variant) in &item.variants {
-        write_docs(out, "  ", &variant.docs)?;
-        writeln!(out, "  {},", AsLowerCamelCase(name))?;
+        write_docs(out, I, &variant.docs)?;
+        writeln!(out, "{I}{},", AsLowerCamelCase(name))?;
     }
 
-    writeln!(out, "  ;")?;
+    writeln!(out, "{I};")?;
     writeln!(out)?;
 
     // decode
-    writeln!(out, "  static {} decode(int n) {{", name)?;
-    writeln!(out, "    switch (n) {{")?;
+    writeln!(out, "{I}static {}? decode(Unpacker u) {{", name)?;
+    writeln!(out, "{I}{I}switch (u.unpackInt()) {{")?;
 
     for (variant_name, variant) in &item.variants {
         writeln!(
             out,
-            "      case {}: return {}.{};",
+            "{I}{I}{I}case {}: return {}.{};",
             variant.value,
             name,
             AsLowerCamelCase(variant_name)
         )?;
     }
 
-    writeln!(
-        out,
-        "      default: throw ArgumentError('invalid value: $n');"
-    )?;
-    writeln!(out, "    }}")?;
-    writeln!(out, "  }}")?;
+    writeln!(out, "{I}{I}{I}null: return null;")?;
+    writeln!(out, "{I}{I}{I}default: {THROW_DECODE_ERROR};")?;
+    writeln!(out, "{I}{I}}}")?;
+    writeln!(out, "{I}}}")?;
     writeln!(out)?;
 
     // encode
-    writeln!(out, "  int encode() {{")?;
-    writeln!(out, "    switch (this) {{")?;
+    writeln!(out, "{I}void encode(Packer p) {{")?;
+    writeln!(out, "{I}{I}switch (this) {{")?;
 
     for (variant_name, variant) in &item.variants {
         writeln!(
             out,
-            "      case {}.{}: return {};",
+            "{I}{I}{I}case {}.{}: p.packInt({});",
             name,
             AsLowerCamelCase(variant_name),
             variant.value
         )?;
     }
 
-    writeln!(out, "    }}")?;
-    writeln!(out, "  }}")?;
+    writeln!(out, "{I}{I}}}")?;
+    writeln!(out, "{I}}}")?;
     writeln!(out)?;
 
     writeln!(out, "}}")?;
@@ -78,72 +82,145 @@ fn write_complex_enum(out: &mut dyn Write, name: &str, item: &ComplexEnum) -> Re
     writeln!(out, "sealed class {name} {{")?;
 
     // decode
-    writeln!(out, "  {name} decode(Object? input) {{")?;
-    writeln!(out, "    switch (input) {{")?;
+    writeln!(out, "{I}static {name}? decode(Unpacker u) {{")?;
+    writeln!(out, "{I}{I}try {{")?;
+    writeln!(out, "{I}{I}{I}switch (u.unpackString()) {{")?;
+
+    for (variant_name, variant) in &item.variants {
+        if !variant.fields.is_empty() {
+            continue;
+        }
+
+        writeln!(
+            out,
+            "{I}{I}{I}{I}case \"{variant_name}\": return {name}{variant_name}();"
+        )?;
+    }
+
+    writeln!(out, "{I}{I}{I}{I}null: return null;")?;
+    writeln!(out, "{I}{I}{I}{I}default: {THROW_DECODE_ERROR};")?;
+
+    writeln!(out, "{I}{I}{I}}}")?;
+    writeln!(out, "{I}{I}}} catch FormatException {{")?;
+    writeln!(
+        out,
+        "{I}{I}{I}if (u.unpackMapLength() != 1) {THROW_DECODE_ERROR};"
+    )?;
+    writeln!(out, "{I}{I}{I}switch (u.unpackString()) {{")?;
 
     for (variant_name, variant) in &item.variants {
         if variant.fields.is_empty() {
-            writeln!(out, "      case \"{variant_name}\":")?;
-            writeln!(out, "        return {name}{variant_name}();")?;
-        } else {
-            writeln!(
-                out,
-                "      case Map() when input.keys.first == \"{variant_name}\":"
-            )?;
-
-            writeln!(
-                out,
-                "        final fields = input.values.first as List<Object?>;"
-            )?;
-            writeln!(out, "        return {name}{variant_name}(")?;
-
-            for (index, (field_name, field)) in variant.fields.iter().enumerate() {
-                write!(out, "          {}: ", AsLowerCamelCase(field_name))?;
-                write_invoke_decode(out, &field.ty, &format!("input[{index}]"))?;
-                writeln!(out, ",")?
-            }
-
-            writeln!(out, "        );")?;
+            continue;
         }
+
+        writeln!(out, "{I}{I}{I}{I}case \"{variant_name}\":")?;
+        writeln!(
+            out,
+            "{I}{I}{I}{I}{I}if (u.unpackListLength() != {}) {THROW_DECODE_ERROR};",
+            variant.fields.len()
+        )?;
+        writeln!(out, "{I}{I}{I}{I}{I}return {name}{variant_name}(")?;
+
+        for (field_name, field) in &variant.fields {
+            write!(out, "{I}{I}{I}{I}{I}{I}{}: ", AsLowerCamelCase(field_name))?;
+            write_invoke_decode(out, &field.ty)?;
+            writeln!(out, ",")?;
+        }
+
+        writeln!(out, "{I}{I}{I}{I}{I});")?;
     }
-    writeln!(out, "      default:")?;
-    writeln!(
-        out,
-        "        throw ArgumentError(\"failed to decode {name} from $input\");"
-    )?;
-    writeln!(out, "  }}")?;
+
+    writeln!(out, "{I}{I}{I}{I}case null: return null;")?;
+    writeln!(out, "{I}{I}{I}{I}default: {THROW_DECODE_ERROR};")?;
+
+    writeln!(out, "{I}{I}{I}}}")?;
+
+    writeln!(out, "{I}{I}}}")?;
+    writeln!(out, "{I}}}")?;
 
     writeln!(out, "}}")?;
     writeln!(out)?;
 
     for (variant_name, variant) in &item.variants {
+        let full_name = format!("{name}{variant_name}");
+
         write_docs(out, "", &variant.docs)?;
-        writeln!(out, "class {name}{variant_name} extends {name} {{")?;
-
-        // fields
-        for (field_name, field) in &variant.fields {
-            write_docs(out, "  ", &field.docs)?;
-            write!(out, "  final ")?;
-            write_type(out, &field.ty)?;
-            writeln!(out, " {};", AsLowerCamelCase(field_name))?;
-        }
-
-        if !variant.fields.is_empty() {
-            writeln!(out)?;
-        }
-
-        // constructor
-        writeln!(out, "  {name}{variant_name}({{")?;
-
-        for (field_name, _) in &variant.fields {
-            writeln!(out, "    required this.{},", AsLowerCamelCase(field_name))?;
-        }
-
-        writeln!(out, "  }})")?;
-
+        writeln!(out, "class {full_name} {name} {{")?;
+        write_class_body(out, &full_name, &variant.fields)?;
         writeln!(out, "}}")?;
         writeln!(out)?;
     }
+
+    Ok(())
+}
+
+fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
+    write_docs(out, "", &item.docs)?;
+    writeln!(out, "class {name} {{")?;
+
+    write_class_body(out, name, &item.fields)?;
+    writeln!(out, "{I}")?;
+
+    // decode
+    writeln!(out, "{I}static {name}? decode(Unpacker u) {{")?;
+    writeln!(
+        out,
+        "{I}{I}if (u.unpackListLength() != {}) {{",
+        item.fields.len()
+    )?;
+    writeln!(out, "{I}{I}{I}{THROW_DECODE_ERROR};")?;
+    writeln!(out, "{I}{I}}}")?;
+
+    writeln!(out, "{I}{I}return {name}(")?;
+
+    for (field_name, field) in &item.fields {
+        write!(out, "{I}{I}{I}{}: ", AsLowerCamelCase(field_name))?;
+        write_invoke_decode(out, &field.ty)?;
+        writeln!(out, ",")?
+    }
+
+    writeln!(out, "{I}{I});")?;
+
+    writeln!(out, "{I}}}")?;
+
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    Ok(())
+}
+
+fn write_class_body(out: &mut dyn Write, name: &str, fields: &[(String, Field)]) -> Result<()> {
+    for (field_name, field) in fields {
+        write_docs(out, I, &field.docs)?;
+        write!(out, "{I}final ")?;
+        write_type(out, &field.ty)?;
+        writeln!(out, " {};", AsLowerCamelCase(field_name))?;
+    }
+
+    if !fields.is_empty() {
+        writeln!(out)?;
+    }
+
+    // constructor
+    write!(out, "{I}{name}(")?;
+
+    if !fields.is_empty() {
+        writeln!(out, "{{")?
+    } else {
+        writeln!(out)?;
+    }
+
+    for (field_name, _) in fields {
+        writeln!(out, "{I}{I}required this.{},", AsLowerCamelCase(field_name))?;
+    }
+
+    write!(out, "{I}")?;
+
+    if !fields.is_empty() {
+        write!(out, "}}")?;
+    }
+
+    writeln!(out, ")")?;
 
     Ok(())
 }
@@ -169,20 +246,36 @@ fn write_type(out: &mut dyn Write, ty: &Type) -> Result<()> {
     Ok(())
 }
 
-fn write_invoke_decode(out: &mut dyn Write, ty: &Type, expr: &str) -> Result<()> {
+fn write_invoke_decode(out: &mut dyn Write, ty: &Type) -> Result<()> {
     match ty {
-        Type::Scalar(name) => match name.as_str() {
-            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" => {
-                write!(out, "{expr} as int")?
-            }
-            "PublicRuntimeId" => write!(out, "HEX.encode({expr} as Uint8List)")?,
-            "String" => write!(out, "{expr} as String")?,
-            "SystemTime" => write!(out, "DateTime.fromMillisecondsSinceEpoch({expr} as int)")?,
-            _ => write!(out, "{name}.decode({expr})")?,
-        },
-        Type::Bytes => write!(out, "{expr} as Uint8List")?,
+        Type::Scalar(name) => {
+            write_invoke_decode_or_null(out, name)?;
+            write!(out, "!")?;
+        }
+        Type::Bytes => write!(out, "u.unpackBinary()")?,
+        Type::Option(name) => write_invoke_decode_or_null(out, name)?,
         Type::Unit | Type::Result(..) => bail!("unsupported type: {:?}", ty),
-        Type::Option(_) | Type::Vec(_) | Type::Map(_, _) => todo!(),
+        Type::Vec(_) | Type::Map(_, _) => todo!(),
+    }
+
+    Ok(())
+}
+
+fn write_invoke_decode_or_null(out: &mut dyn Write, ty: &str) -> Result<()> {
+    match ty {
+        "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" => {
+            write!(out, "u.unpackInt()")?
+        }
+        "PublicRuntimeId" => write!(
+            out,
+            "u.unpackBinary().let((b) => b.isEmpty ? null : HEX.encode(b))"
+        )?,
+        "PeerAddr" | "String" => write!(out, "u.unpackString()")?,
+        "SystemTime" => write!(
+            out,
+            "u.unpackInt()?.let((n) => DateTime.fromMillisecondsSinceEpoch(n))"
+        )?,
+        _ => write!(out, "{ty}.decode(u)")?,
     }
 
     Ok(())
@@ -190,9 +283,12 @@ fn write_invoke_decode(out: &mut dyn Write, ty: &Type, expr: &str) -> Result<()>
 
 fn map_type(src: &str) -> &str {
     match src {
-        "u8" | "u16" | "u32" | "u63" | "i8" | "i16" | "i32" | "i64" => "int",
-        "PublicRuntimeId" => "String",
+        "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" => "int",
+        "PeerAddr" | "PublicRuntimeId" => "String",
         "SystemTime" => "DateTime",
         _ => src,
     }
 }
+
+const I: &str = "  ";
+const THROW_DECODE_ERROR: &str = "throw DecodeError()";

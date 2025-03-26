@@ -1,14 +1,18 @@
 use heck::AsShoutySnakeCase;
 
-use ouisync_api_parser::{Context, Docs, EnumRepr, SimpleEnum};
+use ouisync_api_parser::{Context, Docs, EnumRepr, Item, SimpleEnum};
 use std::io::{self, Write};
 
 pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> io::Result<()> {
     writeln!(out, "package org.equalitie.ouisync.lib")?;
     writeln!(out)?;
 
-    for (name, item) in &ctx.simple_enums {
-        generate_enum(name, item, out)?;
+    for (name, item) in &ctx.items {
+        match item {
+            Item::SimpleEnum(item) => generate_enum(name, item, out)?,
+            Item::ComplexEnum(_item) => todo!(),
+            Item::Struct(_item) => todo!(),
+        }
     }
 
     Ok(())

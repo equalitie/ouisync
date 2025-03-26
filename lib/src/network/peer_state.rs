@@ -81,7 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_deserialize_message_pack() {
+    fn serialize_deserialize_msgpack() {
         let id = SecretRuntimeId::random().public();
         let now = SystemTime::now();
 

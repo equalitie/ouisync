@@ -4,12 +4,12 @@ use anyhow::{bail, format_err, Context as _, Result};
 use heck::AsPascalCase;
 use syn::{
     punctuated::Punctuated, Attribute, BinOp, Expr, ExprBinary, FnArg, GenericArgument, ImplItem,
-    Item, ItemEnum, Lit, Meta, Pat, PathArguments, ReturnType, Signature, Token,
+    ItemEnum, ItemStruct, Lit, Meta, Pat, PathArguments, ReturnType, Signature, Token,
 };
 
 use crate::{
-    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, RequestVariant, SimpleEnum,
-    SimpleVariant, Type,
+    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Item, RequestVariant, SimpleEnum,
+    SimpleVariant, Struct, Type,
 };
 
 pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool) -> Result<bool> {
@@ -31,30 +31,45 @@ pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool
     Ok(true)
 }
 
-fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<Item>) -> Result<()> {
+fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()> {
     for item in items {
         match item {
-            Item::Enum(item) => {
+            syn::Item::Enum(item) => {
                 if !is_api_item(&item.attrs) {
                     continue;
                 }
 
                 let name = item.ident.to_string();
 
-                match parse_enum(item)? {
+                match parse_enum(item)
+                    .with_context(|| format!("failed to parse enum {name} in {}", path.display()))?
+                {
                     Enum::Simple(item) => {
-                        ctx.simple_enums.push((name, item));
+                        ctx.items.push((name, Item::SimpleEnum(item)));
                     }
                     Enum::Complex(item) => {
-                        ctx.complex_enums.push((name, item));
+                        ctx.items.push((name, Item::ComplexEnum(item)));
                     }
                 }
             }
-            Item::Mod(item) => match item.content {
+            syn::Item::Struct(item) => {
+                if !is_api_item(&item.attrs) {
+                    continue;
+                }
+
+                let name = item.ident.to_string();
+                ctx.items.push((
+                    name.clone(),
+                    Item::Struct(parse_struct(item).with_context(|| {
+                        format!("failed to parse struct {name} in {}", path.display())
+                    })?),
+                ));
+            }
+            syn::Item::Mod(item) => match item.content {
                 Some((_, items)) => parse_mod(ctx, path, items)?,
                 None => parse_mod_in_file(ctx, path, &item.ident.to_string())?,
             },
-            Item::Impl(item) => {
+            syn::Item::Impl(item) => {
                 let scope = match &*item.self_ty {
                     syn::Type::Path(path) => {
                         if let Some(ident) = path.path.get_ident() {
@@ -195,6 +210,10 @@ enum Variant {
 }
 
 fn parse_enum(item: ItemEnum) -> Result<Enum> {
+    if item.generics.lt_token.is_some() {
+        bail!("generic enums not supported");
+    }
+
     let docs = parse_docs(&item.attrs)?;
     let repr = parse_enum_repr(&item.attrs)?;
 
@@ -210,8 +229,9 @@ fn parse_enum(item: ItemEnum) -> Result<Enum> {
                 let fields = parse_fields(fields.named)?;
                 Variant::Complex(ComplexVariant { docs, fields })
             }
-            syn::Fields::Unnamed(_) => {
-                bail!("unnamed fields not supported");
+            syn::Fields::Unnamed(fields) => {
+                let fields = parse_fields(fields.unnamed)?;
+                Variant::Complex(ComplexVariant { docs, fields })
             }
             syn::Fields::Unit => {
                 let value = if let Some((_, expr)) = variant.discriminant {
@@ -272,6 +292,22 @@ fn parse_enum(item: ItemEnum) -> Result<Enum> {
     }
 }
 
+fn parse_struct(item: ItemStruct) -> Result<Struct> {
+    if item.generics.lt_token.is_some() {
+        bail!("generic structs not supported");
+    }
+
+    let docs = parse_docs(&item.attrs)?;
+
+    let fields = match item.fields {
+        syn::Fields::Named(fields) => parse_fields(fields.named)?,
+        syn::Fields::Unnamed(_) => bail!("tuple structs not supported"),
+        syn::Fields::Unit => bail!("unit structs not supported"),
+    };
+
+    Ok(Struct { docs, fields })
+}
+
 fn parse_enum_repr(attrs: &[Attribute]) -> Result<Option<EnumRepr>> {
     for attr in attrs {
         let Meta::List(meta) = &attr.meta else {
@@ -304,12 +340,16 @@ fn infer_enum_repr(variants: &[(String, SimpleVariant)]) -> EnumRepr {
 
 fn parse_fields(fields: Punctuated<syn::Field, Token![,]>) -> Result<Vec<(String, Field)>> {
     let mut out = Vec::new();
+    let mut num_unnamed = 0;
+    let mut num_named = 0;
 
     for field in fields {
         let name = if let Some(ident) = &field.ident {
-            ident.to_string()
+            num_named += 1;
+            Some(ident.to_string())
         } else {
-            continue;
+            num_unnamed += 1;
+            None
         };
 
         let docs = parse_docs(&field.attrs)?;
@@ -318,6 +358,24 @@ fn parse_fields(fields: Punctuated<syn::Field, Token![,]>) -> Result<Vec<(String
 
         out.push((name, field));
     }
+
+    if num_unnamed > 0 && num_named > 0 {
+        bail!("mixing named and unnamed fields not supported");
+    }
+
+    if num_unnamed > 1 {
+        bail!("more than one unnamed field not supported");
+    }
+
+    let out = if num_unnamed == 1 {
+        out.into_iter()
+            .map(|(name, field)| (name.unwrap_or_else(|| "value".to_string()), field))
+            .collect()
+    } else {
+        out.into_iter()
+            .map(|(name, field)| (name.unwrap(), field))
+            .collect()
+    };
 
     Ok(out)
 }

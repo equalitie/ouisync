@@ -1,3 +1,4 @@
+use ouisync_macros::api;
 use pin_project_lite::pin_project;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -14,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Network traffic statistics.
 #[derive(Default, Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[api]
 pub struct Stats {
     /// Total number of bytes sent.
     pub bytes_tx: u64,
