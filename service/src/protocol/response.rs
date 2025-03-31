@@ -1,8 +1,8 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{
     crypto::{cipher::SecretKey, PasswordSalt},
-    AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress, ShareToken,
-    Stats, StorageSize,
+    AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress,
+    PublicRuntimeId, ShareToken, Stats, StorageSize,
 };
 use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
@@ -120,6 +120,7 @@ pub struct DirectoryEntry {
 }
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[api]
 pub struct QuotaInfo {
     pub quota: Option<StorageSize>,
     pub size: StorageSize,

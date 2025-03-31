@@ -1,10 +1,12 @@
 use crate::crypto::{cipher::SecretKey, Password, PasswordSalt};
+use ouisync_macros::api;
 #[cfg(test)]
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[api]
 pub enum LocalSecret {
     Password(Password),
     SecretKey(SecretKey),
@@ -25,6 +27,7 @@ impl LocalSecret {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[api]
 pub enum SetLocalSecret {
     Password(Password),
     KeyAndSalt(KeyAndSalt),
@@ -50,6 +53,7 @@ impl From<SetLocalSecret> for LocalSecret {
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
+#[api]
 pub struct KeyAndSalt {
     pub key: SecretKey,
     pub salt: PasswordSalt,

@@ -335,12 +335,6 @@ impl Service {
     }
 
     #[api]
-    fn network_subscribe(&mut self, conn_id: ConnectionId, message_id: MessageId) {
-        let rx = self.state.network.subscribe();
-        self.subscriptions.insert((conn_id, message_id), rx.into());
-    }
-
-    #[api]
     fn remote_control_get_listener_addr(&self) -> Option<SocketAddr> {
         self.remote_server
             .as_ref()
@@ -360,7 +354,13 @@ impl Service {
     }
 
     #[api]
-    fn state_monitor_subscribe(
+    fn session_subscribe_to_network(&mut self, conn_id: ConnectionId, message_id: MessageId) {
+        let rx = self.state.network.subscribe();
+        self.subscriptions.insert((conn_id, message_id), rx.into());
+    }
+
+    #[api]
+    fn session_subscribe_to_state_monitor(
         &mut self,
         conn_id: ConnectionId,
         message_id: MessageId,
@@ -374,7 +374,7 @@ impl Service {
     /// Cancel a subscription identified by the given message id. The message id should be the same
     /// that was used for sending the corresponding subscribe request.
     #[api]
-    fn unsubscribe(&mut self, conn_id: ConnectionId, _: MessageId, id: MessageId) {
+    fn session_unsubscribe(&mut self, conn_id: ConnectionId, _: MessageId, id: MessageId) {
         self.subscriptions.remove(&(conn_id, id));
     }
 

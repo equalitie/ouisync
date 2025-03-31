@@ -1,5 +1,7 @@
 part of 'ouisync.dart';
 
+/*
+
 // `LocalSecret` is used to encrypt and decrypt "global" read and write keys
 // stored inside repositories which are consequently used to encrypt, decrypt
 // and sign repository data.
@@ -149,3 +151,4 @@ Uint8List _randomBytes(int size) {
   }
   return bytes;
 }
+*/

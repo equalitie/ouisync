@@ -1,40 +1,14 @@
-import 'dart:async';
-import 'dart:collection';
-import 'dart:convert';
-import 'dart:math' show Random;
-
-import 'package:flutter/foundation.dart';
-import 'package:hex/hex.dart';
-import 'package:ouisync/exception.dart';
-
-import 'bindings.dart';
+import 'bindings.dart' as b;
 import 'client.dart';
 import 'server.dart';
-import 'state_monitor.dart';
 
-export 'bindings.dart'
-    show
-        AccessMode,
-        EntryType,
-        ErrorCode,
-        LogLevel,
-        NetworkEvent,
-        PeerSource,
-        PeerStateKind;
-export 'exception.dart';
+export 'bindings.dart' hide Session;
 export 'server.dart' show initLog;
 
-part 'local_secret.dart';
-
-const bool debugTrace = false;
-
-/// Entry point to the ouisync bindings. A session should be opened at the start of the application
-/// and closed at the end. There can be only one session at the time.
-class Session {
-  final Client _client;
+class Session extends b.Session {
   final Server? _server;
 
-  Session._(this._client, this._server);
+  Session._(super.client, this._server);
 
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
@@ -54,9 +28,7 @@ class Session {
           configPath: configPath,
           debugLabel: debugLabel,
         );
-      } on ServiceAlreadyRunning catch (_) {
-        debugPrint('Service already started');
-      }
+      } on b.ServiceAlreadyRunning catch (_) {}
     }
 
     final client = await Client.connect(configPath: configPath);
@@ -64,204 +36,29 @@ class Session {
     return Session._(client, server);
   }
 
-  Future<String?> get storeDir => _client.invoke('repository_get_store_dir');
-
-  Future<void> setStoreDir(String path) =>
-      _client.invoke('repository_set_store_dir', path);
-
-  Future<String?> get mountRoot => _client.invoke('repository_get_mount_root');
-
-  Future<void> setMountRoot(String? path) => _client.invoke(
-        'repository_set_mount_root',
-        path,
-      );
-
-  /// Initialize network from config. Fall back to the provided defaults if the corresponding
-  /// config entries don't exist.
-  Future<void> initNetwork({
-    List<String> defaultBindAddrs = const [],
-    bool defaultPortForwardingEnabled = false,
-    bool defaultLocalDiscoveryEnabled = false,
-  }) =>
-      _client.invoke<void>("network_init", {
-        'bind': defaultBindAddrs,
-        'port_forwarding_enabled': defaultPortForwardingEnabled,
-        'local_discovery_enabled': defaultLocalDiscoveryEnabled,
-      });
-
-  /// Binds network to the specified addresses.
-  Future<void> bindNetwork(List<String> addrs) =>
-      _client.invoke<void>("network_bind", addrs);
-
-  Stream<NetworkEvent> get networkEvents => _client
-      .subscribe('network', null)
-      .map((raw) => NetworkEvent.decode(raw as int));
-
-  Future<void> addUserProvidedPeers(List<String> addrs) =>
-      _client.invoke<void>('network_add_user_provided_peers', addrs);
-
-  Future<void> removeUserProvidedPeers(List<String> addrs) =>
-      _client.invoke<void>('network_remove_user_provided_peers', addrs);
-
-  Future<List<String>> get userProvidedPeers => _client
-      .invoke<List<Object?>>('network_get_user_provided_peers')
-      .then((list) => list.cast<String>());
-
-  /// Returns the listener addresses of this Ouisync instance.
-  Future<List<String>> get localListenerAddrs => _client
-      .invoke<List<Object?>>('network_get_local_listener_addrs')
-      .then((list) => list.cast<String>());
-
-  /// Returns the listener addresses of the specified remote Ouisync instance.
-  /// Works only if the remote control API is enabled on the remote instance. Typically used with
-  /// cache servers.
-  Future<List<String>> remoteListenerAddrs(String host) => _client
-      .invoke<List<Object?>>('network_get_remote_listener_addrs', host)
-      .then((list) => list.cast<String>());
-
-  Future<String?> get externalAddressV4 =>
-      _client.invoke<String?>('network_get_external_addr_v4');
-
-  Future<String?> get externalAddressV6 =>
-      _client.invoke<String?>('network_get_external_addr_v6');
-
-  Future<String?> get natBehavior =>
-      _client.invoke<String?>('network_get_nat_behavior');
-
-  Future<NetworkStats> get networkStats => _client
-      .invoke<List<Object?>>('network_stats')
-      .then((list) => NetworkStats.decode(list));
-
-  Future<List<PeerInfo>> get peers => _client
-      .invoke<List<Object?>>('network_get_peers')
-      .then(PeerInfo.decodeAll);
-
-  StateMonitor get rootStateMonitor => StateMonitor.getRoot(_client);
-
-  Future<int> get currentProtocolVersion =>
-      _client.invoke<int>('network_get_current_protocol_version');
-
-  Future<int> get highestSeenProtocolVersion =>
-      _client.invoke<int>('network_get_highest_seen_protocol_version');
-
-  /// Is port forwarding (UPnP) enabled?
-  Future<bool> get isPortForwardingEnabled =>
-      _client.invoke<bool>('network_is_port_forwarding_enabled');
-
-  /// Enable/disable port forwarding (UPnP)
-  Future<void> setPortForwardingEnabled(bool enabled) =>
-      _client.invoke<void>('network_set_port_forwarding_enabled', enabled);
-
-  /// Is local discovery enabled?
-  Future<bool> get isLocalDiscoveryEnabled =>
-      _client.invoke<bool>('network_is_local_discovery_enabled');
-
-  /// Enable/disable local discovery
-  Future<void> setLocalDiscoveryEnabled(bool enabled) =>
-      _client.invoke<void>('network_set_local_discovery_enabled', enabled);
-
-  Future<String> get runtimeId =>
-      _client.invoke<String>('network_get_runtime_id');
-
-  // Utility functions to generate password salts and to derive LocalSecretKey from LocalPasswords.
-
-  Future<PasswordSalt> generatePasswordSalt() => _client
-      .invoke<Uint8List>('password_generate_salt')
-      .then((bytes) => PasswordSalt(bytes));
-
-  Future<LocalSecretKey> deriveSecretKey(
-    LocalPassword pwd,
-    PasswordSalt salt,
-  ) =>
-      _client.invoke<Uint8List>('password_derive_secret_key', {
-        'password': pwd.string,
-        'salt': salt._bytes
-      }).then((bytes) => LocalSecretKey(bytes));
-
   /// Try to gracefully close connections to peers then close the session.
+  @override
   Future<void> close() async {
-    await _client.close();
+    await super.close();
     await _server?.stop();
   }
 }
 
-class PeerInfo {
-  final String addr;
-  final PeerSource source;
-  final PeerStateKind state;
-  final String? runtimeId;
-  final NetworkStats stats;
+/*
+import 'dart:async';
+import 'dart:collection';
+import 'dart:convert';
 
-  PeerInfo({
-    required this.addr,
-    required this.source,
-    required this.state,
-    this.runtimeId,
-    this.stats = const NetworkStats(),
-  });
+import 'package:flutter/foundation.dart';
+import 'package:hex/hex.dart';
 
-  static PeerInfo decode(Object? raw) {
-    final list = raw as List<Object?>;
+import 'client.dart';
+import 'server.dart';
+import 'state_monitor.dart';
 
-    final addr = list[0] as String;
-    final source = PeerSource.decode(list[1] as int);
-    final rawState = list[2];
+export 'bindings.dart';
+export 'server.dart' show initLog;
 
-    PeerStateKind state;
-    String? runtimeId;
-
-    if (rawState is int) {
-      state = PeerStateKind.decode(rawState);
-    } else if (rawState is List) {
-      state = PeerStateKind.decode(rawState[0] as int);
-      runtimeId = HEX.encode(rawState[1] as Uint8List);
-    } else {
-      throw Exception('invalid peer info state');
-    }
-
-    final stats = NetworkStats.decode(list[3] as List<Object?>);
-
-    return PeerInfo(
-      addr: addr,
-      source: source,
-      state: state,
-      runtimeId: runtimeId,
-      stats: stats,
-    );
-  }
-
-  static List<PeerInfo> decodeAll(List<Object?> raw) =>
-      raw.map((rawItem) => PeerInfo.decode(rawItem)).toList();
-
-  @override
-  String toString() =>
-      '$runtimeType(addr: $addr, source: $source, state: $state, runtimeId: $runtimeId)';
-}
-
-class NetworkStats {
-  final int bytesTx;
-  final int bytesRx;
-  final int throughputTx;
-  final int throughputRx;
-
-  const NetworkStats({
-    this.bytesTx = 0,
-    this.bytesRx = 0,
-    this.throughputTx = 0,
-    this.throughputRx = 0,
-  });
-
-  static NetworkStats decode(List<Object?> raw) => NetworkStats(
-        bytesTx: raw[0] as int,
-        bytesRx: raw[1] as int,
-        throughputTx: raw[2] as int,
-        throughputRx: raw[3] as int,
-      );
-
-  @override
-  String toString() =>
-      '$runtimeType(bytesTx: $bytesTx, bytesRx: $bytesRx, throughputTx: $throughputTx, throughputRx: $throughputRx)';
-}
 
 /// A handle to a Ouisync repository.
 class Repository {
@@ -834,3 +631,4 @@ class File {
 
   Future<int> get progress => _client.invoke<int>('file_progress', _handle);
 }
+*/

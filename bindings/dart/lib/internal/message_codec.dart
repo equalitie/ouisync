@@ -1,12 +1,10 @@
 import 'dart:typed_data';
 
-import 'package:msgpack_dart/msgpack_dart.dart';
+import 'package:messagepack/messagepack.dart';
 
-import '../exception.dart';
+import '../bindings.dart' show ErrorCode, OuisyncException, Request, Response;
 
-Uint8List encodeMessage(int id, String method, Object? args) {
-  //debugPrint('send: id=$id method=$method args=$args');
-
+Uint8List encodeMessage(int id, Request message) {
   // Message format:
   //
   // +-------------------------------------+-------------------------------------------+
@@ -15,9 +13,13 @@ Uint8List encodeMessage(int id, String method, Object? args) {
   //
   // This allows the server to decode the id even if the request is malformed so it can send
   // error response back.
+
+  final p = Packer();
+  message.encode(p);
+
   return (BytesBuilder()
         ..add((ByteData(8)..setUint64(0, id, Endian.big)).buffer.asUint8List())
-        ..add(serialize({method: args})))
+        ..add(p.takeBytes()))
       .takeBytes();
 }
 
@@ -27,55 +29,61 @@ DecodeResult decodeMessage(Uint8List bytes) {
   }
 
   final id = bytes.buffer.asByteData().getUint64(0, Endian.big);
-  final payload = deserialize(bytes.sublist(8));
+  final u = Unpacker(bytes.sublist(8));
 
-  //debugPrint('recv: id=$id, payload=$payload');
-
-  if (payload is! Map) {
-    return MalformedPayload._(id);
-  }
-
-  if (payload.containsKey('success')) {
-    final success = payload.remove('success');
-
-    if (success is String) {
-      return MessageSuccess._(id, null);
-    }
-
-    if (success is Map && success.length == 1) {
-      return MessageSuccess._(id, success.entries.single.value);
-    } else {
+  try {
+    if (u.unpackMapLength() != 1) {
       return MalformedPayload._(id);
     }
-  }
 
-  final rawError = payload.remove('failure');
-  if (rawError is! List<Object?>) {
+    final key = u.unpackString();
+    if (key == null) {
+      return MalformedPayload._(id);
+    }
+
+    switch (key) {
+      case 'success':
+        final response = Response.decode(u);
+        if (response == null) {
+          return MalformedPayload._(id);
+        }
+
+        return MessageSuccess._(id, response);
+      case 'failure':
+        if (u.unpackListLength() != 3) {
+          return MalformedPayload._(id);
+        }
+
+        final code = ErrorCode.decode(u);
+        if (code == null) {
+          return MalformedPayload._(id);
+        }
+
+        final message = u.unpackString();
+        if (message == null) {
+          return MalformedPayload._(id);
+        }
+
+        final numSources = u.unpackListLength();
+        final sources = Iterable.generate(numSources, (_) => u.unpackString())
+            .whereType<String>()
+            .toList();
+
+        final error = OuisyncException(code, message, sources);
+        return MessageFailure._(id, error);
+      default:
+        return MalformedPayload._(id);
+    }
+  } on FormatException {
     return MalformedPayload._(id);
   }
-
-  final code = rawError[0];
-  final message = rawError[1];
-  final sources = rawError[2];
-
-  if (code is! int || message is! String || sources is! List<Object?>) {
-    return MalformedPayload._(id);
-  }
-
-  final error = OuisyncException(
-    ErrorCode.decode(code),
-    message,
-    sources.cast(),
-  );
-
-  return MessageFailure._(id, error);
 }
 
 sealed class DecodeResult {}
 
 class MessageSuccess extends DecodeResult {
   final int id;
-  final Object? payload;
+  final Response payload;
 
   MessageSuccess._(this.id, this.payload);
 

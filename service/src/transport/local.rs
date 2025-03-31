@@ -333,7 +333,10 @@ mod tests {
 
         // Unsubscribe
         let () = client
-            .invoke(MessageId::next(), Request::Unsubscribe { id: sub_id })
+            .invoke(
+                MessageId::next(),
+                Request::SessionUnsubscribe { id: sub_id },
+            )
             .await
             .unwrap();
 

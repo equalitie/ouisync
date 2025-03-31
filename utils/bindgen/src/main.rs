@@ -9,7 +9,7 @@ use std::io;
 fn main() -> Result<()> {
     let options = Options::parse();
 
-    let source_files = ["service/src/lib.rs", "lib/src/lib.rs"];
+    let source_files = ["lib/src/lib.rs", "net/src/lib.rs", "service/src/lib.rs"];
     let context = Context::parse(&source_files)?;
 
     match options.language {

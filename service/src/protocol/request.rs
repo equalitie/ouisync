@@ -3,6 +3,7 @@ use ouisync::{
     crypto::PasswordSalt, AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret,
     ShareToken, StorageSize,
 };
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use state_monitor::MonitorId;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
@@ -17,6 +18,7 @@ use super::{
 include!(concat!(env!("OUT_DIR"), "/request.rs"));
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[api]
 pub struct NetworkDefaults {
     #[serde(with = "helpers::strs")]
     pub bind: Vec<PeerAddr>,

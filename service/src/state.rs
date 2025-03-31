@@ -22,8 +22,8 @@ use crate::{
 use ouisync::{
     crypto::{cipher::SecretKey, PasswordSalt},
     Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
-    NatBehavior, Network, PeerAddr, PeerInfo, Progress, Repository, RepositoryParams,
-    SetLocalSecret, ShareToken, Stats, StorageSize,
+    NatBehavior, Network, PeerAddr, PeerInfo, Progress, PublicRuntimeId, Repository,
+    RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize,
 };
 use ouisync_macros::api;
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
@@ -328,8 +328,8 @@ impl State {
     }
 
     #[api]
-    pub fn session_get_runtime_id(&self) -> String {
-        hex::encode(self.network.this_runtime_id().as_ref())
+    pub fn session_get_runtime_id(&self) -> PublicRuntimeId {
+        self.network.this_runtime_id()
     }
 
     #[api]
@@ -1128,11 +1128,11 @@ impl State {
         let mut tx = repo.metadata().write().await?;
 
         for edit in edits {
-            if tx.get(&edit.key).await? != edit.old {
+            if tx.get(&edit.key).await? != edit.old_value {
                 return Ok(false);
             }
 
-            if let Some(new) = edit.new {
+            if let Some(new) = edit.new_value {
                 tx.set(&edit.key, new).await?;
             } else {
                 tx.remove(&edit.key).await?;
@@ -1471,10 +1471,11 @@ impl State {
     }
 
     #[api]
-    pub fn session_get_state_monitor(&self, path: Vec<MonitorId>) -> Result<StateMonitor, Error> {
-        self.root_monitor.locate(path).ok_or(Error::NotFound)
+    pub fn session_get_state_monitor(&self, path: Vec<MonitorId>) -> Option<StateMonitor> {
+        self.root_monitor.locate(path)
     }
 
+    // This is exposed to #[api] in `Service`
     pub fn state_monitor_subscribe(
         &self,
         path: Vec<MonitorId>,

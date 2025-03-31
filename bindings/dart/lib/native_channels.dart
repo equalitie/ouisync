@@ -82,7 +82,7 @@ class NativeChannels {
   }
 
   Future<int?> _openFile(String path) async {
-    final id = _files.insert(await File.open(_repository!, path));
+    final id = _files.insert(await _repository!.openFile(path));
     debugPrint('openFile(path=$path) -> id=$id');
     return id;
   }

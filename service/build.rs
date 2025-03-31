@@ -40,7 +40,6 @@ fn generate_request(request: &Request) -> Result<()> {
         out,
         "#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]"
     )?;
-    writeln!(out, "#[serde(rename_all = \"snake_case\")]")?;
     writeln!(out, "pub enum Request {{")?;
 
     for (name, variant) in &request.variants {
@@ -81,7 +80,6 @@ fn generate_response(response: &Response) -> Result<()> {
         out,
         "#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]"
     )?;
-    writeln!(out, "#[serde(rename_all = \"snake_case\")]")?;
     writeln!(out, "#[allow(clippy::large_enum_variant)]")?;
     writeln!(out, "pub enum Response {{")?;
 

@@ -1,4 +1,5 @@
 use bytes::{Buf, BufMut};
+use ouisync_macros::api;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     mem,
@@ -8,6 +9,7 @@ use thiserror::Error;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
+#[api]
 pub struct MessageId(u64);
 
 impl MessageId {

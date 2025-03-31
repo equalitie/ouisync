@@ -1,10 +1,12 @@
 use crate::protocol::BLOCK_RECORD_SIZE;
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
 /// Strongly typed storage size.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
+#[api]
 pub struct StorageSize {
     bytes: u64,
 }

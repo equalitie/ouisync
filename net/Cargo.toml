@@ -13,6 +13,7 @@ bytes              = "1.1.0"
 futures-util       = { workspace = true }
 hex_fmt            = { workspace = true }
 num_enum           = { workspace = true }
+ouisync-macros     = { path = "../macros" }
 pin-project-lite   = { workspace = true }
 # The quinn-udp package that comes in quinn version 0.11.4 - 0.11.6 (inclusive)
 # has an issue causing large packets to not be delivered between Linux and

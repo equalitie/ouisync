@@ -118,3 +118,25 @@ pub(super) mod strs {
         s.end()
     }
 }
+
+/// Serialize / deserialize Duration by converting it to/from milliseconds
+pub(super) mod millis {
+    use std::time::Duration;
+
+    use serde::{ser, Deserialize, Deserializer, Serializer};
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let millis = u64::deserialize(d)?;
+        Ok(Duration::from_millis(millis))
+    }
+
+    pub fn serialize<S>(value: &Duration, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        s.serialize_u64(value.as_millis().try_into().map_err(ser::Error::custom)?)
+    }
+}

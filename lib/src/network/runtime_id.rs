@@ -6,6 +6,7 @@ use crate::crypto::{
     sign::{Keypair, PublicKey, Signature},
     Digest, Hashable,
 };
+use ouisync_macros::api;
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -43,6 +44,7 @@ impl From<Keypair> for SecretRuntimeId {
 
 #[derive(PartialEq, Eq, Ord, PartialOrd, Hash, Clone, Copy, Deserialize, Serialize, Debug)]
 #[serde(transparent)]
+#[api(repr(Bytes))]
 pub struct PublicRuntimeId {
     public: PublicKey,
 }

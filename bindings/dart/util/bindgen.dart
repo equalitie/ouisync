@@ -16,5 +16,10 @@ Future<void> main() async {
     workingDirectory: '../..',
   );
 
+  if (result.exitCode != 0) {
+    stderr.write(result.stderr);
+    exit(result.exitCode);
+  }
+
   await File('lib/bindings.g.dart').writeAsString(result.stdout);
 }

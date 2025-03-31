@@ -2783,6 +2783,7 @@ name = "ouisync-api-parser"
 version = "0.8.11"
 dependencies = [
  "anyhow",
+ "assert_matches",
  "heck 0.5.0",
  "syn 2.0.100",
 ]
@@ -2857,6 +2858,7 @@ dependencies = [
  "hex_fmt",
  "itertools 0.13.0",
  "num_enum",
+ "ouisync-macros",
  "ouisync-rand",
  "pin-project-lite",
  "proptest",

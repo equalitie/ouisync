@@ -3,13 +3,14 @@ use std::{fs, io, path::Path};
 use anyhow::{bail, format_err, Context as _, Result};
 use heck::AsPascalCase;
 use syn::{
-    punctuated::Punctuated, Attribute, BinOp, Expr, ExprBinary, FnArg, GenericArgument, ImplItem,
-    ItemEnum, ItemStruct, Lit, Meta, Pat, PathArguments, ReturnType, Signature, Token,
+    parenthesized, punctuated::Punctuated, Attribute, BinOp, Expr, ExprBinary, FnArg,
+    GenericArgument, ImplItem, ItemEnum, ItemStruct, Lit, Meta, Pat, PathArguments, ReturnType,
+    Signature, Token,
 };
 
 use crate::{
-    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Item, RequestVariant, SimpleEnum,
-    SimpleVariant, Struct, Type,
+    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Item, Newtype, RequestVariant,
+    SimpleEnum, SimpleVariant, Struct, Type,
 };
 
 pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool) -> Result<bool> {
@@ -40,17 +41,12 @@ fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()
                 }
 
                 let name = item.ident.to_string();
-
-                match parse_enum(item)
-                    .with_context(|| format!("failed to parse enum {name} in {}", path.display()))?
-                {
-                    Enum::Simple(item) => {
-                        ctx.items.push((name, Item::SimpleEnum(item)));
-                    }
-                    Enum::Complex(item) => {
-                        ctx.items.push((name, Item::ComplexEnum(item)));
-                    }
-                }
+                ctx.items.push((
+                    name.clone(),
+                    parse_enum(item).with_context(|| {
+                        format!("failed to parse enum {name} in {}", path.display())
+                    })?,
+                ))
             }
             syn::Item::Struct(item) => {
                 if !is_api_item(&item.attrs) {
@@ -60,9 +56,9 @@ fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()
                 let name = item.ident.to_string();
                 ctx.items.push((
                     name.clone(),
-                    Item::Struct(parse_struct(item).with_context(|| {
+                    parse_struct(item).with_context(|| {
                         format!("failed to parse struct {name} in {}", path.display())
-                    })?),
+                    })?,
                 ));
             }
             syn::Item::Mod(item) => match item.content {
@@ -199,17 +195,12 @@ fn ignore_request_arg(scope: &str, name: &str) -> bool {
     scope == "Service" && (name == "conn_id" || name == "message_id")
 }
 
-enum Enum {
-    Simple(SimpleEnum),
-    Complex(ComplexEnum),
-}
-
 enum Variant {
     Simple(SimpleVariant),
     Complex(ComplexVariant),
 }
 
-fn parse_enum(item: ItemEnum) -> Result<Enum> {
+fn parse_enum(item: ItemEnum) -> Result<Item> {
     if item.generics.lt_token.is_some() {
         bail!("generic enums not supported");
     }
@@ -226,11 +217,22 @@ fn parse_enum(item: ItemEnum) -> Result<Enum> {
 
         let variant = match variant.fields {
             syn::Fields::Named(fields) => {
-                let fields = parse_fields(fields.named)?;
+                let fields = parse_named_fields(&fields.named)?;
                 Variant::Complex(ComplexVariant { docs, fields })
             }
             syn::Fields::Unnamed(fields) => {
-                let fields = parse_fields(fields.unnamed)?;
+                let fields = parse_unnamed_fields(&fields.unnamed)?;
+
+                if fields.len() != 1 {
+                    bail!("enum variants with more than one unnamed fields not supported");
+                }
+
+                let fields = fields
+                    .into_iter()
+                    .take(1)
+                    .map(|field| ("value".to_owned(), field))
+                    .collect();
+
                 Variant::Complex(ComplexVariant { docs, fields })
             }
             syn::Fields::Unit => {
@@ -267,7 +269,7 @@ fn parse_enum(item: ItemEnum) -> Result<Enum> {
             })
             .collect();
 
-        Ok(Enum::Complex(ComplexEnum { docs, variants }))
+        Ok(Item::ComplexEnum(ComplexEnum { docs, variants }))
     } else {
         let variants: Vec<_> = variants
             .into_iter()
@@ -284,7 +286,7 @@ fn parse_enum(item: ItemEnum) -> Result<Enum> {
 
         let repr = repr.unwrap_or_else(|| infer_enum_repr(&variants));
 
-        Ok(Enum::Simple(SimpleEnum {
+        Ok(Item::SimpleEnum(SimpleEnum {
             docs,
             repr,
             variants,
@@ -292,20 +294,44 @@ fn parse_enum(item: ItemEnum) -> Result<Enum> {
     }
 }
 
-fn parse_struct(item: ItemStruct) -> Result<Struct> {
+fn parse_struct(item: ItemStruct) -> Result<Item> {
     if item.generics.lt_token.is_some() {
         bail!("generic structs not supported");
     }
 
     let docs = parse_docs(&item.attrs)?;
 
-    let fields = match item.fields {
-        syn::Fields::Named(fields) => parse_fields(fields.named)?,
-        syn::Fields::Unnamed(_) => bail!("tuple structs not supported"),
-        syn::Fields::Unit => bail!("unit structs not supported"),
+    let ty = if let Some(ty) = parse_api_repr(&item.attrs)? {
+        Some(Some(ty))
+    } else if is_serde_transparent(&item.attrs) {
+        Some(None)
+    } else {
+        None
     };
 
-    Ok(Struct { docs, fields })
+    if let Some(ty) = ty {
+        if item.fields.len() != 1 {
+            bail!("transparent structs must have exactly one field");
+        }
+
+        if let Some(ty) = ty {
+            Ok(Item::Newtype(Newtype { docs, ty }))
+        } else {
+            let field = item.fields.iter().next().unwrap();
+            let ty = parse_type(&field.ty)?;
+
+            Ok(Item::Newtype(Newtype { docs, ty }))
+        }
+    } else {
+        match item.fields {
+            syn::Fields::Named(fields) => {
+                let fields = parse_named_fields(&fields.named)?;
+                Ok(Item::Struct(Struct { docs, fields }))
+            }
+            syn::Fields::Unnamed(_) => bail!("non-transparent tuple structs not supported"),
+            syn::Fields::Unit => bail!("unit structs not supported"),
+        }
+    }
 }
 
 fn parse_enum_repr(attrs: &[Attribute]) -> Result<Option<EnumRepr>> {
@@ -338,18 +364,14 @@ fn infer_enum_repr(variants: &[(String, SimpleVariant)]) -> EnumRepr {
     }
 }
 
-fn parse_fields(fields: Punctuated<syn::Field, Token![,]>) -> Result<Vec<(String, Field)>> {
+fn parse_named_fields(fields: &Punctuated<syn::Field, Token![,]>) -> Result<Vec<(String, Field)>> {
     let mut out = Vec::new();
-    let mut num_unnamed = 0;
-    let mut num_named = 0;
 
     for field in fields {
         let name = if let Some(ident) = &field.ident {
-            num_named += 1;
-            Some(ident.to_string())
+            ident.to_string()
         } else {
-            num_unnamed += 1;
-            None
+            bail!("unnamed fields not supported");
         };
 
         let docs = parse_docs(&field.attrs)?;
@@ -359,25 +381,82 @@ fn parse_fields(fields: Punctuated<syn::Field, Token![,]>) -> Result<Vec<(String
         out.push((name, field));
     }
 
-    if num_unnamed > 0 && num_named > 0 {
-        bail!("mixing named and unnamed fields not supported");
-    }
+    Ok(out)
+}
 
-    if num_unnamed > 1 {
-        bail!("more than one unnamed field not supported");
-    }
+fn parse_unnamed_fields(fields: &Punctuated<syn::Field, Token![,]>) -> Result<Vec<Field>> {
+    let mut out = Vec::new();
 
-    let out = if num_unnamed == 1 {
-        out.into_iter()
-            .map(|(name, field)| (name.unwrap_or_else(|| "value".to_string()), field))
-            .collect()
-    } else {
-        out.into_iter()
-            .map(|(name, field)| (name.unwrap(), field))
-            .collect()
-    };
+    for field in fields {
+        let docs = parse_docs(&field.attrs)?;
+        let ty = parse_type(&field.ty)?;
+        let field = Field { docs, ty };
+
+        out.push(field);
+    }
 
     Ok(out)
+}
+
+fn parse_api_repr(attrs: &[Attribute]) -> Result<Option<Type>> {
+    for attr in attrs {
+        if !attr.path().is_ident("api") {
+            continue;
+        }
+
+        let list = match &attr.meta {
+            Meta::List(list) => list,
+            _ => continue,
+        };
+
+        let mut repr_ty = None;
+
+        list.parse_nested_meta(|meta| {
+            if !meta.path.is_ident("repr") {
+                return Ok(());
+            }
+
+            if meta.input.peek(syn::token::Paren) {
+                let content;
+                parenthesized!(content in meta.input);
+                let ty: syn::Type = content.parse()?;
+                repr_ty = Some(ty);
+            }
+
+            Ok(())
+        })?;
+
+        if let Some(ty) = repr_ty {
+            return Ok(Some(parse_type(&ty)?));
+        }
+    }
+
+    Ok(None)
+}
+
+fn is_serde_transparent(attrs: &[Attribute]) -> bool {
+    for attr in attrs {
+        let list = match &attr.meta {
+            Meta::List(list) => list,
+            _ => continue,
+        };
+
+        if !list.path.is_ident("serde") {
+            continue;
+        }
+
+        let ident: syn::Ident = if let Ok(ident) = list.parse_args() {
+            ident
+        } else {
+            continue;
+        };
+
+        if ident == "transparent" {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn into_complex_variant(v: SimpleVariant) -> ComplexVariant {
@@ -428,7 +507,15 @@ fn parse_type(ty: &syn::Type) -> Result<Type> {
     let first = path.segments.get(0).unwrap();
 
     match &first.arguments {
-        PathArguments::None => Ok(Type::Scalar(first.ident.to_string())),
+        PathArguments::None => {
+            let name = first.ident.to_string();
+
+            if name == "Bytes" {
+                Ok(Type::Bytes)
+            } else {
+                Ok(Type::Scalar(name))
+            }
+        }
         PathArguments::AngleBracketed(args) => {
             if first.ident == "Option" {
                 if args.args.len() != 1 {
@@ -577,5 +664,103 @@ fn parse_const_int_binary_expr(expr: ExprBinary) -> Result<u64> {
         BinOp::Shl(_) => Ok(lhs << rhs),
         BinOp::Shr(_) => Ok(lhs >> rhs),
         _ => bail!("unsupported binary op: {:?}", expr.op),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert_matches::assert_matches;
+    use syn::parse_quote;
+
+    use super::*;
+
+    #[test]
+    fn test_parse_simple_enum() {
+        let item: syn::ItemEnum = parse_quote! {
+            #[api]
+            enum Color {
+                Red,
+                Green,
+                Blue,
+            }
+        };
+        assert_matches!(
+            parse_enum(item),
+            Ok(Item::SimpleEnum(item)) => {
+                assert_eq!(item.variants.len(), 3);
+                assert_eq!(item.variants[0].0, "Red");
+                assert_eq!(item.variants[1].0, "Green");
+                assert_eq!(item.variants[2].0, "Blue");
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_newtype() {
+        let item: syn::ItemStruct = parse_quote! {
+            #[derive(Serialize)]
+            #[api]
+            #[serde(transparent)]
+            struct Name(String);
+        };
+        assert_matches!(
+            parse_struct(item),
+            Ok(Item::Newtype(Newtype { ty, .. })) => {
+                assert_matches!(
+                    ty,
+                    Type::Scalar(name) => assert_eq!(name, "String")
+                )
+            }
+        );
+
+        let item: syn::ItemStruct = parse_quote! {
+            #[api(repr(String))]
+            struct Password(Box<Zeroizing<String>>);
+        };
+        assert_matches!(
+            parse_struct(item),
+            Ok(Item::Newtype(Newtype { ty, .. })) => {
+                assert_matches!(
+                    ty,
+                    Type::Scalar(name) => assert_eq!(name, "String")
+                )
+            }
+        );
+
+        let item: syn::ItemStruct = parse_quote! {
+            #[derive(Serialize)]
+            #[serde(transparent)]
+            #[api(repr(Bytes))]
+            pub struct PublicRuntimeId {
+                public: PublicKey,
+            }
+        };
+        assert_matches!(
+            parse_struct(item),
+            Ok(Item::Newtype(Newtype { ty, .. })) => {
+                assert_matches!(ty, Type::Bytes)
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_api_repr() {
+        let attrs: Vec<Attribute> = parse_quote! {
+            #[api]
+        };
+        assert_matches!(parse_api_repr(&attrs), Ok(None));
+
+        let attrs: Vec<Attribute> = parse_quote! {
+            #[api(nonsense)]
+        };
+        assert_matches!(parse_api_repr(&attrs), Ok(None));
+
+        let attrs: Vec<Attribute> = parse_quote! {
+            #[api(repr(u32))]
+        };
+        assert_matches!(
+            parse_api_repr(&attrs),
+            Ok(Some(Type::Scalar(name))) if name == "u32"
+        );
     }
 }

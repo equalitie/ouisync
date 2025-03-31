@@ -1,5 +1,6 @@
 use crate::error::Error;
 use ouisync::{Registration, Repository, RepositoryId};
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use slab::Slab;
 use std::{
@@ -112,6 +113,7 @@ impl RepositorySet {
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
 #[serde(transparent)]
+#[api]
 pub struct RepositoryHandle(usize);
 
 impl RepositoryHandle {
