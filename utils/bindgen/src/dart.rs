@@ -1,21 +1,29 @@
-use anyhow::{bail, Context as _, Result};
-use heck::AsLowerCamelCase;
+use anyhow::{bail, Result};
+use heck::{AsLowerCamelCase, AsPascalCase};
 use ouisync_api_parser::{ComplexEnum, Context, Docs, Field, Item, SimpleEnum, Struct, Type};
 use std::io::Write;
 
 pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     for (name, item) in &ctx.items {
-        let result = match item {
-            Item::SimpleEnum(item) => write_simple_enum(out, name, item),
-            Item::ComplexEnum(item) => write_complex_enum(out, name, item),
-            Item::Struct(item) => write_struct(out, name, item),
-        };
+        match item {
+            Item::SimpleEnum(item) => {
+                write_simple_enum(out, name, item)?;
 
-        result.with_context(|| format!("failed to write {name}"))?;
+                if name == "ErrorCode" {
+                    write_exception(out, item)?;
+                }
+            }
+            Item::ComplexEnum(item) => write_complex_enum(out, name, item)?,
+            Item::Struct(item) => write_struct(out, name, item)?,
+        }
     }
 
     writeln!(out, "class DecodeError extends ArgumentError {{")?;
     writeln!(out, "{I}DecodeError() : super('decode error');")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+    writeln!(out, "extension _AnyExtension<T> on T {{")?;
+    writeln!(out, "{I}R let<R>(R Function(T) f) => f(this);")?;
     writeln!(out, "}}")?;
 
     Ok(())
@@ -123,7 +131,7 @@ fn write_complex_enum(out: &mut dyn Write, name: &str, item: &ComplexEnum) -> Re
 
         for (field_name, field) in &variant.fields {
             write!(out, "{I}{I}{I}{I}{I}{I}{}: ", AsLowerCamelCase(field_name))?;
-            write_invoke_decode(out, &field.ty)?;
+            write_decode(out, &field.ty)?;
             writeln!(out, ",")?;
         }
 
@@ -175,7 +183,7 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
 
     for (field_name, field) in &item.fields {
         write!(out, "{I}{I}{I}{}: ", AsLowerCamelCase(field_name))?;
-        write_invoke_decode(out, &field.ty)?;
+        write_decode(out, &field.ty)?;
         writeln!(out, ",")?
     }
 
@@ -185,6 +193,83 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
 
     writeln!(out, "}}")?;
     writeln!(out)?;
+
+    Ok(())
+}
+
+fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
+    writeln!(out, "class OuisyncException implements Exception {{")?;
+
+    writeln!(out, "{I}final ErrorCode code;")?;
+    writeln!(out, "{I}final String message;")?;
+    writeln!(out, "{I}final List<String> sources;")?;
+    writeln!(out, "{I}")?;
+
+    writeln!(
+        out,
+        "{I}OuisyncException._(this.code, String? message, this.sources)"
+    )?;
+    writeln!(out, "{I}{I}{I}: message = message ?? code.toString() {{")?;
+    writeln!(out, "{I}{I}assert(code != ErrorCode.ok);")?;
+    writeln!(out, "{I}}}")?;
+    writeln!(out, "{I}")?;
+
+    writeln!(out, "{I}factory OuisyncException(")?;
+    writeln!(out, "{I}{I}ErrorCode code, [")?;
+    writeln!(out, "{I}{I}String? message,")?;
+    writeln!(out, "{I}{I}List<String> sources = const [],")?;
+    writeln!(out, "{I}]) =>")?;
+    writeln!(out, "{I}{I}switch (code) {{")?;
+
+    for (variant_name, _) in &item.variants {
+        if variant_name == "Ok" {
+            continue;
+        }
+
+        if variant_name == "Other" {
+            writeln!(out, "{I}{I}{I}ErrorCode.other => OuisyncException._(ErrorCode.other, message, sources),")?;
+        } else {
+            writeln!(
+                out,
+                "{I}{I}{I}ErrorCode.{} => {}(message, sources),",
+                AsLowerCamelCase(variant_name),
+                AsPascalCase(variant_name)
+            )?;
+        }
+    }
+
+    writeln!(out, "{I}{I}}};")?;
+    writeln!(out, "{I}")?;
+
+    writeln!(out, "{I}@override")?;
+    writeln!(
+        out,
+        "{I}String toString() => [message].followedBy(sources).join(' → ');"
+    )?;
+
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    for (variant_name, variant) in &item.variants {
+        if variant_name == "Ok" || variant_name == "Other" {
+            continue;
+        }
+
+        write_docs(out, "", &variant.docs)?;
+        writeln!(out, "class {} extends OuisyncException {{", variant_name)?;
+        writeln!(
+            out,
+            "{I}{}([String? message, List<String> sources = const[]])",
+            variant_name,
+        )?;
+        writeln!(
+            out,
+            "{I}{I}{I}super._(ErrorCode.{}, message, sources);",
+            AsLowerCamelCase(variant_name)
+        )?;
+        writeln!(out, "}}")?;
+        writeln!(out)?;
+    }
 
     Ok(())
 }
@@ -246,14 +331,14 @@ fn write_type(out: &mut dyn Write, ty: &Type) -> Result<()> {
     Ok(())
 }
 
-fn write_invoke_decode(out: &mut dyn Write, ty: &Type) -> Result<()> {
+fn write_decode(out: &mut dyn Write, ty: &Type) -> Result<()> {
     match ty {
         Type::Scalar(name) => {
-            write_invoke_decode_or_null(out, name)?;
+            write_decode_or_null(out, name)?;
             write!(out, "!")?;
         }
         Type::Bytes => write!(out, "u.unpackBinary()")?,
-        Type::Option(name) => write_invoke_decode_or_null(out, name)?,
+        Type::Option(name) => write_decode_or_null(out, name)?,
         Type::Unit | Type::Result(..) => bail!("unsupported type: {:?}", ty),
         Type::Vec(_) | Type::Map(_, _) => todo!(),
     }
@@ -261,7 +346,7 @@ fn write_invoke_decode(out: &mut dyn Write, ty: &Type) -> Result<()> {
     Ok(())
 }
 
-fn write_invoke_decode_or_null(out: &mut dyn Write, ty: &str) -> Result<()> {
+fn write_decode_or_null(out: &mut dyn Write, ty: &str) -> Result<()> {
     match ty {
         "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" => {
             write!(out, "u.unpackInt()")?

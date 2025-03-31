@@ -46,9 +46,9 @@ pub enum ErrorCode {
     /// Failed to send or receive message
     TransportError = 1024 + 3,
     /// Listener failed to bind to the specified address
-    ListenerBind = 1024 + 4,
+    ListenerBindError = 1024 + 4,
     /// Listener failed to accept client connection
-    ListenerAccept = 1024 + 5,
+    ListenerAcceptError = 1024 + 5,
 
     // # Repository errors
     /// Operation on the internal repository store failed
@@ -64,11 +64,11 @@ pub enum ErrorCode {
 
     // # Service errors
     /// Failed to initialize runtime
-    InitializeRuntime = 4096 + 1,
+    RuntimeInitializeError = 4096 + 1,
     /// Failed to initialize logger
-    InitializeLogger = 4096 + 2,
+    LoggerInitializeError = 4096 + 2,
     /// Failed to read from or write into the config file
-    Config = 4096 + 3,
+    ConfigError = 4096 + 3,
     /// TLS certificated not found
     TlsCertificatesNotFound = 4096 + 4,
     /// TLS certificates failed to load
@@ -76,7 +76,7 @@ pub enum ErrorCode {
     /// TLS keys not found
     TlsKeysNotFound = 4096 + 6,
     /// Failed to create TLS config
-    TlsConfig = 4096 + 7,
+    TlsConfigError = 4096 + 7,
     /// Failed to install virtual filesystem driver
     VfsDriverInstallError = 4096 + 8,
     /// Unspecified virtual filesystem error
@@ -98,10 +98,10 @@ impl ToErrorCode for Error {
     fn to_error_code(&self) -> ErrorCode {
         match self {
             Self::AlreadyExists => ErrorCode::AlreadyExists,
-            Self::Config(_) => ErrorCode::Config,
+            Self::Config(_) => ErrorCode::ConfigError,
             Self::CreateMounter(error) => error.to_error_code(),
-            Self::InitializeLogger(_) => ErrorCode::InitializeLogger,
-            Self::InitializeRuntime(_) => ErrorCode::InitializeRuntime,
+            Self::InitializeLogger(_) => ErrorCode::LoggerInitializeError,
+            Self::InitializeRuntime(_) => ErrorCode::RuntimeInitializeError,
             Self::InvalidArgument => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,
             Self::NotFound => ErrorCode::NotFound,
@@ -113,11 +113,11 @@ impl ToErrorCode for Error {
             Self::StoreDirUnspecified => ErrorCode::StoreDirUnspecified,
             Self::TlsCertificatesNotFound => ErrorCode::TlsCertificatesNotFound,
             Self::TlsCertificatesInvalid(_) => ErrorCode::TlsCertificatesInvalid,
-            Self::TlsConfig(_) => ErrorCode::TlsConfig,
+            Self::TlsConfig(_) => ErrorCode::TlsConfigError,
             Self::TlsKeysNotFound => ErrorCode::TlsKeysNotFound,
             Self::ServiceAlreadyRunning => ErrorCode::ServiceAlreadyRunning,
-            Self::Bind(_) => ErrorCode::ListenerBind,
-            Self::Accept(_) => ErrorCode::ListenerAccept,
+            Self::Bind(_) => ErrorCode::ListenerBindError,
+            Self::Accept(_) => ErrorCode::ListenerAcceptError,
             Self::Client(error) => error.to_error_code(),
         }
     }
