@@ -18,7 +18,9 @@ public var ouisyncLogHandler: ((LogLevel, String) -> Void)?
 // using them here as well if ever we end up making logging async
 private func directLogHandler(_ level: LogLevel, _ ptr: UnsafePointer<UInt8>?, _ len: UInt, _ cap: UInt) {
     defer { release_log_message(ptr, len, cap) }
-    if let ptr { ouisyncLogHandler?(level, String(cString: ptr)) }
+    if let ptr { ouisyncLogHandler?(level, String(decoding: UnsafeBufferPointer(start: ptr,
+                                                                                count: Int(len)),
+                                                  as: UTF8.self)) }
 }
 @MainActor private var loggingConfigured = false
 @MainActor private func setupLogging() async throws {

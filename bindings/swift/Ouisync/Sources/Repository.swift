@@ -24,14 +24,14 @@ public extension Client {
                           writeSecret: CreateSecret? = nil) async throws -> Repository {
         // FIXME: the backend does buggy things here, so we bail out; see also `unsafeSetSecrets`
         if readSecret != nil && writeSecret == nil { throw OuisyncError.InvalidInput }
-        return try await Repository(self, invoke("repository_create",
-                                                 with: ["path": .string(path),
-                                                        "read_secret": readSecret?.value ?? .nil,
-                                                        "write_secret": writeSecret?.value ?? .nil,
-                                                        "token": token?.value ?? .nil,
-                                                        "sync_enabled": false,
-                                                        "dht_enabled": false,
-                                                        "pex_enabled": false]))
+        return try await Repository(self, nil, invoke("repository_create",
+                                                      with: ["path": .string(path),
+                                                             "read_secret": readSecret?.value ?? .nil,
+                                                             "write_secret": writeSecret?.value ?? .nil,
+                                                             "token": token?.value ?? .nil,
+                                                             "sync_enabled": false,
+                                                             "dht_enabled": false,
+                                                             "pex_enabled": false]))
     }
 
     // FIXME: bring this back if we decide on different open / close semantics
@@ -46,7 +46,8 @@ public extension Client {
 
     /// All currently open repositories.
     var repositories: [Repository] { get async throws {
-        try await invoke("repository_list").dictionaryValue.orThrow.values.map { try Repository(self, $0) }
+        try await invoke("repository_list").dictionaryValue.orThrow.map {
+            try Repository(self, $0.key.stringValue.orThrow, $0.value) }
     } }
 }
 
@@ -65,10 +66,12 @@ public protocol Metadata<Key, Value> where Key: Hashable {
 
 public class Repository {
     let client: Client
+    var _path: String?
     let handle: MessagePackValue
-    init(_ client: Client, _ handle: MessagePackValue) throws {
+    init(_ client: Client, _ path: String?, _ handle: MessagePackValue) throws {
         _ = try handle.uintValue.orThrow
         self.client = client
+        self._path = path
         self.handle = handle
     }
 
@@ -93,7 +96,10 @@ public extension Repository {
     }
 
     var path: String { get async throws {
-        try await client.invoke("repository_get_path", with: handle).stringValue.orThrow
+        if let _path { return _path }
+        let res = try await client.invoke("repository_get_path", with: handle).stringValue.orThrow
+        _path = res
+        return res
     } }
 
     /// Whether syncing with other replicas is enabled.
