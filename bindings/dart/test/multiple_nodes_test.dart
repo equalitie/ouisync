@@ -28,8 +28,7 @@ void main() {
     );
     await session2.setStoreDir('${temp.path}/2/store');
 
-    repo1 = await Repository.create(
-      session1,
+    repo1 = await session1.createRepository(
       path: 'repo1',
       readSecret: null,
       writeSecret: null,
@@ -37,8 +36,7 @@ void main() {
     await repo1.setSyncEnabled(true);
     final token = await repo1.share(accessMode: AccessMode.write);
 
-    repo2 = await Repository.create(
-      session2,
+    repo2 = await session2.createRepository(
       path: 'repo2',
       token: token,
       readSecret: null,
@@ -65,26 +63,30 @@ void main() {
     // One event for each block created (one for the root directory and one for the file)
     final expect = expectLater(repo2.events, emitsInOrder([null, null]));
 
-    final addrs = await session1.localListenerAddrs;
+    final addrs = await session1.getLocalListenerAddrs();
     await session2.addUserProvidedPeers(addrs);
 
-    final file = await File.create(repo1, "file.txt");
+    final file = await repo1.createFile("file.txt");
     await file.close();
 
     await expect;
   });
 
   test('notification on peers change', () async {
-    final addr = await session1.localListenerAddrs.then((addrs) => addrs.first);
+    final addr =
+        await session1.getLocalListenerAddrs().then((addrs) => addrs.first);
 
     final expect = expectLater(
-      session2.networkEvents.asyncMap((_) => session2.peers),
-      emitsThrough(contains(isA<PeerInfo>()
-          .having((peer) => peer.addr, 'addr', equals(addr))
-          .having(
-              (peer) => peer.source, 'source', equals(PeerSource.userProvided))
-          .having((peer) => peer.state, 'state', equals(PeerStateKind.active))
-          .having((peer) => peer.runtimeId, 'runtimeId', isNotNull))),
+      session2.networkEvents.asyncMap((_) => session2.getPeers()),
+      emitsThrough(
+        contains(
+          isA<PeerInfo>()
+              .having((peer) => peer.addr, 'addr', equals(addr))
+              .having((peer) => peer.source, 'source',
+                  equals(PeerSource.userProvided))
+              .having((peer) => peer.state, 'state', isA<PeerStateActive>()),
+        ),
+      ),
     );
 
     await session2.addUserProvidedPeers([addr]);
@@ -93,16 +95,17 @@ void main() {
   });
 
   test('network stats', () async {
-    final addr = await session1.localListenerAddrs.then((addrs) => addrs.first);
+    final addr =
+        await session1.getLocalListenerAddrs().then((addrs) => addrs.first);
     await session2.addUserProvidedPeers([addr]);
 
-    final file = await File.create(repo1, 'file.txt');
+    final file = await repo1.createFile('file.txt');
     await file.close();
 
     // Wait for the file to get synced
     while (true) {
       try {
-        final file = await File.open(repo2, 'file.txt');
+        final file = await repo2.openFile('file.txt');
         await file.close();
         break;
       } catch (_) {}
@@ -110,7 +113,7 @@ void main() {
       await repo2.events.first;
     }
 
-    final stats = await session2.networkStats;
+    final stats = await session2.getNetworkStats();
 
     expect(stats.bytesTx, greaterThan(0));
     expect(stats.bytesRx, greaterThan(65536)); // at least two blocks received

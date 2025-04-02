@@ -8,6 +8,13 @@ use slab::Slab;
 #[api]
 pub struct FileHandle(usize);
 
+impl FileHandle {
+    #[cfg(test)]
+    pub(crate) fn from_raw(raw: usize) -> Self {
+        Self(raw)
+    }
+}
+
 pub(crate) struct FileSet {
     files: Slab<FileHolder>,
 }

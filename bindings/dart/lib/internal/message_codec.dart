@@ -42,14 +42,14 @@ DecodeResult decodeMessage(Uint8List bytes) {
     }
 
     switch (key) {
-      case 'success':
+      case 'Success':
         final response = Response.decode(u);
         if (response == null) {
           return MalformedPayload._(id);
         }
 
         return MessageSuccess._(id, response);
-      case 'failure':
+      case 'Failure':
         if (u.unpackListLength() != 3) {
           return MalformedPayload._(id);
         }

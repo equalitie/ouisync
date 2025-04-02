@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::Result;
 use heck::AsPascalCase;
-use ouisync_api_parser::{Context, Request, Response, Type};
+use ouisync_api_parser::{Context, Field, Fields, Request, Response, Type};
 
 fn main() {
     if let Err(error) = generate() {
@@ -49,18 +49,30 @@ fn generate_request(request: &Request) -> Result<()> {
 
         write!(out, "{I}{}", AsPascalCase(name))?;
 
-        if !variant.fields.is_empty() {
-            writeln!(out, " {{")?;
+        match &variant.fields {
+            Fields::Named(fields) => {
+                writeln!(out, " {{")?;
 
-            for (name, ty) in &variant.fields {
-                if let Some(s) = ty.serde_with() {
-                    writeln!(out, "{I}{I}#[serde(with = \"{s}\")]")?;
+                for (name, field) in fields {
+                    if let Some(s) = field.ty.serde_with() {
+                        writeln!(out, "{I}{I}#[serde(with = \"{s}\")]")?;
+                    }
+
+                    writeln!(out, "{I}{I}{name}: {},", field.ty)?;
                 }
 
-                writeln!(out, "{I}{I}{name}: {ty},")?;
+                write!(out, "{I}}}")?;
             }
+            Fields::Unnamed(Field { ty, .. }) => {
+                write!(out, "(")?;
 
-            write!(out, "{I}}}")?;
+                if let Some(s) = ty.serde_with() {
+                    write!(out, "#[serde(with = \"{s}\")]")?;
+                }
+
+                write!(out, "{ty})")?;
+            }
+            Fields::Unit => (),
         }
 
         writeln!(out, ",")?;
@@ -170,14 +182,20 @@ fn generate_service_dispatch(request: &Request) -> Result<()> {
     for (name, variant) in &request.variants {
         write!(out, "{I}{I}{I}Request::{}", AsPascalCase(name))?;
 
-        if !variant.fields.is_empty() {
-            writeln!(out, " {{")?;
+        match &variant.fields {
+            Fields::Named(fields) => {
+                writeln!(out, " {{")?;
 
-            for (name, _) in &variant.fields {
-                writeln!(out, "{I}{I}{I}{I}{name},")?;
+                for (name, _) in fields {
+                    writeln!(out, "{I}{I}{I}{I}{name},")?;
+                }
+
+                write!(out, "{I}{I}{I}}}")?;
             }
-
-            write!(out, "{I}{I}{I}}}")?;
+            Fields::Unnamed(_) => {
+                writeln!(out, "(value)")?;
+            }
+            Fields::Unit => (),
         }
 
         writeln!(out, " => {{")?;
@@ -198,10 +216,14 @@ fn generate_service_dispatch(request: &Request) -> Result<()> {
             _ => continue,
         }
 
-        for (name, ty) in &variant.fields {
-            write!(out, "{I}{I}{I}{I}{I}{name}")?;
+        for (name, field) in &variant.fields {
+            if matches!(field.ty, Type::Unit) {
+                continue;
+            }
 
-            if matches!(ty, Type::Bytes) {
+            write!(out, "{I}{I}{I}{I}{I}{}", name.unwrap_or("value"))?;
+
+            if matches!(field.ty, Type::Bytes) {
                 write!(out, ".into()")?;
             }
 

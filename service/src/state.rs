@@ -20,7 +20,7 @@ use crate::{
     utils,
 };
 use ouisync::{
-    crypto::{cipher::SecretKey, PasswordSalt},
+    crypto::{cipher::SecretKey, Password, PasswordSalt},
     Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
     NatBehavior, Network, PeerAddr, PeerInfo, Progress, PublicRuntimeId, Repository,
     RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize,
@@ -393,6 +393,44 @@ impl State {
         }
 
         Ok(())
+    }
+
+    #[api]
+    pub fn session_validate_share_token(&self, token: String) -> Result<ShareToken, Error> {
+        Ok(token.parse()?)
+    }
+
+    /// Return the info-hash of the repository corresponding to the given token, formatted as hex
+    /// string.
+    ///
+    /// See also: [repository_get_info_hash]
+    #[api]
+    pub fn session_get_share_token_info_hash(&self, token: ShareToken) -> String {
+        hex::encode(ouisync::repository_info_hash(token.id()).as_ref())
+    }
+
+    #[api]
+    pub fn session_get_share_token_access_mode(&self, token: ShareToken) -> AccessMode {
+        token.access_mode()
+    }
+
+    #[api]
+    pub fn session_get_share_token_suggested_name(&self, token: ShareToken) -> String {
+        token.suggested_name().to_owned()
+    }
+
+    #[api]
+    pub async fn session_mirror_exists(
+        &self,
+        token: ShareToken,
+        host: String,
+    ) -> Result<bool, Error> {
+        let mut client = self.connect_remote_client(&host).await?;
+
+        let result = client.mirror_exists(token.id()).await;
+        client.close().await;
+
+        Ok(result?)
     }
 
     #[api]
@@ -1184,47 +1222,6 @@ impl State {
     }
 
     #[api]
-    pub fn share_token_normalize(&self, token: ShareToken) -> ShareToken {
-        // We just return the token as is. This is because this function is called only when the
-        // token in the request is successfully parsed. If the parsing fails, the request handler
-        // returns an error before reaching this function.
-        token
-    }
-
-    /// Return the info-hash of the repository corresponding to the given token, formatted as hex
-    /// string.
-    ///
-    /// See also: [repository_get_info_hash]
-    #[api]
-    pub fn share_token_get_info_hash(&self, token: ShareToken) -> String {
-        hex::encode(ouisync::repository_info_hash(token.id()).as_ref())
-    }
-
-    #[api]
-    pub fn share_token_get_access_mode(&self, token: ShareToken) -> AccessMode {
-        token.access_mode()
-    }
-
-    #[api]
-    pub fn share_token_get_suggested_name(&self, token: ShareToken) -> String {
-        token.suggested_name().to_owned()
-    }
-
-    #[api]
-    pub async fn share_token_mirror_exists(
-        &self,
-        token: ShareToken,
-        host: String,
-    ) -> Result<bool, Error> {
-        let mut client = self.connect_remote_client(&host).await?;
-
-        let result = client.mirror_exists(token.id()).await;
-        client.close().await;
-
-        Ok(result?)
-    }
-
-    #[api]
     pub async fn repository_create_directory(
         &self,
         repo: RepositoryHandle,
@@ -1365,24 +1362,24 @@ impl State {
         }
     }
 
-    /// Reads `len` bytes from the file starting at `offset` bytes from the beginning of the file.
+    /// Reads `size` bytes from the file starting at `offset` bytes from the beginning of the file.
     #[api]
     pub async fn file_read(
         &mut self,
         file: FileHandle,
         offset: u64,
-        len: u64,
+        size: u64,
     ) -> Result<Vec<u8>, Error> {
-        let len = len as usize;
-        let mut buffer = vec![0; len];
+        let size = size as usize;
+        let mut buffer = vec![0; size];
 
         let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
 
         holder.file.seek(SeekFrom::Start(offset));
 
         // TODO: consider using just `read`
-        let len = holder.file.read_all(&mut buffer).await?;
-        buffer.truncate(len);
+        let size = holder.file.read_all(&mut buffer).await?;
+        buffer.truncate(size);
 
         Ok(buffer)
     }
@@ -1406,7 +1403,7 @@ impl State {
     }
 
     #[api]
-    pub fn file_len(&self, file: FileHandle) -> Result<u64, Error> {
+    pub fn file_get_length(&self, file: FileHandle) -> Result<u64, Error> {
         Ok(self
             .files
             .get(file)
@@ -1417,7 +1414,7 @@ impl State {
 
     /// Returns sync progress of the given file.
     #[api]
-    pub async fn file_progress(&self, file: FileHandle) -> Result<u64, Error> {
+    pub async fn file_get_progress(&self, file: FileHandle) -> Result<u64, Error> {
         // Don't keep the file locked while progress is being awaited.
         let progress = self
             .files
@@ -1466,8 +1463,13 @@ impl State {
     }
 
     #[api]
-    pub fn session_derive_secret_key(&self, password: String, salt: PasswordSalt) -> SecretKey {
-        SecretKey::derive_from_password(&password, &salt)
+    pub fn session_derive_secret_key(&self, password: Password, salt: PasswordSalt) -> SecretKey {
+        SecretKey::derive_from_password(password.as_ref(), &salt)
+    }
+
+    #[api]
+    pub fn session_generate_secret_key(&self) -> SecretKey {
+        SecretKey::random()
     }
 
     #[api]

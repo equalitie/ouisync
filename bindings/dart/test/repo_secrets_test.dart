@@ -17,15 +17,22 @@ void main() {
   });
 
   test('Open repo using keys', () async {
-    final readSecret =
-        LocalSecretKeyAndSalt(LocalSecretKey.random(), PasswordSalt.random());
+    final readSecret = SetLocalSecretKeyAndSalt(
+      value: KeyAndSalt(
+        key: await session.generateSecretKey(),
+        salt: await session.generatePasswordSalt(),
+      ),
+    );
 
-    final writeSecret =
-        LocalSecretKeyAndSalt(LocalSecretKey.random(), PasswordSalt.random());
+    final writeSecret = SetLocalSecretKeyAndSalt(
+      value: KeyAndSalt(
+        key: await session.generateSecretKey(),
+        salt: await session.generatePasswordSalt(),
+      ),
+    );
 
     {
-      final repo = await Repository.create(
-        session,
+      final repo = await session.createRepository(
         path: repoName,
         readSecret: readSecret,
         writeSecret: writeSecret,
@@ -35,31 +42,29 @@ void main() {
     }
 
     {
-      final repo = await Repository.open(
-        session,
+      final repo = await session.openRepository(
         path: repoName,
-        secret: readSecret.key,
+        localSecret: LocalSecretSecretKey(value: readSecret.value.key),
       );
 
-      expect(await repo.accessMode, AccessMode.read);
+      expect(await repo.getAccessMode(), AccessMode.read);
       await repo.close();
     }
 
     {
-      final repo = await Repository.open(
-        session,
+      final repo = await session.openRepository(
         path: repoName,
-        secret: writeSecret.key,
+        localSecret: LocalSecretSecretKey(value: writeSecret.value.key),
       );
 
-      expect(await repo.accessMode, AccessMode.write);
+      expect(await repo.getAccessMode(), AccessMode.write);
       await repo.close();
     }
   });
 
   test('Create repo using key, open with password', () async {
-    final readPassword = LocalPassword("foo");
-    final writePassword = LocalPassword("bar");
+    final readPassword = Password('foo');
+    final writePassword = Password('bar');
 
     {
       final readSalt = await session.generatePasswordSalt();
@@ -68,35 +73,36 @@ void main() {
       final readKey = await session.deriveSecretKey(readPassword, readSalt);
       final writeKey = await session.deriveSecretKey(writePassword, writeSalt);
 
-      final repo = await Repository.create(
-        session,
+      final repo = await session.createRepository(
         path: repoName,
-        readSecret: LocalSecretKeyAndSalt(readKey, readSalt),
-        writeSecret: LocalSecretKeyAndSalt(writeKey, writeSalt),
+        readSecret: SetLocalSecretKeyAndSalt(
+          value: KeyAndSalt(key: readKey, salt: readSalt),
+        ),
+        writeSecret: SetLocalSecretKeyAndSalt(
+          value: KeyAndSalt(key: writeKey, salt: writeSalt),
+        ),
       );
 
       await repo.close();
     }
 
     {
-      final repo = await Repository.open(
-        session,
+      final repo = await session.openRepository(
         path: repoName,
-        secret: readPassword,
+        localSecret: LocalSecretPassword(value: readPassword),
       );
 
-      expect(await repo.accessMode, AccessMode.read);
+      expect(await repo.getAccessMode(), AccessMode.read);
       await repo.close();
     }
 
     {
-      final repo = await Repository.open(
-        session,
+      final repo = await session.openRepository(
         path: repoName,
-        secret: writePassword,
+        localSecret: LocalSecretPassword(value: writePassword),
       );
 
-      expect(await repo.accessMode, AccessMode.write);
+      expect(await repo.getAccessMode(), AccessMode.write);
       await repo.close();
     }
   });

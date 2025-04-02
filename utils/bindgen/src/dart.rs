@@ -1,7 +1,7 @@
-use anyhow::{bail, Error, Result};
+use anyhow::{bail, Context as _, Error, Result};
 use heck::{AsLowerCamelCase, AsPascalCase, ToLowerCamelCase, ToSnakeCase};
 use ouisync_api_parser::{
-    ComplexEnum, Context, Docs, Field, Item, Newtype, RequestVariant, SimpleEnum, Struct,
+    ComplexEnum, Context, Docs, Fields, Item, Newtype, RequestVariant, SimpleEnum, Struct,
     ToResponseVariantName, Type,
 };
 use std::{borrow::Cow, fmt, io::Write};
@@ -32,12 +32,6 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
         out,
         "Repository",
         Some(("handle", "RepositoryHandle")),
-        &ctx.request.variants,
-    )?;
-    write_api_class(
-        out,
-        "ShareToken",
-        Some(("value", "String")),
         &ctx.request.variants,
     )?;
     write_api_class(
@@ -124,6 +118,13 @@ fn write_complex_enum(
     writeln!(out, "sealed class {name} {{")?;
 
     if encode {
+        fn write_field_encode(out: &mut dyn Write, ty: &Type, name: &str) -> Result<()> {
+            write!(out, "{I}{I}{I}{I}")?;
+            DartType::try_from(ty)?.write_encode(out, name)?;
+            writeln!(out, ";")?;
+            Ok(())
+        }
+
         writeln!(out, "{I}void encode(Packer p) {{")?;
         writeln!(out, "{I}{I}switch (this) {{")?;
 
@@ -134,22 +135,30 @@ fn write_complex_enum(
                 writeln!(
                     out,
                     "{I}{I}{I}{I}{0}: final {0},",
-                    AsLowerCamelCase(field_name)
+                    AsLowerCamelCase(field_name.unwrap_or(DEFAULT_FIELD_NAME))
                 )?;
             }
 
             writeln!(out, "{I}{I}{I}):")?;
-            writeln!(
-                out,
-                "{I}{I}{I}{I}p.packListLength({});",
-                variant.fields.len()
-            )?;
 
-            for (field_name, field) in &variant.fields {
-                write!(out, "{I}{I}{I}{I}")?;
-                DartType::try_from(&field.ty)?
-                    .write_encode(out, &field_name.to_lower_camel_case())?;
-                writeln!(out, ";")?;
+            match &variant.fields {
+                Fields::Named(fields) => {
+                    writeln!(out, "{I}{I}{I}{I}p.packMapLength(1);")?;
+                    writeln!(out, "{I}{I}{I}{I}p.packString('{variant_name}');")?;
+                    writeln!(out, "{I}{I}{I}{I}p.packListLength({});", fields.len())?;
+
+                    for (field_name, field) in fields {
+                        write_field_encode(out, &field.ty, &field_name.to_lower_camel_case())?;
+                    }
+                }
+                Fields::Unnamed(field) => {
+                    writeln!(out, "{I}{I}{I}{I}p.packMapLength(1);")?;
+                    writeln!(out, "{I}{I}{I}{I}p.packString('{variant_name}');")?;
+                    write_field_encode(out, &field.ty, DEFAULT_FIELD_NAME)?;
+                }
+                Fields::Unit => {
+                    writeln!(out, "{I}{I}{I}{I}p.packString('{variant_name}');")?;
+                }
             }
         }
 
@@ -160,11 +169,13 @@ fn write_complex_enum(
 
     if decode {
         writeln!(out, "{I}static {name}? decode(Unpacker u) {{")?;
+
+        // Variants without fields
         writeln!(out, "{I}{I}try {{")?;
         writeln!(out, "{I}{I}{I}switch (u.unpackString()) {{")?;
 
         for (variant_name, variant) in &item.variants {
-            if !variant.fields.is_empty() {
+            if !matches!(variant.fields, Fields::Unit) {
                 continue;
             }
 
@@ -175,32 +186,44 @@ fn write_complex_enum(
         }
 
         writeln!(out, "{I}{I}{I}{I}case null: return null;")?;
-        writeln!(out, "{I}{I}{I}{I}default: {THROW_DECODE_ERROR};")?;
+        writeln!(out, "{I}{I}{I}{I}default: throw DecodeError();")?;
 
         writeln!(out, "{I}{I}{I}}}")?;
         writeln!(out, "{I}{I}}} on FormatException {{")?;
+
+        // Variants with fields
         writeln!(
             out,
-            "{I}{I}{I}if (u.unpackMapLength() != 1) {THROW_DECODE_ERROR};"
+            "{I}{I}{I}if (u.unpackMapLength() != 1) throw DecodeError();"
         )?;
         writeln!(out, "{I}{I}{I}switch (u.unpackString()) {{")?;
 
         for (variant_name, variant) in &item.variants {
-            if variant.fields.is_empty() {
+            if matches!(variant.fields, Fields::Unit) {
                 continue;
             }
 
             writeln!(out, "{I}{I}{I}{I}case \"{variant_name}\":")?;
-            writeln!(
-                out,
-                "{I}{I}{I}{I}{I}if (u.unpackListLength() != {}) {THROW_DECODE_ERROR};",
-                variant.fields.len()
-            )?;
+
+            if matches!(variant.fields, Fields::Named(_)) {
+                writeln!(
+                    out,
+                    "{I}{I}{I}{I}{I}if (u.unpackListLength() != {}) throw DecodeError();",
+                    variant.fields.len()
+                )?;
+            }
             writeln!(out, "{I}{I}{I}{I}{I}return {name}{variant_name}(")?;
 
             for (field_name, field) in &variant.fields {
+                let field_name = field_name.unwrap_or(DEFAULT_FIELD_NAME);
                 write!(out, "{I}{I}{I}{I}{I}{I}{}: ", AsLowerCamelCase(field_name))?;
-                DartType::try_from(&field.ty)?.write_decode(out)?;
+                DartType::try_from(&field.ty)?
+                    .write_decode(out)
+                    .with_context(|| {
+                        format!(
+                            "failed to generate decode for {name}::{variant_name}::{field_name}"
+                        )
+                    })?;
                 writeln!(out, ",")?;
             }
 
@@ -208,7 +231,7 @@ fn write_complex_enum(
         }
 
         writeln!(out, "{I}{I}{I}{I}case null: return null;")?;
-        writeln!(out, "{I}{I}{I}{I}default: {THROW_DECODE_ERROR};")?;
+        writeln!(out, "{I}{I}{I}{I}default: throw DecodeError();")?;
 
         writeln!(out, "{I}{I}{I}}}")?;
 
@@ -235,7 +258,7 @@ fn write_complex_enum(
 
 fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
     write_docs(out, "", &item.docs)?;
-    writeln!(out, "class {name} {{")?;
+    writeln!(out, "final class {name} {{")?;
 
     write_class_body(out, name, &item.fields)?;
     writeln!(out, "{I}")?;
@@ -243,11 +266,18 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
     // encode
     writeln!(out, "{I}void encode(Packer p) {{")?;
 
-    writeln!(out, "{I}{I}p.packListLength({});", item.fields.len())?;
+    if matches!(item.fields, Fields::Named(_)) {
+        writeln!(out, "{I}{I}p.packListLength({});", item.fields.len())?;
+    }
 
     for (field_name, field) in &item.fields {
         write!(out, "{I}{I}")?;
-        DartType::try_from(&field.ty)?.write_encode(out, &field_name.to_lower_camel_case())?;
+        DartType::try_from(&field.ty)?.write_encode(
+            out,
+            &field_name
+                .map(|f| Cow::Owned(f.to_lower_camel_case()))
+                .unwrap_or(Cow::Borrowed("value")),
+        )?;
         writeln!(out, ";")?;
     }
 
@@ -256,23 +286,85 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
 
     // decode
     writeln!(out, "{I}static {name}? decode(Unpacker u) {{")?;
-    writeln!(out, "{I}{I}switch (u.unpackListLength()) {{")?;
-    writeln!(out, "{I}{I}{I}case 0: return null;")?;
-    writeln!(out, "{I}{I}{I}case {}: break;", item.fields.len())?;
-    writeln!(out, "{I}{I}{I}default: {THROW_DECODE_ERROR};")?;
-    writeln!(out, "{I}{I}}}")?;
 
-    writeln!(out, "{I}{I}return {name}(")?;
+    match &item.fields {
+        Fields::Named(fields) => {
+            writeln!(out, "{I}{I}switch (u.unpackListLength()) {{")?;
+            writeln!(out, "{I}{I}{I}case 0: return null;")?;
+            writeln!(out, "{I}{I}{I}case {}: break;", fields.len())?;
+            writeln!(out, "{I}{I}{I}default: throw DecodeError();")?;
+            writeln!(out, "{I}{I}}}")?;
 
-    for (field_name, field) in &item.fields {
-        write!(out, "{I}{I}{I}{}: ", AsLowerCamelCase(field_name))?;
-        DartType::try_from(&field.ty)?.write_decode(out)?;
-        writeln!(out, ",")?
+            writeln!(out, "{I}{I}return {name}(")?;
+
+            for (field_name, field) in fields {
+                write!(out, "{I}{I}{I}{}: ", AsLowerCamelCase(field_name))?;
+                DartType::try_from(&field.ty)?.write_decode(out)?;
+                writeln!(out, ",")?
+            }
+        }
+        Fields::Unnamed(_field) => todo!(),
+        Fields::Unit => todo!(),
     }
 
     writeln!(out, "{I}{I});")?;
 
     writeln!(out, "{I}}}")?;
+
+    if !item.fields.is_empty() {
+        // operator ==
+        writeln!(out, "{I}")?;
+        writeln!(out, "{I}@override")?;
+        writeln!(out, "{I}operator==(Object other) =>")?;
+        writeln!(out, "{I}{I}{I}other is {name} &&")?;
+
+        for (index, (field_name, _)) in item.fields.iter().enumerate() {
+            write!(
+                out,
+                "{I}{I}{I}other.{0} == {0}",
+                AsLowerCamelCase(field_name.unwrap_or(DEFAULT_FIELD_NAME))
+            )?;
+
+            if index < item.fields.len() - 1 {
+                writeln!(out, " &&")?;
+            } else {
+                writeln!(out, ";")?;
+            }
+        }
+
+        // hashCode
+        writeln!(out, "{I}")?;
+        writeln!(out, "{I}@override")?;
+        write!(out, "{I}int get hashCode => ")?;
+
+        if item.fields.len() == 1 {
+            writeln!(
+                out,
+                "{}.hashCode;",
+                AsLowerCamelCase(
+                    &item
+                        .fields
+                        .iter()
+                        .next()
+                        .unwrap()
+                        .0
+                        .unwrap_or(DEFAULT_FIELD_NAME)
+                )
+            )?;
+        } else {
+            writeln!(out, "Object.hash(")?;
+
+            for (field_name, _) in &item.fields {
+                writeln!(
+                    out,
+                    "{I}{I}{I}{I}{},",
+                    AsLowerCamelCase(field_name.unwrap_or(DEFAULT_FIELD_NAME))
+                )?;
+            }
+
+            writeln!(out, "{I}{I}{I});")?;
+        }
+    }
 
     writeln!(out, "}}")?;
     writeln!(out)?;
@@ -405,19 +497,19 @@ fn write_api_class(
     writeln!(out, "class {name} {{")?;
 
     // fields
-    writeln!(out, "{I}final Client _client;")?;
+    writeln!(out, "{I}final Client client;")?;
 
     if let Some((name, ty)) = inner {
-        writeln!(out, "{I}final {ty} _{name};")?;
+        writeln!(out, "{I}final {ty} {name};")?;
     }
 
     writeln!(out, "{I}")?;
 
     // constructor
-    write!(out, "{I}{name}(this._client")?;
+    write!(out, "{I}{name}(this.client")?;
 
     if let Some((name, _)) = inner {
-        write!(out, ", this._{name}")?;
+        write!(out, ", this.{name}")?;
     }
 
     writeln!(out, ");")?;
@@ -426,44 +518,79 @@ fn write_api_class(
     let prefix = format!("{}_", name.to_snake_case());
 
     for (variant_name, variant) in request_variants {
+        // Event subscription / unsubscription is handled manually
+        if variant_name.contains("subscribe") {
+            continue;
+        }
+
         let op_name = if let Some(op_name) = variant_name.strip_prefix(&prefix) {
             op_name.to_lower_camel_case()
         } else {
             continue;
         };
 
-        let ok = match &variant.ret {
+        // Return type
+        let ret = match &variant.ret {
             Type::Result(ty, _) => ty,
             ty => ty,
         };
-        let ret = DartType::try_from(ok)?;
-        let ret_handle_target = ret.handle_target();
+        // Return type with the "Handle" suffix stripped. Useful for mapping handles to their target
+        // types (e.g., `RepositoryHandle` -> `Repository`).
+        let ret_stripped = ret.strip_suffix("Handle");
+        let response_variant_name = ret.to_response_variant_name();
+
+        let ret = DartType::try_from(ret)?;
+        let ret_stripped = ret_stripped.as_ref().map(DartType::try_from).transpose()?;
+
+        let kw_args = use_keyword_args(name, &op_name);
 
         write_docs(out, I, &variant.docs)?;
-        write!(out, "{I}Future<")?;
+        write!(
+            out,
+            "{I}Future<{}> {op_name}(",
+            ret_stripped.as_ref().unwrap_or(&ret),
+        )?;
 
-        if let Some(target) = ret_handle_target {
-            write!(out, "{target}")?;
+        if kw_args {
+            writeln!(out, "{{")?;
         } else {
-            write!(out, "{ret}")?;
+            writeln!(out)?;
         }
 
-        writeln!(out, "> {op_name}(",)?;
-
-        for (index, (arg_name, ty)) in variant.fields.iter().enumerate() {
+        for (index, (arg_name, field)) in variant.fields.iter().enumerate() {
             if index == 0 && inner.is_some() {
                 continue;
             }
 
-            writeln!(
+            let kw_arg = kw_args.then(|| KeywordArg::from(&field.ty));
+
+            write!(out, "{I}{I}")?;
+
+            if let Some(kw_arg) = kw_arg {
+                write!(out, "{}", kw_arg.prefix())?;
+            }
+
+            write!(
                 out,
-                "{I}{I}{} {},",
-                DartType::try_from(ty)?,
-                AsLowerCamelCase(arg_name)
+                "{} {}",
+                DartType::try_from(&field.ty)?,
+                AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME))
             )?;
+
+            if let Some(kw_arg) = kw_arg {
+                write!(out, "{}", kw_arg.suffix())?;
+            }
+
+            writeln!(out, ",")?;
         }
 
-        writeln!(out, "{I}) async {{")?;
+        write!(out, "{I}")?;
+
+        if kw_args {
+            write!(out, "}}")?;
+        }
+
+        writeln!(out, ") async {{")?;
 
         writeln!(
             out,
@@ -474,11 +601,11 @@ fn write_api_class(
         let inner_name = inner.map(|(name, _)| AsLowerCamelCase(name));
 
         for (index, (arg_name, _)) in variant.fields.iter().enumerate() {
-            let arg_name = AsLowerCamelCase(arg_name);
+            let arg_name = AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
 
             if index == 0 {
                 if let Some(inner_name) = &inner_name {
-                    writeln!(out, "{I}{I}{I}{arg_name}: _{inner_name},",)?;
+                    writeln!(out, "{I}{I}{I}{arg_name}: {inner_name},",)?;
                     continue;
                 }
             }
@@ -488,31 +615,47 @@ fn write_api_class(
 
         writeln!(out, "{I}{I});")?;
 
-        writeln!(out, "{I}{I}final response = await _client.invoke(request);")?;
+        writeln!(out, "{I}{I}final response = await client.invoke(request);")?;
         writeln!(out, "{I}{I}switch (response) {{")?;
 
-        let value = if let Some(target) = ret_handle_target {
-            Cow::Owned(format!("{target}(_client, value)"))
-        } else {
-            Cow::Borrowed("value")
-        };
-
-        match ok {
-            Type::Unit => writeln!(out, "{I}{I}{I}case ResponseNone(): return;")?,
-            Type::Option(ty) => {
-                writeln!(
+        match ret {
+            DartType::Void => writeln!(out, "{I}{I}{I}case ResponseNone(): return;")?,
+            DartType::Nullable(_) => {
+                write!(
                     out,
-                    "{I}{I}{I}case Response{}(value: final value): return {value};",
-                    ty.to_response_variant_name(),
+                    "{I}{I}{I}case Response{}(value: final value): return ",
+                    response_variant_name,
                 )?;
+
+                match ret_stripped {
+                    Some(DartType::Nullable(w)) => {
+                        write!(out, "value != null ? {w}(client, value) : null")?;
+                    }
+                    Some(_) => unreachable!(),
+                    None => write!(out, "value")?,
+                }
+
+                writeln!(out, ";")?;
                 writeln!(out, "{I}{I}{I}case ResponseNone(): return null;")?;
             }
-            ty => {
-                writeln!(
+            _ => {
+                write!(
                     out,
-                    "{I}{I}{I}case Response{}(value: final value): return {value};",
-                    ty.to_response_variant_name(),
+                    "{I}{I}{I}case Response{}(value: final value): return ",
+                    response_variant_name,
                 )?;
+
+                match ret_stripped {
+                    Some(DartType::Scalar(w)) => write!(out, "{w}(client, value)")?,
+                    Some(DartType::List(w)) => write!(out, "value.map((e) => {w}(client, e))")?,
+                    Some(DartType::Map(_, w)) => {
+                        write!(out, "value.map((k, v) => MapEntry(k, {w}(client, v)))")?
+                    }
+                    Some(_) => unreachable!(),
+                    None => write!(out, "value")?,
+                }
+
+                writeln!(out, ";")?;
             }
         }
 
@@ -526,11 +669,29 @@ fn write_api_class(
         writeln!(out, "{I}")?;
     }
 
-    // special cases
-    if name == "Session" {
-        writeln!(out, "{I}Future<void> close() async {{")?;
-        writeln!(out, "{I}{I}await _client.close();")?;
-        writeln!(out, "{I}}}")?;
+    if let Some((inner_name, _)) = inner {
+        // operator ==
+        writeln!(out, "{I}@override")?;
+        writeln!(out, "{I}bool operator ==(Object other) =>")?;
+        writeln!(out, "{I}{I}{I}other is {name} &&")?;
+        writeln!(out, "{I}{I}{I}other.client == client &&")?;
+        writeln!(out, "{I}{I}{I}other.{inner_name} == {inner_name};")?;
+        writeln!(out, "{I}")?;
+
+        // hashCode
+        writeln!(out, "{I}@override")?;
+        writeln!(
+            out,
+            "{I}int get hashCode => Object.hash(client, {inner_name});"
+        )?;
+        writeln!(out, "{I}")?;
+
+        // toString
+        writeln!(out, "{I}@override")?;
+        writeln!(
+            out,
+            "{I}String toString() => '$runtimeType(${inner_name})';"
+        )?;
         writeln!(out, "{I}")?;
     }
 
@@ -540,12 +701,59 @@ fn write_api_class(
     Ok(())
 }
 
-fn write_class_body(out: &mut dyn Write, name: &str, fields: &[(String, Field)]) -> Result<()> {
+fn use_keyword_args(class_name: &str, method_name: &str) -> bool {
+    matches!(
+        (class_name, method_name),
+        ("Session", "createRepository" | "openRepository") | ("Repository", "share" | "setAccess")
+    )
+}
+
+#[derive(Clone, Copy)]
+enum KeywordArg {
+    Required,
+    Nullable,
+    Bool,
+}
+
+impl<'a> From<&'a Type> for KeywordArg {
+    fn from(ty: &'a Type) -> Self {
+        match ty {
+            Type::Option(_) => Self::Nullable,
+            Type::Scalar(s) if s == "bool" => Self::Bool,
+            _ => Self::Required,
+        }
+    }
+}
+
+impl KeywordArg {
+    fn prefix(&self) -> &str {
+        match self {
+            Self::Required => "required ",
+            Self::Nullable => "",
+            Self::Bool => "",
+        }
+    }
+
+    fn suffix(&self) -> &str {
+        match self {
+            Self::Required => "",
+            Self::Nullable => "",
+            Self::Bool => " = false",
+        }
+    }
+}
+
+fn write_class_body(out: &mut dyn Write, name: &str, fields: &Fields) -> Result<()> {
+    // fields
     for (field_name, field) in fields {
         write_docs(out, I, &field.docs)?;
         write!(out, "{I}final ")?;
         write!(out, "{}", DartType::try_from(&field.ty)?)?;
-        writeln!(out, " {};", AsLowerCamelCase(field_name))?;
+        writeln!(
+            out,
+            " {};",
+            AsLowerCamelCase(field_name.unwrap_or(DEFAULT_FIELD_NAME))
+        )?;
     }
 
     if !fields.is_empty() {
@@ -556,19 +764,17 @@ fn write_class_body(out: &mut dyn Write, name: &str, fields: &[(String, Field)])
     write!(out, "{I}{name}(")?;
 
     if !fields.is_empty() {
-        writeln!(out, "{{")?
-    } else {
-        writeln!(out)?;
-    }
+        writeln!(out, "{{")?;
 
-    for (field_name, _) in fields {
-        writeln!(out, "{I}{I}required this.{},", AsLowerCamelCase(field_name))?;
-    }
+        for (field_name, _) in fields {
+            writeln!(
+                out,
+                "{I}{I}required this.{},",
+                AsLowerCamelCase(field_name.unwrap_or(DEFAULT_FIELD_NAME))
+            )?;
+        }
 
-    write!(out, "{I}")?;
-
-    if !fields.is_empty() {
-        write!(out, "}}")?;
+        write!(out, "{I}}}")?;
     }
 
     writeln!(out, ");")?;
@@ -648,18 +854,6 @@ impl DartType {
         match self {
             Self::Scalar(scalar) => Ok(Self::Nullable(scalar)),
             _ => Err(self),
-        }
-    }
-
-    // If the return type is a "handle" (e.g, `RepositoryHandle`, `FileHandle`, ...), this is
-    // the name of the target type of the handle (i.e., `Repository`, `File`). Otherwise it's
-    // `None`.
-    fn handle_target(&self) -> Option<&str> {
-        match self {
-            Self::Scalar(DartScalar::Other(name)) | Self::Nullable(DartScalar::Other(name)) => {
-                name.strip_suffix("Handle")
-            }
-            _ => None,
         }
     }
 }
@@ -761,7 +955,7 @@ impl From<&'_ str> for DartScalar {
                 Self::Int
             }
             "bool" => Self::Bool,
-            "PathBuf" | "PeerAddr" | "ShareToken" | "SocketAddr" | "String" => Self::String,
+            "PathBuf" | "PeerAddr" | "SocketAddr" | "String" => Self::String,
             "SystemTime" => Self::DateTime,
             "Duration" => Self::Duration,
             "StateMonitor" => Self::Other("StateMonitorNode".to_owned()),
@@ -771,4 +965,4 @@ impl From<&'_ str> for DartScalar {
 }
 
 const I: &str = "  ";
-const THROW_DECODE_ERROR: &str = "throw DecodeError()";
+const DEFAULT_FIELD_NAME: &str = "value";

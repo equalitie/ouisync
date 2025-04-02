@@ -409,7 +409,6 @@ impl Access {
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 #[api]
 pub enum AccessChange {
     Enable(Option<SetLocalSecret>),
@@ -427,10 +426,10 @@ mod tests {
         for (orig, expected_serialized) in [
             (
                 AccessChange::Enable(Some(SetLocalSecret::Password("mellon".to_string().into()))),
-                "{\"enable\":{\"password\":\"mellon\"}}",
+                "{\"Enable\":{\"Password\":\"mellon\"}}",
             ),
-            (AccessChange::Enable(None), "{\"enable\":null}"),
-            (AccessChange::Disable, "\"disable\""),
+            (AccessChange::Enable(None), "{\"Enable\":null}"),
+            (AccessChange::Disable, "\"Disable\""),
         ] {
             let serialized = serde_json::to_string(&orig).unwrap();
             assert_eq!(serialized, expected_serialized);
@@ -469,10 +468,10 @@ mod tests {
         for (orig, expected_serialized_hex) in [
             (
                 AccessChange::Enable(Some(SetLocalSecret::Password("mellon".to_string().into()))),
-                "81a6656e61626c6581a870617373776f7264a66d656c6c6f6e",
+                "81a6456e61626c6581a850617373776f7264a66d656c6c6f6e",
             ),
-            (AccessChange::Enable(None), "81a6656e61626c65c0"),
-            (AccessChange::Disable, "a764697361626c65"),
+            (AccessChange::Enable(None), "81a6456e61626c65c0"),
+            (AccessChange::Disable, "a744697361626c65"),
         ] {
             let serialized = rmp_serde::to_vec(&orig).unwrap();
             assert_eq!(hex::encode(&serialized), expected_serialized_hex);

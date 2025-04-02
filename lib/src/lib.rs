@@ -39,8 +39,8 @@ mod versioned;
 
 pub use self::{
     access_control::{
-        Access, AccessChange, AccessMode, AccessSecrets, KeyAndSalt, LocalSecret, SetLocalSecret,
-        ShareToken, WriteSecrets,
+        Access, AccessChange, AccessMode, AccessSecrets, DecodeError, KeyAndSalt, LocalSecret,
+        SetLocalSecret, ShareToken, WriteSecrets,
     },
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
     branch::Branch,

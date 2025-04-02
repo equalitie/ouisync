@@ -14,3 +14,4 @@ syn             = { workspace = true, features = ["extra-traits",  "full", "pars
 
 [dev-dependencies]
 assert_matches  = { workspace = true }
+similar-asserts = { workspace = true }

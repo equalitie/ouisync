@@ -20,7 +20,7 @@ void main() {
   final file1Content = 'Lorem ipsum dolor sit amet';
 
   Future<void> getDirectoryContents(Repository repo, String path) async {
-    final folder1Contents = await Directory.read(repo, path);
+    final folder1Contents = await repo.readDirectory(path);
     debugPrint('Directory contents: ${folder1Contents.toList()}');
   }
 
@@ -32,8 +32,7 @@ void main() {
     );
     await session.setStoreDir('${temp.path}/store');
 
-    repository = await Repository.create(
-      session,
+    repository = await session.createRepository(
       path: 'foo',
       readSecret: null,
       writeSecret: null,
@@ -56,19 +55,19 @@ void main() {
   test('Add file to directory with syncing not in directory', () async {
     // Create folder1 (/folder1)
     {
-      await Directory.create(repository, folder1Path);
+      await repository.createDirectory(folder1Path);
       debugPrint('New folder: $folder1Path');
     }
     // Create file1.txt inside folder1 (/folder1/file1.txt)
     {
       debugPrint('About to create file $file1InFolder1Path');
-      final file = await File.create(repository, file1InFolder1Path);
+      final file = await repository.createFile(file1InFolder1Path);
       await file.write(0, utf8.encode(file1Content));
       await file.close();
     }
     // Get contents of folder1 (/folder1) and confirm it contains only one entry
     {
-      final folder1Contents = await Directory.read(repository, folder1Path);
+      final folder1Contents = await repository.readDirectory(folder1Path);
       expect(folder1Contents.toList().length, equals(1));
 
       debugPrint('Folder1 contents: ${folder1Contents.toList()}');
@@ -78,7 +77,7 @@ void main() {
   test('Add file with syncing in directory', () async {
     // Create folder1 (/folder1)
     {
-      await Directory.create(repository, folder1Path);
+      await repository.createDirectory(folder1Path);
       debugPrint('New folder: $folder1Path');
 
       currentPath = folder1Path;
@@ -86,13 +85,13 @@ void main() {
     // Create file1 inside folder1 (/folder1/file1.txt)
     {
       debugPrint('About to create new file $file1InFolder1Path');
-      final file = await File.create(repository, file1InFolder1Path);
+      final file = await repository.createFile(file1InFolder1Path);
       await file.write(0, utf8.encode(file1Content));
       await file.close();
     }
     // Get contents of folder1 (/folder1) and confirm it contains only one entry
     {
-      final folder1Contents = await Directory.read(repository, folder1Path);
+      final folder1Contents = await repository.readDirectory(folder1Path);
       expect(folder1Contents.toList().length, equals(1));
 
       debugPrint('Folder1 contents: ${folder1Contents.toList()}');

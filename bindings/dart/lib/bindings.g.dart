@@ -157,12 +157,14 @@ sealed class LocalSecret {
       case LocalSecretPassword(
         value: final value,
       ):
-        p.packListLength(1);
+        p.packMapLength(1);
+        p.packString('Password');
         value.encode(p);
       case LocalSecretSecretKey(
         value: final value,
       ):
-        p.packListLength(1);
+        p.packMapLength(1);
+        p.packString('SecretKey');
         value.encode(p);
     }
   }
@@ -177,12 +179,10 @@ sealed class LocalSecret {
       if (u.unpackMapLength() != 1) throw DecodeError();
       switch (u.unpackString()) {
         case "Password":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return LocalSecretPassword(
             value: (Password.decode(u))!,
           );
         case "SecretKey":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return LocalSecretSecretKey(
             value: (SecretKey.decode(u))!,
           );
@@ -216,12 +216,14 @@ sealed class SetLocalSecret {
       case SetLocalSecretPassword(
         value: final value,
       ):
-        p.packListLength(1);
+        p.packMapLength(1);
+        p.packString('Password');
         value.encode(p);
       case SetLocalSecretKeyAndSalt(
         value: final value,
       ):
-        p.packListLength(1);
+        p.packMapLength(1);
+        p.packString('KeyAndSalt');
         value.encode(p);
     }
   }
@@ -236,12 +238,10 @@ sealed class SetLocalSecret {
       if (u.unpackMapLength() != 1) throw DecodeError();
       switch (u.unpackString()) {
         case "Password":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return SetLocalSecretPassword(
             value: (Password.decode(u))!,
           );
         case "KeyAndSalt":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return SetLocalSecretKeyAndSalt(
             value: (KeyAndSalt.decode(u))!,
           );
@@ -269,7 +269,7 @@ class SetLocalSecretKeyAndSalt extends SetLocalSecret {
   });
 }
 
-class KeyAndSalt {
+final class KeyAndSalt {
   final SecretKey key;
   final PasswordSalt salt;
 
@@ -295,6 +295,31 @@ class KeyAndSalt {
       salt: (PasswordSalt.decode(u))!,
     );
   }
+  
+  @override
+  operator==(Object other) =>
+      other is KeyAndSalt &&
+      other.key == key &&
+      other.salt == salt;
+  
+  @override
+  int get hashCode => Object.hash(
+        key,
+        salt,
+      );
+}
+
+/// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
+/// other replicas.
+extension type ShareToken(String value) {
+  void encode(Packer p) {
+    p.packString(value);
+  }
+  
+  static ShareToken? decode(Unpacker u) {
+    final value = u.unpackString();
+    return value != null ? ShareToken(value) : null;
+  }
 }
 
 sealed class AccessChange {
@@ -303,11 +328,12 @@ sealed class AccessChange {
       case AccessChangeEnable(
         value: final value,
       ):
-        p.packListLength(1);
+        p.packMapLength(1);
+        p.packString('Enable');
         _encodeNullable(p, value, (p, e) => e.encode(p));
       case AccessChangeDisable(
       ):
-        p.packListLength(0);
+        p.packString('Disable');
     }
   }
   
@@ -322,7 +348,6 @@ sealed class AccessChange {
       if (u.unpackMapLength() != 1) throw DecodeError();
       switch (u.unpackString()) {
         case "Enable":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return AccessChangeEnable(
             value: SetLocalSecret.decode(u),
           );
@@ -343,8 +368,7 @@ class AccessChangeEnable extends AccessChange {
 }
 
 class AccessChangeDisable extends AccessChange {
-  AccessChangeDisable(
-  );
+  AccessChangeDisable();
 }
 
 /// Type of filesystem entry.
@@ -407,7 +431,7 @@ enum NetworkEvent {
 }
 
 /// Information about a peer.
-class PeerInfo {
+final class PeerInfo {
   final String addr;
   final PeerSource source;
   final PeerState state;
@@ -441,6 +465,22 @@ class PeerInfo {
       stats: (Stats.decode(u))!,
     );
   }
+  
+  @override
+  operator==(Object other) =>
+      other is PeerInfo &&
+      other.addr == addr &&
+      other.source == source &&
+      other.state == state &&
+      other.stats == stats;
+  
+  @override
+  int get hashCode => Object.hash(
+        addr,
+        source,
+        state,
+        stats,
+      );
 }
 
 /// How was the peer discovered.
@@ -490,17 +530,19 @@ sealed class PeerState {
     switch (this) {
       case PeerStateKnown(
       ):
-        p.packListLength(0);
+        p.packString('Known');
       case PeerStateConnecting(
       ):
-        p.packListLength(0);
+        p.packString('Connecting');
       case PeerStateHandshaking(
       ):
-        p.packListLength(0);
+        p.packString('Handshaking');
       case PeerStateActive(
         id: final id,
         since: final since,
       ):
+        p.packMapLength(1);
+        p.packString('Active');
         p.packListLength(2);
         id.encode(p);
         _encodeDateTime(p, since);
@@ -534,18 +576,15 @@ sealed class PeerState {
 }
 
 class PeerStateKnown extends PeerState {
-  PeerStateKnown(
-  );
+  PeerStateKnown();
 }
 
 class PeerStateConnecting extends PeerState {
-  PeerStateConnecting(
-  );
+  PeerStateConnecting();
 }
 
 class PeerStateHandshaking extends PeerState {
-  PeerStateHandshaking(
-  );
+  PeerStateHandshaking();
 }
 
 class PeerStateActive extends PeerState {
@@ -569,7 +608,7 @@ extension type PublicRuntimeId(List<int> value) {
 }
 
 /// Network traffic statistics.
-class Stats {
+final class Stats {
   /// Total number of bytes sent.
   final int bytesTx;
   /// Total number of bytes received.
@@ -607,10 +646,26 @@ class Stats {
       throughputRx: (u.unpackInt())!,
     );
   }
+  
+  @override
+  operator==(Object other) =>
+      other is Stats &&
+      other.bytesTx == bytesTx &&
+      other.bytesRx == bytesRx &&
+      other.throughputTx == throughputTx &&
+      other.throughputRx == throughputRx;
+  
+  @override
+  int get hashCode => Object.hash(
+        bytesTx,
+        bytesRx,
+        throughputTx,
+        throughputRx,
+      );
 }
 
 /// Progress of a task.
-class Progress {
+final class Progress {
   final int value;
   final int total;
 
@@ -636,6 +691,18 @@ class Progress {
       total: (u.unpackInt())!,
     );
   }
+  
+  @override
+  operator==(Object other) =>
+      other is Progress &&
+      other.value == value &&
+      other.total == total;
+  
+  @override
+  int get hashCode => Object.hash(
+        value,
+        total,
+      );
 }
 
 enum NatBehavior {
@@ -1077,7 +1144,7 @@ extension type MessageId(int value) {
 }
 
 /// Edit of a single metadata entry.
-class MetadataEdit {
+final class MetadataEdit {
   /// The key of the entry.
   final String key;
   /// The current value of the entry or `None` if the entry does not exist yet. This is used for
@@ -1114,9 +1181,23 @@ class MetadataEdit {
       newValue: u.unpackString(),
     );
   }
+  
+  @override
+  operator==(Object other) =>
+      other is MetadataEdit &&
+      other.key == key &&
+      other.oldValue == oldValue &&
+      other.newValue == newValue;
+  
+  @override
+  int get hashCode => Object.hash(
+        key,
+        oldValue,
+        newValue,
+      );
 }
 
-class NetworkDefaults {
+final class NetworkDefaults {
   final List<String> bind;
   final bool portForwardingEnabled;
   final bool localDiscoveryEnabled;
@@ -1146,9 +1227,23 @@ class NetworkDefaults {
       localDiscoveryEnabled: (u.unpackBool())!,
     );
   }
+  
+  @override
+  operator==(Object other) =>
+      other is NetworkDefaults &&
+      other.bind == bind &&
+      other.portForwardingEnabled == portForwardingEnabled &&
+      other.localDiscoveryEnabled == localDiscoveryEnabled;
+  
+  @override
+  int get hashCode => Object.hash(
+        bind,
+        portForwardingEnabled,
+        localDiscoveryEnabled,
+      );
 }
 
-class DirectoryEntry {
+final class DirectoryEntry {
   final String name;
   final EntryType entryType;
 
@@ -1174,9 +1269,21 @@ class DirectoryEntry {
       entryType: (EntryType.decode(u))!,
     );
   }
+  
+  @override
+  operator==(Object other) =>
+      other is DirectoryEntry &&
+      other.name == name &&
+      other.entryType == entryType;
+  
+  @override
+  int get hashCode => Object.hash(
+        name,
+        entryType,
+      );
 }
 
-class QuotaInfo {
+final class QuotaInfo {
   final StorageSize? quota;
   final StorageSize size;
 
@@ -1202,6 +1309,18 @@ class QuotaInfo {
       size: (StorageSize.decode(u))!,
     );
   }
+  
+  @override
+  operator==(Object other) =>
+      other is QuotaInfo &&
+      other.quota == quota &&
+      other.size == size;
+  
+  @override
+  int get hashCode => Object.hash(
+        quota,
+        size,
+      );
 }
 
 extension type FileHandle(int value) {
@@ -1232,36 +1351,48 @@ sealed class Request {
       case RequestFileClose(
         file: final file,
       ):
+        p.packMapLength(1);
+        p.packString('FileClose');
         p.packListLength(1);
         file.encode(p);
       case RequestFileFlush(
         file: final file,
       ):
+        p.packMapLength(1);
+        p.packString('FileFlush');
         p.packListLength(1);
         file.encode(p);
-      case RequestFileLen(
+      case RequestFileGetLength(
         file: final file,
       ):
+        p.packMapLength(1);
+        p.packString('FileGetLength');
         p.packListLength(1);
         file.encode(p);
-      case RequestFileProgress(
+      case RequestFileGetProgress(
         file: final file,
       ):
+        p.packMapLength(1);
+        p.packString('FileGetProgress');
         p.packListLength(1);
         file.encode(p);
       case RequestFileRead(
         file: final file,
         offset: final offset,
-        len: final len,
+        size: final size,
       ):
+        p.packMapLength(1);
+        p.packString('FileRead');
         p.packListLength(3);
         file.encode(p);
         p.packInt(offset);
-        p.packInt(len);
+        p.packInt(size);
       case RequestFileTruncate(
         file: final file,
         len: final len,
       ):
+        p.packMapLength(1);
+        p.packString('FileTruncate');
         p.packListLength(2);
         file.encode(p);
         p.packInt(len);
@@ -1270,6 +1401,8 @@ sealed class Request {
         offset: final offset,
         data: final data,
       ):
+        p.packMapLength(1);
+        p.packString('FileWrite');
         p.packListLength(3);
         file.encode(p);
         p.packInt(offset);
@@ -1277,28 +1410,36 @@ sealed class Request {
       case RequestMetricsBind(
         addr: final addr,
       ):
+        p.packMapLength(1);
+        p.packString('MetricsBind');
         p.packListLength(1);
         _encodeNullable(p, addr, (p, e) => p.packString(e));
       case RequestMetricsGetListenerAddr(
       ):
-        p.packListLength(0);
+        p.packString('MetricsGetListenerAddr');
       case RequestRemoteControlBind(
         addr: final addr,
       ):
+        p.packMapLength(1);
+        p.packString('RemoteControlBind');
         p.packListLength(1);
         _encodeNullable(p, addr, (p, e) => p.packString(e));
       case RequestRemoteControlGetListenerAddr(
       ):
-        p.packListLength(0);
+        p.packString('RemoteControlGetListenerAddr');
       case RequestRepositoryClose(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryClose');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryCreateDirectory(
         repo: final repo,
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryCreateDirectory');
         p.packListLength(2);
         repo.encode(p);
         p.packString(path);
@@ -1306,6 +1447,8 @@ sealed class Request {
         repo: final repo,
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryCreateFile');
         p.packListLength(2);
         repo.encode(p);
         p.packString(path);
@@ -1313,18 +1456,24 @@ sealed class Request {
         repo: final repo,
         host: final host,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryCreateMirror');
         p.packListLength(2);
         repo.encode(p);
         p.packString(host);
       case RequestRepositoryDelete(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryDelete');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryDeleteMirror(
         repo: final repo,
         host: final host,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryDeleteMirror');
         p.packListLength(2);
         repo.encode(p);
         p.packString(host);
@@ -1332,6 +1481,8 @@ sealed class Request {
         repo: final repo,
         outputPath: final outputPath,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryExport');
         p.packListLength(2);
         repo.encode(p);
         p.packString(outputPath);
@@ -1339,104 +1490,142 @@ sealed class Request {
         repo: final repo,
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryFileExists');
         p.packListLength(2);
         repo.encode(p);
         p.packString(path);
       case RequestRepositoryGetAccessMode(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetAccessMode');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryGetBlockExpiration(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetBlockExpiration');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryGetCredentials(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetCredentials');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryGetEntryType(
         repo: final repo,
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetEntryType');
         p.packListLength(2);
         repo.encode(p);
         p.packString(path);
       case RequestRepositoryGetExpiration(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetExpiration');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryGetInfoHash(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetInfoHash');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryGetMetadata(
         repo: final repo,
         key: final key,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetMetadata');
         p.packListLength(2);
         repo.encode(p);
         p.packString(key);
       case RequestRepositoryGetMountPoint(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetMountPoint');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryGetPath(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetPath');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryGetQuota(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetQuota');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryGetStats(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetStats');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryGetSyncProgress(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryGetSyncProgress');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryIsDhtEnabled(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryIsDhtEnabled');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryIsPexEnabled(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryIsPexEnabled');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryIsSyncEnabled(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryIsSyncEnabled');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryMirrorExists(
         repo: final repo,
         host: final host,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryMirrorExists');
         p.packListLength(2);
         repo.encode(p);
         p.packString(host);
       case RequestRepositoryMount(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryMount');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryMove(
         repo: final repo,
         dst: final dst,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryMove');
         p.packListLength(2);
         repo.encode(p);
         p.packString(dst);
@@ -1445,6 +1634,8 @@ sealed class Request {
         src: final src,
         dst: final dst,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryMoveEntry');
         p.packListLength(3);
         repo.encode(p);
         p.packString(src);
@@ -1453,6 +1644,8 @@ sealed class Request {
         repo: final repo,
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryOpenFile');
         p.packListLength(2);
         repo.encode(p);
         p.packString(path);
@@ -1460,6 +1653,8 @@ sealed class Request {
         repo: final repo,
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryReadDirectory');
         p.packListLength(2);
         repo.encode(p);
         p.packString(path);
@@ -1468,6 +1663,8 @@ sealed class Request {
         path: final path,
         recursive: final recursive,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryRemoveDirectory');
         p.packListLength(3);
         repo.encode(p);
         p.packString(path);
@@ -1476,6 +1673,8 @@ sealed class Request {
         repo: final repo,
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryRemoveFile');
         p.packListLength(2);
         repo.encode(p);
         p.packString(path);
@@ -1483,14 +1682,18 @@ sealed class Request {
         repo: final repo,
         token: final token,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryResetAccess');
         p.packListLength(2);
         repo.encode(p);
-        p.packString(token);
+        token.encode(p);
       case RequestRepositorySetAccess(
         repo: final repo,
         read: final read,
         write: final write,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetAccess');
         p.packListLength(3);
         repo.encode(p);
         _encodeNullable(p, read, (p, e) => e.encode(p));
@@ -1500,6 +1703,8 @@ sealed class Request {
         accessMode: final accessMode,
         localSecret: final localSecret,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetAccessMode');
         p.packListLength(3);
         repo.encode(p);
         accessMode.encode(p);
@@ -1508,6 +1713,8 @@ sealed class Request {
         repo: final repo,
         value: final value,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetBlockExpiration');
         p.packListLength(2);
         repo.encode(p);
         _encodeNullable(p, value, (p, e) => _encodeDuration(p, e));
@@ -1515,6 +1722,8 @@ sealed class Request {
         repo: final repo,
         credentials: final credentials,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetCredentials');
         p.packListLength(2);
         repo.encode(p);
         p.packBinary(credentials);
@@ -1522,6 +1731,8 @@ sealed class Request {
         repo: final repo,
         enabled: final enabled,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetDhtEnabled');
         p.packListLength(2);
         repo.encode(p);
         p.packBool(enabled);
@@ -1529,6 +1740,8 @@ sealed class Request {
         repo: final repo,
         value: final value,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetExpiration');
         p.packListLength(2);
         repo.encode(p);
         _encodeNullable(p, value, (p, e) => _encodeDuration(p, e));
@@ -1536,6 +1749,8 @@ sealed class Request {
         repo: final repo,
         edits: final edits,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetMetadata');
         p.packListLength(2);
         repo.encode(p);
         _encodeList(p, edits, (p, e) => e.encode(p));
@@ -1543,6 +1758,8 @@ sealed class Request {
         repo: final repo,
         enabled: final enabled,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetPexEnabled');
         p.packListLength(2);
         repo.encode(p);
         p.packBool(enabled);
@@ -1550,6 +1767,8 @@ sealed class Request {
         repo: final repo,
         value: final value,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetQuota');
         p.packListLength(2);
         repo.encode(p);
         _encodeNullable(p, value, (p, e) => e.encode(p));
@@ -1557,6 +1776,8 @@ sealed class Request {
         repo: final repo,
         enabled: final enabled,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySetSyncEnabled');
         p.packListLength(2);
         repo.encode(p);
         p.packBool(enabled);
@@ -1565,6 +1786,8 @@ sealed class Request {
         localSecret: final localSecret,
         accessMode: final accessMode,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryShare');
         p.packListLength(3);
         repo.encode(p);
         _encodeNullable(p, localSecret, (p, e) => e.encode(p));
@@ -1572,21 +1795,29 @@ sealed class Request {
       case RequestRepositorySubscribe(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositorySubscribe');
         p.packListLength(1);
         repo.encode(p);
       case RequestRepositoryUnmount(
         repo: final repo,
       ):
+        p.packMapLength(1);
+        p.packString('RepositoryUnmount');
         p.packListLength(1);
         repo.encode(p);
       case RequestSessionAddUserProvidedPeers(
         addrs: final addrs,
       ):
+        p.packMapLength(1);
+        p.packString('SessionAddUserProvidedPeers');
         p.packListLength(1);
         _encodeList(p, addrs, (p, e) => p.packString(e));
       case RequestSessionBindNetwork(
         addrs: final addrs,
       ):
+        p.packMapLength(1);
+        p.packString('SessionBindNetwork');
         p.packListLength(1);
         _encodeList(p, addrs, (p, e) => p.packString(e));
       case RequestSessionCreateRepository(
@@ -1598,204 +1829,257 @@ sealed class Request {
         dhtEnabled: final dhtEnabled,
         pexEnabled: final pexEnabled,
       ):
+        p.packMapLength(1);
+        p.packString('SessionCreateRepository');
         p.packListLength(7);
         p.packString(path);
         _encodeNullable(p, readSecret, (p, e) => e.encode(p));
         _encodeNullable(p, writeSecret, (p, e) => e.encode(p));
-        _encodeNullable(p, token, (p, e) => p.packString(e));
+        _encodeNullable(p, token, (p, e) => e.encode(p));
         p.packBool(syncEnabled);
         p.packBool(dhtEnabled);
         p.packBool(pexEnabled);
       case RequestSessionDeleteRepositoryByName(
         name: final name,
       ):
+        p.packMapLength(1);
+        p.packString('SessionDeleteRepositoryByName');
         p.packListLength(1);
         p.packString(name);
       case RequestSessionDeriveSecretKey(
         password: final password,
         salt: final salt,
       ):
+        p.packMapLength(1);
+        p.packString('SessionDeriveSecretKey');
         p.packListLength(2);
-        p.packString(password);
+        password.encode(p);
         salt.encode(p);
       case RequestSessionFindRepository(
         name: final name,
       ):
+        p.packMapLength(1);
+        p.packString('SessionFindRepository');
         p.packListLength(1);
         p.packString(name);
       case RequestSessionGeneratePasswordSalt(
       ):
-        p.packListLength(0);
+        p.packString('SessionGeneratePasswordSalt');
+      case RequestSessionGenerateSecretKey(
+      ):
+        p.packString('SessionGenerateSecretKey');
       case RequestSessionGetCurrentProtocolVersion(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetCurrentProtocolVersion');
       case RequestSessionGetDefaultBlockExpiration(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetDefaultBlockExpiration');
       case RequestSessionGetDefaultQuota(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetDefaultQuota');
       case RequestSessionGetDefaultRepositoryExpiration(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetDefaultRepositoryExpiration');
       case RequestSessionGetExternalAddrV4(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetExternalAddrV4');
       case RequestSessionGetExternalAddrV6(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetExternalAddrV6');
       case RequestSessionGetHighestSeenProtocolVersion(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetHighestSeenProtocolVersion');
       case RequestSessionGetLocalListenerAddrs(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetLocalListenerAddrs');
       case RequestSessionGetMountRoot(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetMountRoot');
       case RequestSessionGetNatBehavior(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetNatBehavior');
       case RequestSessionGetNetworkStats(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetNetworkStats');
       case RequestSessionGetPeers(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetPeers');
       case RequestSessionGetRemoteListenerAddrs(
         host: final host,
       ):
+        p.packMapLength(1);
+        p.packString('SessionGetRemoteListenerAddrs');
         p.packListLength(1);
         p.packString(host);
       case RequestSessionGetRuntimeId(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetRuntimeId');
+      case RequestSessionGetShareTokenAccessMode(
+        token: final token,
+      ):
+        p.packMapLength(1);
+        p.packString('SessionGetShareTokenAccessMode');
+        p.packListLength(1);
+        token.encode(p);
+      case RequestSessionGetShareTokenInfoHash(
+        token: final token,
+      ):
+        p.packMapLength(1);
+        p.packString('SessionGetShareTokenInfoHash');
+        p.packListLength(1);
+        token.encode(p);
+      case RequestSessionGetShareTokenSuggestedName(
+        token: final token,
+      ):
+        p.packMapLength(1);
+        p.packString('SessionGetShareTokenSuggestedName');
+        p.packListLength(1);
+        token.encode(p);
       case RequestSessionGetStateMonitor(
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('SessionGetStateMonitor');
         p.packListLength(1);
         _encodeList(p, path, (p, e) => e.encode(p));
       case RequestSessionGetStoreDir(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetStoreDir');
       case RequestSessionGetUserProvidedPeers(
       ):
-        p.packListLength(0);
+        p.packString('SessionGetUserProvidedPeers');
       case RequestSessionInitNetwork(
         defaults: final defaults,
       ):
+        p.packMapLength(1);
+        p.packString('SessionInitNetwork');
         p.packListLength(1);
         defaults.encode(p);
       case RequestSessionIsLocalDiscoveryEnabled(
       ):
-        p.packListLength(0);
+        p.packString('SessionIsLocalDiscoveryEnabled');
       case RequestSessionIsPexRecvEnabled(
       ):
-        p.packListLength(0);
+        p.packString('SessionIsPexRecvEnabled');
       case RequestSessionIsPexSendEnabled(
       ):
-        p.packListLength(0);
+        p.packString('SessionIsPexSendEnabled');
       case RequestSessionIsPortForwardingEnabled(
       ):
-        p.packListLength(0);
+        p.packString('SessionIsPortForwardingEnabled');
       case RequestSessionListRepositories(
       ):
-        p.packListLength(0);
+        p.packString('SessionListRepositories');
+      case RequestSessionMirrorExists(
+        token: final token,
+        host: final host,
+      ):
+        p.packMapLength(1);
+        p.packString('SessionMirrorExists');
+        p.packListLength(2);
+        token.encode(p);
+        p.packString(host);
       case RequestSessionOpenRepository(
         path: final path,
         localSecret: final localSecret,
       ):
+        p.packMapLength(1);
+        p.packString('SessionOpenRepository');
         p.packListLength(2);
         p.packString(path);
         _encodeNullable(p, localSecret, (p, e) => e.encode(p));
       case RequestSessionRemoveUserProvidedPeers(
         addrs: final addrs,
       ):
+        p.packMapLength(1);
+        p.packString('SessionRemoveUserProvidedPeers');
         p.packListLength(1);
         _encodeList(p, addrs, (p, e) => p.packString(e));
       case RequestSessionSetDefaultBlockExpiration(
         value: final value,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSetDefaultBlockExpiration');
         p.packListLength(1);
         _encodeNullable(p, value, (p, e) => _encodeDuration(p, e));
       case RequestSessionSetDefaultQuota(
         value: final value,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSetDefaultQuota');
         p.packListLength(1);
         _encodeNullable(p, value, (p, e) => e.encode(p));
       case RequestSessionSetDefaultRepositoryExpiration(
         value: final value,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSetDefaultRepositoryExpiration');
         p.packListLength(1);
         _encodeNullable(p, value, (p, e) => _encodeDuration(p, e));
       case RequestSessionSetLocalDiscoveryEnabled(
         enabled: final enabled,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSetLocalDiscoveryEnabled');
         p.packListLength(1);
         p.packBool(enabled);
       case RequestSessionSetMountRoot(
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSetMountRoot');
         p.packListLength(1);
         _encodeNullable(p, path, (p, e) => p.packString(e));
       case RequestSessionSetPexRecvEnabled(
         enabled: final enabled,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSetPexRecvEnabled');
         p.packListLength(1);
         p.packBool(enabled);
       case RequestSessionSetPexSendEnabled(
         enabled: final enabled,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSetPexSendEnabled');
         p.packListLength(1);
         p.packBool(enabled);
       case RequestSessionSetPortForwardingEnabled(
         enabled: final enabled,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSetPortForwardingEnabled');
         p.packListLength(1);
         p.packBool(enabled);
       case RequestSessionSetStoreDir(
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSetStoreDir');
         p.packListLength(1);
         p.packString(path);
       case RequestSessionSubscribeToNetwork(
       ):
-        p.packListLength(0);
+        p.packString('SessionSubscribeToNetwork');
       case RequestSessionSubscribeToStateMonitor(
         path: final path,
       ):
+        p.packMapLength(1);
+        p.packString('SessionSubscribeToStateMonitor');
         p.packListLength(1);
         _encodeList(p, path, (p, e) => e.encode(p));
       case RequestSessionUnsubscribe(
         id: final id,
       ):
+        p.packMapLength(1);
+        p.packString('SessionUnsubscribe');
         p.packListLength(1);
         id.encode(p);
-      case RequestShareTokenGetAccessMode(
+      case RequestSessionValidateShareToken(
         token: final token,
       ):
-        p.packListLength(1);
-        p.packString(token);
-      case RequestShareTokenGetInfoHash(
-        token: final token,
-      ):
-        p.packListLength(1);
-        p.packString(token);
-      case RequestShareTokenGetSuggestedName(
-        token: final token,
-      ):
-        p.packListLength(1);
-        p.packString(token);
-      case RequestShareTokenMirrorExists(
-        token: final token,
-        host: final host,
-      ):
-        p.packListLength(2);
-        p.packString(token);
-        p.packString(host);
-      case RequestShareTokenNormalize(
-        token: final token,
-      ):
+        p.packMapLength(1);
+        p.packString('SessionValidateShareToken');
         p.packListLength(1);
         p.packString(token);
     }
@@ -1819,18 +2103,18 @@ class RequestFileFlush extends Request {
   });
 }
 
-class RequestFileLen extends Request {
+class RequestFileGetLength extends Request {
   final FileHandle file;
 
-  RequestFileLen({
+  RequestFileGetLength({
     required this.file,
   });
 }
 
-class RequestFileProgress extends Request {
+class RequestFileGetProgress extends Request {
   final FileHandle file;
 
-  RequestFileProgress({
+  RequestFileGetProgress({
     required this.file,
   });
 }
@@ -1838,12 +2122,12 @@ class RequestFileProgress extends Request {
 class RequestFileRead extends Request {
   final FileHandle file;
   final int offset;
-  final int len;
+  final int size;
 
   RequestFileRead({
     required this.file,
     required this.offset,
-    required this.len,
+    required this.size,
   });
 }
 
@@ -1878,8 +2162,7 @@ class RequestMetricsBind extends Request {
 }
 
 class RequestMetricsGetListenerAddr extends Request {
-  RequestMetricsGetListenerAddr(
-  );
+  RequestMetricsGetListenerAddr();
 }
 
 class RequestRemoteControlBind extends Request {
@@ -1891,8 +2174,7 @@ class RequestRemoteControlBind extends Request {
 }
 
 class RequestRemoteControlGetListenerAddr extends Request {
-  RequestRemoteControlGetListenerAddr(
-  );
+  RequestRemoteControlGetListenerAddr();
 }
 
 class RequestRepositoryClose extends Request {
@@ -2179,7 +2461,7 @@ class RequestRepositoryRemoveFile extends Request {
 
 class RequestRepositoryResetAccess extends Request {
   final RepositoryHandle repo;
-  final String token;
+  final ShareToken token;
 
   RequestRepositoryResetAccess({
     required this.repo,
@@ -2339,7 +2621,7 @@ class RequestSessionCreateRepository extends Request {
   final String path;
   final SetLocalSecret? readSecret;
   final SetLocalSecret? writeSecret;
-  final String? token;
+  final ShareToken? token;
   final bool syncEnabled;
   final bool dhtEnabled;
   final bool pexEnabled;
@@ -2364,7 +2646,7 @@ class RequestSessionDeleteRepositoryByName extends Request {
 }
 
 class RequestSessionDeriveSecretKey extends Request {
-  final String password;
+  final Password password;
   final PasswordSalt salt;
 
   RequestSessionDeriveSecretKey({
@@ -2382,68 +2664,59 @@ class RequestSessionFindRepository extends Request {
 }
 
 class RequestSessionGeneratePasswordSalt extends Request {
-  RequestSessionGeneratePasswordSalt(
-  );
+  RequestSessionGeneratePasswordSalt();
+}
+
+class RequestSessionGenerateSecretKey extends Request {
+  RequestSessionGenerateSecretKey();
 }
 
 class RequestSessionGetCurrentProtocolVersion extends Request {
-  RequestSessionGetCurrentProtocolVersion(
-  );
+  RequestSessionGetCurrentProtocolVersion();
 }
 
 class RequestSessionGetDefaultBlockExpiration extends Request {
-  RequestSessionGetDefaultBlockExpiration(
-  );
+  RequestSessionGetDefaultBlockExpiration();
 }
 
 class RequestSessionGetDefaultQuota extends Request {
-  RequestSessionGetDefaultQuota(
-  );
+  RequestSessionGetDefaultQuota();
 }
 
 class RequestSessionGetDefaultRepositoryExpiration extends Request {
-  RequestSessionGetDefaultRepositoryExpiration(
-  );
+  RequestSessionGetDefaultRepositoryExpiration();
 }
 
 class RequestSessionGetExternalAddrV4 extends Request {
-  RequestSessionGetExternalAddrV4(
-  );
+  RequestSessionGetExternalAddrV4();
 }
 
 class RequestSessionGetExternalAddrV6 extends Request {
-  RequestSessionGetExternalAddrV6(
-  );
+  RequestSessionGetExternalAddrV6();
 }
 
 class RequestSessionGetHighestSeenProtocolVersion extends Request {
-  RequestSessionGetHighestSeenProtocolVersion(
-  );
+  RequestSessionGetHighestSeenProtocolVersion();
 }
 
 class RequestSessionGetLocalListenerAddrs extends Request {
-  RequestSessionGetLocalListenerAddrs(
-  );
+  RequestSessionGetLocalListenerAddrs();
 }
 
 class RequestSessionGetMountRoot extends Request {
-  RequestSessionGetMountRoot(
-  );
+  RequestSessionGetMountRoot();
 }
 
 class RequestSessionGetNatBehavior extends Request {
-  RequestSessionGetNatBehavior(
-  );
+  RequestSessionGetNatBehavior();
 }
 
 class RequestSessionGetNetworkStats extends Request {
-  RequestSessionGetNetworkStats(
-  );
+  RequestSessionGetNetworkStats();
 }
 
 class RequestSessionGetPeers extends Request {
-  RequestSessionGetPeers(
-  );
+  RequestSessionGetPeers();
 }
 
 class RequestSessionGetRemoteListenerAddrs extends Request {
@@ -2455,8 +2728,31 @@ class RequestSessionGetRemoteListenerAddrs extends Request {
 }
 
 class RequestSessionGetRuntimeId extends Request {
-  RequestSessionGetRuntimeId(
-  );
+  RequestSessionGetRuntimeId();
+}
+
+class RequestSessionGetShareTokenAccessMode extends Request {
+  final ShareToken token;
+
+  RequestSessionGetShareTokenAccessMode({
+    required this.token,
+  });
+}
+
+class RequestSessionGetShareTokenInfoHash extends Request {
+  final ShareToken token;
+
+  RequestSessionGetShareTokenInfoHash({
+    required this.token,
+  });
+}
+
+class RequestSessionGetShareTokenSuggestedName extends Request {
+  final ShareToken token;
+
+  RequestSessionGetShareTokenSuggestedName({
+    required this.token,
+  });
 }
 
 class RequestSessionGetStateMonitor extends Request {
@@ -2468,13 +2764,11 @@ class RequestSessionGetStateMonitor extends Request {
 }
 
 class RequestSessionGetStoreDir extends Request {
-  RequestSessionGetStoreDir(
-  );
+  RequestSessionGetStoreDir();
 }
 
 class RequestSessionGetUserProvidedPeers extends Request {
-  RequestSessionGetUserProvidedPeers(
-  );
+  RequestSessionGetUserProvidedPeers();
 }
 
 class RequestSessionInitNetwork extends Request {
@@ -2486,28 +2780,33 @@ class RequestSessionInitNetwork extends Request {
 }
 
 class RequestSessionIsLocalDiscoveryEnabled extends Request {
-  RequestSessionIsLocalDiscoveryEnabled(
-  );
+  RequestSessionIsLocalDiscoveryEnabled();
 }
 
 class RequestSessionIsPexRecvEnabled extends Request {
-  RequestSessionIsPexRecvEnabled(
-  );
+  RequestSessionIsPexRecvEnabled();
 }
 
 class RequestSessionIsPexSendEnabled extends Request {
-  RequestSessionIsPexSendEnabled(
-  );
+  RequestSessionIsPexSendEnabled();
 }
 
 class RequestSessionIsPortForwardingEnabled extends Request {
-  RequestSessionIsPortForwardingEnabled(
-  );
+  RequestSessionIsPortForwardingEnabled();
 }
 
 class RequestSessionListRepositories extends Request {
-  RequestSessionListRepositories(
-  );
+  RequestSessionListRepositories();
+}
+
+class RequestSessionMirrorExists extends Request {
+  final ShareToken token;
+  final String host;
+
+  RequestSessionMirrorExists({
+    required this.token,
+    required this.host,
+  });
 }
 
 class RequestSessionOpenRepository extends Request {
@@ -2601,8 +2900,7 @@ class RequestSessionSetStoreDir extends Request {
 }
 
 class RequestSessionSubscribeToNetwork extends Request {
-  RequestSessionSubscribeToNetwork(
-  );
+  RequestSessionSubscribeToNetwork();
 }
 
 class RequestSessionSubscribeToStateMonitor extends Request {
@@ -2621,44 +2919,10 @@ class RequestSessionUnsubscribe extends Request {
   });
 }
 
-class RequestShareTokenGetAccessMode extends Request {
+class RequestSessionValidateShareToken extends Request {
   final String token;
 
-  RequestShareTokenGetAccessMode({
-    required this.token,
-  });
-}
-
-class RequestShareTokenGetInfoHash extends Request {
-  final String token;
-
-  RequestShareTokenGetInfoHash({
-    required this.token,
-  });
-}
-
-class RequestShareTokenGetSuggestedName extends Request {
-  final String token;
-
-  RequestShareTokenGetSuggestedName({
-    required this.token,
-  });
-}
-
-class RequestShareTokenMirrorExists extends Request {
-  final String token;
-  final String host;
-
-  RequestShareTokenMirrorExists({
-    required this.token,
-    required this.host,
-  });
-}
-
-class RequestShareTokenNormalize extends Request {
-  final String token;
-
-  RequestShareTokenNormalize({
+  RequestSessionValidateShareToken({
     required this.token,
   });
 }
@@ -2677,137 +2941,110 @@ sealed class Response {
       if (u.unpackMapLength() != 1) throw DecodeError();
       switch (u.unpackString()) {
         case "AccessMode":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseAccessMode(
             value: (AccessMode.decode(u))!,
           );
         case "Bool":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseBool(
             value: (u.unpackBool())!,
           );
         case "Bytes":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseBytes(
             value: u.unpackBinary(),
           );
         case "DirectoryEntries":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseDirectoryEntries(
             value: _decodeList(u, (u) => (DirectoryEntry.decode(u))!),
           );
         case "Duration":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseDuration(
             value: (_decodeDuration(u))!,
           );
         case "EntryType":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseEntryType(
             value: (EntryType.decode(u))!,
           );
         case "File":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseFile(
             value: (FileHandle.decode(u))!,
           );
         case "NatBehavior":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseNatBehavior(
             value: (NatBehavior.decode(u))!,
           );
         case "NetworkEvent":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseNetworkEvent(
             value: (NetworkEvent.decode(u))!,
           );
         case "PasswordSalt":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponsePasswordSalt(
             value: (PasswordSalt.decode(u))!,
           );
         case "Path":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponsePath(
             value: (u.unpackString())!,
           );
         case "PeerAddrs":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponsePeerAddrs(
             value: _decodeList(u, (u) => (u.unpackString())!),
           );
         case "PeerInfos":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponsePeerInfos(
             value: _decodeList(u, (u) => (PeerInfo.decode(u))!),
           );
         case "Progress":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseProgress(
             value: (Progress.decode(u))!,
           );
         case "PublicRuntimeId":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponsePublicRuntimeId(
             value: (PublicRuntimeId.decode(u))!,
           );
         case "QuotaInfo":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseQuotaInfo(
             value: (QuotaInfo.decode(u))!,
           );
         case "Repositories":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseRepositories(
             value: _decodeMap(u, (u) => (u.unpackString())!, (u) => (RepositoryHandle.decode(u))!),
           );
         case "Repository":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseRepository(
             value: (RepositoryHandle.decode(u))!,
           );
         case "SecretKey":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseSecretKey(
             value: (SecretKey.decode(u))!,
           );
         case "ShareToken":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseShareToken(
-            value: (u.unpackString())!,
+            value: (ShareToken.decode(u))!,
           );
         case "SocketAddr":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseSocketAddr(
             value: (u.unpackString())!,
           );
         case "StateMonitor":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseStateMonitor(
             value: (StateMonitorNode.decode(u))!,
           );
         case "Stats":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseStats(
             value: (Stats.decode(u))!,
           );
         case "StorageSize":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseStorageSize(
             value: (StorageSize.decode(u))!,
           );
         case "String":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseString(
             value: (u.unpackString())!,
           );
         case "U16":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseU16(
             value: (u.unpackInt())!,
           );
         case "U64":
-          if (u.unpackListLength() != 1) throw DecodeError();
           return ResponseU64(
             value: (u.unpackInt())!,
           );
@@ -2892,8 +3129,7 @@ class ResponseNetworkEvent extends Response {
 }
 
 class ResponseNone extends Response {
-  ResponseNone(
-  );
+  ResponseNone();
 }
 
 class ResponsePasswordSalt extends Response {
@@ -2969,8 +3205,7 @@ class ResponseRepository extends Response {
 }
 
 class ResponseRepositoryEvent extends Response {
-  ResponseRepositoryEvent(
-  );
+  ResponseRepositoryEvent();
 }
 
 class ResponseSecretKey extends Response {
@@ -2982,7 +3217,7 @@ class ResponseSecretKey extends Response {
 }
 
 class ResponseShareToken extends Response {
-  final String value;
+  final ShareToken value;
 
   ResponseShareToken({
     required this.value,
@@ -3006,8 +3241,7 @@ class ResponseStateMonitor extends Response {
 }
 
 class ResponseStateMonitorEvent extends Response {
-  ResponseStateMonitorEvent(
-  );
+  ResponseStateMonitorEvent();
 }
 
 class ResponseStats extends Response {
@@ -3051,9 +3285,9 @@ class ResponseU64 extends Response {
 }
 
 class Session {
-  final Client _client;
+  final Client client;
   
-  Session(this._client);
+  Session(this.client);
   
   Future<void> addUserProvidedPeers(
     List<String> addrs,
@@ -3061,7 +3295,7 @@ class Session {
     final request = RequestSessionAddUserProvidedPeers(
       addrs: addrs,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3074,22 +3308,22 @@ class Session {
     final request = RequestSessionBindNetwork(
       addrs: addrs,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
     }
   }
   
-  Future<Repository> createRepository(
-    String path,
+  Future<Repository> createRepository({
+    required String path,
     SetLocalSecret? readSecret,
     SetLocalSecret? writeSecret,
-    String? token,
-    bool syncEnabled,
-    bool dhtEnabled,
-    bool pexEnabled,
-  ) async {
+    ShareToken? token,
+    bool syncEnabled = false,
+    bool dhtEnabled = false,
+    bool pexEnabled = false,
+  }) async {
     final request = RequestSessionCreateRepository(
       path: path,
       readSecret: readSecret,
@@ -3099,9 +3333,9 @@ class Session {
       dhtEnabled: dhtEnabled,
       pexEnabled: pexEnabled,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
-      case ResponseRepository(value: final value): return Repository(_client, value);
+      case ResponseRepository(value: final value): return Repository(client, value);
       default: throw InvalidData('unexpected response');
     }
   }
@@ -3113,7 +3347,7 @@ class Session {
     final request = RequestSessionDeleteRepositoryByName(
       name: name,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3121,14 +3355,14 @@ class Session {
   }
   
   Future<SecretKey> deriveSecretKey(
-    String password,
+    Password password,
     PasswordSalt salt,
   ) async {
     final request = RequestSessionDeriveSecretKey(
       password: password,
       salt: salt,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseSecretKey(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3141,9 +3375,9 @@ class Session {
     final request = RequestSessionFindRepository(
       name: name,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
-      case ResponseRepository(value: final value): return Repository(_client, value);
+      case ResponseRepository(value: final value): return Repository(client, value);
       default: throw InvalidData('unexpected response');
     }
   }
@@ -3152,9 +3386,20 @@ class Session {
   ) async {
     final request = RequestSessionGeneratePasswordSalt(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePasswordSalt(value: final value): return value;
+      default: throw InvalidData('unexpected response');
+    }
+  }
+  
+  Future<SecretKey> generateSecretKey(
+  ) async {
+    final request = RequestSessionGenerateSecretKey(
+    );
+    final response = await client.invoke(request);
+    switch (response) {
+      case ResponseSecretKey(value: final value): return value;
       default: throw InvalidData('unexpected response');
     }
   }
@@ -3163,7 +3408,7 @@ class Session {
   ) async {
     final request = RequestSessionGetCurrentProtocolVersion(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseU64(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3174,7 +3419,7 @@ class Session {
   ) async {
     final request = RequestSessionGetDefaultBlockExpiration(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseDuration(value: final value): return value;
       case ResponseNone(): return null;
@@ -3186,7 +3431,7 @@ class Session {
   ) async {
     final request = RequestSessionGetDefaultQuota(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseStorageSize(value: final value): return value;
       case ResponseNone(): return null;
@@ -3198,7 +3443,7 @@ class Session {
   ) async {
     final request = RequestSessionGetDefaultRepositoryExpiration(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseDuration(value: final value): return value;
       case ResponseNone(): return null;
@@ -3210,7 +3455,7 @@ class Session {
   ) async {
     final request = RequestSessionGetExternalAddrV4(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseSocketAddr(value: final value): return value;
       case ResponseNone(): return null;
@@ -3222,7 +3467,7 @@ class Session {
   ) async {
     final request = RequestSessionGetExternalAddrV6(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseSocketAddr(value: final value): return value;
       case ResponseNone(): return null;
@@ -3234,7 +3479,7 @@ class Session {
   ) async {
     final request = RequestSessionGetHighestSeenProtocolVersion(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseU64(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3245,7 +3490,7 @@ class Session {
   ) async {
     final request = RequestSessionGetLocalListenerAddrs(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePeerAddrs(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3256,7 +3501,7 @@ class Session {
   ) async {
     final request = RequestSessionGetMountRoot(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePath(value: final value): return value;
       case ResponseNone(): return null;
@@ -3268,7 +3513,7 @@ class Session {
   ) async {
     final request = RequestSessionGetNatBehavior(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNatBehavior(value: final value): return value;
       case ResponseNone(): return null;
@@ -3280,7 +3525,7 @@ class Session {
   ) async {
     final request = RequestSessionGetNetworkStats(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseStats(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3291,7 +3536,7 @@ class Session {
   ) async {
     final request = RequestSessionGetPeers(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePeerInfos(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3304,7 +3549,7 @@ class Session {
     final request = RequestSessionGetRemoteListenerAddrs(
       host: host,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePeerAddrs(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3315,9 +3560,52 @@ class Session {
   ) async {
     final request = RequestSessionGetRuntimeId(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePublicRuntimeId(value: final value): return value;
+      default: throw InvalidData('unexpected response');
+    }
+  }
+  
+  Future<AccessMode> getShareTokenAccessMode(
+    ShareToken token,
+  ) async {
+    final request = RequestSessionGetShareTokenAccessMode(
+      token: token,
+    );
+    final response = await client.invoke(request);
+    switch (response) {
+      case ResponseAccessMode(value: final value): return value;
+      default: throw InvalidData('unexpected response');
+    }
+  }
+  
+  /// Return the info-hash of the repository corresponding to the given token, formatted as hex
+  /// string.
+  ///
+  /// See also: [repository_get_info_hash]
+  Future<String> getShareTokenInfoHash(
+    ShareToken token,
+  ) async {
+    final request = RequestSessionGetShareTokenInfoHash(
+      token: token,
+    );
+    final response = await client.invoke(request);
+    switch (response) {
+      case ResponseString(value: final value): return value;
+      default: throw InvalidData('unexpected response');
+    }
+  }
+  
+  Future<String> getShareTokenSuggestedName(
+    ShareToken token,
+  ) async {
+    final request = RequestSessionGetShareTokenSuggestedName(
+      token: token,
+    );
+    final response = await client.invoke(request);
+    switch (response) {
+      case ResponseString(value: final value): return value;
       default: throw InvalidData('unexpected response');
     }
   }
@@ -3328,7 +3616,7 @@ class Session {
     final request = RequestSessionGetStateMonitor(
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseStateMonitor(value: final value): return value;
       case ResponseNone(): return null;
@@ -3340,7 +3628,7 @@ class Session {
   ) async {
     final request = RequestSessionGetStoreDir(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePath(value: final value): return value;
       case ResponseNone(): return null;
@@ -3352,7 +3640,7 @@ class Session {
   ) async {
     final request = RequestSessionGetUserProvidedPeers(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePeerAddrs(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3367,7 +3655,7 @@ class Session {
     final request = RequestSessionInitNetwork(
       defaults: defaults,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3378,7 +3666,7 @@ class Session {
   ) async {
     final request = RequestSessionIsLocalDiscoveryEnabled(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3390,7 +3678,7 @@ class Session {
   ) async {
     final request = RequestSessionIsPexRecvEnabled(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3401,7 +3689,7 @@ class Session {
   ) async {
     final request = RequestSessionIsPexSendEnabled(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3412,35 +3700,50 @@ class Session {
   ) async {
     final request = RequestSessionIsPortForwardingEnabled(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
     }
   }
   
-  Future<Map<String, RepositoryHandle>> listRepositories(
+  Future<Map<String, Repository>> listRepositories(
   ) async {
     final request = RequestSessionListRepositories(
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
-      case ResponseRepositories(value: final value): return value;
+      case ResponseRepositories(value: final value): return value.map((k, v) => MapEntry(k, Repository(client, v)));
       default: throw InvalidData('unexpected response');
     }
   }
   
-  Future<Repository> openRepository(
-    String path,
-    LocalSecret? localSecret,
+  Future<bool> mirrorExists(
+    ShareToken token,
+    String host,
   ) async {
+    final request = RequestSessionMirrorExists(
+      token: token,
+      host: host,
+    );
+    final response = await client.invoke(request);
+    switch (response) {
+      case ResponseBool(value: final value): return value;
+      default: throw InvalidData('unexpected response');
+    }
+  }
+  
+  Future<Repository> openRepository({
+    required String path,
+    LocalSecret? localSecret,
+  }) async {
     final request = RequestSessionOpenRepository(
       path: path,
       localSecret: localSecret,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
-      case ResponseRepository(value: final value): return Repository(_client, value);
+      case ResponseRepository(value: final value): return Repository(client, value);
       default: throw InvalidData('unexpected response');
     }
   }
@@ -3451,7 +3754,7 @@ class Session {
     final request = RequestSessionRemoveUserProvidedPeers(
       addrs: addrs,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3464,7 +3767,7 @@ class Session {
     final request = RequestSessionSetDefaultBlockExpiration(
       value: value,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3477,7 +3780,7 @@ class Session {
     final request = RequestSessionSetDefaultQuota(
       value: value,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3490,7 +3793,7 @@ class Session {
     final request = RequestSessionSetDefaultRepositoryExpiration(
       value: value,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3503,7 +3806,7 @@ class Session {
     final request = RequestSessionSetLocalDiscoveryEnabled(
       enabled: enabled,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3516,7 +3819,7 @@ class Session {
     final request = RequestSessionSetMountRoot(
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3529,7 +3832,7 @@ class Session {
     final request = RequestSessionSetPexRecvEnabled(
       enabled: enabled,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3542,7 +3845,7 @@ class Session {
     final request = RequestSessionSetPexSendEnabled(
       enabled: enabled,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3555,7 +3858,7 @@ class Session {
     final request = RequestSessionSetPortForwardingEnabled(
       enabled: enabled,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3568,70 +3871,40 @@ class Session {
     final request = RequestSessionSetStoreDir(
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
     }
   }
   
-  Future<void> subscribeToNetwork(
+  Future<ShareToken> validateShareToken(
+    String token,
   ) async {
-    final request = RequestSessionSubscribeToNetwork(
+    final request = RequestSessionValidateShareToken(
+      token: token,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
-      case ResponseNone(): return;
+      case ResponseShareToken(value: final value): return value;
       default: throw InvalidData('unexpected response');
     }
-  }
-  
-  Future<void> subscribeToStateMonitor(
-    List<MonitorId> path,
-  ) async {
-    final request = RequestSessionSubscribeToStateMonitor(
-      path: path,
-    );
-    final response = await _client.invoke(request);
-    switch (response) {
-      case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
-    }
-  }
-  
-  /// Cancel a subscription identified by the given message id. The message id should be the same
-  /// that was used for sending the corresponding subscribe request.
-  Future<void> unsubscribe(
-    MessageId id,
-  ) async {
-    final request = RequestSessionUnsubscribe(
-      id: id,
-    );
-    final response = await _client.invoke(request);
-    switch (response) {
-      case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
-    }
-  }
-  
-  Future<void> close() async {
-    await _client.close();
   }
   
 }
 
 class Repository {
-  final Client _client;
-  final RepositoryHandle _handle;
+  final Client client;
+  final RepositoryHandle handle;
   
-  Repository(this._client, this._handle);
+  Repository(this.client, this.handle);
   
   Future<void> close(
   ) async {
     final request = RequestRepositoryClose(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3642,10 +3915,10 @@ class Repository {
     String path,
   ) async {
     final request = RequestRepositoryCreateDirectory(
-      repo: _handle,
+      repo: handle,
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3656,12 +3929,12 @@ class Repository {
     String path,
   ) async {
     final request = RequestRepositoryCreateFile(
-      repo: _handle,
+      repo: handle,
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
-      case ResponseFile(value: final value): return File(_client, value);
+      case ResponseFile(value: final value): return File(client, value);
       default: throw InvalidData('unexpected response');
     }
   }
@@ -3670,10 +3943,10 @@ class Repository {
     String host,
   ) async {
     final request = RequestRepositoryCreateMirror(
-      repo: _handle,
+      repo: handle,
       host: host,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3684,9 +3957,9 @@ class Repository {
   Future<void> delete(
   ) async {
     final request = RequestRepositoryDelete(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3697,10 +3970,10 @@ class Repository {
     String host,
   ) async {
     final request = RequestRepositoryDeleteMirror(
-      repo: _handle,
+      repo: handle,
       host: host,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3712,10 +3985,10 @@ class Repository {
     String outputPath,
   ) async {
     final request = RequestRepositoryExport(
-      repo: _handle,
+      repo: handle,
       outputPath: outputPath,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePath(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3726,10 +3999,10 @@ class Repository {
     String path,
   ) async {
     final request = RequestRepositoryFileExists(
-      repo: _handle,
+      repo: handle,
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3739,9 +4012,9 @@ class Repository {
   Future<AccessMode> getAccessMode(
   ) async {
     final request = RequestRepositoryGetAccessMode(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseAccessMode(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3751,9 +4024,9 @@ class Repository {
   Future<Duration?> getBlockExpiration(
   ) async {
     final request = RequestRepositoryGetBlockExpiration(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseDuration(value: final value): return value;
       case ResponseNone(): return null;
@@ -3764,9 +4037,9 @@ class Repository {
   Future<List<int>> getCredentials(
   ) async {
     final request = RequestRepositoryGetCredentials(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBytes(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3779,10 +4052,10 @@ class Repository {
     String path,
   ) async {
     final request = RequestRepositoryGetEntryType(
-      repo: _handle,
+      repo: handle,
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseEntryType(value: final value): return value;
       case ResponseNone(): return null;
@@ -3793,9 +4066,9 @@ class Repository {
   Future<Duration?> getExpiration(
   ) async {
     final request = RequestRepositoryGetExpiration(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseDuration(value: final value): return value;
       case ResponseNone(): return null;
@@ -3808,9 +4081,9 @@ class Repository {
   Future<String> getInfoHash(
   ) async {
     final request = RequestRepositoryGetInfoHash(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseString(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3821,10 +4094,10 @@ class Repository {
     String key,
   ) async {
     final request = RequestRepositoryGetMetadata(
-      repo: _handle,
+      repo: handle,
       key: key,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseString(value: final value): return value;
       case ResponseNone(): return null;
@@ -3835,9 +4108,9 @@ class Repository {
   Future<String?> getMountPoint(
   ) async {
     final request = RequestRepositoryGetMountPoint(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePath(value: final value): return value;
       case ResponseNone(): return null;
@@ -3848,9 +4121,9 @@ class Repository {
   Future<String> getPath(
   ) async {
     final request = RequestRepositoryGetPath(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePath(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3860,9 +4133,9 @@ class Repository {
   Future<QuotaInfo> getQuota(
   ) async {
     final request = RequestRepositoryGetQuota(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseQuotaInfo(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3872,9 +4145,9 @@ class Repository {
   Future<Stats> getStats(
   ) async {
     final request = RequestRepositoryGetStats(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseStats(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3884,9 +4157,9 @@ class Repository {
   Future<Progress> getSyncProgress(
   ) async {
     final request = RequestRepositoryGetSyncProgress(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseProgress(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3896,9 +4169,9 @@ class Repository {
   Future<bool> isDhtEnabled(
   ) async {
     final request = RequestRepositoryIsDhtEnabled(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3908,9 +4181,9 @@ class Repository {
   Future<bool> isPexEnabled(
   ) async {
     final request = RequestRepositoryIsPexEnabled(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3920,9 +4193,9 @@ class Repository {
   Future<bool> isSyncEnabled(
   ) async {
     final request = RequestRepositoryIsSyncEnabled(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3933,10 +4206,10 @@ class Repository {
     String host,
   ) async {
     final request = RequestRepositoryMirrorExists(
-      repo: _handle,
+      repo: handle,
       host: host,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3946,9 +4219,9 @@ class Repository {
   Future<String> mount(
   ) async {
     final request = RequestRepositoryMount(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponsePath(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -3959,10 +4232,10 @@ class Repository {
     String dst,
   ) async {
     final request = RequestRepositoryMove(
-      repo: _handle,
+      repo: handle,
       dst: dst,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3974,11 +4247,11 @@ class Repository {
     String dst,
   ) async {
     final request = RequestRepositoryMoveEntry(
-      repo: _handle,
+      repo: handle,
       src: src,
       dst: dst,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -3989,12 +4262,12 @@ class Repository {
     String path,
   ) async {
     final request = RequestRepositoryOpenFile(
-      repo: _handle,
+      repo: handle,
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
-      case ResponseFile(value: final value): return File(_client, value);
+      case ResponseFile(value: final value): return File(client, value);
       default: throw InvalidData('unexpected response');
     }
   }
@@ -4003,10 +4276,10 @@ class Repository {
     String path,
   ) async {
     final request = RequestRepositoryReadDirectory(
-      repo: _handle,
+      repo: handle,
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseDirectoryEntries(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -4020,11 +4293,11 @@ class Repository {
     bool recursive,
   ) async {
     final request = RequestRepositoryRemoveDirectory(
-      repo: _handle,
+      repo: handle,
       path: path,
       recursive: recursive,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4036,10 +4309,10 @@ class Repository {
     String path,
   ) async {
     final request = RequestRepositoryRemoveFile(
-      repo: _handle,
+      repo: handle,
       path: path,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4047,29 +4320,29 @@ class Repository {
   }
   
   Future<void> resetAccess(
-    String token,
+    ShareToken token,
   ) async {
     final request = RequestRepositoryResetAccess(
-      repo: _handle,
+      repo: handle,
       token: token,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
     }
   }
   
-  Future<void> setAccess(
+  Future<void> setAccess({
     AccessChange? read,
     AccessChange? write,
-  ) async {
+  }) async {
     final request = RequestRepositorySetAccess(
-      repo: _handle,
+      repo: handle,
       read: read,
       write: write,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4081,11 +4354,11 @@ class Repository {
     LocalSecret? localSecret,
   ) async {
     final request = RequestRepositorySetAccessMode(
-      repo: _handle,
+      repo: handle,
       accessMode: accessMode,
       localSecret: localSecret,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4096,10 +4369,10 @@ class Repository {
     Duration? value,
   ) async {
     final request = RequestRepositorySetBlockExpiration(
-      repo: _handle,
+      repo: handle,
       value: value,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4110,10 +4383,10 @@ class Repository {
     List<int> credentials,
   ) async {
     final request = RequestRepositorySetCredentials(
-      repo: _handle,
+      repo: handle,
       credentials: credentials,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4124,10 +4397,10 @@ class Repository {
     bool enabled,
   ) async {
     final request = RequestRepositorySetDhtEnabled(
-      repo: _handle,
+      repo: handle,
       enabled: enabled,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4138,10 +4411,10 @@ class Repository {
     Duration? value,
   ) async {
     final request = RequestRepositorySetExpiration(
-      repo: _handle,
+      repo: handle,
       value: value,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4152,10 +4425,10 @@ class Repository {
     List<MetadataEdit> edits,
   ) async {
     final request = RequestRepositorySetMetadata(
-      repo: _handle,
+      repo: handle,
       edits: edits,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -4166,10 +4439,10 @@ class Repository {
     bool enabled,
   ) async {
     final request = RequestRepositorySetPexEnabled(
-      repo: _handle,
+      repo: handle,
       enabled: enabled,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4180,10 +4453,10 @@ class Repository {
     StorageSize? value,
   ) async {
     final request = RequestRepositorySetQuota(
-      repo: _handle,
+      repo: handle,
       value: value,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4194,40 +4467,28 @@ class Repository {
     bool enabled,
   ) async {
     final request = RequestRepositorySetSyncEnabled(
-      repo: _handle,
+      repo: handle,
       enabled: enabled,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
     }
   }
   
-  Future<String> share(
+  Future<ShareToken> share({
     LocalSecret? localSecret,
-    AccessMode accessMode,
-  ) async {
+    required AccessMode accessMode,
+  }) async {
     final request = RequestRepositoryShare(
-      repo: _handle,
+      repo: handle,
       localSecret: localSecret,
       accessMode: accessMode,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseShareToken(value: final value): return value;
-      default: throw InvalidData('unexpected response');
-    }
-  }
-  
-  Future<void> subscribe(
-  ) async {
-    final request = RequestRepositorySubscribe(
-      repo: _handle,
-    );
-    final response = await _client.invoke(request);
-    switch (response) {
-      case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
     }
   }
@@ -4235,103 +4496,41 @@ class Repository {
   Future<void> unmount(
   ) async {
     final request = RequestRepositoryUnmount(
-      repo: _handle,
+      repo: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
     }
   }
   
-}
-
-class ShareToken {
-  final Client _client;
-  final String _value;
+  @override
+  bool operator ==(Object other) =>
+      other is Repository &&
+      other.client == client &&
+      other.handle == handle;
   
-  ShareToken(this._client, this._value);
+  @override
+  int get hashCode => Object.hash(client, handle);
   
-  Future<AccessMode> getAccessMode(
-  ) async {
-    final request = RequestShareTokenGetAccessMode(
-      token: _value,
-    );
-    final response = await _client.invoke(request);
-    switch (response) {
-      case ResponseAccessMode(value: final value): return value;
-      default: throw InvalidData('unexpected response');
-    }
-  }
-  
-  /// Return the info-hash of the repository corresponding to the given token, formatted as hex
-  /// string.
-  ///
-  /// See also: [repository_get_info_hash]
-  Future<String> getInfoHash(
-  ) async {
-    final request = RequestShareTokenGetInfoHash(
-      token: _value,
-    );
-    final response = await _client.invoke(request);
-    switch (response) {
-      case ResponseString(value: final value): return value;
-      default: throw InvalidData('unexpected response');
-    }
-  }
-  
-  Future<String> getSuggestedName(
-  ) async {
-    final request = RequestShareTokenGetSuggestedName(
-      token: _value,
-    );
-    final response = await _client.invoke(request);
-    switch (response) {
-      case ResponseString(value: final value): return value;
-      default: throw InvalidData('unexpected response');
-    }
-  }
-  
-  Future<bool> mirrorExists(
-    String host,
-  ) async {
-    final request = RequestShareTokenMirrorExists(
-      token: _value,
-      host: host,
-    );
-    final response = await _client.invoke(request);
-    switch (response) {
-      case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
-    }
-  }
-  
-  Future<String> normalize(
-  ) async {
-    final request = RequestShareTokenNormalize(
-      token: _value,
-    );
-    final response = await _client.invoke(request);
-    switch (response) {
-      case ResponseShareToken(value: final value): return value;
-      default: throw InvalidData('unexpected response');
-    }
-  }
+  @override
+  String toString() => '$runtimeType($handle)';
   
 }
 
 class File {
-  final Client _client;
-  final FileHandle _handle;
+  final Client client;
+  final FileHandle handle;
   
-  File(this._client, this._handle);
+  File(this.client, this.handle);
   
   Future<void> close(
   ) async {
     final request = RequestFileClose(
-      file: _handle,
+      file: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4341,21 +4540,21 @@ class File {
   Future<void> flush(
   ) async {
     final request = RequestFileFlush(
-      file: _handle,
+      file: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
     }
   }
   
-  Future<int> len(
+  Future<int> getLength(
   ) async {
-    final request = RequestFileLen(
-      file: _handle,
+    final request = RequestFileGetLength(
+      file: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseU64(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -4363,29 +4562,29 @@ class File {
   }
   
   /// Returns sync progress of the given file.
-  Future<int> progress(
+  Future<int> getProgress(
   ) async {
-    final request = RequestFileProgress(
-      file: _handle,
+    final request = RequestFileGetProgress(
+      file: handle,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseU64(value: final value): return value;
       default: throw InvalidData('unexpected response');
     }
   }
   
-  /// Reads `len` bytes from the file starting at `offset` bytes from the beginning of the file.
+  /// Reads `size` bytes from the file starting at `offset` bytes from the beginning of the file.
   Future<List<int>> read(
     int offset,
-    int len,
+    int size,
   ) async {
     final request = RequestFileRead(
-      file: _handle,
+      file: handle,
       offset: offset,
-      len: len,
+      size: size,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseBytes(value: final value): return value;
       default: throw InvalidData('unexpected response');
@@ -4396,10 +4595,10 @@ class File {
     int len,
   ) async {
     final request = RequestFileTruncate(
-      file: _handle,
+      file: handle,
       len: len,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
@@ -4411,16 +4610,28 @@ class File {
     List<int> data,
   ) async {
     final request = RequestFileWrite(
-      file: _handle,
+      file: handle,
       offset: offset,
       data: data,
     );
-    final response = await _client.invoke(request);
+    final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
       default: throw InvalidData('unexpected response');
     }
   }
+  
+  @override
+  bool operator ==(Object other) =>
+      other is File &&
+      other.client == client &&
+      other.handle == handle;
+  
+  @override
+  int get hashCode => Object.hash(client, handle);
+  
+  @override
+  String toString() => '$runtimeType($handle)';
   
 }
 

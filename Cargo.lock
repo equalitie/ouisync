@@ -2785,6 +2785,7 @@ dependencies = [
  "anyhow",
  "assert_matches",
  "heck 0.5.0",
+ "similar-asserts",
  "syn 2.0.100",
 ]
 
@@ -2947,6 +2948,7 @@ dependencies = [
  "ouisync-vfs",
  "pem",
  "rcgen",
+ "rmp",
  "rmp-serde",
  "scoped_task",
  "serde",

@@ -1,6 +1,6 @@
 mod parse;
 
-use std::{collections::HashSet, fmt, path::Path, str::FromStr};
+use std::{collections::HashSet, fmt, path::Path, slice, str::FromStr};
 
 use anyhow::{format_err, Error, Result};
 use heck::ToPascalCase;
@@ -28,7 +28,7 @@ impl Context {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Eq, PartialEq, Debug)]
 pub struct Request {
     pub variants: Vec<(String, RequestVariant)>,
 }
@@ -47,19 +47,7 @@ impl Request {
                     name.to_pascal_case(),
                     ComplexVariant {
                         docs: Docs::default(),
-                        fields: variant
-                            .fields
-                            .iter()
-                            .map(|(name, ty)| {
-                                (
-                                    name.clone(),
-                                    Field {
-                                        docs: Docs::default(),
-                                        ty: ty.clone(),
-                                    },
-                                )
-                            })
-                            .collect(),
+                        fields: variant.fields.clone(),
                     },
                 )
             })
@@ -72,10 +60,10 @@ impl Request {
     }
 }
 
-#[derive(Debug)]
+#[derive(Eq, PartialEq, Debug)]
 pub struct RequestVariant {
     pub docs: Docs,
-    pub fields: Vec<(String, Type)>,
+    pub fields: Fields,
     /// The return type of the handler for this variant
     pub ret: Type,
     /// Whether the handler for this variant is async
@@ -100,14 +88,11 @@ impl Response {
                     ComplexVariant {
                         docs: Docs::default(),
                         fields: match ty {
-                            Type::Unit => vec![],
-                            _ => vec![(
-                                "value".to_owned(),
-                                Field {
-                                    docs: Docs::default(),
-                                    ty: ty.clone(),
-                                },
-                            )],
+                            Type::Unit => Fields::Unit,
+                            _ => Fields::Unnamed(Field {
+                                docs: Docs::default(),
+                                ty: ty.clone(),
+                            }),
                         },
                     },
                 )
@@ -240,13 +225,13 @@ pub struct ComplexEnum {
 #[derive(Debug)]
 pub struct ComplexVariant {
     pub docs: Docs,
-    pub fields: Vec<(String, Field)>,
+    pub fields: Fields,
 }
 
 #[derive(Debug)]
 pub struct Struct {
     pub docs: Docs,
-    pub fields: Vec<(String, Field)>,
+    pub fields: Fields,
 }
 
 #[derive(Debug)]
@@ -255,13 +240,71 @@ pub struct Newtype {
     pub ty: Type,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub enum Fields {
+    Named(Vec<(String, Field)>),
+    Unnamed(Field),
+    Unit,
+}
+
+impl Fields {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Unnamed(_) => 1,
+            Self::Named(fields) => fields.len(),
+            Self::Unit => 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Unnamed(_) => false,
+            Self::Named(fields) => fields.is_empty(),
+            Self::Unit => true,
+        }
+    }
+
+    pub fn iter(&self) -> FieldsIter<'_> {
+        match self {
+            Self::Named(fields) => FieldsIter::Named(fields.iter()),
+            Self::Unnamed(field) => FieldsIter::Unnamed(Some(field)),
+            Self::Unit => FieldsIter::Unnamed(None),
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Fields {
+    type IntoIter = FieldsIter<'a>;
+    type Item = (Option<&'a str>, &'a Field);
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+pub enum FieldsIter<'a> {
+    Named(slice::Iter<'a, (String, Field)>),
+    Unnamed(Option<&'a Field>),
+}
+
+impl<'a> Iterator for FieldsIter<'a> {
+    type Item = (Option<&'a str>, &'a Field);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Named(i) => i.next().map(|(name, field)| (Some(name.as_str()), field)),
+            Self::Unnamed(i) => i.take().map(|field| (None, field)),
+        }
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Field {
     pub docs: Docs,
     pub ty: Type,
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Eq, PartialEq, Debug)]
 pub struct Docs {
     pub lines: Vec<String>,
 }
@@ -295,6 +338,21 @@ impl Type {
                 None => None,
             },
             _ => None,
+        }
+    }
+
+    pub fn strip_suffix(&self, suffix: &str) -> Option<Self> {
+        match self {
+            Self::Scalar(s) => s.strip_suffix(suffix).map(|s| Self::Scalar(s.to_owned())),
+            Self::Option(s) => s.strip_suffix(suffix).map(|s| Self::Option(s.to_owned())),
+            Self::Result(ok, err) => ok
+                .strip_suffix(suffix)
+                .map(|ok| Self::Result(Box::new(ok), err.clone())),
+            Self::Vec(s) => s.strip_suffix(suffix).map(|s| Self::Vec(s.to_owned())),
+            Self::Map(k, v) => v
+                .strip_suffix(suffix)
+                .map(|v| Self::Map(k.clone(), v.to_owned())),
+            Self::Unit | Self::Bytes => None,
         }
     }
 

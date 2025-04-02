@@ -331,7 +331,7 @@ async fn move_repository() {
         .repository_open_file(repo, "test.txt".to_owned())
         .await
         .unwrap();
-    let len = state.file_len(file).unwrap();
+    let len = state.file_get_length(file).unwrap();
     let content = state.file_read(file, 0, len).await.unwrap();
     assert_eq!(content, b"hello");
 

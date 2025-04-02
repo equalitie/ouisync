@@ -1,7 +1,7 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{
-    crypto::PasswordSalt, AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret,
-    ShareToken, StorageSize,
+    crypto::{Password, PasswordSalt},
+    AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
 };
 use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
@@ -31,39 +31,32 @@ mod tests {
     use super::*;
     use ouisync::{AccessSecrets, WriteSecrets};
     use rand::{rngs::StdRng, SeedableRng};
-    use std::net::Ipv4Addr;
 
     #[test]
-    fn serialize() {
+    fn serialize_deserialize_msgpack() {
+        use rmp::encode::*;
+
         let mut rng = StdRng::seed_from_u64(0);
         let secrets = AccessSecrets::Write(WriteSecrets::generate(&mut rng));
 
         let test_vectors = [
+            (Request::SessionGetCurrentProtocolVersion, {
+                let mut out = Vec::new();
+                write_str(&mut out, "SessionGetCurrentProtocolVersion").unwrap();
+                out
+            }),
             (
-                Request::SessionAddUserProvidedPeers { addrs: vec![] },
-                "81bf73657373696f6e5f6164645f757365725f70726f76696465645f70656572739190",
-            ),
-            (
-                Request::SessionAddUserProvidedPeers {
-                    addrs: vec![PeerAddr::Quic(SocketAddr::from((
-                        Ipv4Addr::LOCALHOST,
-                        12345,
-                    )))]
+                Request::FileClose {
+                    file: FileHandle::from_raw(1),
                 },
-                "81bf73657373696f6e5f6164645f757365725f70726f76696465645f70656572739191b4717569632f\
-                 3132372e302e302e313a3132333435",
-            ),
-            (
-                Request::SessionBindNetwork { addrs: vec![PeerAddr::Quic(SocketAddr::from((
-                    Ipv4Addr::UNSPECIFIED,
-                    12345,
-                )))]},
-                "81b473657373696f6e5f62696e645f6e6574776f726b9191b2717569632f302e302e302e303a313233\
-                 3435",
-            ),
-            (
-                Request::SessionGetLocalListenerAddrs,
-                "d92073657373696f6e5f6765745f6c6f63616c5f6c697374656e65725f6164647273",
+                {
+                    let mut out = Vec::new();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "FileClose").unwrap();
+                    write_array_len(&mut out, 1).unwrap();
+                    write_uint(&mut out, 1).unwrap();
+                    out
+                },
             ),
             (
                 Request::SessionCreateRepository {
@@ -75,31 +68,54 @@ mod tests {
                     dht_enabled: false,
                     pex_enabled: false,
                 },
-                "81b973657373696f6e5f6372656174655f7265706f7369746f727997a3666f6fc0c0c0c3c2c2",
+                {
+                    let mut out = Vec::new();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "SessionCreateRepository").unwrap();
+                    write_array_len(&mut out, 7).unwrap();
+                    write_str(&mut out, "foo").unwrap();
+                    write_nil(&mut out).unwrap();
+                    write_nil(&mut out).unwrap();
+                    write_nil(&mut out).unwrap();
+                    write_bool(&mut out, true).unwrap();
+                    write_bool(&mut out, false).unwrap();
+                    write_bool(&mut out, false).unwrap();
+                    out
+                },
             ),
             (
                 Request::SessionCreateRepository {
                     path: "foo".into(),
                     read_secret: None,
                     write_secret: None,
-                    token: Some(ShareToken::from(secrets)),
+                    token: Some(ShareToken::from(secrets.clone())),
                     sync_enabled: true,
                     dht_enabled: false,
                     pex_enabled: false,
                 },
-                "81b973657373696f6e5f6372656174655f7265706f7369746f727997a3666f6fc0c0d9456874747073\
-                 3a2f2f6f756973796e632e6e65742f722341774967663238737a62495f4b7274376153654f6c487742\
-                 7868594b4d633843775a30473050626c71783132693555c3c2c2",
+                {
+                    let mut out = Vec::new();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "SessionCreateRepository").unwrap();
+                    write_array_len(&mut out, 7).unwrap();
+                    write_str(&mut out, "foo").unwrap();
+                    write_nil(&mut out).unwrap();
+                    write_nil(&mut out).unwrap();
+                    write_str(&mut out, &ShareToken::from(secrets.clone()).to_string()).unwrap();
+                    write_bool(&mut out, true).unwrap();
+                    write_bool(&mut out, false).unwrap();
+                    write_bool(&mut out, false).unwrap();
+                    out
+                },
             ),
         ];
 
-        for (request, expected_encoded) in test_vectors {
-            let encoded = rmp_serde::to_vec(&request).unwrap();
-            assert_eq!(hex::encode(&encoded), expected_encoded, "{:?}", request);
+        for (input, expected) in test_vectors {
+            let s = rmp_serde::to_vec(&input).unwrap();
+            assert_eq!(s, expected, "{:?}", input);
 
-            let decoded: Request = rmp_serde::from_slice(&encoded).unwrap();
-
-            assert_eq!(decoded, request);
+            let d: Request = rmp_serde::from_slice(&s).unwrap();
+            assert_eq!(d, input, "{:?}", input);
         }
     }
 }

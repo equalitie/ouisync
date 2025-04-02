@@ -1,4 +1,5 @@
 use crate::{config_store::ConfigError, repository::FindError, transport::ClientError};
+use ouisync::DecodeError;
 use ouisync_vfs::MountError;
 use std::{ffi::IntoStringError, io, str::Utf8Error};
 use thiserror::Error;
@@ -69,5 +70,11 @@ impl From<FindError> for Error {
             FindError::NotFound => Self::NotFound,
             FindError::Ambiguous => Self::Ambiguous,
         }
+    }
+}
+
+impl From<DecodeError> for Error {
+    fn from(_: DecodeError) -> Self {
+        Self::InvalidArgument
     }
 }

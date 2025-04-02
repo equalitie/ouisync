@@ -9,8 +9,8 @@ use syn::{
 };
 
 use crate::{
-    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Item, Newtype, RequestVariant,
-    SimpleEnum, SimpleVariant, Struct, Type,
+    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Fields, Item, Newtype,
+    RequestVariant, SimpleEnum, SimpleVariant, Struct, Type,
 };
 
 pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool) -> Result<bool> {
@@ -171,8 +171,20 @@ fn parse_request_variant(
 
         let ty = parse_type(&arg.ty).with_context(ec)?;
 
-        fields.push((name, ty));
+        fields.push((
+            name,
+            Field {
+                docs: Docs::default(),
+                ty,
+            },
+        ));
     }
+
+    let fields = if fields.is_empty() {
+        Fields::Unit
+    } else {
+        Fields::Named(fields)
+    };
 
     let ret = match &sig.output {
         ReturnType::Default => Type::Unit,
@@ -218,22 +230,24 @@ fn parse_enum(item: ItemEnum) -> Result<Item> {
         let variant = match variant.fields {
             syn::Fields::Named(fields) => {
                 let fields = parse_named_fields(&fields.named)?;
-                Variant::Complex(ComplexVariant { docs, fields })
+                Variant::Complex(ComplexVariant {
+                    docs,
+                    fields: Fields::Named(fields),
+                })
             }
             syn::Fields::Unnamed(fields) => {
                 let fields = parse_unnamed_fields(&fields.unnamed)?;
 
                 if fields.len() != 1 {
-                    bail!("enum variants with more than one unnamed fields not supported");
+                    bail!("enum variants with more than one unnamed field not supported");
                 }
 
-                let fields = fields
-                    .into_iter()
-                    .take(1)
-                    .map(|field| ("value".to_owned(), field))
-                    .collect();
+                let field = fields.into_iter().next().unwrap();
 
-                Variant::Complex(ComplexVariant { docs, fields })
+                Variant::Complex(ComplexVariant {
+                    docs,
+                    fields: Fields::Unnamed(field),
+                })
             }
             syn::Fields::Unit => {
                 let value = if let Some((_, expr)) = variant.discriminant {
@@ -310,13 +324,15 @@ fn parse_struct(item: ItemStruct) -> Result<Item> {
     };
 
     if let Some(ty) = ty {
-        if item.fields.len() != 1 {
-            bail!("transparent structs must have exactly one field");
-        }
-
         if let Some(ty) = ty {
+            // If the struct is annotated with `#[api(repr(T))]` we ignore the fields altogether
+            // treat it as if it contained only one field of type `T`.
             Ok(Item::Newtype(Newtype { docs, ty }))
         } else {
+            if item.fields.len() != 1 {
+                bail!("transparent structs must have exactly one field");
+            }
+
             let field = item.fields.iter().next().unwrap();
             let ty = parse_type(&field.ty)?;
 
@@ -326,10 +342,35 @@ fn parse_struct(item: ItemStruct) -> Result<Item> {
         match item.fields {
             syn::Fields::Named(fields) => {
                 let fields = parse_named_fields(&fields.named)?;
-                Ok(Item::Struct(Struct { docs, fields }))
+
+                if fields.is_empty() {
+                    bail!("empty structs not supported");
+                }
+
+                Ok(Item::Struct(Struct {
+                    docs,
+                    fields: Fields::Named(fields),
+                }))
             }
-            syn::Fields::Unnamed(_) => bail!("non-transparent tuple structs not supported"),
-            syn::Fields::Unit => bail!("unit structs not supported"),
+            syn::Fields::Unnamed(fields) => {
+                let fields = parse_unnamed_fields(&fields.unnamed)?;
+
+                match fields.len() {
+                    0 => bail!("empty structs not supported"),
+                    1 => {
+                        let field = fields.into_iter().next().unwrap();
+                        Ok(Item::Struct(Struct {
+                            docs,
+                            fields: Fields::Unnamed(field),
+                        }))
+                    }
+                    _ => bail!("tuple structs with more than one field not supported"),
+                }
+            }
+            syn::Fields::Unit => Ok(Item::Struct(Struct {
+                docs,
+                fields: Fields::Unit,
+            })),
         }
     }
 }
@@ -462,7 +503,7 @@ fn is_serde_transparent(attrs: &[Attribute]) -> bool {
 fn into_complex_variant(v: SimpleVariant) -> ComplexVariant {
     ComplexVariant {
         docs: v.docs,
-        fields: Vec::new(),
+        fields: Fields::Unit,
     }
 }
 
@@ -672,6 +713,8 @@ mod tests {
     use assert_matches::assert_matches;
     use syn::parse_quote;
 
+    use crate::Request;
+
     use super::*;
 
     #[test]
@@ -762,5 +805,92 @@ mod tests {
             parse_api_repr(&attrs),
             Ok(Some(Type::Scalar(name))) if name == "u32"
         );
+    }
+
+    #[test]
+    fn test_parse_request() {
+        let mut ctx = Context::default();
+
+        let input: syn::Item = parse_quote! {
+            impl State {
+                #[api]
+                fn foo(&self) {
+                }
+
+                #[api]
+                fn bar(&self, arg: u32) -> Result<bool, Error> {
+                }
+
+                /// baz all the things
+                #[api]
+                async fn baz(&self, a: String, b: Vec<u8>) -> Result<(), Error> {
+                }
+            }
+        };
+
+        parse_mod(&mut ctx, Path::new("mod.rs"), vec![input]).unwrap();
+
+        let expected = Request {
+            variants: vec![
+                (
+                    "foo".to_owned(),
+                    RequestVariant {
+                        docs: Docs::default(),
+                        fields: Fields::Unit,
+                        ret: Type::Unit,
+                        is_async: false,
+                        scope: "State".to_owned(),
+                    },
+                ),
+                (
+                    "bar".to_owned(),
+                    RequestVariant {
+                        docs: Docs::default(),
+                        fields: Fields::Named(vec![(
+                            "arg".to_owned(),
+                            Field {
+                                ty: Type::Scalar("u32".to_owned()),
+                                docs: Docs::default(),
+                            },
+                        )]),
+                        ret: Type::Result(
+                            Box::new(Type::Scalar("bool".to_owned())),
+                            "Error".to_string(),
+                        ),
+                        is_async: false,
+                        scope: "State".to_owned(),
+                    },
+                ),
+                (
+                    "baz".to_owned(),
+                    RequestVariant {
+                        docs: Docs {
+                            lines: vec![" baz all the things".to_owned()],
+                        },
+                        fields: Fields::Named(vec![
+                            (
+                                "a".to_owned(),
+                                Field {
+                                    ty: Type::Scalar("String".to_owned()),
+                                    docs: Docs::default(),
+                                },
+                            ),
+                            (
+                                "b".to_owned(),
+                                Field {
+                                    ty: Type::Bytes,
+                                    docs: Docs::default(),
+                                },
+                            ),
+                        ]),
+                        ret: Type::Result(Box::new(Type::Unit), "Error".to_string()),
+                        is_async: true,
+                        scope: "State".to_owned(),
+                    },
+                ),
+            ],
+        };
+
+        similar_asserts::assert_eq!(ctx.request, expected);
     }
 }
