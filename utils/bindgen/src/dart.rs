@@ -1,7 +1,7 @@
 use anyhow::{bail, Context as _, Error, Result};
 use heck::{AsLowerCamelCase, AsPascalCase, ToLowerCamelCase, ToSnakeCase};
 use ouisync_api_parser::{
-    ComplexEnum, Context, Docs, Fields, Item, Newtype, RequestVariant, SimpleEnum, Struct,
+    ComplexEnum, Context, Docs, Fields, Item, RequestVariant, SimpleEnum, Struct,
     ToResponseVariantName, Type,
 };
 use std::{borrow::Cow, fmt, io::Write};
@@ -20,7 +20,6 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
             }
             Item::ComplexEnum(item) => write_complex_enum(out, name, item, true, true)?,
             Item::Struct(item) => write_struct(out, name, item)?,
-            Item::Newtype(item) => write_newtype(out, name, item)?,
         }
     }
 
@@ -215,13 +214,18 @@ fn write_complex_enum(
             writeln!(out, "{I}{I}{I}{I}{I}return {name}{variant_name}(")?;
 
             for (field_name, field) in &variant.fields {
-                let field_name = field_name.unwrap_or(DEFAULT_FIELD_NAME);
-                write!(out, "{I}{I}{I}{I}{I}{I}{}: ", AsLowerCamelCase(field_name))?;
+                write!(out, "{I}{I}{I}{I}{I}{I}")?;
+
+                if let Some(field_name) = field_name {
+                    write!(out, "{}: ", AsLowerCamelCase(field_name))?;
+                }
+
                 DartType::try_from(&field.ty)?
                     .write_decode(out)
                     .with_context(|| {
                         format!(
-                            "failed to generate decode for {name}::{variant_name}::{field_name}"
+                            "failed to generate decode for {name}::{variant_name}::{}",
+                            field_name.unwrap_or(DEFAULT_FIELD_NAME)
                         )
                     })?;
                 writeln!(out, ",")?;
@@ -302,12 +306,29 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
                 DartType::try_from(&field.ty)?.write_decode(out)?;
                 writeln!(out, ",")?
             }
+
+            writeln!(out, "{I}{I});")?;
         }
-        Fields::Unnamed(_field) => todo!(),
+        Fields::Unnamed(field) => {
+            let ty = DartType::try_from(&field.ty)?;
+
+            match ty.try_into_nullable() {
+                Ok(ty) => {
+                    write!(out, "{I}{I}final value = ")?;
+                    ty.write_decode(out)?;
+                    writeln!(out, ";")?;
+
+                    writeln!(out, "{I}{I}return value != null ? {name}(value) : null;")?;
+                }
+                Err(ty) => {
+                    write!(out, "{I}{I}return {name}(")?;
+                    ty.write_decode(out)?;
+                    writeln!(out, ");")?;
+                }
+            }
+        }
         Fields::Unit => todo!(),
     }
-
-    writeln!(out, "{I}{I});")?;
 
     writeln!(out, "{I}}}")?;
 
@@ -365,44 +386,6 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
             writeln!(out, "{I}{I}{I});")?;
         }
     }
-
-    writeln!(out, "}}")?;
-    writeln!(out)?;
-
-    Ok(())
-}
-
-fn write_newtype(out: &mut dyn Write, name: &str, item: &Newtype) -> Result<()> {
-    let ty = DartType::try_from(&item.ty)?;
-
-    write_docs(out, "", &item.docs)?;
-    writeln!(out, "extension type {name}({} value) {{", ty)?;
-
-    writeln!(out, "{I}void encode(Packer p) {{")?;
-    write!(out, "{I}{I}")?;
-    ty.write_encode(out, "value")?;
-    writeln!(out, ";")?;
-    writeln!(out, "{I}}}")?;
-    writeln!(out, "{I}")?;
-
-    writeln!(out, "{I}static {name}? decode(Unpacker u) {{")?;
-
-    match ty.try_into_nullable() {
-        Ok(ty) => {
-            write!(out, "{I}{I}final value = ")?;
-            ty.write_decode(out)?;
-            writeln!(out, ";")?;
-
-            writeln!(out, "{I}{I}return value != null ? {name}(value) : null;")?;
-        }
-        Err(ty) => {
-            write!(out, "{I}{I}return {name}(")?;
-            ty.write_decode(out)?;
-            writeln!(out, ");")?;
-        }
-    }
-
-    writeln!(out, "{I}}}")?;
 
     writeln!(out, "}}")?;
     writeln!(out)?;
@@ -763,18 +746,20 @@ fn write_class_body(out: &mut dyn Write, name: &str, fields: &Fields) -> Result<
     // constructor
     write!(out, "{I}{name}(")?;
 
-    if !fields.is_empty() {
-        writeln!(out, "{{")?;
+    match fields {
+        Fields::Named(fields) => {
+            writeln!(out, "{{")?;
 
-        for (field_name, _) in fields {
-            writeln!(
-                out,
-                "{I}{I}required this.{},",
-                AsLowerCamelCase(field_name.unwrap_or(DEFAULT_FIELD_NAME))
-            )?;
+            for (field_name, _) in fields {
+                writeln!(out, "{I}{I}required this.{},", AsLowerCamelCase(field_name))?;
+            }
+
+            write!(out, "{I}}}")?;
         }
-
-        write!(out, "{I}}}")?;
+        Fields::Unnamed(_) => {
+            write!(out, "this.value")?;
+        }
+        Fields::Unit => (),
     }
 
     writeln!(out, ");")?;

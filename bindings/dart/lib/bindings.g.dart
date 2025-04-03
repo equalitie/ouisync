@@ -72,7 +72,11 @@ Duration? _decodeDuration(Unpacker u) {
 /// means the key can be cheaply cloned without actually cloning the data. Finally, the data is
 /// scrambled (overwritten with zeros) when the key is dropped to make sure it does not stay in
 /// the memory past its lifetime.
-extension type SecretKey(List<int> value) {
+final class SecretKey {
+  final List<int> value;
+
+  SecretKey(this.value);
+  
   void encode(Packer p) {
     p.packBinary(value);
   }
@@ -80,11 +84,23 @@ extension type SecretKey(List<int> value) {
   static SecretKey? decode(Unpacker u) {
     return SecretKey(u.unpackBinary());
   }
+  
+  @override
+  operator==(Object other) =>
+      other is SecretKey &&
+      other.value == value;
+  
+  @override
+  int get hashCode => value.hashCode;
 }
 
 /// A simple wrapper over String to avoid certain kinds of attack. For more elaboration please see
 /// the documentation for the SecretKey structure.
-extension type Password(String value) {
+final class Password {
+  final String value;
+
+  Password(this.value);
+  
   void encode(Packer p) {
     p.packString(value);
   }
@@ -93,9 +109,21 @@ extension type Password(String value) {
     final value = u.unpackString();
     return value != null ? Password(value) : null;
   }
+  
+  @override
+  operator==(Object other) =>
+      other is Password &&
+      other.value == value;
+  
+  @override
+  int get hashCode => value.hashCode;
 }
 
-extension type PasswordSalt(List<int> value) {
+final class PasswordSalt {
+  final List<int> value;
+
+  PasswordSalt(this.value);
+  
   void encode(Packer p) {
     p.packBinary(value);
   }
@@ -103,18 +131,47 @@ extension type PasswordSalt(List<int> value) {
   static PasswordSalt? decode(Unpacker u) {
     return PasswordSalt(u.unpackBinary());
   }
+  
+  @override
+  operator==(Object other) =>
+      other is PasswordSalt &&
+      other.value == value;
+  
+  @override
+  int get hashCode => value.hashCode;
 }
 
 /// Strongly typed storage size.
-extension type StorageSize(int value) {
+final class StorageSize {
+  final int bytes;
+
+  StorageSize({
+    required this.bytes,
+  });
+  
   void encode(Packer p) {
-    p.packInt(value);
+    p.packListLength(1);
+    p.packInt(bytes);
   }
   
   static StorageSize? decode(Unpacker u) {
-    final value = u.unpackInt();
-    return value != null ? StorageSize(value) : null;
+    switch (u.unpackListLength()) {
+      case 0: return null;
+      case 1: break;
+      default: throw DecodeError();
+    }
+    return StorageSize(
+      bytes: (u.unpackInt())!,
+    );
   }
+  
+  @override
+  operator==(Object other) =>
+      other is StorageSize &&
+      other.bytes == bytes;
+  
+  @override
+  int get hashCode => bytes.hashCode;
 }
 
 /// Access mode of a repository.
@@ -180,11 +237,11 @@ sealed class LocalSecret {
       switch (u.unpackString()) {
         case "Password":
           return LocalSecretPassword(
-            value: (Password.decode(u))!,
+            (Password.decode(u))!,
           );
         case "SecretKey":
           return LocalSecretSecretKey(
-            value: (SecretKey.decode(u))!,
+            (SecretKey.decode(u))!,
           );
         case null: return null;
         default: throw DecodeError();
@@ -197,17 +254,13 @@ sealed class LocalSecret {
 class LocalSecretPassword extends LocalSecret {
   final Password value;
 
-  LocalSecretPassword({
-    required this.value,
-  });
+  LocalSecretPassword(this.value);
 }
 
 class LocalSecretSecretKey extends LocalSecret {
   final SecretKey value;
 
-  LocalSecretSecretKey({
-    required this.value,
-  });
+  LocalSecretSecretKey(this.value);
 }
 
 sealed class SetLocalSecret {
@@ -242,7 +295,7 @@ sealed class SetLocalSecret {
       switch (u.unpackString()) {
         case "Password":
           return SetLocalSecretPassword(
-            value: (Password.decode(u))!,
+            (Password.decode(u))!,
           );
         case "KeyAndSalt":
           if (u.unpackListLength() != 2) throw DecodeError();
@@ -261,9 +314,7 @@ sealed class SetLocalSecret {
 class SetLocalSecretPassword extends SetLocalSecret {
   final Password value;
 
-  SetLocalSecretPassword({
-    required this.value,
-  });
+  SetLocalSecretPassword(this.value);
 }
 
 class SetLocalSecretKeyAndSalt extends SetLocalSecret {
@@ -278,7 +329,11 @@ class SetLocalSecretKeyAndSalt extends SetLocalSecret {
 
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
 /// other replicas.
-extension type ShareToken(String value) {
+final class ShareToken {
+  final String value;
+
+  ShareToken(this.value);
+  
   void encode(Packer p) {
     p.packString(value);
   }
@@ -287,6 +342,14 @@ extension type ShareToken(String value) {
     final value = u.unpackString();
     return value != null ? ShareToken(value) : null;
   }
+  
+  @override
+  operator==(Object other) =>
+      other is ShareToken &&
+      other.value == value;
+  
+  @override
+  int get hashCode => value.hashCode;
 }
 
 sealed class AccessChange {
@@ -316,7 +379,7 @@ sealed class AccessChange {
       switch (u.unpackString()) {
         case "Enable":
           return AccessChangeEnable(
-            value: SetLocalSecret.decode(u),
+            SetLocalSecret.decode(u),
           );
         case null: return null;
         default: throw DecodeError();
@@ -329,9 +392,7 @@ sealed class AccessChange {
 class AccessChangeEnable extends AccessChange {
   final SetLocalSecret? value;
 
-  AccessChangeEnable({
-    required this.value,
-  });
+  AccessChangeEnable(this.value);
 }
 
 class AccessChangeDisable extends AccessChange {
@@ -564,7 +625,11 @@ class PeerStateActive extends PeerState {
   });
 }
 
-extension type PublicRuntimeId(List<int> value) {
+final class PublicRuntimeId {
+  final List<int> value;
+
+  PublicRuntimeId(this.value);
+  
   void encode(Packer p) {
     p.packBinary(value);
   }
@@ -572,6 +637,14 @@ extension type PublicRuntimeId(List<int> value) {
   static PublicRuntimeId? decode(Unpacker u) {
     return PublicRuntimeId(u.unpackBinary());
   }
+  
+  @override
+  operator==(Object other) =>
+      other is PublicRuntimeId &&
+      other.value == value;
+  
+  @override
+  int get hashCode => value.hashCode;
 }
 
 /// Network traffic statistics.
@@ -1099,7 +1172,11 @@ enum LogLevel {
 
 }
 
-extension type MessageId(int value) {
+final class MessageId {
+  final int value;
+
+  MessageId(this.value);
+  
   void encode(Packer p) {
     p.packInt(value);
   }
@@ -1108,6 +1185,14 @@ extension type MessageId(int value) {
     final value = u.unpackInt();
     return value != null ? MessageId(value) : null;
   }
+  
+  @override
+  operator==(Object other) =>
+      other is MessageId &&
+      other.value == value;
+  
+  @override
+  int get hashCode => value.hashCode;
 }
 
 /// Edit of a single metadata entry.
@@ -1290,7 +1375,11 @@ final class QuotaInfo {
       );
 }
 
-extension type FileHandle(int value) {
+final class FileHandle {
+  final int value;
+
+  FileHandle(this.value);
+  
   void encode(Packer p) {
     p.packInt(value);
   }
@@ -1299,9 +1388,21 @@ extension type FileHandle(int value) {
     final value = u.unpackInt();
     return value != null ? FileHandle(value) : null;
   }
+  
+  @override
+  operator==(Object other) =>
+      other is FileHandle &&
+      other.value == value;
+  
+  @override
+  int get hashCode => value.hashCode;
 }
 
-extension type RepositoryHandle(int value) {
+final class RepositoryHandle {
+  final int value;
+
+  RepositoryHandle(this.value);
+  
   void encode(Packer p) {
     p.packInt(value);
   }
@@ -1310,6 +1411,14 @@ extension type RepositoryHandle(int value) {
     final value = u.unpackInt();
     return value != null ? RepositoryHandle(value) : null;
   }
+  
+  @override
+  operator==(Object other) =>
+      other is RepositoryHandle &&
+      other.value == value;
+  
+  @override
+  int get hashCode => value.hashCode;
 }
 
 sealed class Request {
@@ -2909,111 +3018,111 @@ sealed class Response {
       switch (u.unpackString()) {
         case "AccessMode":
           return ResponseAccessMode(
-            value: (AccessMode.decode(u))!,
+            (AccessMode.decode(u))!,
           );
         case "Bool":
           return ResponseBool(
-            value: (u.unpackBool())!,
+            (u.unpackBool())!,
           );
         case "Bytes":
           return ResponseBytes(
-            value: u.unpackBinary(),
+            u.unpackBinary(),
           );
         case "DirectoryEntries":
           return ResponseDirectoryEntries(
-            value: _decodeList(u, (u) => (DirectoryEntry.decode(u))!),
+            _decodeList(u, (u) => (DirectoryEntry.decode(u))!),
           );
         case "Duration":
           return ResponseDuration(
-            value: (_decodeDuration(u))!,
+            (_decodeDuration(u))!,
           );
         case "EntryType":
           return ResponseEntryType(
-            value: (EntryType.decode(u))!,
+            (EntryType.decode(u))!,
           );
         case "File":
           return ResponseFile(
-            value: (FileHandle.decode(u))!,
+            (FileHandle.decode(u))!,
           );
         case "NatBehavior":
           return ResponseNatBehavior(
-            value: (NatBehavior.decode(u))!,
+            (NatBehavior.decode(u))!,
           );
         case "NetworkEvent":
           return ResponseNetworkEvent(
-            value: (NetworkEvent.decode(u))!,
+            (NetworkEvent.decode(u))!,
           );
         case "PasswordSalt":
           return ResponsePasswordSalt(
-            value: (PasswordSalt.decode(u))!,
+            (PasswordSalt.decode(u))!,
           );
         case "Path":
           return ResponsePath(
-            value: (u.unpackString())!,
+            (u.unpackString())!,
           );
         case "PeerAddrs":
           return ResponsePeerAddrs(
-            value: _decodeList(u, (u) => (u.unpackString())!),
+            _decodeList(u, (u) => (u.unpackString())!),
           );
         case "PeerInfos":
           return ResponsePeerInfos(
-            value: _decodeList(u, (u) => (PeerInfo.decode(u))!),
+            _decodeList(u, (u) => (PeerInfo.decode(u))!),
           );
         case "Progress":
           return ResponseProgress(
-            value: (Progress.decode(u))!,
+            (Progress.decode(u))!,
           );
         case "PublicRuntimeId":
           return ResponsePublicRuntimeId(
-            value: (PublicRuntimeId.decode(u))!,
+            (PublicRuntimeId.decode(u))!,
           );
         case "QuotaInfo":
           return ResponseQuotaInfo(
-            value: (QuotaInfo.decode(u))!,
+            (QuotaInfo.decode(u))!,
           );
         case "Repositories":
           return ResponseRepositories(
-            value: _decodeMap(u, (u) => (u.unpackString())!, (u) => (RepositoryHandle.decode(u))!),
+            _decodeMap(u, (u) => (u.unpackString())!, (u) => (RepositoryHandle.decode(u))!),
           );
         case "Repository":
           return ResponseRepository(
-            value: (RepositoryHandle.decode(u))!,
+            (RepositoryHandle.decode(u))!,
           );
         case "SecretKey":
           return ResponseSecretKey(
-            value: (SecretKey.decode(u))!,
+            (SecretKey.decode(u))!,
           );
         case "ShareToken":
           return ResponseShareToken(
-            value: (ShareToken.decode(u))!,
+            (ShareToken.decode(u))!,
           );
         case "SocketAddr":
           return ResponseSocketAddr(
-            value: (u.unpackString())!,
+            (u.unpackString())!,
           );
         case "StateMonitor":
           return ResponseStateMonitor(
-            value: (StateMonitorNode.decode(u))!,
+            (StateMonitorNode.decode(u))!,
           );
         case "Stats":
           return ResponseStats(
-            value: (Stats.decode(u))!,
+            (Stats.decode(u))!,
           );
         case "StorageSize":
           return ResponseStorageSize(
-            value: (StorageSize.decode(u))!,
+            (StorageSize.decode(u))!,
           );
         case "String":
           return ResponseString(
-            value: (u.unpackString())!,
+            (u.unpackString())!,
           );
         case "U16":
           return ResponseU16(
-            value: (u.unpackInt())!,
+            (u.unpackInt())!,
           );
         case "U64":
           return ResponseU64(
-            value: (u.unpackInt())!,
+            (u.unpackInt())!,
           );
         case null: return null;
         default: throw DecodeError();
@@ -3026,73 +3135,55 @@ sealed class Response {
 class ResponseAccessMode extends Response {
   final AccessMode value;
 
-  ResponseAccessMode({
-    required this.value,
-  });
+  ResponseAccessMode(this.value);
 }
 
 class ResponseBool extends Response {
   final bool value;
 
-  ResponseBool({
-    required this.value,
-  });
+  ResponseBool(this.value);
 }
 
 class ResponseBytes extends Response {
   final List<int> value;
 
-  ResponseBytes({
-    required this.value,
-  });
+  ResponseBytes(this.value);
 }
 
 class ResponseDirectoryEntries extends Response {
   final List<DirectoryEntry> value;
 
-  ResponseDirectoryEntries({
-    required this.value,
-  });
+  ResponseDirectoryEntries(this.value);
 }
 
 class ResponseDuration extends Response {
   final Duration value;
 
-  ResponseDuration({
-    required this.value,
-  });
+  ResponseDuration(this.value);
 }
 
 class ResponseEntryType extends Response {
   final EntryType value;
 
-  ResponseEntryType({
-    required this.value,
-  });
+  ResponseEntryType(this.value);
 }
 
 class ResponseFile extends Response {
   final FileHandle value;
 
-  ResponseFile({
-    required this.value,
-  });
+  ResponseFile(this.value);
 }
 
 class ResponseNatBehavior extends Response {
   final NatBehavior value;
 
-  ResponseNatBehavior({
-    required this.value,
-  });
+  ResponseNatBehavior(this.value);
 }
 
 class ResponseNetworkEvent extends Response {
   final NetworkEvent value;
 
-  ResponseNetworkEvent({
-    required this.value,
-  });
+  ResponseNetworkEvent(this.value);
 }
 
 class ResponseNone extends Response {
@@ -3102,73 +3193,55 @@ class ResponseNone extends Response {
 class ResponsePasswordSalt extends Response {
   final PasswordSalt value;
 
-  ResponsePasswordSalt({
-    required this.value,
-  });
+  ResponsePasswordSalt(this.value);
 }
 
 class ResponsePath extends Response {
   final String value;
 
-  ResponsePath({
-    required this.value,
-  });
+  ResponsePath(this.value);
 }
 
 class ResponsePeerAddrs extends Response {
   final List<String> value;
 
-  ResponsePeerAddrs({
-    required this.value,
-  });
+  ResponsePeerAddrs(this.value);
 }
 
 class ResponsePeerInfos extends Response {
   final List<PeerInfo> value;
 
-  ResponsePeerInfos({
-    required this.value,
-  });
+  ResponsePeerInfos(this.value);
 }
 
 class ResponseProgress extends Response {
   final Progress value;
 
-  ResponseProgress({
-    required this.value,
-  });
+  ResponseProgress(this.value);
 }
 
 class ResponsePublicRuntimeId extends Response {
   final PublicRuntimeId value;
 
-  ResponsePublicRuntimeId({
-    required this.value,
-  });
+  ResponsePublicRuntimeId(this.value);
 }
 
 class ResponseQuotaInfo extends Response {
   final QuotaInfo value;
 
-  ResponseQuotaInfo({
-    required this.value,
-  });
+  ResponseQuotaInfo(this.value);
 }
 
 class ResponseRepositories extends Response {
   final Map<String, RepositoryHandle> value;
 
-  ResponseRepositories({
-    required this.value,
-  });
+  ResponseRepositories(this.value);
 }
 
 class ResponseRepository extends Response {
   final RepositoryHandle value;
 
-  ResponseRepository({
-    required this.value,
-  });
+  ResponseRepository(this.value);
 }
 
 class ResponseRepositoryEvent extends Response {
@@ -3178,33 +3251,25 @@ class ResponseRepositoryEvent extends Response {
 class ResponseSecretKey extends Response {
   final SecretKey value;
 
-  ResponseSecretKey({
-    required this.value,
-  });
+  ResponseSecretKey(this.value);
 }
 
 class ResponseShareToken extends Response {
   final ShareToken value;
 
-  ResponseShareToken({
-    required this.value,
-  });
+  ResponseShareToken(this.value);
 }
 
 class ResponseSocketAddr extends Response {
   final String value;
 
-  ResponseSocketAddr({
-    required this.value,
-  });
+  ResponseSocketAddr(this.value);
 }
 
 class ResponseStateMonitor extends Response {
   final StateMonitorNode value;
 
-  ResponseStateMonitor({
-    required this.value,
-  });
+  ResponseStateMonitor(this.value);
 }
 
 class ResponseStateMonitorEvent extends Response {
@@ -3214,41 +3279,31 @@ class ResponseStateMonitorEvent extends Response {
 class ResponseStats extends Response {
   final Stats value;
 
-  ResponseStats({
-    required this.value,
-  });
+  ResponseStats(this.value);
 }
 
 class ResponseStorageSize extends Response {
   final StorageSize value;
 
-  ResponseStorageSize({
-    required this.value,
-  });
+  ResponseStorageSize(this.value);
 }
 
 class ResponseString extends Response {
   final String value;
 
-  ResponseString({
-    required this.value,
-  });
+  ResponseString(this.value);
 }
 
 class ResponseU16 extends Response {
   final int value;
 
-  ResponseU16({
-    required this.value,
-  });
+  ResponseU16(this.value);
 }
 
 class ResponseU64 extends Response {
   final int value;
 
-  ResponseU64({
-    required this.value,
-  });
+  ResponseU64(this.value);
 }
 
 class Session {

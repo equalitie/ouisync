@@ -178,12 +178,9 @@ void main() {
 
     test('set access', () async {
       await repo.setAccess(
-        read: AccessChangeEnable(
-          value: SetLocalSecretPassword(value: Password('read_pass')),
-        ),
-        write: AccessChangeEnable(
-          value: SetLocalSecretPassword(value: Password('write_pass')),
-        ),
+        read: AccessChangeEnable(SetLocalSecretPassword(Password('read_pass'))),
+        write:
+            AccessChangeEnable(SetLocalSecretPassword(Password('write_pass'))),
       );
 
       await repo.close();
@@ -193,14 +190,14 @@ void main() {
       await repo.close();
       repo = await session.openRepository(
         path: name,
-        localSecret: LocalSecretPassword(value: Password('read_pass')),
+        localSecret: LocalSecretPassword(Password('read_pass')),
       );
       expect(await repo.getAccessMode(), equals(AccessMode.read));
 
       await repo.close();
       repo = await session.openRepository(
         path: name,
-        localSecret: LocalSecretPassword(value: Password('write_pass')),
+        localSecret: LocalSecretPassword(Password('write_pass')),
       );
       expect(await repo.getAccessMode(), equals(AccessMode.write));
     });

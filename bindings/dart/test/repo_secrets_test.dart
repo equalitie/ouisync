@@ -40,7 +40,7 @@ void main() {
     {
       final repo = await session.openRepository(
         path: repoName,
-        localSecret: LocalSecretSecretKey(value: readSecret.key),
+        localSecret: LocalSecretSecretKey(readSecret.key),
       );
 
       expect(await repo.getAccessMode(), AccessMode.read);
@@ -50,7 +50,7 @@ void main() {
     {
       final repo = await session.openRepository(
         path: repoName,
-        localSecret: LocalSecretSecretKey(value: writeSecret.key),
+        localSecret: LocalSecretSecretKey(writeSecret.key),
       );
 
       expect(await repo.getAccessMode(), AccessMode.write);
@@ -87,7 +87,7 @@ void main() {
     {
       final repo = await session.openRepository(
         path: repoName,
-        localSecret: LocalSecretPassword(value: readPassword),
+        localSecret: LocalSecretPassword(readPassword),
       );
 
       expect(await repo.getAccessMode(), AccessMode.read);
@@ -97,7 +97,7 @@ void main() {
     {
       final repo = await session.openRepository(
         path: repoName,
-        localSecret: LocalSecretPassword(value: writePassword),
+        localSecret: LocalSecretPassword(writePassword),
       );
 
       expect(await repo.getAccessMode(), AccessMode.write);

@@ -23,8 +23,8 @@ class Client {
   final Stream<Uint8List> _stream;
   StreamSubscription<Uint8List>? _streamSubscription;
   int _nextMessageId = 0;
-  final _responses = <MessageId, Completer<Object?>>{};
-  final _notifications = <MessageId, StreamSink<Object?>>{};
+  final _responses = <int, Completer<Object?>>{};
+  final _notifications = <int, StreamSink<Object?>>{};
 
   Client._(this._socket, this._stream) {
     _streamSubscription =
@@ -70,13 +70,13 @@ class Client {
   }
 
   Future<Response> invoke(Request request) async {
-    final id = MessageId(_nextMessageId++);
+    final id = _nextMessageId++;
     return await _invokeWithMessageId(id, request);
   }
 
   Stream<Response> subscribe<T>(Request request) {
     final controller = StreamController<Response>();
-    final id = MessageId(_nextMessageId++);
+    final id = _nextMessageId++;
 
     controller.onListen = () => unawaited(_onSubscriptionListen(
           id,
@@ -94,13 +94,13 @@ class Client {
     await _socket.close();
   }
 
-  Future<Response> _invokeWithMessageId(MessageId id, Request request) async {
+  Future<Response> _invokeWithMessageId(int id, Request request) async {
     final completer = Completer();
     final response = completer.future;
 
     _responses[id] = completer;
 
-    final bytes = encodeLengthDelimited(encodeMessage(id as int, request));
+    final bytes = encodeLengthDelimited(encodeMessage(id, request));
     _socket.add(bytes);
 
     return await response;
@@ -139,7 +139,7 @@ class Client {
   }
 
   Future<void> _onSubscriptionListen(
-    MessageId id,
+    int id,
     Request request,
     StreamSink<Object?> sink,
   ) async {
@@ -153,9 +153,9 @@ class Client {
     }
   }
 
-  Future<void> _onSubscriptionCancel(MessageId id) async {
+  Future<void> _onSubscriptionCancel(int id) async {
     _notifications.remove(id);
-    await invoke(RequestSessionUnsubscribe(id: id));
+    await invoke(RequestSessionUnsubscribe(id: MessageId(id)));
   }
 }
 

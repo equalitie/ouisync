@@ -12,7 +12,6 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> io::Result<()> {
             Item::SimpleEnum(item) => generate_enum(name, item, out)?,
             Item::ComplexEnum(_item) => todo!(),
             Item::Struct(_item) => todo!(),
-            Item::Newtype(_item) => todo!(),
         }
     }
 

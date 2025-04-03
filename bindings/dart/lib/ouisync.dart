@@ -1,3 +1,4 @@
+import 'package:hex/hex.dart';
 import 'package:ouisync/bindings.g.dart';
 
 import 'bindings.dart' as b;
@@ -71,4 +72,8 @@ extension RepositoryExtension on b.Repository {
         .child(MonitorId.expectUnique('Repositories'))
         .child(MonitorId.expectUnique(path));
   }
+}
+
+extension PublicRuntimeIdExtension on b.PublicRuntimeId {
+  String toHex() => HEX.encode(value);
 }

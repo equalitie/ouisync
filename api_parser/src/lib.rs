@@ -174,7 +174,6 @@ pub enum Item {
     SimpleEnum(SimpleEnum),
     ComplexEnum(ComplexEnum),
     Struct(Struct),
-    Newtype(Newtype),
 }
 
 /// Simple enum (C-style enums)

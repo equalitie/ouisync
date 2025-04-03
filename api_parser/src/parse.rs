@@ -9,8 +9,8 @@ use syn::{
 };
 
 use crate::{
-    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Fields, Item, Newtype,
-    RequestVariant, SimpleEnum, SimpleVariant, Struct, Type,
+    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Fields, Item, RequestVariant,
+    SimpleEnum, SimpleVariant, Struct, Type,
 };
 
 pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool) -> Result<bool> {
@@ -54,12 +54,10 @@ fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()
                 }
 
                 let name = item.ident.to_string();
-                ctx.items.push((
-                    name.clone(),
-                    parse_struct(item).with_context(|| {
-                        format!("failed to parse struct {name} in {}", path.display())
-                    })?,
-                ));
+                let item = parse_struct(item).with_context(|| {
+                    format!("failed to parse struct {name} in {}", path.display())
+                })?;
+                ctx.items.push((name.clone(), Item::Struct(item)));
             }
             syn::Item::Mod(item) => match item.content {
                 Some((_, items)) => parse_mod(ctx, path, items)?,
@@ -308,36 +306,23 @@ fn parse_enum(item: ItemEnum) -> Result<Item> {
     }
 }
 
-fn parse_struct(item: ItemStruct) -> Result<Item> {
+fn parse_struct(item: ItemStruct) -> Result<Struct> {
     if item.generics.lt_token.is_some() {
         bail!("generic structs not supported");
     }
 
     let docs = parse_docs(&item.attrs)?;
 
-    let ty = if let Some(ty) = parse_api_repr(&item.attrs)? {
-        Some(Some(ty))
-    } else if is_serde_transparent(&item.attrs) {
-        Some(None)
-    } else {
-        None
-    };
-
-    if let Some(ty) = ty {
-        if let Some(ty) = ty {
-            // If the struct is annotated with `#[api(repr(T))]` we ignore the fields altogether
-            // treat it as if it contained only one field of type `T`.
-            Ok(Item::Newtype(Newtype { docs, ty }))
-        } else {
-            if item.fields.len() != 1 {
-                bail!("transparent structs must have exactly one field");
-            }
-
-            let field = item.fields.iter().next().unwrap();
-            let ty = parse_type(&field.ty)?;
-
-            Ok(Item::Newtype(Newtype { docs, ty }))
-        }
+    if let Some(ty) = parse_api_repr(&item.attrs)? {
+        // If the struct is annotated with `#[api(repr(T))]` we ignore the fields altogether
+        // treat it as if it contained only one field of type `T`.
+        Ok(Struct {
+            docs,
+            fields: Fields::Unnamed(Field {
+                docs: Docs::default(),
+                ty,
+            }),
+        })
     } else {
         match item.fields {
             syn::Fields::Named(fields) => {
@@ -347,10 +332,10 @@ fn parse_struct(item: ItemStruct) -> Result<Item> {
                     bail!("empty structs not supported");
                 }
 
-                Ok(Item::Struct(Struct {
+                Ok(Struct {
                     docs,
                     fields: Fields::Named(fields),
-                }))
+                })
             }
             syn::Fields::Unnamed(fields) => {
                 let fields = parse_unnamed_fields(&fields.unnamed)?;
@@ -359,18 +344,18 @@ fn parse_struct(item: ItemStruct) -> Result<Item> {
                     0 => bail!("empty structs not supported"),
                     1 => {
                         let field = fields.into_iter().next().unwrap();
-                        Ok(Item::Struct(Struct {
+                        Ok(Struct {
                             docs,
                             fields: Fields::Unnamed(field),
-                        }))
+                        })
                     }
                     _ => bail!("tuple structs with more than one field not supported"),
                 }
             }
-            syn::Fields::Unit => Ok(Item::Struct(Struct {
+            syn::Fields::Unit => Ok(Struct {
                 docs,
                 fields: Fields::Unit,
-            })),
+            }),
         }
     }
 }
@@ -473,31 +458,6 @@ fn parse_api_repr(attrs: &[Attribute]) -> Result<Option<Type>> {
     }
 
     Ok(None)
-}
-
-fn is_serde_transparent(attrs: &[Attribute]) -> bool {
-    for attr in attrs {
-        let list = match &attr.meta {
-            Meta::List(list) => list,
-            _ => continue,
-        };
-
-        if !list.path.is_ident("serde") {
-            continue;
-        }
-
-        let ident: syn::Ident = if let Ok(ident) = list.parse_args() {
-            ident
-        } else {
-            continue;
-        };
-
-        if ident == "transparent" {
-            return true;
-        }
-    }
-
-    false
 }
 
 fn into_complex_variant(v: SimpleVariant) -> ComplexVariant {
@@ -743,12 +703,11 @@ mod tests {
         let item: syn::ItemStruct = parse_quote! {
             #[derive(Serialize)]
             #[api]
-            #[serde(transparent)]
             struct Name(String);
         };
         assert_matches!(
             parse_struct(item),
-            Ok(Item::Newtype(Newtype { ty, .. })) => {
+            Ok(Struct { fields: Fields::Unnamed(Field { ty, ..}), .. }) => {
                 assert_matches!(
                     ty,
                     Type::Scalar(name) => assert_eq!(name, "String")
@@ -762,26 +721,11 @@ mod tests {
         };
         assert_matches!(
             parse_struct(item),
-            Ok(Item::Newtype(Newtype { ty, .. })) => {
+            Ok(Struct { fields: Fields::Unnamed(Field { ty, .. }), .. }) => {
                 assert_matches!(
                     ty,
                     Type::Scalar(name) => assert_eq!(name, "String")
                 )
-            }
-        );
-
-        let item: syn::ItemStruct = parse_quote! {
-            #[derive(Serialize)]
-            #[serde(transparent)]
-            #[api(repr(Bytes))]
-            pub struct PublicRuntimeId {
-                public: PublicKey,
-            }
-        };
-        assert_matches!(
-            parse_struct(item),
-            Ok(Item::Newtype(Newtype { ty, .. })) => {
-                assert_matches!(ty, Type::Bytes)
             }
         );
     }
