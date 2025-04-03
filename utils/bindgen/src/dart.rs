@@ -75,6 +75,22 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
     writeln!(out, "{I}}}")?;
     writeln!(out)?;
 
+    // toInt
+    writeln!(out, "{I}int toInt() => switch (this) {{")?;
+
+    for (variant_name, variant) in &item.variants {
+        writeln!(
+            out,
+            "{I}{I}{I}{}.{} => {},",
+            name,
+            AsLowerCamelCase(variant_name),
+            variant.value
+        )?;
+    }
+
+    writeln!(out, "{I}{I}}};")?;
+    writeln!(out)?;
+
     // decode
     writeln!(out, "{I}static {name}? decode(Unpacker u) {{")?;
     writeln!(out, "{I}{I}final n = u.unpackInt();")?;
@@ -84,19 +100,7 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
 
     // encode
     writeln!(out, "{I}void encode(Packer p) {{")?;
-    writeln!(out, "{I}{I}switch (this) {{")?;
-
-    for (variant_name, variant) in &item.variants {
-        writeln!(
-            out,
-            "{I}{I}{I}case {}.{}: p.packInt({});",
-            name,
-            AsLowerCamelCase(variant_name),
-            variant.value
-        )?;
-    }
-
-    writeln!(out, "{I}{I}}}")?;
+    writeln!(out, "{I}{I}p.packInt(toInt());")?;
     writeln!(out, "{I}}}")?;
     writeln!(out)?;
 
@@ -339,11 +343,12 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
         writeln!(out, "{I}operator==(Object other) =>")?;
         writeln!(out, "{I}{I}{I}other is {name} &&")?;
 
-        for (index, (field_name, _)) in item.fields.iter().enumerate() {
+        for (index, (field_name, field)) in item.fields.iter().enumerate() {
             write!(
                 out,
-                "{I}{I}{I}other.{0} == {0}",
-                AsLowerCamelCase(field_name.unwrap_or(DEFAULT_FIELD_NAME))
+                "{I}{I}{I}{} == {}",
+                ObjectWrapper::new(field_name, &field.ty).with_prefix("other."),
+                ObjectWrapper::new(field_name, &field.ty)
             )?;
 
             if index < item.fields.len() - 1 {
@@ -359,27 +364,21 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
         write!(out, "{I}int get hashCode => ")?;
 
         if item.fields.len() == 1 {
+            let (field_name, field) = item.fields.iter().next().unwrap();
+
             writeln!(
                 out,
                 "{}.hashCode;",
-                AsLowerCamelCase(
-                    &item
-                        .fields
-                        .iter()
-                        .next()
-                        .unwrap()
-                        .0
-                        .unwrap_or(DEFAULT_FIELD_NAME)
-                )
+                ObjectWrapper::new(field_name, &field.ty)
             )?;
         } else {
             writeln!(out, "Object.hash(")?;
 
-            for (field_name, _) in &item.fields {
+            for (field_name, field) in &item.fields {
                 writeln!(
                     out,
                     "{I}{I}{I}{I}{},",
-                    AsLowerCamelCase(field_name.unwrap_or(DEFAULT_FIELD_NAME))
+                    ObjectWrapper::new(field_name, &field.ty),
                 )?;
             }
 
@@ -391,6 +390,41 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
     writeln!(out)?;
 
     Ok(())
+}
+
+// Provides value based equality and hashCode impls for lists, leaves other types unchanged.
+struct ObjectWrapper<'a> {
+    name: &'a str,
+    ty: &'a Type,
+    prefix: &'a str,
+}
+
+impl<'a> ObjectWrapper<'a> {
+    fn new(name: Option<&'a str>, ty: &'a Type) -> Self {
+        Self {
+            name: name.unwrap_or(DEFAULT_FIELD_NAME),
+            ty,
+            prefix: "",
+        }
+    }
+
+    fn with_prefix(self, prefix: &'a str) -> Self {
+        Self { prefix, ..self }
+    }
+}
+
+impl fmt::Display for ObjectWrapper<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.ty {
+            Type::Vec(_) | Type::Bytes => write!(
+                f,
+                "_ListWrapper({}{})",
+                self.prefix,
+                AsLowerCamelCase(self.name)
+            ),
+            _ => write!(f, "{}{}", self.prefix, AsLowerCamelCase(self.name)),
+        }
+    }
 }
 
 fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
@@ -642,10 +676,7 @@ fn write_api_class(
             }
         }
 
-        writeln!(
-            out,
-            "{I}{I}{I}default: throw InvalidData('unexpected response');"
-        )?;
+        writeln!(out, "{I}{I}{I}default: throw UnexpectedResponse();")?;
         writeln!(out, "{I}{I}}}")?;
 
         writeln!(out, "{I}}}")?;

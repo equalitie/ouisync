@@ -7,6 +7,10 @@ class DecodeError extends ArgumentError {
   DecodeError() : super('decode error');
 }
 
+class UnexpectedResponse extends InvalidData {
+  UnexpectedResponse() : super('unexpected response');
+}
+
 void _encodeNullable<T>(Packer p, T? value, Function(Packer, T) encode) {
   value != null ? encode(p, value) : p.packNull();
 }
@@ -63,6 +67,22 @@ Duration? _decodeDuration(Unpacker u) {
   return n != null ? Duration(milliseconds: n) : null;
 }
 
+/// Wrapper for `List<T>` which provides value-based equality and hash code.
+final class _ListWrapper<T> {
+  final List<T> list;
+
+  _ListWrapper(this.list);
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ListWrapper<T> &&
+      list.length == other.list.length &&
+      list.indexed.every((p) => p.$2 == other.list[p.$1]);
+
+  @override
+  int get hashCode => Object.hashAll(list);
+}
+
 /// Symmetric encryption/decryption secret key.
 ///
 /// Note: this implementation tries to prevent certain types of attacks by making sure the
@@ -88,10 +108,10 @@ final class SecretKey {
   @override
   operator==(Object other) =>
       other is SecretKey &&
-      other.value == value;
+      _ListWrapper(other.value) == _ListWrapper(value);
   
   @override
-  int get hashCode => value.hashCode;
+  int get hashCode => _ListWrapper(value).hashCode;
 }
 
 /// A simple wrapper over String to avoid certain kinds of attack. For more elaboration please see
@@ -135,10 +155,10 @@ final class PasswordSalt {
   @override
   operator==(Object other) =>
       other is PasswordSalt &&
-      other.value == value;
+      _ListWrapper(other.value) == _ListWrapper(value);
   
   @override
-  int get hashCode => value.hashCode;
+  int get hashCode => _ListWrapper(value).hashCode;
 }
 
 /// Strongly typed storage size.
@@ -193,17 +213,19 @@ enum AccessMode {
     }
   }
 
+  int toInt() => switch (this) {
+      AccessMode.blind => 0,
+      AccessMode.read => 1,
+      AccessMode.write => 2,
+    };
+
   static AccessMode? decode(Unpacker u) {
     final n = u.unpackInt();
     return n != null ? fromInt(n) : null;
   }
 
   void encode(Packer p) {
-    switch (this) {
-      case AccessMode.blind: p.packInt(0);
-      case AccessMode.read: p.packInt(1);
-      case AccessMode.write: p.packInt(2);
-    }
+    p.packInt(toInt());
   }
 
 }
@@ -413,16 +435,18 @@ enum EntryType {
     }
   }
 
+  int toInt() => switch (this) {
+      EntryType.file => 1,
+      EntryType.directory => 2,
+    };
+
   static EntryType? decode(Unpacker u) {
     final n = u.unpackInt();
     return n != null ? fromInt(n) : null;
   }
 
   void encode(Packer p) {
-    switch (this) {
-      case EntryType.file: p.packInt(1);
-      case EntryType.directory: p.packInt(2);
-    }
+    p.packInt(toInt());
   }
 
 }
@@ -444,16 +468,18 @@ enum NetworkEvent {
     }
   }
 
+  int toInt() => switch (this) {
+      NetworkEvent.protocolVersionMismatch => 0,
+      NetworkEvent.peerSetChange => 1,
+    };
+
   static NetworkEvent? decode(Unpacker u) {
     final n = u.unpackInt();
     return n != null ? fromInt(n) : null;
   }
 
   void encode(Packer p) {
-    switch (this) {
-      case NetworkEvent.protocolVersionMismatch: p.packInt(0);
-      case NetworkEvent.peerSetChange: p.packInt(1);
-    }
+    p.packInt(toInt());
   }
 
 }
@@ -536,19 +562,21 @@ enum PeerSource {
     }
   }
 
+  int toInt() => switch (this) {
+      PeerSource.userProvided => 0,
+      PeerSource.listener => 1,
+      PeerSource.localDiscovery => 2,
+      PeerSource.dht => 3,
+      PeerSource.peerExchange => 4,
+    };
+
   static PeerSource? decode(Unpacker u) {
     final n = u.unpackInt();
     return n != null ? fromInt(n) : null;
   }
 
   void encode(Packer p) {
-    switch (this) {
-      case PeerSource.userProvided: p.packInt(0);
-      case PeerSource.listener: p.packInt(1);
-      case PeerSource.localDiscovery: p.packInt(2);
-      case PeerSource.dht: p.packInt(3);
-      case PeerSource.peerExchange: p.packInt(4);
-    }
+    p.packInt(toInt());
   }
 
 }
@@ -641,10 +669,10 @@ final class PublicRuntimeId {
   @override
   operator==(Object other) =>
       other is PublicRuntimeId &&
-      other.value == value;
+      _ListWrapper(other.value) == _ListWrapper(value);
   
   @override
-  int get hashCode => value.hashCode;
+  int get hashCode => _ListWrapper(value).hashCode;
 }
 
 /// Network traffic statistics.
@@ -760,17 +788,19 @@ enum NatBehavior {
     }
   }
 
+  int toInt() => switch (this) {
+      NatBehavior.endpointIndependent => 0,
+      NatBehavior.addressDependent => 1,
+      NatBehavior.addressAndPortDependent => 2,
+    };
+
   static NatBehavior? decode(Unpacker u) {
     final n = u.unpackInt();
     return n != null ? fromInt(n) : null;
   }
 
   void encode(Packer p) {
-    switch (this) {
-      case NatBehavior.endpointIndependent: p.packInt(0);
-      case NatBehavior.addressDependent: p.packInt(1);
-      case NatBehavior.addressAndPortDependent: p.packInt(2);
-    }
+    p.packInt(toInt());
   }
 
 }
@@ -874,44 +904,46 @@ enum ErrorCode {
     }
   }
 
+  int toInt() => switch (this) {
+      ErrorCode.ok => 0,
+      ErrorCode.permissionDenied => 1,
+      ErrorCode.invalidInput => 2,
+      ErrorCode.invalidData => 3,
+      ErrorCode.alreadyExists => 4,
+      ErrorCode.notFound => 5,
+      ErrorCode.ambiguous => 6,
+      ErrorCode.unsupported => 8,
+      ErrorCode.connectionRefused => 1025,
+      ErrorCode.connectionAborted => 1026,
+      ErrorCode.transportError => 1027,
+      ErrorCode.listenerBindError => 1028,
+      ErrorCode.listenerAcceptError => 1029,
+      ErrorCode.storeError => 2049,
+      ErrorCode.isDirectory => 2050,
+      ErrorCode.notDirectory => 2051,
+      ErrorCode.directoryNotEmpty => 2052,
+      ErrorCode.resourceBusy => 2053,
+      ErrorCode.runtimeInitializeError => 4097,
+      ErrorCode.loggerInitializeError => 4098,
+      ErrorCode.configError => 4099,
+      ErrorCode.tlsCertificatesNotFound => 4100,
+      ErrorCode.tlsCertificatesInvalid => 4101,
+      ErrorCode.tlsKeysNotFound => 4102,
+      ErrorCode.tlsConfigError => 4103,
+      ErrorCode.vfsDriverInstallError => 4104,
+      ErrorCode.vfsOtherError => 4105,
+      ErrorCode.serviceAlreadyRunning => 4106,
+      ErrorCode.storeDirUnspecified => 4107,
+      ErrorCode.other => 65535,
+    };
+
   static ErrorCode? decode(Unpacker u) {
     final n = u.unpackInt();
     return n != null ? fromInt(n) : null;
   }
 
   void encode(Packer p) {
-    switch (this) {
-      case ErrorCode.ok: p.packInt(0);
-      case ErrorCode.permissionDenied: p.packInt(1);
-      case ErrorCode.invalidInput: p.packInt(2);
-      case ErrorCode.invalidData: p.packInt(3);
-      case ErrorCode.alreadyExists: p.packInt(4);
-      case ErrorCode.notFound: p.packInt(5);
-      case ErrorCode.ambiguous: p.packInt(6);
-      case ErrorCode.unsupported: p.packInt(8);
-      case ErrorCode.connectionRefused: p.packInt(1025);
-      case ErrorCode.connectionAborted: p.packInt(1026);
-      case ErrorCode.transportError: p.packInt(1027);
-      case ErrorCode.listenerBindError: p.packInt(1028);
-      case ErrorCode.listenerAcceptError: p.packInt(1029);
-      case ErrorCode.storeError: p.packInt(2049);
-      case ErrorCode.isDirectory: p.packInt(2050);
-      case ErrorCode.notDirectory: p.packInt(2051);
-      case ErrorCode.directoryNotEmpty: p.packInt(2052);
-      case ErrorCode.resourceBusy: p.packInt(2053);
-      case ErrorCode.runtimeInitializeError: p.packInt(4097);
-      case ErrorCode.loggerInitializeError: p.packInt(4098);
-      case ErrorCode.configError: p.packInt(4099);
-      case ErrorCode.tlsCertificatesNotFound: p.packInt(4100);
-      case ErrorCode.tlsCertificatesInvalid: p.packInt(4101);
-      case ErrorCode.tlsKeysNotFound: p.packInt(4102);
-      case ErrorCode.tlsConfigError: p.packInt(4103);
-      case ErrorCode.vfsDriverInstallError: p.packInt(4104);
-      case ErrorCode.vfsOtherError: p.packInt(4105);
-      case ErrorCode.serviceAlreadyRunning: p.packInt(4106);
-      case ErrorCode.storeDirUnspecified: p.packInt(4107);
-      case ErrorCode.other: p.packInt(65535);
-    }
+    p.packInt(toInt());
   }
 
 }
@@ -1155,19 +1187,21 @@ enum LogLevel {
     }
   }
 
+  int toInt() => switch (this) {
+      LogLevel.error => 1,
+      LogLevel.warn => 2,
+      LogLevel.info => 3,
+      LogLevel.debug => 4,
+      LogLevel.trace => 5,
+    };
+
   static LogLevel? decode(Unpacker u) {
     final n = u.unpackInt();
     return n != null ? fromInt(n) : null;
   }
 
   void encode(Packer p) {
-    switch (this) {
-      case LogLevel.error: p.packInt(1);
-      case LogLevel.warn: p.packInt(2);
-      case LogLevel.info: p.packInt(3);
-      case LogLevel.debug: p.packInt(4);
-      case LogLevel.trace: p.packInt(5);
-    }
+    p.packInt(toInt());
   }
 
 }
@@ -1283,13 +1317,13 @@ final class NetworkDefaults {
   @override
   operator==(Object other) =>
       other is NetworkDefaults &&
-      other.bind == bind &&
+      _ListWrapper(other.bind) == _ListWrapper(bind) &&
       other.portForwardingEnabled == portForwardingEnabled &&
       other.localDiscoveryEnabled == localDiscoveryEnabled;
   
   @override
   int get hashCode => Object.hash(
-        bind,
+        _ListWrapper(bind),
         portForwardingEnabled,
         localDiscoveryEnabled,
       );
@@ -3320,7 +3354,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3333,7 +3367,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3358,7 +3392,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseRepository(value: final value): return Repository(client, value);
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3372,7 +3406,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3387,7 +3421,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseSecretKey(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3400,7 +3434,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseRepository(value: final value): return Repository(client, value);
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3411,7 +3445,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePasswordSalt(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3422,7 +3456,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseSecretKey(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3433,7 +3467,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseU64(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3445,7 +3479,7 @@ class Session {
     switch (response) {
       case ResponseDuration(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3457,7 +3491,7 @@ class Session {
     switch (response) {
       case ResponseStorageSize(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3469,7 +3503,7 @@ class Session {
     switch (response) {
       case ResponseDuration(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3481,7 +3515,7 @@ class Session {
     switch (response) {
       case ResponseSocketAddr(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3493,7 +3527,7 @@ class Session {
     switch (response) {
       case ResponseSocketAddr(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3504,7 +3538,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseU64(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3515,7 +3549,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePeerAddrs(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3527,7 +3561,7 @@ class Session {
     switch (response) {
       case ResponsePath(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3539,7 +3573,7 @@ class Session {
     switch (response) {
       case ResponseNatBehavior(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3550,7 +3584,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseStats(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3561,7 +3595,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePeerInfos(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3574,7 +3608,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePeerAddrs(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3585,7 +3619,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePublicRuntimeId(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3598,7 +3632,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseAccessMode(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3615,7 +3649,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseString(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3628,7 +3662,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseString(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3642,7 +3676,7 @@ class Session {
     switch (response) {
       case ResponseStateMonitor(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3654,7 +3688,7 @@ class Session {
     switch (response) {
       case ResponsePath(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3665,7 +3699,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePeerAddrs(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3680,7 +3714,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3691,7 +3725,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3703,7 +3737,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3714,7 +3748,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3725,7 +3759,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3736,7 +3770,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseRepositories(value: final value): return value.map((k, v) => MapEntry(k, Repository(client, v)));
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3751,7 +3785,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3766,7 +3800,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseRepository(value: final value): return Repository(client, value);
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3779,7 +3813,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3792,7 +3826,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3805,7 +3839,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3818,7 +3852,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3831,7 +3865,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3844,7 +3878,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3857,7 +3891,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3870,7 +3904,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3883,7 +3917,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3896,7 +3930,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3909,7 +3943,7 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseShareToken(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3929,7 +3963,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3943,7 +3977,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3957,7 +3991,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseFile(value: final value): return File(client, value);
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3971,7 +4005,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3984,7 +4018,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -3998,7 +4032,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4013,7 +4047,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePath(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4027,7 +4061,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4039,7 +4073,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseAccessMode(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4052,7 +4086,7 @@ class Repository {
     switch (response) {
       case ResponseDuration(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4064,7 +4098,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBytes(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4081,7 +4115,7 @@ class Repository {
     switch (response) {
       case ResponseEntryType(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4094,7 +4128,7 @@ class Repository {
     switch (response) {
       case ResponseDuration(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4108,7 +4142,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseString(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4123,7 +4157,7 @@ class Repository {
     switch (response) {
       case ResponseString(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4136,7 +4170,7 @@ class Repository {
     switch (response) {
       case ResponsePath(value: final value): return value;
       case ResponseNone(): return null;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4148,7 +4182,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePath(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4160,7 +4194,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseQuotaInfo(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4172,7 +4206,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseStats(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4184,7 +4218,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseProgress(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4196,7 +4230,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4208,7 +4242,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4220,7 +4254,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4234,7 +4268,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4246,7 +4280,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePath(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4260,7 +4294,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4276,7 +4310,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4290,7 +4324,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseFile(value: final value): return File(client, value);
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4304,7 +4338,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseDirectoryEntries(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4322,7 +4356,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4337,7 +4371,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4351,7 +4385,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4367,7 +4401,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4383,7 +4417,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4397,7 +4431,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4411,7 +4445,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4425,7 +4459,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4439,7 +4473,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4453,7 +4487,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBool(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4467,7 +4501,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4481,7 +4515,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4495,7 +4529,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4511,7 +4545,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseShareToken(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4523,7 +4557,7 @@ class Repository {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4555,7 +4589,7 @@ class File {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4567,7 +4601,7 @@ class File {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4579,7 +4613,7 @@ class File {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseU64(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4592,7 +4626,7 @@ class File {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseU64(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4609,7 +4643,7 @@ class File {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseBytes(value: final value): return value;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4623,7 +4657,7 @@ class File {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   
@@ -4639,7 +4673,7 @@ class File {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
-      default: throw InvalidData('unexpected response');
+      default: throw UnexpectedResponse();
     }
   }
   

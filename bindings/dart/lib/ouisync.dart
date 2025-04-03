@@ -1,4 +1,3 @@
-import 'package:hex/hex.dart';
 import 'package:ouisync/bindings.g.dart';
 
 import 'bindings.dart' as b;
@@ -6,7 +5,7 @@ import 'client.dart';
 import 'server.dart';
 import 'state_monitor.dart';
 
-export 'bindings.dart' hide Session;
+export 'bindings.dart' hide Session, Request, Response;
 export 'server.dart' show initLog;
 
 class Session extends b.Session {
@@ -74,6 +73,11 @@ extension RepositoryExtension on b.Repository {
   }
 }
 
-extension PublicRuntimeIdExtension on b.PublicRuntimeId {
-  String toHex() => HEX.encode(value);
+extension SetLocalSecretExtension on b.SetLocalSecret {
+  LocalSecret toLocalSecret() => switch (this) {
+        b.SetLocalSecretPassword(value: final password) =>
+          b.LocalSecretPassword(password),
+        b.SetLocalSecretKeyAndSalt(key: final key) =>
+          b.LocalSecretSecretKey(key),
+      };
 }

@@ -115,6 +115,8 @@ class StateMonitor {
   StateMonitor child(MonitorId childId) =>
       StateMonitor._(_client, [..._path, childId]);
 
+  bool get isRoot => _path.isEmpty;
+
   /// Stream of change notifications
   Stream<void> get changes => _client
       .subscribe(RequestSessionSubscribeToStateMonitor(path: _path))

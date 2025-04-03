@@ -7,6 +7,10 @@ class DecodeError extends ArgumentError {
   DecodeError() : super('decode error');
 }
 
+class UnexpectedResponse extends InvalidData {
+  UnexpectedResponse() : super('unexpected response');
+}
+
 void _encodeNullable<T>(Packer p, T? value, Function(Packer, T) encode) {
   value != null ? encode(p, value) : p.packNull();
 }
@@ -61,4 +65,20 @@ void _encodeDuration(Packer p, Duration v) => p.packInt(v.inMilliseconds);
 Duration? _decodeDuration(Unpacker u) {
   final n = u.unpackInt();
   return n != null ? Duration(milliseconds: n) : null;
+}
+
+/// Wrapper for `List<T>` which provides value-based equality and hash code.
+final class _ListWrapper<T> {
+  final List<T> list;
+
+  _ListWrapper(this.list);
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ListWrapper<T> &&
+      list.length == other.list.length &&
+      list.indexed.every((p) => p.$2 == other.list[p.$1]);
+
+  @override
+  int get hashCode => Object.hashAll(list);
 }
