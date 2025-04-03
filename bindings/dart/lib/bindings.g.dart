@@ -220,11 +220,14 @@ sealed class SetLocalSecret {
         p.packString('Password');
         value.encode(p);
       case SetLocalSecretKeyAndSalt(
-        value: final value,
+        key: final key,
+        salt: final salt,
       ):
         p.packMapLength(1);
         p.packString('KeyAndSalt');
-        value.encode(p);
+        p.packListLength(2);
+        key.encode(p);
+        salt.encode(p);
     }
   }
   
@@ -242,8 +245,10 @@ sealed class SetLocalSecret {
             value: (Password.decode(u))!,
           );
         case "KeyAndSalt":
+          if (u.unpackListLength() != 2) throw DecodeError();
           return SetLocalSecretKeyAndSalt(
-            value: (KeyAndSalt.decode(u))!,
+            key: (SecretKey.decode(u))!,
+            salt: (PasswordSalt.decode(u))!,
           );
         case null: return null;
         default: throw DecodeError();
@@ -262,51 +267,13 @@ class SetLocalSecretPassword extends SetLocalSecret {
 }
 
 class SetLocalSecretKeyAndSalt extends SetLocalSecret {
-  final KeyAndSalt value;
-
-  SetLocalSecretKeyAndSalt({
-    required this.value,
-  });
-}
-
-final class KeyAndSalt {
   final SecretKey key;
   final PasswordSalt salt;
 
-  KeyAndSalt({
+  SetLocalSecretKeyAndSalt({
     required this.key,
     required this.salt,
   });
-  
-  void encode(Packer p) {
-    p.packListLength(2);
-    key.encode(p);
-    salt.encode(p);
-  }
-  
-  static KeyAndSalt? decode(Unpacker u) {
-    switch (u.unpackListLength()) {
-      case 0: return null;
-      case 2: break;
-      default: throw DecodeError();
-    }
-    return KeyAndSalt(
-      key: (SecretKey.decode(u))!,
-      salt: (PasswordSalt.decode(u))!,
-    );
-  }
-  
-  @override
-  operator==(Object other) =>
-      other is KeyAndSalt &&
-      other.key == key &&
-      other.salt == salt;
-  
-  @override
-  int get hashCode => Object.hash(
-        key,
-        salt,
-      );
 }
 
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to

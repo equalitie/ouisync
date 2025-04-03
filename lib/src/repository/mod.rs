@@ -284,7 +284,13 @@ impl Repository {
             )
         };
 
-        metadata::set_read_key(tx, &id, &read_key, local.as_deref()).await?;
+        metadata::set_read_key(
+            tx,
+            &id,
+            &read_key,
+            local.as_ref().map(|(k, s)| (k.as_ref(), s.as_ref())),
+        )
+        .await?;
 
         Ok(())
     }
@@ -316,8 +322,13 @@ impl Repository {
             )
         };
 
-        metadata::set_write_key(tx, &write_secrets, local.as_deref()).await?;
-        metadata::set_writer_id(tx, &writer_id, local.as_deref().map(|ks| &ks.key)).await?;
+        metadata::set_write_key(
+            tx,
+            &write_secrets,
+            local.as_ref().map(|(k, s)| (k.as_ref(), s.as_ref())),
+        )
+        .await?;
+        metadata::set_writer_id(tx, &writer_id, local.as_ref().map(|(k, _)| k.as_ref())).await?;
 
         Ok(())
     }

@@ -28,14 +28,17 @@ impl LocalSecret {
 #[api]
 pub enum SetLocalSecret {
     Password(Password),
-    KeyAndSalt(KeyAndSalt),
+    KeyAndSalt { key: SecretKey, salt: PasswordSalt },
 }
 
 #[cfg(test)]
 impl SetLocalSecret {
     /// Generates random secret key and salt.
     pub fn random() -> Self {
-        Self::KeyAndSalt(KeyAndSalt::random())
+        Self::KeyAndSalt {
+            key: SecretKey::random(),
+            salt: PasswordSalt::random(),
+        }
     }
 }
 
@@ -44,25 +47,7 @@ impl From<SetLocalSecret> for LocalSecret {
     fn from(local: SetLocalSecret) -> Self {
         match local {
             SetLocalSecret::Password(pwd) => Self::Password(pwd),
-            SetLocalSecret::KeyAndSalt(local) => Self::SecretKey(local.key),
-        }
-    }
-}
-
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
-#[api]
-pub struct KeyAndSalt {
-    pub key: SecretKey,
-    pub salt: PasswordSalt,
-}
-
-#[cfg(test)]
-impl KeyAndSalt {
-    /// Generates random secret key and salt.
-    pub fn random() -> Self {
-        Self {
-            key: SecretKey::random(),
-            salt: SecretKey::random_salt(),
+            SetLocalSecret::KeyAndSalt { key, .. } => Self::SecretKey(key),
         }
     }
 }

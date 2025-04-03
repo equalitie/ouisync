@@ -1,5 +1,6 @@
 use argon2::password_hash;
 use ouisync_macros::api;
+use rand::{rngs::OsRng, Rng};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{array::TryFromSliceError, fmt, sync::Arc};
 use subtle::ConstantTimeEq;
@@ -64,12 +65,17 @@ pub struct PasswordSalt([u8; Self::SIZE]);
 
 // NOTE: Not using the `define_byte_array_wrapper` macro here because this type needs to be visible
 // to the API parser which is currently not smart emough to see inside macros.
+// TODO: consider changing `define_byte_array_wrapper` to a proc-macro
 
 impl PasswordSalt {
     pub const SIZE: usize = password_hash::Salt::RECOMMENDED_LENGTH;
 
     pub fn as_array(&self) -> &[u8; Self::SIZE] {
         &self.0
+    }
+
+    pub fn random() -> Self {
+        OsRng.gen()
     }
 }
 

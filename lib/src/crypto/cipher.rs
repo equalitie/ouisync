@@ -79,10 +79,6 @@ impl SecretKey {
         sub_key
     }
 
-    pub fn random_salt() -> PasswordSalt {
-        OsRng.gen()
-    }
-
     /// Derive a secret key from user's password and salt.
     pub fn derive_from_password(user_password: &str, salt: &PasswordSalt) -> Self {
         use argon2::{Algorithm, Argon2, ParamsBuilder, Version};

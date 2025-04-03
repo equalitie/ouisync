@@ -4,7 +4,7 @@ mod share_token;
 
 pub use self::{
     access_mode::AccessMode,
-    local_secret::{KeyAndSalt, LocalSecret, SetLocalSecret},
+    local_secret::{LocalSecret, SetLocalSecret},
     share_token::ShareToken,
 };
 
@@ -417,6 +417,8 @@ pub enum AccessChange {
 
 #[cfg(test)]
 mod tests {
+    use crate::crypto::PasswordSalt;
+
     use super::*;
 
     // Note we don't actually use JSON anywhere in the protocol but this test uses it because it
@@ -445,11 +447,11 @@ mod tests {
     #[test]
     fn access_change_key_serialize_deserialize_json() {
         let key = cipher::SecretKey::random();
-        let salt = cipher::SecretKey::random_salt();
+        let salt = PasswordSalt::random();
         let key_serialized = serde_json::to_string(&key).unwrap();
         let salt_serialized = serde_json::to_string(&salt).unwrap();
 
-        let orig = AccessChange::Enable(Some(SetLocalSecret::KeyAndSalt(KeyAndSalt { key, salt })));
+        let orig = AccessChange::Enable(Some(SetLocalSecret::KeyAndSalt { key, salt }));
 
         let expected_serialized = format!(
             "{{\"enable\":{{\"key_and_salt\":{{\"key\":{}, \"salt\":{}}}}}}}",
@@ -484,9 +486,9 @@ mod tests {
     #[test]
     fn access_change_key_serialize_deserialize_msgpack() {
         let key = cipher::SecretKey::random();
-        let salt = cipher::SecretKey::random_salt();
+        let salt = PasswordSalt::random();
 
-        let orig = AccessChange::Enable(Some(SetLocalSecret::KeyAndSalt(KeyAndSalt { key, salt })));
+        let orig = AccessChange::Enable(Some(SetLocalSecret::KeyAndSalt { key, salt }));
         let serialized = rmp_serde::to_vec(&orig).unwrap();
         let deserialized: AccessChange = rmp_serde::from_slice(&serialized).unwrap();
         assert_eq!(deserialized, orig);

@@ -18,17 +18,13 @@ void main() {
 
   test('Open repo using keys', () async {
     final readSecret = SetLocalSecretKeyAndSalt(
-      value: KeyAndSalt(
-        key: await session.generateSecretKey(),
-        salt: await session.generatePasswordSalt(),
-      ),
+      key: await session.generateSecretKey(),
+      salt: await session.generatePasswordSalt(),
     );
 
     final writeSecret = SetLocalSecretKeyAndSalt(
-      value: KeyAndSalt(
-        key: await session.generateSecretKey(),
-        salt: await session.generatePasswordSalt(),
-      ),
+      key: await session.generateSecretKey(),
+      salt: await session.generatePasswordSalt(),
     );
 
     {
@@ -44,7 +40,7 @@ void main() {
     {
       final repo = await session.openRepository(
         path: repoName,
-        localSecret: LocalSecretSecretKey(value: readSecret.value.key),
+        localSecret: LocalSecretSecretKey(value: readSecret.key),
       );
 
       expect(await repo.getAccessMode(), AccessMode.read);
@@ -54,7 +50,7 @@ void main() {
     {
       final repo = await session.openRepository(
         path: repoName,
-        localSecret: LocalSecretSecretKey(value: writeSecret.value.key),
+        localSecret: LocalSecretSecretKey(value: writeSecret.key),
       );
 
       expect(await repo.getAccessMode(), AccessMode.write);
@@ -76,10 +72,12 @@ void main() {
       final repo = await session.createRepository(
         path: repoName,
         readSecret: SetLocalSecretKeyAndSalt(
-          value: KeyAndSalt(key: readKey, salt: readSalt),
+          key: readKey,
+          salt: readSalt,
         ),
         writeSecret: SetLocalSecretKeyAndSalt(
-          value: KeyAndSalt(key: writeKey, salt: writeSalt),
+          key: writeKey,
+          salt: writeSalt,
         ),
       );
 
