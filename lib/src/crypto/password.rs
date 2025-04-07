@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 /// A simple wrapper over String to avoid certain kinds of attack. For more elaboration please see
 /// the documentation for the SecretKey structure.
 #[derive(Clone)]
-#[api(repr(String))]
+#[api(repr(String), secret)]
 pub struct Password(Arc<Zeroizing<String>>);
 
 impl From<String> for Password {

@@ -231,6 +231,8 @@ pub struct ComplexVariant {
 pub struct Struct {
     pub docs: Docs,
     pub fields: Fields,
+    /// Is the struct content secret (e.g., password, secret key, ...)?
+    pub secret: bool,
 }
 
 #[derive(Debug)]

@@ -312,8 +312,9 @@ fn parse_struct(item: ItemStruct) -> Result<Struct> {
     }
 
     let docs = parse_docs(&item.attrs)?;
+    let attrs = parse_api_attrs(&item.attrs)?;
 
-    if let Some(ty) = parse_api_repr(&item.attrs)? {
+    if let Some(ty) = attrs.repr {
         // If the struct is annotated with `#[api(repr(T))]` we ignore the fields altogether
         // treat it as if it contained only one field of type `T`.
         Ok(Struct {
@@ -322,6 +323,7 @@ fn parse_struct(item: ItemStruct) -> Result<Struct> {
                 docs: Docs::default(),
                 ty,
             }),
+            secret: attrs.secret,
         })
     } else {
         match item.fields {
@@ -335,6 +337,7 @@ fn parse_struct(item: ItemStruct) -> Result<Struct> {
                 Ok(Struct {
                     docs,
                     fields: Fields::Named(fields),
+                    secret: attrs.secret,
                 })
             }
             syn::Fields::Unnamed(fields) => {
@@ -347,6 +350,7 @@ fn parse_struct(item: ItemStruct) -> Result<Struct> {
                         Ok(Struct {
                             docs,
                             fields: Fields::Unnamed(field),
+                            secret: attrs.secret,
                         })
                     }
                     _ => bail!("tuple structs with more than one field not supported"),
@@ -355,6 +359,7 @@ fn parse_struct(item: ItemStruct) -> Result<Struct> {
             syn::Fields::Unit => Ok(Struct {
                 docs,
                 fields: Fields::Unit,
+                secret: attrs.secret,
             }),
         }
     }
@@ -424,7 +429,7 @@ fn parse_unnamed_fields(fields: &Punctuated<syn::Field, Token![,]>) -> Result<Ve
     Ok(out)
 }
 
-fn parse_api_repr(attrs: &[Attribute]) -> Result<Option<Type>> {
+fn parse_api_attrs(attrs: &[Attribute]) -> Result<Attrs> {
     for attr in attrs {
         if !attr.path().is_ident("api") {
             continue;
@@ -436,28 +441,40 @@ fn parse_api_repr(attrs: &[Attribute]) -> Result<Option<Type>> {
         };
 
         let mut repr_ty = None;
+        let mut secret = false;
 
         list.parse_nested_meta(|meta| {
-            if !meta.path.is_ident("repr") {
+            if meta.path.is_ident("repr") {
+                if meta.input.peek(syn::token::Paren) {
+                    let content;
+                    parenthesized!(content in meta.input);
+                    let ty: syn::Type = content.parse()?;
+                    repr_ty = Some(ty);
+                }
+
                 return Ok(());
             }
 
-            if meta.input.peek(syn::token::Paren) {
-                let content;
-                parenthesized!(content in meta.input);
-                let ty: syn::Type = content.parse()?;
-                repr_ty = Some(ty);
+            if meta.path.is_ident("secret") {
+                secret = true;
+                return Ok(());
             }
 
             Ok(())
         })?;
 
-        if let Some(ty) = repr_ty {
-            return Ok(Some(parse_type(&ty)?));
-        }
+        let repr = repr_ty.map(|ty| parse_type(&ty)).transpose()?;
+
+        return Ok(Attrs { repr, secret });
     }
 
-    Ok(None)
+    Ok(Attrs::default())
+}
+
+#[derive(Default, Debug)]
+struct Attrs {
+    repr: Option<Type>,
+    secret: bool,
 }
 
 fn into_complex_variant(v: SimpleVariant) -> ComplexVariant {
@@ -731,23 +748,54 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_api_repr() {
+    fn test_parse_api_attrs() {
         let attrs: Vec<Attribute> = parse_quote! {
             #[api]
         };
-        assert_matches!(parse_api_repr(&attrs), Ok(None));
+        assert_matches!(
+            parse_api_attrs(&attrs),
+            Ok(Attrs {
+                repr: None,
+                secret: false
+            })
+        );
 
         let attrs: Vec<Attribute> = parse_quote! {
             #[api(nonsense)]
         };
-        assert_matches!(parse_api_repr(&attrs), Ok(None));
+        assert_matches!(
+            parse_api_attrs(&attrs),
+            Ok(Attrs {
+                repr: None,
+                secret: false
+            })
+        );
 
         let attrs: Vec<Attribute> = parse_quote! {
             #[api(repr(u32))]
         };
         assert_matches!(
-            parse_api_repr(&attrs),
-            Ok(Some(Type::Scalar(name))) if name == "u32"
+            parse_api_attrs(&attrs),
+            Ok(Attrs { repr: Some(Type::Scalar(name)), secret: false }) if name == "u32"
+        );
+
+        let attrs: Vec<Attribute> = parse_quote! {
+            #[api(secret)]
+        };
+        assert_matches!(
+            parse_api_attrs(&attrs),
+            Ok(Attrs {
+                repr: None,
+                secret: true
+            })
+        );
+
+        let attrs: Vec<Attribute> = parse_quote! {
+            #[api(repr(String), secret)]
+        };
+        assert_matches!(
+            parse_api_attrs(&attrs),
+            Ok(Attrs { repr: Some(Type::Scalar(name)), secret: true }) if name == "String"
         );
     }
 

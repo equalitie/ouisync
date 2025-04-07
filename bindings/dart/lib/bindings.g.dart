@@ -96,20 +96,20 @@ final class SecretKey {
   final List<int> value;
 
   SecretKey(this.value);
-  
+
   void encode(Packer p) {
     p.packBinary(value);
   }
-  
+
   static SecretKey? decode(Unpacker u) {
     return SecretKey(u.unpackBinary());
   }
-  
+
   @override
   operator==(Object other) =>
       other is SecretKey &&
       _ListWrapper(other.value) == _ListWrapper(value);
-  
+
   @override
   int get hashCode => _ListWrapper(value).hashCode;
 }
@@ -120,43 +120,46 @@ final class Password {
   final String value;
 
   Password(this.value);
-  
+
   void encode(Packer p) {
     p.packString(value);
   }
-  
+
   static Password? decode(Unpacker u) {
     final value = u.unpackString();
     return value != null ? Password(value) : null;
   }
-  
+
   @override
   operator==(Object other) =>
       other is Password &&
       other.value == value;
-  
+
   @override
   int get hashCode => value.hashCode;
+
+  @override
+  String toString() => '****';
 }
 
 final class PasswordSalt {
   final List<int> value;
 
   PasswordSalt(this.value);
-  
+
   void encode(Packer p) {
     p.packBinary(value);
   }
-  
+
   static PasswordSalt? decode(Unpacker u) {
     return PasswordSalt(u.unpackBinary());
   }
-  
+
   @override
   operator==(Object other) =>
       other is PasswordSalt &&
       _ListWrapper(other.value) == _ListWrapper(value);
-  
+
   @override
   int get hashCode => _ListWrapper(value).hashCode;
 }
@@ -168,12 +171,12 @@ final class StorageSize {
   StorageSize({
     required this.bytes,
   });
-  
+
   void encode(Packer p) {
     p.packListLength(1);
     p.packInt(bytes);
   }
-  
+
   static StorageSize? decode(Unpacker u) {
     switch (u.unpackListLength()) {
       case 0: return null;
@@ -184,12 +187,12 @@ final class StorageSize {
       bytes: (u.unpackInt())!,
     );
   }
-  
+
   @override
   operator==(Object other) =>
       other is StorageSize &&
       other.bytes == bytes;
-  
+
   @override
   int get hashCode => bytes.hashCode;
 }
@@ -247,7 +250,7 @@ sealed class LocalSecret {
         value.encode(p);
     }
   }
-  
+
   static LocalSecret? decode(Unpacker u) {
     try {
       switch (u.unpackString()) {
@@ -270,7 +273,7 @@ sealed class LocalSecret {
       }
     }
   }
-  
+
 }
 
 class LocalSecretPassword extends LocalSecret {
@@ -305,7 +308,7 @@ sealed class SetLocalSecret {
         salt.encode(p);
     }
   }
-  
+
   static SetLocalSecret? decode(Unpacker u) {
     try {
       switch (u.unpackString()) {
@@ -330,7 +333,7 @@ sealed class SetLocalSecret {
       }
     }
   }
-  
+
 }
 
 class SetLocalSecretPassword extends SetLocalSecret {
@@ -355,23 +358,26 @@ final class ShareToken {
   final String value;
 
   ShareToken(this.value);
-  
+
   void encode(Packer p) {
     p.packString(value);
   }
-  
+
   static ShareToken? decode(Unpacker u) {
     final value = u.unpackString();
     return value != null ? ShareToken(value) : null;
   }
-  
+
   @override
   operator==(Object other) =>
       other is ShareToken &&
       other.value == value;
-  
+
   @override
   int get hashCode => value.hashCode;
+
+  @override
+  String toString() => value;
 }
 
 sealed class AccessChange {
@@ -388,7 +394,7 @@ sealed class AccessChange {
         p.packString('Disable');
     }
   }
-  
+
   static AccessChange? decode(Unpacker u) {
     try {
       switch (u.unpackString()) {
@@ -408,7 +414,7 @@ sealed class AccessChange {
       }
     }
   }
-  
+
 }
 
 class AccessChangeEnable extends AccessChange {
@@ -497,7 +503,7 @@ final class PeerInfo {
     required this.state,
     required this.stats,
   });
-  
+
   void encode(Packer p) {
     p.packListLength(4);
     p.packString(addr);
@@ -505,7 +511,7 @@ final class PeerInfo {
     state.encode(p);
     stats.encode(p);
   }
-  
+
   static PeerInfo? decode(Unpacker u) {
     switch (u.unpackListLength()) {
       case 0: return null;
@@ -519,7 +525,7 @@ final class PeerInfo {
       stats: (Stats.decode(u))!,
     );
   }
-  
+
   @override
   operator==(Object other) =>
       other is PeerInfo &&
@@ -527,7 +533,7 @@ final class PeerInfo {
       other.source == source &&
       other.state == state &&
       other.stats == stats;
-  
+
   @override
   int get hashCode => Object.hash(
         addr,
@@ -604,7 +610,7 @@ sealed class PeerState {
         _encodeDateTime(p, since);
     }
   }
-  
+
   static PeerState? decode(Unpacker u) {
     try {
       switch (u.unpackString()) {
@@ -628,7 +634,7 @@ sealed class PeerState {
       }
     }
   }
-  
+
 }
 
 class PeerStateKnown extends PeerState {
@@ -657,20 +663,20 @@ final class PublicRuntimeId {
   final List<int> value;
 
   PublicRuntimeId(this.value);
-  
+
   void encode(Packer p) {
     p.packBinary(value);
   }
-  
+
   static PublicRuntimeId? decode(Unpacker u) {
     return PublicRuntimeId(u.unpackBinary());
   }
-  
+
   @override
   operator==(Object other) =>
       other is PublicRuntimeId &&
       _ListWrapper(other.value) == _ListWrapper(value);
-  
+
   @override
   int get hashCode => _ListWrapper(value).hashCode;
 }
@@ -692,7 +698,7 @@ final class Stats {
     required this.throughputTx,
     required this.throughputRx,
   });
-  
+
   void encode(Packer p) {
     p.packListLength(4);
     p.packInt(bytesTx);
@@ -700,7 +706,7 @@ final class Stats {
     p.packInt(throughputTx);
     p.packInt(throughputRx);
   }
-  
+
   static Stats? decode(Unpacker u) {
     switch (u.unpackListLength()) {
       case 0: return null;
@@ -714,7 +720,7 @@ final class Stats {
       throughputRx: (u.unpackInt())!,
     );
   }
-  
+
   @override
   operator==(Object other) =>
       other is Stats &&
@@ -722,7 +728,7 @@ final class Stats {
       other.bytesRx == bytesRx &&
       other.throughputTx == throughputTx &&
       other.throughputRx == throughputRx;
-  
+
   @override
   int get hashCode => Object.hash(
         bytesTx,
@@ -741,13 +747,13 @@ final class Progress {
     required this.value,
     required this.total,
   });
-  
+
   void encode(Packer p) {
     p.packListLength(2);
     p.packInt(value);
     p.packInt(total);
   }
-  
+
   static Progress? decode(Unpacker u) {
     switch (u.unpackListLength()) {
       case 0: return null;
@@ -759,13 +765,13 @@ final class Progress {
       total: (u.unpackInt())!,
     );
   }
-  
+
   @override
   operator==(Object other) =>
       other is Progress &&
       other.value == value &&
       other.total == total;
-  
+
   @override
   int get hashCode => Object.hash(
         value,
@@ -952,12 +958,12 @@ class OuisyncException implements Exception {
   final ErrorCode code;
   final String message;
   final List<String> sources;
-  
+
   OuisyncException._(this.code, String? message, this.sources)
       : message = message ?? code.toString() {
     assert(code != ErrorCode.ok);
   }
-  
+
   factory OuisyncException(
     ErrorCode code, [
     String? message,
@@ -995,7 +1001,7 @@ class OuisyncException implements Exception {
       ErrorCode.storeDirUnspecified => StoreDirUnspecified(message, sources),
       ErrorCode.other => OuisyncException._(code, message, sources),
     };
-  
+
   @override
   String toString() => [message].followedBy(sources).join(' → ');
 }
@@ -1210,21 +1216,21 @@ final class MessageId {
   final int value;
 
   MessageId(this.value);
-  
+
   void encode(Packer p) {
     p.packInt(value);
   }
-  
+
   static MessageId? decode(Unpacker u) {
     final value = u.unpackInt();
     return value != null ? MessageId(value) : null;
   }
-  
+
   @override
   operator==(Object other) =>
       other is MessageId &&
       other.value == value;
-  
+
   @override
   int get hashCode => value.hashCode;
 }
@@ -1247,14 +1253,14 @@ final class MetadataEdit {
     required this.oldValue,
     required this.newValue,
   });
-  
+
   void encode(Packer p) {
     p.packListLength(3);
     p.packString(key);
     _encodeNullable(p, oldValue, (p, e) => p.packString(e));
     _encodeNullable(p, newValue, (p, e) => p.packString(e));
   }
-  
+
   static MetadataEdit? decode(Unpacker u) {
     switch (u.unpackListLength()) {
       case 0: return null;
@@ -1267,14 +1273,14 @@ final class MetadataEdit {
       newValue: u.unpackString(),
     );
   }
-  
+
   @override
   operator==(Object other) =>
       other is MetadataEdit &&
       other.key == key &&
       other.oldValue == oldValue &&
       other.newValue == newValue;
-  
+
   @override
   int get hashCode => Object.hash(
         key,
@@ -1293,14 +1299,14 @@ final class NetworkDefaults {
     required this.portForwardingEnabled,
     required this.localDiscoveryEnabled,
   });
-  
+
   void encode(Packer p) {
     p.packListLength(3);
     _encodeList(p, bind, (p, e) => p.packString(e));
     p.packBool(portForwardingEnabled);
     p.packBool(localDiscoveryEnabled);
   }
-  
+
   static NetworkDefaults? decode(Unpacker u) {
     switch (u.unpackListLength()) {
       case 0: return null;
@@ -1313,14 +1319,14 @@ final class NetworkDefaults {
       localDiscoveryEnabled: (u.unpackBool())!,
     );
   }
-  
+
   @override
   operator==(Object other) =>
       other is NetworkDefaults &&
       _ListWrapper(other.bind) == _ListWrapper(bind) &&
       other.portForwardingEnabled == portForwardingEnabled &&
       other.localDiscoveryEnabled == localDiscoveryEnabled;
-  
+
   @override
   int get hashCode => Object.hash(
         _ListWrapper(bind),
@@ -1337,13 +1343,13 @@ final class DirectoryEntry {
     required this.name,
     required this.entryType,
   });
-  
+
   void encode(Packer p) {
     p.packListLength(2);
     p.packString(name);
     entryType.encode(p);
   }
-  
+
   static DirectoryEntry? decode(Unpacker u) {
     switch (u.unpackListLength()) {
       case 0: return null;
@@ -1355,13 +1361,13 @@ final class DirectoryEntry {
       entryType: (EntryType.decode(u))!,
     );
   }
-  
+
   @override
   operator==(Object other) =>
       other is DirectoryEntry &&
       other.name == name &&
       other.entryType == entryType;
-  
+
   @override
   int get hashCode => Object.hash(
         name,
@@ -1377,13 +1383,13 @@ final class QuotaInfo {
     required this.quota,
     required this.size,
   });
-  
+
   void encode(Packer p) {
     p.packListLength(2);
     _encodeNullable(p, quota, (p, e) => e.encode(p));
     size.encode(p);
   }
-  
+
   static QuotaInfo? decode(Unpacker u) {
     switch (u.unpackListLength()) {
       case 0: return null;
@@ -1395,13 +1401,13 @@ final class QuotaInfo {
       size: (StorageSize.decode(u))!,
     );
   }
-  
+
   @override
   operator==(Object other) =>
       other is QuotaInfo &&
       other.quota == quota &&
       other.size == size;
-  
+
   @override
   int get hashCode => Object.hash(
         quota,
@@ -1413,21 +1419,21 @@ final class FileHandle {
   final int value;
 
   FileHandle(this.value);
-  
+
   void encode(Packer p) {
     p.packInt(value);
   }
-  
+
   static FileHandle? decode(Unpacker u) {
     final value = u.unpackInt();
     return value != null ? FileHandle(value) : null;
   }
-  
+
   @override
   operator==(Object other) =>
       other is FileHandle &&
       other.value == value;
-  
+
   @override
   int get hashCode => value.hashCode;
 }
@@ -1436,21 +1442,21 @@ final class RepositoryHandle {
   final int value;
 
   RepositoryHandle(this.value);
-  
+
   void encode(Packer p) {
     p.packInt(value);
   }
-  
+
   static RepositoryHandle? decode(Unpacker u) {
     final value = u.unpackInt();
     return value != null ? RepositoryHandle(value) : null;
   }
-  
+
   @override
   operator==(Object other) =>
       other is RepositoryHandle &&
       other.value == value;
-  
+
   @override
   int get hashCode => value.hashCode;
 }
@@ -2194,7 +2200,7 @@ sealed class Request {
         p.packString(token);
     }
   }
-  
+
 }
 
 class RequestFileClose extends Request {
@@ -3163,7 +3169,7 @@ sealed class Response {
       }
     }
   }
-  
+
 }
 
 class ResponseAccessMode extends Response {
@@ -3342,9 +3348,9 @@ class ResponseU64 extends Response {
 
 class Session {
   final Client client;
-  
+
   Session(this.client);
-  
+
   Future<void> addUserProvidedPeers(
     List<String> addrs,
   ) async {
@@ -3357,7 +3363,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> bindNetwork(
     List<String> addrs,
   ) async {
@@ -3370,7 +3376,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Repository> createRepository({
     required String path,
     SetLocalSecret? readSecret,
@@ -3395,7 +3401,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Delete a repository with the given name.
   Future<void> deleteRepositoryByName(
     String name,
@@ -3409,7 +3415,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<SecretKey> deriveSecretKey(
     Password password,
     PasswordSalt salt,
@@ -3424,7 +3430,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Repository> findRepository(
     String name,
   ) async {
@@ -3437,7 +3443,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<PasswordSalt> generatePasswordSalt(
   ) async {
     final request = RequestSessionGeneratePasswordSalt(
@@ -3448,7 +3454,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<SecretKey> generateSecretKey(
   ) async {
     final request = RequestSessionGenerateSecretKey(
@@ -3459,7 +3465,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<int> getCurrentProtocolVersion(
   ) async {
     final request = RequestSessionGetCurrentProtocolVersion(
@@ -3470,7 +3476,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Duration?> getDefaultBlockExpiration(
   ) async {
     final request = RequestSessionGetDefaultBlockExpiration(
@@ -3482,7 +3488,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<StorageSize?> getDefaultQuota(
   ) async {
     final request = RequestSessionGetDefaultQuota(
@@ -3494,7 +3500,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Duration?> getDefaultRepositoryExpiration(
   ) async {
     final request = RequestSessionGetDefaultRepositoryExpiration(
@@ -3506,7 +3512,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<String?> getExternalAddrV4(
   ) async {
     final request = RequestSessionGetExternalAddrV4(
@@ -3518,7 +3524,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<String?> getExternalAddrV6(
   ) async {
     final request = RequestSessionGetExternalAddrV6(
@@ -3530,7 +3536,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<int> getHighestSeenProtocolVersion(
   ) async {
     final request = RequestSessionGetHighestSeenProtocolVersion(
@@ -3541,7 +3547,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<List<String>> getLocalListenerAddrs(
   ) async {
     final request = RequestSessionGetLocalListenerAddrs(
@@ -3552,7 +3558,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<String?> getMountRoot(
   ) async {
     final request = RequestSessionGetMountRoot(
@@ -3564,7 +3570,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<NatBehavior?> getNatBehavior(
   ) async {
     final request = RequestSessionGetNatBehavior(
@@ -3576,7 +3582,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Stats> getNetworkStats(
   ) async {
     final request = RequestSessionGetNetworkStats(
@@ -3587,7 +3593,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<List<PeerInfo>> getPeers(
   ) async {
     final request = RequestSessionGetPeers(
@@ -3598,7 +3604,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<List<String>> getRemoteListenerAddrs(
     String host,
   ) async {
@@ -3611,7 +3617,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<PublicRuntimeId> getRuntimeId(
   ) async {
     final request = RequestSessionGetRuntimeId(
@@ -3622,7 +3628,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<AccessMode> getShareTokenAccessMode(
     ShareToken token,
   ) async {
@@ -3635,7 +3641,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Return the info-hash of the repository corresponding to the given token, formatted as hex
   /// string.
   ///
@@ -3652,7 +3658,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<String> getShareTokenSuggestedName(
     ShareToken token,
   ) async {
@@ -3665,7 +3671,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<StateMonitorNode?> getStateMonitor(
     List<MonitorId> path,
   ) async {
@@ -3679,7 +3685,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<String?> getStoreDir(
   ) async {
     final request = RequestSessionGetStoreDir(
@@ -3691,7 +3697,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<List<String>> getUserProvidedPeers(
   ) async {
     final request = RequestSessionGetUserProvidedPeers(
@@ -3702,7 +3708,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Initializes the network according to the stored configuration. If a particular network
   /// parameter is not yet configured, falls back to the given defaults.
   Future<void> initNetwork(
@@ -3717,7 +3723,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> isLocalDiscoveryEnabled(
   ) async {
     final request = RequestSessionIsLocalDiscoveryEnabled(
@@ -3728,7 +3734,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Checks whether accepting peers discovered on the peer exchange is enabled.
   Future<bool> isPexRecvEnabled(
   ) async {
@@ -3740,7 +3746,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> isPexSendEnabled(
   ) async {
     final request = RequestSessionIsPexSendEnabled(
@@ -3751,7 +3757,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> isPortForwardingEnabled(
   ) async {
     final request = RequestSessionIsPortForwardingEnabled(
@@ -3762,7 +3768,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Map<String, Repository>> listRepositories(
   ) async {
     final request = RequestSessionListRepositories(
@@ -3773,7 +3779,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> mirrorExists(
     ShareToken token,
     String host,
@@ -3788,7 +3794,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Repository> openRepository({
     required String path,
     LocalSecret? localSecret,
@@ -3803,7 +3809,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> removeUserProvidedPeers(
     List<String> addrs,
   ) async {
@@ -3816,7 +3822,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setDefaultBlockExpiration(
     Duration? value,
   ) async {
@@ -3829,7 +3835,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setDefaultQuota(
     StorageSize? value,
   ) async {
@@ -3842,7 +3848,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setDefaultRepositoryExpiration(
     Duration? value,
   ) async {
@@ -3855,7 +3861,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setLocalDiscoveryEnabled(
     bool enabled,
   ) async {
@@ -3868,7 +3874,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setMountRoot(
     String? path,
   ) async {
@@ -3881,7 +3887,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setPexRecvEnabled(
     bool enabled,
   ) async {
@@ -3894,7 +3900,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setPexSendEnabled(
     bool enabled,
   ) async {
@@ -3907,7 +3913,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setPortForwardingEnabled(
     bool enabled,
   ) async {
@@ -3920,7 +3926,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setStoreDir(
     String path,
   ) async {
@@ -3933,7 +3939,7 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<ShareToken> validateShareToken(
     String token,
   ) async {
@@ -3946,15 +3952,15 @@ class Session {
       default: throw UnexpectedResponse();
     }
   }
-  
+
 }
 
 class Repository {
   final Client client;
   final RepositoryHandle handle;
-  
+
   Repository(this.client, this.handle);
-  
+
   Future<void> close(
   ) async {
     final request = RequestRepositoryClose(
@@ -3966,7 +3972,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> createDirectory(
     String path,
   ) async {
@@ -3980,7 +3986,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<File> createFile(
     String path,
   ) async {
@@ -3994,7 +4000,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> createMirror(
     String host,
   ) async {
@@ -4008,7 +4014,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Delete a repository
   Future<void> delete(
   ) async {
@@ -4021,7 +4027,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> deleteMirror(
     String host,
   ) async {
@@ -4035,7 +4041,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Export repository to file
   Future<String> export(
     String outputPath,
@@ -4050,7 +4056,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> fileExists(
     String path,
   ) async {
@@ -4064,7 +4070,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<AccessMode> getAccessMode(
   ) async {
     final request = RequestRepositoryGetAccessMode(
@@ -4076,7 +4082,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Duration?> getBlockExpiration(
   ) async {
     final request = RequestRepositoryGetBlockExpiration(
@@ -4089,7 +4095,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<List<int>> getCredentials(
   ) async {
     final request = RequestRepositoryGetCredentials(
@@ -4101,7 +4107,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
   /// exist.
   Future<EntryType?> getEntryType(
@@ -4118,7 +4124,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Duration?> getExpiration(
   ) async {
     final request = RequestRepositoryGetExpiration(
@@ -4131,7 +4137,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
   /// unique, non-secret identifier of the repository.
   Future<String> getInfoHash(
@@ -4145,7 +4151,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<String?> getMetadata(
     String key,
   ) async {
@@ -4160,7 +4166,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<String?> getMountPoint(
   ) async {
     final request = RequestRepositoryGetMountPoint(
@@ -4173,7 +4179,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<String> getPath(
   ) async {
     final request = RequestRepositoryGetPath(
@@ -4185,7 +4191,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<QuotaInfo> getQuota(
   ) async {
     final request = RequestRepositoryGetQuota(
@@ -4197,7 +4203,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Stats> getStats(
   ) async {
     final request = RequestRepositoryGetStats(
@@ -4209,7 +4215,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<Progress> getSyncProgress(
   ) async {
     final request = RequestRepositoryGetSyncProgress(
@@ -4221,7 +4227,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> isDhtEnabled(
   ) async {
     final request = RequestRepositoryIsDhtEnabled(
@@ -4233,7 +4239,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> isPexEnabled(
   ) async {
     final request = RequestRepositoryIsPexEnabled(
@@ -4245,7 +4251,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> isSyncEnabled(
   ) async {
     final request = RequestRepositoryIsSyncEnabled(
@@ -4257,7 +4263,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> mirrorExists(
     String host,
   ) async {
@@ -4271,7 +4277,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<String> mount(
   ) async {
     final request = RequestRepositoryMount(
@@ -4283,7 +4289,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> move(
     String dst,
   ) async {
@@ -4297,7 +4303,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> moveEntry(
     String src,
     String dst,
@@ -4313,7 +4319,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<File> openFile(
     String path,
   ) async {
@@ -4327,7 +4333,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<List<DirectoryEntry>> readDirectory(
     String path,
   ) async {
@@ -4341,7 +4347,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Removes the directory at the given path from the repository. If `recursive` is true it removes
   /// also the contents, otherwise the directory must be empty.
   Future<void> removeDirectory(
@@ -4359,7 +4365,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Remove (delete) the file at the given path from the repository.
   Future<void> removeFile(
     String path,
@@ -4374,7 +4380,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> resetAccess(
     ShareToken token,
   ) async {
@@ -4388,7 +4394,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setAccess({
     AccessChange? read,
     AccessChange? write,
@@ -4404,7 +4410,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setAccessMode(
     AccessMode accessMode,
     LocalSecret? localSecret,
@@ -4420,7 +4426,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setBlockExpiration(
     Duration? value,
   ) async {
@@ -4434,7 +4440,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setCredentials(
     List<int> credentials,
   ) async {
@@ -4448,7 +4454,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setDhtEnabled(
     bool enabled,
   ) async {
@@ -4462,7 +4468,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setExpiration(
     Duration? value,
   ) async {
@@ -4476,7 +4482,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<bool> setMetadata(
     List<MetadataEdit> edits,
   ) async {
@@ -4490,7 +4496,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setPexEnabled(
     bool enabled,
   ) async {
@@ -4504,7 +4510,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setQuota(
     StorageSize? value,
   ) async {
@@ -4518,7 +4524,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> setSyncEnabled(
     bool enabled,
   ) async {
@@ -4532,7 +4538,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<ShareToken> share({
     LocalSecret? localSecret,
     required AccessMode accessMode,
@@ -4548,7 +4554,7 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> unmount(
   ) async {
     final request = RequestRepositoryUnmount(
@@ -4560,27 +4566,27 @@ class Repository {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   @override
   bool operator ==(Object other) =>
       other is Repository &&
       other.client == client &&
       other.handle == handle;
-  
+
   @override
   int get hashCode => Object.hash(client, handle);
-  
+
   @override
   String toString() => '$runtimeType($handle)';
-  
+
 }
 
 class File {
   final Client client;
   final FileHandle handle;
-  
+
   File(this.client, this.handle);
-  
+
   Future<void> close(
   ) async {
     final request = RequestFileClose(
@@ -4592,7 +4598,7 @@ class File {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> flush(
   ) async {
     final request = RequestFileFlush(
@@ -4604,7 +4610,7 @@ class File {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<int> getLength(
   ) async {
     final request = RequestFileGetLength(
@@ -4616,7 +4622,7 @@ class File {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Returns sync progress of the given file.
   Future<int> getProgress(
   ) async {
@@ -4629,7 +4635,7 @@ class File {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   /// Reads `size` bytes from the file starting at `offset` bytes from the beginning of the file.
   Future<List<int>> read(
     int offset,
@@ -4646,7 +4652,7 @@ class File {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> truncate(
     int len,
   ) async {
@@ -4660,7 +4666,7 @@ class File {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   Future<void> write(
     int offset,
     List<int> data,
@@ -4676,18 +4682,18 @@ class File {
       default: throw UnexpectedResponse();
     }
   }
-  
+
   @override
   bool operator ==(Object other) =>
       other is File &&
       other.client == client &&
       other.handle == handle;
-  
+
   @override
   int get hashCode => Object.hash(client, handle);
-  
+
   @override
   String toString() => '$runtimeType($handle)';
-  
+
 }
 

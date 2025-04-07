@@ -1,7 +1,7 @@
 use anyhow::{bail, Context as _, Error, Result};
 use heck::{AsLowerCamelCase, AsPascalCase, ToLowerCamelCase, ToSnakeCase};
 use ouisync_api_parser::{
-    ComplexEnum, Context, Docs, Fields, Item, RequestVariant, SimpleEnum, Struct,
+    ComplexEnum, Context, Docs, Field, Fields, Item, RequestVariant, SimpleEnum, Struct,
     ToResponseVariantName, Type,
 };
 use std::{borrow::Cow, fmt, io::Write};
@@ -167,7 +167,7 @@ fn write_complex_enum(
 
         writeln!(out, "{I}{I}}}")?;
         writeln!(out, "{I}}}")?;
-        writeln!(out, "{I}")?;
+        writeln!(out)?;
     }
 
     if decode {
@@ -245,7 +245,7 @@ fn write_complex_enum(
 
         writeln!(out, "{I}{I}}}")?;
         writeln!(out, "{I}}}")?;
-        writeln!(out, "{I}")?;
+        writeln!(out)?;
     }
 
     writeln!(out, "}}")?;
@@ -269,7 +269,7 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
     writeln!(out, "final class {name} {{")?;
 
     write_class_body(out, name, &item.fields)?;
-    writeln!(out, "{I}")?;
+    writeln!(out)?;
 
     // encode
     writeln!(out, "{I}void encode(Packer p) {{")?;
@@ -290,7 +290,7 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
     }
 
     writeln!(out, "{I}}}")?;
-    writeln!(out, "{I}")?;
+    writeln!(out)?;
 
     // decode
     writeln!(out, "{I}static {name}? decode(Unpacker u) {{")?;
@@ -338,7 +338,7 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
 
     if !item.fields.is_empty() {
         // operator ==
-        writeln!(out, "{I}")?;
+        writeln!(out)?;
         writeln!(out, "{I}@override")?;
         writeln!(out, "{I}operator==(Object other) =>")?;
         writeln!(out, "{I}{I}{I}other is {name} &&")?;
@@ -359,7 +359,7 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
         }
 
         // hashCode
-        writeln!(out, "{I}")?;
+        writeln!(out)?;
         writeln!(out, "{I}@override")?;
         write!(out, "{I}int get hashCode => ")?;
 
@@ -383,6 +383,27 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
             }
 
             writeln!(out, "{I}{I}{I});")?;
+        }
+
+        match &item.fields {
+            Fields::Unnamed(Field {
+                ty: Type::Scalar(s),
+                ..
+            }) if s == "String" => {
+                // toString
+                writeln!(out)?;
+                writeln!(out, "{I}@override")?;
+                write!(out, "{I}String toString() => ")?;
+
+                if item.secret {
+                    write!(out, "'****'")?;
+                } else {
+                    write!(out, "{DEFAULT_FIELD_NAME}")?;
+                }
+
+                writeln!(out, ";")?;
+            }
+            _ => (),
         }
     }
 
@@ -433,7 +454,7 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
     writeln!(out, "{I}final ErrorCode code;")?;
     writeln!(out, "{I}final String message;")?;
     writeln!(out, "{I}final List<String> sources;")?;
-    writeln!(out, "{I}")?;
+    writeln!(out)?;
 
     writeln!(
         out,
@@ -442,7 +463,7 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
     writeln!(out, "{I}{I}{I}: message = message ?? code.toString() {{")?;
     writeln!(out, "{I}{I}assert(code != ErrorCode.ok);")?;
     writeln!(out, "{I}}}")?;
-    writeln!(out, "{I}")?;
+    writeln!(out)?;
 
     writeln!(out, "{I}factory OuisyncException(")?;
     writeln!(out, "{I}{I}ErrorCode code, [")?;
@@ -470,7 +491,7 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
     }
 
     writeln!(out, "{I}{I}}};")?;
-    writeln!(out, "{I}")?;
+    writeln!(out)?;
 
     writeln!(out, "{I}@override")?;
     writeln!(
@@ -520,7 +541,7 @@ fn write_api_class(
         writeln!(out, "{I}final {ty} {name};")?;
     }
 
-    writeln!(out, "{I}")?;
+    writeln!(out)?;
 
     // constructor
     write!(out, "{I}{name}(this.client")?;
@@ -530,7 +551,7 @@ fn write_api_class(
     }
 
     writeln!(out, ");")?;
-    writeln!(out, "{I}")?;
+    writeln!(out)?;
 
     let prefix = format!("{}_", name.to_snake_case());
 
@@ -680,7 +701,7 @@ fn write_api_class(
         writeln!(out, "{I}{I}}}")?;
 
         writeln!(out, "{I}}}")?;
-        writeln!(out, "{I}")?;
+        writeln!(out)?;
     }
 
     if let Some((inner_name, _)) = inner {
@@ -690,7 +711,7 @@ fn write_api_class(
         writeln!(out, "{I}{I}{I}other is {name} &&")?;
         writeln!(out, "{I}{I}{I}other.client == client &&")?;
         writeln!(out, "{I}{I}{I}other.{inner_name} == {inner_name};")?;
-        writeln!(out, "{I}")?;
+        writeln!(out)?;
 
         // hashCode
         writeln!(out, "{I}@override")?;
@@ -698,7 +719,7 @@ fn write_api_class(
             out,
             "{I}int get hashCode => Object.hash(client, {inner_name});"
         )?;
-        writeln!(out, "{I}")?;
+        writeln!(out)?;
 
         // toString
         writeln!(out, "{I}@override")?;
@@ -706,7 +727,7 @@ fn write_api_class(
             out,
             "{I}String toString() => '$runtimeType(${inner_name})';"
         )?;
-        writeln!(out, "{I}")?;
+        writeln!(out)?;
     }
 
     writeln!(out, "}}")?;
