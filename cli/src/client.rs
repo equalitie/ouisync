@@ -320,9 +320,11 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                     .invoke(Request::RepositorySetMountRoot(Some(path)))
                     .await?;
             } else {
-                let path: PathBuf = client.invoke(Request::RepositoryGetMountRoot).await?;
+                let path: Option<PathBuf> = client.invoke(Request::RepositoryGetMountRoot).await?;
 
-                println!("{}", path.display());
+                if let Some(path) = path {
+                    println!("{}", path.display());
+                }
             }
         }
         ClientCommand::Open { path, password } => {
@@ -483,8 +485,11 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             if let Some(path) = path {
                 let () = client.invoke(Request::RepositorySetStoreDir(path)).await?;
             } else {
-                let path: PathBuf = client.invoke(Request::RepositoryGetStoreDir).await?;
-                println!("{}", path.display());
+                let path: Option<PathBuf> = client.invoke(Request::RepositoryGetStoreDir).await?;
+
+                if let Some(path) = path {
+                    println!("{}", path.display());
+                }
             }
         }
         ClientCommand::Unmount { name } => {
