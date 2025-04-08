@@ -1,12 +1,46 @@
-use std::{io, path::Path, sync::Arc};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use tokio::fs;
+use tokio::{fs, sync::OnceCell};
 use tokio_rustls::rustls::{
     self,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
 
 use crate::Error;
+
+pub(crate) struct TlsConfig {
+    dir: PathBuf,
+    server: OnceCell<Arc<rustls::ServerConfig>>,
+    client: OnceCell<Arc<rustls::ClientConfig>>,
+}
+
+impl TlsConfig {
+    pub fn new(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            server: OnceCell::new(),
+            client: OnceCell::new(),
+        }
+    }
+
+    pub async fn server(&self) -> Result<Arc<rustls::ServerConfig>, Error> {
+        self.server
+            .get_or_try_init(|| make_server_config(&self.dir))
+            .await
+            .cloned()
+    }
+
+    pub async fn client(&self) -> Result<Arc<rustls::ClientConfig>, Error> {
+        self.client
+            .get_or_try_init(|| make_client_config(&self.dir))
+            .await
+            .cloned()
+    }
+}
 
 pub(crate) async fn make_server_config(
     config_dir: &Path,

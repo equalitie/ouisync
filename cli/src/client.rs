@@ -246,14 +246,18 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         }
         ClientCommand::Metrics { addr, disable } => {
             if disable {
-                let () = client.invoke(Request::MetricsBind { addr: None }).await?;
+                let () = client
+                    .invoke(Request::SessionMetricsBind { addr: None })
+                    .await?;
             } else if let Some(addr) = addr {
                 let () = client
-                    .invoke(Request::MetricsBind { addr: Some(addr) })
+                    .invoke(Request::SessionMetricsBind { addr: Some(addr) })
                     .await?;
             }
 
-            let addr: Option<SocketAddr> = client.invoke(Request::MetricsGetListenerAddr).await?;
+            let addr: Option<SocketAddr> = client
+                .invoke(Request::SessionGetMetricsListenerAddr)
+                .await?;
 
             if let Some(addr) = addr {
                 println!("{addr}");

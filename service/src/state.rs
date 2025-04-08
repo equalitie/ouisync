@@ -12,10 +12,11 @@ use crate::{
     device_id, dht_contacts,
     error::Error,
     file::{FileHandle, FileHolder, FileSet},
+    metrics::MetricsServer,
     network::{self, PexConfig},
     protocol::{DirectoryEntry, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{RepositoryHandle, RepositoryHolder, RepositorySet},
-    tls,
+    tls::TlsConfig,
     transport::remote::RemoteClient,
     utils,
 };
@@ -42,9 +43,8 @@ use std::{
 };
 use tokio::{
     fs,
-    sync::{broadcast, watch, OnceCell},
+    sync::{broadcast, watch},
 };
-use tokio_rustls::rustls;
 use tokio_stream::StreamExt;
 
 const AUTOMOUNT_KEY: &str = "automount";
@@ -56,14 +56,14 @@ const REPOSITORY_FILE_EXTENSION: &str = "ouisyncdb";
 pub(crate) struct State {
     pub config: ConfigStore,
     pub network: Network,
+    pub tls_config: TlsConfig,
     store: Store,
     mounter: Option<MultiRepoVFS>,
     repos: RepositorySet,
     files: FileSet,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
-    remote_server_config: OnceCell<Arc<rustls::ServerConfig>>,
-    remote_client_config: OnceCell<Arc<rustls::ClientConfig>>,
+    metrics_server: MetricsServer,
 }
 
 impl State {
@@ -100,17 +100,21 @@ impl State {
 
         let repos_monitor = root_monitor.make_child("Repositories");
 
+        let tls_config = TlsConfig::new(config.dir().to_owned());
+
+        let metrics_server = MetricsServer::init(&config, &network, &tls_config).await?;
+
         let mut state = Self {
             config,
             network,
+            tls_config,
             store,
             mounter,
             root_monitor,
             repos_monitor,
             repos: RepositorySet::new(),
             files: FileSet::new(),
-            remote_server_config: OnceCell::new(),
-            remote_client_config: OnceCell::new(),
+            metrics_server,
         };
 
         state.load_repositories().await;
@@ -335,6 +339,22 @@ impl State {
     #[api]
     pub fn session_get_network_stats(&self) -> Stats {
         self.network.stats()
+    }
+
+    #[api]
+    pub async fn session_metrics_bind(&mut self, addr: Option<SocketAddr>) -> Result<(), Error> {
+        if let Some(addr) = addr {
+            self.metrics_server
+                .bind(&self.config, &self.network, &self.tls_config, addr)
+                .await
+        } else {
+            self.metrics_server.unbind(&self.config).await
+        }
+    }
+
+    #[api]
+    pub fn session_get_metrics_listener_addr(&self) -> Option<SocketAddr> {
+        todo!()
     }
 
     #[api]
@@ -1497,20 +1517,6 @@ impl State {
         Ok(())
     }
 
-    pub async fn remote_server_config(&self) -> Result<Arc<rustls::ServerConfig>, Error> {
-        self.remote_server_config
-            .get_or_try_init(|| tls::make_server_config(self.config.dir()))
-            .await
-            .cloned()
-    }
-
-    pub async fn remote_client_config(&self) -> Result<Arc<rustls::ClientConfig>, Error> {
-        self.remote_client_config
-            .get_or_try_init(|| tls::make_client_config(self.config.dir()))
-            .await
-            .cloned()
-    }
-
     pub fn store_dir(&self) -> Option<&Path> {
         self.store.dir.as_deref()
     }
@@ -1566,6 +1572,7 @@ impl State {
     }
 
     pub async fn close(&mut self) {
+        self.metrics_server.close();
         self.network.shutdown().await;
         self.close_repositories().await;
     }
@@ -1659,7 +1666,7 @@ impl State {
     }
 
     async fn connect_remote_client(&self, host: &str) -> Result<RemoteClient, Error> {
-        Ok(RemoteClient::connect(host, self.remote_client_config().await?).await?)
+        Ok(RemoteClient::connect(host, self.tls_config.client().await?).await?)
     }
 }
 

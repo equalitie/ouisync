@@ -24,7 +24,6 @@ pub use error::Error;
 
 use config_store::{ConfigError, ConfigKey, ConfigStore};
 use futures_util::{stream::FuturesUnordered, SinkExt};
-use metrics::MetricsServer;
 use ouisync_macros::api;
 use protocol::{
     DecodeError, Message, MessageId, NetworkDefaults, ProtocolError, RepositoryHandle, Request,
@@ -68,7 +67,6 @@ pub struct Service {
     readers: StreamMap<ConnectionId, StreamNotifyClose<ServerReader>>,
     writers: Slab<ServerWriter>,
     subscriptions: StreamMap<SubscriptionId, SubscriptionStream>,
-    metrics_server: MetricsServer,
 }
 
 impl Service {
@@ -97,15 +95,13 @@ impl Service {
 
         let remote_server = match state.config.entry(REMOTE_CONTROL_KEY).get().await {
             Ok(addr) => Some(
-                RemoteServer::bind(addr, state.remote_server_config().await?)
+                RemoteServer::bind(addr, state.tls_config.server().await?)
                     .await
                     .map_err(Error::Bind)?,
             ),
             Err(ConfigError::NotFound) => None,
             Err(error) => return Err(error.into()),
         };
-
-        let metrics_server = MetricsServer::init(&state).await?;
 
         Ok(Self {
             state,
@@ -114,7 +110,6 @@ impl Service {
             readers: StreamMap::new(),
             writers: Slab::new(),
             subscriptions: StreamMap::new(),
-            metrics_server,
         })
     }
 
@@ -171,8 +166,6 @@ impl Service {
     }
 
     pub async fn close(&mut self) {
-        self.metrics_server.close();
-
         self.readers.clear();
 
         for mut writer in self.writers.drain() {
@@ -226,7 +219,7 @@ impl Service {
         addr: Option<SocketAddr>,
     ) -> Result<u16, Error> {
         if let Some(addr) = addr {
-            let config = self.state.remote_server_config().await?;
+            let config = self.state.tls_config.server().await?;
             let remote_server = RemoteServer::bind(addr, config)
                 .await
                 .map_err(Error::Bind)?;
@@ -322,16 +315,6 @@ impl Service {
                 self.remove_connection(conn_id);
             }
         }
-    }
-
-    #[api]
-    async fn metrics_bind(&mut self, addr: Option<SocketAddr>) -> Result<(), Error> {
-        self.metrics_server.bind(&self.state, addr).await
-    }
-
-    #[api]
-    fn metrics_get_listener_addr(&self) -> Option<SocketAddr> {
-        todo!()
     }
 
     #[api]
