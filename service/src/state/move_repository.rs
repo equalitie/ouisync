@@ -230,13 +230,11 @@ async fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
     // First try rename
     match fs::rename(src, dst).await {
         Ok(()) => return Ok(()),
-        Err(_error) => {
-            // TODO: we should only fallback on `io::ErrorKind::CrossesDevices` but that variant is
-            // currently unstable.
-        }
+        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => (),
+        Err(error) => return Err(error),
     }
 
-    // If that didn't work, fallback to copy + remove
+    // `src` and `dst` are on different filesystems, fall back to copy + remove.
     fs::copy(src, dst).await?;
     fs::remove_file(src).await?;
 

@@ -77,18 +77,10 @@ const fn is_unicast(ip: &Ipv6Addr) -> bool {
 const fn is_unicast_global_ipv6(ip: &Ipv6Addr) -> bool {
     is_unicast(ip)
         && !ip.is_loopback()
-        && !is_unicast_link_local(ip)
-        && !is_unique_local(ip)
+        && !ip.is_unicast_link_local()
+        && !ip.is_unique_local()
         && !ip.is_unspecified()
         && !is_documentation(ip)
-}
-
-pub const fn is_unicast_link_local(ip: &Ipv6Addr) -> bool {
-    (ip.segments()[0] & 0xffc0) == 0xfe80
-}
-
-pub const fn is_unique_local(ip: &Ipv6Addr) -> bool {
-    (ip.segments()[0] & 0xfe00) == 0xfc00
 }
 
 pub const fn is_documentation(ip: &Ipv6Addr) -> bool {

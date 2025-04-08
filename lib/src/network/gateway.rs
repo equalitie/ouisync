@@ -643,8 +643,8 @@ fn ok_to_connect(addr: &SocketAddr, source: PeerSource) -> bool {
 
             if source == PeerSource::Dht
                 && (ip_addr.is_loopback()
-                    || ip::is_unicast_link_local(ip_addr)
-                    || ip::is_unique_local(ip_addr))
+                    || ip_addr.is_unicast_link_local()
+                    || ip_addr.is_unique_local())
             {
                 return false;
             }
