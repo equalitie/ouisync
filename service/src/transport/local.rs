@@ -218,11 +218,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let store_dir = temp_dir.path().join("store");
 
-        let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
         let port = service.local_port();
         let auth_key = *service.local_auth_key();
         service
-            .state_mut()
+            .state()
             .session_set_store_dir(store_dir.clone())
             .await
             .unwrap();
@@ -271,11 +271,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let store_dir = temp_dir.path().join("store");
 
-        let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
         let port = service.local_port();
         let auth_key = *service.local_auth_key();
         service
-            .state_mut()
+            .state()
             .session_set_store_dir(store_dir)
             .await
             .unwrap();
@@ -385,13 +385,13 @@ mod tests {
 
         // Create two separate services (A and B), each with its own client.
         let (port_a, auth_key_a, runner_a) = async {
-            let mut service = Service::init(temp_dir.path().join("config_a"))
+            let service = Service::init(temp_dir.path().join("config_a"))
                 .await
                 .unwrap();
             let port = service.local_port();
             let auth_key = *service.local_auth_key();
             service
-                .state_mut()
+                .state()
                 .session_set_store_dir(temp_dir.path().join("store_a"))
                 .await
                 .unwrap();
@@ -403,13 +403,13 @@ mod tests {
         .await;
 
         let (port_b, auth_key_b, runner_b) = async {
-            let mut service = Service::init(temp_dir.path().join("config_b"))
+            let service = Service::init(temp_dir.path().join("config_b"))
                 .await
                 .unwrap();
             let port = service.local_port();
             let auth_key = *service.local_auth_key();
             service
-                .state_mut()
+                .state()
                 .session_set_store_dir(temp_dir.path().join("store_b"))
                 .await
                 .unwrap();

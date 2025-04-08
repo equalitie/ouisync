@@ -1,10 +1,15 @@
 use std::{
     fmt, io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
-use crate::{protocol::RepositoryHandle, Error};
-use ouisync::{Credentials, Network};
+use crate::{
+    protocol::RepositoryHandle,
+    repository::{self, RepositorySet},
+    Error,
+};
+use ouisync::{Credentials, Network, Repository};
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use state_monitor::StateMonitor;
 use tokio::fs;
@@ -14,11 +19,11 @@ use super::{load_repository, ConfigStore, RepositoryHolder, State, Store};
 /// Move or rename a repository. Makes "best effort" to do it atomically, that is, if any step of
 /// this operation fails, tries to revert all previous steps before returning.
 pub(super) async fn invoke(
-    state: &mut State,
+    state: &State,
     handle: RepositoryHandle,
     dst: &Path,
 ) -> Result<(), Error> {
-    let mut context = Context::new(state, handle, dst)?;
+    let context = Context::new(state, handle, dst)?;
     let mut undo_stack = Vec::new();
 
     match context.invoke(&mut undo_stack).await {
@@ -34,39 +39,56 @@ struct Context<'a> {
     config: &'a ConfigStore,
     network: &'a Network,
     store: &'a Store,
-    mounter: Option<&'a MultiRepoVFS>,
+    repos: &'a RepositorySet,
+    mounter: Option<Arc<MultiRepoVFS>>,
     repos_monitor: &'a StateMonitor,
-    holder: &'a mut RepositoryHolder,
+    handle: RepositoryHandle,
+    repo: Arc<Repository>,
+    sync_enabled: bool,
+    src: PathBuf,
     dst: PathBuf,
 }
 
 impl<'a> Context<'a> {
-    fn new(state: &'a mut State, handle: RepositoryHandle, dst: &Path) -> Result<Self, Error> {
+    fn new(state: &'a State, handle: RepositoryHandle, dst: &Path) -> Result<Self, Error> {
         let dst = state.store.normalize_repository_path(dst)?;
 
         if state.repos.find_by_path(&dst).is_some() {
             return Err(Error::AlreadyExists);
         }
 
-        let holder = state.repos.get_mut(handle).ok_or(Error::InvalidArgument)?;
+        let (repo, sync_enabled, src) = state
+            .repos
+            .with(handle, |holder| {
+                (
+                    holder.repository().clone(),
+                    holder.is_sync_enabled(),
+                    holder.path().to_owned(),
+                )
+            })
+            .ok_or(Error::InvalidArgument)?;
 
         Ok(Self {
             config: &state.config,
             network: &state.network,
             store: &state.store,
-            mounter: state.mounter.as_ref(),
+            repos: &state.repos,
+            mounter: state.mounter.lock().unwrap().as_ref().cloned(),
             repos_monitor: &state.repos_monitor,
-            holder,
+            handle,
+            repo,
+            sync_enabled,
+            src,
             dst,
         })
     }
 
-    async fn invoke(&mut self, undo_stack: &mut Vec<Action>) -> Result<(), Error> {
+    async fn invoke(&self, undo_stack: &mut Vec<Action>) -> Result<(), Error> {
         // TODO: close all open files of this repo
 
         // 1. Unmount the repo (if mounted)
-        if let Some(mounter) = self.mounter {
-            mounter.remove(self.holder.short_name())?;
+        if let Some(mounter) = &self.mounter {
+            mounter.remove(repository::short_name(&self.src))?;
             undo_stack.push(Action::Unmount);
         }
 
@@ -78,17 +100,17 @@ impl<'a> Context<'a> {
         });
 
         // 3. Close the repo
-        let credentials = self.holder.repository().credentials();
-        let sync_enabled = self.holder.registration().is_some();
+        let credentials = self.repo.credentials();
+        let sync_enabled = self.sync_enabled;
 
-        self.holder.close().await?;
+        self.repo.close().await?;
         undo_stack.push(Action::CloseRepository {
             credentials: credentials.clone(),
             sync_enabled,
         });
 
         // 4. Move the database file(s)
-        for (src, dst) in ouisync::database_files(self.holder.path())
+        for (src, dst) in ouisync::database_files(&self.src)
             .into_iter()
             .zip(ouisync::database_files(&self.dst))
         {
@@ -101,26 +123,20 @@ impl<'a> Context<'a> {
         }
 
         // 5. Remove the old parent directory
-        let src_parent = self
-            .holder
-            .path()
-            .parent()
-            .ok_or(Error::InvalidArgument)?
-            .to_owned();
-        self.store
-            .remove_empty_ancestor_dirs(self.holder.path())
-            .await?;
+        let src_parent = self.src.parent().ok_or(Error::InvalidArgument)?.to_owned();
+        self.store.remove_empty_ancestor_dirs(&self.src).await?;
         undo_stack.push(Action::RemoveDir { path: src_parent });
 
         // 6. Open the repository from its new location
-        *self.holder = self
+        let holder = self
             .load_repository(&self.dst, credentials, sync_enabled)
             .await?;
+        self.repos.replace(self.handle, holder);
 
         Ok(())
     }
 
-    async fn undo(&mut self, undo_stack: &mut Vec<Action>) {
+    async fn undo(&self, undo_stack: &mut Vec<Action>) {
         while let Some(action) = undo_stack.pop() {
             let action_debug = format!("{:?}", action);
             action
@@ -144,7 +160,7 @@ impl<'a> Context<'a> {
             self.config,
             self.network,
             self.repos_monitor,
-            self.mounter,
+            self.mounter.as_deref(),
         )
         .await?;
         holder.repository().set_credentials(credentials).await?;
@@ -173,13 +189,13 @@ enum Action {
 }
 
 impl Action {
-    async fn undo(self, context: &mut Context<'_>) -> Result<(), Error> {
+    async fn undo(self, context: &Context<'_>) -> Result<(), Error> {
         match self {
             Self::Unmount => {
-                if let Some(mounter) = context.mounter {
+                if let Some(mounter) = &context.mounter {
                     mounter.insert(
-                        context.holder.short_name().to_owned(),
-                        context.holder.repository().clone(),
+                        repository::short_name(&context.src).to_owned(),
+                        context.repo.clone(),
                     )?;
                 }
             }
@@ -190,9 +206,10 @@ impl Action {
                 credentials,
                 sync_enabled,
             } => {
-                *context.holder = context
-                    .load_repository(context.holder.path(), credentials, sync_enabled)
+                let holder = context
+                    .load_repository(&context.src, credentials, sync_enabled)
                     .await?;
+                context.repos.replace(context.handle, holder);
             }
             Self::MoveFile { src, dst } => {
                 move_file(&dst, &src).await?;

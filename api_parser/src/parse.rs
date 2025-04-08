@@ -1,6 +1,6 @@
 use std::{fs, io, path::Path};
 
-use anyhow::{bail, format_err, Context as _, Result};
+use anyhow::{bail, format_err, Context as _, Error, Result};
 use heck::AsPascalCase;
 use syn::{
     parenthesized, punctuated::Punctuated, Attribute, BinOp, Expr, ExprBinary, FnArg,
@@ -18,14 +18,19 @@ pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool
         Ok(content) => content,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             if fail_on_not_found {
-                return Err(error.into());
+                return Err(Error::from(error))
+                    .with_context(|| format!("failed to read '{}'", path.display()));
             } else {
                 return Ok(false);
             }
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return Err(Error::from(error))
+                .with_context(|| format!("failed to read '{}'", path.display()))
+        }
     };
-    let file = syn::parse_file(&content)?;
+    let file = syn::parse_file(&content)
+        .with_context(|| format!("failed to parse '{}'", path.display()))?;
 
     parse_mod(ctx, path, file.items)?;
 
@@ -44,7 +49,7 @@ fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()
                 ctx.items.push((
                     name.clone(),
                     parse_enum(item).with_context(|| {
-                        format!("failed to parse enum {name} in {}", path.display())
+                        format!("failed to parse enum '{name}' in '{}'", path.display())
                     })?,
                 ))
             }
@@ -55,7 +60,7 @@ fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()
 
                 let name = item.ident.to_string();
                 let item = parse_struct(item).with_context(|| {
-                    format!("failed to parse struct {name} in {}", path.display())
+                    format!("failed to parse struct '{name}' in '{}'", path.display())
                 })?;
                 ctx.items.push((name.clone(), Item::Struct(item)));
             }
@@ -64,18 +69,13 @@ fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()
                 None => parse_mod_in_file(ctx, path, &item.ident.to_string())?,
             },
             syn::Item::Impl(item) => {
-                let scope = match &*item.self_ty {
-                    syn::Type::Path(path) => {
-                        if let Some(ident) = path.path.get_ident() {
-                            ident.to_string()
-                        } else {
-                            continue;
-                        }
-                    }
-                    _ => continue,
-                };
-
-                parse_impl(ctx, scope, item.items)?;
+                parse_impl(ctx, item.items).with_context(|| {
+                    format!(
+                        "failed to parse impl '{:?}' in '{}'",
+                        item.self_ty,
+                        path.display()
+                    )
+                })?;
             }
             _ => (),
         }
@@ -116,16 +116,14 @@ fn parse_mod_in_file(ctx: &mut Context, parent_path: &Path, name: &str) -> Resul
     bail!("mod `{}` not found in `{}`", name, path.display())
 }
 
-fn parse_impl(ctx: &mut Context, scope: String, items: Vec<ImplItem>) -> Result<()> {
+fn parse_impl(ctx: &mut Context, items: Vec<ImplItem>) -> Result<()> {
     for item in items {
         match item {
             ImplItem::Fn(item) => {
                 if is_api_item(&item.attrs) {
-                    ctx.request.variants.push(parse_request_variant(
-                        scope.clone(),
-                        &item.attrs,
-                        &item.sig,
-                    )?);
+                    ctx.request
+                        .variants
+                        .push(parse_request_variant(&item.attrs, &item.sig)?);
                 }
             }
             _ => continue,
@@ -139,11 +137,7 @@ fn is_api_item(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| attr.meta.path().is_ident("api"))
 }
 
-fn parse_request_variant(
-    scope: String,
-    attrs: &[Attribute],
-    sig: &Signature,
-) -> Result<(String, RequestVariant)> {
+fn parse_request_variant(attrs: &[Attribute], sig: &Signature) -> Result<(String, RequestVariant)> {
     let name = sig.ident.to_string();
     let ec = || format!("failed to parse request variant `{}`", AsPascalCase(&name));
 
@@ -162,10 +156,6 @@ fn parse_request_variant(
             Pat::Wild(_) => continue,
             _ => Err(format_err!("unsupported arg type {:?}", arg.pat)).with_context(ec)?,
         };
-
-        if ignore_request_arg(&scope, &name) {
-            continue;
-        }
 
         let ty = parse_type(&arg.ty).with_context(ec)?;
 
@@ -196,13 +186,8 @@ fn parse_request_variant(
             is_async: sig.asyncness.is_some(),
             fields,
             ret,
-            scope,
         },
     ))
-}
-
-fn ignore_request_arg(scope: &str, name: &str) -> bool {
-    scope == "Service" && (name == "conn_id" || name == "message_id")
 }
 
 enum Variant {
@@ -831,7 +816,6 @@ mod tests {
                         fields: Fields::Unit,
                         ret: Type::Unit,
                         is_async: false,
-                        scope: "State".to_owned(),
                     },
                 ),
                 (
@@ -850,7 +834,6 @@ mod tests {
                             "Error".to_string(),
                         ),
                         is_async: false,
-                        scope: "State".to_owned(),
                     },
                 ),
                 (
@@ -877,7 +860,6 @@ mod tests {
                         ]),
                         ret: Type::Result(Box::new(Type::Unit), "Error".to_string()),
                         is_async: true,
-                        scope: "State".to_owned(),
                     },
                 ),
             ],

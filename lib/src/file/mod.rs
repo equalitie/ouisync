@@ -73,7 +73,7 @@ impl File {
     /// NOTE: The future returned from this function doesn't borrow from `self` so it's possible
     /// to drop the `self` before/while awaiting it. This is useful to avoid keeping the file lock
     /// while awaiting the result.
-    pub fn progress(&self) -> impl Future<Output = Result<u64>> {
+    pub fn progress(&self) -> impl Future<Output = Result<u64>> + 'static {
         let branch = self.branch().clone();
         let blob_id = *self.blob.id();
         let len = self.len();

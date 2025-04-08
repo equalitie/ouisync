@@ -18,7 +18,8 @@ impl Context {
         let mut ctx = Self::default();
 
         for source in sources {
-            parse::parse_file(&mut ctx, source.as_ref(), true)?;
+            let source = source.as_ref();
+            parse::parse_file(&mut ctx, source, true)?;
         }
 
         ctx.request.sort();
@@ -68,8 +69,6 @@ pub struct RequestVariant {
     pub ret: Type,
     /// Whether the handler for this variant is async
     pub is_async: bool,
-    /// In which impl block is the handler defined
-    pub scope: String,
 }
 
 #[derive(Default, Debug)]
@@ -111,6 +110,7 @@ impl<'a> From<&'a Request> for Response {
         let types: HashSet<_> = request
             .variants
             .iter()
+            .filter(|(name, _)| !name.contains("subscribe"))
             .map(|(_, variant)| variant.ret.unwrap())
             .collect();
 

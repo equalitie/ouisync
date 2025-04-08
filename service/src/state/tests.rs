@@ -14,9 +14,7 @@ use tracing::Instrument;
 #[tokio::test]
 async fn normalize_repository_path() {
     let store_dir = PathBuf::from("/home/alice/ouisync");
-    let store = Store {
-        dir: Some(store_dir.clone()),
-    };
+    let store = Store::new(Some(store_dir.clone()));
 
     assert_eq!(
         store.normalize_repository_path(Path::new("foo")).unwrap(),
@@ -50,7 +48,7 @@ async fn normalize_repository_path() {
 
 #[tokio::test]
 async fn non_unique_repository_name() {
-    let (_temp_dir, mut state) = setup().await;
+    let (_temp_dir, state) = setup().await;
     let path = Path::new("test");
 
     assert_matches!(
@@ -70,7 +68,7 @@ async fn non_unique_repository_name() {
 
 #[tokio::test]
 async fn non_unique_repository_id() {
-    let (_temp_dir, mut state) = setup().await;
+    let (_temp_dir, state) = setup().await;
 
     let token = ShareToken::from(AccessSecrets::Write(WriteSecrets::random()));
 
@@ -110,7 +108,7 @@ async fn non_unique_repository_id() {
 
 #[tokio::test]
 async fn open_already_opened_repository() {
-    let (_temp_dir, mut state) = setup().await;
+    let (_temp_dir, state) = setup().await;
 
     let name = "foo";
     let handle0 = state
@@ -146,7 +144,7 @@ async fn open_already_opened_repository() {
 async fn expire_empty_repository() {
     test_utils::init_log();
 
-    let (_temp_dir, mut state) = setup().await;
+    let (_temp_dir, state) = setup().await;
 
     let secrets = WriteSecrets::random();
 
@@ -233,7 +231,7 @@ async fn expire_synced_repository() {
         .next()
         .unwrap();
 
-    let mut local_state = State::init(temp_dir.path().join("local/config"))
+    let local_state = State::init(temp_dir.path().join("local/config"))
         .instrument(tracing::info_span!("local"))
         .await
         .unwrap();
@@ -260,7 +258,7 @@ async fn expire_synced_repository() {
         )
         .await
         .unwrap();
-    let local_repo = local_state.repos.get(handle).unwrap().repository();
+    let local_repo = local_state.repos.get_repository(handle).unwrap();
 
     // Wait until synced
     let mut rx = local_repo.subscribe();
@@ -307,7 +305,7 @@ async fn expire_synced_repository() {
 async fn move_repository() {
     test_utils::init_log();
 
-    let (_temp_dir, mut state) = setup().await;
+    let (_temp_dir, state) = setup().await;
     let src = Path::new("foo");
     let dst = Path::new("bar");
 
@@ -359,7 +357,7 @@ async fn move_repository() {
 
 #[tokio::test]
 async fn delete_repository_with_simple_name() {
-    let (_temp_dir, mut state) = setup().await;
+    let (_temp_dir, state) = setup().await;
 
     let name0 = "foo";
     let repo0 = state
@@ -389,7 +387,7 @@ async fn delete_repository_with_simple_name() {
 
 #[tokio::test]
 async fn delete_repository_in_subdir_of_store_dir() {
-    let (_temp_dir, mut state) = setup().await;
+    let (_temp_dir, state) = setup().await;
 
     let name = "foo/bar/baz";
     let repo = state
@@ -419,7 +417,7 @@ async fn delete_repository_in_subdir_of_store_dir() {
 
 #[tokio::test]
 async fn delete_repository_outside_of_store_dir() {
-    let (temp_dir, mut state) = setup().await;
+    let (temp_dir, state) = setup().await;
     let parent_dir = temp_dir.path().join("external");
 
     let name = "foo";
@@ -437,7 +435,7 @@ async fn delete_repository_outside_of_store_dir() {
 
 async fn setup() -> (TempDir, State) {
     let temp_dir = TempDir::new().unwrap();
-    let mut state = State::init(temp_dir.path().join("config")).await.unwrap();
+    let state = State::init(temp_dir.path().join("config")).await.unwrap();
     state
         .session_set_store_dir(temp_dir.path().join("store"))
         .await

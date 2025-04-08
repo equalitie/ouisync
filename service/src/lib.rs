@@ -5,6 +5,7 @@ pub mod transport;
 
 mod config_keys;
 mod config_store;
+mod connection;
 mod device_id;
 mod dht_contacts;
 mod error;
@@ -23,30 +24,26 @@ mod test_utils;
 pub use error::Error;
 
 use config_store::{ConfigError, ConfigKey, ConfigStore};
-use futures_util::{stream::FuturesUnordered, SinkExt};
-use ouisync_macros::api;
-use protocol::{
-    DecodeError, Message, MessageId, NetworkDefaults, ProtocolError, RepositoryHandle, Request,
-    Response, ResponseResult,
-};
-use slab::Slab;
+use connection::Connection;
+use futures_util::{stream::FuturesUnordered, StreamExt};
+use protocol::NetworkDefaults;
 use state::State;
-use state_monitor::MonitorId;
 use std::{
     convert::Infallible,
     io,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
 };
-use subscription::SubscriptionStream;
 use tokio::{
     select,
+    sync::watch,
     time::{self, MissedTickBehavior},
 };
-use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use transport::{
     local::{AuthKey, LocalServer},
-    AcceptedConnection, ClientError, ReadError, ServerReader, ServerWriter,
+    AcceptedConnection, ClientError,
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -56,16 +53,16 @@ const LOCAL_CONTROL_PORT_KEY: ConfigKey<u16> = ConfigKey::new("local_control_por
 const LOCAL_CONTROL_AUTH_KEY_KEY: ConfigKey<AuthKey> = ConfigKey::new("local_control_auth_key", "");
 
 pub struct Service {
-    state: State,
+    state: Arc<State>,
     local_server: LocalServer,
-    readers: StreamMap<ConnectionId, StreamNotifyClose<ServerReader>>,
-    writers: Slab<ServerWriter>,
-    subscriptions: StreamMap<SubscriptionId, SubscriptionStream>,
+    connections: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    closed: watch::Sender<bool>,
 }
 
 impl Service {
     pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
         let state = State::init(config_dir).await?;
+        let state = Arc::new(state);
 
         let local_port_entry = state.config.entry(LOCAL_CONTROL_PORT_KEY);
         let local_port = match local_port_entry.get().await {
@@ -90,14 +87,13 @@ impl Service {
         Ok(Self {
             state,
             local_server,
-            readers: StreamMap::new(),
-            writers: Slab::new(),
-            subscriptions: StreamMap::new(),
+            connections: FuturesUnordered::new(),
+            closed: watch::Sender::new(false),
         })
     }
 
     /// Runs the service. The future returned from this function never completes (unless it errors)
-    /// but it's safe to cancel.
+    /// but it's safe to cancel and optionally restart any number of times.
     //
     // Note we are using `Infallible` for the `Ok` variant which reads a bit weird but it just means
     // the function never returns `Ok`. When `!` (the "never" type) is stabilized we should use
@@ -106,41 +102,17 @@ impl Service {
         let mut repo_expiration_interval = time::interval(REPOSITORY_EXPIRATION_POLL_INTERVAL);
         repo_expiration_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-        let mut accepted_conns = FuturesUnordered::new();
-
         loop {
             select! {
                 result = self.local_server.accept() => {
                     let conn = result.map_err(Error::Accept)?;
-                    accepted_conns.push(AcceptedConnection::Local(conn).finalize());
+                    self.start_connection(AcceptedConnection::Local(conn));
                 }
                 result = self.state.remote_accept() => {
                     let conn = result.map_err(Error::Accept)?;
-                    accepted_conns.push(AcceptedConnection::Remote(conn).finalize());
+                    self.start_connection(AcceptedConnection::Remote(conn));
                 }
-                Some(result) = accepted_conns.next() => {
-                    if let Some((reader, writer)) = result {
-                       self.insert_connection(reader, writer);
-                    }
-                }
-                Some((conn_id, message)) = self.readers.next() => {
-                    if let Some(message) = message {
-                        self.handle_message(conn_id, message).await
-                    } else {
-                        self.remove_connection(conn_id)
-                    }
-                }
-                Some(((conn_id, message_id), response)) = self.subscriptions.next() => {
-                    tracing::trace!(id = ?message_id, payload = ?response, "sending notification");
-
-                    self.send_message(
-                        conn_id,
-                        Message {
-                            id: message_id,
-                            payload: ResponseResult::Success(response)
-                        },
-                    ).await;
-                }
+                Some(_) = self.connections.next() => continue,
                 _ = repo_expiration_interval.tick() => {
                     self.state.delete_expired_repositories().await;
                 }
@@ -149,15 +121,16 @@ impl Service {
     }
 
     pub async fn close(&mut self) {
-        self.readers.clear();
+        // Signal connections to close themselves
+        self.closed.send(true).ok();
 
-        for mut writer in self.writers.drain() {
-            if let Err(error) = writer.close().await {
-                tracing::warn!(?error, "failed to close local connection");
-            }
+        // Wait for each connection to shutdown
+        let close_connections = async { while self.connections.next().await.is_some() {} };
+
+        select! {
+            _ = self.state.close() => (),
+            _ = close_connections => (),
         }
-
-        self.state.close().await;
     }
 
     pub fn local_port(&self) -> u16 {
@@ -168,7 +141,7 @@ impl Service {
         self.local_server.auth_key()
     }
 
-    pub fn store_dir(&self) -> Option<&Path> {
+    pub fn store_dir(&self) -> Option<PathBuf> {
         self.state.store_dir()
     }
 
@@ -177,7 +150,7 @@ impl Service {
     }
 
     /// Initialize network according to the stored config.
-    pub async fn init_network(&mut self) {
+    pub async fn init_network(&self) {
         self.state
             .session_init_network(NetworkDefaults {
                 bind: vec![],
@@ -201,145 +174,30 @@ impl Service {
         &self.state
     }
 
-    #[cfg(test)]
-    pub(crate) fn state_mut(&mut self) -> &mut State {
-        &mut self.state
-    }
+    fn start_connection(&self, accepted: AcceptedConnection) {
+        let state = self.state.clone();
+        let mut closed_rx = self.closed.subscribe();
 
-    async fn handle_message(
-        &mut self,
-        conn_id: ConnectionId,
-        message: Result<Message<Request>, ReadError>,
-    ) {
-        match message {
-            Ok(message) => {
-                let span = tracing::trace_span!("request", message = ?message.payload);
-                let id = message.id;
-                let start = Instant::now();
+        let task = async move {
+            let Some((reader, writer)) = accepted.finalize().await else {
+                return;
+            };
 
-                let result = self.dispatch(conn_id, message).await;
+            let mut conn = Connection::new(reader, writer);
 
-                span.in_scope(|| tracing::trace!(?result, elapsed = ?start.elapsed()));
+            let closed = select! {
+                _ = conn.run(&state) => false,
+                _ = closed_rx.wait_for(|closed| *closed) => true,
+            };
 
-                let message = Message {
-                    id,
-                    payload: result.into(),
-                };
-
-                self.send_message(conn_id, message).await;
+            if closed {
+                conn.close().await;
             }
-            Err(ReadError::Receive(error)) => {
-                tracing::error!(?error, "failed to receive message");
-                self.remove_connection(conn_id);
-            }
-            Err(ReadError::Decode(DecodeError::Id)) => {
-                tracing::error!("failed to decode message id");
-                self.remove_connection(conn_id);
-            }
-            Err(ReadError::Decode(DecodeError::Payload(id, error))) => {
-                tracing::warn!(?error, ?id, "failed to decode message payload");
-
-                self.send_message(
-                    conn_id,
-                    Message {
-                        id,
-                        payload: ResponseResult::Failure(error.into()),
-                    },
-                )
-                .await;
-            }
-            Err(ReadError::Validate(id, error)) => {
-                tracing::warn!(?error, ?id, "failed to validate message");
-
-                self.send_message(
-                    conn_id,
-                    Message {
-                        id,
-                        payload: ResponseResult::Failure(error.into()),
-                    },
-                )
-                .await;
-            }
-        }
-    }
-
-    async fn send_message(&mut self, conn_id: ConnectionId, message: Message<ResponseResult>) {
-        let Some(writer) = self.writers.get_mut(conn_id) else {
-            tracing::error!("connection not found");
-            return;
         };
 
-        match writer.send(message).await {
-            Ok(()) => (),
-            Err(error) => {
-                tracing::error!(?error, "failed to send message");
-                self.remove_connection(conn_id);
-            }
-        }
-    }
-
-    #[api]
-    fn repository_subscribe(
-        &mut self,
-        conn_id: ConnectionId,
-        message_id: MessageId,
-        repo: RepositoryHandle,
-    ) -> Result<(), Error> {
-        let rx = self.state.repository_subscribe(repo)?;
-        self.subscriptions.insert((conn_id, message_id), rx.into());
-        Ok(())
-    }
-
-    #[api]
-    fn session_subscribe_to_network(&mut self, conn_id: ConnectionId, message_id: MessageId) {
-        let rx = self.state.network.subscribe();
-        self.subscriptions.insert((conn_id, message_id), rx.into());
-    }
-
-    #[api]
-    fn session_subscribe_to_state_monitor(
-        &mut self,
-        conn_id: ConnectionId,
-        message_id: MessageId,
-        path: Vec<MonitorId>,
-    ) -> Result<(), Error> {
-        let rx = self.state.state_monitor_subscribe(path)?;
-        self.subscriptions.insert((conn_id, message_id), rx.into());
-        Ok(())
-    }
-
-    /// Cancel a subscription identified by the given message id. The message id should be the same
-    /// that was used for sending the corresponding subscribe request.
-    #[api]
-    fn session_unsubscribe(&mut self, conn_id: ConnectionId, _: MessageId, id: MessageId) {
-        self.subscriptions.remove(&(conn_id, id));
-    }
-
-    fn insert_connection(&mut self, reader: ServerReader, writer: ServerWriter) {
-        let conn_id = self.writers.insert(writer);
-        self.readers.insert(conn_id, StreamNotifyClose::new(reader));
-    }
-
-    fn remove_connection(&mut self, conn_id: ConnectionId) {
-        self.readers.remove(&conn_id);
-        self.writers.try_remove(conn_id);
-
-        // Remove subscriptions
-        let sub_ids: Vec<_> = self
-            .subscriptions
-            .keys()
-            .filter(|(sub_conn_id, _)| *sub_conn_id == conn_id)
-            .copied()
-            .collect();
-        for sub_id in sub_ids {
-            self.subscriptions.remove(&sub_id);
-        }
+        self.connections.push(Box::pin(task));
     }
 }
-
-// The `Service::dispatch` method is auto-generated with `build.rs` from the `#[api]` annotated
-// methods in `impl State`.
-include!(concat!(env!("OUT_DIR"), "/service.rs"));
 
 /// Returns the loopback TCP port and authentication key for establishing local connection to the
 /// service.
@@ -360,9 +218,6 @@ pub async fn local_control_endpoint(config_path: &Path) -> Result<(u16, AuthKey)
 
     Ok((port, auth_key))
 }
-
-type ConnectionId = usize;
-type SubscriptionId = (ConnectionId, MessageId);
 
 async fn fetch_local_control_auth_key(config: &ConfigStore) -> Result<AuthKey, ConfigError> {
     let entry = config.entry(LOCAL_CONTROL_AUTH_KEY_KEY);

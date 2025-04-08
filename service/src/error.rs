@@ -1,4 +1,6 @@
-use crate::{config_store::ConfigError, repository::FindError, transport::ClientError};
+use crate::{
+    config_store::ConfigError, file::FileSetError, repository::FindError, transport::ClientError,
+};
 use ouisync::DecodeError;
 use ouisync_vfs::MountError;
 use std::{ffi::IntoStringError, io, str::Utf8Error};
@@ -24,6 +26,8 @@ pub enum Error {
     NotFound,
     #[error("name is ambiguous")]
     Ambiguous,
+    #[error("resource is busy")]
+    Busy,
     #[error("operation not supported")]
     OperationNotSupported,
     #[error("permission denied")]
@@ -69,6 +73,15 @@ impl From<FindError> for Error {
         match e {
             FindError::NotFound => Self::NotFound,
             FindError::Ambiguous => Self::Ambiguous,
+        }
+    }
+}
+
+impl From<FileSetError> for Error {
+    fn from(e: FileSetError) -> Self {
+        match e {
+            FileSetError::NotFound => Self::InvalidArgument,
+            FileSetError::Locked => Self::Busy,
         }
     }
 }

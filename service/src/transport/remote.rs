@@ -298,7 +298,7 @@ mod tests {
             .unwrap();
 
         let remote_port = service
-            .state_mut()
+            .state()
             .session_bind_remote_control(Some((Ipv4Addr::LOCALHOST, 0).into()))
             .await
             .unwrap();

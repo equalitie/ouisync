@@ -1523,26 +1523,6 @@ sealed class Request {
         file.encode(p);
         p.packInt(offset);
         p.packBinary(data);
-      case RequestMetricsBind(
-        addr: final addr,
-      ):
-        p.packMapLength(1);
-        p.packString('MetricsBind');
-        p.packListLength(1);
-        _encodeNullable(p, addr, (p, e) => p.packString(e));
-      case RequestMetricsGetListenerAddr(
-      ):
-        p.packString('MetricsGetListenerAddr');
-      case RequestRemoteControlBind(
-        addr: final addr,
-      ):
-        p.packMapLength(1);
-        p.packString('RemoteControlBind');
-        p.packListLength(1);
-        _encodeNullable(p, addr, (p, e) => p.packString(e));
-      case RequestRemoteControlGetListenerAddr(
-      ):
-        p.packString('RemoteControlGetListenerAddr');
       case RequestRepositoryClose(
         repo: final repo,
       ):
@@ -1929,6 +1909,13 @@ sealed class Request {
         p.packString('SessionAddUserProvidedPeers');
         p.packListLength(1);
         _encodeList(p, addrs, (p, e) => p.packString(e));
+      case RequestSessionBindMetrics(
+        addr: final addr,
+      ):
+        p.packMapLength(1);
+        p.packString('SessionBindMetrics');
+        p.packListLength(1);
+        _encodeNullable(p, addr, (p, e) => p.packString(e));
       case RequestSessionBindNetwork(
         addrs: final addrs,
       ):
@@ -1936,6 +1923,13 @@ sealed class Request {
         p.packString('SessionBindNetwork');
         p.packListLength(1);
         _encodeList(p, addrs, (p, e) => p.packString(e));
+      case RequestSessionBindRemoteControl(
+        addr: final addr,
+      ):
+        p.packMapLength(1);
+        p.packString('SessionBindRemoteControl');
+        p.packListLength(1);
+        _encodeNullable(p, addr, (p, e) => p.packString(e));
       case RequestSessionCreateRepository(
         path: final path,
         readSecret: final readSecret,
@@ -2008,6 +2002,9 @@ sealed class Request {
       case RequestSessionGetLocalListenerAddrs(
       ):
         p.packString('SessionGetLocalListenerAddrs');
+      case RequestSessionGetMetricsListenerAddr(
+      ):
+        p.packString('SessionGetMetricsListenerAddr');
       case RequestSessionGetMountRoot(
       ):
         p.packString('SessionGetMountRoot');
@@ -2020,6 +2017,9 @@ sealed class Request {
       case RequestSessionGetPeers(
       ):
         p.packString('SessionGetPeers');
+      case RequestSessionGetRemoteControlListenerAddr(
+      ):
+        p.packString('SessionGetRemoteControlListenerAddr');
       case RequestSessionGetRemoteListenerAddrs(
         host: final host,
       ):
@@ -2267,30 +2267,6 @@ class RequestFileWrite extends Request {
     required this.offset,
     required this.data,
   });
-}
-
-class RequestMetricsBind extends Request {
-  final String? addr;
-
-  RequestMetricsBind({
-    required this.addr,
-  });
-}
-
-class RequestMetricsGetListenerAddr extends Request {
-  RequestMetricsGetListenerAddr();
-}
-
-class RequestRemoteControlBind extends Request {
-  final String? addr;
-
-  RequestRemoteControlBind({
-    required this.addr,
-  });
-}
-
-class RequestRemoteControlGetListenerAddr extends Request {
-  RequestRemoteControlGetListenerAddr();
 }
 
 class RequestRepositoryClose extends Request {
@@ -2725,11 +2701,27 @@ class RequestSessionAddUserProvidedPeers extends Request {
   });
 }
 
+class RequestSessionBindMetrics extends Request {
+  final String? addr;
+
+  RequestSessionBindMetrics({
+    required this.addr,
+  });
+}
+
 class RequestSessionBindNetwork extends Request {
   final List<String> addrs;
 
   RequestSessionBindNetwork({
     required this.addrs,
+  });
+}
+
+class RequestSessionBindRemoteControl extends Request {
+  final String? addr;
+
+  RequestSessionBindRemoteControl({
+    required this.addr,
   });
 }
 
@@ -2819,6 +2811,10 @@ class RequestSessionGetLocalListenerAddrs extends Request {
   RequestSessionGetLocalListenerAddrs();
 }
 
+class RequestSessionGetMetricsListenerAddr extends Request {
+  RequestSessionGetMetricsListenerAddr();
+}
+
 class RequestSessionGetMountRoot extends Request {
   RequestSessionGetMountRoot();
 }
@@ -2833,6 +2829,10 @@ class RequestSessionGetNetworkStats extends Request {
 
 class RequestSessionGetPeers extends Request {
   RequestSessionGetPeers();
+}
+
+class RequestSessionGetRemoteControlListenerAddr extends Request {
+  RequestSessionGetRemoteControlListenerAddr();
 }
 
 class RequestSessionGetRemoteListenerAddrs extends Request {
@@ -3364,6 +3364,19 @@ class Session {
     }
   }
 
+  Future<void> bindMetrics(
+    String? addr,
+  ) async {
+    final request = RequestSessionBindMetrics(
+      addr: addr,
+    );
+    final response = await client.invoke(request);
+    switch (response) {
+      case ResponseNone(): return;
+      default: throw UnexpectedResponse();
+    }
+  }
+
   Future<void> bindNetwork(
     List<String> addrs,
   ) async {
@@ -3373,6 +3386,19 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponseNone(): return;
+      default: throw UnexpectedResponse();
+    }
+  }
+
+  Future<int> bindRemoteControl(
+    String? addr,
+  ) async {
+    final request = RequestSessionBindRemoteControl(
+      addr: addr,
+    );
+    final response = await client.invoke(request);
+    switch (response) {
+      case ResponseU16(value: final value): return value;
       default: throw UnexpectedResponse();
     }
   }
@@ -3559,6 +3585,18 @@ class Session {
     }
   }
 
+  Future<String?> getMetricsListenerAddr(
+  ) async {
+    final request = RequestSessionGetMetricsListenerAddr(
+    );
+    final response = await client.invoke(request);
+    switch (response) {
+      case ResponseSocketAddr(value: final value): return value;
+      case ResponseNone(): return null;
+      default: throw UnexpectedResponse();
+    }
+  }
+
   Future<String?> getMountRoot(
   ) async {
     final request = RequestSessionGetMountRoot(
@@ -3601,6 +3639,18 @@ class Session {
     final response = await client.invoke(request);
     switch (response) {
       case ResponsePeerInfos(value: final value): return value;
+      default: throw UnexpectedResponse();
+    }
+  }
+
+  Future<String?> getRemoteControlListenerAddr(
+  ) async {
+    final request = RequestSessionGetRemoteControlListenerAddr(
+    );
+    final response = await client.invoke(request);
+    switch (response) {
+      case ResponseSocketAddr(value: final value): return value;
+      case ResponseNone(): return null;
       default: throw UnexpectedResponse();
     }
   }

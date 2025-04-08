@@ -14,8 +14,8 @@ use crate::{
     file::{FileHandle, FileHolder, FileSet},
     metrics::MetricsServer,
     network::{self, PexConfig},
-    protocol::{DirectoryEntry, MetadataEdit, NetworkDefaults, QuotaInfo},
-    repository::{RepositoryHandle, RepositoryHolder, RepositorySet},
+    protocol::{DirectoryEntry, MessageId, MetadataEdit, NetworkDefaults, QuotaInfo},
+    repository::{self, RepositoryHandle, RepositoryHolder, RepositorySet},
     tls::TlsConfig,
     transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
     utils,
@@ -23,8 +23,8 @@ use crate::{
 use ouisync::{
     crypto::{cipher::SecretKey, Password, PasswordSalt},
     Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
-    NatBehavior, Network, PeerAddr, PeerInfo, Progress, PublicRuntimeId, Repository,
-    RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize,
+    NatBehavior, Network, NetworkEventReceiver, PeerAddr, PeerInfo, Progress, PublicRuntimeId,
+    Registration, Repository, RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize,
 };
 use ouisync_macros::api;
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
@@ -39,7 +39,7 @@ use std::{
     net::SocketAddr,
     panic,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::{
@@ -64,12 +64,12 @@ pub(crate) struct State {
     pub network: Network,
     pub tls_config: TlsConfig,
     store: Store,
-    mounter: Option<MultiRepoVFS>,
+    mounter: Mutex<Option<Arc<MultiRepoVFS>>>,
     repos: RepositorySet,
     files: FileSet,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
-    remote_server: Option<RemoteServer>,
+    remote_server: Mutex<Option<Arc<RemoteServer>>>,
     metrics_server: MetricsServer,
 }
 
@@ -91,7 +91,7 @@ impl State {
             Err(error) => return Err(error.into()),
         };
 
-        let store = Store { dir: store_dir };
+        let store = Store::new(store_dir);
 
         let mount_dir = match config.entry(MOUNT_DIR_KEY).get().await {
             Ok(dir) => Some(dir),
@@ -121,17 +121,17 @@ impl State {
 
         let metrics_server = MetricsServer::init(&config, &network, &tls_config).await?;
 
-        let mut state = Self {
+        let state = Self {
             config,
             network,
             tls_config,
             store,
-            mounter,
+            mounter: Mutex::new(mounter.map(Arc::new)),
             root_monitor,
             repos_monitor,
             repos: RepositorySet::new(),
             files: FileSet::new(),
-            remote_server,
+            remote_server: Mutex::new(remote_server.map(Arc::new)),
             metrics_server,
         };
 
@@ -155,7 +155,9 @@ impl State {
     }
 
     pub async fn remote_accept(&self) -> io::Result<AcceptedRemoteConnection> {
-        if let Some(server) = &self.remote_server {
+        let server = self.remote_server.lock().unwrap().clone();
+
+        if let Some(server) = server {
             server.accept().await
         } else {
             future::pending().await
@@ -204,6 +206,11 @@ impl State {
     pub async fn session_bind_network(&self, addrs: Vec<PeerAddr>) {
         self.config.entry(BIND_KEY).set(&addrs).await.ok();
         network::bind_with_reuse_ports(&self.network, &self.config, &addrs).await;
+    }
+
+    #[api]
+    pub fn session_subscribe_to_network(&self) -> NetworkEventReceiver {
+        self.network.subscribe()
     }
 
     #[api]
@@ -369,21 +376,27 @@ impl State {
 
     #[api]
     pub async fn session_bind_remote_control(
-        &mut self,
+        &self,
         addr: Option<SocketAddr>,
     ) -> Result<u16, Error> {
+        let config_entry = self.config.entry(REMOTE_CONTROL_KEY);
+
         if let Some(addr) = addr {
-            let config = self.tls_config.server().await?;
-            let remote_server = RemoteServer::bind(addr, config)
+            config_entry.set(&addr).await?;
+
+            let tls_config = self.tls_config.server().await?;
+            let remote_server = RemoteServer::bind(addr, tls_config)
                 .await
                 .map_err(Error::Bind)?;
             let port = remote_server.local_addr().port();
 
-            self.remote_server = Some(remote_server);
+            *self.remote_server.lock().unwrap() = Some(Arc::new(remote_server));
 
             Ok(port)
         } else {
-            self.remote_server = None;
+            config_entry.remove().await?;
+
+            *self.remote_server.lock().unwrap() = None;
 
             Ok(0)
         }
@@ -392,12 +405,14 @@ impl State {
     #[api]
     pub fn session_get_remote_control_listener_addr(&self) -> Option<SocketAddr> {
         self.remote_server
+            .lock()
+            .unwrap()
             .as_ref()
             .map(|server| server.local_addr())
     }
 
     #[api]
-    pub async fn session_bind_metrics(&mut self, addr: Option<SocketAddr>) -> Result<(), Error> {
+    pub async fn session_bind_metrics(&self, addr: Option<SocketAddr>) -> Result<(), Error> {
         if let Some(addr) = addr {
             self.metrics_server
                 .bind(&self.config, &self.network, &self.tls_config, addr)
@@ -418,13 +433,12 @@ impl State {
     }
 
     #[api]
-    pub async fn session_set_store_dir(&mut self, path: PathBuf) -> Result<(), Error> {
-        if Some(path.as_path()) == self.store.dir.as_deref() {
+    pub async fn session_set_store_dir(&self, path: PathBuf) -> Result<(), Error> {
+        if !self.store.set(Some(path.clone())) {
             return Ok(());
         }
 
         self.config.entry(STORE_DIR_KEY).set(&path).await?;
-        self.store.dir = Some(path);
 
         // Close repos from the previous store dir and load repos from the new dir.
         self.close_repositories().await;
@@ -439,8 +453,8 @@ impl State {
     }
 
     #[api]
-    pub async fn session_set_mount_root(&mut self, path: Option<PathBuf>) -> Result<(), Error> {
-        if path.as_deref() == self.mount_root() {
+    pub async fn session_set_mount_root(&self, path: Option<PathBuf>) -> Result<(), Error> {
+        if path == self.mount_root() {
             return Ok(());
         }
 
@@ -448,23 +462,24 @@ impl State {
 
         if let Some(path) = path {
             config_entry.set(&path).await?;
-            let mounter = self.mounter.insert(MultiRepoVFS::create(path).await?);
+
+            let mounter = MultiRepoVFS::create(path).await?;
+            let mounter = Arc::new(mounter);
+            let mounter = self.mounter.lock().unwrap().insert(mounter).clone();
 
             // Remount all mounted repos
-            for (_, holder) in self.repos.iter() {
-                if holder
-                    .repository()
-                    .metadata()
-                    .get(AUTOMOUNT_KEY)
-                    .await?
-                    .unwrap_or(false)
-                {
-                    mounter.insert(holder.short_name().to_owned(), holder.repository().clone())?;
+            let repos: Vec<_> = self
+                .repos
+                .map(|_, holder| (holder.short_name().to_owned(), holder.repository().clone()));
+
+            for (name, repo) in repos {
+                if repo.metadata().get(AUTOMOUNT_KEY).await?.unwrap_or(false) {
+                    mounter.insert(name, repo)?;
                 }
             }
         } else {
             config_entry.remove().await?;
-            self.mounter = None;
+            *self.mounter.lock().unwrap() = None;
         }
 
         Ok(())
@@ -510,22 +525,19 @@ impl State {
 
     #[api]
     pub fn session_find_repository(&self, name: String) -> Result<RepositoryHandle, Error> {
-        let (handle, _) = self.repos.find_by_subpath(&name)?;
-        Ok(handle)
+        Ok(self.repos.find_by_subpath(&name)?)
     }
 
     #[api]
     pub fn session_list_repositories(&self) -> BTreeMap<PathBuf, RepositoryHandle> {
         self.repos
-            .iter()
-            .map(|(handle, holder)| (holder.path().to_owned(), handle))
-            .collect()
+            .map(|handle, holder| (holder.path().to_owned(), handle))
     }
 
     #[api]
     #[expect(clippy::too_many_arguments)] // TODO: extract the args to a struct
     pub async fn session_create_repository(
-        &mut self,
+        &self,
         path: PathBuf,
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
@@ -560,7 +572,7 @@ impl State {
         let access = Access::new(read_secret, write_secret, access_secrets);
 
         let repo = Repository::create(&params, access).await?;
-        let mut holder = RepositoryHolder::new(path, repo);
+        let holder = RepositoryHolder::new(path, repo);
 
         // Configure syncing
         if sync_enabled {
@@ -593,7 +605,7 @@ impl State {
         holder.repository().set_block_expiration(value).await?;
 
         let value = self.session_get_default_repository_expiration().await?;
-        holder.set_repository_expiration(value).await?;
+        repository::set_repository_expiration(holder.repository(), value).await?;
 
         tracing::info!(name = holder.short_name(), "repository created");
 
@@ -606,25 +618,28 @@ impl State {
 
     /// Delete a repository with the given name.
     #[api]
-    pub async fn session_delete_repository_by_name(&mut self, name: String) -> Result<(), Error> {
-        let (handle, _) = self.repos.find_by_subpath(&name)?;
+    pub async fn session_delete_repository_by_name(&self, name: String) -> Result<(), Error> {
+        let handle = self.repos.find_by_subpath(&name)?;
         self.repository_delete(handle).await?;
         Ok(())
     }
 
     #[api]
     pub async fn session_open_repository(
-        &mut self,
+        &self,
         path: PathBuf,
         local_secret: Option<LocalSecret>,
     ) -> Result<RepositoryHandle, Error> {
         let path = self.store.normalize_repository_path(&path)?;
-        let handle = if let Some((handle, holder)) = self.repos.find_by_path(&path) {
+        let handle = if let Some((handle, repo)) =
+            self.repos.find_by_path(&path).and_then(|handle| {
+                self.repos
+                    .with(handle, |holder| holder.repository().clone())
+                    .map(|repo| (handle, repo))
+            }) {
             // If `local_secret` provides higher access mode than what the repo currently has,
             // increase it. If not, the access mode remains unchanged.
-            holder
-                .repository()
-                .set_access_mode(AccessMode::Write, local_secret)
+            repo.set_access_mode(AccessMode::Write, local_secret)
                 .await?;
 
             handle
@@ -639,8 +654,8 @@ impl State {
 
     /// Delete a repository
     #[api]
-    pub async fn repository_delete(&mut self, repo: RepositoryHandle) -> Result<(), Error> {
-        let Some(mut holder) = self.repos.remove(repo) else {
+    pub async fn repository_delete(&self, repo: RepositoryHandle) -> Result<(), Error> {
+        let Some(holder) = self.repos.remove(repo) else {
             return Ok(());
         };
 
@@ -662,16 +677,20 @@ impl State {
     }
 
     #[api]
-    pub async fn repository_close(&mut self, repo: RepositoryHandle) -> Result<(), Error> {
-        let mut holder = self.repos.remove(repo).ok_or(Error::InvalidArgument)?;
+    pub async fn repository_close(&self, repo: RepositoryHandle) -> Result<(), Error> {
+        let holder = self.repos.remove(repo).ok_or(Error::InvalidArgument)?;
 
-        if let Some(mounter) = &self.mounter {
-            mounter.remove(holder.short_name())?;
+        if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
+            if let Err(error) = mounter.remove(holder.short_name()) {
+                tracing::error!(
+                    ?error,
+                    name = holder.short_name(),
+                    "failed to unmount repository"
+                );
+            }
         }
 
-        holder.close().await?;
-
-        Ok(())
+        holder.close().await
     }
 
     /// Export repository to file
@@ -681,7 +700,10 @@ impl State {
         repo: RepositoryHandle,
         output_path: PathBuf,
     ) -> Result<PathBuf, Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
+        let repo = self
+            .repos
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
 
         let output_path = if output_path.extension().is_some() {
             output_path
@@ -689,7 +711,7 @@ impl State {
             output_path.with_extension(REPOSITORY_FILE_EXTENSION)
         };
 
-        holder.repository().export(&output_path).await?;
+        repo.export(&output_path).await?;
 
         Ok(output_path)
     }
@@ -701,50 +723,46 @@ impl State {
         local_secret: Option<LocalSecret>,
         access_mode: AccessMode,
     ) -> Result<ShareToken, Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
+        let (repo, short_name) = self
+            .repos
+            .get_repository_and_short_name(repo)
+            .ok_or(Error::InvalidArgument)?;
 
         let access_secrets = if let Some(local_secret) = local_secret {
-            holder.repository().unlock_secrets(local_secret).await?
+            repo.unlock_secrets(local_secret).await?
         } else {
-            holder.repository().secrets()
+            repo.secrets()
         };
 
         let share_token =
-            ShareToken::from(access_secrets.with_mode(access_mode)).with_name(holder.short_name());
+            ShareToken::from(access_secrets.with_mode(access_mode)).with_name(short_name);
 
         Ok(share_token)
     }
 
     #[api]
     pub fn repository_get_path(&self, repo: RepositoryHandle) -> Result<PathBuf, Error> {
-        Ok(self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .path()
-            .to_owned())
+        self.repos
+            .with(repo, |holder| holder.path().to_owned())
+            .ok_or(Error::InvalidArgument)
     }
 
     /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
     /// unique, non-secret identifier of the repository.
     #[api]
     pub fn repository_get_info_hash(&self, repo: RepositoryHandle) -> Result<String, Error> {
-        let repo = self
+        let info_hash = self
             .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
-        let info_hash = ouisync::repository_info_hash(repo.secrets().id());
+            .with(repo, |holder| {
+                ouisync::repository_info_hash(holder.repository().secrets().id())
+            })
+            .ok_or(Error::InvalidArgument)?;
 
         Ok(hex::encode(info_hash))
     }
 
     #[api]
-    pub async fn repository_move(
-        &mut self,
-        repo: RepositoryHandle,
-        dst: PathBuf,
-    ) -> Result<(), Error> {
+    pub async fn repository_move(&self, repo: RepositoryHandle, dst: PathBuf) -> Result<(), Error> {
         move_repository::invoke(self, repo, &dst).await
     }
 
@@ -755,12 +773,11 @@ impl State {
         token: ShareToken,
     ) -> Result<(), Error> {
         let new_credentials = Credentials::with_random_writer_id(token.into_secrets());
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .set_credentials(new_credentials)
-            .await?;
+        let repo = self
+            .repos
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
+        repo.set_credentials(new_credentials).await?;
 
         Ok(())
     }
@@ -772,23 +789,19 @@ impl State {
         read: Option<AccessChange>,
         write: Option<AccessChange>,
     ) -> Result<(), Error> {
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .set_access(read, write)
-            .await?;
+        let repo = self
+            .repos
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
+        repo.set_access(read, write).await?;
         Ok(())
     }
 
     #[api]
     pub fn repository_get_access_mode(&self, repo: RepositoryHandle) -> Result<AccessMode, Error> {
-        Ok(self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .access_mode())
+        self.repos
+            .with(repo, |holder| holder.repository().access_mode())
+            .ok_or(Error::InvalidArgument)
     }
 
     #[api]
@@ -798,25 +811,20 @@ impl State {
         access_mode: AccessMode,
         local_secret: Option<LocalSecret>,
     ) -> Result<(), Error> {
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .set_access_mode(access_mode, local_secret)
-            .await?;
+        let repo = self
+            .repos
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
+        repo.set_access_mode(access_mode, local_secret).await?;
 
         Ok(())
     }
 
     #[api]
     pub fn repository_get_credentials(&self, repo: RepositoryHandle) -> Result<Vec<u8>, Error> {
-        Ok(self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .credentials()
-            .encode())
+        self.repos
+            .with(repo, |holder| holder.repository().credentials().encode())
+            .ok_or(Error::InvalidArgument)
     }
 
     #[api]
@@ -825,46 +833,49 @@ impl State {
         repo: RepositoryHandle,
         credentials: Vec<u8>,
     ) -> Result<(), Error> {
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .set_credentials(Credentials::decode(&credentials)?)
+        let repo = self
+            .repos
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
+        repo.set_credentials(Credentials::decode(&credentials)?)
             .await?;
 
         Ok(())
     }
 
     #[api]
-    pub async fn repository_mount(&mut self, repo: RepositoryHandle) -> Result<PathBuf, Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
+    pub async fn repository_mount(&self, repo: RepositoryHandle) -> Result<PathBuf, Error> {
+        let (repo, short_name) = self
+            .repos
+            .get_repository_and_short_name(repo)
+            .ok_or(Error::InvalidArgument)?;
 
-        holder
-            .repository()
-            .metadata()
-            .set(AUTOMOUNT_KEY, true)
-            .await?;
+        repo.metadata().set(AUTOMOUNT_KEY, true).await?;
 
-        let Some(mounter) = &self.mounter else {
+        let mounter = self.mounter.lock().unwrap();
+        let Some(mounter) = mounter.as_ref() else {
             return Err(Error::OperationNotSupported);
         };
 
-        if let Some(mount_point) = mounter.mount_point(holder.short_name()) {
+        if let Some(mount_point) = mounter.mount_point(&short_name) {
             // Already mounted
             Ok(mount_point)
         } else {
-            Ok(mounter.insert(holder.short_name().to_owned(), holder.repository().clone())?)
+            Ok(mounter.insert(short_name, repo)?)
         }
     }
 
     #[api]
-    pub async fn repository_unmount(&mut self, repo: RepositoryHandle) -> Result<(), Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
+    pub async fn repository_unmount(&self, repo: RepositoryHandle) -> Result<(), Error> {
+        let (repo, short_name) = self
+            .repos
+            .get_repository_and_short_name(repo)
+            .ok_or(Error::InvalidArgument)?;
 
-        holder.repository().metadata().remove(AUTOMOUNT_KEY).await?;
+        repo.metadata().remove(AUTOMOUNT_KEY).await?;
 
-        if let Some(mounter) = &self.mounter {
-            mounter.remove(holder.short_name())?;
+        if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
+            mounter.remove(&short_name)?;
         }
 
         Ok(())
@@ -875,48 +886,60 @@ impl State {
         &self,
         repo: RepositoryHandle,
     ) -> Result<Option<PathBuf>, Error> {
-        if let Some(mounter) = &self.mounter {
-            Ok(mounter.mount_point(
-                self.repos
-                    .get(repo)
-                    .ok_or(Error::InvalidArgument)?
-                    .short_name(),
-            ))
-        } else {
-            Ok(None)
-        }
+        let short_name = self
+            .repos
+            .with(repo, |holder| holder.short_name().to_owned())
+            .ok_or(Error::InvalidArgument)?;
+
+        Ok(self
+            .mounter
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.mount_point(&short_name)))
     }
 
+    #[api]
     pub fn repository_subscribe(
         &self,
         repo: RepositoryHandle,
-    ) -> Result<broadcast::Receiver<Event>, Error> {
-        Ok(self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .subscribe())
+    ) -> Result<RepositorySubscription, Error> {
+        self.repos
+            .with(repo, |holder| holder.repository().subscribe())
+            .ok_or(Error::InvalidArgument)
     }
 
     #[api]
     pub fn repository_is_sync_enabled(&self, repo: RepositoryHandle) -> Result<bool, Error> {
-        Ok(self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .registration()
-            .is_some())
+        self.repos
+            .with(repo, |holder| holder.is_sync_enabled())
+            .ok_or(Error::InvalidArgument)
     }
 
     #[api]
     pub async fn repository_set_sync_enabled(
-        &mut self,
+        &self,
         repo: RepositoryHandle,
         enabled: bool,
     ) -> Result<(), Error> {
-        let holder = self.repos.get_mut(repo).ok_or(Error::InvalidArgument)?;
-        set_sync_enabled(holder, &self.network, enabled).await?;
+        let handle = repo;
+        let (repo, was_enabled) = self
+            .repos
+            .with(handle, |holder| {
+                (holder.repository().clone(), holder.is_sync_enabled())
+            })
+            .ok_or(Error::InvalidArgument)?;
+
+        match (was_enabled, enabled) {
+            (true, false) => {
+                self.repos.with(handle, |holder| holder.disable_sync());
+            }
+            (false, true) => {
+                let reg = register(&self.network, &repo).await?;
+                self.repos.with(handle, |holder| holder.enable_sync(reg));
+            }
+            (true, true) | (false, false) => (),
+        }
 
         Ok(())
     }
@@ -926,28 +949,28 @@ impl State {
         &self,
         repo: RepositoryHandle,
     ) -> Result<Progress, Error> {
-        Ok(self
+        let repo = self
             .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .sync_progress()
-            .await?)
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
+
+        Ok(repo.sync_progress().await?)
     }
 
     #[api]
     pub async fn repository_is_dht_enabled(&self, repo: RepositoryHandle) -> Result<bool, Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
+        let result = self
+            .repos
+            .with(repo, |holder| {
+                holder
+                    .with_registration(|reg| reg.is_dht_enabled())
+                    .ok_or_else(|| holder.repository().clone())
+            })
+            .ok_or(Error::InvalidArgument)?;
 
-        if let Some(reg) = holder.registration() {
-            Ok(reg.is_dht_enabled())
-        } else {
-            Ok(holder
-                .repository()
-                .metadata()
-                .get(DHT_ENABLED_KEY)
-                .await?
-                .unwrap_or(false))
+        match result {
+            Ok(enabled) => Ok(enabled),
+            Err(repo) => Ok(repo.metadata().get(DHT_ENABLED_KEY).await?.unwrap_or(false)),
         }
     }
 
@@ -957,30 +980,33 @@ impl State {
         repo: RepositoryHandle,
         enabled: bool,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
+        let repo = self
+            .repos
+            .with(repo, |holder| {
+                holder.with_registration(|reg| reg.set_dht_enabled(enabled));
+                holder.repository().clone()
+            })
+            .ok_or(Error::InvalidArgument)?;
 
-        if let Some(reg) = holder.registration() {
-            reg.set_dht_enabled(enabled);
-        }
-
-        set_metadata_bool(holder.repository(), DHT_ENABLED_KEY, enabled).await?;
+        set_metadata_bool(&repo, DHT_ENABLED_KEY, enabled).await?;
 
         Ok(())
     }
 
     #[api]
     pub async fn repository_is_pex_enabled(&self, repo: RepositoryHandle) -> Result<bool, Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
+        let result = self
+            .repos
+            .with(repo, |holder| {
+                holder
+                    .with_registration(|reg| reg.is_pex_enabled())
+                    .ok_or_else(|| holder.repository().clone())
+            })
+            .ok_or(Error::InvalidArgument)?;
 
-        if let Some(reg) = holder.registration() {
-            Ok(reg.is_pex_enabled())
-        } else {
-            Ok(holder
-                .repository()
-                .metadata()
-                .get(PEX_ENABLED_KEY)
-                .await?
-                .unwrap_or(false))
+        match result {
+            Ok(enabled) => Ok(enabled),
+            Err(repo) => Ok(repo.metadata().get(PEX_ENABLED_KEY).await?.unwrap_or(false)),
         }
     }
 
@@ -990,27 +1016,28 @@ impl State {
         repo: RepositoryHandle,
         enabled: bool,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
+        let repo = self
+            .repos
+            .with(repo, |holder| {
+                holder.with_registration(|reg| reg.set_pex_enabled(enabled));
+                holder.repository().clone()
+            })
+            .ok_or(Error::InvalidArgument)?;
 
-        if let Some(reg) = holder.registration() {
-            reg.set_pex_enabled(enabled);
-        }
-
-        set_metadata_bool(holder.repository(), PEX_ENABLED_KEY, enabled).await?;
+        set_metadata_bool(&repo, PEX_ENABLED_KEY, enabled).await?;
 
         Ok(())
     }
 
     #[api]
     pub fn repository_get_stats(&self, repo: RepositoryHandle) -> Result<Stats, Error> {
-        Ok(self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .registration()
-            .as_ref()
-            .map(|reg| reg.stats())
-            .unwrap_or_default())
+        self.repos
+            .with(repo, |holder| {
+                holder
+                    .with_registration(|reg| reg.stats())
+                    .unwrap_or_default()
+            })
+            .ok_or(Error::InvalidArgument)
     }
 
     #[api]
@@ -1019,11 +1046,12 @@ impl State {
         repo: RepositoryHandle,
         host: String,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
-        let secrets = holder
-            .repository()
-            .secrets()
-            .into_write_secrets()
+        let secrets = self
+            .repos
+            .with(repo, |holder| {
+                holder.repository().secrets().into_write_secrets()
+            })
+            .ok_or(Error::InvalidArgument)?
             .ok_or(Error::PermissionDenied)?;
 
         let mut client = self.connect_remote_client(&host).await?;
@@ -1041,17 +1069,18 @@ impl State {
         repo: RepositoryHandle,
         host: String,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
-        let secrets = holder
-            .repository()
-            .secrets()
-            .into_write_secrets()
+        let secrets = self
+            .repos
+            .with(repo, |holder| {
+                holder.repository().secrets().into_write_secrets()
+            })
+            .ok_or(Error::InvalidArgument)?
             .ok_or(Error::PermissionDenied)?;
 
         let mut client = self.connect_remote_client(&host).await?;
-
         let result = client.delete_mirror(&secrets).await;
         client.close().await;
+
         result?;
 
         Ok(())
@@ -1063,13 +1092,13 @@ impl State {
         repo: RepositoryHandle,
         host: String,
     ) -> Result<bool, Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
+        let id = self
+            .repos
+            .with(repo, |holder| *holder.repository().secrets().id())
+            .ok_or(Error::InvalidArgument)?;
 
         let mut client = self.connect_remote_client(&host).await?;
-
-        let result = client
-            .mirror_exists(holder.repository().secrets().id())
-            .await;
+        let result = client.mirror_exists(&id).await;
         client.close().await;
 
         Ok(result?)
@@ -1077,9 +1106,13 @@ impl State {
 
     #[api]
     pub async fn repository_get_quota(&self, repo: RepositoryHandle) -> Result<QuotaInfo, Error> {
-        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
-        let quota = holder.repository().quota().await?;
-        let size = holder.repository().size().await?;
+        let repo = self
+            .repos
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
+
+        let quota = repo.quota().await?;
+        let size = repo.size().await?;
 
         Ok(QuotaInfo { quota, size })
     }
@@ -1090,12 +1123,11 @@ impl State {
         repo: RepositoryHandle,
         value: Option<StorageSize>,
     ) -> Result<(), Error> {
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .set_quota(value)
-            .await?;
+        let repo = self
+            .repos
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
+        repo.set_quota(value).await?;
 
         Ok(())
     }
@@ -1117,12 +1149,11 @@ impl State {
         repo: RepositoryHandle,
         value: Option<Duration>,
     ) -> Result<(), Error> {
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .set_repository_expiration(value)
-            .await?;
-        Ok(())
+        let repo = self
+            .repos
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
+        repository::set_repository_expiration(&repo, value).await
     }
 
     #[api]
@@ -1130,11 +1161,11 @@ impl State {
         &self,
         repo: RepositoryHandle,
     ) -> Result<Option<Duration>, Error> {
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository_expiration()
-            .await
+        let repo = self
+            .repos
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
+        repository::repository_expiration(&repo).await
     }
 
     #[api]
@@ -1175,9 +1206,8 @@ impl State {
         value: Option<Duration>,
     ) -> Result<(), Error> {
         self.repos
-            .get(repo)
+            .get_repository(repo)
             .ok_or(Error::InvalidArgument)?
-            .repository()
             .set_block_expiration(value)
             .await?;
         Ok(())
@@ -1190,9 +1220,8 @@ impl State {
     ) -> Result<Option<Duration>, Error> {
         Ok(self
             .repos
-            .get(repo)
+            .get_repository(repo)
             .ok_or(Error::InvalidArgument)?
-            .repository()
             .block_expiration())
     }
 
@@ -1218,9 +1247,8 @@ impl State {
     ) -> Result<Option<String>, Error> {
         Ok(self
             .repos
-            .get(repo)
+            .get_repository(repo)
             .ok_or(Error::InvalidArgument)?
-            .repository()
             .metadata()
             .get(&key)
             .await?)
@@ -1234,9 +1262,8 @@ impl State {
     ) -> Result<bool, Error> {
         let repo = self
             .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
 
         let mut tx = repo.metadata().write().await?;
 
@@ -1267,9 +1294,8 @@ impl State {
     ) -> Result<Option<EntryType>, Error> {
         match self
             .repos
-            .get(repo)
+            .get_repository(repo)
             .ok_or(Error::InvalidArgument)?
-            .repository()
             .lookup_type(path)
             .await
         {
@@ -1287,9 +1313,8 @@ impl State {
         dst: String,
     ) -> Result<(), Error> {
         self.repos
-            .get(repo)
+            .get_repository(repo)
             .ok_or(Error::InvalidArgument)?
-            .repository()
             .move_entry(src, dst)
             .await?;
 
@@ -1303,9 +1328,8 @@ impl State {
         path: String,
     ) -> Result<(), Error> {
         self.repos
-            .get(repo)
+            .get_repository(repo)
             .ok_or(Error::InvalidArgument)?
-            .repository()
             .create_directory(path)
             .await?;
 
@@ -1320,9 +1344,8 @@ impl State {
     ) -> Result<Vec<DirectoryEntry>, Error> {
         let repo = self
             .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
 
         let dir = repo.open_directory(path).await?;
         let entries = dir
@@ -1347,9 +1370,8 @@ impl State {
     ) -> Result<(), Error> {
         let repo = self
             .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
 
         if recursive {
             repo.remove_entry_recursively(path).await?
@@ -1362,15 +1384,14 @@ impl State {
 
     #[api]
     pub async fn repository_create_file(
-        &mut self,
+        &self,
         repo: RepositoryHandle,
         path: String,
     ) -> Result<FileHandle, Error> {
         let repo = self
             .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
         let local_branch = repo.local_branch()?;
 
         let file = repo.create_file(&path).await?;
@@ -1382,15 +1403,14 @@ impl State {
 
     #[api]
     pub async fn repository_open_file(
-        &mut self,
+        &self,
         repo: RepositoryHandle,
         path: String,
     ) -> Result<FileHandle, Error> {
         let repo = self
             .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
         let local_branch = repo.local_branch()?;
 
         let file = repo.open_file(path).await?;
@@ -1403,14 +1423,13 @@ impl State {
     /// Remove (delete) the file at the given path from the repository.
     #[api]
     pub async fn repository_remove_file(
-        &mut self,
+        &self,
         repo: RepositoryHandle,
         path: String,
     ) -> Result<(), Error> {
         self.repos
-            .get(repo)
+            .get_repository(repo)
             .ok_or(Error::InvalidArgument)?
-            .repository()
             .remove_entry(&path)
             .await?;
         Ok(())
@@ -1424,9 +1443,8 @@ impl State {
     ) -> Result<bool, Error> {
         let repo = self
             .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
+            .get_repository(repo)
+            .ok_or(Error::InvalidArgument)?;
 
         match repo.lookup_type(&path).await {
             Ok(EntryType::File) => Ok(true),
@@ -1440,7 +1458,7 @@ impl State {
     /// Reads `size` bytes from the file starting at `offset` bytes from the beginning of the file.
     #[api]
     pub async fn file_read(
-        &mut self,
+        &self,
         file: FileHandle,
         offset: u64,
         size: u64,
@@ -1448,7 +1466,7 @@ impl State {
         let size = size as usize;
         let mut buffer = vec![0; size];
 
-        let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
+        let mut holder = self.files.get(file)?;
 
         holder.file.seek(SeekFrom::Start(offset));
 
@@ -1461,15 +1479,16 @@ impl State {
 
     #[api]
     pub async fn file_write(
-        &mut self,
+        &self,
         file: FileHandle,
         offset: u64,
         data: Vec<u8>,
     ) -> Result<(), Error> {
-        let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
+        let mut holder = self.files.get(file)?;
 
+        let local_branch = holder.local_branch.clone();
         holder.file.seek(SeekFrom::Start(offset));
-        holder.file.fork(holder.local_branch.clone()).await?;
+        holder.file.fork(local_branch).await?;
 
         // TODO: consider using just `write` and returning the number of bytes written
         holder.file.write_all(&data).await?;
@@ -1479,55 +1498,39 @@ impl State {
 
     #[api]
     pub fn file_get_length(&self, file: FileHandle) -> Result<u64, Error> {
-        Ok(self
-            .files
-            .get(file)
-            .ok_or(Error::InvalidArgument)?
-            .file
-            .len())
+        Ok(self.files.get(file)?.file.len())
     }
 
     /// Returns sync progress of the given file.
     #[api]
     pub async fn file_get_progress(&self, file: FileHandle) -> Result<u64, Error> {
         // Don't keep the file locked while progress is being awaited.
-        let progress = self
-            .files
-            .get(file)
-            .ok_or(Error::InvalidArgument)?
-            .file
-            .progress();
+        let progress = self.files.get(file)?.file.progress();
         let progress = progress.await?;
 
         Ok(progress)
     }
 
     #[api]
-    pub async fn file_truncate(&mut self, file: FileHandle, len: u64) -> Result<(), Error> {
-        let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
-        holder.file.fork(holder.local_branch.clone()).await?;
+    pub async fn file_truncate(&self, file: FileHandle, len: u64) -> Result<(), Error> {
+        let mut holder = self.files.get(file)?;
+        let local_branch = holder.local_branch.clone();
+        holder.file.fork(local_branch).await?;
         holder.file.truncate(len)?;
 
         Ok(())
     }
 
     #[api]
-    pub async fn file_flush(&mut self, file: FileHandle) -> Result<(), Error> {
-        self.files
-            .get_mut(file)
-            .ok_or(Error::InvalidArgument)?
-            .file
-            .flush()
-            .await?;
+    pub async fn file_flush(&self, file: FileHandle) -> Result<(), Error> {
+        self.files.get(file)?.file.flush().await?;
 
         Ok(())
     }
 
     #[api]
-    pub async fn file_close(&mut self, file: FileHandle) -> Result<(), Error> {
-        if let Some(mut holder) = self.files.remove(file) {
-            holder.file.flush().await?
-        }
+    pub async fn file_close(&self, file: FileHandle) -> Result<(), Error> {
+        self.files.remove(file)?.file.flush().await?;
 
         Ok(())
     }
@@ -1552,11 +1555,11 @@ impl State {
         self.root_monitor.locate(path)
     }
 
-    // This is exposed to #[api] in `Service`
-    pub fn state_monitor_subscribe(
+    #[api]
+    pub async fn session_subscribe_to_state_monitor(
         &self,
         path: Vec<MonitorId>,
-    ) -> Result<watch::Receiver<()>, Error> {
+    ) -> Result<StateMonitorSubscription, Error> {
         Ok(self
             .root_monitor
             .locate(path)
@@ -1564,32 +1567,44 @@ impl State {
             .subscribe())
     }
 
-    pub async fn set_all_repositories_sync_enabled(&mut self, enabled: bool) -> Result<(), Error> {
-        for (_, holder) in self.repos.iter_mut() {
-            set_sync_enabled(holder, &self.network, enabled).await?;
+    #[api]
+    pub async fn session_unsubscribe(&self, id: MessageId) -> Unsubscribe {
+        Unsubscribe(id)
+    }
+
+    pub async fn set_all_repositories_sync_enabled(&self, enabled: bool) -> Result<(), Error> {
+        let handles: Vec<_> = self.repos.map(|handle, _| handle);
+        for handle in handles {
+            self.repository_set_sync_enabled(handle, enabled).await?;
         }
 
         Ok(())
     }
 
-    pub fn store_dir(&self) -> Option<&Path> {
-        self.store.dir.as_deref()
+    pub fn store_dir(&self) -> Option<PathBuf> {
+        self.store.get()
     }
 
-    pub fn mount_root(&self) -> Option<&Path> {
-        self.mounter.as_ref().map(|m| m.mount_root())
+    pub fn mount_root(&self) -> Option<PathBuf> {
+        self.mounter
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|m| m.mount_root().to_owned())
     }
 
-    pub async fn delete_expired_repositories(&mut self) {
+    pub async fn delete_expired_repositories(&self) {
+        let repos: Vec<_> = self
+            .repos
+            .map(|handle, holder| (handle, holder.repository().clone()));
         let mut expired = Vec::new();
 
-        for (handle, holder) in self.repos.iter() {
-            let Some(last_block_expiration_time) = holder.repository().last_block_expiration_time()
-            else {
+        for (handle, repo) in repos {
+            let Some(last_block_expiration_time) = repo.last_block_expiration_time() else {
                 continue;
             };
 
-            let expiration = match holder.repository_expiration().await {
+            let expiration = match repository::repository_expiration(&repo).await {
                 Ok(Some(duration)) => duration,
                 Ok(None) => continue,
                 Err(error) => {
@@ -1626,20 +1641,21 @@ impl State {
         }
     }
 
-    pub async fn close(&mut self) {
+    /// Closes all resources
+    pub async fn close(&self) {
         self.metrics_server.close();
         self.network.shutdown().await;
         self.close_repositories().await;
     }
 
     // Find all repositories in the store dir and open them.
-    async fn load_repositories(&mut self) {
-        let Some(store_dir) = self.store.dir.as_deref() else {
+    async fn load_repositories(&self) {
+        let Some(store_dir) = self.store.get() else {
             tracing::warn!("store dir not specified");
             return;
         };
 
-        if !fs::try_exists(store_dir).await.unwrap_or(false) {
+        if !fs::try_exists(&store_dir).await.unwrap_or(false) {
             tracing::error!("store dir doesn't exist");
             return;
         }
@@ -1680,9 +1696,12 @@ impl State {
         }
     }
 
-    async fn close_repositories(&mut self) {
-        for mut holder in self.repos.drain() {
-            if let Some(mounter) = &self.mounter {
+    async fn close_repositories(&self) {
+        let repos: Vec<_> = self.repos.drain();
+
+        // Unmount all repos
+        if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
+            for holder in &repos {
                 if let Err(error) = mounter.remove(holder.short_name()) {
                     tracing::warn!(
                         ?error,
@@ -1691,7 +1710,9 @@ impl State {
                     );
                 }
             }
+        }
 
+        for holder in repos {
             if let Err(error) = holder.close().await {
                 tracing::warn!(
                     ?error,
@@ -1708,6 +1729,8 @@ impl State {
         local_secret: Option<LocalSecret>,
         sync_enabled: bool,
     ) -> Result<RepositoryHolder, Error> {
+        let mounter = self.mounter.lock().unwrap().as_ref().cloned();
+
         load_repository(
             path,
             local_secret,
@@ -1715,7 +1738,7 @@ impl State {
             &self.config,
             &self.network,
             &self.repos_monitor,
-            self.mounter.as_ref(),
+            mounter.as_deref(),
         )
         .await
     }
@@ -1725,21 +1748,44 @@ impl State {
     }
 }
 
+// These definitions are only needed to make the api parser's job easier:
+pub(crate) struct Unsubscribe(pub MessageId);
+pub(crate) type RepositorySubscription = broadcast::Receiver<Event>;
+pub(crate) type StateMonitorSubscription = watch::Receiver<()>;
+
 struct Store {
-    dir: Option<PathBuf>,
+    dir: Mutex<Option<PathBuf>>,
 }
 
 impl Store {
+    fn new(dir: Option<PathBuf>) -> Self {
+        Self {
+            dir: Mutex::new(dir),
+        }
+    }
+
+    fn get(&self) -> Option<PathBuf> {
+        self.dir.lock().unwrap().as_ref().cloned()
+    }
+
+    fn set(&self, dir: Option<PathBuf>) -> bool {
+        let mut guard = self.dir.lock().unwrap();
+
+        if *guard != dir {
+            *guard = dir;
+            true
+        } else {
+            false
+        }
+    }
+
     fn normalize_repository_path(&self, path: &Path) -> Result<PathBuf, Error> {
+        let dir = self.get();
+
         let path = if path.is_absolute() {
             Cow::Borrowed(path)
         } else {
-            Cow::Owned(
-                self.dir
-                    .as_deref()
-                    .ok_or(Error::StoreDirUnspecified)?
-                    .join(path),
-            )
+            Cow::Owned(dir.as_deref().ok_or(Error::StoreDirUnspecified)?.join(path))
         };
 
         match path.extension() {
@@ -1757,11 +1803,11 @@ impl Store {
 
     // Remove ancestors directories up to `store_dir` but only if they are empty.
     async fn remove_empty_ancestor_dirs(&self, path: &Path) -> Result<(), io::Error> {
-        let Some(store_dir) = &self.dir else {
+        let Some(store_dir) = self.get() else {
             return Ok(());
         };
 
-        if !path.starts_with(store_dir) {
+        if !path.starts_with(&store_dir) {
             return Ok(());
         }
 
@@ -1795,13 +1841,13 @@ async fn load_repository(
         .with_monitor(repos_monitor.make_child(path.to_string_lossy()));
 
     let repo = Repository::open(&params, local_secret, AccessMode::Write).await?;
-    let mut holder = RepositoryHolder::new(path.to_owned(), repo);
+    let holder = RepositoryHolder::new(path.to_owned(), repo);
 
     if sync_enabled {
-        set_sync_enabled(&mut holder, network, true).await?;
+        holder.enable_sync(register(network, holder.repository()).await?);
     }
 
-    if let Some(mounter) = &mounter {
+    if let Some(mounter) = mounter {
         if holder
             .repository()
             .metadata()
@@ -1816,28 +1862,14 @@ async fn load_repository(
     Ok(holder)
 }
 
-async fn set_sync_enabled(
-    holder: &mut RepositoryHolder,
-    network: &Network,
-    enabled: bool,
-) -> Result<(), Error> {
-    match (enabled, holder.registration().is_some()) {
-        (true, false) => {
-            let registration = network.register(holder.repository().handle());
+async fn register(network: &Network, repo: &Repository) -> Result<Registration, Error> {
+    let registration = network.register(repo.handle());
 
-            let metadata = holder.repository().metadata();
-            registration.set_dht_enabled(metadata.get(DHT_ENABLED_KEY).await?.unwrap_or(false));
-            registration.set_pex_enabled(metadata.get(PEX_ENABLED_KEY).await?.unwrap_or(false));
+    let metadata = repo.metadata();
+    registration.set_dht_enabled(metadata.get(DHT_ENABLED_KEY).await?.unwrap_or(false));
+    registration.set_pex_enabled(metadata.get(PEX_ENABLED_KEY).await?.unwrap_or(false));
 
-            holder.enable_sync(registration);
-        }
-        (false, true) => {
-            holder.disable_sync();
-        }
-        (true, true) | (false, false) => (),
-    }
-
-    Ok(())
+    Ok(registration)
 }
 
 async fn set_metadata_bool(repo: &Repository, key: &str, value: bool) -> Result<(), Error> {

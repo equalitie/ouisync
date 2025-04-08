@@ -19,6 +19,7 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     pin::Pin,
+    sync::Mutex,
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -36,6 +37,10 @@ const GEO_IP_PATH: &str = "GeoLite2-Country.mmdb";
 const COLLECT_INTERVAL: Duration = Duration::from_secs(10);
 
 pub(crate) struct MetricsServer {
+    inner: Mutex<Inner>,
+}
+
+struct Inner {
     handle: Option<ScopedAbortHandle>,
 }
 
@@ -59,32 +64,36 @@ impl MetricsServer {
             None
         };
 
-        Ok(Self { handle })
+        let inner = Inner { handle };
+
+        Ok(Self {
+            inner: Mutex::new(inner),
+        })
     }
 
     pub async fn bind(
-        &mut self,
+        &self,
         config: &ConfigStore,
         network: &Network,
         tls_config: &TlsConfig,
         addr: SocketAddr,
     ) -> Result<(), Error> {
         let handle = start(config, network, tls_config, addr).await?;
-        self.handle = Some(handle);
+        self.inner.lock().unwrap().handle = Some(handle);
         config.entry(BIND_METRICS_KEY).set(&addr).await?;
 
         Ok(())
     }
 
-    pub async fn unbind(&mut self, config: &ConfigStore) -> Result<(), Error> {
-        self.handle = None;
+    pub async fn unbind(&self, config: &ConfigStore) -> Result<(), Error> {
+        self.inner.lock().unwrap().handle = None;
         config.entry(BIND_METRICS_KEY).remove().await?;
 
         Ok(())
     }
 
-    pub fn close(&mut self) {
-        self.handle = None;
+    pub fn close(&self) {
+        self.inner.lock().unwrap().handle = None;
     }
 }
 

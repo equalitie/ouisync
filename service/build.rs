@@ -11,7 +11,7 @@ use ouisync_api_parser::{Context, Field, Fields, Request, Response, Type};
 
 fn main() {
     if let Err(error) = generate() {
-        panic!("{}", error);
+        println!("cargo::error={:#}", error);
     }
 }
 
@@ -20,7 +20,7 @@ fn generate() -> Result<()> {
 
     generate_request(&ctx.request)?;
     generate_response(&ctx.response)?;
-    generate_service_dispatch(&ctx.request)?;
+    generate_dispatch(&ctx.request)?;
 
     Ok(())
 }
@@ -164,33 +164,31 @@ fn generate_response(response: &Response) -> Result<()> {
     Ok(())
 }
 
-fn generate_service_dispatch(request: &Request) -> Result<()> {
-    let mut out = File::create(output_path("service"))?;
+fn generate_dispatch(request: &Request) -> Result<()> {
+    let mut out = File::create(output_path("connection"))?;
 
     write_file_header(&mut out)?;
 
     writeln!(out, "#[allow(clippy::let_unit_value)]")?;
-    writeln!(out, "impl Service {{")?;
-    writeln!(out, "{I}async fn dispatch(")?;
-    writeln!(out, "{I}{I}&mut self,")?;
-    writeln!(out, "{I}{I}conn_id: ConnectionId,")?;
-    writeln!(out, "{I}{I}message: Message<Request>,")?;
-    writeln!(out, "{I}) -> Result<Response, ProtocolError> {{")?;
+    writeln!(out, "async fn dispatch(")?;
+    writeln!(out, "{I}state: &State,")?;
+    writeln!(out, "{I}request: Request,")?;
+    writeln!(out, ") -> Result<Action<Response>, ProtocolError> {{")?;
 
-    writeln!(out, "{I}{I}match message.payload {{")?;
+    writeln!(out, "{I}match request {{")?;
 
     for (name, variant) in &request.variants {
-        write!(out, "{I}{I}{I}Request::{}", AsPascalCase(name))?;
+        write!(out, "{I}{I}Request::{}", AsPascalCase(name))?;
 
         match &variant.fields {
             Fields::Named(fields) => {
                 writeln!(out, " {{")?;
 
                 for (name, _) in fields {
-                    writeln!(out, "{I}{I}{I}{I}{name},")?;
+                    writeln!(out, "{I}{I}{I}{name},")?;
                 }
 
-                write!(out, "{I}{I}{I}}}")?;
+                write!(out, "{I}{I}}}")?;
             }
             Fields::Unnamed(_) => {
                 writeln!(out, "(value)")?;
@@ -199,29 +197,14 @@ fn generate_service_dispatch(request: &Request) -> Result<()> {
         }
 
         writeln!(out, " => {{")?;
-
-        match variant.scope.as_str() {
-            "State" => {
-                writeln!(out, "{I}{I}{I}{I}let ret = self.state.{}(", name)?;
-            }
-            "Service" => {
-                writeln!(out, "{I}{I}{I}{I}let ret = self.{}(", name)?;
-
-                // Pass `conn_id` and `message_id` to subscription handlers.
-                if name.contains("subscribe") {
-                    writeln!(out, "{I}{I}{I}{I}{I}conn_id,")?;
-                    writeln!(out, "{I}{I}{I}{I}{I}message.id,")?;
-                }
-            }
-            _ => continue,
-        }
+        writeln!(out, "{I}{I}{I}let ret = state.{}(", name)?;
 
         for (name, field) in &variant.fields {
             if matches!(field.ty, Type::Unit) {
                 continue;
             }
 
-            write!(out, "{I}{I}{I}{I}{I}{}", name.unwrap_or("value"))?;
+            write!(out, "{I}{I}{I}{I}{}", name.unwrap_or("value"))?;
 
             if matches!(field.ty, Type::Bytes) {
                 write!(out, ".into()")?;
@@ -232,7 +215,7 @@ fn generate_service_dispatch(request: &Request) -> Result<()> {
 
         writeln!(
             out,
-            "{I}{I}{I}{I}){}{};",
+            "{I}{I}{I}){}{};",
             if variant.is_async { ".await" } else { "" },
             match variant.ret {
                 Type::Result(..) => "?",
@@ -240,13 +223,12 @@ fn generate_service_dispatch(request: &Request) -> Result<()> {
             },
         )?;
 
-        writeln!(out, "{I}{I}{I}{I}")?;
-        writeln!(out, "{I}{I}{I}{I}Ok(ret.into())")?;
+        writeln!(out, "{I}{I}{I}")?;
+        writeln!(out, "{I}{I}{I}Ok(ret.into())")?;
 
-        writeln!(out, "{I}{I}{I}}}")?;
+        writeln!(out, "{I}{I}}}")?;
     }
 
-    writeln!(out, "{I}{I}}}")?;
     writeln!(out, "{I}}}")?;
     writeln!(out, "}}")?;
 
