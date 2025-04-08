@@ -2,6 +2,7 @@ use super::{AccessMode, AccessSecrets, DecodeError};
 use crate::protocol::RepositoryId;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine};
 use bincode::Options;
+use ouisync_macros::api;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     fmt,
@@ -15,6 +16,7 @@ pub const VERSION: u64 = 1;
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
 /// other replicas.
 #[derive(Clone, Eq, PartialEq, Debug)]
+#[api(repr(String))]
 pub struct ShareToken {
     secrets: AccessSecrets,
     name: String,

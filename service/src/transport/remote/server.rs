@@ -137,7 +137,7 @@ impl RemoteServerReader {
 
                 match request {
                     protocol::v0::Request::Mirror { share_token } => {
-                        make_repository_create_request(*share_token.id())
+                        make_create_repository_request(*share_token.id())
                     }
                 }
             }
@@ -147,19 +147,21 @@ impl RemoteServerReader {
                     proof,
                 } => {
                     self.verify_proof(message.id, &repository_id, &proof)?;
-                    make_repository_create_request(repository_id)
+                    make_create_repository_request(repository_id)
                 }
                 protocol::v1::Request::Delete {
                     repository_id,
                     proof,
                 } => {
                     self.verify_proof(message.id, &repository_id, &proof)?;
-                    Request::RepositoryDeleteByName(make_repository_name(&repository_id))
+                    Request::SessionDeleteRepositoryByName {
+                        name: make_repository_name(&repository_id),
+                    }
                 }
-                protocol::v1::Request::Exists { repository_id } => {
-                    Request::RepositoryFind(make_repository_name(&repository_id))
-                }
-                protocol::v1::Request::GetListenerAddrs => Request::NetworkGetLocalListenerAddrs,
+                protocol::v1::Request::Exists { repository_id } => Request::SessionFindRepository {
+                    name: make_repository_name(&repository_id),
+                },
+                protocol::v1::Request::GetListenerAddrs => Request::SessionGetLocalListenerAddrs,
             },
         };
 
@@ -246,8 +248,8 @@ fn make_repository_name(id: &RepositoryId) -> String {
     insert_separators(&id.salted_hash(b"ouisync repository name").to_string())
 }
 
-fn make_repository_create_request(id: RepositoryId) -> Request {
-    Request::RepositoryCreate {
+fn make_create_repository_request(id: RepositoryId) -> Request {
+    Request::SessionCreateRepository {
         path: make_repository_name(&id).into(),
         read_secret: None,
         write_secret: None,

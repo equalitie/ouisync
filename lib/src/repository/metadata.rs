@@ -1,7 +1,5 @@
 use crate::{
-    access_control::{
-        Access, AccessSecrets, KeyAndSalt, LocalSecret, SetLocalSecret, WriteSecrets,
-    },
+    access_control::{Access, AccessSecrets, LocalSecret, SetLocalSecret, WriteSecrets},
     crypto::{
         cipher::{self, Nonce},
         sign, Hash, Password, PasswordSalt,
@@ -166,14 +164,16 @@ async fn secret_to_key<'a>(
     }
 }
 
-pub(crate) fn secret_to_key_and_salt(secret: &'_ SetLocalSecret) -> Cow<'_, KeyAndSalt> {
+pub(crate) fn secret_to_key_and_salt(
+    secret: &'_ SetLocalSecret,
+) -> (Cow<'_, cipher::SecretKey>, Cow<'_, PasswordSalt>) {
     match secret {
         SetLocalSecret::Password(password) => {
-            let salt = cipher::SecretKey::random_salt();
+            let salt = PasswordSalt::random();
             let key = cipher::SecretKey::derive_from_password(password.as_ref(), &salt);
-            Cow::Owned(KeyAndSalt { key, salt })
+            (Cow::Owned(key), Cow::Owned(salt))
         }
-        SetLocalSecret::KeyAndSalt(key_and_salt) => Cow::Borrowed(key_and_salt),
+        SetLocalSecret::KeyAndSalt { key, salt } => (Cow::Borrowed(key), Cow::Borrowed(salt)),
     }
 }
 
@@ -280,22 +280,23 @@ async fn set_secret_read_key(
     tx: &mut db::WriteTransaction,
     id: &RepositoryId,
     read_key: &cipher::SecretKey,
-    local: &KeyAndSalt,
+    local_secret_key: &cipher::SecretKey,
+    local_salt: &PasswordSalt,
 ) -> Result<(), StoreError> {
-    set_secret_blob(tx, READ_KEY, read_key, &local.key).await?;
+    set_secret_blob(tx, READ_KEY, read_key, local_secret_key).await?;
     set_secret_blob(tx, READ_KEY_VALIDATOR, read_key_validator(id), read_key).await?;
-    set_password_salt(tx, KeyType::Read, &local.salt).await
+    set_password_salt(tx, KeyType::Read, local_salt).await
 }
 
 pub(crate) async fn set_read_key(
     tx: &mut db::WriteTransaction,
     id: &RepositoryId,
     read_key: &cipher::SecretKey,
-    local: Option<&KeyAndSalt>,
+    local: Option<(&cipher::SecretKey, &PasswordSalt)>,
 ) -> Result<(), StoreError> {
-    if let Some(local) = local {
+    if let Some((local_secret_key, local_salt)) = local {
         remove_public_read_key(tx).await?;
-        set_secret_read_key(tx, id, read_key, local).await
+        set_secret_read_key(tx, id, read_key, local_secret_key, local_salt).await
     } else {
         set_public_read_key(tx, read_key).await?;
         obfuscate_secret_read_key(tx).await
@@ -342,20 +343,27 @@ async fn set_public_write_key(
 async fn set_secret_write_key(
     tx: &mut db::WriteTransaction,
     secrets: &WriteSecrets,
-    local: &KeyAndSalt,
+    local_secret_key: &cipher::SecretKey,
+    local_salt: &PasswordSalt,
 ) -> Result<(), StoreError> {
-    set_secret_blob(tx, WRITE_KEY, secrets.write_keys.to_bytes(), &local.key).await?;
-    set_password_salt(tx, KeyType::Write, &local.salt).await
+    set_secret_blob(
+        tx,
+        WRITE_KEY,
+        secrets.write_keys.to_bytes(),
+        local_secret_key,
+    )
+    .await?;
+    set_password_salt(tx, KeyType::Write, local_salt).await
 }
 
 pub(crate) async fn set_write_key(
     tx: &mut db::WriteTransaction,
     secrets: &WriteSecrets,
-    local: Option<&KeyAndSalt>,
+    local: Option<(&cipher::SecretKey, &PasswordSalt)>,
 ) -> Result<(), StoreError> {
-    if let Some(local) = local {
+    if let Some((local_secret_key, local_salt)) = local {
         remove_public_write_key(tx).await?;
-        set_secret_write_key(tx, secrets, local).await
+        set_secret_write_key(tx, secrets, local_secret_key, local_salt).await
     } else {
         set_public_write_key(tx, secrets).await?;
         obfuscate_secret_write_key(tx).await
@@ -408,13 +416,13 @@ async fn set_password_salt(
 
 async fn obfuscate_read_password_salt(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     migrate_to_separate_password_salts(tx).await?;
-    let dummy_salt = cipher::SecretKey::random_salt();
+    let dummy_salt = PasswordSalt::random();
     set_public_blob(tx, READ_PASSWORD_SALT, &dummy_salt).await
 }
 
 async fn obfuscate_write_password_salt(tx: &mut db::WriteTransaction) -> Result<(), StoreError> {
     migrate_to_separate_password_salts(tx).await?;
-    let dummy_salt = cipher::SecretKey::random_salt();
+    let dummy_salt = PasswordSalt::random();
     set_public_blob(tx, WRITE_PASSWORD_SALT, &dummy_salt).await
 }
 
@@ -503,15 +511,15 @@ pub(crate) async fn set_access<'a>(
             local_secret,
             read_key,
         } => {
-            let local = secret_to_key_and_salt(local_secret);
+            let (local_secret_key, local_salt) = secret_to_key_and_salt(local_secret);
 
             remove_public_read_key(tx).await?;
-            set_secret_read_key(tx, id, read_key, &local).await?;
+            set_secret_read_key(tx, id, read_key, &local_secret_key, &local_salt).await?;
             remove_public_write_key(tx).await?;
             obfuscate_secret_write_key(tx).await?;
 
             Ok(LocalKeys {
-                read: Some(just_key(local)),
+                read: Some(local_secret_key),
                 write: None,
             })
         }
@@ -531,33 +539,40 @@ pub(crate) async fn set_access<'a>(
             local_write_secret,
             secrets,
         } => {
-            let local_read = secret_to_key_and_salt(local_read_secret);
-            let local_write = secret_to_key_and_salt(local_write_secret);
+            let (local_read_key, local_read_salt) = secret_to_key_and_salt(local_read_secret);
+            let (local_write_key, local_write_salt) = secret_to_key_and_salt(local_write_secret);
 
             remove_public_read_key(tx).await?;
-            set_secret_read_key(tx, &secrets.id, &secrets.read_key, &local_read).await?;
+            set_secret_read_key(
+                tx,
+                &secrets.id,
+                &secrets.read_key,
+                &local_read_key,
+                &local_read_salt,
+            )
+            .await?;
             remove_public_write_key(tx).await?;
-            set_secret_write_key(tx, secrets, &local_write).await?;
+            set_secret_write_key(tx, secrets, &local_write_key, &local_write_salt).await?;
 
             Ok(LocalKeys {
-                read: Some(just_key(local_read)),
-                write: Some(just_key(local_write)),
+                read: Some(local_read_key),
+                write: Some(local_write_key),
             })
         }
         Access::WriteLockedReadUnlocked {
             local_write_secret,
             secrets,
         } => {
-            let local_write = secret_to_key_and_salt(local_write_secret);
+            let (local_write_key, local_write_salt) = secret_to_key_and_salt(local_write_secret);
 
             set_public_read_key(tx, &secrets.read_key).await?;
             obfuscate_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
-            set_secret_write_key(tx, secrets, &local_write).await?;
+            set_secret_write_key(tx, secrets, &local_write_key, &local_write_salt).await?;
 
             Ok(LocalKeys {
                 read: None,
-                write: Some(just_key(local_write)),
+                write: Some(local_write_key),
             })
         }
     }
@@ -567,13 +582,6 @@ pub(crate) struct LocalKeys<'a> {
     #[allow(unused)]
     pub read: Option<Cow<'a, cipher::SecretKey>>,
     pub write: Option<Cow<'a, cipher::SecretKey>>,
-}
-
-fn just_key(key_and_salt: Cow<'_, KeyAndSalt>) -> Cow<'_, cipher::SecretKey> {
-    match key_and_salt {
-        Cow::Borrowed(key_and_salt) => Cow::Borrowed(&key_and_salt.key),
-        Cow::Owned(key_and_salt) => Cow::Owned(key_and_salt.key),
-    }
 }
 
 pub(crate) async fn get_access_secrets<'a>(

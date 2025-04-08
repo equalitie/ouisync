@@ -1,5 +1,8 @@
 use crate::udp::DatagramSocket;
 use bytecodec::{DecodeExt, EncodeExt};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ouisync_macros::api;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, HashMap},
     fmt, io, mem,
@@ -305,7 +308,12 @@ impl<T: DatagramSocket> StunClient<T> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize, IntoPrimitive, TryFromPrimitive,
+)]
+#[repr(u8)]
+#[serde(into = "u8", try_from = "u8")]
+#[api]
 pub enum NatBehavior {
     EndpointIndependent,
     AddressDependent,

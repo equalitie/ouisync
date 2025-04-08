@@ -1,10 +1,19 @@
 use ouisync::{Branch, File};
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use slab::Slab;
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
 #[serde(transparent)]
+#[api]
 pub struct FileHandle(usize);
+
+impl FileHandle {
+    #[cfg(test)]
+    pub(crate) fn from_raw(raw: usize) -> Self {
+        Self(raw)
+    }
+}
 
 pub(crate) struct FileSet {
     files: Slab<FileHolder>,

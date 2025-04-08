@@ -1,12 +1,15 @@
 use argon2::password_hash;
+use ouisync_macros::api;
+use rand::{rngs::OsRng, Rng};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
-use std::{fmt, sync::Arc};
+use std::{array::TryFromSliceError, fmt, sync::Arc};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 /// A simple wrapper over String to avoid certain kinds of attack. For more elaboration please see
 /// the documentation for the SecretKey structure.
 #[derive(Clone)]
+#[api(repr(String), secret)]
 pub struct Password(Arc<Zeroizing<String>>);
 
 impl From<String> for Password {
@@ -55,15 +58,56 @@ impl<'de> Deserialize<'de> for Password {
     }
 }
 
-define_byte_array_wrapper! {
-    pub struct PasswordSalt([u8; password_hash::Salt::RECOMMENDED_LENGTH]);
-}
+#[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[repr(transparent)]
+#[api(repr(Bytes))]
+pub struct PasswordSalt([u8; Self::SIZE]);
 
-derive_rand_for_wrapper!(PasswordSalt);
+// NOTE: Not using the `define_byte_array_wrapper` macro here because this type needs to be visible
+// to the API parser which is currently not smart emough to see inside macros.
+// TODO: consider changing `define_byte_array_wrapper` to a proc-macro
 
 impl PasswordSalt {
+    pub const SIZE: usize = password_hash::Salt::RECOMMENDED_LENGTH;
+
     pub fn as_array(&self) -> &[u8; Self::SIZE] {
         &self.0
+    }
+
+    pub fn random() -> Self {
+        OsRng.gen()
+    }
+}
+
+impl From<[u8; Self::SIZE]> for PasswordSalt {
+    fn from(array: [u8; Self::SIZE]) -> Self {
+        Self(array)
+    }
+}
+
+impl TryFrom<&'_ [u8]> for PasswordSalt {
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(slice.try_into()?))
+    }
+}
+
+impl AsRef<[u8]> for PasswordSalt {
+    fn as_ref(&self) -> &[u8] {
+        &self.0[..]
+    }
+}
+
+impl fmt::Debug for PasswordSalt {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:<8x}", self)
+    }
+}
+
+impl fmt::LowerHex for PasswordSalt {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        hex_fmt::HexFmt(&self.0).fmt(f)
     }
 }
 
@@ -96,3 +140,5 @@ impl<'de> Deserialize<'de> for PasswordSalt {
         Ok(PasswordSalt(salt))
     }
 }
+
+derive_rand_for_wrapper!(PasswordSalt);

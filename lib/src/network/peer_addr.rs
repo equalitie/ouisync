@@ -129,7 +129,6 @@ impl<'de> Deserialize<'de> for PeerAddr {
 // Proxy to serialize/deserialize PeerAddr in non human-readable formats.
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "PeerAddr")]
-#[serde(rename_all = "snake_case")]
 enum SerdeProxy {
     Tcp(#[allow(dead_code)] SocketAddr),
     Quic(#[allow(dead_code)] SocketAddr),

@@ -5,7 +5,6 @@ import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 
 import 'bindings.dart';
-import 'exception.dart';
 
 /// Handle to start and stop Ouisync service inside this process.
 class Server {
@@ -37,7 +36,8 @@ class Server {
         nullptr,
       );
 
-      final errorCode = ErrorCode.decode(await completer.future);
+      final errorCode =
+          ErrorCode.fromInt(await completer.future) ?? ErrorCode.other;
 
       if (errorCode == ErrorCode.ok) {
         return Server._(handle);
@@ -77,7 +77,8 @@ class Server {
         nullptr,
       );
 
-      final errorCode = ErrorCode.decode(await completer.future);
+      final errorCode =
+          ErrorCode.fromInt(await completer.future) ?? ErrorCode.other;
 
       if (errorCode != ErrorCode.ok) {
         throw OuisyncException(errorCode);
@@ -100,7 +101,7 @@ void initLog({
     nativeCallback = NativeCallable<LogCallback>.listener(
       (int level, Pointer<Uint8> ptr, int len, int cap) {
         callback(
-          LogLevel.decode(level),
+          LogLevel.fromInt(level) ?? LogLevel.error,
           utf8.decode(ptr.asTypedList(len)),
         );
 

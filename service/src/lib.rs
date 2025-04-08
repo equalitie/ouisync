@@ -25,14 +25,14 @@ pub use error::Error;
 use config_store::{ConfigError, ConfigKey, ConfigStore};
 use futures_util::{stream::FuturesUnordered, SinkExt};
 use metrics::MetricsServer;
-use ouisync::crypto::{cipher::SecretKey, PasswordSalt};
+use ouisync_macros::api;
 use protocol::{
-    DecodeError, Message, MessageId, NetworkDefaults, ProtocolError, Request, Response,
-    ResponseResult,
+    DecodeError, Message, MessageId, NetworkDefaults, ProtocolError, RepositoryHandle, Request,
+    Response, ResponseResult,
 };
-use rand::{rngs::OsRng, Rng};
 use slab::Slab;
 use state::State;
+use state_monitor::MonitorId;
 use std::{
     convert::Infallible,
     future, io,
@@ -197,13 +197,13 @@ impl Service {
     }
 
     pub async fn set_store_dir(&mut self, path: impl Into<PathBuf>) -> Result<(), Error> {
-        self.state.set_store_dir(path.into()).await
+        self.state.session_set_store_dir(path.into()).await
     }
 
     /// Initialize network according to the stored config.
     pub async fn init_network(&mut self) {
         self.state
-            .init_network(NetworkDefaults {
+            .session_init_network(NetworkDefaults {
                 bind: vec![],
                 port_forwarding_enabled: false,
                 local_discovery_enabled: false,
@@ -220,7 +220,8 @@ impl Service {
         self.state.enable_panic_monitor();
     }
 
-    pub(crate) async fn bind_remote_control(
+    #[api]
+    pub(crate) async fn remote_control_bind(
         &mut self,
         addr: Option<SocketAddr>,
     ) -> Result<u16, Error> {
@@ -262,7 +263,7 @@ impl Service {
                 let id = message.id;
                 let start = Instant::now();
 
-                let result = self.dispatch_message(conn_id, message).await;
+                let result = self.dispatch(conn_id, message).await;
 
                 span.in_scope(|| tracing::trace!(?result, elapsed = ?start.elapsed()));
 
@@ -308,445 +309,6 @@ impl Service {
         }
     }
 
-    async fn dispatch_message(
-        &mut self,
-        conn_id: ConnectionId,
-        message: Message<Request>,
-    ) -> Result<Response, ProtocolError> {
-        match message.payload {
-            Request::DirectoryCreate { repository, path } => {
-                self.state.create_directory(repository, path).await?;
-                Ok(().into())
-            }
-            Request::DirectoryRead { repository, path } => {
-                Ok(self.state.read_directory(repository, path).await?.into())
-            }
-            Request::DirectoryRemove {
-                repository,
-                path,
-                recursive,
-            } => {
-                self.state
-                    .remove_directory(repository, path, recursive)
-                    .await?;
-                Ok(().into())
-            }
-            Request::FileClose(file) => {
-                self.state.close_file(file).await?;
-                Ok(().into())
-            }
-            Request::FileCreate { repository, path } => {
-                Ok(self.state.create_file(repository, path).await?.into())
-            }
-            Request::FileExists { repository, path } => {
-                Ok(self.state.file_exists(repository, path).await?.into())
-            }
-            Request::FileFlush(file) => {
-                self.state.flush_file(file).await?;
-                Ok(().into())
-            }
-            Request::FileLen(file) => Ok(self.state.file_len(file)?.into()),
-            Request::FileOpen { repository, path } => {
-                Ok(self.state.open_file(repository, &path).await?.into())
-            }
-            Request::FileProgress(file) => Ok(self.state.file_progress(file).await?.into()),
-            Request::FileRead { file, offset, len } => {
-                Ok(self.state.read_file(file, offset, len).await?.into())
-            }
-            Request::FileRemove { repository, path } => {
-                self.state.remove_file(repository, path).await?;
-                Ok(().into())
-            }
-            Request::FileTruncate { file, len } => {
-                self.state.truncate_file(file, len).await?;
-                Ok(().into())
-            }
-            Request::FileWrite { file, offset, data } => {
-                self.state.write_file(file, offset, &data).await?;
-                Ok(().into())
-            }
-            Request::PasswordGenerateSalt => {
-                let salt: PasswordSalt = OsRng.gen();
-                Ok(salt.as_ref().to_vec().into())
-            }
-            Request::PasswordDeriveSecretKey { password, salt } => {
-                let secret_key = SecretKey::derive_from_password(&password, &salt);
-                Ok(secret_key.as_array().to_vec().into())
-            }
-            Request::MetricsBind(addr) => {
-                Ok(self.metrics_server.bind(&self.state, addr).await?.into())
-            }
-            Request::MetricsGetListenerAddr => todo!(),
-            Request::NetworkAddUserProvidedPeers(addrs) => {
-                self.state.add_user_provided_peers(&addrs).await;
-                Ok(().into())
-            }
-            Request::NetworkBind(addrs) => {
-                self.state.bind_network(&addrs).await;
-                Ok(().into())
-            }
-            Request::NetworkGetCurrentProtocolVersion => {
-                Ok(self.state.network.current_protocol_version().into())
-            }
-            Request::NetworkGetExternalAddrV4 => {
-                Ok(self.state.network.external_addr_v4().await.into())
-            }
-            Request::NetworkGetExternalAddrV6 => {
-                Ok(self.state.network.external_addr_v6().await.into())
-            }
-            Request::NetworkGetHighestSeenProtocolVersion => {
-                Ok(self.state.network.highest_seen_protocol_version().into())
-            }
-            Request::NetworkGetLocalListenerAddrs => {
-                Ok(self.state.network.listener_local_addrs().into())
-            }
-            Request::NetworkGetRemoteListenerAddrs(host) => {
-                Ok(self.state.remote_listener_addrs(&host).await?.into())
-            }
-            Request::NetworkGetNatBehavior => Ok(self.state.network.nat_behavior().await.into()),
-            Request::NetworkGetPeers => {
-                Ok(self.state.network.peer_info_collector().collect().into())
-            }
-            Request::NetworkGetRuntimeId => {
-                Ok(hex::encode(self.state.network.this_runtime_id().as_ref()).into())
-            }
-            Request::NetworkGetUserProvidedPeers => {
-                Ok(self.state.user_provided_peers().await.into())
-            }
-            Request::NetworkInit(defaults) => {
-                self.state.init_network(defaults).await;
-                Ok(().into())
-            }
-            Request::NetworkIsLocalDiscoveryEnabled => {
-                Ok(self.state.network.is_local_discovery_enabled().into())
-            }
-            Request::NetworkIsPexRecvEnabled => Ok(self.state.network.is_pex_recv_enabled().into()),
-            Request::NetworkIsPexSendEnabled => Ok(self.state.network.is_pex_send_enabled().into()),
-            Request::NetworkIsPortForwardingEnabled => {
-                Ok(self.state.network.is_port_forwarding_enabled().into())
-            }
-            Request::NetworkRemoveUserProvidedPeers(addrs) => {
-                self.state.remove_user_provided_peers(&addrs).await;
-                Ok(().into())
-            }
-            Request::NetworkSetLocalDiscoveryEnabled(enabled) => {
-                self.state.set_local_discovery_enabled(enabled).await;
-                Ok(().into())
-            }
-            Request::NetworkSetPexRecvEnabled(enabled) => {
-                self.state.set_pex_recv_enabled(enabled).await;
-                Ok(().into())
-            }
-            Request::NetworkSetPexSendEnabled(enabled) => {
-                self.state.set_pex_send_enabled(enabled).await;
-                Ok(().into())
-            }
-            Request::NetworkSetPortForwardingEnabled(enabled) => {
-                self.state.set_port_forwarding_enabled(enabled).await;
-                Ok(().into())
-            }
-            Request::NetworkStats => Ok(self.state.network.stats().into()),
-            Request::NetworkSubscribe => {
-                let rx = self.state.network.subscribe();
-                self.subscriptions.insert((conn_id, message.id), rx.into());
-                Ok(().into())
-            }
-            Request::RemoteControlBind(addr) => {
-                self.bind_remote_control(addr).await?;
-                Ok(().into())
-            }
-            Request::RemoteControlGetListenerAddr => Ok(self
-                .remote_server
-                .as_ref()
-                .map(|server| server.local_addr())
-                .into()),
-            Request::RepositoryClose(repository) => {
-                self.state.close_repository(repository).await?;
-                Ok(().into())
-            }
-            Request::RepositoryCreate {
-                path,
-                read_secret,
-                write_secret,
-                token,
-                sync_enabled,
-                dht_enabled,
-                pex_enabled,
-            } => {
-                let handle = self
-                    .state
-                    .create_repository(
-                        &path,
-                        read_secret,
-                        write_secret,
-                        token,
-                        sync_enabled,
-                        dht_enabled,
-                        pex_enabled,
-                    )
-                    .await?;
-
-                Ok(handle.into())
-            }
-            Request::RepositoryCreateMirror { repository, host } => {
-                self.state
-                    .create_repository_mirror(repository, host)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositoryCredentials(repository) => {
-                Ok(self.state.repository_credentials(repository)?.into())
-            }
-            Request::RepositoryDelete(handle) => {
-                self.state.delete_repository(handle).await?;
-                Ok(().into())
-            }
-            Request::RepositoryDeleteByName(name) => {
-                let handle = self.state.find_repository(&name)?;
-                self.state.delete_repository(handle).await?;
-                Ok(().into())
-            }
-            Request::RepositoryDeleteMirror { repository, host } => {
-                self.state
-                    .delete_repository_mirror(repository, host)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositoryEntryType { repository, path } => Ok(self
-                .state
-                .repository_entry_type(repository, path)
-                .await?
-                .into()),
-            Request::RepositoryExport { repository, output } => {
-                let output = self.state.export_repository(repository, output).await?;
-                Ok(output.into())
-            }
-            Request::RepositoryFind(pattern) => Ok(self.state.find_repository(&pattern)?.into()),
-            Request::RepositoryGetAccessMode(repository) => {
-                Ok(self.state.repository_access_mode(repository)?.into())
-            }
-            Request::RepositoryGetBlockExpiration(repository) => {
-                Ok(self.state.block_expiration(repository)?.into())
-            }
-            Request::RepositoryGetDefaultBlockExpiration => {
-                Ok(self.state.default_block_expiration().await?.into())
-            }
-            Request::RepositoryGetDefaultRepositoryExpiration => {
-                Ok(self.state.default_repository_expiration().await?.into())
-            }
-            Request::RepositoryGetInfoHash(repository) => {
-                Ok(self.state.repository_info_hash(repository)?.into())
-            }
-            Request::RepositoryGetMetadata { repository, key } => Ok(self
-                .state
-                .repository_metadata(repository, key)
-                .await?
-                .into()),
-            Request::RepositoryGetMountPoint(repository) => {
-                Ok(self.state.repository_mount_point(repository)?.into())
-            }
-            Request::RepositoryGetMountRoot => Ok(self.state.mount_root().into()),
-            Request::RepositoryGetPath(repository) => {
-                Ok(self.state.repository_path(repository)?.into())
-            }
-            Request::RepositoryGetQuota(repository) => {
-                Ok(self.state.repository_quota(repository).await?.into())
-            }
-            Request::RepositoryGetRepositoryExpiration(repository) => {
-                Ok(self.state.repository_expiration(repository).await?.into())
-            }
-            Request::RepositoryGetStats(repository) => {
-                Ok(self.state.repository_stats(repository)?.into())
-            }
-            Request::RepositoryGetStoreDir => Ok(self.state.store_dir().into()),
-            Request::RepositoryGetDefaultQuota => Ok(self.state.default_quota().await?.into()),
-            Request::RepositoryIsDhtEnabled(repository) => Ok(self
-                .state
-                .is_repository_dht_enabled(repository)
-                .await?
-                .into()),
-            Request::RepositoryIsPexEnabled(repository) => Ok(self
-                .state
-                .is_repository_pex_enabled(repository)
-                .await?
-                .into()),
-            Request::RepositoryIsSyncEnabled(repository) => {
-                Ok(self.state.is_repository_sync_enabled(repository)?.into())
-            }
-            Request::RepositoryList => Ok(self.state.list_repositories().into()),
-            Request::RepositoryMirrorExists { repository, host } => Ok(self
-                .state
-                .repository_mirror_exists(repository, &host)
-                .await?
-                .into()),
-            Request::RepositoryMount(repository) => {
-                Ok(self.state.mount_repository(repository).await?.into())
-            }
-            Request::RepositoryMove { repository, to } => {
-                self.state.move_repository(repository, &to).await?;
-                Ok(().into())
-            }
-            Request::RepositoryMoveEntry {
-                repository,
-                src,
-                dst,
-            } => {
-                self.state
-                    .move_repository_entry(repository, src, dst)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositoryOpen { path, secret } => {
-                Ok(self.state.open_repository(&path, secret).await?.into())
-            }
-            Request::RepositoryResetAccess { repository, token } => {
-                self.state
-                    .reset_repository_access(repository, token)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositorySetAccess {
-                repository,
-                read,
-                write,
-            } => {
-                self.state
-                    .set_repository_access(repository, read, write)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositorySetAccessMode {
-                repository,
-                mode,
-                secret,
-            } => {
-                self.state
-                    .set_repository_access_mode(repository, mode, secret)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositorySetBlockExpiration { repository, value } => {
-                self.state.set_block_expiration(repository, value).await?;
-                Ok(().into())
-            }
-            Request::RepositorySetCredentials {
-                repository,
-                credentials,
-            } => {
-                self.state
-                    .set_repository_credentials(repository, credentials.into())
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositorySetDefaultBlockExpiration { value } => {
-                self.state.set_default_block_expiration(value).await?;
-                Ok(().into())
-            }
-            Request::RepositorySetDefaultRepositoryExpiration { value } => {
-                self.state.set_default_repository_expiration(value).await?;
-                Ok(().into())
-            }
-            Request::RepositorySetDefaultQuota { quota } => {
-                self.state.set_default_quota(quota).await?;
-                Ok(().into())
-            }
-            Request::RepositorySetDhtEnabled {
-                repository,
-                enabled,
-            } => {
-                self.state
-                    .set_repository_dht_enabled(repository, enabled)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositorySetMetadata { repository, edits } => Ok(self
-                .state
-                .set_repository_metadata(repository, edits)
-                .await?
-                .into()),
-            Request::RepositorySetMountRoot(path) => {
-                self.state.set_mount_root(path).await?;
-                Ok(().into())
-            }
-            Request::RepositorySetPexEnabled {
-                repository,
-                enabled,
-            } => {
-                self.state
-                    .set_repository_pex_enabled(repository, enabled)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositorySetQuota { repository, quota } => {
-                self.state.set_repository_quota(repository, quota).await?;
-                Ok(().into())
-            }
-            Request::RepositorySetRepositoryExpiration { repository, value } => {
-                self.state
-                    .set_repository_expiration(repository, value)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositorySetStoreDir(path) => {
-                self.state.set_store_dir(path).await?;
-                Ok(().into())
-            }
-            Request::RepositorySetSyncEnabled {
-                repository,
-                enabled,
-            } => {
-                self.state
-                    .set_repository_sync_enabled(repository, enabled)
-                    .await?;
-                Ok(().into())
-            }
-            Request::RepositoryShare {
-                repository,
-                secret,
-                mode,
-            } => Ok(self
-                .state
-                .share_repository(repository, secret, mode)
-                .await?
-                .into()),
-            Request::RepositorySubscribe(repository) => {
-                let rx = self.state.subscribe_to_repository(repository)?;
-                self.subscriptions.insert((conn_id, message.id), rx.into());
-                Ok(().into())
-            }
-            Request::RepositoryUnmount(repository) => {
-                self.state.unmount_repository(repository).await?;
-                Ok(().into())
-            }
-            Request::RepositorySyncProgress(repository) => Ok(self
-                .state
-                .repository_sync_progress(repository)
-                .await?
-                .into()),
-            Request::ShareTokenGetAccessMode(token) => Ok(token.access_mode().into()),
-            Request::ShareTokenGetInfoHash(token) => {
-                Ok(hex::encode(ouisync::repository_info_hash(token.id()).as_ref()).into())
-            }
-            Request::ShareTokenGetSuggestedName(token) => Ok(token.suggested_name().into()),
-            Request::ShareTokenMirrorExists { token, host } => Ok(self
-                .state
-                .share_token_mirror_exists(&token, &host)
-                .await?
-                .into()),
-            Request::ShareTokenNormalize(token) => Ok(token.into()),
-            Request::StateMonitorGet(path) => Ok(self.state.state_monitor(path)?.into()),
-            Request::StateMonitorSubscribe(path) => {
-                let rx = self.state.subscribe_to_state_monitor(path)?;
-                self.subscriptions.insert((conn_id, message.id), rx.into());
-                Ok(().into())
-            }
-            Request::Unsubscribe(id) => {
-                self.subscriptions.remove(&(conn_id, id));
-                Ok(().into())
-            }
-        }
-    }
-
     async fn send_message(&mut self, conn_id: ConnectionId, message: Message<ResponseResult>) {
         let Some(writer) = self.writers.get_mut(conn_id) else {
             tracing::error!("connection not found");
@@ -760,6 +322,60 @@ impl Service {
                 self.remove_connection(conn_id);
             }
         }
+    }
+
+    #[api]
+    async fn metrics_bind(&mut self, addr: Option<SocketAddr>) -> Result<(), Error> {
+        self.metrics_server.bind(&self.state, addr).await
+    }
+
+    #[api]
+    fn metrics_get_listener_addr(&self) -> Option<SocketAddr> {
+        todo!()
+    }
+
+    #[api]
+    fn remote_control_get_listener_addr(&self) -> Option<SocketAddr> {
+        self.remote_server
+            .as_ref()
+            .map(|server| server.local_addr())
+    }
+
+    #[api]
+    fn repository_subscribe(
+        &mut self,
+        conn_id: ConnectionId,
+        message_id: MessageId,
+        repo: RepositoryHandle,
+    ) -> Result<(), Error> {
+        let rx = self.state.repository_subscribe(repo)?;
+        self.subscriptions.insert((conn_id, message_id), rx.into());
+        Ok(())
+    }
+
+    #[api]
+    fn session_subscribe_to_network(&mut self, conn_id: ConnectionId, message_id: MessageId) {
+        let rx = self.state.network.subscribe();
+        self.subscriptions.insert((conn_id, message_id), rx.into());
+    }
+
+    #[api]
+    fn session_subscribe_to_state_monitor(
+        &mut self,
+        conn_id: ConnectionId,
+        message_id: MessageId,
+        path: Vec<MonitorId>,
+    ) -> Result<(), Error> {
+        let rx = self.state.state_monitor_subscribe(path)?;
+        self.subscriptions.insert((conn_id, message_id), rx.into());
+        Ok(())
+    }
+
+    /// Cancel a subscription identified by the given message id. The message id should be the same
+    /// that was used for sending the corresponding subscribe request.
+    #[api]
+    fn session_unsubscribe(&mut self, conn_id: ConnectionId, _: MessageId, id: MessageId) {
+        self.subscriptions.remove(&(conn_id, id));
     }
 
     fn insert_connection(&mut self, reader: ServerReader, writer: ServerWriter) {
@@ -783,6 +399,10 @@ impl Service {
         }
     }
 }
+
+// The `Service::dispatch` method is auto-generated with `build.rs` from the `#[api]` annotated
+// methods in `impl State`.
+include!(concat!(env!("OUT_DIR"), "/service.rs"));
 
 /// Returns the loopback TCP port and authentication key for establishing local connection to the
 /// service.

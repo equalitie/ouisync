@@ -1,7 +1,9 @@
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 
 /// Edit of a single metadata entry.
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[api]
 pub struct MetadataEdit {
     /// The key of the entry.
     pub key: String,
@@ -10,9 +12,9 @@ pub struct MetadataEdit {
     /// modified by some other task and the whole `RepositorySetMetadata` operation is rolled back.
     /// If that happens, the user should read the current value again, adjust the new value if
     /// needed and retry the operation.
-    pub old: Option<String>,
+    pub old_value: Option<String>,
     /// The value to set the entry to or `None` to remove the entry.
-    pub new: Option<String>,
+    pub new_value: Option<String>,
 }
 
 // TODO: support more types than just string

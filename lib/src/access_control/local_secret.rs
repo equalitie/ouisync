@@ -1,10 +1,11 @@
 use crate::crypto::{cipher::SecretKey, Password, PasswordSalt};
+use ouisync_macros::api;
 #[cfg(test)]
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[api]
 pub enum LocalSecret {
     Password(Password),
     SecretKey(SecretKey),
@@ -24,17 +25,20 @@ impl LocalSecret {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[api]
 pub enum SetLocalSecret {
     Password(Password),
-    KeyAndSalt(KeyAndSalt),
+    KeyAndSalt { key: SecretKey, salt: PasswordSalt },
 }
 
 #[cfg(test)]
 impl SetLocalSecret {
     /// Generates random secret key and salt.
     pub fn random() -> Self {
-        Self::KeyAndSalt(KeyAndSalt::random())
+        Self::KeyAndSalt {
+            key: SecretKey::random(),
+            salt: PasswordSalt::random(),
+        }
     }
 }
 
@@ -43,25 +47,7 @@ impl From<SetLocalSecret> for LocalSecret {
     fn from(local: SetLocalSecret) -> Self {
         match local {
             SetLocalSecret::Password(pwd) => Self::Password(pwd),
-            SetLocalSecret::KeyAndSalt(local) => Self::SecretKey(local.key),
-        }
-    }
-}
-
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "snake_case")]
-pub struct KeyAndSalt {
-    pub key: SecretKey,
-    pub salt: PasswordSalt,
-}
-
-#[cfg(test)]
-impl KeyAndSalt {
-    /// Generates random secret key and salt.
-    pub fn random() -> Self {
-        Self {
-            key: SecretKey::random(),
-            salt: SecretKey::random_salt(),
+            SetLocalSecret::KeyAndSalt { key, .. } => Self::SecretKey(key),
         }
     }
 }
@@ -85,7 +71,7 @@ mod tests {
     #[test]
     fn serialize_deserialize_msgpack() {
         let orig = LocalSecret::Password("mellon".to_string().into());
-        let expected_serialized_hex = "81a870617373776f7264a66d656c6c6f6e";
+        let expected_serialized_hex = "81a850617373776f7264a66d656c6c6f6e";
 
         let serialized = rmp_serde::to_vec(&orig).unwrap();
         assert_eq!(hex::encode(&serialized), expected_serialized_hex);

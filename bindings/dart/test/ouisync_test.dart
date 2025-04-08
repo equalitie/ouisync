@@ -39,29 +39,21 @@ void main() {
     late Repository repo;
 
     setUp(() async {
-      repo = await Repository.create(
-        session,
-        path: name,
-        readSecret: null,
-        writeSecret: null,
-      );
+      repo = await session.createRepository(path: name);
     });
 
     test('list', () async {
       await repo.close();
-      expect(await Repository.list(session), isEmpty);
+      expect(await session.listRepositories(), isEmpty);
 
-      repo = await Repository.open(session, path: name);
-      expect(await Repository.list(session), equals([repo]));
+      repo = await session.openRepository(path: name);
+      expect(await session.listRepositories().then((m) => m.values),
+          equals([repo]));
 
-      final repo2 = await Repository.create(
-        session,
-        path: 'repo2',
-        readSecret: null,
-        writeSecret: null,
-      );
+      final repo2 = await session.createRepository(path: 'repo2');
 
-      expect(await Repository.list(session), unorderedEquals([repo, repo2]));
+      expect(await session.listRepositories().then((m) => m.values),
+          unorderedEquals([repo, repo2]));
     });
 
     test('file write and read', () async {
@@ -69,16 +61,16 @@ void main() {
       final origContent = 'hello world';
 
       {
-        final file = await File.create(repo, path);
+        final file = await repo.createFile(path);
         await file.write(0, utf8.encode(origContent));
         await file.close();
       }
 
       {
-        final file = await File.open(repo, path);
+        final file = await repo.openFile(path);
 
         try {
-          final length = await file.length;
+          final length = await file.getLength();
           final readContent = utf8.decode(await file.read(0, length));
 
           expect(readContent, equals(origContent));
@@ -89,47 +81,47 @@ void main() {
     });
 
     test('empty directory', () async {
-      final rootDir = await Directory.read(repo, '/');
+      final rootDir = await repo.readDirectory('/');
       expect(rootDir, isEmpty);
     });
 
     test('directory create and remove', () async {
-      expect(await repo.entryType('dir'), isNull);
+      expect(await repo.getEntryType('dir'), isNull);
 
-      await Directory.create(repo, 'dir');
-      expect(await repo.entryType('dir'), equals(EntryType.directory));
+      await repo.createDirectory('dir');
+      expect(await repo.getEntryType('dir'), equals(EntryType.directory));
 
-      await Directory.remove(repo, 'dir');
-      expect(await repo.entryType('dir'), isNull);
+      await repo.removeDirectory('dir', false);
+      expect(await repo.getEntryType('dir'), isNull);
     });
 
     test('share token access mode', () async {
       for (var mode in AccessMode.values) {
         final token = await repo.share(accessMode: mode);
-        expect(await token.accessMode, equals(mode));
+        expect(await session.getShareTokenAccessMode(token), equals(mode));
       }
     });
 
     test('sync progress', () async {
-      final progress = await repo.syncProgress;
-      expect(progress, equals(Progress(0, 0)));
+      final progress = await repo.getSyncProgress();
+      expect(progress, equals(Progress(total: 0, value: 0)));
     });
 
     test('state monitor', () async {
-      expect(await repo.stateMonitor?.load(), isNotNull);
+      expect(await repo.stateMonitor.then((s) => s.load()), isNotNull);
     });
 
     test('rename', () async {
       {
-        final file = await File.create(repo, 'file.txt');
+        final file = await repo.createFile('file.txt');
         await file.write(0, utf8.encode('hello world'));
         await file.close();
       }
 
-      final cred = await repo.credentials;
+      final cred = await repo.getCredentials();
       await repo.close();
 
-      final base = await session.storeDir;
+      final base = await session.getStoreDir();
 
       final dstName = 'repo-new';
       final ext = 'ouisyncdb';
@@ -149,73 +141,65 @@ void main() {
         }
       }
 
-      repo = await Repository.open(session, path: dstName);
+      repo = await session.openRepository(path: dstName);
       await repo.setCredentials(cred);
 
       {
-        final file = await File.open(repo, 'file.txt');
+        final file = await repo.openFile('file.txt');
         final content = await file.read(0, 11);
         expect(utf8.decode(content), equals('hello world'));
       }
     });
 
     test('get root directory contents after create and open', () async {
-      expect(await Directory.read(repo, '/'), equals([]));
+      expect(await repo.readDirectory('/'), equals([]));
 
       await repo.close();
 
-      repo = await Repository.open(
-        session,
-        path: name,
-        secret: null,
-      );
+      repo = await session.openRepository(path: name);
 
-      expect(await Directory.read(repo, '/'), equals([]));
+      expect(await repo.readDirectory('/'), equals([]));
 
       await repo.close();
     });
 
     test('access mode', () async {
-      expect(await repo.accessMode, equals(AccessMode.write));
+      expect(await repo.getAccessMode(), equals(AccessMode.write));
 
-      await repo.setAccessMode(AccessMode.read);
-      expect(await repo.accessMode, equals(AccessMode.read));
+      await repo.setAccessMode(AccessMode.read, null);
+      expect(await repo.getAccessMode(), equals(AccessMode.read));
 
-      await repo.setAccessMode(AccessMode.blind);
-      expect(await repo.accessMode, equals(AccessMode.blind));
+      await repo.setAccessMode(AccessMode.blind, null);
+      expect(await repo.getAccessMode(), equals(AccessMode.blind));
 
-      await repo.setAccessMode(AccessMode.write);
-      expect(await repo.accessMode, equals(AccessMode.write));
+      await repo.setAccessMode(AccessMode.write, null);
+      expect(await repo.getAccessMode(), equals(AccessMode.write));
     });
 
     test('set access', () async {
       await repo.setAccess(
-        read: EnableAccess(LocalPassword('read_pass')),
-        write: EnableAccess(LocalPassword('write_pass')),
+        read: AccessChangeEnable(SetLocalSecretPassword(Password('read_pass'))),
+        write:
+            AccessChangeEnable(SetLocalSecretPassword(Password('write_pass'))),
       );
 
       await repo.close();
-      repo = await Repository.open(
-        session,
-        path: name,
-      );
-      expect(await repo.accessMode, equals(AccessMode.blind));
+      repo = await session.openRepository(path: name);
+      expect(await repo.getAccessMode(), equals(AccessMode.blind));
 
       await repo.close();
-      repo = await Repository.open(
-        session,
+      repo = await session.openRepository(
         path: name,
-        secret: LocalPassword('read_pass'),
+        localSecret: LocalSecretPassword(Password('read_pass')),
       );
-      expect(await repo.accessMode, equals(AccessMode.read));
+      expect(await repo.getAccessMode(), equals(AccessMode.read));
 
       await repo.close();
-      repo = await Repository.open(
-        session,
+      repo = await session.openRepository(
         path: name,
-        secret: LocalPassword('write_pass'),
+        localSecret: LocalSecretPassword(Password('write_pass')),
       );
-      expect(await repo.accessMode, equals(AccessMode.write));
+      expect(await repo.getAccessMode(), equals(AccessMode.write));
     });
 
     test('metadata', () async {
@@ -223,10 +207,18 @@ void main() {
       expect(await repo.getMetadata('test.bar'), isNull);
 
       expect(
-        await repo.setMetadata({
-          'test.foo': (oldValue: null, newValue: 'foo value 1'),
-          'test.bar': (oldValue: null, newValue: 'bar value 1'),
-        }),
+        await repo.setMetadata([
+          MetadataEdit(
+            key: 'test.foo',
+            oldValue: null,
+            newValue: 'foo value 1',
+          ),
+          MetadataEdit(
+            key: 'test.bar',
+            oldValue: null,
+            newValue: 'bar value 1',
+          ),
+        ]),
         isTrue,
       );
 
@@ -234,10 +226,18 @@ void main() {
       expect(await repo.getMetadata('test.bar'), equals('bar value 1'));
 
       expect(
-        await repo.setMetadata({
-          'test.foo': (oldValue: 'foo value 1', newValue: 'foo value 2'),
-          'test.bar': (oldValue: 'bar value 1', newValue: null),
-        }),
+        await repo.setMetadata([
+          MetadataEdit(
+            key: 'test.foo',
+            oldValue: 'foo value 1',
+            newValue: 'foo value 2',
+          ),
+          MetadataEdit(
+            key: 'test.bar',
+            oldValue: 'bar value 1',
+            newValue: null,
+          ),
+        ]),
         isTrue,
       );
 
@@ -246,9 +246,13 @@ void main() {
 
       // Old value mismatch
       expect(
-        await repo.setMetadata({
-          'test.foo': (oldValue: 'foo value 1', newValue: 'foo value 3'),
-        }),
+        await repo.setMetadata([
+          MetadataEdit(
+            key: 'test.foo',
+            oldValue: 'foo value 1',
+            newValue: 'foo value 3',
+          ),
+        ]),
         isFalse,
       );
 
@@ -259,8 +263,8 @@ void main() {
   test('parse invalid share token', () async {
     final input = "broken!@#%";
     await expectLater(
-      ShareToken.fromString(session, input),
-      throwsA(isA<InvalidData>()),
+      session.validateShareToken(input),
+      throwsA(isA<InvalidInput>()),
     );
   });
 
@@ -275,22 +279,22 @@ void main() {
   });
 
   test('user provided peers', () async {
-    expect(await session.userProvidedPeers, isEmpty);
+    expect(await session.getUserProvidedPeers(), isEmpty);
 
     final addr0 = 'quic/127.0.0.1:12345';
     final addr1 = 'quic/127.0.0.2:54321';
 
     await session.addUserProvidedPeers([addr0]);
-    expect(await session.userProvidedPeers, equals([addr0]));
+    expect(await session.getUserProvidedPeers(), equals([addr0]));
 
     await session.addUserProvidedPeers([addr1]);
-    expect(await session.userProvidedPeers, equals([addr0, addr1]));
+    expect(await session.getUserProvidedPeers(), equals([addr0, addr1]));
 
     await session.removeUserProvidedPeers([addr0]);
-    expect(await session.userProvidedPeers, equals([addr1]));
+    expect(await session.getUserProvidedPeers(), equals([addr1]));
 
     await session.removeUserProvidedPeers([addr1]);
-    expect(await session.userProvidedPeers, isEmpty);
+    expect(await session.getUserProvidedPeers(), isEmpty);
   });
 
   group('stun', () {
@@ -299,17 +303,17 @@ void main() {
     });
 
     test('external address', () async {
-      expect(await session.externalAddressV4, isNotEmpty);
-      expect(await session.externalAddressV6, isNotEmpty);
+      expect(await session.getExternalAddrV4(), isNotEmpty);
+      expect(await session.getExternalAddrV6(), isNotEmpty);
     });
 
     test('nat behavior', () async {
       expect(
-          await session.natBehavior,
+          await session.getNatBehavior(),
           anyOf(
-            "endpoint independent",
-            "address dependent",
-            "address and port dependent",
+            NatBehavior.endpointIndependent,
+            NatBehavior.addressDependent,
+            NatBehavior.addressAndPortDependent,
           ));
     });
   },

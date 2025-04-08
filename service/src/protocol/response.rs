@@ -1,8 +1,10 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{
-    AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress, ShareToken,
-    Stats, StorageSize,
+    crypto::{cipher::SecretKey, PasswordSalt},
+    AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress,
+    PublicRuntimeId, ShareToken, Stats, StorageSize,
 };
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use state_monitor::StateMonitor;
 use std::{
@@ -18,8 +20,11 @@ use super::{
     ProtocolError,
 };
 
+// The `Response` enum is auto-generated in `build.rs` from the `#[api]` annotated methods in `impl
+// State` and `impl Service`.
+include!(concat!(env!("OUT_DIR"), "/response.rs"));
+
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ResponseResult {
     Success(Response),
     Failure(ProtocolError),
@@ -41,71 +46,6 @@ impl From<ResponseResult> for Result<Response, ProtocolError> {
             ResponseResult::Failure(error) => Err(error),
         }
     }
-}
-
-#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[expect(clippy::large_enum_variant)]
-pub enum Response {
-    None,
-    AccessMode(AccessMode),
-    Bool(bool),
-    Bytes(Bytes),
-    Directory(Vec<DirectoryEntry>),
-    Duration(Duration),
-    EntryType(EntryType),
-    File(FileHandle),
-    NetworkEvent(NetworkEvent),
-    NetworkStats(Stats),
-    Path(PathBuf),
-    PeerAddrs(#[serde(with = "helpers::strs")] Vec<PeerAddr>),
-    PeerInfo(Vec<PeerInfo>),
-    Progress(Progress),
-    QuotaInfo(QuotaInfo),
-    Repository(RepositoryHandle),
-    RepositoryEvent,
-    Repositories(BTreeMap<PathBuf, RepositoryHandle>),
-    ShareToken(ShareToken),
-    SocketAddr(#[serde(with = "helpers::str")] SocketAddr),
-    StateMonitor(StateMonitor),
-    StateMonitorEvent,
-    StorageSize(StorageSize),
-    String(String),
-    U32(u32),
-    U64(u64),
-}
-
-macro_rules! impl_response_conversion {
-    ($variant:ident ( $ty:ty )) => {
-        impl From<$ty> for Response {
-            fn from(value: $ty) -> Self {
-                Self::$variant(value)
-            }
-        }
-
-        impl TryFrom<Response> for $ty {
-            type Error = UnexpectedResponse;
-
-            fn try_from(response: Response) -> Result<Self, Self::Error> {
-                match response {
-                    Response::$variant(value) => Ok(value),
-                    _ => Err(UnexpectedResponse),
-                }
-            }
-        }
-
-        impl TryFrom<Response> for Option<$ty> {
-            type Error = UnexpectedResponse;
-
-            fn try_from(value: Response) -> Result<Self, Self::Error> {
-                match value {
-                    Response::$variant(value) => Ok(Some(value)),
-                    Response::None => Ok(None),
-                    _ => Err(UnexpectedResponse),
-                }
-            }
-        }
-    };
 }
 
 impl From<()> for Response {
@@ -167,46 +107,19 @@ impl From<SocketAddrV6> for Response {
     }
 }
 
-impl From<NatBehavior> for Response {
-    fn from(value: NatBehavior) -> Self {
-        value.to_string().into()
-    }
-}
-
-impl_response_conversion!(AccessMode(AccessMode));
-impl_response_conversion!(Bool(bool));
-impl_response_conversion!(Directory(Vec<DirectoryEntry>));
-impl_response_conversion!(Duration(Duration));
-impl_response_conversion!(EntryType(EntryType));
-impl_response_conversion!(File(FileHandle));
-impl_response_conversion!(NetworkEvent(NetworkEvent));
-impl_response_conversion!(NetworkStats(Stats));
-impl_response_conversion!(Path(PathBuf));
-impl_response_conversion!(Progress(Progress));
-impl_response_conversion!(Repository(RepositoryHandle));
-impl_response_conversion!(Repositories(BTreeMap<PathBuf, RepositoryHandle>));
-impl_response_conversion!(PeerInfo(Vec<PeerInfo>));
-impl_response_conversion!(PeerAddrs(Vec<PeerAddr>));
-impl_response_conversion!(ShareToken(ShareToken));
-impl_response_conversion!(SocketAddr(SocketAddr));
-impl_response_conversion!(StateMonitor(StateMonitor));
-impl_response_conversion!(StorageSize(StorageSize));
-impl_response_conversion!(String(String));
-impl_response_conversion!(QuotaInfo(QuotaInfo));
-impl_response_conversion!(U32(u32));
-impl_response_conversion!(U64(u64));
-
 #[derive(Error, Debug)]
 #[error("unexpected response")]
 pub struct UnexpectedResponse;
 
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[api]
 pub struct DirectoryEntry {
     pub name: String,
     pub entry_type: EntryType,
 }
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[api]
 pub struct QuotaInfo {
     pub quota: Option<StorageSize>,
     pub size: StorageSize,
@@ -222,38 +135,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serialize() {
+    fn serialize_deserialize_msgpack() {
+        use rmp::encode::*;
+
         let mut rng = StdRng::seed_from_u64(0);
         let token = ShareToken::from(AccessSecrets::Write(WriteSecrets::generate(&mut rng)));
 
         let test_vectors = [
-            (Response::None, "a46e6f6e65"),
-            (Response::Bool(true), "81a4626f6f6cc3"),
-            (Response::Bool(false), "81a4626f6f6cc2"),
-            (
-                Response::Duration(Duration::from_secs(1)),
-                "81a86475726174696f6e920100",
-            ),
+            (Response::None, {
+                let mut out = Vec::new();
+                write_str(&mut out, "None").unwrap();
+                out
+            }),
+            (Response::Bool(true), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "Bool").unwrap();
+                write_bool(&mut out, true).unwrap();
+                out
+            }),
+            (Response::Bool(false), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "Bool").unwrap();
+                write_bool(&mut out, false).unwrap();
+                out
+            }),
+            (Response::Duration(Duration::from_secs(1)), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "Duration").unwrap();
+                write_uint(&mut out, 1000).unwrap();
+                out
+            }),
             (
                 Response::NetworkEvent(NetworkEvent::ProtocolVersionMismatch),
-                "81ad6e6574776f726b5f6576656e7400",
+                {
+                    let mut out = Vec::new();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "NetworkEvent").unwrap();
+                    write_uint(&mut out, 0).unwrap();
+                    out
+                },
             ),
-            (
-                Response::NetworkEvent(NetworkEvent::PeerSetChange),
-                "81ad6e6574776f726b5f6576656e7401",
-            ),
-            (
-                Response::RepositoryEvent,
-                "b07265706f7369746f72795f6576656e74",
-            ),
-            (
-                Response::Path(PathBuf::from("/home/alice/ouisync")),
-                "81a470617468b32f686f6d652f616c6963652f6f756973796e63",
-            ),
-            (
-                Response::Repository(RepositoryHandle::from_raw(1)),
-                "81aa7265706f7369746f727901",
-            ),
+            (Response::NetworkEvent(NetworkEvent::PeerSetChange), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "NetworkEvent").unwrap();
+                write_uint(&mut out, 1).unwrap();
+                out
+            }),
+            (Response::RepositoryEvent, {
+                let mut out = Vec::new();
+                write_str(&mut out, "RepositoryEvent").unwrap();
+                out
+            }),
+            (Response::Path(PathBuf::from("/home/alice/ouisync")), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "Path").unwrap();
+                write_str(&mut out, "/home/alice/ouisync").unwrap();
+                out
+            }),
+            (Response::Repository(RepositoryHandle::from_raw(1)), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "Repository").unwrap();
+                write_uint(&mut out, 1).unwrap();
+                out
+            }),
             (
                 Response::Repositories(
                     [
@@ -262,10 +212,20 @@ mod tests {
                     ]
                     .into(),
                 ),
-                "81ac7265706f7369746f7269657382a36f6e6501a374776f02",
+                {
+                    let mut out = Vec::new();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "Repositories").unwrap();
+                    write_map_len(&mut out, 2).unwrap();
+                    write_str(&mut out, "one").unwrap();
+                    write_uint(&mut out, 1).unwrap();
+                    write_str(&mut out, "two").unwrap();
+                    write_uint(&mut out, 2).unwrap();
+                    out
+                },
             ),
             (
-                Response::PeerInfo(vec![PeerInfo {
+                Response::PeerInfos(vec![PeerInfo {
                     addr: PeerAddr::Quic((Ipv4Addr::LOCALHOST, 12345).into()),
                     source: PeerSource::Listener,
                     state: PeerState::Connecting,
@@ -276,40 +236,81 @@ mod tests {
                         throughput_rx: 0,
                     },
                 }]),
-                "81a9706565725f696e666f9194b4717569632f3132372e302e302e313a3132333435010194000000\
-                 00",
+                {
+                    let mut out = Vec::new();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "PeerInfos").unwrap();
+                    write_array_len(&mut out, 1).unwrap();
+                    write_array_len(&mut out, 4).unwrap();
+                    write_str(&mut out, "quic/127.0.0.1:12345").unwrap();
+                    write_uint(&mut out, 1).unwrap();
+                    write_str(&mut out, "Connecting").unwrap();
+                    write_array_len(&mut out, 4).unwrap();
+                    write_uint(&mut out, 0).unwrap();
+                    write_uint(&mut out, 0).unwrap();
+                    write_uint(&mut out, 0).unwrap();
+                    write_uint(&mut out, 0).unwrap();
+                    out
+                },
             ),
             (
                 Response::QuotaInfo(QuotaInfo {
                     quota: Some(StorageSize::from_bytes(10 * 1024 * 1024)),
                     size: StorageSize::from_bytes(1024 * 1024),
                 }),
-                "81aa71756f74615f696e666f92ce00a00000ce00100000",
+                {
+                    let mut out = Vec::new();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "QuotaInfo").unwrap();
+                    write_array_len(&mut out, 2).unwrap();
+                    write_uint(&mut out, 10 * 1024 * 1024).unwrap();
+                    write_uint(&mut out, 1024 * 1024).unwrap();
+                    out
+                },
             ),
-            (
-                Response::ShareToken(token),
-                "81ab73686172655f746f6b656ed94568747470733a2f2f6f756973796e632e6e65742f7223417749\
-                 67663238737a62495f4b7274376153654f6c4877427868594b4d633843775a30473050626c717831\
-                 32693555",
-            ),
-            (
-                Response::SocketAddr((Ipv4Addr::LOCALHOST, 24816).into()),
-                "81ab736f636b65745f61646472af3132372e302e302e313a3234383136",
-            ),
-            (
-                Response::StorageSize(StorageSize::from_bytes(1024)),
-                "81ac73746f726167655f73697a65cd0400",
-            ),
-            (Response::U32(3), "81a375333203"),
+            (Response::ShareToken(token.clone()), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "ShareToken").unwrap();
+                write_str(&mut out, &token.to_string()).unwrap();
+                out
+            }),
+            (Response::SocketAddr((Ipv4Addr::LOCALHOST, 24816).into()), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "SocketAddr").unwrap();
+                write_str(&mut out, "127.0.0.1:24816").unwrap();
+                out
+            }),
+            (Response::StorageSize(StorageSize::from_bytes(1024)), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "StorageSize").unwrap();
+                write_uint(&mut out, 1024).unwrap();
+                out
+            }),
+            (Response::U16(3), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "U16").unwrap();
+                write_uint(&mut out, 3).unwrap();
+                out
+            }),
+            (Response::U64(12345678), {
+                let mut out = Vec::new();
+                write_map_len(&mut out, 1).unwrap();
+                write_str(&mut out, "U64").unwrap();
+                write_uint(&mut out, 12345678).unwrap();
+                out
+            }),
         ];
 
-        for (response, expected_encoded) in test_vectors {
-            let encoded = rmp_serde::to_vec(&response).unwrap();
-            assert_eq!(hex::encode(&encoded), expected_encoded, "{:?}", response);
+        for (input, expected) in test_vectors {
+            let s = rmp_serde::to_vec(&input).unwrap();
+            assert_eq!(s, expected);
 
-            let decoded: Response = rmp_serde::from_slice(&encoded).unwrap();
-
-            assert_eq!(decoded, response);
+            let d: Response = rmp_serde::from_slice(&s).unwrap();
+            assert_eq!(d, input);
         }
     }
 }

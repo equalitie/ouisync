@@ -14,23 +14,27 @@ use crate::{
     file::{FileHandle, FileHolder, FileSet},
     network::{self, PexConfig},
     protocol::{DirectoryEntry, MetadataEdit, NetworkDefaults, QuotaInfo},
-    repository::{FindError, RepositoryHandle, RepositoryHolder, RepositorySet},
+    repository::{RepositoryHandle, RepositoryHolder, RepositorySet},
     tls,
     transport::remote::RemoteClient,
     utils,
 };
 use ouisync::{
+    crypto::{cipher::SecretKey, Password, PasswordSalt},
     Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
-    Network, PeerAddr, Progress, Repository, RepositoryParams, SetLocalSecret, ShareToken, Stats,
-    StorageSize,
+    NatBehavior, Network, PeerAddr, PeerInfo, Progress, PublicRuntimeId, Repository,
+    RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize,
 };
+use ouisync_macros::api;
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
+use rand::{rngs::OsRng, Rng};
 use state_monitor::{MonitorId, StateMonitor};
 use std::{
     borrow::Cow,
     collections::BTreeMap,
     ffi::OsStr,
     io::{self, SeekFrom},
+    net::SocketAddr,
     panic,
     path::{Path, PathBuf},
     sync::Arc,
@@ -130,7 +134,8 @@ impl State {
 
     /// Initializes the network according to the stored configuration. If a particular network
     /// parameter is not yet configured, falls back to the given defaults.
-    pub async fn init_network(&self, defaults: NetworkDefaults) {
+    #[api]
+    pub async fn session_init_network(&self, defaults: NetworkDefaults) {
         let bind_addrs = self
             .config
             .entry(BIND_KEY)
@@ -165,12 +170,61 @@ impl State {
         self.network.set_pex_recv_enabled(recv);
     }
 
-    pub async fn bind_network(&self, addrs: &[PeerAddr]) {
-        self.config.entry(BIND_KEY).set(addrs).await.ok();
-        network::bind_with_reuse_ports(&self.network, &self.config, addrs).await;
+    #[api]
+    pub async fn session_bind_network(&self, addrs: Vec<PeerAddr>) {
+        self.config.entry(BIND_KEY).set(&addrs).await.ok();
+        network::bind_with_reuse_ports(&self.network, &self.config, &addrs).await;
     }
 
-    pub async fn add_user_provided_peers(&self, addrs: &[PeerAddr]) {
+    #[api]
+    pub fn session_get_current_protocol_version(&self) -> u64 {
+        self.network.current_protocol_version()
+    }
+
+    #[api]
+    pub fn session_get_highest_seen_protocol_version(&self) -> u64 {
+        self.network.highest_seen_protocol_version()
+    }
+
+    #[api]
+    pub async fn session_get_external_addr_v4(&self) -> Option<SocketAddr> {
+        self.network.external_addr_v4().await.map(SocketAddr::V4)
+    }
+
+    #[api]
+    pub async fn session_get_external_addr_v6(&self) -> Option<SocketAddr> {
+        self.network.external_addr_v6().await.map(SocketAddr::V6)
+    }
+
+    #[api]
+    pub fn session_get_local_listener_addrs(&self) -> Vec<PeerAddr> {
+        self.network.listener_local_addrs()
+    }
+
+    #[api]
+    pub async fn session_get_remote_listener_addrs(
+        &self,
+        host: String,
+    ) -> Result<Vec<PeerAddr>, Error> {
+        let mut client = self.connect_remote_client(&host).await?;
+        let result = client.get_listener_addrs().await;
+        client.close().await;
+
+        Ok(result?)
+    }
+
+    #[api]
+    pub async fn session_get_nat_behavior(&self) -> Option<NatBehavior> {
+        self.network.nat_behavior().await
+    }
+
+    #[api]
+    pub fn session_get_peers(&self) -> Vec<PeerInfo> {
+        self.network.peer_info_collector().collect()
+    }
+
+    #[api]
+    pub async fn session_add_user_provided_peers(&self, addrs: Vec<PeerAddr>) {
         let entry = self.config.entry(PEERS_KEY);
         let mut stored = entry.get().await.unwrap_or_default();
 
@@ -183,12 +237,13 @@ impl State {
             entry.set(&stored).await.ok();
         }
 
-        for addr in addrs {
+        for addr in &addrs {
             self.network.add_user_provided_peer(addr);
         }
     }
 
-    pub async fn remove_user_provided_peers(&self, addrs: &[PeerAddr]) {
+    #[api]
+    pub async fn session_remove_user_provided_peers(&self, addrs: Vec<PeerAddr>) {
         let entry = self.config.entry(PEERS_KEY);
         let mut stored = entry.get().await.unwrap_or_default();
 
@@ -199,16 +254,23 @@ impl State {
             entry.set(&stored).await.ok();
         }
 
-        for addr in addrs {
+        for addr in &addrs {
             self.network.remove_user_provided_peer(addr);
         }
     }
 
-    pub async fn user_provided_peers(&self) -> Vec<PeerAddr> {
+    #[api]
+    pub async fn session_get_user_provided_peers(&self) -> Vec<PeerAddr> {
         self.config.entry(PEERS_KEY).get().await.unwrap_or_default()
     }
 
-    pub async fn set_local_discovery_enabled(&self, enabled: bool) {
+    #[api]
+    pub fn session_is_local_discovery_enabled(&self) -> bool {
+        self.network.is_local_discovery_enabled()
+    }
+
+    #[api]
+    pub async fn session_set_local_discovery_enabled(&self, enabled: bool) {
         self.config
             .entry(LOCAL_DISCOVERY_ENABLED_KEY)
             .set(&enabled)
@@ -217,7 +279,13 @@ impl State {
         self.network.set_local_discovery_enabled(enabled);
     }
 
-    pub async fn set_port_forwarding_enabled(&self, enabled: bool) {
+    #[api]
+    pub fn session_is_port_forwarding_enabled(&self) -> bool {
+        self.network.is_port_forwarding_enabled()
+    }
+
+    #[api]
+    pub async fn session_set_port_forwarding_enabled(&self, enabled: bool) {
         self.config
             .entry(PORT_FORWARDING_ENABLED_KEY)
             .set(&enabled)
@@ -226,17 +294,62 @@ impl State {
         self.network.set_port_forwarding_enabled(enabled);
     }
 
-    pub fn store_dir(&self) -> Option<&Path> {
-        self.store.dir.as_deref()
+    /// Checks whether accepting peers discovered on the peer exchange is enabled.
+    #[api]
+    pub fn session_is_pex_recv_enabled(&self) -> bool {
+        self.network.is_pex_recv_enabled()
     }
 
-    pub async fn set_store_dir(&mut self, dir: PathBuf) -> Result<(), Error> {
-        if Some(dir.as_path()) == self.store.dir.as_deref() {
+    #[api]
+    pub async fn session_set_pex_recv_enabled(&self, enabled: bool) {
+        self.config
+            .entry(PEX_KEY)
+            .modify(|pex_config| pex_config.recv = enabled)
+            .await
+            .ok();
+
+        self.network.set_pex_recv_enabled(enabled);
+    }
+
+    #[api]
+    pub fn session_is_pex_send_enabled(&self) -> bool {
+        self.network.is_pex_send_enabled()
+    }
+
+    #[api]
+    pub async fn session_set_pex_send_enabled(&self, enabled: bool) {
+        self.config
+            .entry(PEX_KEY)
+            .modify(|pex_config| pex_config.send = enabled)
+            .await
+            .ok();
+
+        self.network.set_pex_send_enabled(enabled);
+    }
+
+    #[api]
+    pub fn session_get_runtime_id(&self) -> PublicRuntimeId {
+        self.network.this_runtime_id()
+    }
+
+    #[api]
+    pub fn session_get_network_stats(&self) -> Stats {
+        self.network.stats()
+    }
+
+    #[api]
+    pub fn session_get_store_dir(&self) -> Option<PathBuf> {
+        self.store_dir().map(|path| path.to_owned())
+    }
+
+    #[api]
+    pub async fn session_set_store_dir(&mut self, path: PathBuf) -> Result<(), Error> {
+        if Some(path.as_path()) == self.store.dir.as_deref() {
             return Ok(());
         }
 
-        self.config.entry(STORE_DIR_KEY).set(&dir).await?;
-        self.store.dir = Some(dir);
+        self.config.entry(STORE_DIR_KEY).set(&path).await?;
+        self.store.dir = Some(path);
 
         // Close repos from the previous store dir and load repos from the new dir.
         self.close_repositories().await;
@@ -245,20 +358,22 @@ impl State {
         Ok(())
     }
 
-    pub fn mount_root(&self) -> Option<&Path> {
-        self.mounter.as_ref().map(|m| m.mount_root())
+    #[api]
+    pub fn session_get_mount_root(&self) -> Option<PathBuf> {
+        self.mount_root().map(|path| path.to_owned())
     }
 
-    pub async fn set_mount_root(&mut self, dir: Option<PathBuf>) -> Result<(), Error> {
-        if dir.as_deref() == self.mount_root() {
+    #[api]
+    pub async fn session_set_mount_root(&mut self, path: Option<PathBuf>) -> Result<(), Error> {
+        if path.as_deref() == self.mount_root() {
             return Ok(());
         }
 
         let config_entry = self.config.entry(MOUNT_DIR_KEY);
 
-        if let Some(dir) = dir {
-            config_entry.set(&dir).await?;
-            let mounter = self.mounter.insert(MultiRepoVFS::create(dir).await?);
+        if let Some(path) = path {
+            config_entry.set(&path).await?;
+            let mounter = self.mounter.insert(MultiRepoVFS::create(path).await?);
 
             // Remount all mounted repos
             for (_, holder) in self.repos.iter() {
@@ -280,36 +395,77 @@ impl State {
         Ok(())
     }
 
-    pub fn find_repository(&self, pattern: &str) -> Result<RepositoryHandle, FindError> {
-        let (handle, _) = self.repos.find_by_subpath(pattern)?;
+    #[api]
+    pub fn session_validate_share_token(&self, token: String) -> Result<ShareToken, Error> {
+        Ok(token.parse()?)
+    }
+
+    /// Return the info-hash of the repository corresponding to the given token, formatted as hex
+    /// string.
+    ///
+    /// See also: [repository_get_info_hash]
+    #[api]
+    pub fn session_get_share_token_info_hash(&self, token: ShareToken) -> String {
+        hex::encode(ouisync::repository_info_hash(token.id()).as_ref())
+    }
+
+    #[api]
+    pub fn session_get_share_token_access_mode(&self, token: ShareToken) -> AccessMode {
+        token.access_mode()
+    }
+
+    #[api]
+    pub fn session_get_share_token_suggested_name(&self, token: ShareToken) -> String {
+        token.suggested_name().to_owned()
+    }
+
+    #[api]
+    pub async fn session_mirror_exists(
+        &self,
+        token: ShareToken,
+        host: String,
+    ) -> Result<bool, Error> {
+        let mut client = self.connect_remote_client(&host).await?;
+
+        let result = client.mirror_exists(token.id()).await;
+        client.close().await;
+
+        Ok(result?)
+    }
+
+    #[api]
+    pub fn session_find_repository(&self, name: String) -> Result<RepositoryHandle, Error> {
+        let (handle, _) = self.repos.find_by_subpath(&name)?;
         Ok(handle)
     }
 
-    pub fn list_repositories(&self) -> BTreeMap<PathBuf, RepositoryHandle> {
+    #[api]
+    pub fn session_list_repositories(&self) -> BTreeMap<PathBuf, RepositoryHandle> {
         self.repos
             .iter()
             .map(|(handle, holder)| (holder.path().to_owned(), handle))
             .collect()
     }
 
+    #[api]
     #[expect(clippy::too_many_arguments)] // TODO: extract the args to a struct
-    pub async fn create_repository(
+    pub async fn session_create_repository(
         &mut self,
-        path: &Path,
+        path: PathBuf,
         read_secret: Option<SetLocalSecret>,
         write_secret: Option<SetLocalSecret>,
-        share_token: Option<ShareToken>,
+        token: Option<ShareToken>,
         sync_enabled: bool,
         dht_enabled: bool,
         pex_enabled: bool,
     ) -> Result<RepositoryHandle, Error> {
-        let path = self.store.normalize_repository_path(path)?;
+        let path = self.store.normalize_repository_path(&path)?;
 
         if self.repos.find_by_path(&path).is_some() {
             Err(Error::AlreadyExists)?;
         }
 
-        if let Some(token) = &share_token {
+        if let Some(token) = &token {
             if self.repos.find_by_id(token.id()).is_some() {
                 Err(Error::AlreadyExists)?;
             }
@@ -320,8 +476,8 @@ impl State {
             .with_device_id(device_id::get_or_create(&self.config).await?)
             .with_monitor(self.repos_monitor.make_child(path.to_string_lossy()));
 
-        let access_secrets = if let Some(share_token) = share_token {
-            share_token.into_secrets()
+        let access_secrets = if let Some(token) = token {
+            token.into_secrets()
         } else {
             AccessSecrets::random_write()
         };
@@ -361,7 +517,7 @@ impl State {
         let value = default_block_expiration(&self.config).await?;
         holder.repository().set_block_expiration(value).await?;
 
-        let value = self.default_repository_expiration().await?;
+        let value = self.session_get_default_repository_expiration().await?;
         holder.set_repository_expiration(value).await?;
 
         tracing::info!(name = holder.short_name(), "repository created");
@@ -373,8 +529,43 @@ impl State {
         Ok(handle)
     }
 
-    pub async fn delete_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
-        let Some(mut holder) = self.repos.remove(handle) else {
+    /// Delete a repository with the given name.
+    #[api]
+    pub async fn session_delete_repository_by_name(&mut self, name: String) -> Result<(), Error> {
+        let (handle, _) = self.repos.find_by_subpath(&name)?;
+        self.repository_delete(handle).await?;
+        Ok(())
+    }
+
+    #[api]
+    pub async fn session_open_repository(
+        &mut self,
+        path: PathBuf,
+        local_secret: Option<LocalSecret>,
+    ) -> Result<RepositoryHandle, Error> {
+        let path = self.store.normalize_repository_path(&path)?;
+        let handle = if let Some((handle, holder)) = self.repos.find_by_path(&path) {
+            // If `local_secret` provides higher access mode than what the repo currently has,
+            // increase it. If not, the access mode remains unchanged.
+            holder
+                .repository()
+                .set_access_mode(AccessMode::Write, local_secret)
+                .await?;
+
+            handle
+        } else {
+            let holder = self.load_repository(&path, local_secret, false).await?;
+            // unwrap is ok because we already handled the case when the repo already exists.
+            self.repos.try_insert(holder).unwrap()
+        };
+
+        Ok(handle)
+    }
+
+    /// Delete a repository
+    #[api]
+    pub async fn repository_delete(&mut self, repo: RepositoryHandle) -> Result<(), Error> {
+        let Some(mut holder) = self.repos.remove(repo) else {
             return Ok(());
         };
 
@@ -395,32 +586,9 @@ impl State {
         Ok(())
     }
 
-    pub async fn open_repository(
-        &mut self,
-        path: &Path,
-        local_secret: Option<LocalSecret>,
-    ) -> Result<RepositoryHandle, Error> {
-        let path = self.store.normalize_repository_path(path)?;
-        let handle = if let Some((handle, holder)) = self.repos.find_by_path(&path) {
-            // If `local_secret` provides higher access mode than what the repo currently has,
-            // increase it. If not, the access mode remains unchanged.
-            holder
-                .repository()
-                .set_access_mode(AccessMode::Write, local_secret)
-                .await?;
-
-            handle
-        } else {
-            let holder = self.load_repository(&path, local_secret, false).await?;
-            // unwrap is ok because we already handled the case when the repo already exists.
-            self.repos.try_insert(holder).unwrap()
-        };
-
-        Ok(handle)
-    }
-
-    pub async fn close_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
-        let mut holder = self.repos.remove(handle).ok_or(Error::InvalidArgument)?;
+    #[api]
+    pub async fn repository_close(&mut self, repo: RepositoryHandle) -> Result<(), Error> {
+        let mut holder = self.repos.remove(repo).ok_or(Error::InvalidArgument)?;
 
         if let Some(mounter) = &self.mounter {
             mounter.remove(holder.short_name())?;
@@ -431,12 +599,14 @@ impl State {
         Ok(())
     }
 
-    pub async fn export_repository(
+    /// Export repository to file
+    #[api]
+    pub async fn repository_export(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         output_path: PathBuf,
     ) -> Result<PathBuf, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
 
         let output_path = if output_path.extension().is_some() {
             output_path
@@ -449,13 +619,14 @@ impl State {
         Ok(output_path)
     }
 
-    pub async fn share_repository(
+    #[api]
+    pub async fn repository_share(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         local_secret: Option<LocalSecret>,
         access_mode: AccessMode,
     ) -> Result<ShareToken, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
 
         let access_secrets = if let Some(local_secret) = local_secret {
             holder.repository().unlock_secrets(local_secret).await?
@@ -469,10 +640,11 @@ impl State {
         Ok(share_token)
     }
 
-    pub fn repository_path(&self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
+    #[api]
+    pub fn repository_get_path(&self, repo: RepositoryHandle) -> Result<PathBuf, Error> {
         Ok(self
             .repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .path()
             .to_owned())
@@ -480,11 +652,11 @@ impl State {
 
     /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
     /// unique, non-secret identifier of the repository.
-    /// User is responsible for deallocating the returned string.
-    pub fn repository_info_hash(&self, handle: RepositoryHandle) -> Result<String, Error> {
+    #[api]
+    pub fn repository_get_info_hash(&self, repo: RepositoryHandle) -> Result<String, Error> {
         let repo = self
             .repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository();
         let info_hash = ouisync::repository_info_hash(repo.secrets().id());
@@ -492,22 +664,24 @@ impl State {
         Ok(hex::encode(info_hash))
     }
 
-    pub async fn move_repository(
+    #[api]
+    pub async fn repository_move(
         &mut self,
-        handle: RepositoryHandle,
-        dst: &Path,
+        repo: RepositoryHandle,
+        dst: PathBuf,
     ) -> Result<(), Error> {
-        move_repository::invoke(self, handle, dst).await
+        move_repository::invoke(self, repo, &dst).await
     }
 
-    pub async fn reset_repository_access(
+    #[api]
+    pub async fn repository_reset_access(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         token: ShareToken,
     ) -> Result<(), Error> {
         let new_credentials = Credentials::with_random_writer_id(token.into_secrets());
         self.repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .set_credentials(new_credentials)
@@ -516,14 +690,15 @@ impl State {
         Ok(())
     }
 
-    pub async fn set_repository_access(
+    #[api]
+    pub async fn repository_set_access(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         read: Option<AccessChange>,
         write: Option<AccessChange>,
     ) -> Result<(), Error> {
         self.repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .set_access(read, write)
@@ -531,23 +706,25 @@ impl State {
         Ok(())
     }
 
-    pub fn repository_access_mode(&self, handle: RepositoryHandle) -> Result<AccessMode, Error> {
+    #[api]
+    pub fn repository_get_access_mode(&self, repo: RepositoryHandle) -> Result<AccessMode, Error> {
         Ok(self
             .repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .access_mode())
     }
 
-    pub async fn set_repository_access_mode(
+    #[api]
+    pub async fn repository_set_access_mode(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         access_mode: AccessMode,
         local_secret: Option<LocalSecret>,
     ) -> Result<(), Error> {
         self.repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .set_access_mode(access_mode, local_secret)
@@ -556,23 +733,25 @@ impl State {
         Ok(())
     }
 
-    pub fn repository_credentials(&self, handle: RepositoryHandle) -> Result<Vec<u8>, Error> {
+    #[api]
+    pub fn repository_get_credentials(&self, repo: RepositoryHandle) -> Result<Vec<u8>, Error> {
         Ok(self
             .repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .credentials()
             .encode())
     }
 
-    pub async fn set_repository_credentials(
+    #[api]
+    pub async fn repository_set_credentials(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         credentials: Vec<u8>,
     ) -> Result<(), Error> {
         self.repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .set_credentials(Credentials::decode(&credentials)?)
@@ -581,8 +760,9 @@ impl State {
         Ok(())
     }
 
-    pub async fn mount_repository(&mut self, handle: RepositoryHandle) -> Result<PathBuf, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+    #[api]
+    pub async fn repository_mount(&mut self, repo: RepositoryHandle) -> Result<PathBuf, Error> {
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
 
         holder
             .repository()
@@ -602,8 +782,9 @@ impl State {
         }
     }
 
-    pub async fn unmount_repository(&mut self, handle: RepositoryHandle) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+    #[api]
+    pub async fn repository_unmount(&mut self, repo: RepositoryHandle) -> Result<(), Error> {
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
 
         holder.repository().metadata().remove(AUTOMOUNT_KEY).await?;
 
@@ -614,14 +795,15 @@ impl State {
         Ok(())
     }
 
-    pub fn repository_mount_point(
+    #[api]
+    pub fn repository_get_mount_point(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
     ) -> Result<Option<PathBuf>, Error> {
         if let Some(mounter) = &self.mounter {
             Ok(mounter.mount_point(
                 self.repos
-                    .get(handle)
+                    .get(repo)
                     .ok_or(Error::InvalidArgument)?
                     .short_name(),
             ))
@@ -630,61 +812,57 @@ impl State {
         }
     }
 
-    pub fn subscribe_to_repository(
+    pub fn repository_subscribe(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
     ) -> Result<broadcast::Receiver<Event>, Error> {
         Ok(self
             .repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .subscribe())
     }
 
-    pub fn is_repository_sync_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
+    #[api]
+    pub fn repository_is_sync_enabled(&self, repo: RepositoryHandle) -> Result<bool, Error> {
         Ok(self
             .repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .registration()
             .is_some())
     }
 
-    pub async fn set_repository_sync_enabled(
+    #[api]
+    pub async fn repository_set_sync_enabled(
         &mut self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         enabled: bool,
     ) -> Result<(), Error> {
-        let holder = self.repos.get_mut(handle).ok_or(Error::InvalidArgument)?;
+        let holder = self.repos.get_mut(repo).ok_or(Error::InvalidArgument)?;
         set_sync_enabled(holder, &self.network, enabled).await?;
 
         Ok(())
     }
 
-    pub async fn set_all_repositories_sync_enabled(&mut self, enabled: bool) -> Result<(), Error> {
-        for (_, holder) in self.repos.iter_mut() {
-            set_sync_enabled(holder, &self.network, enabled).await?;
-        }
-
-        Ok(())
-    }
-
-    pub async fn repository_sync_progress(
+    #[api]
+    pub async fn repository_get_sync_progress(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
     ) -> Result<Progress, Error> {
         Ok(self
             .repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .sync_progress()
             .await?)
     }
 
-    pub async fn is_repository_dht_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+    #[api]
+    pub async fn repository_is_dht_enabled(&self, repo: RepositoryHandle) -> Result<bool, Error> {
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
 
         if let Some(reg) = holder.registration() {
             Ok(reg.is_dht_enabled())
@@ -698,12 +876,13 @@ impl State {
         }
     }
 
-    pub async fn set_repository_dht_enabled(
+    #[api]
+    pub async fn repository_set_dht_enabled(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         enabled: bool,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
 
         if let Some(reg) = holder.registration() {
             reg.set_dht_enabled(enabled);
@@ -714,8 +893,9 @@ impl State {
         Ok(())
     }
 
-    pub async fn is_repository_pex_enabled(&self, handle: RepositoryHandle) -> Result<bool, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+    #[api]
+    pub async fn repository_is_pex_enabled(&self, repo: RepositoryHandle) -> Result<bool, Error> {
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
 
         if let Some(reg) = holder.registration() {
             Ok(reg.is_pex_enabled())
@@ -729,12 +909,13 @@ impl State {
         }
     }
 
-    pub async fn set_repository_pex_enabled(
+    #[api]
+    pub async fn repository_set_pex_enabled(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         enabled: bool,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
 
         if let Some(reg) = holder.registration() {
             reg.set_pex_enabled(enabled);
@@ -745,30 +926,11 @@ impl State {
         Ok(())
     }
 
-    pub async fn set_pex_send_enabled(&self, enabled: bool) {
-        self.config
-            .entry(PEX_KEY)
-            .modify(|pex_config| pex_config.send = enabled)
-            .await
-            .ok();
-
-        self.network.set_pex_send_enabled(enabled);
-    }
-
-    pub async fn set_pex_recv_enabled(&self, enabled: bool) {
-        self.config
-            .entry(PEX_KEY)
-            .modify(|pex_config| pex_config.recv = enabled)
-            .await
-            .ok();
-
-        self.network.set_pex_recv_enabled(enabled);
-    }
-
-    pub fn repository_stats(&self, handle: RepositoryHandle) -> Result<Stats, Error> {
+    #[api]
+    pub fn repository_get_stats(&self, repo: RepositoryHandle) -> Result<Stats, Error> {
         Ok(self
             .repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .registration()
             .as_ref()
@@ -776,12 +938,13 @@ impl State {
             .unwrap_or_default())
     }
 
-    pub async fn create_repository_mirror(
+    #[api]
+    pub async fn repository_create_mirror(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         host: String,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
         let secrets = holder
             .repository()
             .secrets()
@@ -797,12 +960,13 @@ impl State {
         Ok(())
     }
 
-    pub async fn delete_repository_mirror(
+    #[api]
+    pub async fn repository_delete_mirror(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         host: String,
     ) -> Result<(), Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
         let secrets = holder
             .repository()
             .secrets()
@@ -818,14 +982,15 @@ impl State {
         Ok(())
     }
 
+    #[api]
     pub async fn repository_mirror_exists(
         &self,
-        handle: RepositoryHandle,
-        host: &str,
+        repo: RepositoryHandle,
+        host: String,
     ) -> Result<bool, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
 
-        let mut client = self.connect_remote_client(host).await?;
+        let mut client = self.connect_remote_client(&host).await?;
 
         let result = client
             .mirror_exists(holder.repository().secrets().id())
@@ -835,84 +1000,70 @@ impl State {
         Ok(result?)
     }
 
-    pub async fn remote_listener_addrs(&self, host: &str) -> Result<Vec<PeerAddr>, Error> {
-        let mut client = self.connect_remote_client(host).await?;
-        let result = client.get_listener_addrs().await;
-        client.close().await;
-
-        Ok(result?)
-    }
-
-    pub async fn share_token_mirror_exists(
-        &self,
-        token: &ShareToken,
-        host: &str,
-    ) -> Result<bool, Error> {
-        let mut client = self.connect_remote_client(host).await?;
-
-        let result = client.mirror_exists(token.id()).await;
-        client.close().await;
-
-        Ok(result?)
-    }
-
-    pub async fn repository_quota(&self, handle: RepositoryHandle) -> Result<QuotaInfo, Error> {
-        let holder = self.repos.get(handle).ok_or(Error::InvalidArgument)?;
+    #[api]
+    pub async fn repository_get_quota(&self, repo: RepositoryHandle) -> Result<QuotaInfo, Error> {
+        let holder = self.repos.get(repo).ok_or(Error::InvalidArgument)?;
         let quota = holder.repository().quota().await?;
         let size = holder.repository().size().await?;
 
         Ok(QuotaInfo { quota, size })
     }
 
-    pub async fn set_repository_quota(
+    #[api]
+    pub async fn repository_set_quota(
         &self,
-        handle: RepositoryHandle,
-        quota: Option<StorageSize>,
+        repo: RepositoryHandle,
+        value: Option<StorageSize>,
     ) -> Result<(), Error> {
         self.repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
-            .set_quota(quota)
+            .set_quota(value)
             .await?;
 
         Ok(())
     }
 
-    pub async fn default_quota(&self) -> Result<Option<StorageSize>, Error> {
+    #[api]
+    pub async fn session_get_default_quota(&self) -> Result<Option<StorageSize>, Error> {
         Ok(default_quota(&self.config).await?)
     }
 
-    pub async fn set_default_quota(&self, value: Option<StorageSize>) -> Result<(), Error> {
+    #[api]
+    pub async fn session_set_default_quota(&self, value: Option<StorageSize>) -> Result<(), Error> {
         set_default_quota(&self.config, value).await?;
         Ok(())
     }
 
-    pub async fn set_repository_expiration(
+    #[api]
+    pub async fn repository_set_expiration(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         value: Option<Duration>,
     ) -> Result<(), Error> {
         self.repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .set_repository_expiration(value)
             .await?;
         Ok(())
     }
 
-    pub async fn repository_expiration(
+    #[api]
+    pub async fn repository_get_expiration(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
     ) -> Result<Option<Duration>, Error> {
         self.repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository_expiration()
             .await
     }
 
-    pub async fn set_default_repository_expiration(
+    #[api]
+    pub async fn session_set_default_repository_expiration(
         &self,
         value: Option<Duration>,
     ) -> Result<(), Error> {
@@ -929,7 +1080,10 @@ impl State {
         Ok(())
     }
 
-    pub async fn default_repository_expiration(&self) -> Result<Option<Duration>, Error> {
+    #[api]
+    pub async fn session_get_default_repository_expiration(
+        &self,
+    ) -> Result<Option<Duration>, Error> {
         let entry = self.config.entry::<u64>(DEFAULT_REPOSITORY_EXPIRATION_KEY);
 
         match entry.get().await {
@@ -939,13 +1093,14 @@ impl State {
         }
     }
 
-    pub async fn set_block_expiration(
+    #[api]
+    pub async fn repository_set_block_expiration(
         &self,
-        handle: RepositoryHandle,
+        repo: RepositoryHandle,
         value: Option<Duration>,
     ) -> Result<(), Error> {
         self.repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .set_block_expiration(value)
@@ -953,22 +1108,415 @@ impl State {
         Ok(())
     }
 
-    pub fn block_expiration(&self, handle: RepositoryHandle) -> Result<Option<Duration>, Error> {
+    #[api]
+    pub fn repository_get_block_expiration(
+        &self,
+        repo: RepositoryHandle,
+    ) -> Result<Option<Duration>, Error> {
         Ok(self
             .repos
-            .get(handle)
+            .get(repo)
             .ok_or(Error::InvalidArgument)?
             .repository()
             .block_expiration())
     }
 
-    pub async fn set_default_block_expiration(&self, value: Option<Duration>) -> Result<(), Error> {
+    #[api]
+    pub async fn session_set_default_block_expiration(
+        &self,
+        value: Option<Duration>,
+    ) -> Result<(), Error> {
         set_default_block_expiration(&self.config, value).await?;
         Ok(())
     }
 
-    pub async fn default_block_expiration(&self) -> Result<Option<Duration>, Error> {
+    #[api]
+    pub async fn session_get_default_block_expiration(&self) -> Result<Option<Duration>, Error> {
         Ok(default_block_expiration(&self.config).await?)
+    }
+
+    #[api]
+    pub async fn repository_get_metadata(
+        &self,
+        repo: RepositoryHandle,
+        key: String,
+    ) -> Result<Option<String>, Error> {
+        Ok(self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .metadata()
+            .get(&key)
+            .await?)
+    }
+
+    #[api]
+    pub async fn repository_set_metadata(
+        &self,
+        repo: RepositoryHandle,
+        edits: Vec<MetadataEdit>,
+    ) -> Result<bool, Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository();
+
+        let mut tx = repo.metadata().write().await?;
+
+        for edit in edits {
+            if tx.get(&edit.key).await? != edit.old_value {
+                return Ok(false);
+            }
+
+            if let Some(new) = edit.new_value {
+                tx.set(&edit.key, new).await?;
+            } else {
+                tx.remove(&edit.key).await?;
+            }
+        }
+
+        tx.commit().await?;
+
+        Ok(true)
+    }
+
+    /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
+    /// exist.
+    #[api]
+    pub async fn repository_get_entry_type(
+        &self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<Option<EntryType>, Error> {
+        match self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .lookup_type(path)
+            .await
+        {
+            Ok(entry_type) => Ok(Some(entry_type)),
+            Err(ouisync::Error::EntryNotFound) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[api]
+    pub async fn repository_move_entry(
+        &self,
+        repo: RepositoryHandle,
+        src: String,
+        dst: String,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .move_entry(src, dst)
+            .await?;
+
+        Ok(())
+    }
+
+    #[api]
+    pub async fn repository_create_directory(
+        &self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .create_directory(path)
+            .await?;
+
+        Ok(())
+    }
+
+    #[api]
+    pub async fn repository_read_directory(
+        &self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<Vec<DirectoryEntry>, Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository();
+
+        let dir = repo.open_directory(path).await?;
+        let entries = dir
+            .entries()
+            .map(|entry| DirectoryEntry {
+                name: entry.unique_name().into_owned(),
+                entry_type: entry.entry_type(),
+            })
+            .collect();
+
+        Ok(entries)
+    }
+
+    /// Removes the directory at the given path from the repository. If `recursive` is true it removes
+    /// also the contents, otherwise the directory must be empty.
+    #[api]
+    pub async fn repository_remove_directory(
+        &self,
+        repo: RepositoryHandle,
+        path: String,
+        recursive: bool,
+    ) -> Result<(), Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository();
+
+        if recursive {
+            repo.remove_entry_recursively(path).await?
+        } else {
+            repo.remove_entry(path).await?
+        }
+
+        Ok(())
+    }
+
+    #[api]
+    pub async fn repository_create_file(
+        &mut self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<FileHandle, Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository();
+        let local_branch = repo.local_branch()?;
+
+        let file = repo.create_file(&path).await?;
+        let holder = FileHolder { file, local_branch };
+        let handle = self.files.insert(holder);
+
+        Ok(handle)
+    }
+
+    #[api]
+    pub async fn repository_open_file(
+        &mut self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<FileHandle, Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository();
+        let local_branch = repo.local_branch()?;
+
+        let file = repo.open_file(path).await?;
+        let holder = FileHolder { file, local_branch };
+        let handle = self.files.insert(holder);
+
+        Ok(handle)
+    }
+
+    /// Remove (delete) the file at the given path from the repository.
+    #[api]
+    pub async fn repository_remove_file(
+        &mut self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<(), Error> {
+        self.repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository()
+            .remove_entry(&path)
+            .await?;
+        Ok(())
+    }
+
+    #[api]
+    pub async fn repository_file_exists(
+        &self,
+        repo: RepositoryHandle,
+        path: String,
+    ) -> Result<bool, Error> {
+        let repo = self
+            .repos
+            .get(repo)
+            .ok_or(Error::InvalidArgument)?
+            .repository();
+
+        match repo.lookup_type(&path).await {
+            Ok(EntryType::File) => Ok(true),
+            Ok(EntryType::Directory) => Ok(false),
+            Err(ouisync::Error::EntryNotFound) => Ok(false),
+            Err(ouisync::Error::AmbiguousEntry) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Reads `size` bytes from the file starting at `offset` bytes from the beginning of the file.
+    #[api]
+    pub async fn file_read(
+        &mut self,
+        file: FileHandle,
+        offset: u64,
+        size: u64,
+    ) -> Result<Vec<u8>, Error> {
+        let size = size as usize;
+        let mut buffer = vec![0; size];
+
+        let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
+
+        holder.file.seek(SeekFrom::Start(offset));
+
+        // TODO: consider using just `read`
+        let size = holder.file.read_all(&mut buffer).await?;
+        buffer.truncate(size);
+
+        Ok(buffer)
+    }
+
+    #[api]
+    pub async fn file_write(
+        &mut self,
+        file: FileHandle,
+        offset: u64,
+        data: Vec<u8>,
+    ) -> Result<(), Error> {
+        let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
+
+        holder.file.seek(SeekFrom::Start(offset));
+        holder.file.fork(holder.local_branch.clone()).await?;
+
+        // TODO: consider using just `write` and returning the number of bytes written
+        holder.file.write_all(&data).await?;
+
+        Ok(())
+    }
+
+    #[api]
+    pub fn file_get_length(&self, file: FileHandle) -> Result<u64, Error> {
+        Ok(self
+            .files
+            .get(file)
+            .ok_or(Error::InvalidArgument)?
+            .file
+            .len())
+    }
+
+    /// Returns sync progress of the given file.
+    #[api]
+    pub async fn file_get_progress(&self, file: FileHandle) -> Result<u64, Error> {
+        // Don't keep the file locked while progress is being awaited.
+        let progress = self
+            .files
+            .get(file)
+            .ok_or(Error::InvalidArgument)?
+            .file
+            .progress();
+        let progress = progress.await?;
+
+        Ok(progress)
+    }
+
+    #[api]
+    pub async fn file_truncate(&mut self, file: FileHandle, len: u64) -> Result<(), Error> {
+        let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
+        holder.file.fork(holder.local_branch.clone()).await?;
+        holder.file.truncate(len)?;
+
+        Ok(())
+    }
+
+    #[api]
+    pub async fn file_flush(&mut self, file: FileHandle) -> Result<(), Error> {
+        self.files
+            .get_mut(file)
+            .ok_or(Error::InvalidArgument)?
+            .file
+            .flush()
+            .await?;
+
+        Ok(())
+    }
+
+    #[api]
+    pub async fn file_close(&mut self, file: FileHandle) -> Result<(), Error> {
+        if let Some(mut holder) = self.files.remove(file) {
+            holder.file.flush().await?
+        }
+
+        Ok(())
+    }
+
+    #[api]
+    pub fn session_generate_password_salt(&self) -> PasswordSalt {
+        OsRng.gen()
+    }
+
+    #[api]
+    pub fn session_derive_secret_key(&self, password: Password, salt: PasswordSalt) -> SecretKey {
+        SecretKey::derive_from_password(password.as_ref(), &salt)
+    }
+
+    #[api]
+    pub fn session_generate_secret_key(&self) -> SecretKey {
+        SecretKey::random()
+    }
+
+    #[api]
+    pub fn session_get_state_monitor(&self, path: Vec<MonitorId>) -> Option<StateMonitor> {
+        self.root_monitor.locate(path)
+    }
+
+    // This is exposed to #[api] in `Service`
+    pub fn state_monitor_subscribe(
+        &self,
+        path: Vec<MonitorId>,
+    ) -> Result<watch::Receiver<()>, Error> {
+        Ok(self
+            .root_monitor
+            .locate(path)
+            .ok_or(Error::NotFound)?
+            .subscribe())
+    }
+
+    pub async fn set_all_repositories_sync_enabled(&mut self, enabled: bool) -> Result<(), Error> {
+        for (_, holder) in self.repos.iter_mut() {
+            set_sync_enabled(holder, &self.network, enabled).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn remote_server_config(&self) -> Result<Arc<rustls::ServerConfig>, Error> {
+        self.remote_server_config
+            .get_or_try_init(|| tls::make_server_config(self.config.dir()))
+            .await
+            .cloned()
+    }
+
+    pub async fn remote_client_config(&self) -> Result<Arc<rustls::ClientConfig>, Error> {
+        self.remote_client_config
+            .get_or_try_init(|| tls::make_client_config(self.config.dir()))
+            .await
+            .cloned()
+    }
+
+    pub fn store_dir(&self) -> Option<&Path> {
+        self.store.dir.as_deref()
+    }
+
+    pub fn mount_root(&self) -> Option<&Path> {
+        self.mounter.as_ref().map(|m| m.mount_root())
     }
 
     pub async fn delete_expired_repositories(&mut self) {
@@ -1008,336 +1556,13 @@ impl State {
         }
 
         for handle in expired {
-            match self.delete_repository(handle).await {
+            match self.repository_delete(handle).await {
                 Ok(()) => (),
                 Err(error) => {
                     tracing::error!(?error, "failed to delete expired repository");
                 }
             }
         }
-    }
-
-    pub async fn repository_metadata(
-        &self,
-        handle: RepositoryHandle,
-        key: String,
-    ) -> Result<Option<String>, Error> {
-        Ok(self
-            .repos
-            .get(handle)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .metadata()
-            .get(&key)
-            .await?)
-    }
-
-    pub async fn set_repository_metadata(
-        &self,
-        handle: RepositoryHandle,
-        edits: Vec<MetadataEdit>,
-    ) -> Result<bool, Error> {
-        let repo = self
-            .repos
-            .get(handle)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
-
-        let mut tx = repo.metadata().write().await?;
-
-        for edit in edits {
-            if tx.get(&edit.key).await? != edit.old {
-                return Ok(false);
-            }
-
-            if let Some(new) = edit.new {
-                tx.set(&edit.key, new).await?;
-            } else {
-                tx.remove(&edit.key).await?;
-            }
-        }
-
-        tx.commit().await?;
-
-        Ok(true)
-    }
-
-    /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
-    /// exist.
-    pub async fn repository_entry_type(
-        &self,
-        handle: RepositoryHandle,
-        path: String,
-    ) -> Result<Option<EntryType>, Error> {
-        match self
-            .repos
-            .get(handle)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .lookup_type(path)
-            .await
-        {
-            Ok(entry_type) => Ok(Some(entry_type)),
-            Err(ouisync::Error::EntryNotFound) => Ok(None),
-            Err(error) => Err(error.into()),
-        }
-    }
-
-    pub async fn move_repository_entry(
-        &self,
-        repo: RepositoryHandle,
-        src: String,
-        dst: String,
-    ) -> Result<(), Error> {
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .move_entry(src, dst)
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn create_directory(
-        &self,
-        repo: RepositoryHandle,
-        path: String,
-    ) -> Result<(), Error> {
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .create_directory(path)
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn read_directory(
-        &self,
-        repo: RepositoryHandle,
-        path: String,
-    ) -> Result<Vec<DirectoryEntry>, Error> {
-        let repo = self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
-
-        let dir = repo.open_directory(path).await?;
-        let entries = dir
-            .entries()
-            .map(|entry| DirectoryEntry {
-                name: entry.unique_name().into_owned(),
-                entry_type: entry.entry_type(),
-            })
-            .collect();
-
-        Ok(entries)
-    }
-
-    /// Removes the directory at the given path from the repository. If `recursive` is true it removes
-    /// also the contents, otherwise the directory must be empty.
-    pub async fn remove_directory(
-        &self,
-        repo: RepositoryHandle,
-        path: String,
-        recursive: bool,
-    ) -> Result<(), Error> {
-        let repo = self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
-
-        if recursive {
-            repo.remove_entry_recursively(path).await?
-        } else {
-            repo.remove_entry(path).await?
-        }
-
-        Ok(())
-    }
-
-    pub async fn create_file(
-        &mut self,
-        repo: RepositoryHandle,
-        path: String,
-    ) -> Result<FileHandle, Error> {
-        let repo = self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
-        let local_branch = repo.local_branch()?;
-
-        let file = repo.create_file(&path).await?;
-        let holder = FileHolder { file, local_branch };
-        let handle = self.files.insert(holder);
-
-        Ok(handle)
-    }
-
-    pub async fn open_file(
-        &mut self,
-        repo: RepositoryHandle,
-        path: &str,
-    ) -> Result<FileHandle, Error> {
-        let repo = self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
-        let local_branch = repo.local_branch()?;
-
-        let file = repo.open_file(path).await?;
-        let holder = FileHolder { file, local_branch };
-        let handle = self.files.insert(holder);
-
-        Ok(handle)
-    }
-
-    /// Remove (delete) the file at the given path from the repository.
-    pub async fn remove_file(&mut self, repo: RepositoryHandle, path: String) -> Result<(), Error> {
-        self.repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository()
-            .remove_entry(&path)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn read_file(
-        &mut self,
-        handle: FileHandle,
-        offset: u64,
-        len: u64,
-    ) -> Result<Vec<u8>, Error> {
-        let len = len as usize;
-        let mut buffer = vec![0; len];
-
-        let holder = self.files.get_mut(handle).ok_or(Error::InvalidArgument)?;
-
-        holder.file.seek(SeekFrom::Start(offset));
-
-        // TODO: consider using just `read`
-        let len = holder.file.read_all(&mut buffer).await?;
-        buffer.truncate(len);
-
-        Ok(buffer)
-    }
-
-    pub async fn write_file(
-        &mut self,
-        file: FileHandle,
-        offset: u64,
-        data: &[u8],
-    ) -> Result<(), Error> {
-        let holder = self.files.get_mut(file).ok_or(Error::InvalidArgument)?;
-
-        holder.file.seek(SeekFrom::Start(offset));
-        holder.file.fork(holder.local_branch.clone()).await?;
-
-        // TODO: consider using just `write` and returning the number of bytes written
-        holder.file.write_all(data).await?;
-
-        Ok(())
-    }
-
-    pub async fn file_exists(&self, repo: RepositoryHandle, path: String) -> Result<bool, Error> {
-        let repo = self
-            .repos
-            .get(repo)
-            .ok_or(Error::InvalidArgument)?
-            .repository();
-
-        match repo.lookup_type(&path).await {
-            Ok(EntryType::File) => Ok(true),
-            Ok(EntryType::Directory) => Ok(false),
-            Err(ouisync::Error::EntryNotFound) => Ok(false),
-            Err(ouisync::Error::AmbiguousEntry) => Ok(false),
-            Err(error) => Err(error.into()),
-        }
-    }
-
-    pub fn file_len(&self, handle: FileHandle) -> Result<u64, Error> {
-        Ok(self
-            .files
-            .get(handle)
-            .ok_or(Error::InvalidArgument)?
-            .file
-            .len())
-    }
-
-    pub async fn file_progress(&self, handle: FileHandle) -> Result<u64, Error> {
-        // Don't keep the file locked while progress is being awaited.
-        let progress = self
-            .files
-            .get(handle)
-            .ok_or(Error::InvalidArgument)?
-            .file
-            .progress();
-        let progress = progress.await?;
-
-        Ok(progress)
-    }
-
-    pub async fn truncate_file(&mut self, handle: FileHandle, len: u64) -> Result<(), Error> {
-        let holder = self.files.get_mut(handle).ok_or(Error::InvalidArgument)?;
-        holder.file.fork(holder.local_branch.clone()).await?;
-        holder.file.truncate(len)?;
-
-        Ok(())
-    }
-
-    pub async fn flush_file(&mut self, handle: FileHandle) -> Result<(), Error> {
-        self.files
-            .get_mut(handle)
-            .ok_or(Error::InvalidArgument)?
-            .file
-            .flush()
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn close_file(&mut self, handle: FileHandle) -> Result<(), Error> {
-        if let Some(mut holder) = self.files.remove(handle) {
-            holder.file.flush().await?
-        }
-
-        Ok(())
-    }
-
-    pub async fn remote_server_config(&self) -> Result<Arc<rustls::ServerConfig>, Error> {
-        self.remote_server_config
-            .get_or_try_init(|| tls::make_server_config(self.config.dir()))
-            .await
-            .cloned()
-    }
-
-    pub async fn remote_client_config(&self) -> Result<Arc<rustls::ClientConfig>, Error> {
-        self.remote_client_config
-            .get_or_try_init(|| tls::make_client_config(self.config.dir()))
-            .await
-            .cloned()
-    }
-
-    pub fn state_monitor(&self, path: Vec<MonitorId>) -> Result<StateMonitor, Error> {
-        self.root_monitor.locate(path).ok_or(Error::NotFound)
-    }
-
-    pub fn subscribe_to_state_monitor(
-        &self,
-        path: Vec<MonitorId>,
-    ) -> Result<watch::Receiver<()>, Error> {
-        Ok(self
-            .root_monitor
-            .locate(path)
-            .ok_or(Error::NotFound)?
-            .subscribe())
     }
 
     pub async fn close(&mut self) {

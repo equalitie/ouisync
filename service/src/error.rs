@@ -1,4 +1,5 @@
-use crate::{config_store::ConfigError, transport::ClientError};
+use crate::{config_store::ConfigError, repository::FindError, transport::ClientError};
+use ouisync::DecodeError;
 use ouisync_vfs::MountError;
 use std::{ffi::IntoStringError, io, str::Utf8Error};
 use thiserror::Error;
@@ -21,6 +22,8 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error("entry not found")]
     NotFound,
+    #[error("name is ambiguous")]
+    Ambiguous,
     #[error("operation not supported")]
     OperationNotSupported,
     #[error("permission denied")]
@@ -57,6 +60,21 @@ impl From<Utf8Error> for Error {
 
 impl From<IntoStringError> for Error {
     fn from(_: IntoStringError) -> Self {
+        Self::InvalidArgument
+    }
+}
+
+impl From<FindError> for Error {
+    fn from(e: FindError) -> Self {
+        match e {
+            FindError::NotFound => Self::NotFound,
+            FindError::Ambiguous => Self::Ambiguous,
+        }
+    }
+}
+
+impl From<DecodeError> for Error {
+    fn from(_: DecodeError) -> Self {
         Self::InvalidArgument
     }
 }

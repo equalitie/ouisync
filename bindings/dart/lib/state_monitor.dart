@@ -1,24 +1,28 @@
-import 'client.dart';
-import 'exception.dart';
+import 'package:messagepack/messagepack.dart' show Packer, Unpacker;
 
-// Version is incremented every time the monitor or any of it's values or
-// children changes.
-typedef Version = int;
+import 'client.dart';
+import 'bindings.dart'
+    show
+        RequestSessionSubscribeToStateMonitor,
+        RequestSessionGetStateMonitor,
+        ResponseStateMonitor,
+        ResponseNone,
+        InvalidData;
 
 // Used to identify child state monitors.
 class MonitorId implements Comparable<MonitorId> {
-  final String _name;
+  final String name;
   // This one is now shown to the user, it allows us to have multiple monitors of the same name.
-  final int _disambiguator;
+  final int disambiguator;
 
-  String get name => _name;
-
-  MonitorId(this._name, this._disambiguator);
+  MonitorId(this.name, this.disambiguator);
 
   // For when we expect the name to uniquely identify the child.
   static MonitorId expectUnique(String name) => MonitorId(name, 0);
 
-  static MonitorId parse(String raw) {
+  static MonitorId decode(Unpacker u) {
+    final raw = u.unpackString()!;
+
     // A string in the format "name:disambiguator".
     final colon = raw.lastIndexOf(':');
     final name = raw.substring(0, colon);
@@ -27,55 +31,59 @@ class MonitorId implements Comparable<MonitorId> {
     return MonitorId(name, disambiguator);
   }
 
+  void encode(Packer p) => p.packString(toString());
+
   @override
   String toString() {
-    return "$_name:$_disambiguator";
+    return "$name:$disambiguator";
   }
 
   @override
   int compareTo(MonitorId other) {
     // Negative return value means `this` will be appear first.
-    final cmp = _name.compareTo(other._name);
+    final cmp = name.compareTo(other.name);
     if (cmp == 0) {
-      return _disambiguator - other._disambiguator;
+      return disambiguator - other.disambiguator;
     }
     return cmp;
   }
 }
 
 class StateMonitorNode {
-  final List<MonitorId> path;
   final Map<String, String> values;
   final List<MonitorId> children;
 
   StateMonitorNode(
-    this.path,
     this.values,
     this.children,
   );
 
-  static StateMonitorNode _decode(
-    List<MonitorId> path,
-    List<Object?> raw,
-  ) {
-    final values = _decodeValues(raw[0]);
-    final children = _decodeChildren(raw[1]);
+  static StateMonitorNode? decode(Unpacker u) {
+    if (u.unpackListLength() != 2) {
+      return null;
+    }
+
+    final values = _decodeValues(u);
+    final children = _decodeChildren(u);
 
     return StateMonitorNode(
-      path,
       values,
       children,
     );
   }
 
-  static Map<String, String> _decodeValues(Object? raw) {
-    final rawMap = raw as Map<Object?, Object?>;
-    return rawMap.cast<String, String>();
+  static Map<String, String> _decodeValues(Unpacker u) {
+    final n = u.unpackMapLength();
+    return Map.fromEntries(Iterable.generate(n, (_) {
+      final k = u.unpackString()!;
+      final v = u.unpackString()!;
+      return MapEntry(k, v);
+    }));
   }
 
-  static List<MonitorId> _decodeChildren(Object? raw) {
-    final rawList = raw as List<Object?>;
-    return rawList.cast<String>().map((id) => MonitorId.parse(id)).toList();
+  static List<MonitorId> _decodeChildren(Unpacker u) {
+    final n = u.unpackListLength();
+    return Iterable.generate(n, (_) => MonitorId.decode(u)).toList();
   }
 
   int? parseIntValue(String name) {
@@ -107,21 +115,27 @@ class StateMonitor {
   StateMonitor child(MonitorId childId) =>
       StateMonitor._(_client, [..._path, childId]);
 
+  bool get isRoot => _path.isEmpty;
+
   /// Stream of change notifications
   Stream<void> get changes => _client
-      .subscribe('state_monitor', _path.map((id) => id.toString()))
-      .cast<void>();
+      .subscribe(RequestSessionSubscribeToStateMonitor(path: _path))
+      .map((_) {});
 
   @override
   String toString() => "StateMonitor($_path)";
 
   Future<StateMonitorNode?> load() async {
-    try {
-      final List<Object?> list = await _client.invoke(
-          "state_monitor_get", _path.map((id) => id.toString()));
-      return StateMonitorNode._decode(_path, list);
-    } on NotFound {
-      return null;
+    final response =
+        await _client.invoke(RequestSessionGetStateMonitor(path: _path));
+
+    switch (response) {
+      case ResponseStateMonitor(value: final node):
+        return node;
+      case ResponseNone():
+        return null;
+      default:
+        throw InvalidData('unexpected response');
     }
   }
 }

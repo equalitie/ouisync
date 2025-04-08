@@ -1,8 +1,10 @@
 [workspace]
 members = [
+    "api_parser",
     "cli",
     "deadlock",
     "lib",
+    "macros",
     "metrics_ext",
     "net",
     "rand",
@@ -42,6 +44,7 @@ chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
 clap = { version = "4.5.20", features = ["derive"] }
 criterion = "0.5.1"
 futures-util = { version = "0.3.30", default-features = false }
+heck = "0.5.0"
 hex = "0.4.3"
 hex_fmt = "0.3.0"
 hmac = { version = "0.12.1", default-features = false }
@@ -55,6 +58,7 @@ pin-project-lite = "0.2.14"
 proptest = "1.5"
 rand = { package = "ouisync-rand", path = "rand" }
 rcgen = "0.13"
+rmp = "0.8.13"
 rmp-serde = "1.2.0"
 rustls = { version = "0.23.5", default-features = false }
 serde = { version = "1.0", features = ["derive", "rc"] }
@@ -64,6 +68,7 @@ sha2 = { version = "0.10.8", default-features = false }
 similar-asserts = "1.6.0"
 slab = "0.4.9"
 sqlx = { version = "0.8.3", default-features = false, features = ["derive", "runtime-tokio", "sqlite"] }
+syn = { version = "2.0.100", default-features = false }
 tempfile = "3.13"
 test-strategy = "0.4.0"
 thiserror = "1.0.65"

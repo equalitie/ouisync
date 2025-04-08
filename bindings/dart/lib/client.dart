@@ -7,7 +7,14 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:hex/hex.dart';
 
-import 'exception.dart';
+import 'bindings.dart'
+    show
+        InvalidData,
+        MessageId,
+        PermissionDenied,
+        Request,
+        Response,
+        RequestSessionUnsubscribe;
 import 'internal/length_delimited_codec.dart';
 import 'internal/message_codec.dart';
 
@@ -62,25 +69,24 @@ class Client {
     }
   }
 
-  Future<T> invoke<T>(String method, [Object? args]) async {
+  Future<Response> invoke(Request request) async {
     final id = _nextMessageId++;
-    return await _invokeWithMessageId(id, method, args);
+    return await _invokeWithMessageId(id, request);
   }
 
-  Stream<T> subscribe<T>(String method, Object? arg) {
-    final controller = StreamController<Object?>();
+  Stream<Response> subscribe<T>(Request request) {
+    final controller = StreamController<Response>();
     final id = _nextMessageId++;
 
     controller.onListen = () => unawaited(_onSubscriptionListen(
           id,
-          method,
-          arg,
+          request,
           controller.sink,
         ));
 
     controller.onCancel = () => unawaited(_onSubscriptionCancel(id));
 
-    return controller.stream.cast<T>();
+    return controller.stream.cast();
   }
 
   Future<void> close() async {
@@ -88,13 +94,13 @@ class Client {
     await _socket.close();
   }
 
-  Future<T> _invokeWithMessageId<T>(int id, String method, Object? args) async {
+  Future<Response> _invokeWithMessageId(int id, Request request) async {
     final completer = Completer();
     final response = completer.future;
 
     _responses[id] = completer;
 
-    final bytes = encodeLengthDelimited(encodeMessage(id, method, args));
+    final bytes = encodeLengthDelimited(encodeMessage(id, request));
     _socket.add(bytes);
 
     return await response;
@@ -134,14 +140,13 @@ class Client {
 
   Future<void> _onSubscriptionListen(
     int id,
-    String method,
-    Object? arg,
+    Request request,
     StreamSink<Object?> sink,
   ) async {
     _notifications[id] = sink;
 
     try {
-      await _invokeWithMessageId<void>(id, '${method}_subscribe', arg);
+      await _invokeWithMessageId(id, request);
     } catch (e, st) {
       _notifications.remove(id);
       sink.addError(e, st);
@@ -150,7 +155,7 @@ class Client {
 
   Future<void> _onSubscriptionCancel(int id) async {
     _notifications.remove(id);
-    await invoke<void>('unsubscribe', id);
+    await invoke(RequestSessionUnsubscribe(id: MessageId(id)));
   }
 }
 

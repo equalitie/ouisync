@@ -24,8 +24,8 @@ void main() {
 
     try {
       final vs = await Future.wait([
-        session0.currentProtocolVersion,
-        session1.currentProtocolVersion,
+        session0.getCurrentProtocolVersion(),
+        session1.getCurrentProtocolVersion(),
       ]);
 
       expect(vs[0], equals(vs[1]));
@@ -42,6 +42,6 @@ void main() {
     await session.close();
 
     await expectLater(
-        session.currentProtocolVersion, throwsA(isA<StateError>()));
+        session.getCurrentProtocolVersion(), throwsA(isA<StateError>()));
   });
 }
