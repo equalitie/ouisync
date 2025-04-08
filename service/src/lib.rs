@@ -34,8 +34,7 @@ use state::State;
 use state_monitor::MonitorId;
 use std::{
     convert::Infallible,
-    future, io,
-    net::SocketAddr,
+    io,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -47,7 +46,6 @@ use tokio::{
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use transport::{
     local::{AuthKey, LocalServer},
-    remote::{AcceptedRemoteConnection, RemoteServer},
     AcceptedConnection, ClientError, ReadError, ServerReader, ServerWriter,
 };
 
@@ -57,13 +55,9 @@ const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 6
 const LOCAL_CONTROL_PORT_KEY: ConfigKey<u16> = ConfigKey::new("local_control_port", "");
 const LOCAL_CONTROL_AUTH_KEY_KEY: ConfigKey<AuthKey> = ConfigKey::new("local_control_auth_key", "");
 
-const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
-    ConfigKey::new("remote_control", "Remote control endpoint address");
-
 pub struct Service {
     state: State,
     local_server: LocalServer,
-    remote_server: Option<RemoteServer>,
     readers: StreamMap<ConnectionId, StreamNotifyClose<ServerReader>>,
     writers: Slab<ServerWriter>,
     subscriptions: StreamMap<SubscriptionId, SubscriptionStream>,
@@ -93,20 +87,9 @@ impl Service {
             local_port_entry.set(&local_server.port()).await?;
         }
 
-        let remote_server = match state.config.entry(REMOTE_CONTROL_KEY).get().await {
-            Ok(addr) => Some(
-                RemoteServer::bind(addr, state.tls_config.server().await?)
-                    .await
-                    .map_err(Error::Bind)?,
-            ),
-            Err(ConfigError::NotFound) => None,
-            Err(error) => return Err(error.into()),
-        };
-
         Ok(Self {
             state,
             local_server,
-            remote_server,
             readers: StreamMap::new(),
             writers: Slab::new(),
             subscriptions: StreamMap::new(),
@@ -131,7 +114,7 @@ impl Service {
                     let conn = result.map_err(Error::Accept)?;
                     accepted_conns.push(AcceptedConnection::Local(conn).finalize());
                 }
-                result = maybe_accept(self.remote_server.as_ref()) => {
+                result = self.state.remote_accept() => {
                     let conn = result.map_err(Error::Accept)?;
                     accepted_conns.push(AcceptedConnection::Remote(conn).finalize());
                 }
@@ -211,28 +194,6 @@ impl Service {
 
     pub fn enable_panic_monitor(&self) {
         self.state.enable_panic_monitor();
-    }
-
-    #[api]
-    pub(crate) async fn remote_control_bind(
-        &mut self,
-        addr: Option<SocketAddr>,
-    ) -> Result<u16, Error> {
-        if let Some(addr) = addr {
-            let config = self.state.tls_config.server().await?;
-            let remote_server = RemoteServer::bind(addr, config)
-                .await
-                .map_err(Error::Bind)?;
-            let port = remote_server.local_addr().port();
-
-            self.remote_server = Some(remote_server);
-
-            Ok(port)
-        } else {
-            self.remote_server = None;
-
-            Ok(0)
-        }
     }
 
     #[cfg(test)]
@@ -315,13 +276,6 @@ impl Service {
                 self.remove_connection(conn_id);
             }
         }
-    }
-
-    #[api]
-    fn remote_control_get_listener_addr(&self) -> Option<SocketAddr> {
-        self.remote_server
-            .as_ref()
-            .map(|server| server.local_addr())
     }
 
     #[api]
@@ -409,14 +363,6 @@ pub async fn local_control_endpoint(config_path: &Path) -> Result<(u16, AuthKey)
 
 type ConnectionId = usize;
 type SubscriptionId = (ConnectionId, MessageId);
-
-async fn maybe_accept(server: Option<&RemoteServer>) -> io::Result<AcceptedRemoteConnection> {
-    if let Some(server) = server {
-        server.accept().await
-    } else {
-        future::pending().await
-    }
-}
 
 async fn fetch_local_control_auth_key(config: &ConfigStore) -> Result<AuthKey, ConfigError> {
     let entry = config.entry(LOCAL_CONTROL_AUTH_KEY_KEY);

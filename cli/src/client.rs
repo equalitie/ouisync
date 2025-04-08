@@ -247,11 +247,11 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         ClientCommand::Metrics { addr, disable } => {
             if disable {
                 let () = client
-                    .invoke(Request::SessionMetricsBind { addr: None })
+                    .invoke(Request::SessionBindMetrics { addr: None })
                     .await?;
             } else if let Some(addr) = addr {
                 let () = client
-                    .invoke(Request::SessionMetricsBind { addr: Some(addr) })
+                    .invoke(Request::SessionBindMetrics { addr: Some(addr) })
                     .await?;
             }
 
@@ -416,16 +416,17 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         ClientCommand::RemoteControl { addr, disable } => {
             if disable {
                 let _: u16 = client
-                    .invoke(Request::RemoteControlBind { addr: None })
+                    .invoke(Request::SessionBindRemoteControl { addr: None })
                     .await?;
             } else if let Some(addr) = addr {
                 let _: u16 = client
-                    .invoke(Request::RemoteControlBind { addr: Some(addr) })
+                    .invoke(Request::SessionBindRemoteControl { addr: Some(addr) })
                     .await?;
             }
 
-            let addr: Option<SocketAddr> =
-                client.invoke(Request::RemoteControlGetListenerAddr).await?;
+            let addr: Option<SocketAddr> = client
+                .invoke(Request::SessionGetRemoteControlListenerAddr)
+                .await?;
 
             if let Some(addr) = addr {
                 println!("{}", addr);

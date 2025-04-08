@@ -8,7 +8,7 @@ use crate::{
         DEFAULT_REPOSITORY_EXPIRATION_KEY, LOCAL_DISCOVERY_ENABLED_KEY, MOUNT_DIR_KEY, PEERS_KEY,
         PEX_KEY, PORT_FORWARDING_ENABLED_KEY, STORE_DIR_KEY,
     },
-    config_store::{ConfigError, ConfigStore},
+    config_store::{ConfigError, ConfigKey, ConfigStore},
     device_id, dht_contacts,
     error::Error,
     file::{FileHandle, FileHolder, FileSet},
@@ -17,7 +17,7 @@ use crate::{
     protocol::{DirectoryEntry, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{RepositoryHandle, RepositoryHolder, RepositorySet},
     tls::TlsConfig,
-    transport::remote::RemoteClient,
+    transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
     utils,
 };
 use ouisync::{
@@ -34,6 +34,7 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     ffi::OsStr,
+    future,
     io::{self, SeekFrom},
     net::SocketAddr,
     panic,
@@ -47,6 +48,11 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 
+// Config keys
+const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
+    ConfigKey::new("remote_control", "Remote control endpoint address");
+
+// Repo metadata keys
 const AUTOMOUNT_KEY: &str = "automount";
 const DHT_ENABLED_KEY: &str = "dht_enabled";
 const PEX_ENABLED_KEY: &str = "pex_enabled";
@@ -63,6 +69,7 @@ pub(crate) struct State {
     files: FileSet,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
+    remote_server: Option<RemoteServer>,
     metrics_server: MetricsServer,
 }
 
@@ -102,6 +109,16 @@ impl State {
 
         let tls_config = TlsConfig::new(config.dir().to_owned());
 
+        let remote_server = match config.entry(REMOTE_CONTROL_KEY).get().await {
+            Ok(addr) => Some(
+                RemoteServer::bind(addr, tls_config.server().await?)
+                    .await
+                    .map_err(Error::Bind)?,
+            ),
+            Err(ConfigError::NotFound) => None,
+            Err(error) => return Err(error.into()),
+        };
+
         let metrics_server = MetricsServer::init(&config, &network, &tls_config).await?;
 
         let mut state = Self {
@@ -114,6 +131,7 @@ impl State {
             repos_monitor,
             repos: RepositorySet::new(),
             files: FileSet::new(),
+            remote_server,
             metrics_server,
         };
 
@@ -134,6 +152,14 @@ impl State {
             *panic_counter.get() += 1;
             default_panic_hook(panic_info);
         }));
+    }
+
+    pub async fn remote_accept(&self) -> io::Result<AcceptedRemoteConnection> {
+        if let Some(server) = &self.remote_server {
+            server.accept().await
+        } else {
+            future::pending().await
+        }
     }
 
     /// Initializes the network according to the stored configuration. If a particular network
@@ -342,7 +368,36 @@ impl State {
     }
 
     #[api]
-    pub async fn session_metrics_bind(&mut self, addr: Option<SocketAddr>) -> Result<(), Error> {
+    pub async fn session_bind_remote_control(
+        &mut self,
+        addr: Option<SocketAddr>,
+    ) -> Result<u16, Error> {
+        if let Some(addr) = addr {
+            let config = self.tls_config.server().await?;
+            let remote_server = RemoteServer::bind(addr, config)
+                .await
+                .map_err(Error::Bind)?;
+            let port = remote_server.local_addr().port();
+
+            self.remote_server = Some(remote_server);
+
+            Ok(port)
+        } else {
+            self.remote_server = None;
+
+            Ok(0)
+        }
+    }
+
+    #[api]
+    pub fn session_get_remote_control_listener_addr(&self) -> Option<SocketAddr> {
+        self.remote_server
+            .as_ref()
+            .map(|server| server.local_addr())
+    }
+
+    #[api]
+    pub async fn session_bind_metrics(&mut self, addr: Option<SocketAddr>) -> Result<(), Error> {
         if let Some(addr) = addr {
             self.metrics_server
                 .bind(&self.config, &self.network, &self.tls_config, addr)
