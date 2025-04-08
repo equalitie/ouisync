@@ -264,8 +264,7 @@ mod tests {
 
         // Now we get cache hits.
         for (leaf_node, expected_block_presence) in snapshot.leaf_nodes().zip(
-            iter::repeat(SingleBlockPresence::Present)
-                .take(num_present)
+            iter::repeat_n(SingleBlockPresence::Present, num_present)
                 .chain(iter::repeat(SingleBlockPresence::Missing)),
         ) {
             assert_eq!(
