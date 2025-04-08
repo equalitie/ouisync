@@ -34,6 +34,8 @@ pub fn configure(
 pub struct Connector;
 
 impl Connector {
+    // Using explicit return type instead of `async fn` to ensure it's `'static`.
+    #[expect(clippy::manual_async_fn)]
     pub fn connect(
         &self,
         addr: SocketAddr,

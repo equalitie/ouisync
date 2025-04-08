@@ -1,8 +1,5 @@
 use super::{ExpectShortLifetime, WARNING_TIMEOUT};
-use std::{
-    future::Future,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 /// Replacement for `tokio::sync::Mutex` instrumented for deadlock detection.
 pub struct Mutex<T> {

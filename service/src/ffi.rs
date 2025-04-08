@@ -31,20 +31,20 @@ use crate::{
 /// - `config_dir` must be safe to pass to [std::ffi::CStr::from_ptr].
 /// - `debug_label` must be either null or must be safe to pass to [std::ffi::CStr::from_ptr].
 /// - `callback_context` must be either null or it must be safe to access from multiple threads.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn start_service(
     config_dir: *const c_char,
     debug_label: *const c_char,
     callback: extern "C" fn(*const c_void, ErrorCode),
     callback_context: *const c_void,
 ) -> *mut c_void {
-    let config_dir = CStr::from_ptr(config_dir).to_owned();
+    let config_dir = unsafe { CStr::from_ptr(config_dir) }.to_owned();
     let debug_label = if !debug_label.is_null() {
-        Some(CStr::from_ptr(debug_label).to_owned())
+        Some(unsafe { CStr::from_ptr(debug_label) }.to_owned())
     } else {
         None
     };
-    let callback = Callback::new(callback, callback_context);
+    let callback = unsafe { Callback::new(callback, callback_context) };
 
     let (stop_tx, stop_rx) = oneshot::channel();
     let stop_tx = Box::into_raw(Box::new(stop_tx)) as _;
@@ -63,14 +63,15 @@ pub unsafe extern "C" fn start_service(
 /// - `handle must have been obtained by calling `ouisync_start` and it must not have already been
 /// passed to `ouisync_stop`.
 /// - `callback_context` must be either null of it must be safe to access from multiple threads.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn stop_service(
     handle: *mut c_void,
     callback: extern "C" fn(*const c_void, ErrorCode),
     callback_context: *const c_void,
 ) {
-    let tx: oneshot::Sender<Callback> = *Box::from_raw(handle as _);
-    tx.send(Callback::new(callback, callback_context)).ok();
+    let tx: oneshot::Sender<Callback> = unsafe { *Box::from_raw(handle as _) };
+    let cb = unsafe { Callback::new(callback, callback_context) };
+    tx.send(cb).ok();
 }
 
 mod callback {
@@ -179,9 +180,9 @@ pub type LogCallback = extern "C" fn(LogLevel, *const c_uchar, u64, u64);
 /// # Safety
 ///
 /// `file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn init_log(file: *const c_char, callback: Option<LogCallback>) -> ErrorCode {
-    try_init_log(file, callback).to_error_code()
+    unsafe { try_init_log(file, callback) }.to_error_code()
 }
 
 /// Release a log message back to the backend. See `init_log` for more details.
@@ -190,9 +191,9 @@ pub unsafe extern "C" fn init_log(file: *const c_char, callback: Option<LogCallb
 ///
 /// `ptr`, `len` and `cap` must have been obtained through the callback to `init_log` and not
 /// modified.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn release_log_message(ptr: *const c_uchar, len: u64, cap: u64) {
-    let message = Vec::from_raw_parts(ptr as _, len as _, cap as _);
+    let message = unsafe { Vec::from_raw_parts(ptr as _, len as _, cap as _) };
 
     if let Some(pool) = LOGGER.get().and_then(|wrapper| wrapper.pool.as_ref()) {
         pool.release(message);
@@ -209,7 +210,7 @@ static LOGGER: OnceLock<LoggerWrapper> = OnceLock::new();
 unsafe fn try_init_log(file: *const c_char, callback: Option<LogCallback>) -> Result<(), Error> {
     let builder = Logger::builder();
     let builder = if !file.is_null() {
-        builder.file(Path::new(CStr::from_ptr(file).to_str()?))
+        builder.file(Path::new(unsafe { CStr::from_ptr(file) }.to_str()?))
     } else {
         builder
     };

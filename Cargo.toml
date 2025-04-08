@@ -23,15 +23,16 @@ members = [
     "utils/swarm",
     "vfs",
 ]
-resolver = "2"
+
+resolver = "3"
 
 [workspace.package]
 version = "0.8.11"
 authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
 repository = "https://github.com/equalitie/ouisync"
 license = "MPL-2.0"
-edition = "2021"
-rust-version = "1.84.0"
+edition = "2024"
+rust-version = "1.85.0"
 
 [workspace.dependencies]
 anyhow = "1.0.90"

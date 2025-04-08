@@ -7,10 +7,7 @@ use net::{
     SocketOptions,
 };
 use scoped_task::ScopedJoinHandle;
-use std::{
-    future::Future,
-    net::{IpAddr, SocketAddr},
-};
+use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
 use tokio::{
     select,

@@ -85,7 +85,9 @@ impl Block {
 
 impl Distribution<Block> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
-        Block::new(rng.gen(), rng.gen())
+        let content = rng.r#gen();
+        let nonce = rng.r#gen();
+        Block::new(content, nonce)
     }
 }
 

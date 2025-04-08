@@ -21,9 +21,7 @@ use ouisync_tracing_fmt::Formatter;
 use rand::Rng;
 use state_monitor::StateMonitor;
 use std::{
-    fmt,
-    future::Future,
-    io,
+    fmt, io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     str::FromStr,

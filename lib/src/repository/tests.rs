@@ -6,7 +6,7 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use rand::Rng;
-use std::{future::Future, io::SeekFrom};
+use std::io::SeekFrom;
 use tempfile::TempDir;
 use tokio::{
     fs,

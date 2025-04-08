@@ -101,7 +101,7 @@ derive_sqlx_traits_for_byte_array_wrapper!(Hash);
 #[cfg(test)]
 impl Distribution<Hash> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Hash {
-        let array: [u8; Hash::SIZE] = rng.gen();
+        let array: [u8; Hash::SIZE] = rng.r#gen();
         Hash(array.into())
     }
 }

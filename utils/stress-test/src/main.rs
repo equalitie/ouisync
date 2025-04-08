@@ -16,8 +16,12 @@ fn main() {
     // Override TMPDIR so that all temp files/directories created in the tests are created inside
     // it, for easier cleanup.
     let temp_root = TempDir::new().unwrap();
-    env::set_var("TMPDIR", temp_root.path()); // unix
-    env::set_var("TEMP", temp_root.path()); // windows
+
+    // SAFETY: This is the only thread accessing these env vars at this moment.
+    unsafe {
+        env::set_var("TMPDIR", temp_root.path()); // unix
+        env::set_var("TEMP", temp_root.path()); // windows
+    }
 
     // Build the test binaries
     let exes = build(&options);

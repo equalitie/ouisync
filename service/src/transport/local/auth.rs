@@ -41,7 +41,7 @@ impl AuthKey {
     pub const SIZE: usize = 32;
 
     pub fn generate<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
-        Self(rng.gen())
+        Self(rng.r#gen())
     }
 
     pub fn random() -> Self {

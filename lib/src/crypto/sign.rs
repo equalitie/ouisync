@@ -274,7 +274,7 @@ mod tests {
         );
 
         assert_eq!(
-            dump_signature(&keypair.sign(&rng.gen::<[u8; 32]>())),
+            dump_signature(&keypair.sign(&rng.r#gen::<[u8; 32]>())),
             "3230b7f98529273c71f8af92b1581d290bf424fd7bd5015399c6213cbc461ca79ff932a7fcbb5e19d2ef6efa8ed9b833b6d17431793facf1b810c3b579570d0d"
         );
     }

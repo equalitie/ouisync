@@ -12,7 +12,7 @@ pub(crate) async fn get_or_create(config: &ConfigStore) -> Result<DeviceId, Conf
     match entry.get().await {
         Ok(id) => Ok(id),
         Err(ConfigError::NotFound | ConfigError::Malformed(_)) => {
-            let new_id = OsRng.gen();
+            let new_id = OsRng.r#gen();
             entry.set(&new_id).await?;
             Ok(new_id)
         }

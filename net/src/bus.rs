@@ -6,7 +6,6 @@ pub use topic::TopicId;
 
 use crate::unified::{Connection, RecvStream, SendStream};
 use std::{
-    future::Future,
     io,
     pin::Pin,
     task::{ready, Context, Poll},

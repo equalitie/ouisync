@@ -274,7 +274,7 @@ mod tests {
         }
 
         // Looking up a non-existing locator fails.
-        let invalid_locator: Hash = rng.gen();
+        let invalid_locator: Hash = rng.r#gen();
         assert_eq!(
             cache.lookup(snapshot.root_hash(), &invalid_locator),
             Err(LookupError::NotFound)

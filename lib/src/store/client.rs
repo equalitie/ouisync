@@ -542,8 +542,8 @@ mod tests {
         let remote_id = PublicKey::generate(&mut rng);
 
         // Create one block locally
-        let block: Block = rng.gen();
-        let locator = rng.gen();
+        let block: Block = rng.r#gen();
+        let locator = rng.r#gen();
 
         let mut tx = store.begin_write().await.unwrap();
         let mut changeset = Changeset::new();
@@ -683,15 +683,15 @@ mod tests {
 
             let local_id = PublicKey::generate(&mut rng);
 
-            let locator_0 = rng.gen();
-            let block_id_0_0 = rng.gen();
-            let block_id_0_1 = rng.gen();
+            let locator_0 = rng.r#gen();
+            let block_id_0_0 = rng.r#gen();
+            let block_id_0_1 = rng.r#gen();
 
-            let locator_1 = rng.gen();
-            let block_1: Block = rng.gen();
+            let locator_1 = rng.r#gen();
+            let block_1: Block = rng.r#gen();
 
-            let locator_2 = rng.gen();
-            let block_id_2 = rng.gen();
+            let locator_2 = rng.r#gen();
+            let block_id_2 = rng.r#gen();
 
             // Insert one present and two missing, so the root block presence is `Some`
             let mut tx = store.begin_write().await.unwrap();

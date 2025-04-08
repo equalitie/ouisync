@@ -76,7 +76,6 @@ use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;
 use std::{
-    future::Future,
     io, mem,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{Arc, Weak},

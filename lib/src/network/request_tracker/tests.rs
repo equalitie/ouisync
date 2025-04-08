@@ -64,7 +64,7 @@ async fn dynamic_swarm() {
             // `expected_peer_changes`. Both `Insert` and `Remove` have currently the same
             // probability.
             let action = if rng.gen_range(0..steps) < expected_peer_changes {
-                if rng.gen() {
+                if rng.r#gen() {
                     Action::Insert
                 } else {
                     Action::Remove
@@ -156,7 +156,7 @@ async fn timeout() {
     let (client_b, mut request_rx_b) = tracker.new_client();
 
     let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng), 0);
-    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
 
     // Register the request with both clients.
     client_a.success(
@@ -207,7 +207,7 @@ async fn drop_uncommitted_client() {
     let (client_b, mut request_rx_b) = tracker.new_client();
 
     let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng), 0);
-    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
     let request_key = MessageKey::from(&request);
 
     for client in [&client_a, &client_b] {
@@ -257,7 +257,7 @@ async fn multiple_responses_to_identical_requests() {
         cookie: 0,
         debug: DebugRequest::start(),
     };
-    let followup_request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let followup_request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
 
     // Send initial root node request
     client.initial(CandidateRequest::new(initial_request.clone()));
@@ -308,8 +308,8 @@ async fn suspend_resume() {
     let (client, mut request_rx) = tracker.new_client();
     worker.step();
 
-    let preceding_request_key = MessageKey::ChildNodes(rng.gen());
-    let request = Request::Block(rng.gen(), DebugRequest::start());
+    let preceding_request_key = MessageKey::ChildNodes(rng.r#gen());
+    let request = Request::Block(rng.r#gen(), DebugRequest::start());
     let request_key = MessageKey::from(&request);
 
     client.success(
@@ -381,7 +381,7 @@ mod duplicate_request_with_different_variant_on_the_same_client {
 
         let preceding_request_key = MessageKey::RootNode(PublicKey::generate(&mut rng), 0);
 
-        let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+        let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
         let variant_0 = RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::None);
         let variant_1 = RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::Full);
 
@@ -422,7 +422,7 @@ async fn choke_before_request() {
     let (client_b, mut request_rx_b) = tracker.new_client();
     worker.step();
 
-    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
 
     client_a.choke();
     client_a.initial(CandidateRequest::new(request.clone()));
@@ -448,7 +448,7 @@ async fn choke_after_request() {
     let (client_b, mut request_rx_b) = tracker.new_client();
     worker.step();
 
-    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
 
     client_a.initial(CandidateRequest::new(request.clone()));
     client_b.initial(CandidateRequest::new(request.clone()));
@@ -482,7 +482,7 @@ async fn unchoke() {
     let (client, mut request_rx) = tracker.new_client();
     worker.step();
 
-    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
 
     client.choke();
     client.initial(CandidateRequest::new(request.clone()));
@@ -510,7 +510,7 @@ async fn fallback_after_unchoke() {
     let (client_a, mut request_rx_a) = tracker.new_client();
     let (client_b, mut request_rx_b) = tracker.new_client();
 
-    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
 
     client_a.initial(CandidateRequest::new(request.clone()));
 
@@ -554,7 +554,7 @@ async fn idle_after_success_by_same_client() {
 
     assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
 
-    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
 
     client.initial(CandidateRequest::new(request.clone()));
     worker.step();
@@ -588,7 +588,7 @@ async fn idle_after_success_by_other_client() {
     let (client_b, mut request_rx_b) = tracker.new_client();
     worker.step();
 
-    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
 
     client_a.initial(CandidateRequest::new(request.clone()));
     client_b.initial(CandidateRequest::new(request.clone()));
@@ -633,7 +633,7 @@ async fn idle_after_failure() {
     let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
     let (client, mut request_rx) = tracker.new_client();
 
-    let request = Request::ChildNodes(rng.gen(), DebugRequest::start());
+    let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
 
     client.initial(CandidateRequest::new(request.clone()));
     worker.step();

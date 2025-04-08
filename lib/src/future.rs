@@ -3,7 +3,6 @@
 use futures_util::TryStream;
 use pin_project_lite::pin_project;
 use std::{
-    future::Future,
     iter,
     pin::Pin,
     task::{ready, Context, Poll},

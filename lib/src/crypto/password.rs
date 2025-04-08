@@ -75,7 +75,7 @@ impl PasswordSalt {
     }
 
     pub fn random() -> Self {
-        OsRng.gen()
+        OsRng.r#gen()
     }
 }
 

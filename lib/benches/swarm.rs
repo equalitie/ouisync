@@ -306,9 +306,9 @@ fn parse_size(input: &str) -> Result<u64, parse_size::Error> {
 
 async fn write_random_file(file: &mut File, seed: u64, size: u64) {
     let mut chunk = Vec::new();
-    let mut gen = RandomChunks::new(seed, size);
+    let mut generator = RandomChunks::new(seed, size);
 
-    while gen.next(&mut chunk) {
+    while generator.next(&mut chunk) {
         file.write_all(&chunk).await.unwrap();
     }
 

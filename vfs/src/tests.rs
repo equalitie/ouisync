@@ -6,7 +6,6 @@ use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
     fs::Metadata,
-    future::Future,
     io::{ErrorKind, SeekFrom},
     path::{Path, PathBuf},
     sync::Arc,

@@ -10,7 +10,6 @@ use ouisync_lib::Repository;
 use std::io;
 use std::{
     collections::{hash_map, HashMap},
-    future::Future,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},

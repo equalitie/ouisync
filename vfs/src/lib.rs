@@ -29,7 +29,6 @@ mod tests;
 
 use ouisync_lib::Repository;
 use std::{
-    future::Future,
     io,
     path::{Path, PathBuf},
     sync::Arc,

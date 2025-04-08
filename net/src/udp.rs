@@ -1,7 +1,6 @@
 pub use self::implementation::*;
 
 use std::{
-    future::Future,
     io,
     net::{Ipv4Addr, SocketAddr},
 };

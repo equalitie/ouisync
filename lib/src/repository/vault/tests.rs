@@ -86,14 +86,14 @@ async fn prune_snapshots_insert_present() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = vec![rng.gen()];
+    let mut blocks = vec![rng.r#gen()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&vault, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&vault, &blocks[0].1).await;
 
     // snapshot 2 (insert new block)
-    blocks.push(rng.gen());
+    blocks.push(rng.r#gen());
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&vault, remote_id, &snapshot, &secrets.write_keys).await;
@@ -114,14 +114,14 @@ async fn prune_snapshots_insert_missing() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = vec![rng.gen()];
+    let mut blocks = vec![rng.r#gen()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (insert new block)
-    blocks.push(rng.gen());
+    blocks.push(rng.r#gen());
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
@@ -144,14 +144,14 @@ async fn prune_snapshots_update_from_present_to_present() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = [rng.gen()];
+    let mut blocks = [rng.r#gen()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (update the first block)
-    blocks[0].1 = rng.gen();
+    blocks[0].1 = rng.r#gen();
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
@@ -172,14 +172,14 @@ async fn prune_snapshots_update_from_present_to_missing() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = [rng.gen()];
+    let mut blocks = [rng.r#gen()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (update the first block)
-    blocks[0].1 = rng.gen();
+    blocks[0].1 = rng.r#gen();
     let snapshot = Snapshot::from_present_blocks(blocks);
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
@@ -203,14 +203,14 @@ async fn prune_snapshots_update_from_missing_to_missing() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = [rng.gen()];
+    let mut blocks = [rng.r#gen()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the block
 
     // snapshot 2 (update the first block)
-    blocks[0].1 = rng.gen();
+    blocks[0].1 = rng.r#gen();
     let snapshot = Snapshot::from_present_blocks(blocks);
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
@@ -234,14 +234,14 @@ async fn prune_snapshots_keep_missing_and_insert_missing() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = vec![rng.gen()];
+    let mut blocks = vec![rng.r#gen()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the block
 
     // snapshot 2 (insert new block)
-    blocks.push(rng.gen());
+    blocks.push(rng.r#gen());
     let snapshot = Snapshot::from_present_blocks(blocks);
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;

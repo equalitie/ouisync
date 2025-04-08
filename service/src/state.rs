@@ -1459,7 +1459,7 @@ impl State {
 
     #[api]
     pub fn session_generate_password_salt(&self) -> PasswordSalt {
-        OsRng.gen()
+        OsRng.r#gen()
     }
 
     #[api]

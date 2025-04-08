@@ -9,7 +9,7 @@ impl TopicId {
     pub const SIZE: usize = 32;
 
     pub fn generate<R: Rng>(rng: &mut R) -> Self {
-        Self(rng.gen())
+        Self(rng.r#gen())
     }
 
     pub fn random() -> Self {
@@ -41,7 +41,7 @@ impl TopicNonce {
     pub const SIZE: usize = 16;
 
     pub fn generate<R: Rng>(rng: &mut R) -> Self {
-        Self(rng.gen())
+        Self(rng.r#gen())
     }
 
     pub fn random() -> Self {

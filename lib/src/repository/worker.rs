@@ -717,7 +717,6 @@ mod trash {
 mod utils {
     use futures_util::{Stream, StreamExt};
     use std::{
-        future::Future,
         pin::pin,
         sync::atomic::{AtomicU64, Ordering},
     };

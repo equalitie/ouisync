@@ -10,7 +10,6 @@ use reqwest::{
 use std::{
     collections::HashMap,
     fmt::Write,
-    future::Future,
     sync::Arc,
     time::{Duration, SystemTime},
 };

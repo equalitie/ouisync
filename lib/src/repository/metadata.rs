@@ -185,7 +185,7 @@ pub(crate) async fn get_or_generate_database_id(db: &db::Pool) -> Result<Databas
     let database_id = match get_public_blob(&mut tx, DATABASE_ID).await {
         Ok(Some(database_id)) => database_id,
         Ok(None) => {
-            let database_id: DatabaseId = OsRng.gen();
+            let database_id: DatabaseId = OsRng.r#gen();
             set_public_blob(&mut tx, DATABASE_ID, &database_id).await?;
             tx.commit().await?;
             database_id

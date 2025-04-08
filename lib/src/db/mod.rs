@@ -20,9 +20,7 @@ use sqlx::{
     Row, SqlitePool, TransactionManager,
 };
 use std::{
-    fmt,
-    future::Future,
-    io,
+    fmt, io,
     ops::{Deref, DerefMut},
     panic::Location,
     path::Path,

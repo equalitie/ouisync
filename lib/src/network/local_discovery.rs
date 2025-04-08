@@ -165,7 +165,7 @@ impl PerInterfaceLocalDiscovery {
         parent_monitor: &StateMonitor,
     ) -> io::Result<Self> {
         // Only used to filter out multicast packets from self.
-        let id = OsRng.gen();
+        let id = OsRng.r#gen();
         let socket_provider = Arc::new(SocketProvider::new(interface));
 
         let monitor = parent_monitor.make_child(format!("{interface}"));

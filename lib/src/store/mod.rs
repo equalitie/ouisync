@@ -53,7 +53,6 @@ use crate::{
 use futures_util::{Stream, TryStreamExt};
 use std::{
     borrow::Cow,
-    future::Future,
     ops::{Deref, DerefMut},
     path::Path,
     sync::{Arc, RwLock},

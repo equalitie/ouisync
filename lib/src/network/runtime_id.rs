@@ -96,7 +96,7 @@ where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
-    let our_challenge: [u8; 32] = OsRng.gen();
+    let our_challenge: [u8; 32] = OsRng.r#gen();
 
     writer.write_all(&our_challenge).await?;
     our_runtime_id.public().write_into(writer).await?;

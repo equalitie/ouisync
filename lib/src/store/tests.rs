@@ -191,10 +191,10 @@ async fn overwrite_block() {
 
     let branch_id = PublicKey::random();
 
-    let locator = Locator::head(rng.gen());
+    let locator = Locator::head(rng.r#gen());
     let locator = locator.encode(&read_key);
 
-    let block0: Block = rng.gen();
+    let block0: Block = rng.r#gen();
     let block0_id = block0.id;
 
     let mut tx = store.begin_write().await.unwrap();
@@ -210,7 +210,7 @@ async fn overwrite_block() {
     assert!(tx.block_exists(&block0_id).await.unwrap());
     assert_eq!(tx.count_blocks().await.unwrap(), 1);
 
-    let block1: Block = rng.gen();
+    let block1: Block = rng.r#gen();
     let block1_id = block1.id;
 
     let mut changeset = Changeset::new();
@@ -238,11 +238,11 @@ async fn fallback() {
     let branch_0_id = PublicKey::generate(&mut rng);
     let write_keys = Keypair::generate(&mut rng);
 
-    let locator = rng.gen();
-    let id0 = rng.gen();
-    let id1 = rng.gen();
-    let id2 = rng.gen();
-    let id3 = rng.gen();
+    let locator = rng.r#gen();
+    let id0 = rng.r#gen();
+    let id1 = rng.r#gen();
+    let id2 = rng.r#gen();
+    let id3 = rng.r#gen();
 
     for (block_id, presence) in [
         (id0, SingleBlockPresence::Present),
@@ -324,8 +324,8 @@ async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
 
     // Add blocks
     for _ in 0..leaf_count {
-        let locator = rng.gen();
-        let block_id = rng.gen();
+        let locator = rng.r#gen();
+        let block_id = rng.r#gen();
 
         let mut changeset = Changeset::new();
         changeset.link_block(locator, block_id, SingleBlockPresence::Present);
@@ -383,8 +383,8 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
         // Apply op
         match op {
             PruneTestOp::Insert => {
-                let locator = rng.gen();
-                let block_id = rng.gen();
+                let locator = rng.r#gen();
+                let block_id = rng.r#gen();
 
                 let mut tx = store.begin_write().await.unwrap();
                 let mut changeset = Changeset::new();

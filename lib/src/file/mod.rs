@@ -7,7 +7,7 @@ use crate::{
     store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
-use std::{fmt, future::Future, io::SeekFrom};
+use std::{fmt, io::SeekFrom};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 pub struct File {

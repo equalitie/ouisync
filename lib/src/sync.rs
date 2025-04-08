@@ -2,7 +2,6 @@
 
 use futures_util::StreamExt;
 use std::{
-    future::Future,
     pin::Pin,
     task::{ready, Context, Poll},
 };
@@ -220,7 +219,6 @@ pub(crate) mod stream {
     use std::{
         collections::{hash_map, BTreeMap, HashMap},
         fmt::Debug,
-        future::Future,
         hash::Hash,
         pin::Pin,
         task::{ready, Context, Poll},

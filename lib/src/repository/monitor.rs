@@ -5,7 +5,6 @@ use metrics::{
 use state_monitor::{MonitoredValue, StateMonitor};
 use std::{
     fmt,
-    future::Future,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };

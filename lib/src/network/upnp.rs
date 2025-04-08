@@ -13,9 +13,7 @@ use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
 use std::{
     collections::hash_map::Entry,
-    fmt,
-    future::Future,
-    io, net,
+    fmt, io, net,
     sync::{Arc, Weak},
     time::SystemTime,
 };

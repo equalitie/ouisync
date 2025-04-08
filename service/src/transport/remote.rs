@@ -268,18 +268,21 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().join("config");
 
-        let gen = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
 
         fs::create_dir_all(&config_dir).await.unwrap();
-        fs::write(config_dir.join("cert.pem"), gen.cert.pem())
+        fs::write(config_dir.join("cert.pem"), cert_key.cert.pem())
             .await
             .unwrap();
-        fs::write(config_dir.join("key.pem"), gen.key_pair.serialize_pem())
-            .await
-            .unwrap();
+        fs::write(
+            config_dir.join("key.pem"),
+            cert_key.key_pair.serialize_pem(),
+        )
+        .await
+        .unwrap();
 
         let mut root_cert_store = rustls::RootCertStore::empty();
-        root_cert_store.add(gen.cert.into()).unwrap();
+        root_cert_store.add(cert_key.cert.into()).unwrap();
 
         let remote_client_config = Arc::new(
             rustls::ClientConfig::builder()

@@ -21,7 +21,7 @@ use futures_util::{future, TryStreamExt};
 use metrics::NoopRecorder;
 use rand::prelude::*;
 use state_monitor::StateMonitor;
-use std::{fmt, future::Future, pin::pin};
+use std::{fmt, pin::pin};
 use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::{
@@ -529,8 +529,8 @@ async fn create_changeset(
     let mut changeset = Changeset::new();
 
     for _ in 0..size {
-        let encoded_locator = rng.gen();
-        let block: Block = rng.gen();
+        let encoded_locator = rng.r#gen();
+        let block: Block = rng.r#gen();
 
         changeset.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
         changeset.write_block(block);

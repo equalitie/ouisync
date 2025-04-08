@@ -51,7 +51,7 @@ mod implementation {
 
                     match env::var("OUISYNC_TEST_SEED") {
                         Ok(seed) => seed.parse().expect(PARSE_ERROR),
-                        Err(VarError::NotPresent) => rand::rngs::OsRng.gen(),
+                        Err(VarError::NotPresent) => rand::rngs::OsRng.r#gen(),
                         Err(VarError::NotUnicode(_)) => panic!("{}", PARSE_ERROR),
                     }
                 });
@@ -124,7 +124,7 @@ mod implementation {
     where
         Standard: Distribution<T>,
     {
-        thread_rng().gen()
+        thread_rng().r#gen()
     }
 
     /// Drop-in replacement for `std::collections::hash_map::RandomState` which uses the seedable

@@ -721,8 +721,8 @@ mod tests {
         let (_base_dir, mut rng, inner, mut request_rx, secrets) = setup(None).await;
         let remote_id = PublicKey::generate(&mut rng);
 
-        let block: Block = rng.gen();
-        let locator: Hash = rng.gen();
+        let block: Block = rng.r#gen();
+        let locator: Hash = rng.r#gen();
 
         let snapshot = Snapshot::from_blocks([(locator, BlockState::Missing(block.id))]);
         let proof = Proof::new(

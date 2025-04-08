@@ -283,5 +283,5 @@ fn seeded_random<T>(seed: u64) -> T
 where
     Standard: Distribution<T>,
 {
-    StdRng::seed_from_u64(seed).gen()
+    StdRng::seed_from_u64(seed).r#gen()
 }
