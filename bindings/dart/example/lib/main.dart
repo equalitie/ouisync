@@ -37,21 +37,17 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> initObjects() async {
     final dataDir = (await getApplicationSupportDirectory()).path;
-    final session = await Session.create(configPath: join(dataDir, 'config.db'));
+    final session =
+        await Session.create(configPath: join(dataDir, 'config.db'));
 
     final repoPath = join(dataDir, 'repo.db');
     final repoExists = await io.File(repoPath).exists();
 
     final repo = repoExists
-        ? await Repository.open(session, path: repoPath, secret: null)
-        : await Repository.create(
-            session,
-            path: repoPath,
-            readSecret: null,
-            writeSecret: null,
-          );
+        ? await session.openRepository(path: repoPath)
+        : await session.createRepository(path: repoPath);
 
-    bittorrentDhtEnabled = await repo.isDhtEnabled;
+    bittorrentDhtEnabled = await repo.isDhtEnabled();
 
     final nativeChannels = NativeChannels();
     nativeChannels.repository = repo;
@@ -123,7 +119,7 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> setDhtEnabled(bool enable) async {
     await repo.setDhtEnabled(enable);
-    final isEnabled = await repo.isDhtEnabled;
+    final isEnabled = await repo.isDhtEnabled();
 
     setState(() {
       bittorrentDhtEnabled = isEnabled;
@@ -160,7 +156,7 @@ class _MyAppState extends State<MyApp> {
 
     try {
       debugPrint('Creating file $filePath');
-      newFile = await File.create(repo, filePath);
+      newFile = await repo.createFile(filePath);
     } catch (e) {
       debugPrint('Error creating file $filePath: $e');
     }
@@ -168,7 +164,8 @@ class _MyAppState extends State<MyApp> {
     return newFile!;
   }
 
-  Future<void> saveFile(File file, String path, Stream<List<int>> stream) async {
+  Future<void> saveFile(
+      File file, String path, Stream<List<int>> stream) async {
     debugPrint('Writing file $path');
 
     int offset = 0;
@@ -195,7 +192,7 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> getFiles(String path) async {
-    final dir = await Directory.read(repo, path);
+    final dir = await repo.readDirectory(path);
     final items = dir.map((entry) => entry.name).toList();
 
     setState(() {
