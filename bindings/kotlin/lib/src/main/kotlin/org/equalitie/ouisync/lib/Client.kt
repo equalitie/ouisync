@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import org.msgpack.core.MessagePack
+import org.msgpack.core.MessageUnpacker
 import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -66,7 +67,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
 
     suspend fun invoke(request: Request): Any {
         val id = messageMatcher.nextId()
-        val deferred = CompletableDeferred<Response>()
+        val deferred = CompletableDeferred<ResponseResult>()
         messageMatcher.register(id, deferred)
 
         send(id, request)
@@ -74,8 +75,8 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         val response = deferred.await()
 
         when (response) {
-            is Success -> return response.value
-            is Failure -> throw response.error
+            is ResponseResult.Success -> return response.value
+            is ResponseResult.Failure -> throw response.error
         }
     }
 
@@ -88,14 +89,14 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             awaitClose()
         } finally {
             messageMatcher.deregister(id)
-            invoke(Unsubscribe(id))
+            invoke(Request.SessionUnsubscribe(MessageId(id)))
         }
     }
         .buffer(onBufferOverflow = BufferOverflow.DROP_OLDEST)
         .map {
             when (it) {
-                is Success -> it.value
-                is Failure -> throw it.error
+                is ResponseResult.Success -> it.value
+                is ResponseResult.Failure -> throw it.error
             }
         }
 
@@ -112,7 +113,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         // | u32, be | u64, be    | `length` - 8 bytes |
 
         val payload = MessagePack.newDefaultBufferPacker().let {
-            request.pack(it)
+            request.encode(it)
             it.toByteArray()
         }
 
@@ -163,33 +164,49 @@ internal class Client private constructor(private val socket: AsynchronousSocket
 
             try {
                 val unpacker = MessagePack.newDefaultUnpacker(buffer)
-                val response = Response.unpack(unpacker)
+                val response = ResponseResult.decode(unpacker)
 
                 completer.complete(response)
             } catch (e: Error) {
-                completer.complete(Failure(e))
+                completer.complete(ResponseResult.Failure(e))
             } catch (e: Exception) {
-                completer.complete(Failure(Error.InvalidData("invalid response: $e")))
+                completer.complete(ResponseResult.Failure(Error.InvalidData("invalid response: $e")))
             }
         }
     }
 }
 
+private sealed class ResponseResult {
+    companion object {
+        fun decode(u: MessageUnpacker): ResponseResult {
+            if (u.unpackMapHeader() != 1) throw InvalidData("invalid response")
+            when (u.unpackString()) {
+                "Success" -> return Success(Response.decode(u))
+                "Failure" -> return Failure(Error.decode(u))
+                else -> throw InvalidData("invalid response")
+            }
+        }
+    }
+
+    class Success(val value: Response) : ResponseResult()
+    class Failure(val error: Error) : ResponseResult()
+}
+
 private class MessageMatcher {
     private var nextId: Long = 0
-    private val oneshots: HashMap<Long, CompletableDeferred<Response>> = HashMap()
-    private val channels: HashMap<Long, SendChannel<Response>> = HashMap()
+    private val oneshots: HashMap<Long, CompletableDeferred<ResponseResult>> = HashMap()
+    private val channels: HashMap<Long, SendChannel<ResponseResult>> = HashMap()
 
     @Synchronized
     fun nextId(): Long = nextId++
 
     @Synchronized
-    fun register(id: Long, deferred: CompletableDeferred<Response>) {
+    fun register(id: Long, deferred: CompletableDeferred<ResponseResult>) {
         oneshots.put(id, deferred)
     }
 
     @Synchronized
-    fun register(id: Long, channel: SendChannel<Response>) {
+    fun register(id: Long, channel: SendChannel<ResponseResult>) {
         channels.put(id, channel)
     }
 
@@ -230,17 +247,17 @@ private class MessageMatcher {
 }
 
 private sealed class Completer {
-    class Oneshot(val deferred: CompletableDeferred<Response>) : Completer() {
-        override suspend fun complete(value: Response) {
+    class Oneshot(val deferred: CompletableDeferred<ResponseResult>) : Completer() {
+        override suspend fun complete(value: ResponseResult) {
             deferred.complete(value)
         }
     }
 
-    class Channel(val channel: SendChannel<Response>) : Completer() {
-        override suspend fun complete(value: Response) = channel.send(value)
+    class Channel(val channel: SendChannel<ResponseResult>) : Completer() {
+        override suspend fun complete(value: ResponseResult) = channel.send(value)
     }
 
-    abstract suspend fun complete(value: Response)
+    abstract suspend fun complete(value: ResponseResult)
 }
 
 private const val HEADER_SIZE = Int.SIZE_BYTES + Long.SIZE_BYTES
