@@ -164,7 +164,7 @@ impl ReadTransaction {
         location: &'static Location<'static>,
     ) -> Result<Self, sqlx::Error> {
         let mut inner = PoolConnection::acquire(pool, location).await?;
-        SqliteTransactionManager::begin(&mut inner.inner).await?;
+        SqliteTransactionManager::begin(&mut inner.inner, None).await?;
 
         Ok(Self {
             inner,

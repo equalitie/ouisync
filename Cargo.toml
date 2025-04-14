@@ -68,7 +68,7 @@ serde_json = "1.0.109"
 sha2 = { version = "0.10.8", default-features = false }
 similar-asserts = "1.6.0"
 slab = "0.4.9"
-sqlx = { version = "0.8.3", default-features = false, features = ["derive", "runtime-tokio", "sqlite"] }
+sqlx = { version = "0.8.4", default-features = false, features = ["derive", "runtime-tokio", "sqlite"] }
 syn = { version = "2.0.100", default-features = false }
 tempfile = "3.13"
 test-strategy = "0.4.0"
