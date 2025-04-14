@@ -97,7 +97,7 @@ impl Inner {
             result = self.handle_responses(response_rx) => result,
             _ = self.send_requests(request_rx) => Ok(()),
             _ = self.request_blocks(block_rx) => Ok(()),
-            _ = self.handle_reload_index() => Ok(()),
+            _ = self.handle_reload_index() => unreachable!(),
         }
     }
 
@@ -106,6 +106,8 @@ impl Inner {
             tracing::trace!(?payload, "sending request");
             self.message_tx.send(Message::Request(payload)).ok();
         }
+
+        tracing::debug!("request send channel closed");
     }
 
     async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
@@ -197,6 +199,7 @@ impl Inner {
             }
 
             if count == 0 {
+                tracing::debug!("response recv channel closed");
                 break;
             }
 
@@ -495,9 +498,11 @@ impl Inner {
             self.request_tracker
                 .resume(MessageKey::Block(block_id), RequestVariant::default());
         }
+
+        tracing::debug!("block tracker recv channel closed");
     }
 
-    async fn handle_reload_index(&self) {
+    async fn handle_reload_index(&self) -> ! {
         let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
 
         while let Ok(branch_ids) = reload_index_rx.changed().await {

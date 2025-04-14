@@ -932,11 +932,12 @@ impl Worker {
             return;
         }
 
+        *node.value_mut() = RequestState::Cancelled;
+
         // No waiter found. If this request has no children, we can remove it, otherwise we mark it
         // as cancelled.
         if node.children().len() > 0 {
             remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());
-            *node.value_mut() = RequestState::Cancelled;
         } else {
             self.remove_request(node_key);
         }
@@ -946,6 +947,10 @@ impl Worker {
         let Some(node) = self.requests.remove(node_key) else {
             return;
         };
+
+        // FIXME: remove this assert (or change to `debug_assert`) when the invariant
+        // breaking bug is fixed.
+        assert!(!matches!(node.value(), RequestState::InFlight { .. }));
 
         let request_key = MessageKey::from(&node.request().payload);
         remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());

@@ -278,16 +278,9 @@ async fn establish_channel<'a>(
     sink: &'a mut MessageSink,
     vault: &Vault,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
-    match crypto::establish_channel(role, vault.repository_id(), stream, sink).await {
-        Ok(io) => {
-            tracing::debug!("Established encrypted channel");
-            Ok(io)
-        }
-        Err(error) => {
-            tracing::warn!(?error, "Failed to establish encrypted channel");
-            Err(error)
-        }
-    }
+    crypto::establish_channel(role, vault.repository_id(), stream, sink)
+        .await
+        .inspect_err(|error| tracing::warn!(?error, "Failed to establish encrypted channel"))
 }
 
 async fn run_link(
@@ -347,7 +340,7 @@ async fn recv_messages(
                 break;
             }
             None => {
-                tracing::debug!("Message channel closed");
+                tracing::debug!("Incoming message stream closed");
                 break;
             }
         };
