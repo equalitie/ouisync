@@ -48,17 +48,17 @@ private class ResultHandler() : StatusCallback {
     }
 
     suspend fun await() {
-        val errorCode = ErrorCode.decode(deferred.await())
+        val errorCode = ErrorCode.fromValue(deferred.await())
 
         if (errorCode != ErrorCode.OK) {
-            throw Error.dispatch(errorCode)
+            throw OuisyncException.dispatch(errorCode)
         }
     }
 }
 
 private class LogHandler(val function: LogFunction) : LogCallback {
     override fun invoke(level: Byte, ptr: Pointer, len: Long, cap: Long) {
-        val level = LogLevel.decode(level)
+        val level = LogLevel.fromValue(level)
         val message = ptr.getByteArray(0, len.toInt()).decodeToString()
 
         try {

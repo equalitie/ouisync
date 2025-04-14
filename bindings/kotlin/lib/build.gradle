@@ -6,6 +6,7 @@ plugins {
     id 'kotlin-android'
     id "maven-publish"
     id "org.jetbrains.dokka" version '1.9.0'
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.20'
     id "org.jetbrains.kotlinx.kover" version "0.9.1"
     id "org.mozilla.rust-android-gradle.rust-android" version '0.9.4'
     id "signing"
@@ -118,7 +119,7 @@ tasks.register('generateBindings', Exec) {
     doFirst {
         def dir = layout.buildDirectory.dir('gen').get().getAsFile()
         mkdir(dir)
-        standardOutput = new FileOutputStream("$dir/Bindings.kt")
+        standardOutput = new FileOutputStream("$dir/Api.kt")
     }
 }
 

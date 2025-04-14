@@ -17,8 +17,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
-import org.msgpack.core.MessagePack
-import org.msgpack.core.MessageUnpacker
+import kotlinx.serialization.Serializable
 import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -112,10 +111,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         // +---------+------------+--------------------+
         // | u32, be | u64, be    | `length` - 8 bytes |
 
-        val payload = MessagePack.newDefaultBufferPacker().let {
-            request.encode(it)
-            it.toByteArray()
-        }
+        val payload = encode(request)
 
         val buffer = ByteBuffer.allocate(HEADER_SIZE + payload.size)
         buffer.order(ByteOrder.BIG_ENDIAN)
@@ -163,33 +159,22 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             }
 
             try {
-                val unpacker = MessagePack.newDefaultUnpacker(buffer)
-                val response = ResponseResult.decode(unpacker)
+                val response: ResponseResult = decode(buffer.array())
 
                 completer.complete(response)
-            } catch (e: Error) {
+            } catch (e: OuisyncException) {
                 completer.complete(ResponseResult.Failure(e))
             } catch (e: Exception) {
-                completer.complete(ResponseResult.Failure(Error.InvalidData("invalid response: $e")))
+                completer.complete(ResponseResult.Failure(OuisyncException.InvalidData("invalid response: $e")))
             }
         }
     }
 }
 
+@Serializable
 private sealed class ResponseResult {
-    companion object {
-        fun decode(u: MessageUnpacker): ResponseResult {
-            if (u.unpackMapHeader() != 1) throw InvalidData("invalid response")
-            when (u.unpackString()) {
-                "Success" -> return Success(Response.decode(u))
-                "Failure" -> return Failure(Error.decode(u))
-                else -> throw InvalidData("invalid response")
-            }
-        }
-    }
-
     class Success(val value: Response) : ResponseResult()
-    class Failure(val error: Error) : ResponseResult()
+    class Failure(val error: OuisyncException) : ResponseResult()
 }
 
 private class MessageMatcher {
@@ -290,7 +275,7 @@ private suspend fun authenticate(socket: AsynchronousSocket, authKey: ByteArray)
     buffer.get(serverProof)
 
     if (!MessageDigest.isEqual(serverProof, hmac.doFinal(clientChallenge))) {
-        throw Error.PermissionDenied()
+        throw OuisyncException.PermissionDenied()
     }
 
     val serverChallenge = ByteArray(CHALLENGE_SIZE)
