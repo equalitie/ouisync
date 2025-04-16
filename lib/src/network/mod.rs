@@ -865,7 +865,6 @@ impl Inner {
 
         permit.mark_as_active(that_runtime_id);
         monitor.mark_as_active(that_runtime_id);
-        tracing::info!(parent: monitor.span(), "Connected");
 
         let closed = connection.closed();
 
@@ -881,7 +880,7 @@ impl Inner {
             let pex_peer = self.pex_discovery.new_peer();
             pex_peer.handle_connection(permit.addr(), permit.source(), permit.released());
 
-            let mut peer = self.span.in_scope(|| {
+            let mut peer = monitor.span().in_scope(|| {
                 MessageBroker::new(
                     self.this_runtime_id.public(),
                     that_runtime_id,
@@ -915,7 +914,6 @@ impl Inner {
         let _guard = PeerGuard {
             registry: &self.registry,
             key,
-            monitor,
         };
 
         closed.await;
@@ -1013,13 +1011,10 @@ enum HandshakeError {
 struct PeerGuard<'a> {
     registry: &'a BlockingMutex<Registry>,
     key: usize,
-    monitor: &'a ConnectionMonitor,
 }
 
 impl Drop for PeerGuard<'_> {
     fn drop(&mut self) {
-        tracing::info!(parent: self.monitor.span(), "Disconnected");
-
         if let Some(peers) = &mut self
             .registry
             .lock()

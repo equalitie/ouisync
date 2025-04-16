@@ -41,13 +41,14 @@ impl Dispatcher {
 
         let accept = async {
             loop {
-                let (send_stream, mut recv_stream) = match self.connection.incoming().await {
-                    Ok(streams) => streams,
-                    Err(error) => {
-                        tracing::debug!(?error, "failed to accept incoming stream");
-                        return Err(io::Error::other(error));
-                    }
-                };
+                let (send_stream, mut recv_stream) = self
+                    .connection
+                    .incoming()
+                    .await
+                    .inspect_err(|error| {
+                        tracing::debug!(?error, "failed to accept incoming stream")
+                    })
+                    .map_err(io::Error::other)?;
 
                 let mut buffer = [0; TopicId::SIZE];
                 let topic_id = match recv_stream.read_exact(&mut buffer).await {
@@ -71,7 +72,7 @@ impl Dispatcher {
                 if let Some(reply_tx) = reply_tx {
                     reply_tx.send((send_stream, recv_stream)).ok();
                 } else {
-                    tracing::debug!(?topic_id, "unsolicited incoming stream");
+                    tracing::trace!(?topic_id, "unsolicited incoming stream");
                     continue;
                 }
             }
