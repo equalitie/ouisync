@@ -32,7 +32,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// and ensures every request is only sent to one peer at a time.
 #[derive(Clone)]
 pub(super) struct RequestTracker {
-    command_tx: mpsc::UnboundedSender<Command>,
+    command_tx: CommandSender,
 }
 
 impl RequestTracker {
@@ -43,7 +43,7 @@ impl RequestTracker {
     }
 
     pub fn set_timeout(&self, timeout: Duration) {
-        self.command_tx.send(Command::SetTimeout { timeout }).ok();
+        self.command_tx.send(Command::SetTimeout { timeout });
     }
 
     pub fn new_client(
@@ -55,12 +55,10 @@ impl RequestTracker {
         let client_id = ClientId::next();
         let (request_tx, request_rx) = mpsc::unbounded_channel();
 
-        self.command_tx
-            .send(Command::InsertClient {
-                client_id,
-                request_tx,
-            })
-            .ok();
+        self.command_tx.send(Command::InsertClient {
+            client_id,
+            request_tx,
+        });
 
         (
             RequestTrackerClient {
@@ -74,49 +72,41 @@ impl RequestTracker {
 
 pub(super) struct RequestTrackerClient {
     client_id: ClientId,
-    command_tx: mpsc::UnboundedSender<Command>,
+    command_tx: CommandSender,
 }
 
 impl RequestTrackerClient {
     /// Handle sending a request that does not follow from any previously received response.
     pub fn initial(&self, request: CandidateRequest) {
-        self.command_tx
-            .send(Command::HandleInitial {
-                client_id: self.client_id,
-                request,
-            })
-            .ok();
+        self.command_tx.send(Command::HandleInitial {
+            client_id: self.client_id,
+            request,
+        });
     }
 
     /// Handle sending requests that follow from a received success response.
     pub fn success(&self, request_key: MessageKey, requests: Vec<CandidateRequest>) {
-        self.command_tx
-            .send(Command::HandleSuccess {
-                client_id: self.client_id,
-                request_key,
-                requests,
-            })
-            .ok();
+        self.command_tx.send(Command::HandleSuccess {
+            client_id: self.client_id,
+            request_key,
+            requests,
+        });
     }
 
     /// Handle failure response.
     pub fn failure(&self, request_key: MessageKey) {
-        self.command_tx
-            .send(Command::HandleFailure {
-                client_id: self.client_id,
-                request_key,
-            })
-            .ok();
+        self.command_tx.send(Command::HandleFailure {
+            client_id: self.client_id,
+            request_key,
+        });
     }
 
     /// Resume suspended request.
     pub fn resume(&self, request_key: MessageKey, variant: RequestVariant) {
-        self.command_tx
-            .send(Command::Resume {
-                request_key,
-                variant,
-            })
-            .ok();
+        self.command_tx.send(Command::Resume {
+            request_key,
+            variant,
+        });
     }
 
     /// Obtain a handle to commit all the requests that were successfully completed by this client.
@@ -130,36 +120,30 @@ impl RequestTrackerClient {
 
     /// Choke this client.
     pub fn choke(&self) {
-        self.command_tx
-            .send(Command::Choke {
-                client_id: self.client_id,
-            })
-            .ok();
+        self.command_tx.send(Command::Choke {
+            client_id: self.client_id,
+        });
     }
 
     /// Unchoke this client.
     pub fn unchoke(&self) {
-        self.command_tx
-            .send(Command::Unchoke {
-                client_id: self.client_id,
-            })
-            .ok();
+        self.command_tx.send(Command::Unchoke {
+            client_id: self.client_id,
+        });
     }
 }
 
 impl Drop for RequestTrackerClient {
     fn drop(&mut self) {
-        self.command_tx
-            .send(Command::RemoveClient {
-                client_id: self.client_id,
-            })
-            .ok();
+        self.command_tx.send(Command::RemoveClient {
+            client_id: self.client_id,
+        });
     }
 }
 
 pub(crate) struct RequestTrackerCommitter {
     client_id: ClientId,
-    command_tx: mpsc::UnboundedSender<Command>,
+    command_tx: CommandSender,
 }
 
 impl RequestTrackerCommitter {
@@ -169,11 +153,9 @@ impl RequestTrackerCommitter {
     /// successfully completed by the client will be considered failed and will be made available
     /// for retry by other clients.
     pub fn commit(self) {
-        self.command_tx
-            .send(Command::Commit {
-                client_id: self.client_id,
-            })
-            .ok();
+        self.command_tx.send(Command::Commit {
+            client_id: self.client_id,
+        });
     }
 }
 
@@ -295,6 +277,8 @@ impl<'a> From<&'a Request> for MessageKey {
 
 fn build(monitor: TrafficMonitor) -> (RequestTracker, Worker) {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let command_tx = command_tx.into();
+
     (
         RequestTracker { command_tx },
         Worker::new(command_rx, monitor),
@@ -305,14 +289,14 @@ const BROKEN_INVARIANT: &str = "broken invariant";
 const CLIENT_NOT_FOUND: &str = "client not found";
 
 struct Worker {
-    command_rx: mpsc::UnboundedReceiver<Command>,
+    command_rx: mpsc::UnboundedReceiver<SpannedCommand>,
     clients: HashMap<ClientId, ClientState>,
     requests: Graph<RequestState>,
     flight: Flight,
 }
 
 impl Worker {
-    fn new(command_rx: mpsc::UnboundedReceiver<Command>, monitor: TrafficMonitor) -> Self {
+    fn new(command_rx: mpsc::UnboundedReceiver<SpannedCommand>, monitor: TrafficMonitor) -> Self {
         Self {
             command_rx,
             clients: HashMap::default(),
@@ -351,7 +335,10 @@ impl Worker {
         self.requests.requests()
     }
 
-    fn handle_command(&mut self, command: Command) {
+    fn handle_command(&mut self, command: SpannedCommand) {
+        let SpannedCommand { command, span } = command;
+        let _enter = span.enter();
+
         match command {
             Command::InsertClient {
                 client_id,
@@ -975,6 +962,31 @@ impl ClientId {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+#[derive(Clone)]
+struct CommandSender(mpsc::UnboundedSender<SpannedCommand>);
+
+impl CommandSender {
+    fn send(&self, command: Command) {
+        self.0
+            .send(SpannedCommand {
+                command,
+                span: Span::current(),
+            })
+            .ok();
+    }
+}
+
+impl From<mpsc::UnboundedSender<SpannedCommand>> for CommandSender {
+    fn from(tx: mpsc::UnboundedSender<SpannedCommand>) -> Self {
+        Self(tx)
+    }
+}
+
+struct SpannedCommand {
+    command: Command,
+    span: Span,
 }
 
 enum Command {
