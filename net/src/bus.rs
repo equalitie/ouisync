@@ -3,6 +3,7 @@ mod topic;
 mod worker;
 
 pub use topic::TopicId;
+use tracing::{Instrument, Span};
 
 use crate::unified::{Connection, RecvStream, SendStream};
 use std::{
@@ -30,7 +31,7 @@ impl Bus {
     pub fn new(connection: Connection) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
-        task::spawn(worker::run(connection, command_rx));
+        task::spawn(worker::run(connection, command_rx).instrument(Span::current()));
 
         Self { command_tx }
     }

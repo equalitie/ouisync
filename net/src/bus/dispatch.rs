@@ -7,7 +7,6 @@ use tokio::{
     select,
     sync::oneshot,
 };
-use tracing::instrument;
 
 /// Wrapper around `Connection` that allow to establish incoming and outgoing streams that are bound
 /// to a given topic. When the two connected peers establish streams bound to the same topic
@@ -32,7 +31,6 @@ impl Dispatcher {
     }
 
     /// Establish an incoming stream bound to the given topic.
-    #[instrument(skip_all)]
     pub async fn incoming(&self, topic_id: TopicId) -> io::Result<(SendStream, RecvStream)> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -72,7 +70,7 @@ impl Dispatcher {
                 if let Some(reply_tx) = reply_tx {
                     reply_tx.send((send_stream, recv_stream)).ok();
                 } else {
-                    tracing::trace!(?topic_id, "unsolicited incoming stream");
+                    // unsolicited incoming stream
                     continue;
                 }
             }
@@ -91,29 +89,26 @@ impl Dispatcher {
     }
 
     /// Establish an outgoing stream bound to the given topic.
-    #[instrument(skip_all)]
     pub async fn outgoing(&self, topic_id: TopicId) -> io::Result<(SendStream, RecvStream)> {
         let (mut send_stream, recv_stream) = self
             .connection
             .outgoing()
             .await
-            .inspect_err(|error| tracing::error!(?error))
+            .inspect_err(|error| tracing::debug!(?error, "failed to create outgoing stream"))
             .map_err(io::Error::other)?;
 
         send_stream
             .write_all(topic_id.as_bytes())
             .await
-            .inspect_err(|error| tracing::error!(?error))?;
+            .inspect_err(|error| {
+                tracing::debug!(?error, "failed to write topic id to outgoing stream")
+            })?;
 
         Ok((send_stream, recv_stream))
     }
 
     pub async fn close(&self) {
         self.connection.close().await
-    }
-
-    pub async fn closed(&self) {
-        self.connection.closed().await
     }
 }
 

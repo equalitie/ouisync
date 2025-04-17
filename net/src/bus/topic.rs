@@ -135,7 +135,7 @@ impl TopicState {
                 | OutgoingState::Created
                 | OutgoingState::Failed,
             )
-            | (IncomingState::Failed, OutgoingState::Init | OutgoingState::Creating) => {
+            | (IncomingState::Failed, OutgoingState::Init) => {
                 self.incoming = IncomingState::Creating;
                 Some(Output::IncomingCreate)
             }
@@ -144,8 +144,7 @@ impl TopicState {
                 self.outgoing = OutgoingState::Init;
                 Some(Output::IncomingCreate)
             }
-            (IncomingState::Creating | IncomingState::Created(_), OutgoingState::Init)
-            | (IncomingState::Creating, OutgoingState::Failed) => {
+            (IncomingState::Creating | IncomingState::Created(_), OutgoingState::Init) => {
                 self.outgoing = OutgoingState::Creating;
                 Some(Output::OutgoingCreate(self.nonce))
             }
@@ -162,10 +161,12 @@ impl TopicState {
                     Some(Output::OutgoingAccept)
                 }
             }
-            (IncomingState::Creating, OutgoingState::Creating)
-            | (IncomingState::Creating, OutgoingState::Created)
+            (IncomingState::Creating, OutgoingState::Created)
             | (IncomingState::Created(_), OutgoingState::Creating)
-            | (IncomingState::Failed, OutgoingState::Failed) => {
+            | (
+                IncomingState::Creating | IncomingState::Failed,
+                OutgoingState::Creating | OutgoingState::Failed,
+            ) => {
                 // Nothing to do, waiting for further inputs.
                 None
             }

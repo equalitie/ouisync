@@ -23,16 +23,20 @@ pub(super) enum Command {
     },
 }
 
-#[instrument(name = "worker", skip_all, fields(addr = %connection.remote_addr()))]
 pub(super) async fn run(connection: Connection, mut command_rx: mpsc::UnboundedReceiver<Command>) {
     let dispatcher = Dispatcher::new(connection);
     let mut topic_tasks = FuturesUnordered::new();
 
     loop {
         let command = select! {
-            Some(command) = command_rx.recv() => command,
+            command = command_rx.recv() => {
+                if let Some(command) = command {
+                    command
+                } else {
+                    break;
+                }
+            }
             Some(_) = topic_tasks.next() => continue,
-            _ = dispatcher.closed() => break,
         };
 
         match command {
@@ -142,7 +146,6 @@ impl<'a> TopicHandler<'a> {
                     self.state.handle(Input::IncomingCreated(nonce));
                 }
                 CreateOutput::Incoming(Err(error)) => {
-                    tracing::debug!(?error, "failed to create incoming stream");
                     last_error = Some(error);
                     self.state.handle(Input::IncomingFailed);
                 }
@@ -151,7 +154,6 @@ impl<'a> TopicHandler<'a> {
                     self.state.handle(Input::OutgoingCreated);
                 }
                 CreateOutput::Outgoing(Err(error)) => {
-                    tracing::debug!(?error, "failed to create outgoing stream");
                     last_error = Some(error);
                     self.state.handle(Input::OutgoingFailed);
                 }
