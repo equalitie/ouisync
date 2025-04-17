@@ -356,8 +356,6 @@ impl Worker {
         let SpannedCommand { command, span } = command;
         let _enter = span.enter();
 
-        tracing::debug!(?command);
-
         match command {
             Command::InsertClient {
                 client_id,
