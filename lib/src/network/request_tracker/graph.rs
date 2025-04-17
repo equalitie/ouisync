@@ -1,3 +1,5 @@
+use std::fmt;
+
 use super::{MessageKey, PendingRequest, RequestVariant};
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -117,6 +119,30 @@ impl<T> Graph<T> {
     #[cfg_attr(not(test), expect(dead_code))]
     pub fn requests(&self) -> impl ExactSizeIterator<Item = &Request> {
         self.nodes.iter().map(|(_, node)| &node.request.payload)
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Graph<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (node_key, node) in &self.nodes {
+            writeln!(f, "{node_key}:")?;
+            writeln!(f, "    request:  {:?}", node.request.payload)?;
+            writeln!(f, "    variant:  {:?}", node.request.variant)?;
+            writeln!(f, "    value:    {:?}", node.value)?;
+            writeln!(f, "    parents:  {:?}", {
+                let mut keys = node.parents.iter().map(|k| k.0).collect::<Vec<_>>();
+                keys.sort();
+                keys
+            })?;
+            writeln!(f, "    children: {:?}", {
+                let mut keys = node.children.iter().map(|k| k.0).collect::<Vec<_>>();
+                keys.sort();
+                keys
+            })?;
+            writeln!(f)?;
+        }
+
+        Ok(())
     }
 }
 

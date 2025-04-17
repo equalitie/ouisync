@@ -322,17 +322,29 @@ impl Worker {
         }
     }
 
-    /// Process all currently queued commands.
+    /// Process all currently queued commands and expired timeouts.
     #[cfg(test)]
     pub fn step(&mut self) {
+        use futures_util::FutureExt;
+
         while let Ok(command) = self.command_rx.try_recv() {
             self.handle_command(command);
+        }
+
+        while let Some(Some((client_id, request_key))) = self.flight.next_timeout().now_or_never() {
+            self.handle_failure(client_id, request_key, FailureReason::Timeout);
         }
     }
 
     #[cfg(test)]
     pub fn requests(&self) -> impl ExactSizeIterator<Item = &Request> {
         self.requests.requests()
+    }
+
+    #[allow(unused)]
+    #[cfg(test)]
+    pub fn dump(&self) {
+        println!("{:?}", self.requests);
     }
 
     fn handle_command(&mut self, command: SpannedCommand) {
@@ -934,10 +946,6 @@ impl Worker {
         let Some(node) = self.requests.remove(node_key) else {
             return;
         };
-
-        // FIXME: remove this assert (or change to `debug_assert`) when the invariant
-        // breaking bug is fixed.
-        assert!(!matches!(node.value(), RequestState::InFlight { .. }));
 
         let request_key = MessageKey::from(&node.request().payload);
         remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());

@@ -13,7 +13,7 @@ use rand::{
     seq::SliceRandom,
     Rng, SeedableRng,
 };
-use std::{pin::pin, time::Duration};
+use std::time::Duration;
 use tokio::{sync::mpsc::error::TryRecvError, time};
 
 // Test syncing while peers keep joining and leaving the swarm.
@@ -148,9 +148,7 @@ async fn missing_blocks() {
 #[tokio::test(start_paused = true)]
 async fn timeout() {
     let mut rng = StdRng::seed_from_u64(0);
-    let (tracker, tracker_worker) = build(TrafficMonitor::new(&NoopRecorder));
-
-    let mut work = pin!(tracker_worker.run());
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
 
     let (client_a, mut request_rx_a) = tracker.new_client();
     let (client_b, mut request_rx_b) = tracker.new_client();
@@ -169,9 +167,7 @@ async fn timeout() {
         vec![CandidateRequest::new(request.clone())],
     );
 
-    time::timeout(Duration::from_millis(1), &mut work)
-        .await
-        .ok();
+    worker.step();
 
     // Only the first client gets the request.
     assert_eq!(
@@ -185,9 +181,9 @@ async fn timeout() {
     );
 
     // Wait until the request timeout passes
-    time::timeout(DEFAULT_TIMEOUT + Duration::from_millis(1), &mut work)
-        .await
-        .ok();
+    time::advance(DEFAULT_TIMEOUT + Duration::from_millis(1)).await;
+
+    worker.step();
 
     // The first client timeouted so the second client now gets the request.
     assert_eq!(
@@ -651,6 +647,71 @@ async fn idle_after_failure() {
         request_rx.try_recv(),
         Ok(PendingRequest::new(Request::Idle))
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn in_flight_with_children() {
+    crate::test_utils::init_log();
+
+    // Create a node in in-flight state which has children. It's a rare corner case but still
+    // possible.
+
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+    let (client_a, _request_rx_a) = tracker.new_client();
+    let (client_b, _request_rx_b) = tracker.new_client();
+
+    let writer_id = PublicKey::generate(&mut rng);
+
+    let root_request_0 = Request::RootNode {
+        writer_id,
+        cookie: 0,
+        debug: DebugRequest::start(),
+    };
+    let root_key_0 = MessageKey::from(&root_request_0);
+
+    let root_request_1 = Request::RootNode {
+        writer_id,
+        cookie: 1,
+        debug: DebugRequest::start(),
+    };
+    let root_key_1 = MessageKey::from(&root_request_1);
+
+    let child_request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
+
+    client_a.initial(CandidateRequest::new(root_request_0));
+    client_b.initial(CandidateRequest::new(root_request_1.clone()));
+    client_a.success(
+        root_key_0,
+        vec![CandidateRequest::new(child_request.clone())],
+    );
+    client_b.success(
+        root_key_1,
+        vec![CandidateRequest::new(child_request.clone())],
+    );
+    worker.step();
+
+    // Drop
+    drop(client_b);
+    worker.step();
+
+    let (client_b, _request_rx_b) = tracker.new_client();
+    client_b.initial(CandidateRequest::new(root_request_1));
+    worker.step();
+
+    // Complete and commit the child node.
+    client_a.success(MessageKey::from(&child_request), vec![]);
+    client_a.new_committer().commit();
+    worker.step();
+
+    // Drop the second client. This should cancel the timeout on the second root node (by cancelling
+    // the node itself).
+    drop(client_b);
+
+    // Ensure the timeout has been cancelled. If it hasn't then this would cause panic because the
+    // client associated with the timeout has been dropped.
+    time::advance(DEFAULT_TIMEOUT + Duration::from_millis(1)).await;
+    worker.step();
 }
 
 // TODO: test idle after failures
