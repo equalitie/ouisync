@@ -344,12 +344,19 @@ impl Worker {
     #[allow(unused)]
     #[cfg(test)]
     pub fn dump(&self) {
+        for (client_id, client_state) in &self.clients {
+            println!("{client_id:?}: {:?}", client_state.requests);
+        }
+
+        println!();
         println!("{:?}", self.requests);
     }
 
     fn handle_command(&mut self, command: SpannedCommand) {
         let SpannedCommand { command, span } = command;
         let _enter = span.enter();
+
+        tracing::debug!(?command);
 
         match command {
             Command::InsertClient {
@@ -590,13 +597,9 @@ impl Worker {
                 | RequestState::Cancelled => unreachable!(),
             }
 
-            // If the node has no children, remove it, otherwise mark is as committed.
-            if node.children().len() == 0 {
-                self.remove_request(node_key);
-            } else {
-                remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());
-                *node.value_mut() = RequestState::Committed;
-            }
+            remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());
+            *node.value_mut() = RequestState::Committed;
+            self.remove_request(node_key);
         }
     }
 
@@ -931,33 +934,29 @@ impl Worker {
             return;
         }
 
+        remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());
         *node.value_mut() = RequestState::Cancelled;
-
-        // No waiter found. If this request has no children, we can remove it, otherwise we mark it
-        // as cancelled.
-        if node.children().len() > 0 {
-            remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());
-        } else {
-            self.remove_request(node_key);
-        }
+        self.remove_request(node_key);
     }
 
     fn remove_request(&mut self, node_key: GraphKey) {
-        let Some(node) = self.requests.remove(node_key) else {
+        let Some(node) = self.requests.get_mut(node_key) else {
             return;
         };
 
-        let request_key = MessageKey::from(&node.request().payload);
-        remove_request_from_clients(&mut self.clients, request_key, node_key, node.value());
+        match node.value() {
+            RequestState::Committed | RequestState::Cancelled => (),
+            RequestState::InFlight { .. }
+            | RequestState::Complete { .. }
+            | RequestState::Suspended { .. }
+            | RequestState::Choked { .. } => return,
+        }
 
-        for parent_key in node.parents() {
-            let parent_node = self.requests.get(parent_key).expect(BROKEN_INVARIANT);
-
-            if parent_node.children().len() > 0 {
-                continue;
+        if node.children().len() == 0 {
+            let node = self.requests.remove(node_key).unwrap();
+            for parent_key in node.parents() {
+                self.remove_request(parent_key);
             }
-
-            self.remove_request(parent_key);
         }
     }
 }
@@ -997,6 +996,7 @@ struct SpannedCommand {
     span: Span,
 }
 
+#[derive(Debug)]
 enum Command {
     InsertClient {
         client_id: ClientId,

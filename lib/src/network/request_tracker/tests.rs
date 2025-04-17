@@ -107,8 +107,10 @@ async fn dynamic_swarm() {
 
 // Test syncing with multiple peers where no peer has all the blocks but every block is present in
 // at least one peer.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn missing_blocks() {
+    crate::test_utils::init_log();
+
     let seed = rand::random();
     case(seed, 32, 4);
 
@@ -135,6 +137,7 @@ async fn missing_blocks() {
 
             if sim.poll(&mut rng) {
                 tracker_worker.step();
+                tracker_worker.dump();
             } else {
                 break;
             }
