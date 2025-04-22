@@ -202,6 +202,14 @@ impl State {
         self.network.set_pex_recv_enabled(recv);
     }
 
+    /// Binds the network listeners to the specified interfaces.
+    ///
+    /// Up to four listeners can be bound, one for each combination of protocol (TCP or QUIC) and IP
+    /// family (IPv4 or IPv6). The format of the interfaces is "PROTO/IP:PORT" where PROTO is "tcp"
+    /// or "quic". If IP is IPv6, it needs to be enclosed in square brackets.
+    ///
+    /// If port is `0`, binds to a random port initially but on subsequent starts tries to use the
+    /// same port (unless it's already taken). This can be useful to configuring port forwarding.
     #[api]
     pub async fn session_bind_network(&self, addrs: Vec<PeerAddr>) {
         self.config.entry(BIND_KEY).set(&addrs).await.ok();
@@ -233,11 +241,14 @@ impl State {
         self.network.external_addr_v6().await.map(SocketAddr::V6)
     }
 
+    /// Returns the listener addresses of this Ouisync instance.
     #[api]
     pub fn session_get_local_listener_addrs(&self) -> Vec<PeerAddr> {
         self.network.listener_local_addrs()
     }
 
+    /// Returns the listener addresses of the specified remote Ouisync instance. Works only if the
+    /// remote control API is enabled on the remote instance. Typically used with cache servers.
     #[api]
     pub async fn session_get_remote_listener_addrs(
         &self,
@@ -485,6 +496,7 @@ impl State {
         Ok(())
     }
 
+    /// Checks whether the given string is a valid share token.
     #[api]
     pub fn session_validate_share_token(&self, token: String) -> Result<ShareToken, Error> {
         Ok(token.parse()?)
@@ -499,11 +511,13 @@ impl State {
         hex::encode(ouisync::repository_info_hash(token.id()).as_ref())
     }
 
+    /// Returns the access mode that the given token grants.
     #[api]
     pub fn session_get_share_token_access_mode(&self, token: ShareToken) -> AccessMode {
         token.access_mode()
     }
 
+    /// Returns the suggested name for the repository corresponding to the given token.
     #[api]
     pub fn session_get_share_token_suggested_name(&self, token: ShareToken) -> String {
         token.suggested_name().to_owned()
@@ -652,7 +666,7 @@ impl State {
         Ok(handle)
     }
 
-    /// Delete a repository
+    /// Delete the repository
     #[api]
     pub async fn repository_delete(&self, repo: RepositoryHandle) -> Result<(), Error> {
         let Some(holder) = self.repos.remove(repo) else {
@@ -676,6 +690,7 @@ impl State {
         Ok(())
     }
 
+    /// Closes the repository.
     #[api]
     pub async fn repository_close(&self, repo: RepositoryHandle) -> Result<(), Error> {
         let holder = self.repos.remove(repo).ok_or(Error::InvalidArgument)?;
@@ -720,8 +735,8 @@ impl State {
     pub async fn repository_share(
         &self,
         repo: RepositoryHandle,
-        local_secret: Option<LocalSecret>,
         access_mode: AccessMode,
+        local_secret: Option<LocalSecret>,
     ) -> Result<ShareToken, Error> {
         let (repo, short_name) = self
             .repos
@@ -747,8 +762,8 @@ impl State {
             .ok_or(Error::InvalidArgument)
     }
 
-    /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
-    /// unique, non-secret identifier of the repository.
+    /// Return the info-hash of the repository formatted as hex string. This can be used as a
+    /// globally unique, non-secret identifier of the repository.
     #[api]
     pub fn repository_get_info_hash(&self, repo: RepositoryHandle) -> Result<String, Error> {
         let info_hash = self
@@ -797,6 +812,7 @@ impl State {
         Ok(())
     }
 
+    /// Returns the access mode (*blind*, *read* or *write*) the repository is currently opened in.
     #[api]
     pub fn repository_get_access_mode(&self, repo: RepositoryHandle) -> Result<AccessMode, Error> {
         self.repos
@@ -909,6 +925,7 @@ impl State {
             .ok_or(Error::InvalidArgument)
     }
 
+    /// Returns whether syncing with other replicas is enabled for this repository.
     #[api]
     pub fn repository_is_sync_enabled(&self, repo: RepositoryHandle) -> Result<bool, Error> {
         self.repos
@@ -916,6 +933,9 @@ impl State {
             .ok_or(Error::InvalidArgument)
     }
 
+    /// Enabled or disables syncing with other replicas.
+    ///
+    /// Note syncing is initially disabled.
     #[api]
     pub async fn repository_set_sync_enabled(
         &self,
@@ -1321,6 +1341,7 @@ impl State {
         Ok(())
     }
 
+    /// Creates a new directory at the given path in the repository.
     #[api]
     pub async fn repository_create_directory(
         &self,
@@ -1336,6 +1357,7 @@ impl State {
         Ok(())
     }
 
+    /// Returns the entries of the directory at the given path in the repository.
     #[api]
     pub async fn repository_read_directory(
         &self,
@@ -1382,6 +1404,7 @@ impl State {
         Ok(())
     }
 
+    /// Creates a new file at the given path in the repository.
     #[api]
     pub async fn repository_create_file(
         &self,
@@ -1401,6 +1424,7 @@ impl State {
         Ok(handle)
     }
 
+    /// Opens an existing file at the given path in the repository.
     #[api]
     pub async fn repository_open_file(
         &self,
@@ -1420,7 +1444,7 @@ impl State {
         Ok(handle)
     }
 
-    /// Remove (delete) the file at the given path from the repository.
+    /// Removes (deletes) the file at the given path from the repository.
     #[api]
     pub async fn repository_remove_file(
         &self,
@@ -1477,6 +1501,7 @@ impl State {
         Ok(buffer)
     }
 
+    /// Writes the data to the file at the given offset.
     #[api]
     pub async fn file_write(
         &self,
@@ -1496,12 +1521,18 @@ impl State {
         Ok(())
     }
 
+    /// Returns the length of the file in bytes
     #[api]
     pub fn file_get_length(&self, file: FileHandle) -> Result<u64, Error> {
         Ok(self.files.get(file)?.file.len())
     }
 
-    /// Returns sync progress of the given file.
+    /// Returns the sync progress of this file, that is, the total byte size of all the blocks of
+    /// this file that's already been downloaded.
+    ///
+    /// Note that Ouisync downloads the blocks in random order, so until the file's been completely
+    /// downloaded, the already downloaded blocks are not guaranteed to continuous (there might be
+    /// gaps).
     #[api]
     pub async fn file_get_progress(&self, file: FileHandle) -> Result<u64, Error> {
         // Don't keep the file locked while progress is being awaited.
@@ -1511,6 +1542,7 @@ impl State {
         Ok(progress)
     }
 
+    /// Truncates the file to the given length.
     #[api]
     pub async fn file_truncate(&self, file: FileHandle, len: u64) -> Result<(), Error> {
         let mut holder = self.files.get(file)?;
@@ -1521,6 +1553,7 @@ impl State {
         Ok(())
     }
 
+    /// Flushes any pending writes to the file.
     #[api]
     pub async fn file_flush(&self, file: FileHandle) -> Result<(), Error> {
         self.files.get(file)?.file.flush().await?;
@@ -1528,6 +1561,7 @@ impl State {
         Ok(())
     }
 
+    /// Closes the file.
     #[api]
     pub async fn file_close(&self, file: FileHandle) -> Result<(), Error> {
         self.files.remove(file)?.file.flush().await?;

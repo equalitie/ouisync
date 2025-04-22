@@ -10,6 +10,8 @@ import kotlinx.coroutines.launch
 import org.equalitie.ouisync.lib.Repository
 import org.equalitie.ouisync.lib.Session
 import org.equalitie.ouisync.lib.ShareToken
+import org.equalitie.ouisync.lib.close
+import org.equalitie.ouisync.lib.create
 
 private const val TAG = "ouisync.example"
 
@@ -65,16 +67,10 @@ class ExampleViewModel(
         var shareToken: ShareToken? = null
 
         if (!token.isEmpty()) {
-            shareToken = ShareToken.fromString(session, token)
+            shareToken = session.validateShareToken(token)
         }
 
-        val repo = Repository.create(
-            session,
-            name,
-            readSecret = null,
-            writeSecret = null,
-            token = shareToken,
-        )
+        val repo = session.createRepository(name, token = shareToken)
 
         // Syncing is initially disabled, need to enable it.
         repo.setSyncEnabled(true)
@@ -96,7 +92,7 @@ class ExampleViewModel(
 
     private suspend fun openRepositories() {
         val session = this.session ?: return
-        repositories = repositories + Repository.list(session)
+        repositories = repositories + session.listRepositories()
     }
 
     override fun onCleared() {

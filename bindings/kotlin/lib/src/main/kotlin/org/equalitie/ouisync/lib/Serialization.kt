@@ -2,22 +2,14 @@
 
 package org.equalitie.ouisync.lib
 
-import kotlin.collections.firstNotNullOfOrNull
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
-import kotlinx.datetime.Instant
 import kotlinx.serialization.DeserializationStrategy
-import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialInfo
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.SerializationStrategy
-import kotlinx.serialization.SerialInfo
-import kotlinx.serialization.serializer
 import kotlinx.serialization.builtins.ByteArraySerializer
 import kotlinx.serialization.descriptors.PolymorphicKind
-import kotlinx.serialization.descriptors.StructureKind
-import kotlinx.serialization.descriptors.PrimitiveKind
-import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.descriptors.elementDescriptors
 import kotlinx.serialization.encoding.AbstractDecoder
 import kotlinx.serialization.encoding.AbstractEncoder
@@ -27,11 +19,12 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.modules.EmptySerializersModule
 import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.serializer
 import org.msgpack.core.MessageBufferPacker
 import org.msgpack.core.MessagePack
-import org.msgpack.core.MessagePacker
 import org.msgpack.core.MessageUnpacker
 import org.msgpack.value.ValueType
+import kotlin.collections.firstNotNullOfOrNull
 
 internal fun <T> encode(serializer: SerializationStrategy<T>, value: T): ByteArray {
     val encoder = MessageEncoder()
@@ -56,46 +49,10 @@ internal inline fun <reified T> decode(buffer: ByteArray): T = decode(serializer
 @Target(AnnotationTarget.FIELD)
 annotation class Value(val value: Int)
 
-/**
- * Serialize [Duration] as the number of whole milliseconds
- */
-internal object DurationSerializer : KSerializer<Duration> {
-    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor(
-        "${javaClass.getPackage()?.getName()}.Duration",
-        PrimitiveKind.LONG
-    )
-
-    override fun serialize(encoder: Encoder, value: Duration) {
-        encoder.encodeLong(value.inWholeMilliseconds)
-    }
-
-    override fun deserialize(decoder: Decoder): Duration {
-        return decoder.decodeLong().milliseconds
-    }
-}
-
-/**
- * Serialize [Instant] as the number of milliseconds since epoch
- */
-internal object InstantSerializer : KSerializer<Instant> {
-    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor(
-        "${javaClass.getPackage()?.getName()}.Instant",
-        PrimitiveKind.LONG
-    )
-
-    override fun serialize(encoder: Encoder, value: Instant) {
-        encoder.encodeLong(value.toEpochMilliseconds())
-    }
-
-    override fun deserialize(decoder: Decoder): Instant {
-        return Instant.fromEpochMilliseconds(decoder.decodeLong())
-    }
-}
-
 internal class MessageEncoder(
     private val packer: MessageBufferPacker = MessagePack.newDefaultBufferPacker(),
-    private val inSealed: Boolean = false
-): AbstractEncoder() {
+    private val inSealed: Boolean = false,
+) : AbstractEncoder() {
     val output: ByteArray
         get() = packer.toByteArray()
 
@@ -135,7 +92,7 @@ internal class MessageEncoder(
     }
 
     override fun encodeString(value: String) {
-        if (inSealed) return;
+        if (inSealed) return
 
         packer.packString(value)
     }
@@ -146,7 +103,7 @@ internal class MessageEncoder(
             packer.packString(unqualify(descriptor.serialName))
         }
 
-        return super.encodeInline(descriptor)
+        return MessageEncoder(packer)
     }
 
     override fun beginStructure(descriptor: SerialDescriptor): CompositeEncoder {
@@ -198,8 +155,8 @@ internal class MessageEncoder(
 internal class MessageDecoder(
     private val unpacker: MessageUnpacker,
     private val sealedDescriptor: SerialDescriptor? = null,
-): AbstractDecoder() {
-    constructor(buffer: ByteArray): this(MessagePack.newDefaultUnpacker(buffer))
+) : AbstractDecoder() {
+    constructor(buffer: ByteArray) : this(MessagePack.newDefaultUnpacker(buffer))
 
     private var elementIndex = 0
 
@@ -229,7 +186,7 @@ internal class MessageDecoder(
             }
         }
 
-        throw SerializationException("wrong value ${value} for ${descriptor.serialName}")
+        throw SerializationException("wrong value $value for ${descriptor.serialName}")
     }
 
     override fun decodeBoolean(): Boolean = unpacker.unpackBoolean()
@@ -273,11 +230,15 @@ internal class MessageDecoder(
         }
     }
 
+    override fun decodeInline(descriptor: SerialDescriptor): Decoder {
+        return MessageDecoder(unpacker)
+    }
+
     override fun beginStructure(descriptor: SerialDescriptor): CompositeDecoder {
         when (descriptor.kind) {
             PolymorphicKind.SEALED -> return MessageDecoder(
                 unpacker,
-                sealedDescriptor = descriptor.getElementDescriptor(1)
+                sealedDescriptor = descriptor.getElementDescriptor(1),
             )
             StructureKind.CLASS -> {
                 val count = unpacker.unpackArrayHeader()

@@ -1,3 +1,5 @@
+@file:UseSerializers(OuisyncExceptionSerializer::class)
+
 package org.equalitie.ouisync.lib
 
 import kotlinx.coroutines.CancellableContinuation
@@ -16,8 +18,9 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.UseSerializers
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -172,9 +175,14 @@ internal class Client private constructor(private val socket: AsynchronousSocket
 }
 
 @Serializable
-private sealed class ResponseResult {
-    class Success(val value: Response) : ResponseResult()
-    class Failure(val error: OuisyncException) : ResponseResult()
+private sealed interface ResponseResult {
+    @Serializable
+    @JvmInline
+    value class Success(val value: Response) : ResponseResult
+
+    @Serializable
+    @JvmInline
+    value class Failure(val error: OuisyncException) : ResponseResult
 }
 
 private class MessageMatcher {

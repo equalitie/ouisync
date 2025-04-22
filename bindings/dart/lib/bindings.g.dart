@@ -352,7 +352,7 @@ class SetLocalSecretKeyAndSalt extends SetLocalSecret {
   });
 }
 
-/// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
+/// Token to share a repository. It can be encoded as a URL-formatted string and transmitted to
 /// other replicas.
 final class ShareToken {
   final String value;
@@ -380,6 +380,7 @@ final class ShareToken {
   String toString() => value;
 }
 
+/// How to change access to a repository.
 sealed class AccessChange {
   void encode(Packer p) {
     switch (this) {
@@ -417,12 +418,14 @@ sealed class AccessChange {
 
 }
 
+/// Enable read or write access, optionally with local secret
 class AccessChangeEnable extends AccessChange {
   final SetLocalSecret? value;
 
   AccessChangeEnable(this.value);
 }
 
+/// Disable access
 class AccessChangeDisable extends AccessChange {
   AccessChangeDisable();
 }
@@ -1289,9 +1292,13 @@ final class MetadataEdit {
       );
 }
 
+/// Default network parameters
 final class NetworkDefaults {
+  /// Default addresses to bind to
   final List<String> bind;
+  /// Is port forwarding (UPnP) enabled by default?
   final bool portForwardingEnabled;
+  /// Is local discovery enabled by default?
   final bool localDiscoveryEnabled;
 
   NetworkDefaults({
@@ -1879,15 +1886,15 @@ sealed class Request {
         p.packBool(enabled);
       case RequestRepositoryShare(
         repo: final repo,
-        localSecret: final localSecret,
         accessMode: final accessMode,
+        localSecret: final localSecret,
       ):
         p.packMapLength(1);
         p.packString('RepositoryShare');
         p.packListLength(3);
         repo.encode(p);
-        _encodeNullable(p, localSecret, (p, e) => e.encode(p));
         accessMode.encode(p);
+        _encodeNullable(p, localSecret, (p, e) => e.encode(p));
       case RequestRepositorySubscribe(
         repo: final repo,
       ):
@@ -2667,13 +2674,13 @@ class RequestRepositorySetSyncEnabled extends Request {
 
 class RequestRepositoryShare extends Request {
   final RepositoryHandle repo;
-  final LocalSecret? localSecret;
   final AccessMode accessMode;
+  final LocalSecret? localSecret;
 
   RequestRepositoryShare({
     required this.repo,
-    required this.localSecret,
     required this.accessMode,
+    required this.localSecret,
   });
 }
 
@@ -3377,6 +3384,14 @@ class Session {
     }
   }
 
+  /// Binds the network listeners to the specified interfaces.
+  ///
+  /// Up to four listeners can be bound, one for each combination of protocol (TCP or QUIC) and IP
+  /// family (IPv4 or IPv6). The format of the interfaces is "PROTO/IP:PORT" where PROTO is "tcp"
+  /// or "quic". If IP is IPv6, it needs to be enclosed in square brackets.
+  ///
+  /// If port is `0`, binds to a random port initially but on subsequent starts tries to use the
+  /// same port (unless it's already taken). This can be useful to configuring port forwarding.
   Future<void> bindNetwork(
     List<String> addrs,
   ) async {
@@ -3574,6 +3589,7 @@ class Session {
     }
   }
 
+  /// Returns the listener addresses of this Ouisync instance.
   Future<List<String>> getLocalListenerAddrs(
   ) async {
     final request = RequestSessionGetLocalListenerAddrs(
@@ -3655,6 +3671,8 @@ class Session {
     }
   }
 
+  /// Returns the listener addresses of the specified remote Ouisync instance. Works only if the
+  /// remote control API is enabled on the remote instance. Typically used with cache servers.
   Future<List<String>> getRemoteListenerAddrs(
     String host,
   ) async {
@@ -3679,6 +3697,7 @@ class Session {
     }
   }
 
+  /// Returns the access mode that the given token grants.
   Future<AccessMode> getShareTokenAccessMode(
     ShareToken token,
   ) async {
@@ -3709,6 +3728,7 @@ class Session {
     }
   }
 
+  /// Returns the suggested name for the repository corresponding to the given token.
   Future<String> getShareTokenSuggestedName(
     ShareToken token,
   ) async {
@@ -3990,6 +4010,7 @@ class Session {
     }
   }
 
+  /// Checks whether the given string is a valid share token.
   Future<ShareToken> validateShareToken(
     String token,
   ) async {
@@ -4011,6 +4032,7 @@ class Repository {
 
   Repository(this.client, this.handle);
 
+  /// Closes the repository.
   Future<void> close(
   ) async {
     final request = RequestRepositoryClose(
@@ -4023,6 +4045,7 @@ class Repository {
     }
   }
 
+  /// Creates a new directory at the given path in the repository.
   Future<void> createDirectory(
     String path,
   ) async {
@@ -4037,6 +4060,7 @@ class Repository {
     }
   }
 
+  /// Creates a new file at the given path in the repository.
   Future<File> createFile(
     String path,
   ) async {
@@ -4065,7 +4089,7 @@ class Repository {
     }
   }
 
-  /// Delete a repository
+  /// Delete the repository
   Future<void> delete(
   ) async {
     final request = RequestRepositoryDelete(
@@ -4121,6 +4145,7 @@ class Repository {
     }
   }
 
+  /// Returns the access mode (*blind*, *read* or *write*) the repository is currently opened in.
   Future<AccessMode> getAccessMode(
   ) async {
     final request = RequestRepositoryGetAccessMode(
@@ -4188,8 +4213,8 @@ class Repository {
     }
   }
 
-  /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
-  /// unique, non-secret identifier of the repository.
+  /// Return the info-hash of the repository formatted as hex string. This can be used as a
+  /// globally unique, non-secret identifier of the repository.
   Future<String> getInfoHash(
   ) async {
     final request = RequestRepositoryGetInfoHash(
@@ -4302,6 +4327,7 @@ class Repository {
     }
   }
 
+  /// Returns whether syncing with other replicas is enabled for this repository.
   Future<bool> isSyncEnabled(
   ) async {
     final request = RequestRepositoryIsSyncEnabled(
@@ -4370,6 +4396,7 @@ class Repository {
     }
   }
 
+  /// Opens an existing file at the given path in the repository.
   Future<File> openFile(
     String path,
   ) async {
@@ -4384,6 +4411,7 @@ class Repository {
     }
   }
 
+  /// Returns the entries of the directory at the given path in the repository.
   Future<List<DirectoryEntry>> readDirectory(
     String path,
   ) async {
@@ -4416,7 +4444,7 @@ class Repository {
     }
   }
 
-  /// Remove (delete) the file at the given path from the repository.
+  /// Removes (deletes) the file at the given path from the repository.
   Future<void> removeFile(
     String path,
   ) async {
@@ -4575,6 +4603,9 @@ class Repository {
     }
   }
 
+  /// Enabled or disables syncing with other replicas.
+  ///
+  /// Note syncing is initially disabled.
   Future<void> setSyncEnabled(
     bool enabled,
   ) async {
@@ -4590,13 +4621,13 @@ class Repository {
   }
 
   Future<ShareToken> share({
-    LocalSecret? localSecret,
     required AccessMode accessMode,
+    LocalSecret? localSecret,
   }) async {
     final request = RequestRepositoryShare(
       repo: handle,
-      localSecret: localSecret,
       accessMode: accessMode,
+      localSecret: localSecret,
     );
     final response = await client.invoke(request);
     switch (response) {
@@ -4637,6 +4668,7 @@ class File {
 
   File(this.client, this.handle);
 
+  /// Closes the file.
   Future<void> close(
   ) async {
     final request = RequestFileClose(
@@ -4649,6 +4681,7 @@ class File {
     }
   }
 
+  /// Flushes any pending writes to the file.
   Future<void> flush(
   ) async {
     final request = RequestFileFlush(
@@ -4661,6 +4694,7 @@ class File {
     }
   }
 
+  /// Returns the length of the file in bytes
   Future<int> getLength(
   ) async {
     final request = RequestFileGetLength(
@@ -4673,7 +4707,12 @@ class File {
     }
   }
 
-  /// Returns sync progress of the given file.
+  /// Returns the sync progress of this file, that is, the total byte size of all the blocks of
+  /// this file that's already been downloaded.
+  ///
+  /// Note that Ouisync downloads the blocks in random order, so until the file's been completely
+  /// downloaded, the already downloaded blocks are not guaranteed to continuous (there might be
+  /// gaps).
   Future<int> getProgress(
   ) async {
     final request = RequestFileGetProgress(
@@ -4703,6 +4742,7 @@ class File {
     }
   }
 
+  /// Truncates the file to the given length.
   Future<void> truncate(
     int len,
   ) async {
@@ -4717,6 +4757,7 @@ class File {
     }
   }
 
+  /// Writes the data to the file at the given offset.
   Future<void> write(
     int offset,
     List<int> data,

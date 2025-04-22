@@ -1,10 +1,19 @@
 package org.equalitie.ouisync.lib
 
-// import kotlinx.coroutines.flow.Flow
-// import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterIsInstance
 // import org.msgpack.core.MessagePacker
 // import java.security.SecureRandom
 // import java.util.Objects
+
+/**
+ * Subscribe to repository events.
+ *
+ * An even is emitted every time the content of the repo changes (e.g., a file is created,
+ * written to, removed, moved, ...).
+ */
+fun Repository.subscribe(): Flow<Unit> =
+    client.subscribe(Request.RepositorySubscribe(handle)).filterIsInstance<Unit>()
 
 // /**
 //  *
@@ -141,44 +150,10 @@ package org.equalitie.ouisync.lib
 //         }
 //     }
 
-//     /**
-//      * Closes the repository.
-//      */
-//     suspend fun close() = client.invoke(RepositoryClose(handle))
 
-//     /**
-//      * Deletes this repository.
-//      */
-//     suspend fun delete() = client.invoke(RepositoryDelete(handle))
 
-//     /**
-//      * Subscribe to repository events.
-//      *
-//      * An even is emitted every time the content of the repo changes (e.g., a file is created,
-//      * written to, removed, moved, ...).
-//      */
-//     fun subscribe(): Flow<Unit> =
-//         client.subscribe(RepositorySubscribe(handle)).filterIsInstance<Unit>()
 
-//     /**
-//      * Returns whether syncing with other replicas is enabled.
-//      */
-//     suspend fun isSyncEnabled() = client.invoke(RepositoryIsSyncEnabled(handle))
 
-//     /**
-//      * Enabled or disables syncing with other replicas.
-//      *
-//      * Note syncing is initially disabled.
-//      */
-//     suspend fun setSyncEnabled(enabled: Boolean) = client.invoke(RepositorySetSyncEnabled(handle, enabled))
-
-//     /**
-//      * Returns the info-hash used to announce the repo on the Bittorrent DHT.
-//      *
-//      * Note the announce happens automatically. This function exists just for information/debugging
-//      * purposes.
-//      */
-//     suspend fun infoHash() = client.invoke(RepositoryGetInfoHash(handle)) as String
 
 //     /**
 //      * Creates a *share token* to share this repository with other devices.
@@ -201,11 +176,6 @@ package org.equalitie.ouisync.lib
 //         return ShareToken(raw, client)
 //     }
 
-//     /**
-//      * Returns the access mode (*blind*, *read* or *write*) the repo is opened in.
-//      */
-//     suspend fun accessMode(): AccessMode =
-//         client.invoke(RepositoryGetAccessMode(handle)) as AccessMode
 
 //     /**
 //      * Switches the repository to the given access mode.
@@ -434,41 +404,5 @@ package org.equalitie.ouisync.lib
 //     }
 // }
 
-// /**
-//  * How to change access to a repository.
-//  *
-//  * @see [Repository.setAccess]
-//  */
-// sealed class AccessChange {
-//     fun pack(packer: MessagePacker) {
-//         when (this) {
-//             is EnableAccess -> {
-//                 packer.packMapHeader(1)
-//                 packer.packString("enable")
 
-//                 if (secret != null) {
-//                     secret.pack(packer)
-//                 } else {
-//                     packer.packNil()
-//                 }
-//             }
-//             is DisableAccess -> {
-//                 packer.packString("disabled")
-//             }
-//         }
-//     }
-// }
 
-// /**
-//  * Enable read or write access, optionally with local secret
-//  *
-//  * @see [Repository.setAccess]
-//  */
-// class EnableAccess(val secret: SetLocalSecret?) : AccessChange()
-
-// /**
-//  * Disable access
-//  *
-//  * @see [Repository.setAccess]
-//  */
-// class DisableAccess() : AccessChange()

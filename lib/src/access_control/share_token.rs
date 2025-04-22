@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 pub const PREFIX: &str = "https://ouisync.net/r";
 pub const VERSION: u64 = 1;
 
-/// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
+/// Token to share a repository. It can be encoded as a URL-formatted string and transmitted to
 /// other replicas.
 #[derive(Clone, Eq, PartialEq, Debug)]
 #[api(repr(String))]

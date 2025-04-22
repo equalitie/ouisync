@@ -1,98 +1,100 @@
 package org.equalitie.ouisync.lib
 
-// import kotlinx.coroutines.flow.emitAll
-// import kotlinx.coroutines.flow.filter
-// import kotlinx.coroutines.flow.first
-// import kotlinx.coroutines.flow.flow
-// import kotlinx.coroutines.test.runTest
-// import org.junit.After
-// import org.junit.Before
-// import org.junit.Test
-// import kotlin.io.path.createTempDirectory
-// import java.io.File as JFile
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
+import kotlin.io.path.createTempDirectory
+import java.io.File as JFile
 
-// class SyncTest {
-//     lateinit var tempDir: JFile
-//     lateinit var sessionA: Session
-//     lateinit var sessionB: Session
+class SyncTest {
+    lateinit var tempDir: JFile
 
-//     @Before
-//     fun setup() = runTest {
-//         tempDir = JFile(createTempDirectory().toString())
+    lateinit var serverA: Server
+    lateinit var sessionA: Session
 
-//         sessionA = Session.create(
-//             configPath = "$tempDir/a/config",
-//         )
+    lateinit var serverB: Server
+    lateinit var sessionB: Session
 
-//         sessionB = Session.create(
-//             configPath = "$tempDir/b/config",
-//         )
-//     }
+    @Before
+    fun setup() = runTest {
+        initLog { level, message -> println("[$level] $message") }
 
-//     @After
-//     fun teardown() = runTest {
-//         sessionA.close()
-//         sessionB.close()
-//         tempDir.deleteRecursively()
-//     }
+        tempDir = JFile(createTempDirectory().toString())
 
-//     @Test
-//     fun sync() = runTest {
-//         val repoA = Repository.create(
-//             sessionA,
-//             "$tempDir/a.ouisyncdb",
-//             readSecret = null,
-//             writeSecret = null,
-//         )
+        val configDirA = "$tempDir/a/config"
+        serverA = Server.start(configDirA, "A")
+        sessionA = Session.create(configDirA)
 
-//         val token = repoA.share()
-//         val repoB = Repository.create(
-//             sessionB,
-//             "$tempDir/b.ouisyncdb",
-//             readSecret = null,
-//             writeSecret = null,
-//             token = token,
-//         )
+        val configDirB = "$tempDir/b/config"
+        serverB = Server.start(configDirB, "B")
+        sessionB = Session.create(configDirB)
+    }
 
-//         sessionA.bindNetwork(listOf("quic/127.0.0.1:0"))
-//         sessionB.bindNetwork(listOf("quic/127.0.0.1:0"))
+    @After
+    fun teardown() = runTest {
+        sessionA.close()
+        serverA.stop()
 
-//         val addrsA = sessionA.networkLocalListenerAddrs()
-//         sessionB.addUserProvidedPeers(addrsA)
+        sessionB.close()
+        serverB.stop()
 
-//         repoA.setSyncEnabled(true)
-//         repoB.setSyncEnabled(true)
+        tempDir.deleteRecursively()
+    }
 
-//         val contentA = "hello world"
-//         val fileA = File.create(repoA, "test.txt")
-//         fileA.write(0, contentA.toByteArray())
-//         fileA.close()
+    @Test
+    fun sync() = runTest {
+        val repoA = sessionA.createRepository("$tempDir/a.ouisyncdb")
 
-//         flow {
-//             emit(Unit)
-//             emitAll(repoB.subscribe())
-//         }
-//             .filter checkContent@{
-//                 try {
-//                     val fileB = File.open(repoB, "test.txt")
-//                     try {
-//                         val length = fileB.length()
-//                         val contentB = fileB.read(0, length).decodeToString()
+        val token = repoA.share(AccessMode.WRITE)
+        val repoB = sessionB.createRepository(
+            "$tempDir/b.ouisyncdb",
+            token = token,
+        )
 
-//                         if (contentB == contentA) {
-//                             return@checkContent true
-//                         }
-//                     } finally {
-//                         fileB.close()
-//                     }
-//                 } catch (e: Exception) {
-//                 }
+        sessionA.bindNetwork(listOf("quic/127.0.0.1:0"))
+        sessionB.bindNetwork(listOf("quic/127.0.0.1:0"))
 
-//                 return@checkContent false
-//             }
-//             .first()
+        val addrsA = sessionA.getLocalListenerAddrs()
+        sessionB.addUserProvidedPeers(addrsA)
 
-//         repoA.close()
-//         repoB.close()
-//     }
-// }
+        repoA.setSyncEnabled(true)
+        repoB.setSyncEnabled(true)
+
+        val contentA = "hello world"
+        val fileA = repoA.createFile("test.txt")
+        fileA.write(0, contentA.toByteArray())
+        fileA.close()
+
+        flow {
+            emit(Unit)
+            emitAll(repoB.subscribe())
+        }
+            .filter checkContent@{
+                try {
+                    val fileB = repoB.openFile("test.txt")
+                    try {
+                        val length = fileB.getLength()
+                        val contentB = fileB.read(0, length).decodeToString()
+
+                        if (contentB == contentA) {
+                            return@checkContent true
+                        }
+                    } finally {
+                        fileB.close()
+                    }
+                } catch (e: Exception) {
+                }
+
+                return@checkContent false
+            }
+            .first()
+
+        repoA.close()
+        repoB.close()
+    }
+}

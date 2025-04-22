@@ -112,10 +112,16 @@ class SerializationTest {
 
     @Test
     fun encodeDecodeSealedWithInlineClass() {
-        encodeDecode(TestSealedWithInline.Inline(5) as TestSealedWithInline) {
+        encodeDecode(TestSealedWithInline.A(5) as TestSealedWithInline) {
             packMapHeader(1)
-            packString("Inline")
+            packString("A")
             packShort(5)
+        }
+
+        encodeDecode(TestSealedWithInline.B("foo") as TestSealedWithInline) {
+            packMapHeader(1)
+            packString("B")
+            packString("foo")
         }
     }
 
@@ -155,6 +161,7 @@ private enum class TestEnum {
 private enum class TestAnnotatedEnum {
     @Value(2)
     Two,
+
     @Value(4)
     Four,
 }
@@ -165,13 +172,13 @@ private data class TestClass(val name: String, val code: Long)
 @Serializable
 private sealed interface TestSealed {
     @Serializable
-    data class A(val value: Boolean): TestSealed
+    data class A(val value: Boolean) : TestSealed
 
     @Serializable
-    data class B(val key: String, val value: Long): TestSealed
+    data class B(val key: String, val value: Long) : TestSealed
 
     @Serializable
-    object C: TestSealed
+    object C : TestSealed
 }
 
 @Serializable
@@ -191,7 +198,11 @@ private value class TestInline(val value: Int)
 private sealed interface TestSealedWithInline {
     @Serializable
     @JvmInline
-    value class Inline(val value: Short): TestSealedWithInline
+    value class A(val value: Short) : TestSealedWithInline
+
+    @Serializable
+    @JvmInline
+    value class B(val value: String) : TestSealedWithInline
 }
 
 @Serializable

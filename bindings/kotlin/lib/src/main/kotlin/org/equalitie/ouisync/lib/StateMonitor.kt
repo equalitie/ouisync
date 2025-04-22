@@ -7,9 +7,6 @@ import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import org.msgpack.core.MessagePacker
-import org.msgpack.core.MessageUnpacker
-
 
 @Serializable(with = IdSerializer::class)
 data class MonitorId(val name: String, val disambiguator: Long) {
@@ -52,10 +49,10 @@ class StateMonitorNode(val values: Map<String, String>, val children: List<Monit
     // }
 }
 
-private object IdSerializer: KSerializer<MonitorId> {
+private object IdSerializer : KSerializer<MonitorId> {
     override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor(
         MonitorId::class.qualifiedName!!,
-        PrimitiveKind.STRING
+        PrimitiveKind.STRING,
     )
 
     override fun serialize(encoder: Encoder, value: MonitorId) {
@@ -73,4 +70,3 @@ private object IdSerializer: KSerializer<MonitorId> {
         return MonitorId(name, disambiguator)
     }
 }
-

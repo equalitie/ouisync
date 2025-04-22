@@ -1,7 +1,8 @@
 use anyhow::Result;
-use heck::AsShoutySnakeCase;
+use heck::{AsLowerCamelCase, AsPascalCase, AsShoutySnakeCase, AsSnakeCase};
 use ouisync_api_parser::{
-    ComplexEnum, Context, Docs, EnumRepr, Fields, Item, SimpleEnum, Struct, Type,
+    ComplexEnum, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
+    ToResponseVariantName, Type,
 };
 use std::{
     fmt,
@@ -18,6 +19,7 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     writeln!(out)?;
     writeln!(out, "package {PACKAGE}")?;
     writeln!(out)?;
+    writeln!(out, "import java.util.Objects")?;
     writeln!(out, "import kotlinx.datetime.Instant")?;
     writeln!(out, "import kotlinx.serialization.Serializable")?;
     writeln!(out, "import kotlinx.serialization.UseSerializers")?;
@@ -40,19 +42,24 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     write_complex_enum(out, "Request", &ctx.request.to_enum())?;
     write_complex_enum(out, "Response", &ctx.response.to_enum())?;
 
-    // write_api_class(out, "Session", None, &ctx.request.variants)?;
-    // write_api_class(
-    //     out,
-    //     "Repository",
-    //     Some(("handle", "RepositoryHandle")),
-    //     &ctx.request.variants,
-    // )?;
-    // write_api_class(
-    //     out,
-    //     "File",
-    //     Some(("handle", "FileHandle")),
-    //     &ctx.request.variants,
-    // )?;
+    write_api_class(out, "Session", None, &ctx.request.variants)?;
+    write_api_class(
+        out,
+        "Repository",
+        Some(("handle", "RepositoryHandle")),
+        &ctx.request.variants,
+    )?;
+    write_api_class(
+        out,
+        "File",
+        Some(("handle", "FileHandle")),
+        &ctx.request.variants,
+    )?;
+
+    writeln!(
+        out,
+        "open class UnexpectedResponse: OuisyncException.InvalidData(\"unexpected response\")"
+    )?;
 
     Ok(())
 }
@@ -119,7 +126,12 @@ fn write_complex_enum(out: &mut dyn Write, name: &str, item: &ComplexEnum) -> Re
                 writeln!(out, "{I}class {variant_name}(")?;
 
                 for (field_name, field) in fields {
-                    writeln!(out, "{I}{I}val {field_name}: {},", KotlinType(&field.ty),)?;
+                    writeln!(
+                        out,
+                        "{I}{I}val {}: {},",
+                        AsLowerCamelCase(field_name),
+                        KotlinType(&field.ty),
+                    )?;
                 }
 
                 writeln!(out, "{I}) : {name}")?;
@@ -155,7 +167,12 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
             writeln!(out, "data class {name}(")?;
 
             for (field_name, field) in fields {
-                writeln!(out, "{I}val {field_name}: {},", KotlinType(&field.ty))?;
+                writeln!(
+                    out,
+                    "{I}val {}: {},",
+                    AsLowerCamelCase(field_name),
+                    KotlinType(&field.ty)
+                )?;
             }
 
             write!(out, ")")?;
@@ -175,7 +192,10 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
 
     if item.secret {
         writeln!(out, " {{")?;
-        writeln!(out, "{I}override fun toString() = \"****\"")?;
+        writeln!(
+            out,
+            "{I}override fun toString() = \"${{this::class.simpleName}}(******)\""
+        )?;
         writeln!(out, "}}")?;
     } else {
         writeln!(out)?;
@@ -255,6 +275,209 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
     Ok(())
 }
 
+fn write_api_class(
+    out: &mut dyn Write,
+    name: &str,
+    inner: Option<(&str, &str)>,
+    request_variants: &[(String, RequestVariant)],
+) -> Result<()> {
+    write!(
+        out,
+        "open class {name} internal constructor (internal val client: Client"
+    )?;
+
+    if let Some((name, ty)) = inner {
+        write!(out, ", internal val {name}: {ty}")?;
+    }
+
+    writeln!(out, ") {{")?;
+
+    writeln!(out, "{I}companion object {{ }}")?;
+    writeln!(out)?;
+
+    let prefix = format!("{}_", AsSnakeCase(name));
+
+    for (variant_name, variant) in request_variants {
+        // Event subscription / unsubscription is handled manually
+        if variant_name.contains("subscribe") {
+            continue;
+        }
+
+        let Some(op_name) = variant_name.strip_prefix(&prefix) else {
+            continue;
+        };
+
+        // Return type
+        let ret = match &variant.ret {
+            Type::Result(ty, _) => ty,
+            ty => ty,
+        };
+        // Return type with the "Handle" suffix stripped. Useful for mapping handles to their target
+        // types (e.g., `RepositoryHandle` -> `Repository`).
+        let ret_stripped = ret.strip_suffix("Handle");
+        let response_variant_name = ret.to_response_variant_name();
+
+        // Use default argument only if there is at least one other non-default argument.
+        let use_default_args = variant
+            .fields
+            .iter()
+            .skip(if inner.is_some() { 1 } else { 0 })
+            .any(|(_, field)| KotlinType(&field.ty).default().is_none());
+
+        write_docs(out, I, &variant.docs)?;
+        writeln!(out, "{I}suspend fun {}(", AsLowerCamelCase(op_name))?;
+
+        for (index, (arg_name, field)) in variant.fields.iter().enumerate() {
+            if index == 0 && inner.is_some() {
+                continue;
+            }
+
+            let ty = KotlinType(&field.ty);
+
+            write!(
+                out,
+                "{I}{I}{}: {}",
+                AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME)),
+                ty
+            )?;
+
+            if use_default_args {
+                if let Some(default) = ty.default() {
+                    write!(out, " = {default}")?;
+                }
+            }
+
+            writeln!(out, ",")?;
+        }
+
+        write!(out, "{I})")?;
+
+        match ret {
+            Type::Unit => (),
+            _ => write!(
+                out,
+                ": {}",
+                ret_stripped
+                    .as_ref()
+                    .map(KotlinType)
+                    .unwrap_or(KotlinType(ret))
+            )?,
+        }
+
+        writeln!(out, " {{")?;
+
+        // request
+        write!(
+            out,
+            "{I}{I}val request = Request.{}",
+            AsPascalCase(variant_name)
+        )?;
+
+        if !variant.fields.is_empty() {
+            writeln!(out, "(")?;
+
+            let inner_name = inner.map(|(name, _)| AsLowerCamelCase(name));
+
+            for (index, (arg_name, _)) in variant.fields.iter().enumerate() {
+                let arg_name = AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
+
+                if index == 0 {
+                    if let Some(inner_name) = &inner_name {
+                        writeln!(out, "{I}{I}{I}{inner_name},")?;
+                        continue;
+                    }
+                }
+
+                writeln!(out, "{I}{I}{I}{arg_name},")?;
+            }
+
+            writeln!(out, "{I}{I})")?;
+        } else {
+            writeln!(out)?;
+        }
+
+        // response
+        writeln!(out, "{I}{I}val response = client.invoke(request)")?;
+        writeln!(out, "{I}{I}when (response) {{")?;
+
+        match ret {
+            Type::Unit => writeln!(out, "{I}{I}{I}is Response.None -> return")?,
+            Type::Option(_) => {
+                write!(
+                    out,
+                    "{I}{I}{I}is Response.{} -> return ",
+                    response_variant_name,
+                )?;
+
+                match ret_stripped {
+                    Some(Type::Option(w)) => {
+                        write!(
+                            out,
+                            "if (response.value != null) {w}(client, response.value) else null"
+                        )?;
+                    }
+                    Some(_) => unreachable!(),
+                    None => write!(out, "response.value")?,
+                }
+
+                writeln!(out)?;
+                writeln!(out, "{I}{I}{I}is Response.None -> return null")?;
+            }
+            _ => {
+                write!(
+                    out,
+                    "{I}{I}{I}is Response.{} -> return ",
+                    response_variant_name,
+                )?;
+
+                match ret_stripped {
+                    Some(Type::Scalar(w)) => write!(out, "{w}(client, response.value)")?,
+                    Some(Type::Vec(w)) => write!(out, "response.value.map {{ {w}(client, it) }}")?,
+                    Some(Type::Map(_, w)) => {
+                        write!(out, "response.value.mapValues {{ {w}(client, it.value) }}")?
+                    }
+                    Some(_) => unreachable!(),
+                    None => write!(out, "response.value")?,
+                }
+
+                writeln!(out)?;
+            }
+        }
+
+        writeln!(out, "{I}{I}{I}else -> throw UnexpectedResponse()")?;
+        writeln!(out, "{I}{I}}}")?;
+
+        writeln!(out, "{I}}}")?;
+        writeln!(out)?;
+    }
+
+    // equals + hashCode + toString
+    if let Some((inner_name, _)) = inner {
+        writeln!(out, "{I}override fun equals(other: Any?): Boolean =")?;
+        writeln!(
+            out,
+            "{I}{I}other is {name} && client == other.client && {inner_name} == other.{inner_name}"
+        )?;
+
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{I}override fun hashCode(): Int = Objects.hash(client, {inner_name})"
+        )?;
+
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{I}override fun toString(): String = \"${{this::class.simpleName}}(${inner_name})\""
+        )?;
+    }
+
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    Ok(())
+}
+
 fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> io::Result<()> {
     if docs.lines.is_empty() {
         return Ok(());
@@ -272,6 +495,16 @@ fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> io::Result<()> 
 }
 
 struct KotlinType<'a>(&'a Type);
+
+impl KotlinType<'_> {
+    fn default(&self) -> Option<&str> {
+        match self.0 {
+            Type::Option(_) => Some("null"),
+            Type::Scalar(s) if s == "bool" => Some("false"),
+            _ => None,
+        }
+    }
+}
 
 impl fmt::Display for KotlinType<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
