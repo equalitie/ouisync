@@ -221,11 +221,22 @@ impl State {
         self.network.subscribe()
     }
 
+    /// Returns our Ouisync protocol version.
+    ///
+    /// In order to establish connections with peers, they must use the same protocol version as
+    /// us.
+    ///
+    /// See also [Self::session_get_highest_seen_protocol_version]
     #[api]
     pub fn session_get_current_protocol_version(&self) -> u64 {
         self.network.current_protocol_version()
     }
 
+    /// Returns the highest protocol version of all known peers.
+    ///
+    /// If this is higher than [our version](Self::session_get_current_protocol_version) it likely
+    /// means we are using an outdated version of Ouisync. When a peer with higher protocol version
+    /// is found, a [NetworkEvent::ProtocolVersionMismatch] is emitted.
     #[api]
     pub fn session_get_highest_seen_protocol_version(&self) -> u64 {
         self.network.highest_seen_protocol_version()
@@ -266,11 +277,23 @@ impl State {
         self.network.nat_behavior().await
     }
 
+    /// Returns info about all known peers (both discovered and explicitly added).
+    ///
+    /// When the set of known peers changes, a [NetworkEvent::PeerSetChange] is emitted. Calling
+    /// this function afterwards returns the new peer info.
     #[api]
     pub fn session_get_peers(&self) -> Vec<PeerInfo> {
         self.network.peer_info_collector().collect()
     }
 
+    /// Adds peers to connect to.
+    ///
+    /// Normally peers are discovered automatically (using Bittorrent DHT, Peer exchange or Local
+    /// discovery) but this function is useful in case when the discovery is not available for any
+    /// reason (e.g. in an isolated network).
+    ///
+    /// Note that peers added with this function are remembered across restarts. To forget peers,
+    /// use [Self::session_remove_user_provided_peers].
     #[api]
     pub async fn session_add_user_provided_peers(&self, addrs: Vec<PeerAddr>) {
         let entry = self.config.entry(PEERS_KEY);
@@ -290,6 +313,7 @@ impl State {
         }
     }
 
+    /// Removes peers previously added with [Self::session_add_user_provided_peers].
     #[api]
     pub async fn session_remove_user_provided_peers(&self, addrs: Vec<PeerAddr>) {
         let entry = self.config.entry(PEERS_KEY);
@@ -312,11 +336,13 @@ impl State {
         self.config.entry(PEERS_KEY).get().await.unwrap_or_default()
     }
 
+    /// Is local discovery enabled?
     #[api]
     pub fn session_is_local_discovery_enabled(&self) -> bool {
         self.network.is_local_discovery_enabled()
     }
 
+    /// Enables/disables local discovery.
     #[api]
     pub async fn session_set_local_discovery_enabled(&self, enabled: bool) {
         self.config
@@ -327,11 +353,13 @@ impl State {
         self.network.set_local_discovery_enabled(enabled);
     }
 
+    /// Is port forwarding (UPnP) enabled?
     #[api]
     pub fn session_is_port_forwarding_enabled(&self) -> bool {
         self.network.is_port_forwarding_enabled()
     }
 
+    /// Enables/disables port forwarding (UPnP).
     #[api]
     pub async fn session_set_port_forwarding_enabled(&self, enabled: bool) {
         self.config
@@ -375,6 +403,10 @@ impl State {
         self.network.set_pex_send_enabled(enabled);
     }
 
+    /// Returns the runtime id of this Ouisync instance.
+    ///
+    /// The runtime id is a unique identifier of this instance which is randomly generated every
+    /// time Ouisync starts.
     #[api]
     pub fn session_get_runtime_id(&self) -> PublicRuntimeId {
         self.network.this_runtime_id()
@@ -548,6 +580,22 @@ impl State {
             .map(|handle, holder| (holder.path().to_owned(), handle))
     }
 
+    /// Creates a new repository.
+    ///
+    /// - `path`: path to the repository file or name of the repository.
+    /// - `read_secret`: local secret for reading the repository on this device only. Do not share
+    ///   with peers!. If null, the repo won't be protected and anyone with physical access to the
+    ///   device will be able to read it.
+    /// - `write_secret`: local secret for writing to the repository on this device only. Do not
+    ///   share with peers! Can be the same as `read_secret` if one wants to use only one secret
+    ///   for both reading and writing.  Separate secrets are useful for plausible deniability. If
+    ///   both `read_secret` and `write_secret` are `None`, the repo won't be protected and anyone
+    ///   with physical access to the device will be able to read and write to it. If `read_secret`
+    ///   is not `None` but `write_secret` is `None`, the repo won't be writable from this device.
+    /// - `token`: used to share repositories between devices. If not `None`, this repo will be
+    ///   linked with the repos with the same token on other devices. See also
+    ///   [Self::repository_share]. This also determines the maximal access mode the repo can be
+    ///   opened in. If `None`, it's *write* mode.
     #[api]
     #[expect(clippy::too_many_arguments)] // TODO: extract the args to a struct
     pub async fn session_create_repository(
@@ -638,6 +686,15 @@ impl State {
         Ok(())
     }
 
+    /// Opens an existing repository.
+    ///
+    /// - `path`: path to the local file the repo is stored in.
+    /// - `local_secret`: a local secret. See the `read_secret` and `write_secret` params in
+    ///   [Self::session_create_repository] for more details. If this repo uses local secret
+    ///   (s), this determines the access mode the repo is opened in: `read_secret` opens it
+    ///   in *read* mode, `write_secret` opens it in *write* mode and no secret or wrong secret
+    ///   opens it in *blind* mode. If this repo doesn't use local secret(s), the repo is opened in
+    ///   the maximal mode specified when the repo was created.
     #[api]
     pub async fn session_open_repository(
         &self,
@@ -731,6 +788,17 @@ impl State {
         Ok(output_path)
     }
 
+    /// Creates a *share token* to share this repository with other devices.
+    ///
+    /// By default the access mode of the token will be the same as the mode the repo is currently
+    /// opened in but it can be escalated with the `local_secret` param or de-escalated with the
+    /// `access_mode` param.
+    ///
+    /// - `access_mode`: access mode of the token. Useful to de-escalate the access mode to below of
+    ///   what the repo is opened in.
+    /// - `local_secret`: the local repo secret. If not `None`, the share token's access mode will
+    ///   be the same as what the secret provides. Useful to escalate the access mode to above of
+    ///   what the repo is opened in.
     #[api]
     pub async fn repository_share(
         &self,
@@ -797,6 +865,30 @@ impl State {
         Ok(())
     }
 
+    /// Sets, unsets or changes local secrets for accessing the repository or disables the given
+    /// access mode.
+    ///
+    /// ## Examples
+    ///
+    /// To protect both read and write access with the same password:
+    ///
+    /// ```kotlin
+    /// val password = Password("supersecret")
+    /// repo.setAccess(read: AccessChange.Enable(password), write: AccessChange.Enable(password))
+    /// ```
+    ///
+    /// To require password only for writing:
+    ///
+    /// ```kotlin
+    /// repo.setAccess(read: AccessChange.Enable(null), write: AccessChange.Enable(password))
+    /// ```
+    ///
+    /// To competelly disable write access but leave read access as it was. Warning: this operation
+    /// is currently irreversibe.
+    ///
+    /// ```kotlin
+    /// repo.setAccess(read: null, write: AccessChange.Disable)
+    /// ```
     #[api]
     pub async fn repository_set_access(
         &self,
@@ -820,6 +912,11 @@ impl State {
             .ok_or(Error::InvalidArgument)
     }
 
+    /// Switches the repository to the given access mode.
+    ///
+    /// - `access_mode` is the desired access mode to switch to.
+    /// - `local_secret` is the local secret protecting the desired access mode. Can be `None` if no
+    ///   local secret is used.
     #[api]
     pub async fn repository_set_access_mode(
         &self,
@@ -836,6 +933,8 @@ impl State {
         Ok(())
     }
 
+    /// Gets the current credentials of this repository. Can be used to restore access after closing
+    /// and reopening the repository.
     #[api]
     pub fn repository_get_credentials(&self, repo: RepositoryHandle) -> Result<Vec<u8>, Error> {
         self.repos
@@ -843,6 +942,7 @@ impl State {
             .ok_or(Error::InvalidArgument)
     }
 
+    /// Sets the current credentials of the repository.
     #[api]
     pub async fn repository_set_credentials(
         &self,
@@ -964,6 +1064,8 @@ impl State {
         Ok(())
     }
 
+    /// Returns the synchronization progress of this repository as the number of bytes already
+    /// synced ([Progress.value]) vs. the total size of the repository in bytes ([Progress.total]).
     #[api]
     pub async fn repository_get_sync_progress(
         &self,
@@ -977,6 +1079,7 @@ impl State {
         Ok(repo.sync_progress().await?)
     }
 
+    /// Is Bittorrent DHT enabled?
     #[api]
     pub async fn repository_is_dht_enabled(&self, repo: RepositoryHandle) -> Result<bool, Error> {
         let result = self
@@ -994,6 +1097,7 @@ impl State {
         }
     }
 
+    /// Enables/disabled Bittorrent DHT (for peer discovery).
     #[api]
     pub async fn repository_set_dht_enabled(
         &self,
@@ -1013,6 +1117,7 @@ impl State {
         Ok(())
     }
 
+    /// Is Peer Exchange enabled?
     #[api]
     pub async fn repository_is_pex_enabled(&self, repo: RepositoryHandle) -> Result<bool, Error> {
         let result = self
@@ -1030,6 +1135,7 @@ impl State {
         }
     }
 
+    /// Enables/disables Peer Exchange (for peer discovery).
     #[api]
     pub async fn repository_set_pex_enabled(
         &self,
@@ -1060,6 +1166,14 @@ impl State {
             .ok_or(Error::InvalidArgument)
     }
 
+    /// Creates mirror of this repository on the given cache server host.
+    ///
+    /// Cache servers relay traffic between Ouisync peers and also temporarily store data. They are
+    /// useful when direct P2P connection fails (e.g. due to restrictive NAT) and also to allow
+    /// syncing when the peers are not online at the same time (they still need to be online within
+    /// ~24 hours of each other).
+    ///
+    /// Requires the repository to be opened in write mode.
     #[api]
     pub async fn repository_create_mirror(
         &self,
@@ -1083,6 +1197,9 @@ impl State {
         Ok(())
     }
 
+    /// Deletes mirror of this repository from the given cache server host.
+    ///
+    /// Requires the repository to be opened in write mode.
     #[api]
     pub async fn repository_delete_mirror(
         &self,
@@ -1106,6 +1223,7 @@ impl State {
         Ok(())
     }
 
+    /// Checks if this repository is mirrored on the given cache server host.
     #[api]
     pub async fn repository_mirror_exists(
         &self,
@@ -1325,6 +1443,7 @@ impl State {
         }
     }
 
+    /// Moves an entry (file or directory) from `src` to `dst`.
     #[api]
     pub async fn repository_move_entry(
         &self,
