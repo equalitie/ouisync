@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:test/test.dart';
 
+import 'utils.dart';
+
 void main() {
   late io.Directory temp;
   late Session session;
@@ -33,7 +35,7 @@ void main() {
 
   tearDown(() async {
     await session.close();
-    await temp.delete(recursive: true);
+    await deleteTempDir(temp);
   });
 
   test('Move folder ok when folder to move is empty', () async {

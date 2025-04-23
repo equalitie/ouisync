@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:test/test.dart';
 
+import 'utils.dart';
+
 void main() {
   late io.Directory temp;
   late Session session;
@@ -49,7 +51,7 @@ void main() {
   tearDown(() async {
     await subscription.cancel();
     await session.close();
-    await temp.delete(recursive: true);
+    await deleteTempDir(temp);
   });
 
   test('Add file to directory with syncing not in directory', () async {

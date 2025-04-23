@@ -4,6 +4,8 @@ import 'package:test/test.dart';
 import 'package:ouisync/ouisync.dart';
 import 'package:ouisync/state_monitor.dart';
 
+import 'utils.dart';
+
 void main() {
   late io.Directory temp;
   late Session session;
@@ -26,12 +28,7 @@ void main() {
 
   tearDown(() async {
     await session.close();
-
-    try {
-      await temp.delete(recursive: true);
-    } on io.PathNotFoundException {
-      // TODO: Why does this sometimes happen?
-    }
+    await deleteTempDir(temp);
   });
 
   group('repository', () {

@@ -3,6 +3,8 @@ import 'dart:io' as io;
 import 'package:test/test.dart';
 import 'package:ouisync/ouisync.dart';
 
+import 'utils.dart';
+
 void main() {
   late io.Directory temp;
   late Session session1;
@@ -51,12 +53,7 @@ void main() {
   tearDown(() async {
     await session2.close();
     await session1.close();
-
-    try {
-      await temp.delete(recursive: true);
-    } on io.PathNotFoundException {
-      // TODO: Why does this sometimes happen?
-    }
+    await deleteTempDir(temp);
   });
 
   test('notification on sync', () async {
