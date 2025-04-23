@@ -132,7 +132,7 @@ class RepositoryTest {
 
             it.setAccess(
                 read = AccessChange.Enable(SetLocalSecret.Password(Password("banana"))),
-                write = AccessChange.Enable(SetLocalSecret.Password(Password("banana")))
+                write = AccessChange.Enable(SetLocalSecret.Password(Password("banana"))),
             )
             checkAccessMode(it, set = AccessMode.READ, expected = AccessMode.BLIND)
             checkAccessMode(it, set = AccessMode.WRITE, expected = AccessMode.BLIND)
@@ -327,7 +327,7 @@ class RepositoryTest {
 
         session.openRepository(
             repoPath,
-            localSecret = LocalSecret.Password(readPassword)
+            localSecret = LocalSecret.Password(readPassword),
         ).also { repo ->
             assertEquals(AccessMode.READ, repo.getAccessMode())
             repo.close()
@@ -335,7 +335,7 @@ class RepositoryTest {
 
         session.openRepository(
             repoPath,
-            localSecret = LocalSecret.Password(writePassword)
+            localSecret = LocalSecret.Password(writePassword),
         ).also { repo ->
             assertEquals(AccessMode.WRITE, repo.getAccessMode())
             repo.close()
@@ -364,7 +364,7 @@ class RepositoryTest {
 
         session.openRepository(
             repoPath,
-            localSecret = LocalSecret.SecretKey(readKey)
+            localSecret = LocalSecret.SecretKey(readKey),
         ).also { repo ->
             assertEquals(AccessMode.READ, repo.getAccessMode())
             repo.close()
@@ -372,7 +372,7 @@ class RepositoryTest {
 
         session.openRepository(
             repoPath,
-            localSecret = LocalSecret.SecretKey(writeKey)
+            localSecret = LocalSecret.SecretKey(writeKey),
         ).also { repo ->
             assertEquals(AccessMode.WRITE, repo.getAccessMode())
             repo.close()
