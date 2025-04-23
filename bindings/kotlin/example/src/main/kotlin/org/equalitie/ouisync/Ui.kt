@@ -56,11 +56,12 @@ import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import org.equalitie.ouisync.lib.Directory
+import org.equalitie.ouisync.lib.AccessMode
 import org.equalitie.ouisync.lib.DirectoryEntry
 import org.equalitie.ouisync.lib.EntryType
 import org.equalitie.ouisync.lib.File
 import org.equalitie.ouisync.lib.Repository
+import org.equalitie.ouisync.lib.subscribe
 import java.security.MessageDigest
 
 private const val TAG = "ouisync.example"
@@ -302,14 +303,14 @@ fun FolderDetail(
     path: String = "",
     onEntryClicked: (DirectoryEntry) -> Unit = {},
 ) {
-    var directory by remember { mutableStateOf<Directory>(Directory.empty()) }
+    var directory by remember { mutableStateOf<List<DirectoryEntry>>(emptyList()) }
 
     // Refresh the directory on every notification event from the repo.
     LaunchedEffect(repository, path) {
-        directory = Directory.read(repository, path)
+        directory = repository.readDirectory(path)
 
         repository.subscribe().collect {
-            directory = Directory.read(repository, path)
+            directory = repository.readDirectory(path)
         }
     }
 
@@ -395,7 +396,7 @@ fun FileDetail(repo: Repository, path: String, modifier: Modifier = Modifier) {
                 // Try to open the file. If the file is not synced yet, this throws. We catch the
                 // exception, wait for a notification event (which signals that the repository
                 // content has changed) and try again.
-                val file = File.open(repo, path)
+                val file = repo.openFile(path)
 
                 maybeFile = file
                 error = null
@@ -406,7 +407,7 @@ fun FileDetail(repo: Repository, path: String, modifier: Modifier = Modifier) {
                 //
                 // Note: It's possible for the file to change while it's length remain the same but
                 // we don't handle such situation here for simplicity.
-                var newLength = file.length()
+                var newLength = file.getLength()
 
                 if (newLength != length) {
                     length = newLength
@@ -423,7 +424,7 @@ fun FileDetail(repo: Repository, path: String, modifier: Modifier = Modifier) {
                 // Wait until the file is completelly synced. Reporting the sync progress on each
                 // notification event.
                 while (true) {
-                    val progress = file.progress()
+                    val progress = file.getProgress()
 
                     syncProgress = if (length > 0) {
                         progress.toFloat() / length.toFloat()
@@ -673,7 +674,7 @@ fun DeleteRepositoryDialog(onSubmit: () -> Unit = {}, onCancel: () -> Unit = {})
 }
 
 suspend fun shareRepository(context: Context, repo: Repository) {
-    val token = repo.share().toString()
+    val token = repo.share(AccessMode.WRITE).toString()
 
     val sendIntent = Intent().apply {
         action = Intent.ACTION_SEND

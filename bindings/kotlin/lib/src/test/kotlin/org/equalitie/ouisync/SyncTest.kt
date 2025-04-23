@@ -13,58 +13,60 @@ import java.io.File as JFile
 
 class SyncTest {
     lateinit var tempDir: JFile
+
+    lateinit var serverA: Server
     lateinit var sessionA: Session
+
+    lateinit var serverB: Server
     lateinit var sessionB: Session
 
     @Before
     fun setup() = runTest {
+        initLog { level, message -> println("[$level] $message") }
+
         tempDir = JFile(createTempDirectory().toString())
 
-        sessionA = Session.create(
-            configPath = "$tempDir/a/config",
-        )
+        val configDirA = "$tempDir/a/config"
+        serverA = Server.start(configDirA, "A")
+        sessionA = Session.create(configDirA)
 
-        sessionB = Session.create(
-            configPath = "$tempDir/b/config",
-        )
+        val configDirB = "$tempDir/b/config"
+        serverB = Server.start(configDirB, "B")
+        sessionB = Session.create(configDirB)
     }
 
     @After
     fun teardown() = runTest {
         sessionA.close()
+        serverA.stop()
+
         sessionB.close()
+        serverB.stop()
+
         tempDir.deleteRecursively()
     }
 
     @Test
     fun sync() = runTest {
-        val repoA = Repository.create(
-            sessionA,
-            "$tempDir/a.ouisyncdb",
-            readSecret = null,
-            writeSecret = null,
-        )
+        val repoA = sessionA.createRepository("$tempDir/a.ouisyncdb")
 
-        val token = repoA.share()
-        val repoB = Repository.create(
-            sessionB,
+        val token = repoA.share(AccessMode.WRITE)
+        val repoB = sessionB.createRepository(
             "$tempDir/b.ouisyncdb",
-            readSecret = null,
-            writeSecret = null,
             token = token,
         )
 
         sessionA.bindNetwork(listOf("quic/127.0.0.1:0"))
         sessionB.bindNetwork(listOf("quic/127.0.0.1:0"))
 
-        val addrsA = sessionA.networkLocalListenerAddrs()
+        val addrsA = sessionA.getLocalListenerAddrs()
         sessionB.addUserProvidedPeers(addrsA)
 
         repoA.setSyncEnabled(true)
         repoB.setSyncEnabled(true)
 
         val contentA = "hello world"
-        val fileA = File.create(repoA, "test.txt")
+        val fileA = repoA.createFile("test.txt")
         fileA.write(0, contentA.toByteArray())
         fileA.close()
 
@@ -74,9 +76,9 @@ class SyncTest {
         }
             .filter checkContent@{
                 try {
-                    val fileB = File.open(repoB, "test.txt")
+                    val fileB = repoB.openFile("test.txt")
                     try {
-                        val length = fileB.length()
+                        val length = fileB.getLength()
                         val contentB = fileB.read(0, length).decodeToString()
 
                         if (contentB == contentA) {

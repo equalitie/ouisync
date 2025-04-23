@@ -17,12 +17,16 @@ use super::{
 // State` and `impl Service`.
 include!(concat!(env!("OUT_DIR"), "/request.rs"));
 
+/// Default network parameters
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[api]
 pub struct NetworkDefaults {
     #[serde(with = "helpers::strs")]
+    /// Default addresses to bind to
     pub bind: Vec<PeerAddr>,
+    /// Is port forwarding (UPnP) enabled by default?
     pub port_forwarding_enabled: bool,
+    /// Is local discovery enabled by default?
     pub local_discovery_enabled: bool,
 }
 

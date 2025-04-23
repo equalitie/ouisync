@@ -15,20 +15,25 @@ import java.io.File as JFile
 class RepositoryTest {
     lateinit var tempDir: JFile
     lateinit var session: Session
+    lateinit var server: Server
 
     @Before
     fun setup() = runTest {
+        initLog { level, message -> println("[$level] $message") }
+
         tempDir = JFile(createTempDirectory().toString())
+        val configDir = "$tempDir/config"
 
-        initLog("$tempDir/test.log")
+        server = Server.start(configDir)
 
-        session = Session.create(configPath = "$tempDir/config")
+        session = Session.create(configDir)
         session.setStoreDir("$tempDir/store")
     }
 
     @After
     fun teardown() = runTest {
         session.close()
+        server.stop()
         tempDir.deleteRecursively()
     }
 
@@ -44,7 +49,7 @@ class RepositoryTest {
 
         try {
             repo.close()
-            repo = Repository.open(session, repoName)
+            repo = session.openRepository(repoName)
         } finally {
             repo.close()
         }
@@ -53,13 +58,13 @@ class RepositoryTest {
     @Test
     fun list() = runTest {
         val ext = "ouisyncdb"
-        val storeDir = session.storeDir()
+        val storeDir = session.getStoreDir()
 
         val repoA = createRepo(name = "a")
-        assertEquals(mapOf("$storeDir/a.$ext" to repoA), Repository.list(session))
+        assertEquals(mapOf("$storeDir/a.$ext" to repoA), session.listRepositories())
 
         val repoB = createRepo(name = "b")
-        assertEquals(mapOf("$storeDir/a.$ext" to repoA, "$storeDir/b.$ext" to repoB), Repository.list(session))
+        assertEquals(mapOf("$storeDir/a.$ext" to repoA, "$storeDir/b.$ext" to repoB), session.listRepositories())
     }
 
     // TODO: events
@@ -67,11 +72,11 @@ class RepositoryTest {
     @Test
     fun infoHash() = runTest {
         withRepo {
-            val infoHash = it.infoHash()
+            val infoHash = it.getInfoHash()
             assertTrue(infoHash.isNotEmpty())
 
-            val token = it.share()
-            assertEquals(infoHash, token.infoHash())
+            val token = it.share(AccessMode.WRITE)
+            assertEquals(infoHash, session.getShareTokenInfoHash(token))
         }
     }
 
@@ -104,9 +109,9 @@ class RepositoryTest {
         var repo = createRepo()
 
         try {
-            val credentials = repo.credentials()
+            val credentials = repo.getCredentials()
             repo.close()
-            repo = Repository.open(session, repoName)
+            repo = session.openRepository(repoName)
             repo.setCredentials(credentials)
         } finally {
             repo.close()
@@ -118,24 +123,27 @@ class RepositoryTest {
         suspend fun checkAccessMode(repo: Repository, set: AccessMode, expected: AccessMode) {
             repo.setAccessMode(AccessMode.BLIND)
             repo.setAccessMode(set)
-            assertEquals(expected, repo.accessMode())
+            assertEquals(expected, repo.getAccessMode())
         }
 
         withRepo {
             checkAccessMode(it, set = AccessMode.READ, expected = AccessMode.READ)
             checkAccessMode(it, set = AccessMode.WRITE, expected = AccessMode.WRITE)
 
-            it.setAccess(read = EnableAccess(LocalPassword("banana")), write = EnableAccess(LocalPassword("banana")))
+            it.setAccess(
+                read = AccessChange.Enable(SetLocalSecret.Password(Password("banana"))),
+                write = AccessChange.Enable(SetLocalSecret.Password(Password("banana")))
+            )
             checkAccessMode(it, set = AccessMode.READ, expected = AccessMode.BLIND)
             checkAccessMode(it, set = AccessMode.WRITE, expected = AccessMode.BLIND)
 
-            it.setAccessMode(AccessMode.READ, LocalPassword("banana"))
-            it.setAccess(read = EnableAccess(null))
+            it.setAccessMode(AccessMode.READ, LocalSecret.Password(Password("banana")))
+            it.setAccess(read = AccessChange.Enable(null), write = null)
             checkAccessMode(it, set = AccessMode.READ, expected = AccessMode.READ)
             checkAccessMode(it, set = AccessMode.WRITE, expected = AccessMode.READ)
 
-            it.setAccessMode(AccessMode.WRITE, LocalPassword("banana"))
-            it.setAccess(write = EnableAccess(null))
+            it.setAccessMode(AccessMode.WRITE, LocalSecret.Password(Password("banana")))
+            it.setAccess(read = null, write = AccessChange.Enable(null))
             checkAccessMode(it, set = AccessMode.READ, expected = AccessMode.READ)
             checkAccessMode(it, set = AccessMode.WRITE, expected = AccessMode.WRITE)
         }
@@ -144,14 +152,14 @@ class RepositoryTest {
     @Test
     fun accessMode() = runTest {
         withRepo {
-            assertEquals(AccessMode.WRITE, it.accessMode())
+            assertEquals(AccessMode.WRITE, it.getAccessMode())
         }
     }
 
     @Test
     fun syncProgress() = runTest {
         withRepo {
-            val progress = it.syncProgress()
+            val progress = it.getSyncProgress()
             assertEquals(0, progress.value)
             assertEquals(0, progress.total)
         }
@@ -160,19 +168,19 @@ class RepositoryTest {
     @Test
     fun entryType() = runTest {
         withRepo {
-            assertEquals(EntryType.DIRECTORY, it.entryType("/"))
-            assertNull(it.entryType("missing.txt"))
+            assertEquals(EntryType.DIRECTORY, it.getEntryType("/"))
+            assertNull(it.getEntryType("missing.txt"))
         }
     }
 
     @Test
     fun moveEntry() = runTest {
         withRepo { repo ->
-            File.create(repo, "foo.txt").close()
+            repo.createFile("foo.txt").close()
 
             repo.moveEntry("foo.txt", "bar.txt")
-            assertEquals(EntryType.FILE, repo.entryType("bar.txt"))
-            assertNull(repo.entryType("foo.txt"))
+            assertEquals(EntryType.FILE, repo.getEntryType("bar.txt"))
+            assertNull(repo.getEntryType("foo.txt"))
         }
     }
 
@@ -182,13 +190,13 @@ class RepositoryTest {
         val contentW = "hello world"
 
         withRepo { repo ->
-            val fileW = File.create(repo, "test.txt")
+            val fileW = repo.createFile("test.txt")
             fileW.write(0, contentW.toByteArray(charset))
             fileW.flush()
             fileW.close()
 
-            val fileR = File.open(repo, "test.txt")
-            val length = fileR.length()
+            val fileR = repo.openFile("test.txt")
+            val length = fileR.getLength()
             val contentR = fileR.read(0, length).toString(charset)
 
             assertEquals(contentW, contentR)
@@ -200,27 +208,27 @@ class RepositoryTest {
         val name = "test.txt"
 
         withRepo { repo ->
-            assertNull(repo.entryType(name))
+            assertNull(repo.getEntryType(name))
 
-            val file = File.create(repo, name)
+            val file = repo.createFile(name)
             file.close()
-            assertEquals(EntryType.FILE, repo.entryType(name))
+            assertEquals(EntryType.FILE, repo.getEntryType(name))
 
-            File.remove(repo, name)
-            assertNull(repo.entryType(name))
+            repo.removeFile(name)
+            assertNull(repo.getEntryType(name))
         }
     }
 
     @Test
     fun fileTruncate() = runTest {
         withRepo { repo ->
-            val file = File.create(repo, "test.txt")
+            val file = repo.createFile("test.txt")
             file.write(0, "hello world".toByteArray(Charsets.UTF_8))
             file.flush()
-            assertEquals(11, file.length())
+            assertEquals(11, file.getLength())
 
             file.truncate(5)
-            assertEquals(5, file.length())
+            assertEquals(5, file.getLength())
             assertEquals("hello", file.read(0, 5).toString(Charsets.UTF_8))
         }
     }
@@ -228,12 +236,12 @@ class RepositoryTest {
     @Test
     fun fileProgress() = runTest {
         withRepo { repo ->
-            val file = File.create(repo, "test.txt")
+            val file = repo.createFile("test.txt")
             file.write(0, "hello world".toByteArray(Charsets.UTF_8))
             file.flush()
 
-            val length = file.length()
-            val progress = file.progress()
+            val length = file.getLength()
+            val progress = file.getProgress()
             assertEquals(length, progress)
         }
     }
@@ -242,10 +250,9 @@ class RepositoryTest {
     fun fileOpenError() = runTest {
         withRepo { repo ->
             try {
-                File.open(repo, "missing.txt")
+                repo.openFile("missing.txt")
                 fail("unexpected successs - expected 'entry not found'")
-            } catch (e: Error) {
-                assertEquals(ErrorCode.NOT_FOUND, e.code)
+            } catch (e: OuisyncException.NotFound) {
             }
         }
     }
@@ -256,47 +263,46 @@ class RepositoryTest {
         val fileName = "test.txt"
 
         withRepo { repo ->
-            assertNull(repo.entryType(dirName))
+            assertNull(repo.getEntryType(dirName))
 
-            Directory.create(repo, dirName)
-            assertEquals(EntryType.DIRECTORY, repo.entryType(dirName))
+            repo.createDirectory(dirName)
+            assertEquals(EntryType.DIRECTORY, repo.getEntryType(dirName))
 
-            val dir0 = Directory.read(repo, dirName)
+            val dir0 = repo.readDirectory(dirName)
             assertEquals(0, dir0.size)
 
-            File.create(repo, "$dirName/$fileName").close()
+            repo.createFile("$dirName/$fileName").close()
 
-            val dir1 = Directory.read(repo, dirName)
+            val dir1 = repo.readDirectory(dirName)
             assertEquals(1, dir1.size)
             assertEquals(fileName, dir1.elementAt(0).name)
             assertEquals(EntryType.FILE, dir1.elementAt(0).entryType)
 
-            Directory.remove(repo, dirName, recursive = true)
-            assertNull(repo.entryType(dirName))
+            repo.removeDirectory(dirName, recursive = true)
+            assertNull(repo.getEntryType(dirName))
         }
     }
 
     @Test
     fun shareTokenOperations() = runTest {
         withRepo { repo ->
-            var token = repo.share()
+            var token = repo.share(AccessMode.WRITE)
 
-            assertEquals(AccessMode.WRITE, token.accessMode())
-            assertEquals(repoName, token.suggestedName())
+            assertEquals(AccessMode.WRITE, session.getShareTokenAccessMode(token))
+            assertEquals(repoName, session.getShareTokenSuggestedName(token))
         }
     }
 
     @Test
     fun shareTokenRoundTrip() = runTest {
-        val origToken = ShareToken.fromString(
-            session,
+        val origToken = session.validateShareToken(
             "https://ouisync.net/r#AwAgEZkrt6b9gW47Nb6hGQjsZRGeh9GKp3gTyhZrxfT03SE",
         )
         val repo = createRepo(token = origToken)
 
         try {
-            val actualToken = repo.share()
-            assertEquals("$origToken?name=$repoName", actualToken.toString())
+            val actualToken = repo.share(AccessMode.WRITE)
+            assertEquals("${origToken.value}?name=$repoName", actualToken.value)
         } finally {
             repo.close()
         }
@@ -307,26 +313,31 @@ class RepositoryTest {
         val tempDir = JFile(createTempDirectory().toString())
         val repoPath = "$tempDir/repo.db"
 
-        val readPassword = LocalPassword("read_pwd")
-        val writePassword = LocalPassword("write_pwd")
+        val readPassword = Password("read_pwd")
+        val writePassword = Password("write_pwd")
 
-        Repository.create(
-            session,
+        session.createRepository(
             repoPath,
-            readSecret = readPassword,
-            writeSecret = writePassword,
+            readSecret = SetLocalSecret.Password(readPassword),
+            writeSecret = SetLocalSecret.Password(writePassword),
         ).also { repo ->
-            assertEquals(AccessMode.WRITE, repo.accessMode())
+            assertEquals(AccessMode.WRITE, repo.getAccessMode())
             repo.close()
         }
 
-        Repository.open(session, repoPath, secret = readPassword).also { repo ->
-            assertEquals(AccessMode.READ, repo.accessMode())
+        session.openRepository(
+            repoPath,
+            localSecret = LocalSecret.Password(readPassword)
+        ).also { repo ->
+            assertEquals(AccessMode.READ, repo.getAccessMode())
             repo.close()
         }
 
-        Repository.open(session, repoPath, secret = writePassword).also { repo ->
-            assertEquals(AccessMode.WRITE, repo.accessMode())
+        session.openRepository(
+            repoPath,
+            localSecret = LocalSecret.Password(writePassword)
+        ).also { repo ->
+            assertEquals(AccessMode.WRITE, repo.getAccessMode())
             repo.close()
         }
     }
@@ -336,29 +347,34 @@ class RepositoryTest {
         val tempDir = JFile(createTempDirectory().toString())
         val repoPath = "$tempDir/repo.db"
 
-        val readKey = LocalSecretKey.random()
-        val writeKey = LocalSecretKey.random()
+        val readKey = session.generateSecretKey()
+        val writeKey = session.generateSecretKey()
 
-        val readSalt = PasswordSalt.random()
-        val writeSalt = PasswordSalt.random()
+        val readSalt = session.generatePasswordSalt()
+        val writeSalt = session.generatePasswordSalt()
 
-        Repository.create(
-            session,
+        session.createRepository(
             repoPath,
-            readSecret = LocalSecretKeyAndSalt(readKey, readSalt),
-            writeSecret = LocalSecretKeyAndSalt(writeKey, writeSalt),
+            readSecret = SetLocalSecret.KeyAndSalt(readKey, readSalt),
+            writeSecret = SetLocalSecret.KeyAndSalt(writeKey, writeSalt),
         ).also { repo ->
-            assertEquals(AccessMode.WRITE, repo.accessMode())
+            assertEquals(AccessMode.WRITE, repo.getAccessMode())
             repo.close()
         }
 
-        Repository.open(session, repoPath, secret = readKey).also { repo ->
-            assertEquals(AccessMode.READ, repo.accessMode())
+        session.openRepository(
+            repoPath,
+            localSecret = LocalSecret.SecretKey(readKey)
+        ).also { repo ->
+            assertEquals(AccessMode.READ, repo.getAccessMode())
             repo.close()
         }
 
-        Repository.open(session, repoPath, secret = writeKey).also { repo ->
-            assertEquals(AccessMode.WRITE, repo.accessMode())
+        session.openRepository(
+            repoPath,
+            localSecret = LocalSecret.SecretKey(writeKey)
+        ).also { repo ->
+            assertEquals(AccessMode.WRITE, repo.getAccessMode())
             repo.close()
         }
     }
@@ -367,24 +383,21 @@ class RepositoryTest {
     fun delete() = runTest {
         createRepo().apply { close() }
 
-        val repo = Repository.open(session, repoName)
+        val repo = session.openRepository(repoName)
         repo.delete()
 
         try {
-            Repository.open(session, repoName)
+            session.openRepository(repoName)
             fail("unexpected success")
-        } catch (e: Error.StoreError) {
+        } catch (e: OuisyncException.StoreError) {
         } catch (e: Exception) {
             fail("unexpected exception: $e")
         }
     }
 
     private suspend fun createRepo(name: String? = null, token: ShareToken? = null): Repository =
-        Repository.create(
-            session,
+        session.createRepository(
             name ?: repoName,
-            readSecret = null,
-            writeSecret = null,
             token = token,
         )
 

@@ -408,10 +408,14 @@ impl Access {
     }
 }
 
+/// How to change access to a repository.
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[api]
 pub enum AccessChange {
+    /// Enable read or write access, optionally with local secret
     Enable(Option<SetLocalSecret>),
+
+    /// Disable access
     Disable,
 }
 

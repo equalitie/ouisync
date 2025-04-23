@@ -112,7 +112,7 @@ impl Service {
                     let conn = result.map_err(Error::Accept)?;
                     self.start_connection(AcceptedConnection::Remote(conn));
                 }
-                Some(_) = self.connections.next() => continue,
+                Some(_) = self.connections.next() => (),
                 _ = repo_expiration_interval.tick() => {
                     self.state.delete_expired_repositories().await;
                 }
