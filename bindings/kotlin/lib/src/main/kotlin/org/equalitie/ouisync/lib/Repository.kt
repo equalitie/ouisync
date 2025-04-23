@@ -2,9 +2,7 @@ package org.equalitie.ouisync.lib
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filterIsInstance
-// import org.msgpack.core.MessagePacker
-// import java.security.SecureRandom
-// import java.util.Objects
+import kotlinx.coroutines.flow.mapNotNull
 
 /**
  * Subscribe to repository events.
@@ -13,7 +11,13 @@ import kotlinx.coroutines.flow.filterIsInstance
  * written to, removed, moved, ...).
  */
 fun Repository.subscribe(): Flow<Unit> =
-    client.subscribe(Request.RepositorySubscribe(handle)).filterIsInstance<Unit>()
+    client.subscribe(Request.RepositorySubscribe(handle)).mapNotNull {
+        when (it) {
+            is Response.RepositoryEvent -> Unit
+            is Response.None -> Unit
+            else -> null
+        }
+    }
 
 // /**
 //  *

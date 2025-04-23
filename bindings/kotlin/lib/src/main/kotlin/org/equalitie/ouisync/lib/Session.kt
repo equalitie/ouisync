@@ -31,8 +31,8 @@ fun Session.subscribeToNetworkEvents(): Flow<NetworkEvent> =
     client.subscribe(Request.SessionSubscribeToNetwork)
         .mapNotNull {
             when (it) {
-                is NetworkEvent -> it
-                is Unit -> NetworkEvent.PEER_SET_CHANGE
+                is Response.NetworkEvent -> it.value
+                is Response.None -> NetworkEvent.PEER_SET_CHANGE
                 else -> null
             }
         }
