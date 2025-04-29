@@ -7,7 +7,7 @@ use super::{
 use crate::{
     block_tracker::BlockTrackerClient,
     collections::HashSet,
-    crypto::{sign::PublicKey, CacheHash, Hashable},
+    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     error::Result,
     event::Payload,
     network::{
@@ -15,8 +15,8 @@ use crate::{
         request_tracker::{CandidateRequest, MessageKey, RequestVariant},
     },
     protocol::{
-        Block, BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, MultiBlockPresence,
-        ProofError, RootNodeFilter, UntrustedProof,
+        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, ProofError, RootNodeFilter,
+        UntrustedProof,
     },
     repository::Vault,
     store::{ClientReaderMut, ClientWriter},
@@ -90,27 +90,33 @@ impl Inner {
     async fn run(
         &mut self,
         request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>,
-        response_rx: &mut mpsc::Receiver<Response>,
+        received_response_rx: &mut mpsc::Receiver<Response>,
         block_rx: &mut mpsc::UnboundedReceiver<BlockId>,
     ) -> Result<()> {
+        let (prepared_response_tx, prepared_response_rx) = mpsc::channel(16 * RESPONSE_BATCH_SIZE);
+
         select! {
-            result = self.handle_responses(response_rx) => result,
+            _ = self.prepare_responses(received_response_rx, prepared_response_tx) => Ok(()),
+            result = self.handle_responses(prepared_response_rx) => result,
             _ = self.send_requests(request_rx) => Ok(()),
             _ = self.request_blocks(block_rx) => Ok(()),
             _ = self.handle_reload_index() => unreachable!(),
         }
     }
 
-    async fn send_requests(&self, request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>) {
-        while let Some(PendingRequest { payload, .. }) = request_rx.recv().await {
-            tracing::trace!(?payload, "sending request");
-            self.message_tx.send(Message::Request(payload)).ok();
+    async fn prepare_responses(
+        &self,
+        rx: &mut mpsc::Receiver<Response>,
+        tx: mpsc::Sender<PreparedResponse>,
+    ) {
+        while let Some(response) = rx.recv().await {
+            let response = PreparedResponse::from(response);
+            self.request_tracker.receive(response.key());
+            tx.send(response).await.ok();
         }
-
-        tracing::debug!("request send channel closed");
     }
 
-    async fn handle_responses(&self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
+    async fn handle_responses(&self, mut rx: mpsc::Receiver<PreparedResponse>) -> Result<()> {
         // Responses that need write access to the db or responses that need only read access but
         // that depend on any previous writable responses.
         let mut writable = Vec::with_capacity(RESPONSE_BATCH_SIZE);
@@ -127,11 +133,11 @@ impl Inner {
         let mut block_references = HashSet::new();
 
         loop {
-            for response in recv_iter(rx).await {
+            for response in recv_iter(&mut rx).await {
                 count += 1;
 
                 match response {
-                    Response::RootNode {
+                    PreparedResponse::RootNode {
                         proof,
                         block_presence,
                         cookie,
@@ -144,46 +150,48 @@ impl Inner {
                             debug,
                         });
                     }
-                    Response::InnerNodes(nodes, debug) => {
+                    PreparedResponse::InnerNodes(nodes, debug) => {
                         writable.push(WritableResponse::InnerNodes(nodes, debug));
                     }
-                    Response::LeafNodes(nodes, debug) => {
-                        for node in &nodes {
+                    PreparedResponse::LeafNodes(nodes, debug) => {
+                        for node in &*nodes {
                             block_references.insert(node.block_id);
                         }
 
                         writable.push(WritableResponse::LeafNodes(nodes, debug));
                     }
-                    Response::Block(block_content, block_nonce, debug) => {
-                        writable.push(WritableResponse::Block(block_content, block_nonce, debug));
+                    PreparedResponse::Block(block, debug) => {
+                        writable.push(WritableResponse::Block(block, debug));
                     }
-                    Response::BlockOffer(block_id, debug) => {
+                    PreparedResponse::BlockOffer(block_id, debug) => {
                         if block_references.contains(&block_id) {
                             writable.push(WritableResponse::BlockOffer(block_id, debug));
                         } else {
                             readable.push(ReadableResponse::BlockOffer(block_id, debug));
                         }
                     }
-                    Response::RootNodeError {
-                        writer_id, cookie, ..
+                    PreparedResponse::RootNodeError {
+                        writer_id,
+                        cookie,
+                        debug: debug_payload,
                     } => {
-                        tracing::trace!(?writer_id, "Received root node error");
+                        tracing::trace!(?writer_id, ?debug_payload, "Received root node error");
                         self.request_tracker
                             .failure(MessageKey::RootNode(writer_id, cookie));
                     }
-                    Response::ChildNodesError(hash, _) => {
-                        tracing::trace!(?hash, "Received child nodes error");
+                    PreparedResponse::ChildNodesError(hash, debug_payload) => {
+                        tracing::trace!(?hash, ?debug_payload, "Received child nodes error");
                         self.request_tracker.failure(MessageKey::ChildNodes(hash));
                     }
-                    Response::BlockError(block_id, _) => {
-                        tracing::trace!(?block_id, "Received block error");
+                    PreparedResponse::BlockError(block_id, debug_payload) => {
+                        tracing::trace!(?block_id, ?debug_payload, "Received block error");
                         self.request_tracker.failure(MessageKey::Block(block_id));
                     }
-                    Response::Choke => {
+                    PreparedResponse::Choke => {
                         tracing::trace!("Received choke");
                         self.request_tracker.choke();
                     }
-                    Response::Unchoke => {
+                    PreparedResponse::Unchoke => {
                         tracing::trace!("Received unchoke");
                         self.request_tracker.unchoke();
                     }
@@ -241,16 +249,13 @@ impl Inner {
                         .await?;
                 }
                 WritableResponse::InnerNodes(nodes, debug) => {
-                    self.handle_inner_nodes(&mut writer, nodes.into(), debug)
-                        .await?;
+                    self.handle_inner_nodes(&mut writer, nodes, debug).await?;
                 }
                 WritableResponse::LeafNodes(nodes, debug) => {
-                    self.handle_leaf_nodes(&mut writer, nodes.into(), debug)
-                        .await?;
+                    self.handle_leaf_nodes(&mut writer, nodes, debug).await?;
                 }
-                WritableResponse::Block(block_content, block_nonce, debug) => {
-                    self.handle_block(&mut writer, Block::new(block_content, block_nonce), debug)
-                        .await?;
+                WritableResponse::Block(block, debug) => {
+                    self.handle_block(&mut writer, block, debug).await?;
                 }
                 WritableResponse::BlockOffer(block_id, debug) => {
                     self.handle_block_offer(writer.as_reader_mut(), block_id, debug)
@@ -493,6 +498,15 @@ impl Inner {
         Ok(())
     }
 
+    async fn send_requests(&self, request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>) {
+        while let Some(PendingRequest { payload, .. }) = request_rx.recv().await {
+            tracing::trace!(?payload, "sending request");
+            self.message_tx.send(Message::Request(payload)).ok();
+        }
+
+        tracing::debug!("request send channel closed");
+    }
+
     async fn request_blocks(&self, block_rx: &mut mpsc::UnboundedReceiver<BlockId>) {
         while let Some(block_id) = block_rx.recv().await {
             self.request_tracker
@@ -581,6 +595,82 @@ impl Inner {
     }
 }
 
+enum PreparedResponse {
+    RootNode {
+        proof: UntrustedProof,
+        block_presence: MultiBlockPresence,
+        cookie: u64,
+        debug: DebugResponse,
+    },
+    RootNodeError {
+        writer_id: PublicKey,
+        cookie: u64,
+        debug: DebugResponse,
+    },
+    InnerNodes(CacheHash<InnerNodes>, DebugResponse),
+    LeafNodes(CacheHash<LeafNodes>, DebugResponse),
+    ChildNodesError(Hash, DebugResponse),
+    Block(Block, DebugResponse),
+    BlockOffer(BlockId, DebugResponse),
+    BlockError(BlockId, DebugResponse),
+    Choke,
+    Unchoke,
+}
+
+impl PreparedResponse {
+    fn key(&self) -> MessageKey {
+        match self {
+            Self::RootNode { proof, cookie, .. } => MessageKey::RootNode(proof.writer_id, *cookie),
+            Self::RootNodeError {
+                writer_id, cookie, ..
+            } => MessageKey::RootNode(*writer_id, *cookie),
+            Self::InnerNodes(nodes, ..) => MessageKey::ChildNodes(nodes.hash()),
+            Self::LeafNodes(nodes, ..) => MessageKey::ChildNodes(nodes.hash()),
+            Self::ChildNodesError(hash, ..) => MessageKey::ChildNodes(*hash),
+            Self::Block(block, ..) => MessageKey::Block(block.id),
+            Self::BlockError(block_id, ..) => MessageKey::Block(*block_id),
+            Self::BlockOffer(..) | Self::Choke | Self::Unchoke => MessageKey::Other,
+        }
+    }
+}
+
+impl From<Response> for PreparedResponse {
+    fn from(response: Response) -> Self {
+        match response {
+            Response::RootNode {
+                proof,
+                block_presence,
+                cookie,
+                debug,
+            } => Self::RootNode {
+                proof,
+                block_presence,
+                cookie,
+                debug,
+            },
+            Response::RootNodeError {
+                writer_id,
+                cookie,
+                debug,
+            } => Self::RootNodeError {
+                writer_id,
+                cookie,
+                debug,
+            },
+            Response::InnerNodes(nodes, debug) => Self::InnerNodes(nodes.into(), debug),
+            Response::LeafNodes(nodes, debug) => Self::LeafNodes(nodes.into(), debug),
+            Response::ChildNodesError(hash, debug) => Self::ChildNodesError(hash, debug),
+            Response::Block(content, nonce, debug) => {
+                Self::Block(Block::new(content, nonce), debug)
+            }
+            Response::BlockOffer(block_id, debug) => Self::BlockOffer(block_id, debug),
+            Response::BlockError(block_id, debug) => Self::BlockError(block_id, debug),
+            Response::Choke => Self::Choke,
+            Response::Unchoke => Self::Unchoke,
+        }
+    }
+}
+
 enum WritableResponse {
     RootNode {
         proof: UntrustedProof,
@@ -588,9 +678,9 @@ enum WritableResponse {
         cookie: u64,
         debug: DebugResponse,
     },
-    InnerNodes(InnerNodes, DebugResponse),
-    LeafNodes(LeafNodes, DebugResponse),
-    Block(BlockContent, BlockNonce, DebugResponse),
+    InnerNodes(CacheHash<InnerNodes>, DebugResponse),
+    LeafNodes(CacheHash<LeafNodes>, DebugResponse),
+    Block(Block, DebugResponse),
     BlockOffer(BlockId, DebugResponse),
 }
 
@@ -652,7 +742,7 @@ mod tests {
 
         // Receive invalid root node from the remote replica.
         let invalid_write_keys = Keypair::generate(&mut rng);
-        let (_, mut response_rx) = make_response_channel(vec![Response::RootNode {
+        let (_, response_rx) = make_response_channel(vec![Response::RootNode {
             proof: Proof::new(
                 remote_id,
                 VersionVector::first(remote_id),
@@ -663,8 +753,9 @@ mod tests {
             block_presence: MultiBlockPresence::None,
             cookie: 0,
             debug: DebugResponse::unsolicited(),
-        }]);
-        inner.handle_responses(&mut response_rx).await.unwrap();
+        }
+        .into()]);
+        inner.handle_responses(response_rx).await.unwrap();
 
         // The invalid root was not written to the db.
         assert!(inner
@@ -685,7 +776,7 @@ mod tests {
         let (_base_dir, mut rng, inner, _, secrets) = setup(None).await;
         let remote_id = PublicKey::generate(&mut rng);
 
-        let (_, mut response_rx) = make_response_channel(vec![Response::RootNode {
+        let (_, response_rx) = make_response_channel(vec![Response::RootNode {
             proof: Proof::new(
                 remote_id,
                 VersionVector::new(),
@@ -696,8 +787,9 @@ mod tests {
             block_presence: MultiBlockPresence::None,
             cookie: 0,
             debug: DebugResponse::unsolicited(),
-        }]);
-        inner.handle_responses(&mut response_rx).await.unwrap();
+        }
+        .into()]);
+        inner.handle_responses(response_rx).await.unwrap();
 
         assert!(inner
             .vault
@@ -737,7 +829,7 @@ mod tests {
             &secrets.write_keys,
         );
 
-        let (_, mut response_rx) =
+        let (_, response_rx) =
             make_response_channel(
                 iter::once(Response::RootNode {
                     proof: proof.into(),
@@ -755,9 +847,10 @@ mod tests {
                     snapshot.leaf_nodes().next().unwrap().block_id,
                     DebugResponse::unsolicited(),
                 )))
+                .map(Into::into)
                 .collect(),
             );
-        inner.handle_responses(&mut response_rx).await.unwrap();
+        inner.handle_responses(response_rx).await.unwrap();
 
         // Simulate block tracker producing the block.
         inner
@@ -828,8 +921,11 @@ mod tests {
     }
 
     fn make_response_channel(
-        responses: Vec<Response>,
-    ) -> (mpsc::Sender<Response>, mpsc::Receiver<Response>) {
+        responses: Vec<PreparedResponse>,
+    ) -> (
+        mpsc::Sender<PreparedResponse>,
+        mpsc::Receiver<PreparedResponse>,
+    ) {
         let (response_tx, response_rx) = mpsc::channel(responses.len());
 
         for response in responses {
