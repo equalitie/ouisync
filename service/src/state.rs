@@ -74,8 +74,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
-        let config = ConfigStore::new(config_dir);
+    pub async fn init(config: ConfigStore) -> Result<Self, Error> {
         let root_monitor = StateMonitor::make_root();
         let dht_contacts_store = dht_contacts::Store::new(config.dir());
 

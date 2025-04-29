@@ -231,7 +231,7 @@ async fn expire_synced_repository() {
         .next()
         .unwrap();
 
-    let local_state = State::init(temp_dir.path().join("local/config"))
+    let local_state = State::init(ConfigStore::new(temp_dir.path().join("local/config")))
         .instrument(tracing::info_span!("local"))
         .await
         .unwrap();
@@ -435,7 +435,9 @@ async fn delete_repository_outside_of_store_dir() {
 
 async fn setup() -> (TempDir, State) {
     let temp_dir = TempDir::new().unwrap();
-    let state = State::init(temp_dir.path().join("config")).await.unwrap();
+    let state = State::init(ConfigStore::new(temp_dir.path().join("config")))
+        .await
+        .unwrap();
     state
         .session_set_store_dir(temp_dir.path().join("store"))
         .await

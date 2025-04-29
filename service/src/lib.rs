@@ -61,17 +61,16 @@ pub struct Service {
 
 impl Service {
     pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
-        let state = State::init(config_dir).await?;
-        let state = Arc::new(state);
+        let config = ConfigStore::new(config_dir);
 
-        let local_port_entry = state.config.entry(LOCAL_CONTROL_PORT_KEY);
+        let local_port_entry = config.entry(LOCAL_CONTROL_PORT_KEY);
         let local_port = match local_port_entry.get().await {
             Ok(port) => port,
             Err(ConfigError::NotFound) => 0,
             Err(error) => return Err(error.into()),
         };
 
-        let local_auth_key = fetch_local_control_auth_key(&state.config).await?;
+        let local_auth_key = fetch_local_control_auth_key(&config).await?;
 
         let local_server = LocalServer::bind(local_port, local_auth_key)
             .await
@@ -83,6 +82,9 @@ impl Service {
         if local_port == 0 {
             local_port_entry.set(&local_server.port()).await?;
         }
+
+        let state = State::init(config).await?;
+        let state = Arc::new(state);
 
         Ok(Self {
             state,
