@@ -11,7 +11,7 @@ version.workspace = true
 deadlock     = { path = "../deadlock" }
 indexmap     = { workspace = true }
 metrics      = { workspace = true }
-metrics-util = { workspace = true, features = ["summary"] }
+metrics-util = { workspace = true, features = ["storage"] }
 serde        = { workspace = true }
 tokio        = { workspace = true }
 tracing      = { workspace = true }

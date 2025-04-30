@@ -18,10 +18,10 @@ use crate::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, ProofError, RootNodeFilter,
         UntrustedProof,
     },
-    repository::Vault,
+    repository::{monitor::TrafficMonitor, Vault},
     store::{ClientReaderMut, ClientWriter},
 };
-use std::iter;
+use std::{iter, time::Instant};
 use tokio::{select, sync::mpsc};
 use tracing::{instrument, Level};
 
@@ -109,14 +109,29 @@ impl Inner {
         rx: &mut mpsc::Receiver<Response>,
         tx: mpsc::Sender<PreparedResponse>,
     ) {
+        let tx = PreparedResponseSender {
+            tx,
+            monitor: &self.vault.monitor.traffic,
+        };
+
         while let Some(response) = rx.recv().await {
             let response = PreparedResponse::from(response);
-            self.request_tracker.receive(response.key());
-            tx.send(response).await.ok();
+
+            tracing::info_span!("prepare_response", ?response)
+                .in_scope(|| self.request_tracker.receive(response.key()));
+
+            self.vault.monitor.traffic.responses_received.increment(1);
+
+            tx.send(response).await;
         }
     }
 
-    async fn handle_responses(&self, mut rx: mpsc::Receiver<PreparedResponse>) -> Result<()> {
+    async fn handle_responses(&self, rx: mpsc::Receiver<PreparedResponse>) -> Result<()> {
+        let mut rx = PreparedResponseReceiver {
+            rx,
+            monitor: &self.vault.monitor.traffic,
+        };
+
         // Responses that need write access to the db or responses that need only read access but
         // that depend on any previous writable responses.
         let mut writable = Vec::with_capacity(RESPONSE_BATCH_SIZE);
@@ -126,14 +141,16 @@ impl Inner {
         let mut readable = Vec::with_capacity(RESPONSE_BATCH_SIZE);
 
         // Number of responses received in this batch.
-        let mut count = 0;
+        let mut count = 0u32;
 
         // Blocks referenced from received `LeafNode` responses in this batch. This is used to
         // deremine if any subsequent `BlockOffer` response depends on any of them.
         let mut block_references = HashSet::new();
 
         loop {
-            for response in recv_iter(&mut rx).await {
+            let start = Instant::now();
+
+            for response in rx.recv_iter().await {
                 count += 1;
 
                 match response {
@@ -211,20 +228,17 @@ impl Inner {
                 break;
             }
 
-            self.vault
-                .monitor
-                .traffic
-                .responses_received
-                .increment(count);
-
-            count = 0;
-            block_references.clear();
+            let _recorder =
+                ScopedProcessingRecorder::new(&self.vault.monitor.traffic, start, count);
 
             future::try_join(
                 self.handle_writable_responses(&mut writable),
                 self.handle_readable_responses(&mut readable),
             )
             .await?;
+
+            count = 0;
+            block_references.clear();
         }
 
         Ok(())
@@ -595,6 +609,7 @@ impl Inner {
     }
 }
 
+#[derive(Debug)]
 enum PreparedResponse {
     RootNode {
         proof: UntrustedProof,
@@ -688,13 +703,70 @@ enum ReadableResponse {
     BlockOffer(BlockId, DebugResponse),
 }
 
-/// Waits for at least one item to become available (or the chanel getting closed) and then yields
-/// all the buffered items from the channel.
-async fn recv_iter<T>(rx: &mut mpsc::Receiver<T>) -> impl Iterator<Item = T> + '_ {
-    rx.recv()
-        .await
-        .into_iter()
-        .chain(iter::from_fn(|| rx.try_recv().ok()))
+struct PreparedResponseSender<'a> {
+    tx: mpsc::Sender<PreparedResponse>,
+    monitor: &'a TrafficMonitor,
+}
+
+impl PreparedResponseSender<'_> {
+    async fn send(&self, response: PreparedResponse) {
+        self.monitor.responses_queued.increment(1);
+        self.tx.send(response).await.ok();
+    }
+}
+
+struct PreparedResponseReceiver<'a> {
+    rx: mpsc::Receiver<PreparedResponse>,
+    monitor: &'a TrafficMonitor,
+}
+
+impl PreparedResponseReceiver<'_> {
+    /// Waits for at least one item to become available (or the chanel getting closed) and then
+    /// yields all the buffered items from the channel.
+    async fn recv_iter(&mut self) -> impl Iterator<Item = PreparedResponse> + '_ {
+        self.rx
+            .recv()
+            .await
+            .into_iter()
+            .chain(iter::from_fn(|| self.rx.try_recv().ok()))
+            .inspect(|_| self.monitor.responses_queued.decrement(1))
+    }
+}
+
+impl Drop for PreparedResponseReceiver<'_> {
+    fn drop(&mut self) {
+        while self.rx.try_recv().is_ok() {
+            self.monitor.responses_queued.decrement(1);
+        }
+    }
+}
+
+// Records response processing metrics on drop.
+struct ScopedProcessingRecorder<'a> {
+    monitor: &'a TrafficMonitor,
+    start: Instant,
+    count: u32,
+}
+
+impl<'a> ScopedProcessingRecorder<'a> {
+    fn new(monitor: &'a TrafficMonitor, start: Instant, count: u32) -> Self {
+        monitor.responses_processing.increment(count);
+
+        Self {
+            monitor,
+            start,
+            count,
+        }
+    }
+}
+
+impl Drop for ScopedProcessingRecorder<'_> {
+    fn drop(&mut self) {
+        self.monitor.responses_processing.decrement(self.count);
+        self.monitor
+            .responses_process_time
+            .record_many(self.start.elapsed() / self.count, self.count as usize);
+    }
 }
 
 // Generate cookie for the next `RootNode` request. This value is guaranteed to be non-zero (zero is

@@ -9,7 +9,7 @@ version.workspace = true
 
 [dependencies]
 metrics      = { workspace = true }
-metrics-util = { workspace = true, features = ["summary"] }
+metrics-util = { workspace = true, features = ["storage"] }
 tokio        = { workspace = true, features = ["sync"] }
 tracing      = { workspace = true }
 reqwest      = { version = "0.12.8", default-features = false }

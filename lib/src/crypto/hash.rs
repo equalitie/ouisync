@@ -298,6 +298,12 @@ where
     }
 }
 
+impl<T: fmt::Debug> fmt::Debug for CacheHash<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.owner.fmt(f)
+    }
+}
+
 #[cfg(test)]
 mod test_utils {
     use super::Hash;

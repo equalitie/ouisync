@@ -1,4 +1,4 @@
-use std::pin::pin;
+use std::{pin::pin, time::Instant};
 
 use super::{
     choke::{Choked, Choker, Unchoked},
@@ -11,7 +11,7 @@ use crate::{
     event::{Event, Payload},
     network::constants::UNCHOKED_IDLE_TIMEOUT,
     protocol::{BlockContent, BlockId, RootNode, RootNodeFilter},
-    repository::Vault,
+    repository::{monitor::TrafficMonitor, Vault},
     store,
 };
 use futures_util::{stream::FuturesOrdered, TryStreamExt};
@@ -186,7 +186,7 @@ impl Inner {
     }
 
     async fn handle_request(&self, request: Request) -> Result<()> {
-        self.vault.monitor.traffic.requests_received.increment(1);
+        let _recorder = ScopedProcessingRecorder::new(&self.vault.monitor.traffic);
 
         match request {
             Request::RootNode {
@@ -418,5 +418,31 @@ impl Inner {
         if self.message_tx.send(Message::Response(response)).is_ok() {
             self.vault.monitor.traffic.responses_sent.increment(1);
         }
+    }
+}
+
+// Records request processing metrics on drop.
+struct ScopedProcessingRecorder<'a> {
+    monitor: &'a TrafficMonitor,
+    start: Instant,
+}
+
+impl<'a> ScopedProcessingRecorder<'a> {
+    fn new(monitor: &'a TrafficMonitor) -> Self {
+        monitor.request_processing.increment(1);
+
+        Self {
+            monitor,
+            start: Instant::now(),
+        }
+    }
+}
+
+impl Drop for ScopedProcessingRecorder<'_> {
+    fn drop(&mut self) {
+        self.monitor.request_processing.decrement(1);
+        self.monitor
+            .request_process_time
+            .record(self.start.elapsed());
     }
 }
