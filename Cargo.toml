@@ -89,3 +89,8 @@ debug = 1
 # Build dependencies with optimizations even in dev mode
 [profile.dev.package."*"]
 opt-level = 3
+
+[patch.crates-io]
+# The upstream has outdated dependency on `bindgen` which conflicts with some of our other
+# dependencies. Using this fork until the upstream updates.
+xpc-connection-sys = { git = "https://github.com/madadam/xpc-connection-rs" }
