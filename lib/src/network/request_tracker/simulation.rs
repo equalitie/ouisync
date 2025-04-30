@@ -216,8 +216,10 @@ impl TestClient {
                     .into_iter()
                     .collect();
 
-                self.tracker_client
-                    .success(MessageKey::RootNode(proof.writer_id, cookie), requests);
+                let key = MessageKey::RootNode(proof.writer_id, cookie);
+
+                self.tracker_client.receive(key);
+                self.tracker_client.success(key, requests);
             }
             Response::InnerNodes(nodes, debug_payload) => {
                 let parent_hash = nodes.hash();
@@ -237,8 +239,10 @@ impl TestClient {
                     })
                     .collect();
 
-                self.tracker_client
-                    .success(MessageKey::ChildNodes(parent_hash), requests);
+                let key = MessageKey::ChildNodes(parent_hash);
+
+                self.tracker_client.receive(key);
+                self.tracker_client.success(key, requests);
             }
             Response::LeafNodes(nodes, debug_payload) => {
                 let parent_hash = nodes.hash();
@@ -253,8 +257,10 @@ impl TestClient {
                     })
                     .collect();
 
-                self.tracker_client
-                    .success(MessageKey::ChildNodes(parent_hash), requests);
+                let key = MessageKey::ChildNodes(parent_hash);
+
+                self.tracker_client.receive(key);
+                self.tracker_client.success(key, requests);
             }
             Response::Block(content, nonce, _debug_payload) => {
                 let block = Block::new(content, nonce);
@@ -262,20 +268,30 @@ impl TestClient {
 
                 snapshot.insert_block(block);
 
-                self.tracker_client
-                    .success(MessageKey::Block(block_id), vec![]);
+                let key = MessageKey::Block(block_id);
+
+                self.tracker_client.receive(key);
+                self.tracker_client.success(key, vec![]);
             }
             Response::RootNodeError {
                 writer_id, cookie, ..
             } => {
-                self.tracker_client
-                    .failure(MessageKey::RootNode(writer_id, cookie));
+                let key = MessageKey::RootNode(writer_id, cookie);
+
+                self.tracker_client.receive(key);
+                self.tracker_client.failure(key);
             }
             Response::ChildNodesError(hash, _debug_payload) => {
-                self.tracker_client.failure(MessageKey::ChildNodes(hash));
+                let key = MessageKey::ChildNodes(hash);
+
+                self.tracker_client.receive(key);
+                self.tracker_client.failure(key);
             }
             Response::BlockError(block_id, _debug_payload) => {
-                self.tracker_client.failure(MessageKey::Block(block_id));
+                let key = MessageKey::Block(block_id);
+
+                self.tracker_client.receive(key);
+                self.tracker_client.failure(key);
             }
             Response::BlockOffer(..) | Response::Choke | Response::Unchoke => unimplemented!(),
         };

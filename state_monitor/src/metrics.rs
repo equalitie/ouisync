@@ -3,7 +3,7 @@ use metrics::{
     Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName, Metadata, Recorder,
     SharedString, Unit,
 };
-use metrics_util::Summary;
+use metrics_util::storage::Summary;
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -197,7 +197,7 @@ where
             Some(Unit::Bytes) => write!(f, " B"),
             Some(Unit::Kibibytes) => write!(f, " KiB"),
             Some(Unit::Mebibytes) => write!(f, " MiB"),
-            Some(Unit::Gigibytes) => write!(f, " GiB"),
+            Some(Unit::Gibibytes) => write!(f, " GiB"),
             Some(Unit::Tebibytes) => write!(f, " TiB"),
             Some(Unit::BitsPerSecond) => write!(f, " bit/s"),
             Some(Unit::KilobitsPerSecond) => write!(f, " Kbit/s"),

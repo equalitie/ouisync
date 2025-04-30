@@ -11,7 +11,7 @@ use crate::{
     collections::HashMap,
     crypto::{sign::PublicKey, Hash},
     protocol::{BlockId, MultiBlockPresence},
-    repository::monitor::{RequestEvent, RequestKind, TrafficMonitor},
+    repository::monitor::TrafficMonitor,
 };
 use std::{
     collections::{hash_map::Entry, VecDeque},
@@ -25,7 +25,7 @@ use tokio_util::time::{delay_queue, DelayQueue};
 use tracing::{instrument, Instrument, Span};
 use xxhash_rust::xxh3::Xxh3Default;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Keeps track of in-flight requests. Falls back on another peer in case the request failed (due to
 /// error response, timeout or disconnection). Evenly distributes the requests between the peers
@@ -96,6 +96,14 @@ impl RequestTrackerClient {
     /// Handle failure response.
     pub fn failure(&self, request_key: MessageKey) {
         self.command_tx.send(Command::HandleFailure {
+            client_id: self.client_id,
+            request_key,
+        });
+    }
+
+    /// Handle receiving response to a previously sent request.
+    pub fn receive(&self, request_key: MessageKey) {
+        self.command_tx.send(Command::HandleReceive {
             client_id: self.client_id,
             request_key,
         });
@@ -249,17 +257,7 @@ pub(super) enum MessageKey {
     RootNode(PublicKey, u64),
     ChildNodes(Hash),
     Block(BlockId),
-    Idle,
-}
-
-impl MessageKey {
-    pub fn kind(&self) -> RequestKind {
-        match self {
-            Self::RootNode(..) | Self::ChildNodes(..) => RequestKind::Index,
-            Self::Block(..) => RequestKind::Block,
-            Self::Idle => RequestKind::Other,
-        }
-    }
+    Other,
 }
 
 impl<'a> From<&'a Request> for MessageKey {
@@ -270,7 +268,7 @@ impl<'a> From<&'a Request> for MessageKey {
             } => MessageKey::RootNode(*writer_id, *cookie),
             Request::ChildNodes(hash, _) => MessageKey::ChildNodes(*hash),
             Request::Block(block_id, _) => MessageKey::Block(*block_id),
-            Request::Idle => MessageKey::Idle,
+            Request::Idle => MessageKey::Other,
         }
     }
 }
@@ -387,6 +385,10 @@ impl Worker {
             } => {
                 self.handle_failure(client_id, request_key, FailureReason::Response);
             }
+            Command::HandleReceive {
+                client_id,
+                request_key,
+            } => self.handle_receive(client_id, request_key),
             Command::Resume {
                 request_key,
                 variant,
@@ -425,6 +427,47 @@ impl Worker {
     }
 
     #[instrument(skip(self))]
+    fn handle_receive(&mut self, client_id: ClientId, request_key: MessageKey) {
+        let Some(node_key) = self
+            .clients
+            .get(&client_id)
+            .expect(CLIENT_NOT_FOUND)
+            .requests
+            .get(&request_key)
+            .copied()
+        else {
+            return;
+        };
+
+        let node = self.requests.get_mut(node_key).expect(BROKEN_INVARIANT);
+
+        let waiters = match node.value_mut() {
+            RequestState::InFlight {
+                sender_client_id,
+                sender_timer_key,
+                sent_at,
+                waiters,
+            } if *sender_client_id == client_id => {
+                self.flight
+                    .receive(request_key, *sender_timer_key, *sent_at);
+                mem::take(waiters)
+            }
+            RequestState::InFlight { .. }
+            | RequestState::Received { .. }
+            | RequestState::Complete { .. }
+            | RequestState::Suspended { .. }
+            | RequestState::Choked { .. } => return,
+
+            RequestState::Cancelled | RequestState::Committed => unreachable!(),
+        };
+
+        *node.value_mut() = RequestState::Received {
+            sender_client_id: client_id,
+            waiters,
+        };
+    }
+
+    #[instrument(skip(self))]
     fn handle_success(
         &mut self,
         client_id: ClientId,
@@ -442,18 +485,15 @@ impl Worker {
         let (mut client_ids, decrement_pending) = if let Some(node_key) = node_key {
             let node = self.requests.get_mut(node_key).expect(BROKEN_INVARIANT);
 
+            // If the request was `Received` from this client, switch it to `Complete`. Otherwise
+            // keep it as is.
             let waiters = match node.value_mut() {
-                RequestState::InFlight {
+                RequestState::Received {
                     sender_client_id,
-                    sender_timer_key,
-                    sent_at,
                     waiters,
-                } if *sender_client_id == client_id => {
-                    self.flight
-                        .complete(request_key, *sender_timer_key, *sent_at);
-                    Some(mem::take(waiters))
-                }
-                RequestState::InFlight { .. }
+                } if *sender_client_id == client_id => Some(mem::take(waiters)),
+                RequestState::Received { .. }
+                | RequestState::InFlight { .. }
                 | RequestState::Complete { .. }
                 | RequestState::Suspended { .. }
                 | RequestState::Choked { .. } => None,
@@ -465,8 +505,6 @@ impl Worker {
                 .collect();
             let decrement_pending = waiters.is_some();
 
-            // If the request was `InFlight` from this client, switch it to `Complete`. Otherwise
-            // keep it as is.
             if let Some(waiters) = waiters {
                 *node.value_mut() = RequestState::Complete {
                     sender_client_id: client_id,
@@ -530,7 +568,8 @@ impl Worker {
                     &mut self.flight,
                 );
             }
-            RequestState::InFlight { .. }
+            RequestState::Received { .. }
+            | RequestState::InFlight { .. }
             | RequestState::Complete { .. }
             | RequestState::Choked { .. }
             | RequestState::Committed
@@ -563,6 +602,7 @@ impl Worker {
                     } if *sender_client_id == client_id => true,
                     RequestState::Complete { .. }
                     | RequestState::InFlight { .. }
+                    | RequestState::Received { .. }
                     | RequestState::Suspended { .. }
                     | RequestState::Choked { .. } => false,
                     RequestState::Committed | RequestState::Cancelled => unreachable!(),
@@ -589,6 +629,7 @@ impl Worker {
                     }
                 }
                 RequestState::InFlight { .. }
+                | RequestState::Received { .. }
                 | RequestState::Suspended { .. }
                 | RequestState::Choked { .. }
                 | RequestState::Committed
@@ -621,8 +662,8 @@ impl Worker {
                 RequestState::InFlight {
                     sender_client_id,
                     sender_timer_key,
-                    sent_at,
                     waiters,
+                    ..
                 } => {
                     if !choked {
                         continue;
@@ -645,8 +686,7 @@ impl Worker {
 
                     waiters.push_back(client_id);
 
-                    self.flight
-                        .cancel(*request_key, *sender_timer_key, *sent_at, None);
+                    self.flight.cancel(*request_key, *sender_timer_key, None);
 
                     *node.value_mut() =
                         promote_waiter(waiters, node.request(), &self.clients, &mut self.flight);
@@ -667,7 +707,9 @@ impl Worker {
 
                     client_state.send(node.request().clone());
                 }
-                RequestState::Complete { .. } | RequestState::Suspended { .. } => (),
+                RequestState::Received { .. }
+                | RequestState::Complete { .. }
+                | RequestState::Suspended { .. } => (),
                 RequestState::Committed | RequestState::Cancelled => unreachable!(),
             }
         }
@@ -705,6 +747,7 @@ impl Worker {
         // Old request state | Client choked | initial_state | Action
         // ------------------+---------------+---------------+-----------------------
         // InFlight          | -             | -             | add client to waiters
+        // Received          | -             | -             | add client to waiters
         // Complete          | -             | -             | add client to waiters
         // Suspended         | -             | -             | add client to waiters
         // Choked            | false         | -             | insert InFlight
@@ -728,6 +771,7 @@ impl Worker {
         let request_key = MessageKey::from(&node.request().payload);
         let add = match node.value() {
             RequestState::InFlight { .. }
+            | RequestState::Received { .. }
             | RequestState::Complete { .. }
             | RequestState::Suspended { .. }
             | RequestState::Choked { .. }
@@ -765,16 +809,10 @@ impl Worker {
 
         if send {
             let in_flight_waiters = match node.value_mut() {
-                RequestState::Suspended { waiters } | RequestState::InFlight { waiters, .. } => {
-                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant
-                    // breaking bug is fixed.
-                    assert!(!waiters.contains(&client_id));
-
-                    client_state.increment_pending();
-                    waiters.push_back(client_id);
-                    None
-                }
-                RequestState::Complete { waiters, .. } => {
+                RequestState::Suspended { waiters }
+                | RequestState::InFlight { waiters, .. }
+                | RequestState::Received { waiters, .. }
+                | RequestState::Complete { waiters, .. } => {
                     // FIXME: remove this assert (or change to `debug_assert`) when the invariant
                     // breaking bug is fixed.
                     assert!(!waiters.contains(&client_id));
@@ -887,15 +925,27 @@ impl Worker {
             RequestState::InFlight {
                 sender_client_id,
                 sender_timer_key,
-                sent_at,
+                waiters,
+                ..
+            } => {
+                try_decrement_pending();
+
+                if *sender_client_id == client_id {
+                    self.flight.cancel(request_key, *sender_timer_key, reason);
+
+                    Some(waiters)
+                } else {
+                    remove_waiter(waiters, client_id);
+                    return;
+                }
+            }
+            RequestState::Received {
+                sender_client_id,
                 waiters,
             } => {
                 try_decrement_pending();
 
                 if *sender_client_id == client_id {
-                    self.flight
-                        .cancel(request_key, *sender_timer_key, *sent_at, reason);
-
                     Some(waiters)
                 } else {
                     remove_waiter(waiters, client_id);
@@ -945,6 +995,7 @@ impl Worker {
         match node.value() {
             RequestState::Committed | RequestState::Cancelled => (),
             RequestState::InFlight { .. }
+            | RequestState::Received { .. }
             | RequestState::Complete { .. }
             | RequestState::Suspended { .. }
             | RequestState::Choked { .. } => return,
@@ -1019,6 +1070,10 @@ enum Command {
         client_id: ClientId,
         request_key: MessageKey,
     },
+    HandleReceive {
+        client_id: ClientId,
+        request_key: MessageKey,
+    },
     Resume {
         request_key: MessageKey,
         variant: RequestVariant,
@@ -1040,7 +1095,7 @@ struct ClientState {
     // Number of pending requests tracked for this client. A request is considered "pending" if it
     // is:
     //
-    // - `InFlight`, `Choked` or `Suspended`
+    // - `InFlight`, `Received`, `Choked` or `Suspended`
     // - `Complete` and the client is a waiter, not sender.
     //
     // When this number drops to zero we send a `Request::Idle` message to notify the that we've
@@ -1093,16 +1148,25 @@ enum RequestState {
         sender_timer_key: delay_queue::Key,
         /// When was the request sent.
         sent_at: Instant,
-        /// Other clients interested in sending this request. If the current client fails or
-        /// timeouts, a new one will be picked from this list.
+        /// Other clients interested in sending this request. If the sender client is dropped or the
+        /// request timeouts, a new sender is picked from this list.
         waiters: VecDeque<ClientId>,
     },
-    /// The response to this request has already been received but the request hasn't been committed
-    /// because the response hasn't been fully processed yet. If the sender client is dropped
-    /// before this request gets committed, a new sender is picked and the request is switched back
-    /// to `InFlight`.
-    Complete {
+    /// The response to this request has been received but not yet processed.
+    Received {
+        /// Client who sent this request
         sender_client_id: ClientId,
+        /// Other clients interested in sending this request. If the sender client is dropped, a new
+        /// sender is picked from this list.
+        waiters: VecDeque<ClientId>,
+    },
+    /// The response to this request has been processed but not commited yet (responses are
+    /// processed in batches and commited only at the end of each batch).
+    Complete {
+        /// Client who sent the request.
+        sender_client_id: ClientId,
+        /// Other clients interested in sending this request. If the sender client is dropped, a new
+        /// sender is picked from this list.
         waiters: VecDeque<ClientId>,
     },
     /// This request is suspended. It will be transitioned to `InFlight` when resumed.
@@ -1121,6 +1185,11 @@ impl RequestState {
     fn clients(&self) -> impl Iterator<Item = &ClientId> {
         match self {
             Self::InFlight {
+                sender_client_id,
+                waiters,
+                ..
+            }
+            | Self::Received {
                 sender_client_id,
                 waiters,
                 ..
@@ -1165,38 +1234,62 @@ impl Flight {
 
     fn send(&mut self, client_id: ClientId, request_key: MessageKey) -> delay_queue::Key {
         let timer_key = self.timer.insert((client_id, request_key), self.timeout);
-        self.monitor.record(RequestEvent::Send, request_key.kind());
+
+        match request_key {
+            MessageKey::Block(_) => {
+                self.monitor.block_requests_sent.increment(1);
+                self.monitor.block_requests_inflight.increment(1);
+            }
+            MessageKey::RootNode(..) | MessageKey::ChildNodes(_) => {
+                self.monitor.index_requests_sent.increment(1);
+                self.monitor.index_requests_inflight.increment(1);
+            }
+            MessageKey::Other => (),
+        }
+
         timer_key
     }
 
-    fn complete(&mut self, request_key: MessageKey, timer_key: delay_queue::Key, sent_at: Instant) {
+    fn receive(&mut self, request_key: MessageKey, timer_key: delay_queue::Key, sent_at: Instant) {
         self.timer.try_remove(&timer_key);
-        self.monitor.record(
-            RequestEvent::Success {
-                rtt: sent_at.elapsed(),
-            },
-            request_key.kind(),
-        );
+
+        match request_key {
+            MessageKey::Block(_) => {
+                self.monitor.block_requests_inflight.decrement(1);
+            }
+            MessageKey::RootNode(..) | MessageKey::ChildNodes(_) => {
+                self.monitor.index_requests_inflight.decrement(1);
+            }
+            MessageKey::Other => (),
+        }
+
+        self.monitor.request_rtt.record(sent_at.elapsed());
     }
 
     fn cancel(
         &mut self,
         request_key: MessageKey,
         timer_key: delay_queue::Key,
-        sent_at: Instant,
         reason: Option<FailureReason>,
     ) {
         self.timer.try_remove(&timer_key);
-        self.monitor.record(
-            match reason {
-                Some(FailureReason::Response) => RequestEvent::Failure {
-                    rtt: sent_at.elapsed(),
-                },
-                Some(FailureReason::Timeout) => RequestEvent::Timeout,
-                None => RequestEvent::Cancel,
-            },
-            request_key.kind(),
-        );
+
+        match request_key {
+            MessageKey::Block(_) => {
+                self.monitor.block_requests_inflight.decrement(1);
+            }
+            MessageKey::RootNode(..) | MessageKey::ChildNodes(_) => {
+                self.monitor.index_requests_inflight.decrement(1);
+            }
+            MessageKey::Other => (),
+        }
+
+        match reason {
+            Some(FailureReason::Timeout) => {
+                self.monitor.request_timeouts.increment(1);
+            }
+            Some(FailureReason::Response) | None => (),
+        }
     }
 
     async fn next_timeout(&mut self) -> Option<(ClientId, MessageKey)> {

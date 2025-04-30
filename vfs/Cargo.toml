@@ -27,7 +27,7 @@ libc = "0.2.139"
 bitflags = "2.6.0"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-xpc-connection = "0.2.0"
+xpc-connection = "0.2.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 deadlock = { path = "../deadlock" }

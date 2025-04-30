@@ -77,17 +77,26 @@ pub(crate) struct TrafficMonitor {
     pub block_requests_sent: Counter,
     // Current number of sent block request for which responses haven't been received yet.
     pub block_requests_inflight: Gauge,
-    // Total number of received requests
-    pub requests_received: Counter,
+
     // Time from sending a request to receiving its response.
-    pub request_latency: Histogram,
+    pub request_rtt: Histogram,
     // Total number of timeouted requests.
     pub request_timeouts: Counter,
+    // Current number of requests being processed.
+    pub request_processing: Gauge,
+    // Time it takes to process a request.
+    pub request_process_time: Histogram,
 
     // Total number of responses sent.
     pub responses_sent: Counter,
     // Total number of responses received.
     pub responses_received: Counter,
+    // Current number of queued responses (received but not yet processed)
+    pub responses_queued: Gauge,
+    // Current number of responses being processed
+    pub responses_processing: Gauge,
+    // Time it takes to process a response
+    pub responses_process_time: Histogram,
 }
 
 impl TrafficMonitor {
@@ -100,78 +109,21 @@ impl TrafficMonitor {
             index_requests_inflight: create_gauge(recorder, "index requests inflight", Unit::Count),
             block_requests_sent: create_counter(recorder, "block requests sent", Unit::Count),
             block_requests_inflight: create_gauge(recorder, "block requests inflight", Unit::Count),
-            requests_received: create_counter(recorder, "requests received", Unit::Count),
-            request_latency: create_histogram(recorder, "request latency", Unit::Seconds),
+            request_rtt: create_histogram(recorder, "request rtt", Unit::Seconds),
             request_timeouts: create_counter(recorder, "request timeouts", Unit::Count),
+            request_processing: create_gauge(recorder, "request processing", Unit::Count),
+            request_process_time: create_histogram(recorder, "request process time", Unit::Seconds),
             responses_sent: create_counter(recorder, "responses sent", Unit::Count),
             responses_received: create_counter(recorder, "responses received", Unit::Count),
+            responses_queued: create_gauge(recorder, "responses queued", Unit::Count),
+            responses_processing: create_gauge(recorder, "responses processing", Unit::Count),
+            responses_process_time: create_histogram(
+                recorder,
+                "responses process time",
+                Unit::Seconds,
+            ),
         }
     }
-
-    pub fn record(&self, event: RequestEvent, kind: RequestKind) {
-        match (event, kind) {
-            (RequestEvent::Send, RequestKind::Index) => {
-                self.index_requests_sent.increment(1);
-                self.index_requests_inflight.increment(1.0);
-            }
-            (RequestEvent::Send, RequestKind::Block) => {
-                self.block_requests_sent.increment(1);
-                self.block_requests_inflight.increment(1.0);
-            }
-            (
-                RequestEvent::Success { .. }
-                | RequestEvent::Failure { .. }
-                | RequestEvent::Timeout
-                | RequestEvent::Cancel,
-                RequestKind::Index,
-            ) => {
-                self.index_requests_inflight.decrement(1.0);
-            }
-            (
-                RequestEvent::Success { .. }
-                | RequestEvent::Failure { .. }
-                | RequestEvent::Timeout
-                | RequestEvent::Cancel,
-                RequestKind::Block,
-            ) => {
-                self.block_requests_inflight.decrement(1.0);
-            }
-            (
-                RequestEvent::Send
-                | RequestEvent::Success { .. }
-                | RequestEvent::Failure { .. }
-                | RequestEvent::Timeout
-                | RequestEvent::Cancel,
-                RequestKind::Other,
-            ) => (),
-        }
-
-        match event {
-            RequestEvent::Success { rtt } | RequestEvent::Failure { rtt } => {
-                self.request_latency.record(rtt);
-            }
-            RequestEvent::Timeout => {
-                self.request_timeouts.increment(1);
-            }
-            RequestEvent::Send | RequestEvent::Cancel => (),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
-pub(crate) enum RequestKind {
-    Index,
-    Block,
-    Other,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
-pub(crate) enum RequestEvent {
-    Send,
-    Success { rtt: Duration },
-    Failure { rtt: Duration },
-    Timeout,
-    Cancel,
 }
 
 pub(crate) struct JobMonitor {

@@ -210,6 +210,7 @@ async fn drop_uncommitted_client() {
     let request_key = MessageKey::from(&request);
 
     for client in [&client_a, &client_b] {
+        client.receive(preceding_request_key);
         client.success(
             preceding_request_key,
             vec![CandidateRequest::new(request.clone())],
@@ -225,6 +226,7 @@ async fn drop_uncommitted_client() {
     assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
 
     // Complete the request by the first client.
+    client_a.receive(request_key);
     client_a.success(request_key, vec![]);
     tracker_worker.step();
 
@@ -268,7 +270,9 @@ async fn multiple_responses_to_identical_requests() {
     );
 
     // Receive response to it
-    client.success(MessageKey::from(&initial_request), vec![]);
+    let key = MessageKey::from(&initial_request);
+    client.receive(key);
+    client.success(key, vec![]);
     worker.step();
 
     // All reqests have been completed so the client is now considered idle.
@@ -282,10 +286,9 @@ async fn multiple_responses_to_identical_requests() {
 
     // Receive another response, this time unsolicited, which has the same key but different
     // followups than the one received previously.
-    client.success(
-        MessageKey::from(&initial_request),
-        vec![CandidateRequest::new(followup_request.clone())],
-    );
+    let key = MessageKey::from(&initial_request);
+    client.receive(key);
+    client.success(key, vec![CandidateRequest::new(followup_request.clone())]);
     worker.step();
 
     assert_eq!(
@@ -311,6 +314,7 @@ async fn suspend_resume() {
     let request = Request::Block(rng.r#gen(), DebugRequest::start());
     let request_key = MessageKey::from(&request);
 
+    client.receive(preceding_request_key);
     client.success(
         preceding_request_key,
         vec![CandidateRequest::new(request.clone()).suspended()],
@@ -337,9 +341,18 @@ mod duplicate_request_with_different_variant_on_the_same_client {
     }
 
     #[tokio::test]
+    async fn received() {
+        case(
+            |client, request_key| client.receive(request_key),
+            Err(TryRecvError::Empty),
+        );
+    }
+
+    #[tokio::test]
     async fn complete() {
         case(
             |client, request_key| {
+                client.receive(request_key);
                 client.success(request_key, vec![]);
             },
             Ok(PendingRequest::new(Request::Idle)),
@@ -350,6 +363,7 @@ mod duplicate_request_with_different_variant_on_the_same_client {
     async fn committed() {
         case(
             |client, request_key| {
+                client.receive(request_key);
                 client.success(request_key, vec![]);
                 client.new_committer().commit();
             },
@@ -361,6 +375,7 @@ mod duplicate_request_with_different_variant_on_the_same_client {
     async fn cancelled() {
         case(
             |client, request_key| {
+                client.receive(request_key);
                 client.failure(request_key);
             },
             Ok(PendingRequest::new(Request::Idle)),
@@ -384,6 +399,7 @@ mod duplicate_request_with_different_variant_on_the_same_client {
         let variant_0 = RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::None);
         let variant_1 = RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::Full);
 
+        client.receive(preceding_request_key);
         client.success(
             preceding_request_key,
             vec![CandidateRequest::new(request.clone()).variant(variant_0)],
@@ -400,6 +416,7 @@ mod duplicate_request_with_different_variant_on_the_same_client {
 
         assert_eq!(request_rx.try_recv(), expect);
 
+        client.receive(preceding_request_key);
         client.success(
             preceding_request_key,
             vec![CandidateRequest::new(request.clone()).variant(variant_1)],
@@ -567,7 +584,9 @@ async fn idle_after_success_by_same_client() {
     );
     assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
 
-    client.success(MessageKey::from(&request), vec![]);
+    let key = MessageKey::from(&request);
+    client.receive(key);
+    client.success(key, vec![]);
     worker.step();
 
     assert_eq!(
@@ -603,7 +622,9 @@ async fn idle_after_success_by_other_client() {
     assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::Empty));
     assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
 
-    client_a.success(MessageKey::from(&request), vec![]);
+    let key = MessageKey::from(&request);
+    client_a.receive(key);
+    client_a.success(key, vec![]);
     worker.step();
 
     // A is the sender so they become idle immediatelly after the request's been completed.
@@ -643,7 +664,9 @@ async fn idle_after_failure() {
     );
     assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
 
-    client.failure(MessageKey::from(&request));
+    let key = MessageKey::from(&request);
+    client.receive(key);
+    client.failure(key);
     worker.step();
 
     assert_eq!(
