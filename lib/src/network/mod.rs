@@ -8,7 +8,7 @@ mod debug_payload;
 mod dht_discovery;
 mod event;
 mod gateway;
-mod ip;
+pub mod ip;
 mod local_discovery;
 mod message;
 mod message_broker;

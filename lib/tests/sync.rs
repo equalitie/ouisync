@@ -89,7 +89,7 @@ fn sync_swarm_case(num_peers: usize, num_repos: usize, file_size: usize) {
             let barrier = barrier.clone();
 
             async move {
-                let network = actor::create_network(Proto::Tcp).await;
+                let network = actor::create_network(Proto::Mock).await;
 
                 // Connect to the others
                 for other_actor_index in 0..num_peers {

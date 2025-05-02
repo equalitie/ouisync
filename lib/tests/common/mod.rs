@@ -14,7 +14,7 @@ use self::wait_map::WaitMap;
 use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
 use ouisync::{
-    crypto::sign::PublicKey, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File,
+    crypto::sign::PublicKey, ip, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File,
     Network, Payload, PeerAddr, Registration, Repository, Result, StoreError,
 };
 use ouisync_tracing_fmt::Formatter;
@@ -210,7 +210,7 @@ pub(crate) mod actor {
         let bind_addr = network
             .listener_local_addrs()
             .into_iter()
-            .find(|addr| Proto::of(addr) == proto)
+            .find(|addr| Proto::ip_proto_of(addr) == proto.ip_proto())
             .unwrap();
         register_addr(bind_addr);
     }
@@ -389,20 +389,29 @@ impl Drop for TempDir {
 pub(crate) enum Proto {
     Tcp,
     Quic,
+    Mock,
 }
 
 impl Proto {
     pub fn wrap(&self, addr: impl Into<SocketAddr>) -> PeerAddr {
-        match self {
-            Self::Tcp => PeerAddr::Tcp(addr.into()),
-            Self::Quic => PeerAddr::Quic(addr.into()),
+        match self.ip_proto() {
+            ip::Protocol::Tcp => PeerAddr::Tcp(addr.into()),
+            ip::Protocol::Udp => PeerAddr::Quic(addr.into()),
         }
     }
 
-    pub fn of(addr: &PeerAddr) -> Self {
+    fn ip_proto(&self) -> ip::Protocol {
+        match self {
+            Self::Tcp => ip::Protocol::Tcp,
+            Self::Quic => ip::Protocol::Udp,
+            Self::Mock => ip::Protocol::Tcp,
+        }
+    }
+
+    fn ip_proto_of(addr: &PeerAddr) -> ip::Protocol {
         match addr {
-            PeerAddr::Quic(_) => Self::Quic,
-            PeerAddr::Tcp(_) => Self::Tcp,
+            PeerAddr::Tcp(_) => ip::Protocol::Tcp,
+            PeerAddr::Quic(_) => ip::Protocol::Udp,
         }
     }
 }
@@ -414,6 +423,7 @@ impl FromStr for Proto {
         match input.trim().to_lowercase().as_str() {
             "tcp" => Ok(Self::Tcp),
             "quic" => Ok(Self::Quic),
+            "mock" => Ok(Self::Mock),
             _ => Err(ProtoParseError),
         }
     }
@@ -424,6 +434,7 @@ impl fmt::Display for Proto {
         match self {
             Self::Tcp => write!(f, "TCP"),
             Self::Quic => write!(f, "QUIC"),
+            Self::Mock => write!(f, "MOCK"),
         }
     }
 }

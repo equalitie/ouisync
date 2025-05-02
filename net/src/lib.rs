@@ -1,6 +1,8 @@
 use std::time::Duration;
 
 pub mod bus;
+#[cfg(test)]
+pub mod mock;
 pub mod quic;
 pub mod stun;
 pub mod tcp;

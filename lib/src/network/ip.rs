@@ -1,7 +1,7 @@
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Protocol {
+pub enum Protocol {
     Tcp,
     Udp,
 }
@@ -21,7 +21,7 @@ impl fmt::Display for Protocol {
 // TODO: Get rid of the below once `IpAddr::is_global` is in stable API.
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-pub const fn is_global(ip: &IpAddr) -> bool {
+pub(crate) const fn is_global(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_global_ipv4(ip),
         IpAddr::V6(ip) => is_global_ipv6(ip),
@@ -54,7 +54,7 @@ const fn is_shared(ip: &Ipv4Addr) -> bool {
     ip.octets()[0] == 100 && (ip.octets()[1] & 0b1100_0000 == 0b0100_0000)
 }
 
-pub const fn is_reserved(ip: &Ipv4Addr) -> bool {
+pub(crate) const fn is_reserved(ip: &Ipv4Addr) -> bool {
     ip.octets()[0] & 240 == 240 && !ip.is_broadcast()
 }
 
@@ -66,7 +66,7 @@ const fn is_global_ipv6(ip: &Ipv6Addr) -> bool {
     }
 }
 
-pub const fn is_benchmarking(ip: &Ipv4Addr) -> bool {
+pub(crate) const fn is_benchmarking(ip: &Ipv4Addr) -> bool {
     ip.octets()[0] == 198 && (ip.octets()[1] & 0xfe) == 18
 }
 
@@ -83,7 +83,7 @@ const fn is_unicast_global_ipv6(ip: &Ipv6Addr) -> bool {
         && !is_documentation(ip)
 }
 
-pub const fn is_documentation(ip: &Ipv6Addr) -> bool {
+pub(crate) const fn is_documentation(ip: &Ipv6Addr) -> bool {
     (ip.segments()[0] == 0x2001) && (ip.segments()[1] == 0xdb8)
 }
 

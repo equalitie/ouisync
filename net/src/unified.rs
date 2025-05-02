@@ -1,5 +1,7 @@
 //! Unified interface over different network protocols (currently TCP and QUIC).
 
+#[cfg(test)]
+use crate::mock;
 use crate::{quic, tcp};
 use futures_util::future::Either;
 use std::{
@@ -16,6 +18,8 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 pub enum Connector {
     Tcp(tcp::Connector),
     Quic(quic::Connector),
+    #[cfg(test)]
+    Mock(mock::Connector),
 }
 
 impl Connector {
@@ -30,6 +34,12 @@ impl Connector {
                 .connect(addr)
                 .await
                 .map(Connection::Quic)
+                .map_err(Into::into),
+            #[cfg(test)]
+            Self::Mock(inner) => inner
+                .connect(addr)
+                .await
+                .map(Connection::Mock)
                 .map_err(Into::into),
         }
     }
@@ -51,6 +61,8 @@ impl From<quic::Connector> for Connector {
 pub enum Acceptor {
     Tcp(tcp::Acceptor),
     Quic(quic::Acceptor),
+    #[cfg(test)]
+    Mock(mock::Acceptor),
 }
 
 impl Acceptor {
@@ -58,6 +70,8 @@ impl Acceptor {
         match self {
             Self::Tcp(inner) => inner.local_addr(),
             Self::Quic(inner) => inner.local_addr(),
+            #[cfg(test)]
+            Self::Mock(inner) => inner.local_addr(),
         }
     }
 
@@ -65,6 +79,8 @@ impl Acceptor {
         match self {
             Self::Tcp(inner) => Ok(Connecting::Tcp(inner.accept().await?)),
             Self::Quic(inner) => Ok(Connecting::Quic(inner.accept().await?)),
+            #[cfg(test)]
+            Self::Mock(inner) => Ok(Connecting::Mock(inner.accept().await?)),
         }
     }
 }
@@ -87,6 +103,8 @@ pub enum Connecting {
     // connection.
     Tcp(tcp::Connection),
     Quic(quic::Connecting),
+    #[cfg(test)]
+    Mock(mock::Connection),
 }
 
 impl Connecting {
@@ -94,6 +112,8 @@ impl Connecting {
         match self {
             Self::Tcp(inner) => inner.remote_addr(),
             Self::Quic(inner) => inner.remote_addr(),
+            #[cfg(test)]
+            Self::Mock(inner) => inner.remote_addr(),
         }
     }
 }
@@ -106,6 +126,8 @@ impl IntoFuture for Connecting {
         match self {
             Self::Tcp(inner) => ConnectingFuture::Tcp(future::ready(inner)),
             Self::Quic(inner) => ConnectingFuture::Quic(inner.into_future()),
+            #[cfg(test)]
+            Self::Mock(inner) => ConnectingFuture::Mock(future::ready(inner)),
         }
     }
 }
@@ -113,6 +135,8 @@ impl IntoFuture for Connecting {
 pub enum ConnectingFuture {
     Tcp(Ready<tcp::Connection>),
     Quic(quic::ConnectingFuture),
+    #[cfg(test)]
+    Mock(Ready<mock::Connection>),
 }
 
 impl Future for ConnectingFuture {
@@ -127,6 +151,10 @@ impl Future for ConnectingFuture {
                 .poll(cx)
                 .map_ok(Connection::Quic)
                 .map_err(Into::into),
+            #[cfg(test)]
+            Self::Mock(inner) => Pin::new(inner)
+                .poll(cx)
+                .map(|inner| Ok(Connection::Mock(inner))),
         }
     }
 }
@@ -135,6 +163,8 @@ impl Future for ConnectingFuture {
 pub enum Connection {
     Tcp(tcp::Connection),
     Quic(quic::Connection),
+    #[cfg(test)]
+    Mock(mock::Connection),
 }
 
 impl Connection {
@@ -142,6 +172,8 @@ impl Connection {
         match self {
             Self::Tcp(inner) => inner.remote_addr(),
             Self::Quic(inner) => inner.remote_addr(),
+            #[cfg(test)]
+            Self::Mock(inner) => inner.remote_addr(),
         }
     }
 
@@ -157,6 +189,12 @@ impl Connection {
                 .incoming()
                 .await
                 .map(|(send, recv)| (SendStream::Quic(send), RecvStream::Quic(recv)))
+                .map_err(Into::into),
+            #[cfg(test)]
+            Self::Mock(inner) => inner
+                .incoming()
+                .await
+                .map(|(send, recv)| (SendStream::Mock(send), RecvStream::Mock(recv)))
                 .map_err(Into::into),
         }
     }
@@ -174,6 +212,12 @@ impl Connection {
                 .await
                 .map(|(send, recv)| (SendStream::Quic(send), RecvStream::Quic(recv)))
                 .map_err(Into::into),
+            #[cfg(test)]
+            Self::Mock(inner) => inner
+                .outgoing()
+                .await
+                .map(|(send, recv)| (SendStream::Mock(send), RecvStream::Mock(recv)))
+                .map_err(Into::into),
         }
     }
 
@@ -182,6 +226,8 @@ impl Connection {
         match self {
             Self::Tcp(inner) => inner.close().await,
             Self::Quic(inner) => inner.close(),
+            #[cfg(test)]
+            Self::Mock(inner) => inner.close().await,
         }
     }
 
@@ -189,10 +235,19 @@ impl Connection {
     ///
     /// Note the returned future has a `'static` lifetime, so it can be moved to another task/thread
     /// and awaited there.
+    #[cfg(not(test))]
     pub fn closed(&self) -> impl Future<Output = ()> + 'static {
         match self {
             Self::Tcp(inner) => Either::Left(inner.closed()),
             Self::Quic(inner) => Either::Right(inner.closed()),
+        }
+    }
+    #[cfg(test)]
+    pub fn closed(&self) -> impl Future<Output = ()> + 'static {
+        match self {
+            Self::Tcp(inner) => Either::Left(inner.closed()),
+            Self::Quic(_inner) => todo!(),
+            Self::Mock(inner) => Either::Right(inner.closed()),
         }
     }
 }
@@ -200,6 +255,8 @@ impl Connection {
 pub enum SendStream {
     Tcp(tcp::SendStream),
     Quic(quic::SendStream),
+    #[cfg(test)]
+    Mock(mock::SendStream),
 }
 
 impl AsyncWrite for SendStream {
@@ -211,6 +268,8 @@ impl AsyncWrite for SendStream {
         match self.get_mut() {
             Self::Tcp(inner) => AsyncWrite::poll_write(Pin::new(inner), cx, buf),
             Self::Quic(inner) => AsyncWrite::poll_write(Pin::new(inner), cx, buf),
+            #[cfg(test)]
+            Self::Mock(inner) => AsyncWrite::poll_write(Pin::new(inner), cx, buf),
         }
     }
 
@@ -218,6 +277,8 @@ impl AsyncWrite for SendStream {
         match self.get_mut() {
             Self::Tcp(inner) => AsyncWrite::poll_flush(Pin::new(inner), cx),
             Self::Quic(inner) => AsyncWrite::poll_flush(Pin::new(inner), cx),
+            #[cfg(test)]
+            Self::Mock(inner) => AsyncWrite::poll_flush(Pin::new(inner), cx),
         }
     }
 
@@ -225,6 +286,8 @@ impl AsyncWrite for SendStream {
         match self.get_mut() {
             Self::Tcp(inner) => AsyncWrite::poll_shutdown(Pin::new(inner), cx),
             Self::Quic(inner) => AsyncWrite::poll_shutdown(Pin::new(inner), cx),
+            #[cfg(test)]
+            Self::Mock(inner) => AsyncWrite::poll_shutdown(Pin::new(inner), cx),
         }
     }
 
@@ -236,6 +299,8 @@ impl AsyncWrite for SendStream {
         match self.get_mut() {
             Self::Tcp(inner) => AsyncWrite::poll_write_vectored(Pin::new(inner), cx, bufs),
             Self::Quic(inner) => AsyncWrite::poll_write_vectored(Pin::new(inner), cx, bufs),
+            #[cfg(test)]
+            Self::Mock(inner) => AsyncWrite::poll_write_vectored(Pin::new(inner), cx, bufs),
         }
     }
 
@@ -243,6 +308,8 @@ impl AsyncWrite for SendStream {
         match self {
             Self::Tcp(inner) => inner.is_write_vectored(),
             Self::Quic(inner) => inner.is_write_vectored(),
+            #[cfg(test)]
+            Self::Mock(inner) => inner.is_write_vectored(),
         }
     }
 }
@@ -250,6 +317,8 @@ impl AsyncWrite for SendStream {
 pub enum RecvStream {
     Tcp(tcp::RecvStream),
     Quic(quic::RecvStream),
+    #[cfg(test)]
+    Mock(mock::RecvStream),
 }
 
 impl AsyncRead for RecvStream {
@@ -261,6 +330,8 @@ impl AsyncRead for RecvStream {
         match self.get_mut() {
             Self::Tcp(inner) => AsyncRead::poll_read(Pin::new(inner), cx, buf),
             Self::Quic(inner) => AsyncRead::poll_read(Pin::new(inner), cx, buf),
+            #[cfg(test)]
+            Self::Mock(inner) => AsyncRead::poll_read(Pin::new(inner), cx, buf),
         }
     }
 }
@@ -271,6 +342,9 @@ pub enum ConnectionError {
     Tcp(#[from] tcp::Error),
     #[error("quic")]
     Quic(#[from] quic::Error),
+    #[cfg(test)]
+    #[error("mock")]
+    Mock(#[from] mock::Error),
 }
 
 #[cfg(test)]
