@@ -539,7 +539,7 @@ impl TcpStack {
                 Ok((connector, acceptor)) => {
                     span.record(
                         "addr",
-                        field::display(PeerAddr::Quic(*acceptor.local_addr())),
+                        field::display(PeerAddr::Tcp(*acceptor.local_addr())),
                     );
                     tracing::info!(parent: &span, "Stack configured");
 
