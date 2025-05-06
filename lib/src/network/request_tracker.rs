@@ -8,18 +8,22 @@ mod tests;
 use self::graph::{Graph, Key as GraphKey};
 use super::message::Request;
 use crate::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     crypto::{sign::PublicKey, Hash},
     protocol::{BlockId, MultiBlockPresence},
     repository::monitor::TrafficMonitor,
 };
 use std::{
-    collections::{hash_map::Entry, VecDeque},
+    collections::hash_map::Entry,
     fmt, iter, mem,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
-use tokio::{select, sync::mpsc, task};
+use tokio::{
+    select,
+    sync::{mpsc, oneshot},
+    task,
+};
 use tokio_stream::StreamExt;
 use tokio_util::time::{delay_queue, DelayQueue};
 use tracing::{instrument, Instrument, Span};
@@ -46,12 +50,7 @@ impl RequestTracker {
         self.command_tx.send(Command::SetTimeout { timeout });
     }
 
-    pub fn new_client(
-        &self,
-    ) -> (
-        RequestTrackerClient,
-        mpsc::UnboundedReceiver<PendingRequest>,
-    ) {
+    pub fn new_client(&self) -> (RequestTrackerClient, RequestTrackerReceiver) {
         let client_id = ClientId::next();
         let (request_tx, request_rx) = mpsc::unbounded_channel();
 
@@ -65,7 +64,14 @@ impl RequestTracker {
                 client_id,
                 command_tx: self.command_tx.clone(),
             },
-            request_rx,
+            RequestTrackerReceiver {
+                client_id,
+                command_tx: self.command_tx.clone(),
+                request_rx,
+
+                #[cfg(test)]
+                reply_rx: None,
+            },
         )
     }
 }
@@ -149,6 +155,96 @@ impl Drop for RequestTrackerClient {
     }
 }
 
+/// Receives requests to be sent to peers.
+pub(crate) struct RequestTrackerReceiver {
+    client_id: ClientId,
+    command_tx: CommandSender,
+    request_rx: mpsc::UnboundedReceiver<MessageKey>,
+
+    #[cfg(test)]
+    reply_rx: Option<oneshot::Receiver<PendingRequest>>,
+}
+
+impl RequestTrackerReceiver {
+    pub async fn recv(&mut self) -> Option<PendingRequest> {
+        loop {
+            let request_key = self.request_rx.recv().await?;
+            let reply_rx = self.send(request_key);
+
+            if let Ok(request) = reply_rx.await {
+                return Some(request);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn try_recv(&mut self) -> Result<PendingRequest, TryRecvError> {
+        loop {
+            if let Some(rx) = &mut self.reply_rx {
+                match rx.try_recv() {
+                    Ok(request) => {
+                        self.reply_rx = None;
+                        return Ok(request);
+                    }
+                    Err(oneshot::error::TryRecvError::Empty) => {
+                        return Err(TryRecvError::InProgress)
+                    }
+                    Err(oneshot::error::TryRecvError::Closed) => {
+                        self.reply_rx = None;
+                    }
+                }
+            }
+
+            let request_key = self.request_rx.try_recv()?;
+            self.reply_rx = Some(self.send(request_key));
+        }
+    }
+
+    fn send(&self, request_key: MessageKey) -> oneshot::Receiver<PendingRequest> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+
+        match request_key {
+            MessageKey::Idle => {
+                // `Request::Idle` is not tracked - send it right away.
+                reply_tx.send(PendingRequest::new(Request::Idle)).unwrap();
+            }
+            MessageKey::Block(_)
+            | MessageKey::RootNode(_, _)
+            | MessageKey::ChildNodes(_)
+            | MessageKey::Other => {
+                self.command_tx.send(Command::HandleSend {
+                    client_id: self.client_id,
+                    request_key,
+                    reply_tx,
+                });
+            }
+        }
+
+        reply_rx
+    }
+}
+
+#[cfg(test)]
+#[derive(Eq, PartialEq, Debug)]
+pub(crate) enum TryRecvError {
+    // The channel is currently empty but request might yet become available
+    Empty,
+    // The channel has been closed, not request will be received.
+    Closed,
+    // The request receiving is in progress. Call [Worker::step()] and try again.
+    InProgress,
+}
+
+#[cfg(test)]
+impl From<mpsc::error::TryRecvError> for TryRecvError {
+    fn from(error: mpsc::error::TryRecvError) -> Self {
+        match error {
+            mpsc::error::TryRecvError::Empty => Self::Empty,
+            mpsc::error::TryRecvError::Disconnected => Self::Closed,
+        }
+    }
+}
+
 pub(crate) struct RequestTrackerCommitter {
     client_id: ClientId,
     command_tx: CommandSender,
@@ -181,7 +277,7 @@ impl CandidateRequest {
         Self {
             payload,
             variant: RequestVariant::default(),
-            state: InitialRequestState::InFlight,
+            state: InitialRequestState::Ready,
         }
     }
 
@@ -223,7 +319,7 @@ impl fmt::Debug for RequestVariant {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum InitialRequestState {
-    InFlight,
+    Ready,
     Suspended,
 }
 
@@ -257,6 +353,7 @@ pub(super) enum MessageKey {
     RootNode(PublicKey, u64),
     ChildNodes(Hash),
     Block(BlockId),
+    Idle,
     Other,
 }
 
@@ -268,7 +365,7 @@ impl<'a> From<&'a Request> for MessageKey {
             } => MessageKey::RootNode(*writer_id, *cookie),
             Request::ChildNodes(hash, _) => MessageKey::ChildNodes(*hash),
             Request::Block(block_id, _) => MessageKey::Block(*block_id),
-            Request::Idle => MessageKey::Other,
+            Request::Idle => MessageKey::Idle,
         }
     }
 }
@@ -385,6 +482,15 @@ impl Worker {
             } => {
                 self.handle_failure(client_id, request_key, FailureReason::Response);
             }
+            Command::HandleSend {
+                client_id,
+                request_key,
+                reply_tx,
+            } => {
+                if let Some(request) = self.handle_send(client_id, request_key) {
+                    reply_tx.send(request).ok();
+                }
+            }
             Command::HandleReceive {
                 client_id,
                 request_key,
@@ -405,7 +511,7 @@ impl Worker {
     fn insert_client(
         &mut self,
         client_id: ClientId,
-        request_tx: mpsc::UnboundedSender<PendingRequest>,
+        request_tx: mpsc::UnboundedSender<MessageKey>,
     ) {
         self.clients.insert(client_id, ClientState::new(request_tx));
     }
@@ -424,6 +530,42 @@ impl Worker {
     #[instrument(skip(self))]
     fn handle_initial(&mut self, client_id: ClientId, request: CandidateRequest) {
         self.insert_request(client_id, request, None)
+    }
+
+    #[instrument(skip(self))]
+    fn handle_send(
+        &mut self,
+        client_id: ClientId,
+        request_key: MessageKey,
+    ) -> Option<PendingRequest> {
+        let node_key = self
+            .clients
+            .get(&client_id)?
+            .requests
+            .get(&request_key)
+            .copied()?;
+        let node = self.requests.get_mut(node_key).expect(BROKEN_INVARIANT);
+
+        match node.value_mut() {
+            RequestState::Ready { waiters } => {
+                assert!(waiters.remove(&client_id), "{BROKEN_INVARIANT}");
+
+                *node.value_mut() = RequestState::InFlight {
+                    sender_client_id: client_id,
+                    sender_timer_key: self.flight.send(client_id, request_key),
+                    sent_at: Instant::now(),
+                    waiters: mem::take(waiters),
+                };
+
+                Some(node.request().clone())
+            }
+            RequestState::InFlight { .. }
+            | RequestState::Received { .. }
+            | RequestState::Complete { .. }
+            | RequestState::Suspended { .. }
+            | RequestState::Committed
+            | RequestState::Cancelled => None,
+        }
     }
 
     #[instrument(skip(self))]
@@ -452,11 +594,11 @@ impl Worker {
                     .receive(request_key, *sender_timer_key, *sent_at);
                 mem::take(waiters)
             }
-            RequestState::InFlight { .. }
+            RequestState::Ready { .. }
+            | RequestState::InFlight { .. }
             | RequestState::Received { .. }
             | RequestState::Complete { .. }
-            | RequestState::Suspended { .. }
-            | RequestState::Choked { .. } => return,
+            | RequestState::Suspended { .. } => return,
 
             RequestState::Cancelled | RequestState::Committed => unreachable!(),
         };
@@ -482,7 +624,7 @@ impl Worker {
             .get(&request_key)
             .copied();
 
-        let (mut client_ids, decrement_pending) = if let Some(node_key) = node_key {
+        let (client_ids, decrement_pending) = if let Some(node_key) = node_key {
             let node = self.requests.get_mut(node_key).expect(BROKEN_INVARIANT);
 
             // If the request was `Received` from this client, switch it to `Complete`. Otherwise
@@ -493,10 +635,10 @@ impl Worker {
                     waiters,
                 } if *sender_client_id == client_id => Some(mem::take(waiters)),
                 RequestState::Received { .. }
+                | RequestState::Ready { .. }
                 | RequestState::InFlight { .. }
                 | RequestState::Complete { .. }
-                | RequestState::Suspended { .. }
-                | RequestState::Choked { .. } => None,
+                | RequestState::Suspended { .. } => None,
                 RequestState::Cancelled | RequestState::Committed => unreachable!(),
             };
 
@@ -520,14 +662,9 @@ impl Worker {
         // Register the followup (child) requests with this client but also with all the clients
         // that were waiting for the original request.
         for child_request in requests {
-            for (client_id, child_request) in
-                client_ids.iter().copied().zip(iter::repeat(child_request))
-            {
-                self.insert_request(client_id, child_request, node_key);
+            for client_id in &client_ids {
+                self.insert_request(*client_id, child_request.clone(), node_key);
             }
-
-            // Round-robin the requests among the clients.
-            client_ids.rotate_left(1);
         }
 
         if decrement_pending {
@@ -561,17 +698,15 @@ impl Worker {
 
         match node.value_mut() {
             RequestState::Suspended { waiters } => {
-                *node.value_mut() = promote_waiter(
-                    mem::take(waiters),
-                    node.request(),
-                    &self.clients,
-                    &mut self.flight,
-                );
+                send(&self.clients, &*waiters, request_key);
+                *node.value_mut() = RequestState::Ready {
+                    waiters: mem::take(waiters),
+                };
             }
-            RequestState::Received { .. }
+            RequestState::Ready { .. }
             | RequestState::InFlight { .. }
+            | RequestState::Received { .. }
             | RequestState::Complete { .. }
-            | RequestState::Choked { .. }
             | RequestState::Committed
             | RequestState::Cancelled => (),
         }
@@ -601,10 +736,10 @@ impl Worker {
                         sender_client_id, ..
                     } if *sender_client_id == client_id => true,
                     RequestState::Complete { .. }
+                    | RequestState::Ready { .. }
                     | RequestState::InFlight { .. }
                     | RequestState::Received { .. }
-                    | RequestState::Suspended { .. }
-                    | RequestState::Choked { .. } => false,
+                    | RequestState::Suspended { .. } => false,
                     RequestState::Committed | RequestState::Cancelled => unreachable!(),
                 }
             })
@@ -628,10 +763,10 @@ impl Worker {
                         }
                     }
                 }
-                RequestState::InFlight { .. }
+                RequestState::Ready { .. }
+                | RequestState::InFlight { .. }
                 | RequestState::Received { .. }
                 | RequestState::Suspended { .. }
-                | RequestState::Choked { .. }
                 | RequestState::Committed
                 | RequestState::Cancelled => unreachable!(),
             }
@@ -659,6 +794,13 @@ impl Worker {
             let node = self.requests.get_mut(*node_key).expect(BROKEN_INVARIANT);
 
             match node.value_mut() {
+                RequestState::Ready { .. } => {
+                    if choked {
+                        continue;
+                    }
+
+                    client_state.send(*request_key);
+                }
                 RequestState::InFlight {
                     sender_client_id,
                     sender_timer_key,
@@ -673,39 +815,14 @@ impl Worker {
                         continue;
                     }
 
-                    // The newly choked client has an `InFlight` request. If that request has at
-                    // least one unchoked waiter, we promote that waiter to a sender.
-                    // Otherwise we transition the request to `Choked`. In any case, we demote the
-                    // current sender (who's just been choked) to a waiter.
-
-                    let mut waiters = mem::take(waiters);
-
-                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant
-                    // breaking bug is fixed.
-                    assert!(!waiters.contains(&client_id));
-
-                    waiters.push_back(client_id);
-
                     self.flight.cancel(*request_key, *sender_timer_key, None);
 
-                    *node.value_mut() =
-                        promote_waiter(waiters, node.request(), &self.clients, &mut self.flight);
-                }
-                RequestState::Choked { waiters } => {
-                    if choked {
-                        continue;
-                    }
+                    let mut waiters = mem::take(waiters);
+                    waiters.insert(client_id);
 
-                    remove_waiter(waiters, client_id);
+                    send(&self.clients, &waiters, *request_key);
 
-                    *node.value_mut() = RequestState::InFlight {
-                        sender_client_id: client_id,
-                        sender_timer_key: self.flight.send(client_id, *request_key),
-                        sent_at: Instant::now(),
-                        waiters: mem::take(waiters),
-                    };
-
-                    client_state.send(node.request().clone());
+                    *node.value_mut() = RequestState::Ready { waiters };
                 }
                 RequestState::Received { .. }
                 | RequestState::Complete { .. }
@@ -746,6 +863,7 @@ impl Worker {
         //
         // Old request state | Client choked | initial_state | Action
         // ------------------+---------------+---------------+-----------------------
+        // Ready             | -             | -             | add client to waiters
         // InFlight          | -             | -             | add client to waiters
         // Received          | -             | -             | add client to waiters
         // Complete          | -             | -             | add client to waiters
@@ -769,20 +887,21 @@ impl Worker {
         let client_state = self.clients.get_mut(&client_id).expect(CLIENT_NOT_FOUND);
         let node = self.requests.get_mut(node_key).expect(BROKEN_INVARIANT);
         let request_key = MessageKey::from(&node.request().payload);
-        let add = match node.value() {
-            RequestState::InFlight { .. }
+
+        let add_to_client = match node.value() {
+            RequestState::Ready { .. }
+            | RequestState::InFlight { .. }
             | RequestState::Received { .. }
             | RequestState::Complete { .. }
             | RequestState::Suspended { .. }
-            | RequestState::Choked { .. }
             | RequestState::Cancelled => true,
             RequestState::Committed => false,
         };
 
-        let (old_key, send) = match client_state.requests.entry(request_key) {
+        let (old_key, update) = match client_state.requests.entry(request_key) {
             // The request is not yet tracked with this client: start tracking it.
             Entry::Vacant(entry) => {
-                if add {
+                if add_to_client {
                     entry.insert(node_key);
                 }
 
@@ -795,7 +914,7 @@ impl Worker {
             Entry::Occupied(mut entry) => {
                 let old_key = *entry.get();
 
-                if add {
+                if add_to_client {
                     entry.insert(node_key);
                 } else {
                     entry.remove();
@@ -807,70 +926,39 @@ impl Worker {
 
         let children: Vec<_> = node.children().collect();
 
-        if send {
-            let in_flight_waiters = match node.value_mut() {
+        if update {
+            match node.value_mut() {
+                RequestState::Ready { waiters } => {
+                    client_state.increment_pending();
+                    send(&self.clients, iter::once(&client_id), request_key);
+                    waiters.insert(client_id);
+                }
                 RequestState::Suspended { waiters }
                 | RequestState::InFlight { waiters, .. }
                 | RequestState::Received { waiters, .. }
                 | RequestState::Complete { waiters, .. } => {
-                    // FIXME: remove this assert (or change to `debug_assert`) when the invariant
-                    // breaking bug is fixed.
-                    assert!(!waiters.contains(&client_id));
-
                     client_state.increment_pending();
-                    waiters.push_back(client_id);
-                    None
+                    waiters.insert(client_id);
                 }
-                RequestState::Committed => None,
+                RequestState::Committed => (),
                 RequestState::Cancelled => {
                     client_state.increment_pending();
 
-                    match (initial_state, client_state.choked) {
-                        (InitialRequestState::InFlight, true) => {
-                            *node.value_mut() = RequestState::Choked {
+                    match initial_state {
+                        InitialRequestState::Ready => {
+                            send(&self.clients, iter::once(&client_id), request_key);
+
+                            *node.value_mut() = RequestState::Ready {
                                 waiters: [client_id].into(),
                             };
-
-                            None
                         }
-                        (InitialRequestState::InFlight, false) => Some(VecDeque::new()),
-                        (InitialRequestState::Suspended, _) => {
+                        InitialRequestState::Suspended => {
                             *node.value_mut() = RequestState::Suspended {
                                 waiters: [client_id].into(),
                             };
-                            None
                         }
                     }
                 }
-                RequestState::Choked { waiters } => {
-                    client_state.increment_pending();
-
-                    if client_state.choked {
-                        // FIXME: remove this assert (or change to `debug_assert`) when the
-                        // invariant breaking bug is fixed.
-                        assert!(!waiters.contains(&client_id));
-
-                        waiters.push_back(client_id);
-                        None
-                    } else {
-                        Some(mem::take(waiters))
-                    }
-                }
-            };
-
-            if let Some(waiters) = in_flight_waiters {
-                // FIXME: remove this assert (or change to `debug_assert`) when the invariant
-                // breaking bug is fixed.
-                assert!(!waiters.contains(&client_id));
-
-                *node.value_mut() = RequestState::InFlight {
-                    sender_client_id: client_id,
-                    sender_timer_key: self.flight.send(client_id, request_key),
-                    sent_at: Instant::now(),
-                    waiters,
-                };
-
-                client_state.send(node.request().clone());
             }
         }
 
@@ -912,9 +1000,9 @@ impl Worker {
         };
 
         let waiters = match node.value_mut() {
-            RequestState::Suspended { waiters } | RequestState::Choked { waiters } => {
+            RequestState::Suspended { waiters } | RequestState::Ready { waiters } => {
                 try_decrement_pending();
-                remove_waiter(waiters, client_id);
+                waiters.remove(&client_id);
 
                 if !waiters.is_empty() {
                     return;
@@ -935,7 +1023,7 @@ impl Worker {
 
                     Some(waiters)
                 } else {
-                    remove_waiter(waiters, client_id);
+                    waiters.remove(&client_id);
                     return;
                 }
             }
@@ -948,7 +1036,7 @@ impl Worker {
                 if *sender_client_id == client_id {
                     Some(waiters)
                 } else {
-                    remove_waiter(waiters, client_id);
+                    waiters.remove(&client_id);
                     return;
                 }
             }
@@ -960,25 +1048,18 @@ impl Worker {
                     Some(waiters)
                 } else {
                     try_decrement_pending();
-                    remove_waiter(waiters, client_id);
+                    waiters.remove(&client_id);
                     return;
                 }
             }
             RequestState::Committed | RequestState::Cancelled => unreachable!(),
         };
 
-        // Find next waiting client:
-        //
-        // - if non-choked waiter exists, promote them to sender and transition to `InFlight`
-        // - if only choked waiters exist, transition to `Choked`
-        // - if no waiters exist, transition to `Cancelled`
         if let Some(waiters) = waiters.filter(|waiters| !waiters.is_empty()) {
-            *node.value_mut() = promote_waiter(
-                mem::take(waiters),
-                node.request(),
-                &self.clients,
-                &mut self.flight,
-            );
+            send(&self.clients, &*waiters, request_key);
+            *node.value_mut() = RequestState::Ready {
+                waiters: mem::take(waiters),
+            };
             return;
         }
 
@@ -994,11 +1075,11 @@ impl Worker {
 
         match node.value() {
             RequestState::Committed | RequestState::Cancelled => (),
-            RequestState::InFlight { .. }
+            RequestState::Ready { .. }
+            | RequestState::InFlight { .. }
             | RequestState::Received { .. }
             | RequestState::Complete { .. }
-            | RequestState::Suspended { .. }
-            | RequestState::Choked { .. } => return,
+            | RequestState::Suspended { .. } => return,
         }
 
         if node.children().len() == 0 {
@@ -1049,7 +1130,7 @@ struct SpannedCommand {
 enum Command {
     InsertClient {
         client_id: ClientId,
-        request_tx: mpsc::UnboundedSender<PendingRequest>,
+        request_tx: mpsc::UnboundedSender<MessageKey>,
     },
     RemoveClient {
         client_id: ClientId,
@@ -1069,6 +1150,11 @@ enum Command {
     HandleFailure {
         client_id: ClientId,
         request_key: MessageKey,
+    },
+    HandleSend {
+        client_id: ClientId,
+        request_key: MessageKey,
+        reply_tx: oneshot::Sender<PendingRequest>,
     },
     HandleReceive {
         client_id: ClientId,
@@ -1090,7 +1176,7 @@ enum Command {
 }
 
 struct ClientState {
-    request_tx: mpsc::UnboundedSender<PendingRequest>,
+    request_tx: mpsc::UnboundedSender<MessageKey>,
     requests: HashMap<MessageKey, GraphKey>,
     // Number of pending requests tracked for this client. A request is considered "pending" if it
     // is:
@@ -1106,7 +1192,7 @@ struct ClientState {
 }
 
 impl ClientState {
-    fn new(request_tx: mpsc::UnboundedSender<PendingRequest>) -> Self {
+    fn new(request_tx: mpsc::UnboundedSender<MessageKey>) -> Self {
         Self {
             request_tx,
             requests: HashMap::default(),
@@ -1115,8 +1201,8 @@ impl ClientState {
         }
     }
 
-    fn send(&self, request: PendingRequest) {
-        self.request_tx.send(request).ok();
+    fn send(&self, request_key: MessageKey) {
+        self.request_tx.send(request_key).ok();
     }
 
     fn increment_pending(&mut self) {
@@ -1133,13 +1219,15 @@ impl ClientState {
             .expect("pending requests counter underflow");
 
         if self.pending == 0 {
-            self.send(PendingRequest::new(Request::Idle));
+            self.send(MessageKey::Idle);
         }
     }
 }
 
 #[derive(Debug)]
 enum RequestState {
+    /// This request is ready to be sent, waiting for a client to pick it up.
+    Ready { waiters: HashSet<ClientId> },
     /// This request is currently in flight
     InFlight {
         /// Client who's sending this request
@@ -1150,7 +1238,7 @@ enum RequestState {
         sent_at: Instant,
         /// Other clients interested in sending this request. If the sender client is dropped or the
         /// request timeouts, a new sender is picked from this list.
-        waiters: VecDeque<ClientId>,
+        waiters: HashSet<ClientId>,
     },
     /// The response to this request has been received but not yet processed.
     Received {
@@ -1158,7 +1246,7 @@ enum RequestState {
         sender_client_id: ClientId,
         /// Other clients interested in sending this request. If the sender client is dropped, a new
         /// sender is picked from this list.
-        waiters: VecDeque<ClientId>,
+        waiters: HashSet<ClientId>,
     },
     /// The response to this request has been processed but not commited yet (responses are
     /// processed in batches and commited only at the end of each batch).
@@ -1167,13 +1255,10 @@ enum RequestState {
         sender_client_id: ClientId,
         /// Other clients interested in sending this request. If the sender client is dropped, a new
         /// sender is picked from this list.
-        waiters: VecDeque<ClientId>,
+        waiters: HashSet<ClientId>,
     },
     /// This request is suspended. It will be transitioned to `InFlight` when resumed.
-    Suspended { waiters: VecDeque<ClientId> },
-    /// This request is choked. It (together with all the other choked requests of the same client)
-    /// will be transitioned to `InFlight` when at least one of the waiting clients is unchoked.
-    Choked { waiters: VecDeque<ClientId> },
+    Suspended { waiters: HashSet<ClientId> },
     /// The response to this request has been received and fully processed. This request won't be
     /// retried even when the sender client gets dropped.
     Committed,
@@ -1198,7 +1283,7 @@ impl RequestState {
                 sender_client_id,
                 waiters,
             } => Some((Some(sender_client_id), waiters)),
-            Self::Suspended { waiters } | Self::Choked { waiters } => Some((None, waiters)),
+            Self::Ready { waiters } | Self::Suspended { waiters } => Some((None, waiters)),
             Self::Committed | Self::Cancelled => None,
         }
         .into_iter()
@@ -1244,7 +1329,7 @@ impl Flight {
                 self.monitor.index_requests_sent.increment(1);
                 self.monitor.index_requests_inflight.increment(1);
             }
-            MessageKey::Other => (),
+            MessageKey::Idle | MessageKey::Other => (),
         }
 
         timer_key
@@ -1260,7 +1345,7 @@ impl Flight {
             MessageKey::RootNode(..) | MessageKey::ChildNodes(_) => {
                 self.monitor.index_requests_inflight.decrement(1);
             }
-            MessageKey::Other => (),
+            MessageKey::Idle | MessageKey::Other => (),
         }
 
         self.monitor.request_rtt.record(sent_at.elapsed());
@@ -1281,7 +1366,7 @@ impl Flight {
             MessageKey::RootNode(..) | MessageKey::ChildNodes(_) => {
                 self.monitor.index_requests_inflight.decrement(1);
             }
-            MessageKey::Other => (),
+            MessageKey::Idle | MessageKey::Other => (),
         }
 
         match reason {
@@ -1295,19 +1380,6 @@ impl Flight {
     async fn next_timeout(&mut self) -> Option<(ClientId, MessageKey)> {
         Some(self.timer.next().await?.into_inner())
     }
-}
-
-/// Panics if `client_id` is not in `waiters`.
-fn remove_waiter(waiters: &mut VecDeque<ClientId>, client_id: ClientId) {
-    let index = waiters
-        .iter()
-        .position(|waiter_id| *waiter_id == client_id)
-        .unwrap();
-    waiters.remove(index).unwrap();
-
-    // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug
-    // is fixed.
-    assert!(!waiters.contains(&client_id));
 }
 
 fn remove_request_from_clients(
@@ -1330,37 +1402,18 @@ fn remove_request_from_clients(
     }
 }
 
-// If there is at least one un-choked waiter, promote it to sender and return the corresponding
-// `InFlight` state. Otherwise return `Choked` state.
-fn promote_waiter(
-    mut waiters: VecDeque<ClientId>,
-    request: &PendingRequest,
-    clients: &HashMap<ClientId, ClientState>,
-    flight: &mut Flight,
-) -> RequestState {
-    // Find the first unchoked waiter, if any.
-    let unchoked_client = waiters
-        .iter()
-        .enumerate()
-        .map(|(index, id)| (index, *id, clients.get(id).expect(BROKEN_INVARIANT)))
-        .find(|(_, _, state)| !state.choked);
+fn send<'a>(
+    clients: &'_ HashMap<ClientId, ClientState>,
+    recipients: impl IntoIterator<Item = &'a ClientId>,
+    request_key: MessageKey,
+) {
+    for client_id in recipients {
+        let client_state = clients.get(client_id).expect(BROKEN_INVARIANT);
 
-    if let Some((waiter_index, client_id, client_state)) = unchoked_client {
-        waiters.remove(waiter_index).unwrap();
-
-        client_state.send(request.clone());
-
-        // FIXME: remove this assert (or change to `debug_assert`) when the invariant breaking bug
-        // is fixed.
-        assert!(!waiters.contains(&client_id));
-
-        RequestState::InFlight {
-            sender_client_id: client_id,
-            sender_timer_key: flight.send(client_id, MessageKey::from(&request.payload)),
-            sent_at: Instant::now(),
-            waiters,
+        if client_state.choked {
+            continue;
         }
-    } else {
-        RequestState::Choked { waiters }
+
+        client_state.send(request_key);
     }
 }

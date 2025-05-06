@@ -2,7 +2,9 @@ use super::{
     constants::RESPONSE_BATCH_SIZE,
     debug_payload::{DebugRequest, DebugResponse},
     message::{Message, Response},
-    request_tracker::{PendingRequest, RequestTracker, RequestTrackerClient},
+    request_tracker::{
+        PendingRequest, RequestTracker, RequestTrackerClient, RequestTrackerReceiver,
+    },
 };
 use crate::{
     block_tracker::BlockTrackerClient,
@@ -32,7 +34,7 @@ mod future {
 
 pub(super) struct Client {
     inner: Inner,
-    request_rx: mpsc::UnboundedReceiver<PendingRequest>,
+    request_rx: RequestTrackerReceiver,
     response_rx: mpsc::Receiver<Response>,
     block_rx: mpsc::UnboundedReceiver<BlockId>,
 }
@@ -89,7 +91,7 @@ struct Inner {
 impl Inner {
     async fn run(
         &mut self,
-        request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>,
+        request_rx: &mut RequestTrackerReceiver,
         received_response_rx: &mut mpsc::Receiver<Response>,
         block_rx: &mut mpsc::UnboundedReceiver<BlockId>,
     ) -> Result<()> {
@@ -512,13 +514,13 @@ impl Inner {
         Ok(())
     }
 
-    async fn send_requests(&self, request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>) {
+    async fn send_requests(&self, request_rx: &mut RequestTrackerReceiver) {
         while let Some(PendingRequest { payload, .. }) = request_rx.recv().await {
             tracing::trace!(?payload, "sending request");
             self.message_tx.send(Message::Request(payload)).await.ok();
         }
 
-        tracing::debug!("request send channel closed");
+        tracing::debug!("request recv channel closed");
     }
 
     async fn request_blocks(&self, block_rx: &mut mpsc::UnboundedReceiver<BlockId>) {
@@ -787,6 +789,8 @@ fn next_root_node_cookie() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::{
         access_control::WriteSecrets,
@@ -806,6 +810,7 @@ mod tests {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use state_monitor::StateMonitor;
     use tempfile::TempDir;
+    use tokio::time;
 
     #[tokio::test]
     async fn receive_root_node_with_invalid_proof() {
@@ -929,13 +934,12 @@ mod tests {
             .request_tracker
             .resume(MessageKey::Block(block.id), RequestVariant::default());
 
-        // Drop inner to close the request channel so that the following while loop is guaranteed to
-        // terminate.
-        drop(inner);
-
         let mut found = false;
 
-        while let Some(request) = request_rx.recv().await {
+        while let Some(request) = time::timeout(Duration::from_secs(10), request_rx.recv())
+            .await
+            .unwrap()
+        {
             match request.payload {
                 Request::Block(block_id, _) if block_id == block.id => {
                     found = true;
@@ -950,13 +954,7 @@ mod tests {
 
     async fn setup(
         seed: Option<u64>,
-    ) -> (
-        TempDir,
-        StdRng,
-        Inner,
-        mpsc::UnboundedReceiver<PendingRequest>,
-        WriteSecrets,
-    ) {
+    ) -> (TempDir, StdRng, Inner, RequestTrackerReceiver, WriteSecrets) {
         crate::test_utils::init_log();
 
         let (base_dir, pool) = db::create_temp().await.unwrap();
