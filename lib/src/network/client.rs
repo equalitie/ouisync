@@ -40,7 +40,7 @@ pub(super) struct Client {
 impl Client {
     pub fn new(
         vault: Vault,
-        message_tx: mpsc::UnboundedSender<Message>,
+        message_tx: mpsc::Sender<Message>,
         response_rx: mpsc::Receiver<Response>,
         request_tracker: &RequestTracker,
     ) -> Self {
@@ -83,7 +83,7 @@ struct Inner {
     vault: Vault,
     request_tracker: RequestTrackerClient,
     block_tracker: BlockTrackerClient,
-    message_tx: mpsc::UnboundedSender<Message>,
+    message_tx: mpsc::Sender<Message>,
 }
 
 impl Inner {
@@ -515,7 +515,7 @@ impl Inner {
     async fn send_requests(&self, request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>) {
         while let Some(PendingRequest { payload, .. }) = request_rx.recv().await {
             tracing::trace!(?payload, "sending request");
-            self.message_tx.send(Message::Request(payload)).ok();
+            self.message_tx.send(Message::Request(payload)).await.ok();
         }
 
         tracing::debug!("request send channel closed");
@@ -980,7 +980,7 @@ mod tests {
         let (request_tracker, request_rx) = request_tracker.new_client();
         let (block_tracker, _block_rx) = vault.block_tracker.new_client();
 
-        let (message_tx, _message_rx) = mpsc::unbounded_channel();
+        let (message_tx, _message_rx) = mpsc::channel(1);
 
         let inner = Inner {
             vault,

@@ -285,21 +285,33 @@ async fn run_link(
     pex_tx: &mut PexSender,
     pex_rx: &mut PexReceiver,
 ) {
-    // Incoming message channels are bounded to prevent malicious peers from sending us too many
-    // messages and exhausting our memory.
-    let (request_tx, request_rx) = mpsc::channel(REQUEST_BUFFER_SIZE);
-    let (response_tx, response_rx) = mpsc::channel(1);
-    // Outgoing message channel is unbounded because we fully control how much stuff goes into it.
-    let (message_tx, message_rx) = mpsc::unbounded_channel();
+    let (incoming_request_tx, incoming_request_rx) = mpsc::channel(REQUEST_BUFFER_SIZE);
+    let (incoming_response_tx, incoming_response_rx) = mpsc::channel(1);
+    let (outgoing_message_tx, outgoing_message_rx) = mpsc::channel(1);
 
     let _guard = LinkGuard::new();
 
     select! {
-        _ = run_client(vault.clone(), message_tx.clone(), response_rx, request_tracker) => (),
-        _ = run_server(vault.clone(), message_tx.clone(), request_rx, choker) => (),
-        _ = recv_messages(stream, request_tx, response_tx, pex_rx) => (),
-        _ = send_messages(message_rx, sink) => (),
-        _ = pex_tx.run(message_tx) => (),
+        _ = run_client(
+                vault.clone(),
+                outgoing_message_tx.clone(),
+                incoming_response_rx,
+                request_tracker
+            ) => (),
+        _ = run_server(
+                vault.clone(),
+                outgoing_message_tx.clone(),
+                incoming_request_rx,
+                choker
+            ) => (),
+        _ = recv_messages(
+                stream,
+                incoming_request_tx,
+                incoming_response_tx,
+                pex_rx
+            ) => (),
+        _ = send_messages(outgoing_message_rx, sink) => (),
+        _ = pex_tx.run(outgoing_message_tx) => (),
     };
 }
 
@@ -355,10 +367,7 @@ async fn recv_messages(
 }
 
 // Handle outgoing messages
-async fn send_messages(
-    mut message_rx: mpsc::UnboundedReceiver<Message>,
-    mut sink: EncryptingSink<'_>,
-) {
+async fn send_messages(mut message_rx: mpsc::Receiver<Message>, mut sink: EncryptingSink<'_>) {
     let mut writer = BytesMut::new().writer();
 
     loop {
@@ -399,11 +408,16 @@ async fn send_messages(
 // Create and run client. Returns only on error.
 async fn run_client(
     vault: Vault,
-    message_tx: mpsc::UnboundedSender<Message>,
-    response_rx: mpsc::Receiver<Response>,
+    outgoing_message_tx: mpsc::Sender<Message>,
+    incoming_response_rx: mpsc::Receiver<Response>,
     request_tracker: &RequestTracker,
 ) {
-    let mut client = Client::new(vault, message_tx, response_rx, request_tracker);
+    let mut client = Client::new(
+        vault,
+        outgoing_message_tx,
+        incoming_response_rx,
+        request_tracker,
+    );
     let result = client.run().await;
 
     tracing::debug!("Client stopped running with result {:?}", result);
@@ -412,11 +426,11 @@ async fn run_client(
 // Create and run server. Returns only on error.
 async fn run_server(
     vault: Vault,
-    message_tx: mpsc::UnboundedSender<Message>,
-    request_rx: mpsc::Receiver<Request>,
+    outgoing_message_tx: mpsc::Sender<Message>,
+    incoming_request_rx: mpsc::Receiver<Request>,
     choker: Choker,
 ) {
-    let mut server = Server::new(vault, message_tx, request_rx, choker);
+    let mut server = Server::new(vault, outgoing_message_tx, incoming_request_rx, choker);
 
     let result = server.run().await;
 

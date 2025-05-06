@@ -610,19 +610,11 @@ where
     }
 }
 
-type ServerData = (
-    Server,
-    mpsc::UnboundedReceiver<Message>,
-    mpsc::Sender<Request>,
-);
-type ClientData = (
-    Client,
-    mpsc::UnboundedReceiver<Message>,
-    mpsc::Sender<Response>,
-);
+type ServerData = (Server, mpsc::Receiver<Message>, mpsc::Sender<Request>);
+type ClientData = (Client, mpsc::Receiver<Message>, mpsc::Sender<Response>);
 
 fn create_server(vault: Vault, choker: Choker) -> ServerData {
-    let (send_tx, send_rx) = mpsc::unbounded_channel();
+    let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
     let server = Server::new(vault, send_tx, recv_rx, choker);
 
@@ -630,7 +622,7 @@ fn create_server(vault: Vault, choker: Choker) -> ServerData {
 }
 
 fn create_client(vault: Vault, request_tracker: &RequestTracker) -> ClientData {
-    let (send_tx, send_rx) = mpsc::unbounded_channel();
+    let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
     let client = Client::new(vault, send_tx, recv_rx, request_tracker);
 
@@ -639,7 +631,7 @@ fn create_client(vault: Vault, request_tracker: &RequestTracker) -> ClientData {
 
 // Simulated connection between a server and a client.
 struct Connection<'a, T> {
-    send_rx: &'a mut mpsc::UnboundedReceiver<Message>,
+    send_rx: &'a mut mpsc::Receiver<Message>,
     recv_tx: &'a mut mpsc::Sender<T>,
 }
 

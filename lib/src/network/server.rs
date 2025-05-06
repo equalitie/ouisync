@@ -34,7 +34,7 @@ pub(crate) struct Server {
 impl Server {
     pub fn new(
         vault: Vault,
-        message_tx: mpsc::UnboundedSender<Message>,
+        message_tx: mpsc::Sender<Message>,
         request_rx: mpsc::Receiver<Request>,
         choker: Choker,
     ) -> Self {
@@ -56,7 +56,7 @@ impl Server {
 
 struct Inner {
     vault: Vault,
-    message_tx: mpsc::UnboundedSender<Message>,
+    message_tx: mpsc::Sender<Message>,
     choker: Choker,
 }
 
@@ -81,7 +81,7 @@ impl Inner {
                 first = false;
             }
 
-            self.send_response(Response::Unchoke);
+            self.send_response(Response::Unchoke).await;
 
             choked = match self
                 .run_unchoked(unchoked, request_rx, &mut event_rx)
@@ -91,7 +91,7 @@ impl Inner {
                 None => break,
             };
 
-            self.send_response(Response::Choke);
+            self.send_response(Response::Choke).await;
         }
 
         Ok(())
@@ -206,7 +206,7 @@ impl Inner {
                 self.handle_branch_changed_event(branch_id).await
             }
             Payload::BlockReceived(block_id) => {
-                self.handle_block_received_event(block_id);
+                self.handle_block_received_event(block_id).await;
                 Ok(())
             }
             Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted => Ok(()),
@@ -239,7 +239,7 @@ impl Inner {
                     debug: debug.reply(),
                 };
 
-                self.send_response(response);
+                self.send_response(response).await;
                 Ok(())
             }
             Err(store::Error::BranchNotFound) => {
@@ -248,7 +248,8 @@ impl Inner {
                     writer_id,
                     cookie,
                     debug: debug.reply(),
-                });
+                })
+                .await;
                 Ok(())
             }
             Err(error) => {
@@ -256,7 +257,8 @@ impl Inner {
                     writer_id,
                     cookie,
                     debug: debug.reply(),
-                });
+                })
+                .await;
                 Err(error.into())
             }
         }
@@ -275,16 +277,19 @@ impl Inner {
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
-                self.send_response(Response::InnerNodes(inner_nodes, debug.reply()));
+                self.send_response(Response::InnerNodes(inner_nodes, debug.reply()))
+                    .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
-                self.send_response(Response::LeafNodes(leaf_nodes, debug.reply()));
+                self.send_response(Response::LeafNodes(leaf_nodes, debug.reply()))
+                    .await;
             }
         } else {
             tracing::trace!("child nodes not found");
-            self.send_response(Response::ChildNodesError(parent_hash, debug.reply()));
+            self.send_response(Response::ChildNodesError(parent_hash, debug.reply()))
+                .await;
         }
 
         Ok(())
@@ -304,16 +309,19 @@ impl Inner {
         match result {
             Ok(nonce) => {
                 tracing::trace!("block found");
-                self.send_response(Response::Block(content, nonce, debug.reply()));
+                self.send_response(Response::Block(content, nonce, debug.reply()))
+                    .await;
                 Ok(())
             }
             Err(store::Error::BlockNotFound) => {
                 tracing::trace!("block not found");
-                self.send_response(Response::BlockError(block_id, debug.reply()));
+                self.send_response(Response::BlockError(block_id, debug.reply()))
+                    .await;
                 Ok(())
             }
             Err(error) => {
-                self.send_response(Response::BlockError(block_id, debug.reply()));
+                self.send_response(Response::BlockError(block_id, debug.reply()))
+                    .await;
                 Err(error.into())
             }
         }
@@ -333,8 +341,9 @@ impl Inner {
         self.send_root_node(root_node).await
     }
 
-    fn handle_block_received_event(&self, block_id: BlockId) {
-        self.send_response(Response::BlockOffer(block_id, DebugResponse::unsolicited()));
+    async fn handle_block_received_event(&self, block_id: BlockId) {
+        self.send_response(Response::BlockOffer(block_id, DebugResponse::unsolicited()))
+            .await;
     }
 
     #[instrument(skip(self))]
@@ -373,7 +382,7 @@ impl Inner {
             debug: DebugResponse::unsolicited(),
         };
 
-        self.send_response(response);
+        self.send_response(response).await;
 
         Ok(())
     }
@@ -414,8 +423,13 @@ impl Inner {
             .await?)
     }
 
-    fn send_response(&self, response: Response) {
-        if self.message_tx.send(Message::Response(response)).is_ok() {
+    async fn send_response(&self, response: Response) {
+        if self
+            .message_tx
+            .send(Message::Response(response))
+            .await
+            .is_ok()
+        {
             self.vault.monitor.traffic.responses_sent.increment(1);
         }
     }
