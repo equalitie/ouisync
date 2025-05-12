@@ -9,7 +9,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    network::constants::UNCHOKED_IDLE_TIMEOUT,
+    network::constants::{MAX_CONCURRENT_REQUESTS, UNCHOKED_IDLE_TIMEOUT},
     protocol::{BlockContent, BlockId, RootNode, RootNodeFilter},
     repository::{monitor::TrafficMonitor, Vault},
     store,
@@ -19,7 +19,7 @@ use tokio::{
     select,
     sync::{
         broadcast::{self, error::RecvError},
-        mpsc,
+        mpsc, Semaphore, SemaphorePermit,
     },
     time,
 };
@@ -116,27 +116,58 @@ impl Inner {
         request_rx: &mut mpsc::Receiver<Request>,
         event_rx: &mut broadcast::Receiver<Event>,
     ) -> Result<Option<Choked<'a>>> {
-        enum Action<'a> {
-            Work(Work),
-            Choke(Choked<'a>),
+        enum Action<'semaphore, 'choker> {
+            Work(Work<'semaphore>),
+            Choke(Choked<'choker>),
         }
-        enum Work {
-            Request(Request),
+
+        enum Work<'semaphore> {
+            Request {
+                request: Request,
+                permit: SemaphorePermit<'semaphore>,
+            },
             Event(Option<Event>),
         }
+
+        // Limits the number of concurrently processed requests.
+        let semaphore = Semaphore::new(MAX_CONCURRENT_REQUESTS);
+        // Latest received request, waiting for permit.
+        let mut request = None;
 
         // Using `FuturesOrdered` to run the tasks concurrently but maintain their order.
         let mut tasks = FuturesOrdered::new();
         let mut choke = pin!(unchoked.choke());
 
         loop {
+            // Receive next request and acquire a permit to process it in a cancel-safe way.
+            let recv_request = async {
+                loop {
+                    let action = if request.is_some() {
+                        let permit = semaphore.acquire().await.unwrap();
+                        let request = request.take().unwrap();
+
+                        Some(Action::Work(Work::Request { request, permit }))
+                    } else {
+                        match time::timeout(UNCHOKED_IDLE_TIMEOUT, request_rx.recv()).await {
+                            Ok(Some(Request::Idle)) => Some(Action::Choke(self.choker.choke())),
+                            Ok(Some(new_request)) => {
+                                request = Some(new_request);
+                                continue;
+                            }
+                            Ok(None) => None,
+                            Err(_) => Some(Action::Choke(self.choker.choke())),
+                        }
+                    };
+
+                    break action;
+                }
+            };
+
             let action = select! {
-                result = time::timeout(UNCHOKED_IDLE_TIMEOUT, request_rx.recv()) => {
+                result = recv_request => {
                     match result {
-                        Ok(Some(Request::Idle)) => Action::Choke(self.choker.choke()),
-                        Ok(Some(request)) => Action::Work(Work::Request(request)),
-                        Ok(None) => return Ok(None),
-                        Err(_) => Action::Choke(self.choker.choke()),
+                        Some(action) => action,
+                        None => return Ok(None),
                     }
                 }
                 result = event_rx.recv() => {
@@ -157,7 +188,11 @@ impl Inner {
                 Action::Work(work) => {
                     tasks.push_back(async {
                         match work {
-                            Work::Request(request) => self.handle_request(request).await,
+                            Work::Request { request, permit } => {
+                                let result = self.handle_request(request).await;
+                                drop(permit);
+                                result
+                            }
                             Work::Event(Some(event)) => self.handle_event(event).await,
                             Work::Event(None) => self.handle_unknown_event().await,
                         }
@@ -175,6 +210,10 @@ impl Inner {
                             // Finish the remaining work.
                             while let Some(result) = tasks.next().await {
                                 result?;
+                            }
+
+                            if let Some(request) = request.take() {
+                                self.handle_request(request).await?;
                             }
 
                             return Ok(Some(choked));

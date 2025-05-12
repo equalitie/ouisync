@@ -18,3 +18,11 @@ pub(super) const RESPONSE_BATCH_SIZE: usize = 1024;
 
 /// Max number of buffered incoming requests per server.
 pub(super) const REQUEST_BUFFER_SIZE: usize = 1024;
+
+/// Max number of requests being processed concurrently per server.
+///
+/// Note that the request processing is already limited by the number of database connections that
+/// can be acquired at the same time, but this further limit is necessary to put a bound on the
+/// number of tasks that already released their db connection but are waiting for the response to
+/// be sent. Without this limit we would be vulnerable to memory exhaustion by malicious peers.
+pub(super) const MAX_CONCURRENT_REQUESTS: usize = 1024;
