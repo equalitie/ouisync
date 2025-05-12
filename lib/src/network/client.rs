@@ -95,7 +95,7 @@ impl Inner {
         received_response_rx: &mut mpsc::Receiver<Response>,
         block_rx: &mut mpsc::UnboundedReceiver<BlockId>,
     ) -> Result<()> {
-        let (prepared_response_tx, prepared_response_rx) = mpsc::channel(16 * RESPONSE_BATCH_SIZE);
+        let (prepared_response_tx, prepared_response_rx) = mpsc::channel(RESPONSE_BATCH_SIZE);
 
         select! {
             _ = self.prepare_responses(received_response_rx, prepared_response_tx) => Ok(()),
@@ -216,11 +216,7 @@ impl Inner {
                     }
                 }
 
-                if writable.len() >= RESPONSE_BATCH_SIZE {
-                    break;
-                }
-
-                if readable.len() >= RESPONSE_BATCH_SIZE {
+                if writable.len() + readable.len() >= RESPONSE_BATCH_SIZE {
                     break;
                 }
             }

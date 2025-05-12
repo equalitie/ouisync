@@ -10,10 +10,7 @@ use super::{
     server::Server,
     stats::ByteCounters,
 };
-use crate::{
-    collections::HashMap, crypto::Hashable, network::constants::REQUEST_BUFFER_SIZE,
-    protocol::RepositoryId, repository::Vault,
-};
+use crate::{collections::HashMap, crypto::Hashable, protocol::RepositoryId, repository::Vault};
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use bytes::{BufMut, BytesMut};
 use futures_util::{SinkExt, StreamExt};
@@ -285,7 +282,7 @@ async fn run_link(
     pex_tx: &mut PexSender,
     pex_rx: &mut PexReceiver,
 ) {
-    let (incoming_request_tx, incoming_request_rx) = mpsc::channel(REQUEST_BUFFER_SIZE);
+    let (incoming_request_tx, incoming_request_rx) = mpsc::channel(1);
     let (incoming_response_tx, incoming_response_rx) = mpsc::channel(1);
     let (outgoing_message_tx, outgoing_message_rx) = mpsc::channel(1);
 
