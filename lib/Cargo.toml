@@ -24,6 +24,7 @@ harness = false
 [dependencies]
 argon2 = "0.5.3"
 async-recursion = "1.0.0"
+async-speed-limit = { version = "0.4.2", features = ['tokio'] }
 async-trait = { workspace = true }
 backoff = "0.4.0"
 base64 = "0.22.1"

@@ -28,6 +28,7 @@ mod stun;
 mod stun_server_list;
 #[cfg(test)]
 mod tests;
+mod throttle;
 mod upnp;
 
 pub use self::{
@@ -60,6 +61,7 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
     stats::{ByteCounters, StatsTracker},
     stun::StunClients,
+    throttle::Throttle,
 };
 use crate::{
     collections::HashSet,
@@ -158,6 +160,7 @@ impl Network {
             protocol_versions: watch::Sender::new(ProtocolVersions::new()),
             our_addresses: BlockingMutex::new(HashSet::default()),
             stats_tracker: StatsTracker::default(),
+            throttle: Throttle::new_no_limits(),
         });
 
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
@@ -276,6 +279,16 @@ impl Network {
     /// Get the network traffic stats.
     pub fn stats(&self) -> Stats {
         self.inner.stats_tracker.read()
+    }
+
+    /// Set maximum sending speed in bytes per second.
+    pub fn set_send_speed_limit(&self, limit: f64) {
+        self.inner.throttle.set_write_speed_limit(limit);
+    }
+
+    /// Set maximum receiving speed in bytes per second.
+    pub fn set_recv_speed_limit(&self, limit: f64) {
+        self.inner.throttle.set_read_speed_limit(limit);
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -489,6 +502,7 @@ struct Inner {
     // Used to prevent repeatedly connecting to self.
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
     stats_tracker: StatsTracker,
+    throttle: Throttle,
 }
 
 struct Registry {
@@ -890,6 +904,7 @@ impl Inner {
                         .make_child(format!("{:?}", that_runtime_id.as_public_key())),
                     self.stats_tracker.bytes.clone(),
                     permit.byte_counters(),
+                    self.throttle.clone(),
                 )
             });
 

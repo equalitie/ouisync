@@ -1,8 +1,11 @@
 //! Utilities for sending and receiving messages across the network.
 
-use super::stats::{ByteCounters, Instrumented};
+use super::{
+    stats::{ByteCounters, Instrumented},
+    throttle::{Throttle, ThrottledBusRecvStream, ThrottledBusSendStream},
+};
 use net::{
-    bus::{Bus, BusRecvStream, BusSendStream, TopicId},
+    bus::{Bus, TopicId},
     unified::Connection,
 };
 use std::sync::Arc;
@@ -17,6 +20,7 @@ pub(super) struct MessageDispatcher {
     bus: net::bus::Bus,
     total_counters: Arc<ByteCounters>,
     peer_counters: Arc<ByteCounters>,
+    throttle: Throttle,
 }
 
 impl MessageDispatcher {
@@ -25,6 +29,7 @@ impl MessageDispatcher {
             connection,
             total_counters: None,
             peer_counters: None,
+            throttle: None,
         }
     }
 
@@ -35,6 +40,9 @@ impl MessageDispatcher {
         repo_counters: Arc<ByteCounters>,
     ) -> (MessageSink, MessageStream) {
         let (writer, reader) = self.bus.create_topic(topic_id);
+
+        let writer = self.throttle.limit_writer(writer);
+        let reader = self.throttle.limit_reader(reader);
 
         let writer = Instrumented::new(writer, self.total_counters.clone());
         let writer = Instrumented::new(writer, self.peer_counters.clone());
@@ -67,6 +75,7 @@ pub(super) struct Builder {
     connection: Connection,
     total_counters: Option<Arc<ByteCounters>>,
     peer_counters: Option<Arc<ByteCounters>>,
+    throttle: Option<Throttle>,
 }
 
 impl Builder {
@@ -84,11 +93,19 @@ impl Builder {
         }
     }
 
+    pub fn with_throttle(self, throttle: Throttle) -> Self {
+        Self {
+            throttle: Some(throttle),
+            ..self
+        }
+    }
+
     pub fn build(self) -> MessageDispatcher {
         MessageDispatcher {
             bus: Bus::new(self.connection),
             total_counters: self.total_counters.unwrap_or_default(),
             peer_counters: self.peer_counters.unwrap_or_default(),
+            throttle: self.throttle.unwrap_or_else(Throttle::new_no_limits),
         }
     }
 }
@@ -102,11 +119,15 @@ fn make_codec() -> LengthDelimitedCodec {
 
 // The streams/sinks are tripple-instrumented: once to collect the total cummulative traffic across
 // all peers, once to collect the traffic per peer and once to collect the traffic per repo.
-pub(super) type MessageStream =
-    FramedRead<Instrumented<Instrumented<Instrumented<BusRecvStream>>>, LengthDelimitedCodec>;
+pub(super) type MessageStream = FramedRead<
+    Instrumented<Instrumented<Instrumented<ThrottledBusRecvStream>>>,
+    LengthDelimitedCodec,
+>;
 
-pub(super) type MessageSink =
-    FramedWrite<Instrumented<Instrumented<Instrumented<BusSendStream>>>, LengthDelimitedCodec>;
+pub(super) type MessageSink = FramedWrite<
+    Instrumented<Instrumented<Instrumented<ThrottledBusSendStream>>>,
+    LengthDelimitedCodec,
+>;
 
 /// Create pair of Connections connected to each other. For tests only.
 #[cfg(test)]

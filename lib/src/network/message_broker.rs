@@ -9,6 +9,7 @@ use super::{
     runtime_id::PublicRuntimeId,
     server::Server,
     stats::ByteCounters,
+    throttle::Throttle,
 };
 use crate::{
     collections::HashMap,
@@ -54,6 +55,7 @@ impl MessageBroker {
         monitor: StateMonitor,
         total_counters: Arc<ByteCounters>,
         peer_counters: Arc<ByteCounters>,
+        throttle: Throttle,
     ) -> Self {
         let span = SpanGuard::new(Span::current());
 
@@ -63,6 +65,7 @@ impl MessageBroker {
             dispatcher: MessageDispatcher::builder(connection)
                 .with_total_counters(total_counters)
                 .with_peer_counters(peer_counters)
+                .with_throttle(throttle)
                 .build(),
             links: HashMap::default(),
             pex_peer,

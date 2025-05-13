@@ -229,6 +229,47 @@ fn sync_dump_case(dump: dump::Directory) {
     });
 }
 
+#[ignore]
+#[test]
+fn sync_big_repo_with_slow_seeder() {
+    let dump = dump::Directory::new().add(
+        "food",
+        dump::Directory::new().add("pizza.jpg", common::random_bytes(60 * 1024 * 1024)),
+    );
+    let mut env = Env::new();
+    let (tx, rx) = sync_watch::channel();
+    let dump = Arc::new(dump);
+
+    env.actor("writer", {
+        let dump = dump.clone();
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+
+            network.set_send_speed_limit(200_000.0);
+            network.set_recv_speed_limit(200_000.0);
+
+            dump::load(&repo, &dump).await;
+
+            info!("dump load complete");
+
+            tx.run(&repo).await;
+        }
+    });
+
+    env.actor("reader", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+
+            network.add_user_provided_peer(&actor::lookup_addr("writer").await);
+
+            rx.run(&repo).await;
+
+            let actual_dump = dump::save(&repo).await;
+            similar_asserts::assert_eq!(actual_dump, *dump);
+        }
+    });
+}
+
 #[test]
 fn relink_repository() {
     let mut env = Env::new();
