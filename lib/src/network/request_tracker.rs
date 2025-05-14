@@ -6,7 +6,7 @@ mod simulation;
 mod tests;
 
 use self::graph::{Graph, Key as GraphKey};
-use super::message::Request;
+use super::{constants::RESPONSE_BUFFER_SIZE, message::Request};
 use crate::{
     collections::{HashMap, HashSet},
     crypto::{sign::PublicKey, Hash},
@@ -16,12 +16,15 @@ use crate::{
 use std::{
     collections::hash_map::Entry,
     fmt, iter, mem,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use tokio::{
     select,
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore},
     task,
 };
 use tokio_stream::StreamExt;
@@ -52,11 +55,11 @@ impl RequestTracker {
 
     pub fn new_client(&self) -> (RequestTrackerClient, RequestTrackerReceiver) {
         let client_id = ClientId::next();
-        let (request_tx, request_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         self.command_tx.send(Command::InsertClient {
             client_id,
-            request_tx,
+            event_tx,
         });
 
         (
@@ -67,10 +70,11 @@ impl RequestTracker {
             RequestTrackerReceiver {
                 client_id,
                 command_tx: self.command_tx.clone(),
-                request_rx,
+                event_rx,
+                semaphore: Arc::new(Semaphore::new(RESPONSE_BUFFER_SIZE)),
 
                 #[cfg(test)]
-                reply_rx: None,
+                try_recv_state: TryRecvState::Idle,
             },
         )
     }
@@ -159,17 +163,25 @@ impl Drop for RequestTrackerClient {
 pub(crate) struct RequestTrackerReceiver {
     client_id: ClientId,
     command_tx: CommandSender,
-    request_rx: mpsc::UnboundedReceiver<MessageKey>,
+    event_rx: mpsc::UnboundedReceiver<ClientEvent>,
+    // This sempahore limits the number of requests that are `InFlight` or `Received`. This ensures
+    // that we don't send request faster than we are able to process their responses.
+    semaphore: Arc<Semaphore>,
 
     #[cfg(test)]
-    reply_rx: Option<oneshot::Receiver<PendingRequest>>,
+    try_recv_state: TryRecvState,
 }
 
 impl RequestTrackerReceiver {
     pub async fn recv(&mut self) -> Option<PendingRequest> {
         loop {
-            let request_key = self.request_rx.recv().await?;
-            let reply_rx = self.send(request_key);
+            let request_key = match self.event_rx.recv().await? {
+                ClientEvent::Idle => return Some(PendingRequest::new(Request::Idle)),
+                ClientEvent::Send(request_key) => request_key,
+            };
+
+            let permit = self.semaphore.clone().acquire_owned().await.unwrap();
+            let reply_rx = self.send(request_key, permit);
 
             if let Ok(request) = reply_rx.await {
                 return Some(request);
@@ -179,46 +191,69 @@ impl RequestTrackerReceiver {
 
     #[cfg(test)]
     pub fn try_recv(&mut self) -> Result<PendingRequest, TryRecvError> {
+        use tokio::sync::TryAcquireError;
+
         loop {
-            if let Some(rx) = &mut self.reply_rx {
-                match rx.try_recv() {
+            match &mut self.try_recv_state {
+                TryRecvState::Idle => {
+                    let event = match self.event_rx.try_recv() {
+                        Ok(event) => event,
+                        Err(mpsc::error::TryRecvError::Empty) => return Err(TryRecvError::Empty),
+                        Err(mpsc::error::TryRecvError::Disconnected) => {
+                            return Err(TryRecvError::Closed)
+                        }
+                    };
+
+                    match event {
+                        ClientEvent::Idle => {
+                            self.try_recv_state = TryRecvState::Idle;
+                            return Ok(PendingRequest::new(Request::Idle));
+                        }
+                        ClientEvent::Send(request_key) => {
+                            self.try_recv_state = TryRecvState::Permit(request_key);
+                        }
+                    }
+                }
+                TryRecvState::Permit(request_key) => {
+                    let permit = match self.semaphore.clone().try_acquire_owned() {
+                        Ok(permit) => permit,
+                        Err(TryAcquireError::NoPermits) => return Err(TryRecvError::InProgress),
+                        Err(TryAcquireError::Closed) => unreachable!(),
+                    };
+
+                    let request_key = *request_key;
+                    let reply_rx = self.send(request_key, permit);
+                    self.try_recv_state = TryRecvState::Reply(reply_rx);
+                }
+                TryRecvState::Reply(rx) => match rx.try_recv() {
                     Ok(request) => {
-                        self.reply_rx = None;
+                        self.try_recv_state = TryRecvState::Idle;
                         return Ok(request);
                     }
                     Err(oneshot::error::TryRecvError::Empty) => {
-                        return Err(TryRecvError::InProgress)
+                        return Err(TryRecvError::InProgress);
                     }
                     Err(oneshot::error::TryRecvError::Closed) => {
-                        self.reply_rx = None;
+                        self.try_recv_state = TryRecvState::Idle;
                     }
-                }
+                },
             }
-
-            let request_key = self.request_rx.try_recv()?;
-            self.reply_rx = Some(self.send(request_key));
         }
     }
 
-    fn send(&self, request_key: MessageKey) -> oneshot::Receiver<PendingRequest> {
+    fn send(
+        &self,
+        request_key: MessageKey,
+        permit: OwnedSemaphorePermit,
+    ) -> oneshot::Receiver<PendingRequest> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
-        match request_key {
-            MessageKey::Idle => {
-                // `Request::Idle` is not tracked - send it right away.
-                reply_tx.send(PendingRequest::new(Request::Idle)).unwrap();
-            }
-            MessageKey::Block(_)
-            | MessageKey::RootNode(_, _)
-            | MessageKey::ChildNodes(_)
-            | MessageKey::Other => {
-                self.command_tx.send(Command::HandleSend {
-                    client_id: self.client_id,
-                    request_key,
-                    reply_tx,
-                });
-            }
-        }
+        self.command_tx.send(Command::HandleSend {
+            client_id: self.client_id,
+            request_key,
+            permit,
+            reply_tx,
+        });
 
         reply_rx
     }
@@ -236,13 +271,10 @@ pub(crate) enum TryRecvError {
 }
 
 #[cfg(test)]
-impl From<mpsc::error::TryRecvError> for TryRecvError {
-    fn from(error: mpsc::error::TryRecvError) -> Self {
-        match error {
-            mpsc::error::TryRecvError::Empty => Self::Empty,
-            mpsc::error::TryRecvError::Disconnected => Self::Closed,
-        }
-    }
+enum TryRecvState {
+    Idle,
+    Permit(MessageKey),
+    Reply(oneshot::Receiver<PendingRequest>),
 }
 
 pub(crate) struct RequestTrackerCommitter {
@@ -353,7 +385,6 @@ pub(super) enum MessageKey {
     RootNode(PublicKey, u64),
     ChildNodes(Hash),
     Block(BlockId),
-    Idle,
     Other,
 }
 
@@ -365,7 +396,7 @@ impl<'a> From<&'a Request> for MessageKey {
             } => MessageKey::RootNode(*writer_id, *cookie),
             Request::ChildNodes(hash, _) => MessageKey::ChildNodes(*hash),
             Request::Block(block_id, _) => MessageKey::Block(*block_id),
-            Request::Idle => MessageKey::Idle,
+            Request::Idle => MessageKey::Other,
         }
     }
 }
@@ -454,9 +485,9 @@ impl Worker {
         match command {
             Command::InsertClient {
                 client_id,
-                request_tx,
+                event_tx,
             } => {
-                self.insert_client(client_id, request_tx);
+                self.insert_client(client_id, event_tx);
             }
             Command::RemoveClient { client_id } => {
                 self.remove_client(client_id);
@@ -485,9 +516,10 @@ impl Worker {
             Command::HandleSend {
                 client_id,
                 request_key,
+                permit,
                 reply_tx,
             } => {
-                if let Some(request) = self.handle_send(client_id, request_key) {
+                if let Some(request) = self.handle_send(client_id, request_key, permit) {
                     reply_tx.send(request).ok();
                 }
             }
@@ -507,13 +539,9 @@ impl Worker {
         }
     }
 
-    #[instrument(skip(self, request_tx))]
-    fn insert_client(
-        &mut self,
-        client_id: ClientId,
-        request_tx: mpsc::UnboundedSender<MessageKey>,
-    ) {
-        self.clients.insert(client_id, ClientState::new(request_tx));
+    #[instrument(skip(self, event_tx))]
+    fn insert_client(&mut self, client_id: ClientId, event_tx: mpsc::UnboundedSender<ClientEvent>) {
+        self.clients.insert(client_id, ClientState::new(event_tx));
     }
 
     #[instrument(skip(self))]
@@ -537,6 +565,7 @@ impl Worker {
         &mut self,
         client_id: ClientId,
         request_key: MessageKey,
+        permit: OwnedSemaphorePermit,
     ) -> Option<PendingRequest> {
         let node_key = self
             .clients
@@ -553,6 +582,7 @@ impl Worker {
                 *node.value_mut() = RequestState::InFlight {
                     sender_client_id: client_id,
                     sender_timer_key: self.flight.send(client_id, request_key),
+                    sender_permit: permit,
                     sent_at: Instant::now(),
                     waiters: mem::take(waiters),
                 };
@@ -583,29 +613,35 @@ impl Worker {
 
         let node = self.requests.get_mut(node_key).expect(BROKEN_INVARIANT);
 
-        let waiters = match node.value_mut() {
+        match node.value_mut() {
             RequestState::InFlight {
-                sender_client_id,
-                sender_timer_key,
-                sent_at,
-                waiters,
+                sender_client_id, ..
             } if *sender_client_id == client_id => {
-                self.flight
-                    .receive(request_key, *sender_timer_key, *sent_at);
-                mem::take(waiters)
+                match mem::replace(node.value_mut(), RequestState::Cancelled) {
+                    RequestState::InFlight {
+                        sender_timer_key,
+                        sender_permit,
+                        sent_at,
+                        waiters,
+                        ..
+                    } => {
+                        self.flight.receive(request_key, sender_timer_key, sent_at);
+
+                        *node.value_mut() = RequestState::Received {
+                            sender_client_id: client_id,
+                            sender_permit,
+                            waiters,
+                        };
+                    }
+                    _ => unreachable!(),
+                }
             }
             RequestState::Ready { .. }
             | RequestState::InFlight { .. }
             | RequestState::Received { .. }
             | RequestState::Complete { .. }
             | RequestState::Suspended { .. } => return,
-
             RequestState::Cancelled | RequestState::Committed => unreachable!(),
-        };
-
-        *node.value_mut() = RequestState::Received {
-            sender_client_id: client_id,
-            waiters,
         };
     }
 
@@ -616,13 +652,8 @@ impl Worker {
         request_key: MessageKey,
         requests: Vec<CandidateRequest>,
     ) {
-        let node_key = self
-            .clients
-            .get(&client_id)
-            .expect(CLIENT_NOT_FOUND)
-            .requests
-            .get(&request_key)
-            .copied();
+        let client_state = self.clients.get(&client_id).expect(CLIENT_NOT_FOUND);
+        let node_key = client_state.requests.get(&request_key).copied();
 
         let (client_ids, decrement_pending) = if let Some(node_key) = node_key {
             let node = self.requests.get_mut(node_key).expect(BROKEN_INVARIANT);
@@ -632,6 +663,7 @@ impl Worker {
             let waiters = match node.value_mut() {
                 RequestState::Received {
                     sender_client_id,
+                    sender_permit: _,
                     waiters,
                 } if *sender_client_id == client_id => Some(mem::take(waiters)),
                 RequestState::Received { .. }
@@ -1030,6 +1062,7 @@ impl Worker {
             RequestState::Received {
                 sender_client_id,
                 waiters,
+                ..
             } => {
                 try_decrement_pending();
 
@@ -1130,7 +1163,7 @@ struct SpannedCommand {
 enum Command {
     InsertClient {
         client_id: ClientId,
-        request_tx: mpsc::UnboundedSender<MessageKey>,
+        event_tx: mpsc::UnboundedSender<ClientEvent>,
     },
     RemoveClient {
         client_id: ClientId,
@@ -1154,6 +1187,7 @@ enum Command {
     HandleSend {
         client_id: ClientId,
         request_key: MessageKey,
+        permit: OwnedSemaphorePermit,
         reply_tx: oneshot::Sender<PendingRequest>,
     },
     HandleReceive {
@@ -1176,7 +1210,7 @@ enum Command {
 }
 
 struct ClientState {
-    request_tx: mpsc::UnboundedSender<MessageKey>,
+    event_tx: mpsc::UnboundedSender<ClientEvent>,
     requests: HashMap<MessageKey, GraphKey>,
     // Number of pending requests tracked for this client. A request is considered "pending" if it
     // is:
@@ -1192,9 +1226,9 @@ struct ClientState {
 }
 
 impl ClientState {
-    fn new(request_tx: mpsc::UnboundedSender<MessageKey>) -> Self {
+    fn new(event_tx: mpsc::UnboundedSender<ClientEvent>) -> Self {
         Self {
-            request_tx,
+            event_tx,
             requests: HashMap::default(),
             pending: 0,
             choked: false,
@@ -1202,7 +1236,7 @@ impl ClientState {
     }
 
     fn send(&self, request_key: MessageKey) {
-        self.request_tx.send(request_key).ok();
+        self.event_tx.send(ClientEvent::Send(request_key)).ok();
     }
 
     fn increment_pending(&mut self) {
@@ -1219,9 +1253,14 @@ impl ClientState {
             .expect("pending requests counter underflow");
 
         if self.pending == 0 {
-            self.send(MessageKey::Idle);
+            self.event_tx.send(ClientEvent::Idle).ok();
         }
     }
+}
+
+enum ClientEvent {
+    Idle,
+    Send(MessageKey),
 }
 
 #[derive(Debug)]
@@ -1234,6 +1273,8 @@ enum RequestState {
         sender_client_id: ClientId,
         /// Timeout key for the request
         sender_timer_key: delay_queue::Key,
+        /// Send permit
+        sender_permit: OwnedSemaphorePermit,
         /// When was the request sent.
         sent_at: Instant,
         /// Other clients interested in sending this request. If the sender client is dropped or the
@@ -1244,6 +1285,9 @@ enum RequestState {
     Received {
         /// Client who sent this request
         sender_client_id: ClientId,
+        /// Send permit
+        #[expect(dead_code)]
+        sender_permit: OwnedSemaphorePermit,
         /// Other clients interested in sending this request. If the sender client is dropped, a new
         /// sender is picked from this list.
         waiters: HashSet<ClientId>,
@@ -1329,7 +1373,7 @@ impl Flight {
                 self.monitor.index_requests_sent.increment(1);
                 self.monitor.index_requests_inflight.increment(1);
             }
-            MessageKey::Idle | MessageKey::Other => (),
+            MessageKey::Other => (),
         }
 
         timer_key
@@ -1345,7 +1389,7 @@ impl Flight {
             MessageKey::RootNode(..) | MessageKey::ChildNodes(_) => {
                 self.monitor.index_requests_inflight.decrement(1);
             }
-            MessageKey::Idle | MessageKey::Other => (),
+            MessageKey::Other => (),
         }
 
         self.monitor.request_rtt.record(sent_at.elapsed());
@@ -1366,7 +1410,7 @@ impl Flight {
             MessageKey::RootNode(..) | MessageKey::ChildNodes(_) => {
                 self.monitor.index_requests_inflight.decrement(1);
             }
-            MessageKey::Idle | MessageKey::Other => (),
+            MessageKey::Other => (),
         }
 
         match reason {
