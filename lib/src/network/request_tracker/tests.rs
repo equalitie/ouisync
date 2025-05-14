@@ -14,7 +14,7 @@ use rand::{
     Rng, SeedableRng,
 };
 use std::time::Duration;
-use tokio::{sync::mpsc::error::TryRecvError, time};
+use tokio::time;
 
 // Test syncing while peers keep joining and leaving the swarm.
 //
@@ -22,7 +22,7 @@ use tokio::{sync::mpsc::error::TryRecvError, time};
 // needs a tokio runtime.
 #[tokio::test]
 async fn dynamic_swarm() {
-    // crate::test_utils::init_log();
+    crate::test_utils::init_log();
 
     let seed = rand::random();
     case(seed, 64, 4);
@@ -173,11 +173,15 @@ async fn timeout() {
     worker.step();
 
     // Only the first client gets the request.
+    assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx_a.try_recv().map(|r| r.payload),
         Ok(request.clone())
     );
 
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx_b.try_recv().map(|r| r.payload),
         Err(TryRecvError::Empty)
@@ -189,10 +193,9 @@ async fn timeout() {
     worker.step();
 
     // The first client timeouted so the second client now gets the request.
-    assert_eq!(
-        request_rx_b.try_recv().map(|r| r.payload),
-        Ok(request.clone())
-    );
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
+    assert_eq!(request_rx_b.try_recv().map(|r| r.payload), Ok(request));
 }
 
 #[tokio::test]
@@ -200,7 +203,7 @@ async fn drop_uncommitted_client() {
     crate::test_utils::init_log();
 
     let mut rng = StdRng::seed_from_u64(0);
-    let (tracker, mut tracker_worker) = build(TrafficMonitor::new(&NoopRecorder));
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
 
     let (client_a, mut request_rx_a) = tracker.new_client();
     let (client_b, mut request_rx_b) = tracker.new_client();
@@ -217,31 +220,39 @@ async fn drop_uncommitted_client() {
         );
     }
 
-    tracker_worker.step();
+    worker.step();
 
+    assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx_a.try_recv(),
         Ok(PendingRequest::new(request.clone()))
     );
+
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
 
     // Complete the request by the first client.
     client_a.receive(request_key);
     client_a.success(request_key, vec![]);
-    tracker_worker.step();
+    worker.step();
 
     assert_eq!(
         request_rx_a.try_recv(),
         Ok(PendingRequest::new(Request::Idle))
     );
+
     assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
 
     // Drop the first client without commiting.
     drop(client_a);
-    tracker_worker.step();
+    worker.step();
 
     // The request falls back to the other client because although the request was completed, it
     // wasn't committed.
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(request_rx_b.try_recv(), Ok(PendingRequest::new(request)));
 }
 
@@ -264,6 +275,8 @@ async fn multiple_responses_to_identical_requests() {
     client.initial(CandidateRequest::new(initial_request.clone()));
     worker.step();
 
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx.try_recv(),
         Ok(PendingRequest::new(initial_request.clone()))
@@ -291,6 +304,8 @@ async fn multiple_responses_to_identical_requests() {
     client.success(key, vec![CandidateRequest::new(followup_request.clone())]);
     worker.step();
 
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx.try_recv(),
         Ok(PendingRequest::new(followup_request))
@@ -329,6 +344,8 @@ async fn suspend_resume() {
     client.resume(request_key, RequestVariant::default());
     worker.step();
 
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(request_rx.try_recv().map(|r| r.payload), Ok(request));
 }
 
@@ -406,6 +423,8 @@ mod duplicate_request_with_different_variant_on_the_same_client {
         );
         worker.step();
 
+        assert_eq!(request_rx.try_recv(), Err(TryRecvError::InProgress));
+        worker.step();
         assert_eq!(
             request_rx.try_recv(),
             Ok(PendingRequest::new(request.clone()).variant(variant_0)),
@@ -423,6 +442,8 @@ mod duplicate_request_with_different_variant_on_the_same_client {
         );
         worker.step();
 
+        assert_eq!(request_rx.try_recv(), Err(TryRecvError::InProgress));
+        worker.step();
         assert_eq!(
             request_rx.try_recv(),
             Ok(PendingRequest::new(request.clone()).variant(variant_1)),
@@ -447,6 +468,9 @@ async fn choke_before_request() {
 
     // The first client is choked so the request is sent to the second one.
     assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::Empty));
+
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx_b.try_recv(),
         Ok(PendingRequest {
@@ -470,6 +494,8 @@ async fn choke_after_request() {
     client_b.initial(CandidateRequest::new(request.clone()));
     worker.step();
 
+    assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx_a.try_recv(),
         Ok(PendingRequest {
@@ -477,11 +503,16 @@ async fn choke_after_request() {
             variant: RequestVariant::default()
         })
     );
+
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
 
     client_a.choke();
     worker.step();
 
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx_b.try_recv(),
         Ok(PendingRequest {
@@ -509,6 +540,8 @@ async fn unchoke() {
     client.unchoke();
     worker.step();
 
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx.try_recv(),
         Ok(PendingRequest {
@@ -535,6 +568,8 @@ async fn fallback_after_unchoke() {
 
     worker.step();
 
+    assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx_a.try_recv(),
         Ok(PendingRequest {
@@ -542,6 +577,7 @@ async fn fallback_after_unchoke() {
             variant: RequestVariant::default()
         })
     );
+
     assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
 
     client_a.failure(MessageKey::from(&request));
@@ -552,6 +588,8 @@ async fn fallback_after_unchoke() {
     client_b.unchoke();
     worker.step();
 
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx_b.try_recv(),
         Ok(PendingRequest {
@@ -575,6 +613,8 @@ async fn idle_after_success_by_same_client() {
     client.initial(CandidateRequest::new(request.clone()));
     worker.step();
 
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx.try_recv(),
         Ok(PendingRequest {
@@ -591,10 +631,7 @@ async fn idle_after_success_by_same_client() {
 
     assert_eq!(
         request_rx.try_recv(),
-        Ok(PendingRequest {
-            payload: Request::Idle,
-            variant: RequestVariant::default()
-        })
+        Ok(PendingRequest::new(Request::Idle)),
     );
 }
 
@@ -612,6 +649,8 @@ async fn idle_after_success_by_other_client() {
     client_b.initial(CandidateRequest::new(request.clone()));
     worker.step();
 
+    assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx_a.try_recv(),
         Ok(PendingRequest {
@@ -620,6 +659,9 @@ async fn idle_after_success_by_other_client() {
         })
     );
     assert_eq!(request_rx_a.try_recv(), Err(TryRecvError::Empty));
+
+    assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(request_rx_b.try_recv(), Err(TryRecvError::Empty));
 
     let key = MessageKey::from(&request);
@@ -658,6 +700,8 @@ async fn idle_after_failure() {
     client.initial(CandidateRequest::new(request.clone()));
     worker.step();
 
+    assert_eq!(request_rx.try_recv(), Err(TryRecvError::InProgress));
+    worker.step();
     assert_eq!(
         request_rx.try_recv(),
         Ok(PendingRequest::new(request.clone()))

@@ -9,7 +9,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    network::constants::UNCHOKED_IDLE_TIMEOUT,
+    network::constants::{MAX_CONCURRENT_REQUESTS, UNCHOKED_IDLE_TIMEOUT},
     protocol::{BlockContent, BlockId, RootNode, RootNodeFilter},
     repository::{monitor::TrafficMonitor, Vault},
     store,
@@ -19,7 +19,7 @@ use tokio::{
     select,
     sync::{
         broadcast::{self, error::RecvError},
-        mpsc,
+        mpsc, Semaphore, SemaphorePermit,
     },
     time,
 };
@@ -34,7 +34,7 @@ pub(crate) struct Server {
 impl Server {
     pub fn new(
         vault: Vault,
-        message_tx: mpsc::UnboundedSender<Message>,
+        message_tx: mpsc::Sender<Message>,
         request_rx: mpsc::Receiver<Request>,
         choker: Choker,
     ) -> Self {
@@ -56,7 +56,7 @@ impl Server {
 
 struct Inner {
     vault: Vault,
-    message_tx: mpsc::UnboundedSender<Message>,
+    message_tx: mpsc::Sender<Message>,
     choker: Choker,
 }
 
@@ -81,7 +81,7 @@ impl Inner {
                 first = false;
             }
 
-            self.send_response(Response::Unchoke);
+            self.send_response(Response::Unchoke).await;
 
             choked = match self
                 .run_unchoked(unchoked, request_rx, &mut event_rx)
@@ -91,7 +91,7 @@ impl Inner {
                 None => break,
             };
 
-            self.send_response(Response::Choke);
+            self.send_response(Response::Choke).await;
         }
 
         Ok(())
@@ -116,27 +116,58 @@ impl Inner {
         request_rx: &mut mpsc::Receiver<Request>,
         event_rx: &mut broadcast::Receiver<Event>,
     ) -> Result<Option<Choked<'a>>> {
-        enum Action<'a> {
-            Work(Work),
-            Choke(Choked<'a>),
+        enum Action<'semaphore, 'choker> {
+            Work(Work<'semaphore>),
+            Choke(Choked<'choker>),
         }
-        enum Work {
-            Request(Request),
+
+        enum Work<'semaphore> {
+            Request {
+                request: Request,
+                permit: SemaphorePermit<'semaphore>,
+            },
             Event(Option<Event>),
         }
+
+        // Limits the number of concurrently processed requests.
+        let semaphore = Semaphore::new(MAX_CONCURRENT_REQUESTS);
+        // Latest received request, waiting for permit.
+        let mut request = None;
 
         // Using `FuturesOrdered` to run the tasks concurrently but maintain their order.
         let mut tasks = FuturesOrdered::new();
         let mut choke = pin!(unchoked.choke());
 
         loop {
+            // Receive next request and acquire a permit to process it in a cancel-safe way.
+            let recv_request = async {
+                loop {
+                    let action = if request.is_some() {
+                        let permit = semaphore.acquire().await.unwrap();
+                        let request = request.take().unwrap();
+
+                        Some(Action::Work(Work::Request { request, permit }))
+                    } else {
+                        match time::timeout(UNCHOKED_IDLE_TIMEOUT, request_rx.recv()).await {
+                            Ok(Some(Request::Idle)) => Some(Action::Choke(self.choker.choke())),
+                            Ok(Some(new_request)) => {
+                                request = Some(new_request);
+                                continue;
+                            }
+                            Ok(None) => None,
+                            Err(_) => Some(Action::Choke(self.choker.choke())),
+                        }
+                    };
+
+                    break action;
+                }
+            };
+
             let action = select! {
-                result = time::timeout(UNCHOKED_IDLE_TIMEOUT, request_rx.recv()) => {
+                result = recv_request => {
                     match result {
-                        Ok(Some(Request::Idle)) => Action::Choke(self.choker.choke()),
-                        Ok(Some(request)) => Action::Work(Work::Request(request)),
-                        Ok(None) => return Ok(None),
-                        Err(_) => Action::Choke(self.choker.choke()),
+                        Some(action) => action,
+                        None => return Ok(None),
                     }
                 }
                 result = event_rx.recv() => {
@@ -157,7 +188,11 @@ impl Inner {
                 Action::Work(work) => {
                     tasks.push_back(async {
                         match work {
-                            Work::Request(request) => self.handle_request(request).await,
+                            Work::Request { request, permit } => {
+                                let result = self.handle_request(request).await;
+                                drop(permit);
+                                result
+                            }
                             Work::Event(Some(event)) => self.handle_event(event).await,
                             Work::Event(None) => self.handle_unknown_event().await,
                         }
@@ -175,6 +210,10 @@ impl Inner {
                             // Finish the remaining work.
                             while let Some(result) = tasks.next().await {
                                 result?;
+                            }
+
+                            if let Some(request) = request.take() {
+                                self.handle_request(request).await?;
                             }
 
                             return Ok(Some(choked));
@@ -206,7 +245,7 @@ impl Inner {
                 self.handle_branch_changed_event(branch_id).await
             }
             Payload::BlockReceived(block_id) => {
-                self.handle_block_received_event(block_id);
+                self.handle_block_received_event(block_id).await;
                 Ok(())
             }
             Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted => Ok(()),
@@ -239,7 +278,7 @@ impl Inner {
                     debug: debug.reply(),
                 };
 
-                self.send_response(response);
+                self.send_response(response).await;
                 Ok(())
             }
             Err(store::Error::BranchNotFound) => {
@@ -248,7 +287,8 @@ impl Inner {
                     writer_id,
                     cookie,
                     debug: debug.reply(),
-                });
+                })
+                .await;
                 Ok(())
             }
             Err(error) => {
@@ -256,7 +296,8 @@ impl Inner {
                     writer_id,
                     cookie,
                     debug: debug.reply(),
-                });
+                })
+                .await;
                 Err(error.into())
             }
         }
@@ -275,16 +316,19 @@ impl Inner {
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
-                self.send_response(Response::InnerNodes(inner_nodes, debug.reply()));
+                self.send_response(Response::InnerNodes(inner_nodes, debug.reply()))
+                    .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
-                self.send_response(Response::LeafNodes(leaf_nodes, debug.reply()));
+                self.send_response(Response::LeafNodes(leaf_nodes, debug.reply()))
+                    .await;
             }
         } else {
             tracing::trace!("child nodes not found");
-            self.send_response(Response::ChildNodesError(parent_hash, debug.reply()));
+            self.send_response(Response::ChildNodesError(parent_hash, debug.reply()))
+                .await;
         }
 
         Ok(())
@@ -304,16 +348,19 @@ impl Inner {
         match result {
             Ok(nonce) => {
                 tracing::trace!("block found");
-                self.send_response(Response::Block(content, nonce, debug.reply()));
+                self.send_response(Response::Block(content, nonce, debug.reply()))
+                    .await;
                 Ok(())
             }
             Err(store::Error::BlockNotFound) => {
                 tracing::trace!("block not found");
-                self.send_response(Response::BlockError(block_id, debug.reply()));
+                self.send_response(Response::BlockError(block_id, debug.reply()))
+                    .await;
                 Ok(())
             }
             Err(error) => {
-                self.send_response(Response::BlockError(block_id, debug.reply()));
+                self.send_response(Response::BlockError(block_id, debug.reply()))
+                    .await;
                 Err(error.into())
             }
         }
@@ -333,8 +380,9 @@ impl Inner {
         self.send_root_node(root_node).await
     }
 
-    fn handle_block_received_event(&self, block_id: BlockId) {
-        self.send_response(Response::BlockOffer(block_id, DebugResponse::unsolicited()));
+    async fn handle_block_received_event(&self, block_id: BlockId) {
+        self.send_response(Response::BlockOffer(block_id, DebugResponse::unsolicited()))
+            .await;
     }
 
     #[instrument(skip(self))]
@@ -373,7 +421,7 @@ impl Inner {
             debug: DebugResponse::unsolicited(),
         };
 
-        self.send_response(response);
+        self.send_response(response).await;
 
         Ok(())
     }
@@ -414,8 +462,13 @@ impl Inner {
             .await?)
     }
 
-    fn send_response(&self, response: Response) {
-        if self.message_tx.send(Message::Response(response)).is_ok() {
+    async fn send_response(&self, response: Response) {
+        if self
+            .message_tx
+            .send(Message::Response(response))
+            .await
+            .is_ok()
+        {
             self.vault.monitor.traffic.responses_sent.increment(1);
         }
     }

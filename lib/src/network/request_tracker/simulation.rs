@@ -1,7 +1,7 @@
 use super::{
     super::message::{Request, Response},
     CandidateRequest, MessageKey, PendingRequest, RequestTracker, RequestTrackerClient,
-    RequestVariant,
+    RequestTrackerReceiver, RequestVariant, TryRecvError,
 };
 use crate::{
     collections::{HashMap, HashSet},
@@ -18,7 +18,6 @@ use crate::{
 };
 use rand::{seq::SliceRandom, CryptoRng, Rng};
 use std::collections::{hash_map::Entry, VecDeque};
-use tokio::sync::mpsc;
 
 /// Simple network simulation for testing `RequestTracker`.
 pub(super) struct Simulation {
@@ -92,28 +91,32 @@ impl Simulation {
 
             match side {
                 Side::Client => {
-                    if let Some(PendingRequest { payload, variant }) = peer.client.poll_request() {
-                        let key = MessageKey::from(&payload);
-                        let inserted = self.requests.entry(key).or_default().insert(variant);
+                    match peer.client.poll_request() {
+                        Ok(PendingRequest { payload, variant }) => {
+                            let key = MessageKey::from(&payload);
+                            let inserted = self.requests.entry(key).or_default().insert(variant);
 
-                        match payload {
-                            Request::RootNode { .. }
-                            | Request::ChildNodes(..)
-                            | Request::Block(..) => {
-                                assert!(
-                                    inserted,
-                                    "request sent more than once: {payload:?} ({variant:?})"
-                                );
+                            match payload {
+                                Request::RootNode { .. }
+                                | Request::ChildNodes(..)
+                                | Request::Block(..) => {
+                                    assert!(
+                                        inserted,
+                                        "request sent more than once: {payload:?} ({variant:?})"
+                                    );
+                                }
+                                // `Idle` is actually a notification, not a request, so it's allowed to
+                                // be sent more than once.
+                                Request::Idle => (),
                             }
-                            // `Idle` is actually a notification, not a request, so it's allowed to
-                            // be sent more than once.
-                            Request::Idle => (),
+
+                            peer.requests.insert(key, variant);
+                            peer.server.handle_request(payload);
+
+                            return true;
                         }
-
-                        peer.requests.insert(key, variant);
-                        peer.server.handle_request(payload);
-
-                        return true;
+                        Err(TryRecvError::InProgress) => return true,
+                        Err(TryRecvError::Empty | TryRecvError::Closed) => (),
                     }
                 }
                 Side::Server => {
@@ -182,13 +185,13 @@ struct TestPeer {
 
 struct TestClient {
     tracker_client: RequestTrackerClient,
-    tracker_request_rx: mpsc::UnboundedReceiver<PendingRequest>,
+    tracker_request_rx: RequestTrackerReceiver,
 }
 
 impl TestClient {
     fn new(
         tracker_client: RequestTrackerClient,
-        tracker_request_rx: mpsc::UnboundedReceiver<PendingRequest>,
+        tracker_request_rx: RequestTrackerReceiver,
     ) -> Self {
         Self {
             tracker_client,
@@ -301,8 +304,8 @@ impl TestClient {
         self.tracker_client.new_committer().commit();
     }
 
-    fn poll_request(&mut self) -> Option<PendingRequest> {
-        self.tracker_request_rx.try_recv().ok()
+    fn poll_request(&mut self) -> Result<PendingRequest, TryRecvError> {
+        self.tracker_request_rx.try_recv()
     }
 }
 

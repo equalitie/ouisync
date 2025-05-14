@@ -2,7 +2,9 @@ use super::{
     constants::RESPONSE_BATCH_SIZE,
     debug_payload::{DebugRequest, DebugResponse},
     message::{Message, Response},
-    request_tracker::{PendingRequest, RequestTracker, RequestTrackerClient},
+    request_tracker::{
+        PendingRequest, RequestTracker, RequestTrackerClient, RequestTrackerReceiver,
+    },
 };
 use crate::{
     block_tracker::BlockTrackerClient,
@@ -32,7 +34,7 @@ mod future {
 
 pub(super) struct Client {
     inner: Inner,
-    request_rx: mpsc::UnboundedReceiver<PendingRequest>,
+    request_rx: RequestTrackerReceiver,
     response_rx: mpsc::Receiver<Response>,
     block_rx: mpsc::UnboundedReceiver<BlockId>,
 }
@@ -40,7 +42,7 @@ pub(super) struct Client {
 impl Client {
     pub fn new(
         vault: Vault,
-        message_tx: mpsc::UnboundedSender<Message>,
+        message_tx: mpsc::Sender<Message>,
         response_rx: mpsc::Receiver<Response>,
         request_tracker: &RequestTracker,
     ) -> Self {
@@ -83,17 +85,17 @@ struct Inner {
     vault: Vault,
     request_tracker: RequestTrackerClient,
     block_tracker: BlockTrackerClient,
-    message_tx: mpsc::UnboundedSender<Message>,
+    message_tx: mpsc::Sender<Message>,
 }
 
 impl Inner {
     async fn run(
         &mut self,
-        request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>,
+        request_rx: &mut RequestTrackerReceiver,
         received_response_rx: &mut mpsc::Receiver<Response>,
         block_rx: &mut mpsc::UnboundedReceiver<BlockId>,
     ) -> Result<()> {
-        let (prepared_response_tx, prepared_response_rx) = mpsc::channel(16 * RESPONSE_BATCH_SIZE);
+        let (prepared_response_tx, prepared_response_rx) = mpsc::channel(RESPONSE_BATCH_SIZE);
 
         select! {
             _ = self.prepare_responses(received_response_rx, prepared_response_tx) => Ok(()),
@@ -214,11 +216,7 @@ impl Inner {
                     }
                 }
 
-                if writable.len() >= RESPONSE_BATCH_SIZE {
-                    break;
-                }
-
-                if readable.len() >= RESPONSE_BATCH_SIZE {
+                if writable.len() + readable.len() >= RESPONSE_BATCH_SIZE {
                     break;
                 }
             }
@@ -512,13 +510,13 @@ impl Inner {
         Ok(())
     }
 
-    async fn send_requests(&self, request_rx: &mut mpsc::UnboundedReceiver<PendingRequest>) {
+    async fn send_requests(&self, request_rx: &mut RequestTrackerReceiver) {
         while let Some(PendingRequest { payload, .. }) = request_rx.recv().await {
             tracing::trace!(?payload, "sending request");
-            self.message_tx.send(Message::Request(payload)).ok();
+            self.message_tx.send(Message::Request(payload)).await.ok();
         }
 
-        tracing::debug!("request send channel closed");
+        tracing::debug!("request recv channel closed");
     }
 
     async fn request_blocks(&self, block_rx: &mut mpsc::UnboundedReceiver<BlockId>) {
@@ -787,6 +785,8 @@ fn next_root_node_cookie() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::{
         access_control::WriteSecrets,
@@ -806,6 +806,7 @@ mod tests {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use state_monitor::StateMonitor;
     use tempfile::TempDir;
+    use tokio::time;
 
     #[tokio::test]
     async fn receive_root_node_with_invalid_proof() {
@@ -929,13 +930,12 @@ mod tests {
             .request_tracker
             .resume(MessageKey::Block(block.id), RequestVariant::default());
 
-        // Drop inner to close the request channel so that the following while loop is guaranteed to
-        // terminate.
-        drop(inner);
-
         let mut found = false;
 
-        while let Some(request) = request_rx.recv().await {
+        while let Some(request) = time::timeout(Duration::from_secs(10), request_rx.recv())
+            .await
+            .unwrap()
+        {
             match request.payload {
                 Request::Block(block_id, _) if block_id == block.id => {
                     found = true;
@@ -950,13 +950,7 @@ mod tests {
 
     async fn setup(
         seed: Option<u64>,
-    ) -> (
-        TempDir,
-        StdRng,
-        Inner,
-        mpsc::UnboundedReceiver<PendingRequest>,
-        WriteSecrets,
-    ) {
+    ) -> (TempDir, StdRng, Inner, RequestTrackerReceiver, WriteSecrets) {
         crate::test_utils::init_log();
 
         let (base_dir, pool) = db::create_temp().await.unwrap();
@@ -980,7 +974,7 @@ mod tests {
         let (request_tracker, request_rx) = request_tracker.new_client();
         let (block_tracker, _block_rx) = vault.block_tracker.new_client();
 
-        let (message_tx, _message_rx) = mpsc::unbounded_channel();
+        let (message_tx, _message_rx) = mpsc::channel(1);
 
         let inner = Inner {
             vault,
