@@ -19,64 +19,54 @@ import kotlinx.serialization.serializer
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
-/**
- * Serialize [Duration] as the number of whole milliseconds
- */
+/** Serialize [Duration] as the number of whole milliseconds */
 internal object DurationSerializer : KSerializer<Duration> {
-    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor(
-        "${javaClass.getPackage()?.getName()}.Duration",
-        PrimitiveKind.LONG,
-    )
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor(
+            "${javaClass.getPackage()?.getName()}.Duration",
+            PrimitiveKind.LONG,
+        )
 
     override fun serialize(encoder: Encoder, value: Duration) {
         encoder.encodeLong(value.inWholeMilliseconds)
     }
 
-    override fun deserialize(decoder: Decoder): Duration {
-        return decoder.decodeLong().milliseconds
-    }
+    override fun deserialize(decoder: Decoder): Duration = decoder.decodeLong().milliseconds
 }
 
-/**
- * Serialize [Instant] as the number of milliseconds since epoch
- */
+/** Serialize [Instant] as the number of milliseconds since epoch */
 internal object InstantSerializer : KSerializer<Instant> {
-    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor(
-        "${javaClass.getPackage()?.getName()}.Instant",
-        PrimitiveKind.LONG,
-    )
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor(
+            "${javaClass.getPackage()?.getName()}.Instant",
+            PrimitiveKind.LONG,
+        )
 
     override fun serialize(encoder: Encoder, value: Instant) {
         encoder.encodeLong(value.toEpochMilliseconds())
     }
 
-    override fun deserialize(decoder: Decoder): Instant {
-        return Instant.fromEpochMilliseconds(decoder.decodeLong())
-    }
+    override fun deserialize(decoder: Decoder): Instant = Instant.fromEpochMilliseconds(decoder.decodeLong())
 }
 
-/**
- * Serializer for [OuisyncException]
- */
+/** Serializer for [OuisyncException] */
 internal object OuisyncExceptionSerializer : KSerializer<OuisyncException> {
-    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
-        "${javaClass.getPackage()?.getName()}.OuisyncException",
-    ) {
-        element<ErrorCode>("code")
-        element("message", serialDescriptor<String>().nullable)
-        element("sources", listSerialDescriptor<String>())
-    }
-
-    override fun serialize(encoder: Encoder, value: OuisyncException) {
-        throw NotImplementedError()
-    }
-
-    override fun deserialize(decoder: Decoder): OuisyncException =
-        decoder.decodeStructure(descriptor) {
-            val code = decodeSerializableElement<ErrorCode>(descriptor, 0, serializer())
-            val message = decodeNullableSerializableElement<String>(descriptor, 1, serializer())
-            val sources = decodeSerializableElement<List<String>>(descriptor, 2, serializer())
-
-            OuisyncException.dispatch(code, message, sources)
+    override val descriptor: SerialDescriptor =
+        buildClassSerialDescriptor(
+            "${javaClass.getPackage()?.getName()}.OuisyncException",
+        ) {
+            element<ErrorCode>("code")
+            element("message", serialDescriptor<String>().nullable)
+            element("sources", listSerialDescriptor<String>())
         }
+
+    override fun serialize(encoder: Encoder, value: OuisyncException): Unit = throw NotImplementedError()
+
+    override fun deserialize(decoder: Decoder): OuisyncException = decoder.decodeStructure(descriptor) {
+        val code = decodeSerializableElement<ErrorCode>(descriptor, 0, serializer())
+        val message = decodeNullableSerializableElement<String>(descriptor, 1, serializer())
+        val sources = decodeSerializableElement<List<String>>(descriptor, 2, serializer())
+
+        OuisyncException.dispatch(code, message, sources)
+    }
 }

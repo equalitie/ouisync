@@ -51,10 +51,11 @@ class SyncTest {
         val repoA = sessionA.createRepository("$tempDir/a.ouisyncdb")
 
         val token = repoA.share(AccessMode.WRITE)
-        val repoB = sessionB.createRepository(
-            "$tempDir/b.ouisyncdb",
-            token = token,
-        )
+        val repoB =
+            sessionB.createRepository(
+                "$tempDir/b.ouisyncdb",
+                token = token,
+            )
 
         sessionA.bindNetwork(listOf("quic/127.0.0.1:0"))
         sessionB.bindNetwork(listOf("quic/127.0.0.1:0"))
@@ -87,8 +88,7 @@ class SyncTest {
                     } finally {
                         fileB.close()
                     }
-                } catch (e: Exception) {
-                }
+                } catch (e: Exception) {}
 
                 return@checkContent false
             }

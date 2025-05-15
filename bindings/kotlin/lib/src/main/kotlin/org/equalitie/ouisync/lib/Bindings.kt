@@ -8,9 +8,7 @@ import com.sun.jna.Callback as JnaCallback
 @Suppress("ktlint:standard:function-naming")
 internal interface Bindings : Library {
     companion object {
-        val INSTANCE: Bindings by lazy {
-            Native.load("ouisync_service", Bindings::class.java)
-        }
+        val INSTANCE: Bindings by lazy { Native.load("ouisync_service", Bindings::class.java) }
     }
 
     fun start_service(

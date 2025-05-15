@@ -62,11 +62,9 @@ internal class MessageEncoder(
         packer.packNil()
     }
 
-    override fun encodeEnum(descriptor: SerialDescriptor, index: Int) {
-        val annotations = descriptor.getElementAnnotations(index)
-        val value = annotations.firstNotNullOfOrNull {
-            if (it is Value) it.value else null
-        } ?: index
+    override fun encodeEnum(enumDescriptor: SerialDescriptor, index: Int) {
+        val annotations = enumDescriptor.getElementAnnotations(index)
+        val value = annotations.firstNotNullOfOrNull { if (it is Value) it.value else null } ?: index
 
         encodeInt(value)
     }
@@ -128,10 +126,16 @@ internal class MessageEncoder(
         return MessageEncoder(packer)
     }
 
-    override fun beginCollection(descriptor: SerialDescriptor, size: Int): CompositeEncoder {
+    override fun beginCollection(
+        descriptor: SerialDescriptor,
+        collectionSize: Int,
+    ): CompositeEncoder {
         when (descriptor.kind) {
-            StructureKind.LIST -> packer.packArrayHeader(size)
-            StructureKind.CLASS, StructureKind.OBJECT, StructureKind.MAP -> packer.packMapHeader(size)
+            StructureKind.LIST -> packer.packArrayHeader(collectionSize)
+            StructureKind.CLASS,
+            StructureKind.OBJECT,
+            StructureKind.MAP,
+            -> packer.packMapHeader(collectionSize)
             else -> SerializationException("wrong collection kind ${descriptor.kind}")
         }
 
@@ -174,19 +178,20 @@ internal class MessageDecoder(
 
     override fun decodeNotNullMark(): Boolean = !unpacker.tryUnpackNil()
 
-    override fun decodeEnum(descriptor: SerialDescriptor): Int {
+    override fun decodeEnum(enumDescriptor: SerialDescriptor): Int {
         val value = decodeInt()
 
-        for (index in 0..<descriptor.elementsCount) {
-            val annotations = descriptor.getElementAnnotations(index)
-            val variantValue = annotations.firstNotNullOfOrNull { if (it is Value) it.value else null } ?: index
+        for (index in 0..<enumDescriptor.elementsCount) {
+            val annotations = enumDescriptor.getElementAnnotations(index)
+            val variantValue =
+                annotations.firstNotNullOfOrNull { if (it is Value) it.value else null } ?: index
 
             if (variantValue == value) {
                 return index
             }
         }
 
-        throw SerializationException("wrong value $value for ${descriptor.serialName}")
+        throw SerializationException("wrong value $value for ${enumDescriptor.serialName}")
     }
 
     override fun decodeBoolean(): Boolean = unpacker.unpackBoolean()
@@ -218,7 +223,8 @@ internal class MessageDecoder(
             }
 
             val simpleName = unpacker.unpackString()
-            val qualifiedName = descriptor.elementDescriptors.find { unqualify(it.serialName) == simpleName }?.serialName
+            val qualifiedName =
+                descriptor.elementDescriptors.find { unqualify(it.serialName) == simpleName }?.serialName
 
             if (qualifiedName != null) {
                 return qualifiedName
@@ -230,20 +236,21 @@ internal class MessageDecoder(
         }
     }
 
-    override fun decodeInline(descriptor: SerialDescriptor): Decoder {
-        return MessageDecoder(unpacker)
-    }
+    override fun decodeInline(descriptor: SerialDescriptor): Decoder = MessageDecoder(unpacker)
 
     override fun beginStructure(descriptor: SerialDescriptor): CompositeDecoder {
         when (descriptor.kind) {
-            PolymorphicKind.SEALED -> return MessageDecoder(
-                unpacker,
-                sealedDescriptor = descriptor.getElementDescriptor(1),
-            )
+            PolymorphicKind.SEALED ->
+                return MessageDecoder(
+                    unpacker,
+                    sealedDescriptor = descriptor.getElementDescriptor(1),
+                )
             StructureKind.CLASS -> {
                 val count = unpacker.unpackArrayHeader()
                 if (count != descriptor.elementsCount) {
-                    throw SerializationException("wrong field count for ${descriptor.serialName} (expected: ${descriptor.elementsCount}, actual: $count)")
+                    throw SerializationException(
+                        "wrong field count for ${descriptor.serialName} (expected: ${descriptor.elementsCount}, actual: $count)",
+                    )
                 }
             }
             else -> {}
@@ -254,17 +261,18 @@ internal class MessageDecoder(
 
     override fun decodeCollectionSize(descriptor: SerialDescriptor): Int = when (descriptor.kind) {
         StructureKind.LIST -> unpacker.unpackArrayHeader()
-        StructureKind.CLASS, StructureKind.OBJECT, StructureKind.MAP -> unpacker.unpackMapHeader()
+        StructureKind.CLASS,
+        StructureKind.OBJECT,
+        StructureKind.MAP,
+        -> unpacker.unpackMapHeader()
         else -> throw SerializationException("wrong collection kind ${descriptor.kind}")
     }
 
     @Suppress("UNCHECKED_CAST")
-    override fun <T> decodeSerializableValue(deserializer: DeserializationStrategy<T>): T {
-        return if (deserializer == ByteArraySerializer()) {
-            decodeByteArray() as T
-        } else {
-            super.decodeSerializableValue(deserializer)
-        }
+    override fun <T> decodeSerializableValue(deserializer: DeserializationStrategy<T>): T = if (deserializer == ByteArraySerializer()) {
+        decodeByteArray() as T
+    } else {
+        super.decodeSerializableValue(deserializer)
     }
 
     fun decodeByteArray(): ByteArray {

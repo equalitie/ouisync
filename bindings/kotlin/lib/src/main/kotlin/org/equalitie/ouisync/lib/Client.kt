@@ -50,7 +50,8 @@ internal class Client private constructor(private val socket: AsynchronousSocket
 
             // TODO: retry connect
 
-            val socket = AsynchronousSocket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port))
+            val socket =
+                AsynchronousSocket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port))
 
             authenticate(socket, authKey)
 
@@ -62,9 +63,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
     private val coroutineScope = CoroutineScope(Dispatchers.Default)
 
     init {
-        coroutineScope.launch {
-            receive()
-        }
+        coroutineScope.launch { receive() }
     }
 
     suspend fun invoke(request: Request): Any {
@@ -168,7 +167,9 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             } catch (e: OuisyncException) {
                 completer.complete(ResponseResult.Failure(e))
             } catch (e: Exception) {
-                completer.complete(ResponseResult.Failure(OuisyncException.InvalidData("invalid response: $e")))
+                completer.complete(
+                    ResponseResult.Failure(OuisyncException.InvalidData("invalid response: $e")),
+                )
             }
         }
     }
@@ -176,12 +177,10 @@ internal class Client private constructor(private val socket: AsynchronousSocket
 
 @Serializable
 private sealed interface ResponseResult {
-    @Serializable
-    @JvmInline
+    @Serializable @JvmInline
     value class Success(val value: Response) : ResponseResult
 
-    @Serializable
-    @JvmInline
+    @Serializable @JvmInline
     value class Failure(val error: OuisyncException) : ResponseResult
 }
 
@@ -190,8 +189,7 @@ private class MessageMatcher {
     private val oneshots: HashMap<Long, CompletableDeferred<ResponseResult>> = HashMap()
     private val channels: HashMap<Long, SendChannel<ResponseResult>> = HashMap()
 
-    @Synchronized
-    fun nextId(): Long = nextId++
+    @Synchronized fun nextId(): Long = nextId++
 
     @Synchronized
     fun register(id: Long, deferred: CompletableDeferred<ResponseResult>) {
@@ -306,17 +304,13 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
         suspend fun connect(addr: SocketAddress): AsynchronousSocket {
             val channel = AsynchronousSocketChannel.open()
 
-            suspendCancellableCoroutine<Unit> { cont ->
-                channel.connect(addr, cont, ConnectHandler)
-            }
+            suspendCancellableCoroutine<Unit> { cont -> channel.connect(addr, cont, ConnectHandler) }
 
             return AsynchronousSocket(channel)
         }
     }
 
-    suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont ->
-        channel.read(buffer, cont, IOHandler())
-    }
+    suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.read(buffer, cont, IOHandler()) }
 
     suspend fun readExact(buffer: ByteBuffer): Int {
         var total = 0
@@ -334,9 +328,7 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
         return total
     }
 
-    suspend fun write(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont ->
-        channel.write(buffer, cont, IOHandler())
-    }
+    suspend fun write(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.write(buffer, cont, IOHandler()) }
 
     suspend fun writeAll(buffer: ByteBuffer) {
         while (buffer.hasRemaining()) {

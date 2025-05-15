@@ -17,10 +17,6 @@ class MainActivity : ComponentActivity() {
 
         val viewModel = ExampleViewModel(configDir, storeDir)
 
-        setContent {
-            MaterialTheme {
-                ExampleApp(viewModel)
-            }
-        }
+        setContent { MaterialTheme { ExampleApp(viewModel) } }
     }
 }

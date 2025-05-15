@@ -67,14 +67,11 @@ import java.security.MessageDigest
 private const val TAG = "ouisync.example"
 private val PADDING = 8.dp
 
-@Serializable
-object RepositoryListRoute
+@Serializable object RepositoryListRoute
 
-@Serializable
-data class FolderRoute(val repositoryName: String, val path: String = "")
+@Serializable data class FolderRoute(val repositoryName: String, val path: String = "")
 
-@Serializable
-data class FileRoute(val repositoryName: String, val path: String = "")
+@Serializable data class FileRoute(val repositoryName: String, val path: String = "")
 
 @Composable
 fun ExampleApp(viewModel: ExampleViewModel) {
@@ -84,9 +81,7 @@ fun ExampleApp(viewModel: ExampleViewModel) {
         navController = navController,
         startDestination = RepositoryListRoute,
     ) {
-        composable<RepositoryListRoute> {
-            RepositoryListScreen(viewModel, navController)
-        }
+        composable<RepositoryListRoute> { RepositoryListScreen(viewModel, navController) }
 
         composable<FolderRoute> { backStackEntry ->
             val route: FolderRoute = backStackEntry.toRoute()
@@ -126,9 +121,7 @@ fun RepositoryListScreen(
         floatingActionButton = {
             if (!adding) {
                 FloatingActionButton(
-                    onClick = {
-                        adding = true
-                    },
+                    onClick = { adding = true },
                 ) {
                     Icon(Icons.Default.Add, "Add")
                 }
@@ -136,15 +129,12 @@ fun RepositoryListScreen(
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-
         val sessionError = viewModel.sessionError
 
         if (sessionError == null) {
             RepositoryList(
                 repositories = viewModel.repositories,
-                onRepositoryClicked = { name ->
-                    navController.navigate(route = FolderRoute(name))
-                },
+                onRepositoryClicked = { name -> navController.navigate(route = FolderRoute(name)) },
                 onRepositoryDeleteConfirmed = { name ->
                     scope.launch {
                         viewModel.deleteRepository(name)
@@ -165,7 +155,6 @@ fun RepositoryListScreen(
             CreateRepositoryDialog(
                 repositories = viewModel.repositories,
                 onSubmit = { name, token ->
-
                     adding = false
 
                     scope.launch {
@@ -184,9 +173,7 @@ fun RepositoryListScreen(
                         }
                     }
                 },
-                onCancel = {
-                    adding = false
-                },
+                onCancel = { adding = false },
             )
         }
     }
@@ -216,17 +203,13 @@ fun RepositoryList(
                     Text(
                         entry.key,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onRepositoryClicked(entry.key) },
+                        modifier = Modifier.weight(1f).clickable { onRepositoryClicked(entry.key) },
                     )
 
                     IconButton(
                         onClick = {
                             repositories.get(entry.key)?.let { repo ->
-                                scope.launch {
-                                    shareRepository(context, repo)
-                                }
+                                scope.launch { shareRepository(context, repo) }
                             }
                         },
                     ) {
@@ -234,9 +217,7 @@ fun RepositoryList(
                     }
 
                     IconButton(
-                        onClick = {
-                            deleting = entry.key
-                        },
+                        onClick = { deleting = entry.key },
                     ) {
                         Icon(Icons.Default.Delete, "Delete")
                     }
@@ -251,9 +232,7 @@ fun RepositoryList(
                 onRepositoryDeleteConfirmed(name)
                 deleting = null
             },
-            onCancel = {
-                deleting = null
-            },
+            onCancel = { deleting = null },
         )
     }
 }
@@ -270,7 +249,6 @@ fun FolderScreen(
     Scaffold(
         topBar = { TopBar("$repositoryName$path", navController) },
     ) { padding ->
-
         if (repo != null) {
             FolderDetail(
                 modifier = Modifier.padding(padding),
@@ -309,9 +287,7 @@ fun FolderDetail(
     LaunchedEffect(repository, path) {
         directory = repository.readDirectory(path)
 
-        repository.subscribe().collect {
-            directory = repository.readDirectory(path)
-        }
+        repository.subscribe().collect { directory = repository.readDirectory(path) }
     }
 
     LazyColumn(
@@ -331,9 +307,7 @@ fun FolderDetail(
 
                     Text(
                         entry.name,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onEntryClicked(entry) },
+                        modifier = Modifier.weight(1f).clickable { onEntryClicked(entry) },
                         overflow = TextOverflow.Ellipsis,
                         maxLines = 1,
                     )
@@ -356,7 +330,6 @@ fun FileScreen(
     Scaffold(
         topBar = { TopBar("$repositoryName$path", navController) },
     ) { padding ->
-
         if (repo != null) {
             FileDetail(repo, path, modifier = Modifier.padding(padding))
         } else {
@@ -385,9 +358,7 @@ fun FileDetail(repo: Repository, path: String, modifier: Modifier = Modifier) {
         val digest = MessageDigest.getInstance("SHA-256")
 
         @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-        val events = produce {
-            repo.subscribe().collect(::send)
-        }
+        val events = produce { repo.subscribe().collect(::send) }
 
         var maybeFile: File? = null
 
@@ -426,11 +397,12 @@ fun FileDetail(repo: Repository, path: String, modifier: Modifier = Modifier) {
                 while (true) {
                     val progress = file.getProgress()
 
-                    syncProgress = if (length > 0) {
-                        progress.toFloat() / length.toFloat()
-                    } else {
-                        1f
-                    }
+                    syncProgress =
+                        if (length > 0) {
+                            progress.toFloat() / length.toFloat()
+                        } else {
+                            1f
+                        }
 
                     if (progress >= length) {
                         break
@@ -509,22 +481,14 @@ fun FileDetail(repo: Repository, path: String, modifier: Modifier = Modifier) {
         }
 
         if (length >= 0) {
-            FileDetailRow("Size") { modifier ->
-                Text(formatSize(length), modifier)
-            }
+            FileDetailRow("Size") { modifier -> Text(formatSize(length), modifier) }
         }
 
         if (!hash.isEmpty()) {
-            FileDetailRow("SHA-256") { modifier ->
-                Text(hash, modifier)
-            }
+            FileDetailRow("SHA-256") { modifier -> Text(hash, modifier) }
         }
 
-        error?.let { error ->
-            FileDetailRow("Error") { modifier ->
-                Text(error.toString(), modifier)
-            }
-        }
+        error?.let { error -> FileDetailRow("Error") { modifier -> Text(error.toString(), modifier) } }
     }
 }
 
@@ -580,17 +544,11 @@ fun CreateRepositoryDialog(
     onSubmit: (String, String) -> Unit = { _, _ -> },
     onCancel: () -> Unit = {},
 ) {
-    var name by remember {
-        mutableStateOf("")
-    }
+    var name by remember { mutableStateOf("") }
 
-    var nameError by remember {
-        mutableStateOf("")
-    }
+    var nameError by remember { mutableStateOf("") }
 
-    var token by remember {
-        mutableStateOf("")
-    }
+    var token by remember { mutableStateOf("") }
 
     fun validate(): Boolean {
         if (name.isEmpty()) {
@@ -620,11 +578,7 @@ fun CreateRepositoryDialog(
                 Text("Create")
             }
         },
-        dismissButton = {
-            TextButton(onClick = { onCancel() }) {
-                Text("Cancel")
-            }
-        },
+        dismissButton = { TextButton(onClick = { onCancel() }) { Text("Cancel") } },
         onDismissRequest = { onCancel() },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(PADDING)) {
@@ -653,34 +607,23 @@ fun CreateRepositoryDialog(
 @Composable
 fun DeleteRepositoryDialog(onSubmit: () -> Unit = {}, onCancel: () -> Unit = {}) {
     AlertDialog(
-        title = {
-            Text("Delete repository")
-        },
-        text = {
-            Text("Are you sure you want to delete this repository?")
-        },
+        title = { Text("Delete repository") },
+        text = { Text("Are you sure you want to delete this repository?") },
         onDismissRequest = onCancel,
-        confirmButton = {
-            TextButton(onClick = onSubmit) {
-                Text("Delete")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onCancel) {
-                Text("Cancel")
-            }
-        },
+        confirmButton = { TextButton(onClick = onSubmit) { Text("Delete") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
 }
 
 suspend fun shareRepository(context: Context, repo: Repository) {
     val token = repo.share(AccessMode.WRITE).toString()
 
-    val sendIntent = Intent().apply {
-        action = Intent.ACTION_SEND
-        putExtra(Intent.EXTRA_TEXT, token)
-        type = "text/plain"
-    }
+    val sendIntent =
+        Intent().apply {
+            action = Intent.ACTION_SEND
+            putExtra(Intent.EXTRA_TEXT, token)
+            type = "text/plain"
+        }
     val shareIntent = Intent.createChooser(sendIntent, null)
 
     context.startActivity(shareIntent)

@@ -64,7 +64,10 @@ class RepositoryTest {
         assertEquals(mapOf("$storeDir/a.$ext" to repoA), session.listRepositories())
 
         val repoB = createRepo(name = "b")
-        assertEquals(mapOf("$storeDir/a.$ext" to repoA, "$storeDir/b.$ext" to repoB), session.listRepositories())
+        assertEquals(
+            mapOf("$storeDir/a.$ext" to repoA, "$storeDir/b.$ext" to repoB),
+            session.listRepositories(),
+        )
     }
 
     // TODO: events
@@ -150,11 +153,7 @@ class RepositoryTest {
     }
 
     @Test
-    fun accessMode() = runTest {
-        withRepo {
-            assertEquals(AccessMode.WRITE, it.getAccessMode())
-        }
-    }
+    fun accessMode() = runTest { withRepo { assertEquals(AccessMode.WRITE, it.getAccessMode()) } }
 
     @Test
     fun syncProgress() = runTest {
@@ -252,8 +251,7 @@ class RepositoryTest {
             try {
                 repo.openFile("missing.txt")
                 fail("unexpected successs - expected 'entry not found'")
-            } catch (e: OuisyncException.NotFound) {
-            }
+            } catch (e: OuisyncException.NotFound) {}
         }
     }
 
@@ -295,9 +293,10 @@ class RepositoryTest {
 
     @Test
     fun shareTokenRoundTrip() = runTest {
-        val origToken = session.validateShareToken(
-            "https://ouisync.net/r#AwAgEZkrt6b9gW47Nb6hGQjsZRGeh9GKp3gTyhZrxfT03SE",
-        )
+        val origToken =
+            session.validateShareToken(
+                "https://ouisync.net/r#AwAgEZkrt6b9gW47Nb6hGQjsZRGeh9GKp3gTyhZrxfT03SE",
+            )
         val repo = createRepo(token = origToken)
 
         try {
@@ -316,30 +315,36 @@ class RepositoryTest {
         val readPassword = Password("read_pwd")
         val writePassword = Password("write_pwd")
 
-        session.createRepository(
-            repoPath,
-            readSecret = SetLocalSecret.Password(readPassword),
-            writeSecret = SetLocalSecret.Password(writePassword),
-        ).also { repo ->
-            assertEquals(AccessMode.WRITE, repo.getAccessMode())
-            repo.close()
-        }
+        session
+            .createRepository(
+                repoPath,
+                readSecret = SetLocalSecret.Password(readPassword),
+                writeSecret = SetLocalSecret.Password(writePassword),
+            )
+            .also { repo ->
+                assertEquals(AccessMode.WRITE, repo.getAccessMode())
+                repo.close()
+            }
 
-        session.openRepository(
-            repoPath,
-            localSecret = LocalSecret.Password(readPassword),
-        ).also { repo ->
-            assertEquals(AccessMode.READ, repo.getAccessMode())
-            repo.close()
-        }
+        session
+            .openRepository(
+                repoPath,
+                localSecret = LocalSecret.Password(readPassword),
+            )
+            .also { repo ->
+                assertEquals(AccessMode.READ, repo.getAccessMode())
+                repo.close()
+            }
 
-        session.openRepository(
-            repoPath,
-            localSecret = LocalSecret.Password(writePassword),
-        ).also { repo ->
-            assertEquals(AccessMode.WRITE, repo.getAccessMode())
-            repo.close()
-        }
+        session
+            .openRepository(
+                repoPath,
+                localSecret = LocalSecret.Password(writePassword),
+            )
+            .also { repo ->
+                assertEquals(AccessMode.WRITE, repo.getAccessMode())
+                repo.close()
+            }
     }
 
     @Test
@@ -353,30 +358,36 @@ class RepositoryTest {
         val readSalt = session.generatePasswordSalt()
         val writeSalt = session.generatePasswordSalt()
 
-        session.createRepository(
-            repoPath,
-            readSecret = SetLocalSecret.KeyAndSalt(readKey, readSalt),
-            writeSecret = SetLocalSecret.KeyAndSalt(writeKey, writeSalt),
-        ).also { repo ->
-            assertEquals(AccessMode.WRITE, repo.getAccessMode())
-            repo.close()
-        }
+        session
+            .createRepository(
+                repoPath,
+                readSecret = SetLocalSecret.KeyAndSalt(readKey, readSalt),
+                writeSecret = SetLocalSecret.KeyAndSalt(writeKey, writeSalt),
+            )
+            .also { repo ->
+                assertEquals(AccessMode.WRITE, repo.getAccessMode())
+                repo.close()
+            }
 
-        session.openRepository(
-            repoPath,
-            localSecret = LocalSecret.SecretKey(readKey),
-        ).also { repo ->
-            assertEquals(AccessMode.READ, repo.getAccessMode())
-            repo.close()
-        }
+        session
+            .openRepository(
+                repoPath,
+                localSecret = LocalSecret.SecretKey(readKey),
+            )
+            .also { repo ->
+                assertEquals(AccessMode.READ, repo.getAccessMode())
+                repo.close()
+            }
 
-        session.openRepository(
-            repoPath,
-            localSecret = LocalSecret.SecretKey(writeKey),
-        ).also { repo ->
-            assertEquals(AccessMode.WRITE, repo.getAccessMode())
-            repo.close()
-        }
+        session
+            .openRepository(
+                repoPath,
+                localSecret = LocalSecret.SecretKey(writeKey),
+            )
+            .also { repo ->
+                assertEquals(AccessMode.WRITE, repo.getAccessMode())
+                repo.close()
+            }
     }
 
     @Test
@@ -389,17 +400,15 @@ class RepositoryTest {
         try {
             session.openRepository(repoName)
             fail("unexpected success")
-        } catch (e: OuisyncException.StoreError) {
-        } catch (e: Exception) {
+        } catch (e: OuisyncException.StoreError) {} catch (e: Exception) {
             fail("unexpected exception: $e")
         }
     }
 
-    private suspend fun createRepo(name: String? = null, token: ShareToken? = null): Repository =
-        session.createRepository(
-            name ?: repoName,
-            token = token,
-        )
+    private suspend fun createRepo(name: String? = null, token: ShareToken? = null): Repository = session.createRepository(
+        name ?: repoName,
+        token = token,
+    )
 
     private suspend fun <R> withRepo(block: suspend (repo: Repository) -> R): R {
         val repo = createRepo()

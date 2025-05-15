@@ -26,13 +26,11 @@ suspend fun Session.close() {
  * Returns a Flow of network events.
  *
  * Note the event subscription is created only after the flow starts being consumed.
- **/
-fun Session.subscribeToNetworkEvents(): Flow<NetworkEvent> =
-    client.subscribe(Request.SessionSubscribeToNetwork)
-        .mapNotNull {
-            when (it) {
-                is Response.NetworkEvent -> it.value
-                is Response.None -> NetworkEvent.PEER_SET_CHANGE
-                else -> null
-            }
-        }
+ */
+fun Session.subscribeToNetworkEvents(): Flow<NetworkEvent> = client.subscribe(Request.SessionSubscribeToNetwork).mapNotNull {
+    when (it) {
+        is Response.NetworkEvent -> it.value
+        is Response.None -> NetworkEvent.PEER_SET_CHANGE
+        else -> null
+    }
+}

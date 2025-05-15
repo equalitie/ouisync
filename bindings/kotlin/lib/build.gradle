@@ -5,10 +5,10 @@ plugins {
     id 'com.android.library'
     id 'kotlin-android'
     id "maven-publish"
-    id "org.jetbrains.dokka" version '1.9.0'
-    id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.20'
+    id "org.jetbrains.dokka" version '2.0.0'
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.21'
     id "org.jetbrains.kotlinx.kover" version "0.9.1"
-    id "org.mozilla.rust-android-gradle.rust-android" version '0.9.4'
+    id "org.mozilla.rust-android-gradle.rust-android" version '0.9.6'
     id "signing"
 }
 
@@ -129,26 +129,22 @@ tasks.register('cargoBuildUnitTest', Exec) {
     commandLine 'cargo', 'build', '--package', 'ouisync-service', '--lib'
 }
 
-tasks.withType(DokkaTask) {
-    dokkaSourceSets {
-        configureEach {
-            includes.from("docs/module.md")
-        }
+dokka {
+    dokkaSourceSets.main {
+        includes.from("docs/module.md")
     }
 
     moduleName.set("ouisync")
 
-    def dokkaBaseConfiguration = """
-    {
-        "customAssets":      ["${file("docs/logo-icon.png")}"],
-        "customStyleSheets": ["${file("docs/logo-styles.css")}"],
-        "footerMessage":     "Copyright (c) 2024 <a href=\\\"https://equalit.ie/\\\">eQualitie</a> | <a href=\\\"https://ouisync.net\\\">Ouisync website</a> | <a href=\\\"https://github.com/equalitie/ouisync\\\">Ouisync git repository</a>"
+    pluginsConfiguration.html {
+        customStyleSheets.from("docs/logo-styles.css")
+        customAssets.from("docs/logo-icon.png")
+        footerMessage.set("""
+            Copyright (c) 2024 <a href="https://equalit.ie">eQualitie</a> |
+            <a href="https://ouisync.net">Ouisync website</a> |
+            <a href="https://github.com/equalitie/ouisync">Ouisync git repository</a>
+            """.stripIndent())
     }
-    """
-
-    pluginsMapConfiguration.set([
-        "org.jetbrains.dokka.base.DokkaBase": dokkaBaseConfiguration,
-    ])
 }
 
 afterEvaluate {
@@ -175,7 +171,7 @@ afterEvaluate {
         }
     }
 
-    tasks.named("dokkaHtml") {
+    tasks.named("dokkaGenerateModuleHtml") {
         dependsOn 'generateBindings'
     }
 

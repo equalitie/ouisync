@@ -75,9 +75,7 @@ class SessionTest {
 
         // Convert the flow to ReceiveChannel so we can collect it one element at a time.
         @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-        val events = produce {
-            session.subscribeToNetworkEvents().collect(::send)
-        }
+        val events = produce { session.subscribeToNetworkEvents().collect(::send) }
 
         // Wait for the initial event indicating that the subscription has been created
         assertEquals(NetworkEvent.PEER_SET_CHANGE, events.receive())
@@ -98,10 +96,7 @@ class SessionTest {
         events.cancel()
     }
 
-    @Test
-    fun runtimeId() = runTest {
-        session.getRuntimeId()
-    }
+    @Test fun runtimeId() = runTest { session.getRuntimeId() }
 
     @Test
     fun protocolVersion() = runTest {

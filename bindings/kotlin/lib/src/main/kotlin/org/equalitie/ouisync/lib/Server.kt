@@ -40,11 +40,11 @@ fun initLog(
     bindings.init_log(file, logHandler)
 }
 
-private class ResultHandler() : StatusCallback {
+private class ResultHandler : StatusCallback {
     private val deferred = CompletableDeferred<Short>()
 
-    override fun invoke(context: Pointer?, errorCode: Short) {
-        deferred.complete(errorCode)
+    override fun invoke(context: Pointer?, error_code: Short) {
+        deferred.complete(error_code)
     }
 
     suspend fun await() {

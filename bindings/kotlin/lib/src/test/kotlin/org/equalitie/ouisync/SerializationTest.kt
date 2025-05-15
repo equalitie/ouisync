@@ -50,9 +50,7 @@ class SerializationTest {
             packLong(42)
         }
 
-        encodeDecode(TestSealed.C as TestSealed) {
-            packString("C")
-        }
+        encodeDecode(TestSealed.C as TestSealed) { packString("C") }
     }
 
     @Test
@@ -105,9 +103,7 @@ class SerializationTest {
 
     @Test
     fun encodeDecodeInlineClass() {
-        encodeDecode(TestInline(1)) {
-            packInt(1)
-        }
+        encodeDecode(TestInline(1)) { packInt(1) }
     }
 
     @Test
@@ -136,7 +132,11 @@ class SerializationTest {
 
     // Test that encoding `value` using `serializer` produces the same output as running `expected`
     // and vice-versa.
-    private fun <T> encodeDecode(serializer: KSerializer<T>, value: T, expected: MessagePacker.() -> Unit) {
+    private fun <T> encodeDecode(
+        serializer: KSerializer<T>,
+        value: T,
+        expected: MessagePacker.() -> Unit,
+    ) {
         val actualEncoded = encode(serializer, value)
         val expectedEncoded = MessagePack.newDefaultBufferPacker().apply(expected).toByteArray()
         assertEquals(value.toString(), expectedEncoded.toHexString(), actualEncoded.toHexString())
@@ -146,8 +146,10 @@ class SerializationTest {
     }
 
     // Convenient overload of `encodeDecode` that infers the serializer from the value type.
-    private inline fun <reified T> encodeDecode(value: T, noinline expected: MessagePacker.() -> Unit) =
-        encodeDecode(serializer(), value, expected)
+    private inline fun <reified T> encodeDecode(
+        value: T,
+        noinline expected: MessagePacker.() -> Unit,
+    ) = encodeDecode(serializer(), value, expected)
 }
 
 @Serializable
@@ -166,42 +168,32 @@ private enum class TestAnnotatedEnum {
     Four,
 }
 
-@Serializable
-private data class TestClass(val name: String, val code: Long)
+@Serializable private data class TestClass(val name: String, val code: Long)
 
 @Serializable
 private sealed interface TestSealed {
-    @Serializable
-    data class A(val value: Boolean) : TestSealed
+    @Serializable data class A(val value: Boolean) : TestSealed
 
-    @Serializable
-    data class B(val key: String, val value: Long) : TestSealed
+    @Serializable data class B(val key: String, val value: Long) : TestSealed
 
-    @Serializable
-    object C : TestSealed
+    @Serializable object C : TestSealed
 }
 
-@Serializable
-private data class TestNullable(val value: String?)
+@Serializable private data class TestNullable(val value: String?)
 
-@Serializable
-private data class TestList(val values: List<String>)
+@Serializable private data class TestList(val values: List<String>)
 
-@Serializable
-private data class TestMap(val values: Map<String, Int>)
+@Serializable private data class TestMap(val values: Map<String, Int>)
 
-@Serializable
-@JvmInline
+@Serializable @JvmInline
 private value class TestInline(val value: Int)
 
 @Serializable
 private sealed interface TestSealedWithInline {
-    @Serializable
-    @JvmInline
+    @Serializable @JvmInline
     value class A(val value: Short) : TestSealedWithInline
 
-    @Serializable
-    @JvmInline
+    @Serializable @JvmInline
     value class B(val value: String) : TestSealedWithInline
 }
 
