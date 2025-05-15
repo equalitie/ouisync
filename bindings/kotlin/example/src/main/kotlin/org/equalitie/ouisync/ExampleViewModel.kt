@@ -7,11 +7,16 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
-import org.equalitie.ouisync.lib.Repository
-import org.equalitie.ouisync.lib.Session
-import org.equalitie.ouisync.lib.ShareToken
-import org.equalitie.ouisync.lib.close
-import org.equalitie.ouisync.lib.create
+import kotlinx.coroutines.Dispatchers
+import org.equalitie.ouisync.client.LogLevel
+import org.equalitie.ouisync.client.OuisyncException
+import org.equalitie.ouisync.client.Repository
+import org.equalitie.ouisync.client.Session
+import org.equalitie.ouisync.client.ShareToken
+import org.equalitie.ouisync.client.close
+import org.equalitie.ouisync.client.create
+import org.equalitie.ouisync.server.Server
+import org.equalitie.ouisync.server.initLog
 
 private const val TAG = "ouisync.example"
 
@@ -19,6 +24,7 @@ class ExampleViewModel(
     private val configDir: String,
     private val storeDir: String,
 ) : ViewModel() {
+    private var server: Server? = null
     private var session: Session? = null
 
     var sessionError by mutableStateOf<String?>(null)
@@ -28,16 +34,40 @@ class ExampleViewModel(
         private set
 
     init {
-        viewModelScope.launch {
+        initLog { level, message ->
+            val priority =
+                when (level) {
+                    LogLevel.ERROR -> Log.ERROR
+                    LogLevel.WARN  -> Log.WARN
+                    LogLevel.INFO  -> Log.INFO
+                    LogLevel.DEBUG -> Log.DEBUG
+                    LogLevel.TRACE -> Log.VERBOSE
+                }
+
+            Log.println(priority, TAG, message)
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                session = Session.create(configDir)
-                session?.setStoreDir(storeDir)
+                server = Server.start(configDir)
+            } catch (e: OuisyncException.ServiceAlreadyRunning) {
+                Log.d(TAG, "Server already running")
             } catch (e: Exception) {
-                Log.e(TAG, "Session.create failed", e)
+                Log.e(TAG, "Server.start failed", e)
                 sessionError = e.toString()
-            } catch (e: java.lang.Error) {
-                Log.e(TAG, "Session.create failed", e)
-                sessionError = e.toString()
+            }
+
+            if (server != null) {
+                try {
+                    session = Session.create(configDir)
+                    session?.setStoreDir(storeDir)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Session.create failed", e)
+                    sessionError = e.toString()
+                } catch (e: java.lang.Error) {
+                    Log.e(TAG, "Session.create failed", e)
+                    sessionError = e.toString()
+                }
             }
 
             session?.let {

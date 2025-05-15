@@ -1,0 +1,145 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+    id 'java-library'
+    // id "maven-publish"
+    id 'org.jetbrains.dokka'
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.21'
+    // id "signing"
+}
+
+version = rootProject.version
+group   = rootProject.group
+
+dependencies {
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-datetime:0.6.2'
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0'
+    implementation 'org.msgpack:msgpack-core:0.9.5'
+
+    testImplementation platform('org.junit:junit-bom:5.12.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly    'org.junit.platform:junit-platform-launcher'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2'
+    testImplementation 'net.java.dev.jna:jna:5.17.0'
+}
+
+kotlin {
+    sourceSets {
+        main {
+            kotlin {
+                // Add directory with generated source files
+                srcDir layout.buildDirectory.dir('gen')
+            }
+        }
+
+        test {
+            kotlin {
+                // HACK: The tests depend on the `:server` project but we can't add it as a regular
+                // test dependency because it's an android library and `:client` is a regular jvm
+                // library. There is probably a way to build `:server` as both, but adding the
+                // `:server`'s sources directly like this is simpler and good enough for now.
+                srcDir '../server/src/main'
+            }
+        }
+    }
+}
+
+jar {
+    archiveBaseName = "${rootProject.name}.${project.name}"
+}
+
+test {
+    useJUnitPlatform()
+
+    testLogging {
+        showStandardStreams true
+        exceptionFormat "full"
+    }
+}
+
+tasks.register('generateBindings', Exec) {
+    description 'Generate bindings'
+    workingDir "$rootDir/../.."
+    commandLine 'cargo', 'run', '--package', 'ouisync-bindgen', '--', '--language', 'kotlin'
+
+    doFirst {
+        def dir = layout.buildDirectory.dir('gen').get().getAsFile()
+        mkdir(dir)
+        standardOutput = new FileOutputStream("$dir/Api.kt")
+    }
+}
+
+tasks.register('cargoBuildUnitTest', Exec) {
+    description 'Build the native library for unit tests'
+    workingDir "$rootDir/../.."
+    commandLine 'cargo', 'build', '--package', 'ouisync-service', '--lib'
+}
+
+afterEvaluate {
+    // Generate bindings before compiling the kotlin sources. This happens during both
+    // 'assemble' and 'test'.
+    tasks.named('compileKotlin') {
+        dependsOn 'generateBindings'
+    }
+
+    // Build the native library for the host platform and set 'jna.library.path' to point to
+    // it. This happens only during 'test'.
+    tasks.named('test') {
+        dependsOn 'cargoBuildUnitTest'
+        systemProperty('jna.library.path', "$rootDir/../../target/debug")
+    }
+
+    // tasks.named("dokkaGenerateModuleHtml") {
+    //     dependsOn 'generateBindings'
+    // }
+
+    // publishing {
+    //     publications {
+    //         release(MavenPublication) {
+    //             def packageName = "${rootProject.name}-omni"
+
+    //             from(components.release)
+
+    //             artifactId packageName
+
+    //             pom {
+    //                 name = packageName
+    //                 description = "Library for secure peer-to-peer file syncing"
+    //                 url = 'https://github.com/equalitie/ouisync'
+    //                 licenses {
+    //                     license {
+    //                         name = 'MPL-2.0'
+    //                         url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+    //                     }
+    //                 }
+    //                 developers {
+    //                     developer {
+    //                         name = 'Ouisync Developers'
+    //                         email = 'ouisync@equalit.ie'
+    //                     }
+    //                 }
+
+    //                 scm {
+    //                     connection = 'scm:git:github.com/equalitie/ouisync.git'
+    //                     developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+    //                     url = 'https://github.com/equalitie/ouisync/tree/master'
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+}
+
+// signing {
+//     // Only sign when publishing to sonatype, not local
+//     required {
+//         gradle.taskGraph.hasTask("lib:publishToSonatype")
+//     }
+
+//     if (signingKey) {
+//         useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+//     }
+
+//     sign publishing.publications
+// }
+

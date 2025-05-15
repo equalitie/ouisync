@@ -54,8 +54,10 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3'
 
     if (useLocalLib) {
-        implementation project(':lib')
+        implementation project(':client')
+        implementation project(':server')
     } else {
-        implementation 'ie.equalit.ouinet:ouisync-omni:+'
+        implementation 'ie.equalit.ouinet:ouisync.client:+'
+        implementation 'ie.equalit.ouinet:ouisync.server-omni:+'
     }
 }

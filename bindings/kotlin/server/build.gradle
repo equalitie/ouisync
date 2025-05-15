@@ -1,0 +1,140 @@
+plugins {
+    id 'com.android.library'
+    id 'kotlin-android'
+//     id "maven-publish"
+    id 'org.jetbrains.dokka'
+    id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.6'
+    // id "signing"
+}
+
+Properties localProperties = new Properties()
+
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.newDataInputStream())
+}
+
+version = rootProject.version
+group   = rootProject.group
+
+android {
+    namespace 'org.equalitie.ouisync.server'
+
+    compileSdk = 34
+    ndkVersion = '27.2.12479018'
+
+    defaultConfig {
+        targetSdkVersion 34
+        minSdkVersion 26
+        versionCode 1
+        versionName version
+
+        archivesBaseName = "${rootProject.name}.${project.name}"
+    }
+
+    kotlin {
+        jvmToolchain(17)
+    }
+}
+
+dependencies {
+    implementation project(':client')
+    implementation 'net.java.dev.jna:jna:5.17.0@aar'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
+}
+
+cargo {
+    module = "$rootDir/../.."
+    libname = 'ouisync_service'
+
+    // Targets can be overriden with "rust.targets" in local.properties.
+    // Example: "rust.targets=arm64,x86_64".
+    // More info: https://github.com/mozilla/rust-android-gradle.
+    targets = ['arm', 'arm64', /* 'x86', */ 'x86_64']
+
+    profile = 'release'
+
+    extraCargoBuildArguments = ['--package', 'ouisync-service']
+
+    def relTargetDir = localProperties.getProperty('rust.cargoTargetDir')
+    def absTargetDir = null
+
+    if (relTargetDir != null) {
+        if ((new File(relTargetDir)).isAbsolute()) {
+            absTargetDir = relTargetDir
+        } else {
+            absTargetDir = "$projectDir/$relTargetDir"
+        }
+    }
+
+    exec { spec, toolchain ->
+        // HACK: rust.cargoTargetDir local property is not passed to cargo for some reason
+        // (https://github.com/mozilla/rust-android-gradle?tab=readme-ov-file#targetdirectory).
+        // Force it:
+        if (absTargetDir != null) {
+            spec.environment('CARGO_TARGET_DIR', absTargetDir)
+        }
+    }
+}
+
+afterEvaluate {
+    android.libraryVariants.each {
+        def variant  = it.name.capitalize()
+
+        // Build the native library for the target android platforms.
+        tasks.named("merge${variant}JniLibFolders") {
+            dependsOn 'cargoBuild'
+        }
+    }
+
+    // TODO:
+    // publishing {
+    //     publications {
+    //         release(MavenPublication) {
+    //             def packageName = "${rootProject.name}-omni"
+
+    //             from(components.release)
+
+    //             artifactId packageName
+
+    //             pom {
+    //                 name = packageName
+    //                 description = "Library for secure peer-to-peer file syncing"
+    //                 url = 'https://github.com/equalitie/ouisync'
+    //                 licenses {
+    //                     license {
+    //                         name = 'MPL-2.0'
+    //                         url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+    //                     }
+    //                 }
+    //                 developers {
+    //                     developer {
+    //                         name = 'Ouisync Developers'
+    //                         email = 'ouisync@equalit.ie'
+    //                     }
+    //                 }
+
+    //                 scm {
+    //                     connection = 'scm:git:github.com/equalitie/ouisync.git'
+    //                     developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+    //                     url = 'https://github.com/equalitie/ouisync/tree/master'
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+}
+
+// signing {
+//     // Only sign when publishing to sonatype, not local
+//     required {
+//         gradle.taskGraph.hasTask("server:publishToSonatype")
+//     }
+
+//     if (signingKey) {
+//         useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+//     }
+
+//     sign publishing.publications
+// }
+

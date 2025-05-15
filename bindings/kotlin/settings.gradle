@@ -1,5 +1,5 @@
 rootProject.name = 'ouisync'
 
-include 'lib'
+include 'client'
+include 'server'
 include 'example'
-

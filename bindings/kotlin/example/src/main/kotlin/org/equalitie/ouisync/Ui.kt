@@ -56,12 +56,12 @@ import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import org.equalitie.ouisync.lib.AccessMode
-import org.equalitie.ouisync.lib.DirectoryEntry
-import org.equalitie.ouisync.lib.EntryType
-import org.equalitie.ouisync.lib.File
-import org.equalitie.ouisync.lib.Repository
-import org.equalitie.ouisync.lib.subscribe
+import org.equalitie.ouisync.client.AccessMode
+import org.equalitie.ouisync.client.DirectoryEntry
+import org.equalitie.ouisync.client.EntryType
+import org.equalitie.ouisync.client.File
+import org.equalitie.ouisync.client.Repository
+import org.equalitie.ouisync.client.subscribe
 import java.security.MessageDigest
 
 private const val TAG = "ouisync.example"
