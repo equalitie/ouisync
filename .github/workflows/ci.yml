@@ -152,7 +152,7 @@ jobs:
 
       - name: Run unit tests
         working-directory: bindings/kotlin
-        run: ./gradlew --stacktrace lib:testDebugUnitTest
+        run: ./gradlew --stacktrace testDebugUnitTest
 
       - name: Build the example app
         working-directory: bindings/kotlin
