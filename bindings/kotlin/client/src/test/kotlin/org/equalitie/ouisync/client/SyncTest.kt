@@ -1,18 +1,17 @@
 package org.equalitie.ouisync.client
 
-import java.io.File as JFile
-import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
 import org.equalitie.ouisync.server.Server
 import org.equalitie.ouisync.server.initLog
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import kotlin.io.path.createTempDirectory
+import java.io.File as JFile
 
 class SyncTest {
     lateinit var tempDir: JFile

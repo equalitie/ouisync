@@ -6,8 +6,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.equalitie.ouisync.client.LogLevel
 import org.equalitie.ouisync.client.OuisyncException
 import org.equalitie.ouisync.client.Repository
@@ -38,8 +38,8 @@ class ExampleViewModel(
             val priority =
                 when (level) {
                     LogLevel.ERROR -> Log.ERROR
-                    LogLevel.WARN  -> Log.WARN
-                    LogLevel.INFO  -> Log.INFO
+                    LogLevel.WARN -> Log.WARN
+                    LogLevel.INFO -> Log.INFO
                     LogLevel.DEBUG -> Log.DEBUG
                     LogLevel.TRACE -> Log.VERBOSE
                 }

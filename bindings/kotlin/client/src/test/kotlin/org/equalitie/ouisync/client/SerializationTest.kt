@@ -5,7 +5,7 @@ package org.equalitie.ouisync.client
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.serializer
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.msgpack.core.MessagePack
 import org.msgpack.core.MessagePacker
