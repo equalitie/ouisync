@@ -2,7 +2,8 @@ import 'dart:typed_data';
 
 import 'package:messagepack/messagepack.dart';
 
-import '../bindings.dart' show ErrorCode, OuisyncException, Request, Response;
+import '../generated/api.g.dart'
+    show ErrorCode, OuisyncException, Request, Response;
 
 Uint8List encodeMessage(int id, Request message) {
   // Message format:

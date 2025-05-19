@@ -210,7 +210,7 @@ jobs:
 
       - name: Generate bindings
         working-directory: bindings/dart
-        run: dart run util/bindgen.dart
+        run: dart run tool/bindgen.dart
 
       - name: Analyze
         # analyze should be the same on all platforms so run it on just one to save time

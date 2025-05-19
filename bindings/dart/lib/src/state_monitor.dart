@@ -1,7 +1,7 @@
 import 'package:messagepack/messagepack.dart' show Packer, Unpacker;
 
 import 'client.dart';
-import 'bindings.dart'
+import '../generated/api.g.dart'
     show
         RequestSessionSubscribeToStateMonitor,
         RequestSessionGetStateMonitor,

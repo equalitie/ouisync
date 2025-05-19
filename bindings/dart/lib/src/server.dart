@@ -5,6 +5,7 @@ import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 
 import 'bindings.dart';
+import '../generated/api.g.dart' show ErrorCode, LogLevel, OuisyncException;
 
 /// Handle to start and stop Ouisync service inside this process.
 class Server {

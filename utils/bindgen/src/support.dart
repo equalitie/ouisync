@@ -1,7 +1,7 @@
 import 'package:messagepack/messagepack.dart';
 
-import 'client.dart' show Client;
-import 'state_monitor.dart' show MonitorId, StateMonitorNode;
+import '../src/client.dart' show Client;
+import '../src/state_monitor.dart' show MonitorId, StateMonitorNode;
 
 class DecodeError extends ArgumentError {
   DecodeError() : super('decode error');

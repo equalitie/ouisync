@@ -5,7 +5,6 @@ import 'package:async/async.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:ouisync/ouisync.dart';
-import 'package:ouisync/native_channels.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 

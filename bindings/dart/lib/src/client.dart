@@ -7,7 +7,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:hex/hex.dart';
 
-import 'bindings.dart'
+import '../generated/api.g.dart'
     show
         InvalidData,
         MessageId,
@@ -15,8 +15,8 @@ import 'bindings.dart'
         Request,
         Response,
         RequestSessionUnsubscribe;
-import 'internal/length_delimited_codec.dart';
-import 'internal/message_codec.dart';
+import 'length_delimited_codec.dart';
+import 'message_codec.dart';
 
 class Client {
   final Socket _socket;
@@ -42,11 +42,14 @@ class Client {
     SocketException? lastException;
 
     final port = json.decode(
-            await File('$configPath/local_control_port.conf').readAsString())
-        as int;
+      await File('$configPath/local_control_port.conf').readAsString(),
+    ) as int;
 
-    final authKey = HEX.decode(json.decode(
-        await File('$configPath/local_control_auth_key.conf').readAsString()));
+    final authKey = HEX.decode(
+      json.decode(
+        await File('$configPath/local_control_auth_key.conf').readAsString(),
+      ),
+    );
 
     while (true) {
       if (timeout != null) {
@@ -78,11 +81,8 @@ class Client {
     final controller = StreamController<Response>();
     final id = _nextMessageId++;
 
-    controller.onListen = () => unawaited(_onSubscriptionListen(
-          id,
-          request,
-          controller.sink,
-        ));
+    controller.onListen =
+        () => unawaited(_onSubscriptionListen(id, request, controller.sink));
 
     controller.onCancel = () => unawaited(_onSubscriptionCancel(id));
 
@@ -173,8 +173,10 @@ Future<void> _authenticate(
   final hmac = Hmac(sha256, authKey);
   final reader = _Reader(stream);
 
-  final clientChallenge =
-      List<int>.generate(challengeSize, (_) => random.nextInt(256));
+  final clientChallenge = List<int>.generate(
+    challengeSize,
+    (_) => random.nextInt(256),
+  );
 
   sink.add(clientChallenge);
 

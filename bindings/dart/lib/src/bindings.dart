@@ -4,8 +4,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 
-export 'bindings.g.dart';
-
 /// Callback for `start_service` and `stop_service`.
 typedef StatusCallback = Void Function(Pointer<Void>, Uint16);
 

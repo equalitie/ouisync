@@ -4,7 +4,7 @@ import 'dart:collection';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-import 'ouisync.dart' show Repository, File;
+import '../generated/api.g.dart' show Repository, File;
 
 /// Enum for handling the reponse from the previewFile method
 enum PreviewFileResult {

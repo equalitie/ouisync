@@ -1,8 +1,8 @@
 import 'dart:io' as io;
 
-import 'package:ouisync/client.dart';
 import 'package:ouisync/ouisync.dart';
-import 'package:ouisync/server.dart';
+import 'package:ouisync/src/client.dart';
+import 'package:ouisync/src/server.dart';
 import 'package:test/test.dart';
 
 void main() {

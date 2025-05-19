@@ -7,9 +7,11 @@ import 'utils.dart';
 
 void main() {
   late io.Directory temp;
+
   late Session session1;
-  late Session session2;
   late Repository repo1;
+
+  late Session session2;
   late Repository repo2;
 
   setUp(() async {
