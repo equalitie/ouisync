@@ -1,10 +1,8 @@
 plugins {
     id 'org.jetbrains.kotlin.jvm'
     id 'java-library'
-    // id "maven-publish"
     id 'org.jetbrains.dokka'
     id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.21'
-    // id "signing"
 }
 
 version = rootProject.version
@@ -88,58 +86,6 @@ afterEvaluate {
         dependsOn 'cargoBuildUnitTest'
         systemProperty('jna.library.path', "$rootDir/../../target/debug")
     }
-
-    // tasks.named("dokkaGenerateModuleHtml") {
-    //     dependsOn 'generateBindings'
-    // }
-
-    // publishing {
-    //     publications {
-    //         release(MavenPublication) {
-    //             def packageName = "${rootProject.name}-omni"
-
-    //             from(components.release)
-
-    //             artifactId packageName
-
-    //             pom {
-    //                 name = packageName
-    //                 description = "Library for secure peer-to-peer file syncing"
-    //                 url = 'https://github.com/equalitie/ouisync'
-    //                 licenses {
-    //                     license {
-    //                         name = 'MPL-2.0'
-    //                         url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
-    //                     }
-    //                 }
-    //                 developers {
-    //                     developer {
-    //                         name = 'Ouisync Developers'
-    //                         email = 'ouisync@equalit.ie'
-    //                     }
-    //                 }
-
-    //                 scm {
-    //                     connection = 'scm:git:github.com/equalitie/ouisync.git'
-    //                     developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
-    //                     url = 'https://github.com/equalitie/ouisync/tree/master'
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
 }
 
-// signing {
-//     // Only sign when publishing to sonatype, not local
-//     required {
-//         gradle.taskGraph.hasTask("lib:publishToSonatype")
-//     }
-
-//     if (signingKey) {
-//         useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
-//     }
-
-//     sign publishing.publications
-// }
-
+// TODO: publishing
