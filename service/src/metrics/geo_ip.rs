@@ -95,7 +95,7 @@ impl From<MaxMindDBError> for LookupError {
     fn from(src: MaxMindDBError) -> Self {
         match src {
             MaxMindDBError::AddressNotFoundError(_) => Self::NotFound,
-            _ => Self::Io(io::Error::new(io::ErrorKind::Other, src)),
+            _ => Self::Io(io::Error::other(src)),
         }
     }
 }
@@ -104,8 +104,7 @@ async fn load(file: &mut File) -> Result<Reader<Vec<u8>>, io::Error> {
     let mut content = Vec::new();
     file.read_to_end(&mut content).await?;
 
-    let reader = Reader::from_source(content)
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    let reader = Reader::from_source(content).map_err(io::Error::other)?;
 
     Ok(reader)
 }

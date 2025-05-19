@@ -48,3 +48,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [features]
 simulation = ["turmoil"]
+
+[lints]
+workspace = true

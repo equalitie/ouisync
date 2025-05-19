@@ -597,10 +597,7 @@ impl Inner {
 
     // Disconnect from all currently connected peers, regardless of their source.
     async fn disconnect_all(&self) {
-        let Some(peers) = mem::replace(
-            &mut self.registry.lock().unwrap().peers,
-            Some(Slab::default()),
-        ) else {
+        let Some(peers) = self.registry.lock().unwrap().peers.replace(Slab::default()) else {
             return;
         };
 

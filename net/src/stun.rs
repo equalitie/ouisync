@@ -99,7 +99,7 @@ impl<T: DatagramSocket> StunClient<T> {
             // mapping is.
 
             if other_addr.ip() == server_addr.ip() {
-                return Err(io::Error::new(io::ErrorKind::Other, "Faulty STUN server"));
+                return Err(io::Error::other("Faulty STUN server"));
             }
 
             // test II

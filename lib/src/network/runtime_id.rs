@@ -115,10 +115,7 @@ where
         .public
         .verify(&to_sign(&our_challenge), &their_signature)
     {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Failed to verify runtime ID",
-        ));
+        return Err(io::Error::other("Failed to verify runtime ID"));
     }
 
     Ok(their_runtime_id)

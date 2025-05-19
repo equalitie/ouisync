@@ -96,3 +96,6 @@ analyze-protocol = []
 influxdb         = []
 prometheus       = ["metrics-exporter-prometheus/push-gateway"]
 simulation       = ["rand/simulation", "turmoil"]
+
+[lints]
+workspace = true

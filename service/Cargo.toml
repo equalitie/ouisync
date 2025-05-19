@@ -62,3 +62,6 @@ tempfile                    = { workspace = true }
 anyhow                      = { workspace = true }
 heck                        = { workspace = true }
 ouisync-api-parser          = { path = "../api_parser" }
+
+[lints]
+workspace = true

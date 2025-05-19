@@ -94,3 +94,8 @@ opt-level = 3
 # The upstream has outdated dependency on `bindgen` which conflicts with some of our other
 # dependencies. Using this fork until the upstream updates.
 xpc-connection-sys = { git = "https://github.com/madadam/xpc-connection-rs" }
+
+[workspace.lints.clippy]
+large_enum_variant = "allow"
+result_large_err   = "allow"
+
