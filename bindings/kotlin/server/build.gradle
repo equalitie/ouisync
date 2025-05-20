@@ -16,7 +16,7 @@ version = rootProject.version
 group   = rootProject.group
 
 android {
-    namespace 'org.equalitie.ouisync.server'
+    namespace 'org.equalitie.ouisync.kotlin.server'
 
     compileSdk = 34
     ndkVersion = '27.2.12479018'

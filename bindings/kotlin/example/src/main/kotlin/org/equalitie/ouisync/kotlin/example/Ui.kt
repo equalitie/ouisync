@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.example
+package org.equalitie.ouisync.kotlin.example
 
 import android.content.Context
 import android.content.Intent
@@ -56,12 +56,12 @@ import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import org.equalitie.ouisync.client.AccessMode
-import org.equalitie.ouisync.client.DirectoryEntry
-import org.equalitie.ouisync.client.EntryType
-import org.equalitie.ouisync.client.File
-import org.equalitie.ouisync.client.Repository
-import org.equalitie.ouisync.client.subscribe
+import org.equalitie.ouisync.kotlin.client.AccessMode
+import org.equalitie.ouisync.kotlin.client.DirectoryEntry
+import org.equalitie.ouisync.kotlin.client.EntryType
+import org.equalitie.ouisync.kotlin.client.File
+import org.equalitie.ouisync.kotlin.client.Repository
+import org.equalitie.ouisync.kotlin.client.subscribe
 import java.security.MessageDigest
 
 private const val TAG = "ouisync.example"

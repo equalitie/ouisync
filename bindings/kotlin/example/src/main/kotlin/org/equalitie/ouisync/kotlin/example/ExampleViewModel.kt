@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.example
+package org.equalitie.ouisync.kotlin.example
 
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -8,15 +8,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.equalitie.ouisync.client.LogLevel
-import org.equalitie.ouisync.client.OuisyncException
-import org.equalitie.ouisync.client.Repository
-import org.equalitie.ouisync.client.Session
-import org.equalitie.ouisync.client.ShareToken
-import org.equalitie.ouisync.client.close
-import org.equalitie.ouisync.client.create
-import org.equalitie.ouisync.server.Server
-import org.equalitie.ouisync.server.initLog
+import org.equalitie.ouisync.kotlin.client.LogLevel
+import org.equalitie.ouisync.kotlin.client.OuisyncException
+import org.equalitie.ouisync.kotlin.client.Repository
+import org.equalitie.ouisync.kotlin.client.Session
+import org.equalitie.ouisync.kotlin.client.ShareToken
+import org.equalitie.ouisync.kotlin.client.close
+import org.equalitie.ouisync.kotlin.client.create
+import org.equalitie.ouisync.kotlin.server.Server
+import org.equalitie.ouisync.kotlin.server.initLog
 
 private const val TAG = "ouisync.example"
 

@@ -1,6 +1,6 @@
 @file:UseSerializers(OuisyncExceptionSerializer::class)
 
-package org.equalitie.ouisync.client
+package org.equalitie.ouisync.kotlin.client
 
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred

@@ -1,10 +1,10 @@
-package org.equalitie.ouisync.server
+package org.equalitie.ouisync.kotlin.server
 
 import com.sun.jna.Pointer
 import kotlinx.coroutines.CompletableDeferred
-import org.equalitie.ouisync.client.ErrorCode
-import org.equalitie.ouisync.client.LogLevel
-import org.equalitie.ouisync.client.OuisyncException
+import org.equalitie.ouisync.kotlin.client.ErrorCode
+import org.equalitie.ouisync.kotlin.client.LogLevel
+import org.equalitie.ouisync.kotlin.client.OuisyncException
 
 private val bindings = Bindings.INSTANCE
 
@@ -36,11 +36,12 @@ typealias LogFunction = (level: LogLevel, message: String) -> Unit
 private var logHandler: LogHandler? = null
 
 fun initLog(
+    stdout: Boolean = false,
     file: String? = null,
     callback: LogFunction? = null,
 ) {
     logHandler = logHandler ?: callback?.let(::LogHandler)
-    bindings.init_log(file, logHandler)
+    bindings.init_log(if (stdout) 1 else 0, file, logHandler)
 }
 
 private class ResultHandler : StatusCallback {

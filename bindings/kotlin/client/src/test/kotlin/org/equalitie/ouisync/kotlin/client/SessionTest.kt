@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.client
+package org.equalitie.ouisync.kotlin.client
 
 import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.test.runTest

@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.client
+package org.equalitie.ouisync.kotlin.client
 
 import kotlinx.coroutines.test.runTest
 import org.equalitie.ouisync.server.Server

@@ -16,10 +16,10 @@ def useLocalLib = localProperties.getProperty("useLocalLib", "false").toBoolean(
 
 android {
     compileSdkVersion 35
-    namespace 'org.equalitie.ouisync.example'
+    namespace 'org.equalitie.ouisync.kotlin.example'
 
     defaultConfig {
-        applicationId 'org.equalitie.ouisync.example'
+        applicationId 'org.equalitie.ouisync.kotlin.example'
         minSdkVersion 26
         targetSdkVersion 35
         versionCode 1

@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.server
+package org.equalitie.ouisync.kotlin.server
 
 import com.sun.jna.Library
 import com.sun.jna.Native
@@ -25,6 +25,7 @@ internal interface Bindings : Library {
     )
 
     fun init_log(
+        stdout: Byte,
         file: String?,
         callback: LogCallback?,
     ): Short

@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.client
+package org.equalitie.ouisync.kotlin.client
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable

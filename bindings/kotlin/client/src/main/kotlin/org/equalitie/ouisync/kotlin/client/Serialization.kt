@@ -1,6 +1,6 @@
 @file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 
-package org.equalitie.ouisync.client
+package org.equalitie.ouisync.kotlin.client
 
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerialInfo

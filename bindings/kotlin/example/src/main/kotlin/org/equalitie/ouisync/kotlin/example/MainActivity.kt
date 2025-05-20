@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.example
+package org.equalitie.ouisync.kotlin.example
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
