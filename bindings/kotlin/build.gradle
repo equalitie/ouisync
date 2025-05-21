@@ -23,8 +23,8 @@ plugins {
 }
 
 dependencies {
-    dokka project(':client')
-    dokka project(':server')
+    dokka project(':ouisync-client')
+    dokka project(':ouisync-server')
 }
 
 allprojects {

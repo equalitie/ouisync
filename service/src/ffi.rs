@@ -171,18 +171,22 @@ pub type LogCallback = extern "C" fn(LogLevel, *const c_uchar, u64, u64);
 
 /// Initialize logging. Should be called before `service_start`.
 ///
-/// If `file` is not null, write log messages to the given file.
-///
-/// If `callback` is not null, it is invoked for each log message. After the log message has been
-/// processed, it needs to be released by calling `release_log_message`. Failure to do so will
-/// cause memory leak. The messages can be processed asynchronously (e.g., in another thread).
+/// - If `stdout` is not zero, write log messages to the standard output.
+/// - If `file` is not null, write log messages to the given file.
+/// - If `callback` is not null, it is invoked for each log message. After the log message has been
+///   processed, it needs to be released by calling `release_log_message`. Failure to do so will
+///   cause memory leak. The messages can be processed asynchronously (e.g., in another thread).
 ///
 /// # Safety
 ///
 /// `file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn init_log(file: *const c_char, callback: Option<LogCallback>) -> ErrorCode {
-    unsafe { try_init_log(file, callback) }.to_error_code()
+pub unsafe extern "C" fn init_log(
+    stdout: c_uchar,
+    file: *const c_char,
+    callback: Option<LogCallback>,
+) -> ErrorCode {
+    unsafe { try_init_log(stdout != 0, file, callback) }.to_error_code()
 }
 
 /// Release a log message back to the backend. See `init_log` for more details.
@@ -207,8 +211,15 @@ struct LoggerWrapper {
 
 static LOGGER: OnceLock<LoggerWrapper> = OnceLock::new();
 
-unsafe fn try_init_log(file: *const c_char, callback: Option<LogCallback>) -> Result<(), Error> {
+unsafe fn try_init_log(
+    stdout: bool,
+    file: *const c_char,
+    callback: Option<LogCallback>,
+) -> Result<(), Error> {
     let builder = Logger::builder();
+
+    let builder = if stdout { builder.stdout() } else { builder };
+
     let builder = if !file.is_null() {
         builder.file(Path::new(unsafe { CStr::from_ptr(file) }.to_str()?))
     } else {

@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.lib
+package org.equalitie.ouisync.dart
 
 import android.content.Context
 import android.content.res.AssetFileDescriptor
@@ -13,11 +13,9 @@ import android.system.OsConstants
 import android.util.Log
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.Result
-import java.io.FileNotFoundException
-import java.io.IOException
 import java.util.concurrent.CompletableFuture
 
-class PipeProvider: AbstractFileProvider() {
+class PipeProvider : AbstractFileProvider() {
     companion object {
         private const val CHUNK_SIZE = 64000
         internal val TAG = PipeProvider::class.java.simpleName
@@ -32,7 +30,7 @@ class PipeProvider: AbstractFileProvider() {
         Log.d(TAG, "onCreate")
 
         val thread = HandlerThread("${javaClass.simpleName} worker thread")
-        thread.start();
+        thread.start()
 
         handler = Handler(thread.getLooper())
 
@@ -40,35 +38,41 @@ class PipeProvider: AbstractFileProvider() {
     }
 
     // TODO: Handle `mode`
-    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
+    override fun openFile(
+        uri: Uri,
+        mode: String,
+    ): ParcelFileDescriptor? {
         Log.d(TAG, "Opening file '$uri' in mode '$mode'")
 
-        val path = getPathFromUri(uri);
+        val path = getPathFromUri(uri)
 
         if (supportsProxyFileDescriptor) {
-            var size = super.getDataLength(uri);
+            var size = super.getDataLength(uri)
 
             if (size == AssetFileDescriptor.UNKNOWN_LENGTH) {
-                Log.d(TAG, "Using pipe because size is unknown");
-                return openPipe(path);
+                Log.d(TAG, "Using pipe because size is unknown")
+                return openPipe(path)
             }
 
-            Log.d(TAG, "Using proxy file");
-            return openProxyFile(path, size);
+            Log.d(TAG, "Using proxy file")
+            return openProxyFile(path, size)
         } else {
-            Log.d(TAG, "Using pipe because proxy file is not supported");
-            return openPipe(path);
+            Log.d(TAG, "Using pipe because proxy file is not supported")
+            return openPipe(path)
         }
     }
 
-    private fun openProxyFile(path: String, size: Long): ParcelFileDescriptor? {
-        var storage = context!!.getSystemService(Context.STORAGE_SERVICE) as StorageManager;
+    private fun openProxyFile(
+        path: String,
+        size: Long,
+    ): ParcelFileDescriptor? {
+        var storage = context!!.getSystemService(Context.STORAGE_SERVICE) as StorageManager
 
         // https://developer.android.google.cn/reference/android/os/storage/StorageManager
         return storage.openProxyFileDescriptor(
             ParcelFileDescriptor.MODE_READ_ONLY,
             ProxyCallbacks(path, size),
-            handler
+            handler,
         )
     }
 
@@ -76,23 +80,31 @@ class PipeProvider: AbstractFileProvider() {
         val pipe = ParcelFileDescriptor.createPipe()
         var reader = pipe[0]
         var writer = pipe[1]
-        var dstFd = writer!!.detachFd();
+        var dstFd = writer!!.detachFd()
 
         runInMainThread {
-            copyFileToRawFd(path, dstFd, object: MethodChannel.Result {
-                override fun success(a: Any?) {
-                    writer.close()
-                }
+            copyFileToRawFd(
+                path,
+                dstFd,
+                object : MethodChannel.Result {
+                    override fun success(a: Any?) {
+                        writer.close()
+                    }
 
-                override fun error(code: String, message: String?, details: Any?) {
-                    Log.e(TAG, channelMethodErrorMessage(code, message, details))
-                    writer.close()
-                }
+                    override fun error(
+                        code: String,
+                        message: String?,
+                        details: Any?,
+                    ) {
+                        Log.e(TAG, channelMethodErrorMessage(code, message, details))
+                        writer.close()
+                    }
 
-                override fun notImplemented() {
-                    writer.close()
-                }
-            })
+                    override fun notImplemented() {
+                        writer.close()
+                    }
+                },
+            )
         }
 
         return reader
@@ -115,13 +127,17 @@ class PipeProvider: AbstractFileProvider() {
 
     internal class ProxyCallbacks(
         private val path: String,
-        private val size: Long
+        private val size: Long,
     ) : android.os.ProxyFileDescriptorCallback() {
         private var id: Int? = null
 
         override fun onGetSize() = size
 
-        override fun onRead(offset: Long, chunkSize: Int, outData: ByteArray): Int {
+        override fun onRead(
+            offset: Long,
+            chunkSize: Int,
+            outData: ByteArray,
+        ): Int {
             var id = this.id
 
             if (id == null) {
@@ -159,12 +175,20 @@ private fun closeFile(id: Int) {
     invokeBlocking<Unit>("closeFile", arguments)
 }
 
-private fun readFile(id: Int, chunkSize: Int, offset: Long): ByteArray? {
+private fun readFile(
+    id: Int,
+    chunkSize: Int,
+    offset: Long,
+): ByteArray? {
     val arguments = hashMapOf("id" to id, "chunkSize" to chunkSize, "offset" to offset)
     return invokeBlocking("readFile", arguments)
 }
 
-private fun copyFileToRawFd(srcPath: String, dstFd: Int, result: MethodChannel.Result) {
+private fun copyFileToRawFd(
+    srcPath: String,
+    dstFd: Int,
+    result: MethodChannel.Result,
+) {
     val arguments = hashMapOf("srcPath" to srcPath, "dstFd" to dstFd)
     val channel = OuisyncPlugin.sharedChannel
 
@@ -175,7 +199,10 @@ private fun copyFileToRawFd(srcPath: String, dstFd: Int, result: MethodChannel.R
     }
 }
 
-private fun <T> invokeBlocking(method: String, arguments: Any?): T? {
+private fun <T> invokeBlocking(
+    method: String,
+    arguments: Any?,
+): T? {
     val channel = OuisyncPlugin.sharedChannel
 
     if (channel == null) {
@@ -186,21 +213,29 @@ private fun <T> invokeBlocking(method: String, arguments: Any?): T? {
     val future = CompletableFuture<T?>()
 
     runInMainThread {
-        channel.invokeMethod(method, arguments, object : MethodChannel.Result {
-            override fun success(a: Any?) {
-                future.complete(a as T?)
-            }
+        channel.invokeMethod(
+            method,
+            arguments,
+            object : MethodChannel.Result {
+                override fun success(a: Any?) {
+                    future.complete(a as T?)
+                }
 
-            override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
-                future.completeExceptionally(
-                    Exception(channelMethodErrorMessage(errorCode, errorMessage, errorDetails))
-                )
-            }
+                override fun error(
+                    errorCode: String,
+                    errorMessage: String?,
+                    errorDetails: Any?,
+                ) {
+                    future.completeExceptionally(
+                        Exception(channelMethodErrorMessage(errorCode, errorMessage, errorDetails)),
+                    )
+                }
 
-            override fun notImplemented() {
-                future.completeExceptionally(NotImplementedError("method '$method' not implemented"))
-            }
-        })
+                override fun notImplemented() {
+                    future.completeExceptionally(NotImplementedError("method '$method' not implemented"))
+                }
+            },
+        )
     }
 
     return future.get()
@@ -210,6 +245,8 @@ private fun runInMainThread(f: () -> Unit) {
     Handler(Looper.getMainLooper()).post(f)
 }
 
-private fun channelMethodErrorMessage(code: String?, message: String?, details: Any?): String =
-    "error invoking channel method (code: $code, message: $message, details: $details)"
-
+private fun channelMethodErrorMessage(
+    code: String?,
+    message: String?,
+    details: Any?,
+): String = "error invoking channel method (code: $code, message: $message, details: $details)"

@@ -8,9 +8,11 @@ import 'utils.dart';
 void main() {
   late io.Directory temp;
 
+  late Server server1;
   late Session session1;
   late Repository repo1;
 
+  late Server server2;
   late Session session2;
   late Repository repo2;
 
@@ -20,16 +22,17 @@ void main() {
     await io.Directory('${temp.path}/1').create();
     await io.Directory('${temp.path}/2').create();
 
-    session1 = await Session.create(
-      configPath: '${temp.path}/1/config',
-      debugLabel: '1',
-    );
-    await session1.setStoreDir('${temp.path}/1/store');
+    final configPath1 = '${temp.path}/1/config';
+    server1 = Server.create(configPath: configPath1, debugLabel: '1');
+    await server1.start();
+    session1 = await Session.create(configPath: configPath1);
 
-    session2 = await Session.create(
-      configPath: '${temp.path}/2/config',
-      debugLabel: '2',
-    );
+    final configPath2 = '${temp.path}/2/config';
+    server2 = Server.create(configPath: configPath2, debugLabel: '2');
+    await server2.start();
+    session2 = await Session.create(configPath: configPath2);
+
+    await session1.setStoreDir('${temp.path}/1/store');
     await session2.setStoreDir('${temp.path}/2/store');
 
     repo1 = await session1.createRepository(
@@ -55,6 +58,10 @@ void main() {
   tearDown(() async {
     await session2.close();
     await session1.close();
+
+    await server2.stop();
+    await server1.stop();
+
     await deleteTempDir(temp);
   });
 

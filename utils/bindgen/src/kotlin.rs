@@ -9,7 +9,7 @@ use std::{
     io::{self, Write},
 };
 
-const PACKAGE: &str = "org.equalitie.ouisync.client";
+const PACKAGE: &str = "org.equalitie.ouisync.kotlin.client";
 
 pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     writeln!(
@@ -103,6 +103,20 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
     writeln!(out, "{I}{I}{I}else -> throw IllegalArgumentException()")?;
 
     writeln!(out, "{I}{I}}}")?;
+    writeln!(out, "{I}}}")?;
+    writeln!(out)?;
+
+    writeln!(out, "{I}fun toValue() = when (this) {{")?;
+
+    for (variant_name, variant) in &item.variants {
+        writeln!(
+            out,
+            "{I}{I}{} -> {}",
+            AsShoutySnakeCase(variant_name),
+            variant.value
+        )?;
+    }
+
     writeln!(out, "{I}}}")?;
 
     writeln!(out, "}}")?;

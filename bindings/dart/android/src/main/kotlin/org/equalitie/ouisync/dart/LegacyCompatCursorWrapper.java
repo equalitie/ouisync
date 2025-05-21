@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.lib;
+package org.equalitie.ouisync.dart;
 
 import android.database.Cursor;
 import android.database.CursorWrapper;

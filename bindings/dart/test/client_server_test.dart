@@ -2,7 +2,6 @@ import 'dart:io' as io;
 
 import 'package:ouisync/ouisync.dart';
 import 'package:ouisync/src/client.dart';
-import 'package:ouisync/src/server.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -18,7 +17,8 @@ void main() {
 
   test('sanity check', () async {
     final configPath = '${temp.path}/config';
-    final server = await Server.start(configPath: configPath);
+    final server = Server.create(configPath: configPath);
+    await server.start();
     final client = await Client.connect(configPath: configPath);
 
     expect(
@@ -50,12 +50,12 @@ void main() {
   test('server already running', () async {
     final configPath = '${temp.path}/config';
 
-    final server0 = await Server.start(
-      configPath: configPath,
-    );
+    final server0 = Server.create(configPath: configPath);
+    final server1 = Server.create(configPath: configPath);
 
+    await server0.start();
     await expectLater(
-      Server.start(configPath: configPath),
+      server1.start(),
       throwsA(isA<ServiceAlreadyRunning>()),
     );
 

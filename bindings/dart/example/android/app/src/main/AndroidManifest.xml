@@ -25,11 +25,13 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
         <provider
-          tools:replace="android:authorities"
-          android:name="org.equalitie.ouisync.lib.PipeProvider"
-          android:authorities="${applicationId}.pipe"
-          android:exported="true"/>
+            android:name="org.equalitie.ouisync.dart.PipeProvider"
+            android:authorities="${applicationId}.pipe"
+            android:enabled="true"
+            android:exported="true"/>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

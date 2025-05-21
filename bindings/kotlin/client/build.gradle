@@ -42,26 +42,62 @@ kotlin {
     }
 }
 
-jar {
-    archiveBaseName = "${rootProject.name}.${project.name}"
-}
-
 test {
     useJUnitPlatform()
 
     testLogging {
-        showStandardStreams true
-        exceptionFormat "full"
+        showStandardStreams = true
+        exceptionFormat = "full"
     }
 }
 
-tasks.register('generateBindings', Exec) {
-    description 'Generate bindings'
+publishing {
+    publications {
+        client(MavenPublication) {
+            def packageName = project.name
+
+            from components.java
+
+            artifactId = packageName
+
+            pom {
+                name = packageName
+                description = "Library for secure peer-to-peer file syncing"
+                url = 'https://github.com/equalitie/ouisync'
+                licenses {
+                    license {
+                        name = 'MPL-2.0'
+                        url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                    }
+                }
+                developers {
+                    developer {
+                        name = 'Ouisync Developers'
+                        email = 'ouisync@equalit.ie'
+                    }
+                }
+
+                scm {
+                    connection = 'scm:git:github.com/equalitie/ouisync.git'
+                    developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                    url = 'https://github.com/equalitie/ouisync/tree/master'
+                }
+            }
+        }
+    }
+}
+
+tasks.register('generateApi', Exec) {
+    description = 'Generate the API classes'
+    group = 'Build'
     workingDir "$rootDir/../.."
     commandLine 'cargo', 'run', '--package', 'ouisync-bindgen', '--', '--language', 'kotlin'
 
     doFirst {
         def dir = layout.buildDirectory.dir('gen').get().getAsFile()
+
+        println("DIR: $dir")
+
         mkdir(dir)
         standardOutput = new FileOutputStream("$dir/Api.kt")
     }
@@ -77,7 +113,7 @@ afterEvaluate {
     // Generate bindings before compiling the kotlin sources. This happens during both
     // 'assemble' and 'test'.
     tasks.named('compileKotlin') {
-        dependsOn 'generateBindings'
+        dependsOn 'generateApi'
     }
 
     // Build the native library for the host platform and set 'jna.library.path' to point to

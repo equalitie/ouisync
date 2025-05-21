@@ -1,4 +1,3 @@
-import 'dart:io' as io;
 import 'dart:async';
 
 import 'package:async/async.dart';
@@ -20,6 +19,7 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
+  late Server server;
   late Session session;
   late Repository repo;
   late NativeChannels nativeChannels;
@@ -36,15 +36,27 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> initObjects() async {
     final dataDir = (await getApplicationSupportDirectory()).path;
-    final session =
-        await Session.create(configPath: join(dataDir, 'config.db'));
+    final configDir = join(dataDir, 'config.db');
 
-    final repoPath = join(dataDir, 'repo.db');
-    final repoExists = await io.File(repoPath).exists();
+    final server = Server.create(configPath: configDir)..initLog(stdout: true);
+    await server.start();
 
-    final repo = repoExists
-        ? await session.openRepository(path: repoPath)
-        : await session.createRepository(path: repoPath);
+    final session = await Session.create(configPath: configDir);
+    await session.setStoreDir(join(dataDir, 'repos'));
+    await session.initNetwork(NetworkDefaults(
+      bind: ["quic/0.0.0.0:0"],
+      portForwardingEnabled: false,
+      localDiscoveryEnabled: false,
+    ));
+
+    const repoName = 'my repo';
+    Repository repo;
+
+    try {
+      repo = await session.findRepository(repoName);
+    } on NotFound catch (_) {
+      repo = await session.createRepository(path: repoName);
+    }
 
     bittorrentDhtEnabled = await repo.isDhtEnabled();
 
@@ -60,8 +72,10 @@ class _MyAppState extends State<MyApp> {
 
   @override
   void dispose() {
-    repo.close();
-    unawaited(session.close());
+    unawaited(Future(() async {
+      await server.stop();
+      await session.close();
+    }));
 
     super.dispose();
   }

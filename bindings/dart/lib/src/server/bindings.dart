@@ -32,11 +32,13 @@ typedef _StopServiceC = Void Function(
     Pointer<Void>, Pointer<NativeFunction<StatusCallback>>, Pointer<Void>);
 
 typedef InitLog = int Function(
+  int,
   Pointer<Char>,
   Pointer<NativeFunction<LogCallback>>,
 );
 
 typedef _InitLogC = Uint16 Function(
+  Uint8,
   Pointer<Char>,
   Pointer<NativeFunction<LogCallback>>,
 );

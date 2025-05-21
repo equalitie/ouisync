@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.lib.ouisync_example
+package org.equalitie.ouisync.dart.example
 
 import io.flutter.embedding.android.FlutterActivity
 

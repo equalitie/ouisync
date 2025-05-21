@@ -7,17 +7,23 @@ import 'utils.dart';
 
 void main() {
   late io.Directory temp;
+  late Server server;
   late Session session;
-
-  initLog(callback: (level, message) {
-    // ignore: avoid_print
-    print('${level.name.toUpperCase()} $message');
-  });
 
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
+
+    final configPath = '${temp.path}/config';
+
+    server = Server.create(configPath: configPath);
+    server.initLog(callback: (level, message) {
+      // ignore: avoid_print
+      print('${level.name.toUpperCase()} $message');
+    });
+    await server.start();
+
     session = await Session.create(
-      configPath: '${temp.path}/config',
+      configPath: configPath,
     );
 
     final storeDir = '${temp.path}/store';
@@ -27,6 +33,7 @@ void main() {
 
   tearDown(() async {
     await session.close();
+    await server.stop();
     await deleteTempDir(temp);
   });
 

@@ -16,7 +16,7 @@ version = rootProject.version
 group   = rootProject.group
 
 android {
-    namespace 'org.equalitie.ouisync.kotlin.server'
+    namespace = 'org.equalitie.ouisync.kotlin.server'
 
     compileSdk = 34
     ndkVersion = '27.2.12479018'
@@ -26,17 +26,20 @@ android {
         minSdkVersion 26
         versionCode 1
         versionName version
-
-        archivesBaseName = "${rootProject.name}.${project.name}"
     }
 
     kotlin {
         jvmToolchain(17)
     }
+
+    publishing {
+        singleVariant 'release'
+        singleVariant 'debug'
+    }
 }
 
 dependencies {
-    implementation project(':client')
+    implementation project(':ouisync-client')
     implementation 'net.java.dev.jna:jna:5.17.0@aar'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
 }
@@ -45,12 +48,13 @@ cargo {
     module = "$rootDir/../.."
     libname = 'ouisync_service'
 
-    // Targets can be overriden with "rust.targets" in local.properties.
-    // Example: "rust.targets=arm64,x86_64".
-    // More info: https://github.com/mozilla/rust-android-gradle.
-    targets = ['arm', 'arm64', /* 'x86', */ 'x86_64']
-
-    profile = 'release'
+    // Read targets from the 'rust-targets' project property that can be set in `gradle.properties`
+    // or using the `-P` command line option when invoking gradle. Example: `gradle
+    // assemble -Prust-targets=x86_64`
+    //
+    // Can be also overriden with "rust.targets" in local.properties. Example:
+    // `rust.targets=arm64,x86_64`. More info: https://github.com/mozilla/rust-android-gradle.
+    targets = (project.findProperty('rust-targets') ?: 'arm,arm64,x86_64').split(',')
 
     extraCargoBuildArguments = ['--package', 'ouisync-service']
 
@@ -65,7 +69,7 @@ cargo {
         }
     }
 
-    exec { spec, toolchain ->
+    exec = { spec, toolchain ->
         // HACK: rust.cargoTargetDir local property is not passed to cargo for some reason
         // (https://github.com/mozilla/rust-android-gradle?tab=readme-ov-file#targetdirectory).
         // Force it:
@@ -77,44 +81,61 @@ cargo {
 
 afterEvaluate {
     android.libraryVariants.each {
-        def variant  = it.name.capitalize()
+        def variant = it.name.capitalize()
 
         // Build the native library for the target android platforms.
         tasks.named("merge${variant}JniLibFolders") {
             dependsOn 'cargoBuild'
         }
+
+        // Set cargo profile according to build type.
+        //
+        // FIXME: This doesn't work when multiple build types are built in the same gradle
+        // invocation. Only one profile is build and then reused for all build types.
+        // See also: https://github.com/mozilla/rust-android-gradle/pull/68
+        def cargoProfile = it.name
+        tasks.named("pre${variant}Build") {
+            doLast {
+                cargo.profile = cargoProfile
+            }
+        }
     }
 
     publishing {
         publications {
-            release(MavenPublication) {
-                def packageName = "${rootProject.name}.${project.name}-omni"
+            android.libraryVariants.each {
+                def variant = it.name
+                def packageNameSuffix = variant == 'release' ? '' : "-${variant}"
 
-                from(components.release)
+                create("${variant}Server", MavenPublication) {
+                    def packageName = "${project.name}${packageNameSuffix}"
 
-                artifactId packageName
+                    from components.getByName(variant)
 
-                pom {
-                    name = packageName
-                    description = "Library for secure peer-to-peer file syncing"
-                    url = 'https://github.com/equalitie/ouisync'
-                    licenses {
-                        license {
-                            name = 'MPL-2.0'
-                            url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                    artifactId = packageName
+
+                    pom {
+                        name = packageName
+                        description = "Library for secure peer-to-peer file syncing"
+                        url = 'https://github.com/equalitie/ouisync'
+                        licenses {
+                            license {
+                                name = 'MPL-2.0'
+                                url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                            }
                         }
-                    }
-                    developers {
-                        developer {
-                            name = 'Ouisync Developers'
-                            email = 'ouisync@equalit.ie'
+                        developers {
+                            developer {
+                                name = 'Ouisync Developers'
+                                email = 'ouisync@equalit.ie'
+                            }
                         }
-                    }
 
-                    scm {
-                        connection = 'scm:git:github.com/equalitie/ouisync.git'
-                        developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
-                        url = 'https://github.com/equalitie/ouisync/tree/master'
+                        scm {
+                            connection = 'scm:git:github.com/equalitie/ouisync.git'
+                            developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                            url = 'https://github.com/equalitie/ouisync/tree/master'
+                        }
                     }
                 }
             }
@@ -124,7 +145,7 @@ afterEvaluate {
 
 signing {
     // Only sign when publishing to sonatype, not local
-    required {
+    required = {
         gradle.taskGraph.hasTask("server:publishToSonatype")
     }
 

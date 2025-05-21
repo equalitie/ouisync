@@ -14,13 +14,13 @@ void main() {
   });
 
   test('shared session', () async {
-    final session0 = await Session.create(
-      configPath: '${temp.path}/config',
-    );
+    final configPath = '${temp.path}/config';
 
-    final session1 = await Session.create(
-      configPath: '${temp.path}/config',
-    );
+    final server = Server.create(configPath: configPath);
+    await server.start();
+
+    final session0 = await Session.create(configPath: configPath);
+    final session1 = await Session.create(configPath: configPath);
 
     try {
       final vs = await Future.wait([
@@ -32,16 +32,27 @@ void main() {
     } finally {
       await session0.close();
       await session1.close();
+      await server.stop();
     }
   });
 
   test('use after close', () async {
-    final session = await Session.create(
-      configPath: '${temp.path}/config',
-    );
-    await session.close();
+    final configPath = '${temp.path}/config';
 
-    await expectLater(
-        session.getCurrentProtocolVersion(), throwsA(isA<StateError>()));
+    final server = Server.create(configPath: configPath);
+
+    try {
+      await server.start();
+
+      final session = await Session.create(configPath: configPath);
+      await session.close();
+
+      await expectLater(
+        session.getCurrentProtocolVersion(),
+        throwsA(isA<StateError>()),
+      );
+    } finally {
+      await server.stop();
+    }
   });
 }

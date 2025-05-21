@@ -1,124 +1,45 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:ffi';
+import 'dart:io';
 
-import 'package:ffi/ffi.dart';
+import '../../generated/api.g.dart' show LogLevel;
+import 'server/ffi.dart';
+import 'server/method_channel.dart';
 
-import 'bindings.dart';
-import '../generated/api.g.dart' show ErrorCode, LogLevel, OuisyncException;
+/// Handle to a Ouisync service.
+abstract class Server {
+  final String configPath;
+  final String? debugLabel;
 
-/// Handle to start and stop Ouisync service inside this process.
-class Server {
-  Pointer<Void> _handle;
+  Server({required this.configPath, this.debugLabel});
 
-  Server._(this._handle);
+  factory Server.create({required String configPath, String? debugLabel}) {
+    if (Platform.isAndroid) {
+      return MethodChannelServer(
+        configPath: configPath,
+        debugLabel: debugLabel,
+      );
+    } else {
+      return FfiServer(
+        configPath: configPath,
+        debugLabel: debugLabel,
+      );
+    }
+  }
+
+  /// Initializes logging in the underlying Ouisync service. If `stdout` is true, writes the log
+  /// messages to the standard output (on Android, logs them using the Android log API instead).
+  /// If `file` is not null, writes the log messages to the specified file. If `callback` is not
+  /// null, it's invoked with each log message, passing the log level and the log message text to
+  /// it.
+  void initLog({
+    bool stdout = false,
+    String? file,
+    Function(LogLevel, String)? callback,
+  });
 
   /// Starts the server. After this function completes the server is ready to accept client
   /// connections.
-  static Future<Server> start({
-    required String configPath,
-    String? debugLabel,
-  }) async {
-    final configPathPtr = configPath.toNativeUtf8(allocator: malloc);
-    final debugLabelPtr = debugLabel != null
-        ? debugLabel.toNativeUtf8(allocator: malloc)
-        : nullptr;
-
-    final completer = Completer<int>();
-    final callback = NativeCallable<StatusCallback>.listener(
-      (Pointer<Void> context, int errorCode) => completer.complete(errorCode),
-    );
-
-    try {
-      final handle = Bindings.instance.startService(
-        configPathPtr.cast(),
-        debugLabelPtr.cast(),
-        callback.nativeFunction,
-        nullptr,
-      );
-
-      final errorCode =
-          ErrorCode.fromInt(await completer.future) ?? ErrorCode.other;
-
-      if (errorCode == ErrorCode.ok) {
-        return Server._(handle);
-      } else {
-        throw OuisyncException(errorCode);
-      }
-    } finally {
-      callback.close();
-
-      if (debugLabelPtr != nullptr) {
-        malloc.free(debugLabelPtr);
-      }
-
-      malloc.free(configPathPtr);
-    }
-  }
+  Future<void> start();
 
   /// Stops the server.
-  Future<void> stop() async {
-    final handle = _handle;
-    _handle = nullptr;
-
-    if (handle == nullptr) {
-      // Already stopped.
-      return;
-    }
-
-    final completer = Completer<int>();
-    final callback = NativeCallable<StatusCallback>.listener(
-      (Pointer<Void> context, int errorCode) => completer.complete(errorCode),
-    );
-
-    try {
-      Bindings.instance.stopService(
-        handle,
-        callback.nativeFunction,
-        nullptr,
-      );
-
-      final errorCode =
-          ErrorCode.fromInt(await completer.future) ?? ErrorCode.other;
-
-      if (errorCode != ErrorCode.ok) {
-        throw OuisyncException(errorCode);
-      }
-    } finally {
-      callback.close();
-    }
-  }
-}
-
-void initLog({
-  String? file,
-  Function(LogLevel, String)? callback,
-}) {
-  final filePtr = file != null ? file.toNativeUtf8(allocator: malloc) : nullptr;
-
-  NativeCallable<LogCallback>? nativeCallback;
-
-  if (callback != null) {
-    nativeCallback = NativeCallable<LogCallback>.listener(
-      (int level, Pointer<Uint8> ptr, int len, int cap) {
-        callback(
-          LogLevel.fromInt(level) ?? LogLevel.error,
-          utf8.decode(ptr.asTypedList(len)),
-        );
-
-        Bindings.instance.releaseLogMessage(ptr, len, cap);
-      },
-    );
-  }
-
-  try {
-    Bindings.instance.initLog(
-      filePtr.cast(),
-      nativeCallback?.nativeFunction ?? nullptr,
-    );
-  } finally {
-    if (filePtr != nullptr) {
-      malloc.free(filePtr);
-    }
-  }
+  Future<void> stop();
 }

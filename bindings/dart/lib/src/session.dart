@@ -1,36 +1,18 @@
 import '../generated/api.g.dart' as api show Session;
 import '../generated/api.g.dart' hide Session;
 import 'client.dart';
-import 'server.dart';
 import 'state_monitor.dart';
 
 class Session extends api.Session {
-  final Server? _server;
-
-  Session._(super.client, this._server);
+  Session._(super.client);
 
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
   /// doesn't exists, it will be created.
   static Future<Session> create({
     required String configPath,
-    String? debugLabel,
-  }) async {
-    Server? server;
-
-    // Try to start our own server but if one is already running connect to
-    // that one instead.
-    try {
-      server = await Server.start(
-        configPath: configPath,
-        debugLabel: debugLabel,
-      );
-    } on ServiceAlreadyRunning catch (_) {}
-
-    final client = await Client.connect(configPath: configPath);
-
-    return Session._(client, server);
-  }
+  }) =>
+      Client.connect(configPath: configPath).then(Session._);
 
   /// Stream of network events
   Stream<NetworkEvent> get networkEvents =>
@@ -44,10 +26,7 @@ class Session extends api.Session {
   StateMonitor get rootStateMonitor => StateMonitor.getRoot(client);
 
   /// Try to gracefully close connections to peers then close the session.
-  Future<void> close() async {
-    await client.close();
-    await _server?.stop();
-  }
+  Future<void> close() => client.close();
 }
 
 extension RepositoryExtension on Repository {

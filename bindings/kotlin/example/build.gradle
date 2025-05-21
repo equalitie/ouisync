@@ -16,7 +16,7 @@ def useLocalLib = localProperties.getProperty("useLocalLib", "false").toBoolean(
 
 android {
     compileSdkVersion 35
-    namespace 'org.equalitie.ouisync.kotlin.example'
+    namespace = 'org.equalitie.ouisync.kotlin.example'
 
     defaultConfig {
         applicationId 'org.equalitie.ouisync.kotlin.example'
@@ -36,7 +36,7 @@ android {
     }
 
     buildFeatures {
-        compose true
+        compose = true
     }
 
     composeOptions {
@@ -54,10 +54,10 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0'
 
     if (useLocalLib) {
-        implementation project(':client')
-        implementation project(':server')
+        implementation project(':ouisync-client')
+        implementation project(':ouisync-server')
     } else {
-        implementation 'ie.equalit.ouinet:ouisync.client:+'
-        implementation 'ie.equalit.ouinet:ouisync.server-omni:+'
+        implementation 'ie.equalit.ouinet:ouisync-client:+'
+        implementation 'ie.equalit.ouinet:ouisync-server-omni:+'
     }
 }
