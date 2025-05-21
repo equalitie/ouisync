@@ -15,7 +15,7 @@ mod summary;
 #[cfg(test)]
 pub(crate) mod test_utils;
 
-pub use self::block::BLOCK_SIZE;
+pub use self::block::{BLOCK_RECORD_SIZE, BLOCK_SIZE};
 pub use self::{
     proof::{Proof, UntrustedProof},
     repository::RepositoryId,
@@ -25,7 +25,7 @@ pub use self::{
 };
 
 pub(crate) use self::{
-    block::{Block, BlockContent, BlockId, BlockNonce, BLOCK_RECORD_SIZE},
+    block::{Block, BlockContent, BlockId, BlockNonce},
     bump::Bump,
     inner_node::{get_bucket, InnerNode, InnerNodes, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf_node::{LeafNode, LeafNodes, EMPTY_LEAF_HASH},

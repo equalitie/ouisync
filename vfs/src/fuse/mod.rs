@@ -942,10 +942,21 @@ async fn make_file_attr_for_entry(
 }
 
 fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64, uid: u32, gid: u32) -> FileAttr {
+    // From POSIX <sys/stat.h> reference:
+    // https://pubs.opengroup.org/onlinepubs/009696699/basedefs/sys/stat.h.html
+    //
+    // > The unit for the st_blocks member of the stat structure is not defined within
+    // > POSIX.1-2017. In some implementations it is 512 bytes. It may differ on a file system
+    // > basis.
+    //
+    // TODO: Attempt to get the actual value of the system.
+    const S_BLKSIZE: u64 = 512;
+    use ouisync_lib::protocol::BLOCK_RECORD_SIZE;
+
     FileAttr {
         ino: inode,
         size: len,
-        blocks: 0,                      // TODO: ?
+        blocks: len.next_multiple_of(BLOCK_RECORD_SIZE).div_ceil(S_BLKSIZE),
         atime: SystemTime::UNIX_EPOCH,  // TODO
         mtime: SystemTime::UNIX_EPOCH,  // TODO
         ctime: SystemTime::UNIX_EPOCH,  // TODO
@@ -959,6 +970,14 @@ fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64, uid: u32, gid: 
         uid,
         gid,
         rdev: 0,
+        // From POSIX <sys/stat.h> reference:
+        //
+        // > A file system-specific preferred I/O block size for this object.
+        // ...
+        // > There is no correlation between values of the st_blocks and st_blksize, and the
+        // > f_bsize (from <sys/statvfs.h>) structure members.
+        //
+        // TODO: Ouisync's BLOCK_SIZE might be a good guess, but shold be benchmarked.
         blksize: 0, // ?
         flags: 0,
     }

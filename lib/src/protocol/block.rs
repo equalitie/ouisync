@@ -12,7 +12,7 @@ use zeroize::Zeroize;
 pub const BLOCK_SIZE: usize = 32 * 1024;
 
 /// Size of the block db record in bytes.
-pub(crate) const BLOCK_RECORD_SIZE: u64 =
+pub const BLOCK_RECORD_SIZE: u64 =
     BLOCK_SIZE as u64 + BlockId::SIZE as u64 + BLOCK_NONCE_SIZE as u64;
 
 pub(crate) const BLOCK_NONCE_SIZE: usize = 32;
