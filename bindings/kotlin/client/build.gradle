@@ -95,9 +95,6 @@ tasks.register('generateApi', Exec) {
 
     doFirst {
         def dir = layout.buildDirectory.dir('gen').get().getAsFile()
-
-        println("DIR: $dir")
-
         mkdir(dir)
         standardOutput = new FileOutputStream("$dir/Api.kt")
     }

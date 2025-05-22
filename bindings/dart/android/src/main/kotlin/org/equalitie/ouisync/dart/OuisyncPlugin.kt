@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -23,14 +25,12 @@ class OuisyncPlugin :
     FlutterPlugin,
     MethodCallHandler,
     ActivityAware {
-    // / The MethodChannel that will the communication between Flutter and native Android
-    // /
-    // / This local reference serves to register the plugin with the Flutter Engine and unregister it
-    // / when the Flutter Engine is detached from the Activity
     var activity: Activity? = null
     var channel: MethodChannel? = null
-
     var servers: MutableMap<Int, Server> = mutableMapOf()
+
+    // To run stuff on the main thread.
+    val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
         private val TAG = OuisyncPlugin::class.java.simpleName
@@ -90,11 +90,7 @@ class OuisyncPlugin :
 
         channel = null
 
-        val servers = synchronized(servers) {
-            servers.values.also {
-                servers.clear()
-            }
-        }
+        val servers = synchronized(servers) { servers.values.also { servers.clear() } }
 
         runBlocking {
             for (server in servers) {
@@ -159,7 +155,9 @@ class OuisyncPlugin :
             initLog(
                 file = file,
                 callback = { level, message ->
-                    channel?.invokeMethod("log", mapOf("level" to level.toValue(), "message" to message))
+                    mainHandler.post {
+                        channel?.invokeMethod("log", mapOf("level" to level.toValue(), "message" to message))
+                    }
                 },
             )
         }

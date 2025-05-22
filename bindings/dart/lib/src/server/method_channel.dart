@@ -70,7 +70,7 @@ class MethodChannelServer extends Server {
       case 'log':
         final logCallback = _logCallback;
         if (logCallback != null) {
-          final args = call.arguments as Map<String, Object?>;
+          final args = call.arguments as Map<Object?, Object?>;
           final level = LogLevel.fromInt(args['level'] as int)!;
           final message = args['message'] as String;
 
