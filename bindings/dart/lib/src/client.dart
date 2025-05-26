@@ -39,17 +39,13 @@ class Client {
   }) async {
     DateTime start = DateTime.now();
     Duration delay = minDelay;
-    SocketException? lastException;
+    Exception? lastException;
 
-    final port = json.decode(
-      await File('$configPath/local_control_port.conf').readAsString(),
-    ) as int;
+    final portFile = File('$configPath/local_control_port.conf');
+    final authKeyFile = File('$configPath/local_control_auth_key.conf');
 
-    final authKey = HEX.decode(
-      json.decode(
-        await File('$configPath/local_control_auth_key.conf').readAsString(),
-      ),
-    );
+    final port = json.decode(await portFile.readAsString()) as int;
+    final authKey = HEX.decode(json.decode(await authKeyFile.readAsString()));
 
     while (true) {
       if (timeout != null) {

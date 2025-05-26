@@ -2,38 +2,47 @@ package org.equalitie.ouisync.dart
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
-import io.flutter.plugin.common.MethodChannel.Result
-import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.client.LogLevel
-import org.equalitie.ouisync.kotlin.server.Server
 import org.equalitie.ouisync.kotlin.server.initLog
 import java.net.URLConnection
+
+internal const val TAG = "ouisync"
 
 /** OuisyncPlugin */
 class OuisyncPlugin :
     FlutterPlugin,
     MethodCallHandler,
-    ActivityAware {
-    var activity: Activity? = null
-    var channel: MethodChannel? = null
-    var servers: MutableMap<Int, Server> = mutableMapOf()
+    ActivityAware,
+    ServiceConnection {
+    private var context: Context? = null
+    private val connectionCallbacks = mutableListOf<(OuisyncService.LocalBinder) -> Unit>()
 
     // To run stuff on the main thread.
-    val mainHandler = Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    var activity: Activity? = null
+    var channel: MethodChannel? = null
 
     companion object {
-        private val TAG = OuisyncPlugin::class.java.simpleName
         private const val CHANNEL_NAME = "org.equalitie.ouisync.plugin"
 
         private var channels = HashSet<MethodChannel>()
@@ -52,6 +61,8 @@ class OuisyncPlugin :
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        requestPermissions(binding.activity)
+
         activity = binding.activity
 
         channel?.let { enableSharingForChannel(it) }
@@ -71,7 +82,29 @@ class OuisyncPlugin :
         onAttachedToActivity(binding)
     }
 
+    private fun requestPermissions(activity: Activity) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                activity,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        ActivityCompat.requestPermissions(
+            activity,
+            arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+            1,
+        )
+    }
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        context = binding.getApplicationContext()
+
         channel =
             MethodChannel(binding.binaryMessenger, CHANNEL_NAME).also {
                 it.setMethodCallHandler(this)
@@ -87,21 +120,23 @@ class OuisyncPlugin :
             disableSharingForChannel(it)
             it.setMethodCallHandler(null)
         }
-
         channel = null
 
-        val servers = synchronized(servers) { servers.values.also { servers.clear() } }
-
-        runBlocking {
-            for (server in servers) {
-                try {
-                    server.stop()
-                } catch (e: Exception) {
-                    Log.e(TAG, "failed to stop server", e)
-                }
-            }
-        }
+        context?.unbindService(this)
+        context = null
     }
+
+    override fun onServiceConnected(
+        name: ComponentName,
+        binder: IBinder,
+    ) {
+        val serviceBinder = binder as OuisyncService.LocalBinder
+
+        connectionCallbacks.forEach { it(serviceBinder) }
+        connectionCallbacks.clear()
+    }
+
+    override fun onServiceDisconnected(name: ComponentName) {}
 
     override fun onMethodCall(
         call: MethodCall,
@@ -119,12 +154,14 @@ class OuisyncPlugin :
             "start" -> {
                 val configPath = arguments["configPath"] as String
                 val debugLabel = arguments["debugLabel"] as String?
-                val handle = onStart(configPath, debugLabel)
-                result.success(handle)
+                onStart(configPath, debugLabel) {
+                    // TODO: do we need to explicitly call `result.error` on failure?
+                    it.getOrThrow()
+                    result.success(null)
+                }
             }
             "stop" -> {
-                val handle = arguments["handle"] as Int
-                onStop(handle)
+                onStop()
                 result.success(null)
             }
             "shareFile" -> {
@@ -166,24 +203,29 @@ class OuisyncPlugin :
     private fun onStart(
         configPath: String,
         debugLabel: String?,
-    ): Int {
-        val server = runBlocking { Server.start(configPath, debugLabel) }
+        callback: (Result<Unit>) -> Unit,
+    ) {
+        val context = requireNotNull(this.context)
 
-        synchronized(servers) {
-            val handle = servers.size + 1
-            servers.put(handle, server)
-            return handle
-        }
+        connectionCallbacks.add { binder -> binder.onStart(callback) }
+
+        // start the service so that it can outlive this plugin instance...
+        context.startForegroundService(
+            Intent(context, OuisyncService::class.java).apply {
+                putExtra(OuisyncService.EXTRA_CONFIG_PATH, configPath)
+                putExtra(OuisyncService.EXTRA_DEBUG_LABEL, debugLabel)
+            },
+        )
+
+        // ...but also bind to it so we can observe when the service startup completes.
+        context.bindService(Intent(context, OuisyncService::class.java), this, 0)
     }
 
-    private fun onStop(handle: Int) {
-        val server = synchronized(servers) { servers.remove(handle) }
+    private fun onStop() {
+        val context = requireNotNull(this.context)
 
-        if (server == null) {
-            return
-        }
-
-        runBlocking { server.stop() }
+        context.unbindService(this)
+        context.stopService(Intent(context, OuisyncService::class.java))
     }
 
     private fun startFilePreviewAction(arguments: Map<String, Any?>): String {

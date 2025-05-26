@@ -8,9 +8,6 @@ import '../../generated/api.g.dart' show LogLevel;
 class MethodChannelServer extends Server {
   final _channel = MethodChannel('org.equalitie.ouisync.plugin');
   Function(LogLevel, String)? _logCallback;
-  int _handle = 0;
-  // Prevents calling start/stop concurrently.
-  Completer<void> _lock = Completer()..complete();
 
   MethodChannelServer({required super.configPath, super.debugLabel}) {
     _channel.setMethodCallHandler(_handleMethodCall);
@@ -27,43 +24,13 @@ class MethodChannelServer extends Server {
   }
 
   @override
-  Future<void> start() async {
-    await _lock.future;
-
-    if (_handle != 0) {
-      return;
-    }
-
-    _lock = Completer();
-
-    try {
-      _handle = await _channel.invokeMethod<int>('start', {
-            'configPath': configPath,
-            'debugLabel': debugLabel,
-          }) ??
-          0;
-    } finally {
-      _lock.complete();
-    }
-  }
+  Future<void> start() => _channel.invokeMethod<int>('start', {
+        'configPath': configPath,
+        'debugLabel': debugLabel,
+      });
 
   @override
-  Future<void> stop() async {
-    await _lock.future;
-
-    if (_handle == 0) {
-      return;
-    }
-
-    _lock = Completer();
-
-    try {
-      await _channel.invokeMethod<int>('stop', {'handle': _handle});
-      _handle = 0;
-    } finally {
-      _lock.complete();
-    }
-  }
+  Future<void> stop() => _channel.invokeMethod<int>('stop');
 
   Future<void> _handleMethodCall(MethodCall call) {
     switch (call.method) {
