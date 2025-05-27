@@ -108,10 +108,71 @@ fn run(
     on_init: Callback,
     on_stop_rx: oneshot::Receiver<Callback>,
 ) {
-    let (runtime, mut service, span) = match init(config_dir, debug_label) {
-        Ok(parts) => {
+    // Get config dir
+    let config_dir = match config_dir.into_string().map_err(Error::from) {
+        Ok(config_dir) => config_dir,
+        Err(error) => {
+            on_init.call(error.to_error_code());
+            return;
+        }
+    };
+
+    // Get debug label
+    let debug_label = match debug_label
+        .map(CString::into_string)
+        .transpose()
+        .map_err(Error::from)
+    {
+        Ok(debug_label) => debug_label,
+        Err(error) => {
+            on_init.call(error.to_error_code());
+            return;
+        }
+    };
+
+    // Create tracing span
+    let span = if let Some(debug_label) = debug_label {
+        tracing::info_span!("service", message = debug_label)
+    } else {
+        Span::none()
+    };
+
+    // Setup the runtime
+    let runtime = match runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(Error::InitializeRuntime)
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            on_init.call(error.to_error_code());
+            return;
+        }
+    };
+
+    let mut on_stop_rx = pin!(on_stop_rx);
+
+    // Init the service. This can be cancelled with `service_stop`.
+    let service = runtime.block_on(
+        async {
+            select! {
+                result = Service::init(config_dir.into()) => result,
+                result = &mut on_stop_rx => {
+                    if let Ok(on_stop) = result {
+                        on_stop.call(ErrorCode::Ok);
+                    }
+
+                    Err(Error::OperationInterrupted)
+                }
+            }
+        }
+        .instrument(span.clone()),
+    );
+
+    let mut service = match service {
+        Ok(service) => {
             on_init.call(ErrorCode::Ok);
-            parts
+            service
         }
         Err(error) => {
             on_init.call(error.to_error_code());
@@ -119,9 +180,9 @@ fn run(
         }
     };
 
+    // Run the service until `service_stop` is called.
     runtime.block_on(
-        async move {
-            let mut on_stop_rx = pin!(on_stop_rx);
+        async {
             let (run_result, on_stop_result) = select! {
                 result = service.run() => {
                     match result {
@@ -142,29 +203,6 @@ fn run(
         }
         .instrument(span),
     );
-}
-
-fn init(
-    config_dir: CString,
-    debug_label: Option<CString>,
-) -> Result<(runtime::Runtime, Service, Span), Error> {
-    let config_dir = config_dir.into_string()?.into();
-
-    let span = if let Some(debug_label) = debug_label {
-        tracing::info_span!("service", message = debug_label.into_string()?)
-    } else {
-        Span::none()
-    };
-
-    let runtime = runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(Error::InitializeRuntime)?;
-
-    let service = runtime.block_on(Service::init(config_dir).instrument(span.clone()))?;
-    service.enable_panic_monitor();
-
-    Ok((runtime, service, span))
 }
 
 pub type LogCallback = extern "C" fn(LogLevel, *const c_uchar, u64, u64);

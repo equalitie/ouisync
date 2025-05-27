@@ -37,6 +37,8 @@ pub enum ErrorCode {
     Ambiguous = 6,
     /// The indended operation is not supported
     Unsupported = 8,
+    /// The operation was interrupted
+    Interrupted = 9,
 
     // # Network errors
     /// Failed to establish connection to the server
@@ -108,6 +110,7 @@ impl ToErrorCode for Error {
             Self::Ambiguous => ErrorCode::Ambiguous,
             Self::Busy => ErrorCode::ResourceBusy,
             Self::OperationNotSupported => ErrorCode::Unsupported,
+            Self::OperationInterrupted => ErrorCode::Interrupted,
             Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::Repository(error) => error.to_error_code(),
             Self::Store(_) => ErrorCode::StoreError,

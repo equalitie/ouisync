@@ -2,10 +2,14 @@ package org.equalitie.ouisync.kotlin.client
 
 import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.test.runTest
-import org.equalitie.ouisync.server.Server
-import org.equalitie.ouisync.server.initLog
+import org.equalitie.ouisync.kotlin.server.Server
+import org.equalitie.ouisync.kotlin.server.initLog
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -21,7 +25,7 @@ class SessionTest {
         tempDir = File(createTempDirectory().toString())
         val configDir = "$tempDir/config"
 
-        initLog { level, message -> println("[$level] $message") }
+        initLog(stdout = true)
 
         server = Server.start(configDir)
         session = Session.create(configDir)

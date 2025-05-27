@@ -48,7 +48,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             val authKeyRaw = File("$configPath/local_control_auth_key.conf").readText()
             val authKey = Json.decodeFromString<String>(authKeyRaw).hexToByteArray()
 
-            val addr = InetSocketAddress(InetAddress.getLocalHost(), port)
+            val addr = InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), port)
 
             // TODO: retry connect
             val socket = AsynchronousSocket.connect(addr)

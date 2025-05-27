@@ -2,32 +2,60 @@ package org.equalitie.ouisync.kotlin.server
 
 import com.sun.jna.Pointer
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.equalitie.ouisync.kotlin.client.ErrorCode
 import org.equalitie.ouisync.kotlin.client.LogLevel
 import org.equalitie.ouisync.kotlin.client.OuisyncException
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 
 private val bindings = Bindings.INSTANCE
 
 class Server private constructor(private val handle: Pointer) {
     companion object {
-
         suspend fun start(
             configPath: String,
             debugLabel: String? = null,
         ): Server {
-            val result = ResultHandler()
-            val handle = bindings.start_service(configPath, debugLabel, result, null)
-            result.await()
+            val deferredHandle = CompletableDeferred<Pointer>()
 
-            return Server(handle)
+            suspendCancellableCoroutine<Unit> { cont ->
+                val handle =
+                    bindings.start_service(
+                        configPath,
+                        debugLabel,
+                        CoroutineHandler(cont),
+                        null,
+                    )
+
+                cont.invokeOnCancellation { bindings.stop_service(handle, NoopHandler, null) }
+
+                deferredHandle.complete(handle)
+            }
+
+            return Server(deferredHandle.await())
         }
     }
 
-    suspend fun stop() {
-        val result = ResultHandler()
-        bindings.stop_service(handle, result, null)
-        result.await()
+    suspend fun stop() = suspendCoroutine<Unit> { cont -> bindings.stop_service(handle, CoroutineHandler(cont), null) }
+}
+
+private class CoroutineHandler(val cont: Continuation<Unit>) : StatusCallback {
+    override fun invoke(context: Pointer?, error_code: Short) {
+        val errorCode = ErrorCode.fromValue(error_code)
+
+        if (errorCode == ErrorCode.OK) {
+            cont.resume(Unit)
+        } else {
+            cont.resumeWithException(OuisyncException.dispatch(errorCode))
+        }
     }
+}
+
+private object NoopHandler : StatusCallback {
+    override fun invoke(context: Pointer?, error_code: Short) = Unit
 }
 
 typealias LogFunction = (level: LogLevel, message: String) -> Unit
@@ -42,22 +70,6 @@ fun initLog(
 ) {
     logHandler = logHandler ?: callback?.let(::LogHandler)
     bindings.init_log(if (stdout) 1 else 0, file, logHandler)
-}
-
-private class ResultHandler : StatusCallback {
-    private val deferred = CompletableDeferred<Short>()
-
-    override fun invoke(context: Pointer?, error_code: Short) {
-        deferred.complete(error_code)
-    }
-
-    suspend fun await() {
-        val errorCode = ErrorCode.fromValue(deferred.await())
-
-        if (errorCode != ErrorCode.OK) {
-            throw OuisyncException.dispatch(errorCode)
-        }
-    }
 }
 
 private class LogHandler(val function: LogFunction) : LogCallback {

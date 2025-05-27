@@ -5,8 +5,8 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
-import org.equalitie.ouisync.server.Server
-import org.equalitie.ouisync.server.initLog
+import org.equalitie.ouisync.kotlin.server.Server
+import org.equalitie.ouisync.kotlin.server.initLog
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
