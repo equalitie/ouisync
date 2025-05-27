@@ -1,7 +1,6 @@
 package org.equalitie.ouisync.kotlin.server
 
 import com.sun.jna.Pointer
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.equalitie.ouisync.kotlin.client.ErrorCode
 import org.equalitie.ouisync.kotlin.client.LogLevel
@@ -19,10 +18,10 @@ class Server private constructor(private val handle: Pointer) {
             configPath: String,
             debugLabel: String? = null,
         ): Server {
-            val deferredHandle = CompletableDeferred<Pointer>()
+            var handle = Pointer.NULL
 
             suspendCancellableCoroutine<Unit> { cont ->
-                val handle =
+                handle =
                     bindings.start_service(
                         configPath,
                         debugLabel,
@@ -31,11 +30,9 @@ class Server private constructor(private val handle: Pointer) {
                     )
 
                 cont.invokeOnCancellation { bindings.stop_service(handle, NoopHandler, null) }
-
-                deferredHandle.complete(handle)
             }
 
-            return Server(deferredHandle.await())
+            return Server(handle)
         }
     }
 

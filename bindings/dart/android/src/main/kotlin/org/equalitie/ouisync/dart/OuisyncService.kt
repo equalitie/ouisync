@@ -10,9 +10,10 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.server.Server
@@ -21,18 +22,19 @@ class OuisyncService : Service() {
     // / Local binder allows observing when the service startup completes.
     inner class LocalBinder : Binder() {
         fun onStart(callback: (Result<Unit>) -> Unit) {
-            if (server != null) {
-                callback(Result.success(Unit))
-            } else {
-                startCallbacks.add(callback)
+            server.invokeOnCompletion { cause ->
+                if (cause == null) {
+                    callback(Result.success(Unit))
+                } else {
+                    callback(Result.failure(cause))
+                }
             }
         }
     }
 
-    private val job = SupervisorJob()
-    private val scope = CoroutineScope(Dispatchers.Main + job)
-    private var server: Server? = null
-    private val startCallbacks = mutableListOf<(Result<Unit>) -> Unit>()
+    private val scope = CoroutineScope(Dispatchers.Main)
+    private var server = CompletableDeferred<Server>()
+    private var isStarted = false
 
     override fun onCreate() {
         super.onCreate()
@@ -41,18 +43,17 @@ class OuisyncService : Service() {
     override fun onDestroy() {
         super.onDestroy()
 
-        if (server != null) {
-            try {
-                runBlocking {
-                    server?.stop()
-                    server = null
+        runBlocking {
+            scope.cancel()
+
+            if (server.isCompleted) {
+                try {
+                    server.getCompleted().stop()
+                } catch (e: Exception) {
+                    Log.e(TAG, "failed to stop server", e)
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "failed to stop server", e)
             }
         }
-
-        job.cancel()
     }
 
     override fun onStartCommand(
@@ -60,28 +61,40 @@ class OuisyncService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
-        val intent = requireNotNull(intent)
-        val configPath = requireNotNull(intent.getStringExtra(EXTRA_CONFIG_PATH))
-        val debugLabel = intent.getStringExtra(EXTRA_DEBUG_LABEL)
-
-        setupForeground()
-
-        scope.launch {
-            try {
-                server = Server.start(configPath, debugLabel)
-                startCallbacks.forEach { it(Result.success(Unit)) }
-            } catch (e: Exception) {
-                startCallbacks.forEach { it(Result.failure(e)) }
-                stopSelf()
-            } finally {
-                startCallbacks.clear()
-            }
-        }
-
+        start(intent)
         return START_REDELIVER_INTENT
     }
 
-    override fun onBind(intent: Intent?): IBinder? = LocalBinder()
+    override fun onBind(intent: Intent?): IBinder? {
+        start(intent)
+        return LocalBinder()
+    }
+
+    private fun start(intent: Intent?) {
+        val configPath = intent?.getStringExtra(EXTRA_CONFIG_PATH)
+        val debugLabel = intent?.getStringExtra(EXTRA_DEBUG_LABEL)
+
+        if (configPath != null) {
+            saveConfigPath(configPath)
+        }
+
+        if (isStarted) {
+            return
+        } else {
+            isStarted = true
+        }
+
+        scope.launch {
+            try {
+                server.complete(Server.start(configPath ?: loadConfigPath(), debugLabel))
+            } catch (e: Exception) {
+                server.completeExceptionally(e)
+                stopSelf()
+            }
+        }
+
+        setupForeground()
+    }
 
     private fun setupForeground() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
