@@ -26,12 +26,6 @@
             </intent-filter>
         </activity>
 
-        <provider
-            android:name="org.equalitie.ouisync.dart.PipeProvider"
-            android:authorities="${applicationId}.pipe"
-            android:enabled="true"
-            android:exported="true"/>
-
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

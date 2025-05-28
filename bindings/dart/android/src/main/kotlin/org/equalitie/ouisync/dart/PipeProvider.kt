@@ -1,252 +1,221 @@
 package org.equalitie.ouisync.dart
 
+import android.content.ComponentName
+import android.content.ContentProvider
+import android.content.ContentValues
 import android.content.Context
-import android.content.res.AssetFileDescriptor
+import android.content.Intent
+import android.content.ServiceConnection
+import android.database.Cursor
+import android.database.MatrixCursor
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.Looper
+import android.os.IBinder
 import android.os.ParcelFileDescriptor
+import android.os.ProxyFileDescriptorCallback
 import android.os.storage.StorageManager
-import android.system.ErrnoException
-import android.system.OsConstants
+import android.provider.OpenableColumns
 import android.util.Log
-import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.common.MethodChannel.Result
-import java.util.concurrent.CompletableFuture
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import org.equalitie.ouisync.kotlin.client.File
+import org.equalitie.ouisync.kotlin.client.Session
+import org.equalitie.ouisync.kotlin.client.create
+import java.net.URLConnection
+import kotlin.collections.joinToString
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
-class PipeProvider : AbstractFileProvider() {
+class PipeProvider : ContentProvider() {
     companion object {
         private const val CHUNK_SIZE = 64000
-        internal val TAG = PipeProvider::class.java.simpleName
 
-        private val supportsProxyFileDescriptor: Boolean
-            get() = android.os.Build.VERSION.SDK_INT >= 26
+        private val supportsProxyFileDescriptor: Boolean =
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
     }
 
-    private lateinit var handler: Handler
+    private val supervisorJob = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.IO + supervisorJob)
+
+    private val session = CompletableDeferred<Session>()
+
+    // Handler for running proxy file descriptor's callbacks
+    private val handler =
+        Handler(
+            HandlerThread("${javaClass.simpleName} handler thread")
+                .apply {
+                    setUncaughtExceptionHandler { thread, e ->
+                        Log.e(TAG, "uncaught exception in ${thread.name}", e)
+                    }
+                    start()
+                }.getLooper(),
+        )
 
     override fun onCreate(): Boolean {
-        Log.d(TAG, "onCreate")
+        val context = requireNotNull(context)
 
-        val thread = HandlerThread("${javaClass.simpleName} worker thread")
-        thread.start()
+        scope.launch {
+            // Bind to OusyncService and wait until the ousiync service has been started.
+            suspendCoroutine<Unit> { cont ->
+                val intent = Intent(context, OuisyncService::class.java)
+                val connection =
+                    object : ServiceConnection {
+                        override fun onServiceConnected(
+                            name: ComponentName,
+                            binder: IBinder,
+                        ) = (binder as OuisyncService.LocalBinder).onStart { cont.resume(Unit) }
 
-        handler = Handler(thread.getLooper())
+                        override fun onServiceDisconnected(name: ComponentName) = Unit
+                    }
+
+                context.bindService(intent, connection, 0)
+            }
+
+            // Create ousync Session which should connect to the server we just started above.
+            val configPath = context.loadConfigPath()
+            session.complete(Session.create(configPath))
+        }
 
         return true
     }
 
-    // TODO: Handle `mode`
+    override fun query(
+        uri: Uri,
+        projection: Array<String>?,
+        selection: String?,
+        selectionArgs: Array<String>?,
+        sortOrder: String?,
+    ): Cursor? = query(uri, projection, null, null)
+
+    override fun query(
+        uri: Uri,
+        projection: Array<String>?,
+        queryArgs: Bundle?,
+        cancellationSignal: CancellationSignal?,
+    ): Cursor? {
+        val projection = projection ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+        val cursor = MatrixCursor(projection, 1)
+
+        val row = cursor.newRow()
+
+        for (col in projection) {
+            when (col) {
+                OpenableColumns.DISPLAY_NAME -> row.add(uri.lastPathSegment)
+                OpenableColumns.SIZE -> row.add(getFileSize(uri))
+                else -> row.add(null) // unknown, just add null
+            }
+        }
+
+        return cursor
+    }
+
+    override fun getType(uri: Uri): String? = URLConnection.guessContentTypeFromName(uri.path)
+
     override fun openFile(
         uri: Uri,
         mode: String,
-    ): ParcelFileDescriptor? {
-        Log.d(TAG, "Opening file '$uri' in mode '$mode'")
-
-        val path = getPathFromUri(uri)
-
+    ): ParcelFileDescriptor? =
         if (supportsProxyFileDescriptor) {
-            var size = super.getDataLength(uri)
-
-            if (size == AssetFileDescriptor.UNKNOWN_LENGTH) {
-                Log.d(TAG, "Using pipe because size is unknown")
-                return openPipe(path)
-            }
-
-            Log.d(TAG, "Using proxy file")
-            return openProxyFile(path, size)
+            openProxyFile(uri)
         } else {
-            Log.d(TAG, "Using pipe because proxy file is not supported")
-            return openPipe(path)
+            openPipe(uri)
         }
-    }
 
-    private fun openProxyFile(
-        path: String,
-        size: Long,
-    ): ParcelFileDescriptor? {
+    override fun insert(
+        uri: Uri,
+        values: ContentValues?,
+    ): Uri? = throw NotImplementedError()
+
+    override fun delete(
+        uri: Uri,
+        selection: String?,
+        selectionArgs: Array<out String>?,
+    ): Int = throw NotImplementedError()
+
+    override fun update(
+        uri: Uri,
+        values: ContentValues?,
+        selection: String?,
+        selectionArgs: Array<out String>?,
+    ): Int = throw NotImplementedError()
+
+    private fun getFileSize(uri: Uri): Long =
+        runBlocking {
+            val file = openRepoFile(uri)
+
+            try {
+                file.getLength()
+            } finally {
+                file.close()
+            }
+        }
+
+    private fun openProxyFile(uri: Uri): ParcelFileDescriptor? {
         var storage = context!!.getSystemService(Context.STORAGE_SERVICE) as StorageManager
 
-        // https://developer.android.google.cn/reference/android/os/storage/StorageManager
         return storage.openProxyFileDescriptor(
             ParcelFileDescriptor.MODE_READ_ONLY,
-            ProxyCallbacks(path, size),
+            ProxyCallback(uri),
             handler,
         )
     }
 
-    private fun openPipe(path: String): ParcelFileDescriptor? {
+    private fun openPipe(uri: Uri): ParcelFileDescriptor? {
         val pipe = ParcelFileDescriptor.createPipe()
-        var reader = pipe[0]
-        var writer = pipe[1]
-        var dstFd = writer!!.detachFd()
+        val reader = pipe[0]
+        val writer = pipe[1]
+        val dstFd = writer!!.detachFd()
 
-        runInMainThread {
-            copyFileToRawFd(
-                path,
-                dstFd,
-                object : MethodChannel.Result {
-                    override fun success(a: Any?) {
-                        writer.close()
-                    }
+        scope.launch {
+            val file = openRepoFile(uri)
 
-                    override fun error(
-                        code: String,
-                        message: String?,
-                        details: Any?,
-                    ) {
-                        Log.e(TAG, channelMethodErrorMessage(code, message, details))
-                        writer.close()
-                    }
-
-                    override fun notImplemented() {
-                        writer.close()
-                    }
-                },
-            )
+            try {
+                TODO("File.copyToRawFd is not yet implemented")
+                // file.copyToFd(dstFd)
+            } finally {
+                file.close()
+            }
         }
 
         return reader
     }
 
-    private fun getPathFromUri(uri: Uri): String {
-        val segments = uri.pathSegments
-        var index = 0
-        var path = ""
+    private suspend fun openRepoFile(uri: Uri): File {
+        val repoName = uri.pathSegments.first()
+        val filePath = uri.pathSegments.drop(1).joinToString("/")
 
-        for (segment in segments) {
-            if (index > 0) {
-                path += "/$segment"
-            }
-            index++
-        }
-
-        return path
+        return session.await().findRepository(repoName).openFile(filePath)
     }
 
-    internal class ProxyCallbacks(
-        private val path: String,
-        private val size: Long,
-    ) : android.os.ProxyFileDescriptorCallback() {
-        private var id: Int? = null
+    inner class ProxyCallback(
+        val uri: Uri,
+    ) : ProxyFileDescriptorCallback() {
+        private val file: Deferred<File> by lazy { scope.async { openRepoFile(uri) } }
 
-        override fun onGetSize() = size
+        override fun onGetSize() = runBlocking { file.await().getLength() }
 
         override fun onRead(
             offset: Long,
             chunkSize: Int,
             outData: ByteArray,
-        ): Int {
-            var id = this.id
-
-            if (id == null) {
-                id = openFile(path) ?: throw ErrnoException("openFile", OsConstants.ENOENT)
-                this.id = id
-            }
-
-            val chunk = readFile(id, chunkSize, offset)
-
-            if (chunk != null) {
-                chunk.copyInto(outData)
-                return chunk.size
-            } else {
-                return 0
-            }
+        ) = runBlocking {
+            val chunk = file.await().read(offset, chunkSize.toLong())
+            chunk.copyInto(outData)
+            chunk.size
         }
 
-        override fun onRelease() {
-            val id = this.id
+        override fun onFsync() = runBlocking { file.await().flush() }
 
-            if (id != null) {
-                closeFile(id)
-            }
-        }
+        override fun onRelease() = runBlocking { file.await().close() }
     }
 }
-
-private fun openFile(path: String): Int? {
-    val arguments = hashMapOf("path" to path)
-    return invokeBlocking("openFile", arguments)
-}
-
-private fun closeFile(id: Int) {
-    val arguments = hashMapOf("id" to id)
-    invokeBlocking<Unit>("closeFile", arguments)
-}
-
-private fun readFile(
-    id: Int,
-    chunkSize: Int,
-    offset: Long,
-): ByteArray? {
-    val arguments = hashMapOf("id" to id, "chunkSize" to chunkSize, "offset" to offset)
-    return invokeBlocking("readFile", arguments)
-}
-
-private fun copyFileToRawFd(
-    srcPath: String,
-    dstFd: Int,
-    result: MethodChannel.Result,
-) {
-    val arguments = hashMapOf("srcPath" to srcPath, "dstFd" to dstFd)
-    val channel = OuisyncPlugin.sharedChannel
-
-    if (channel != null) {
-        channel.invokeMethod("copyFileToRawFd", arguments, result)
-    } else {
-        result.notImplemented()
-    }
-}
-
-private fun <T> invokeBlocking(
-    method: String,
-    arguments: Any?,
-): T? {
-    val channel = OuisyncPlugin.sharedChannel
-
-    if (channel == null) {
-        Log.w(PipeProvider.TAG, "Method channel does not exist")
-        return null
-    }
-
-    val future = CompletableFuture<T?>()
-
-    runInMainThread {
-        channel.invokeMethod(
-            method,
-            arguments,
-            object : MethodChannel.Result {
-                override fun success(a: Any?) {
-                    future.complete(a as T?)
-                }
-
-                override fun error(
-                    errorCode: String,
-                    errorMessage: String?,
-                    errorDetails: Any?,
-                ) {
-                    future.completeExceptionally(
-                        Exception(channelMethodErrorMessage(errorCode, errorMessage, errorDetails)),
-                    )
-                }
-
-                override fun notImplemented() {
-                    future.completeExceptionally(NotImplementedError("method '$method' not implemented"))
-                }
-            },
-        )
-    }
-
-    return future.get()
-}
-
-private fun runInMainThread(f: () -> Unit) {
-    Handler(Looper.getMainLooper()).post(f)
-}
-
-private fun channelMethodErrorMessage(
-    code: String?,
-    message: String?,
-    details: Any?,
-): String = "error invoking channel method (code: $code, message: $message, details: $details)"

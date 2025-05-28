@@ -4,8 +4,11 @@ import 'package:async/async.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:ouisync/ouisync.dart';
+import 'package:ouisync/helpers.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
+
+const _repoName = 'my repo';
 
 void main() async {
   runApp(const MaterialApp(home: MyApp()));
@@ -22,7 +25,6 @@ class _MyAppState extends State<MyApp> {
   late Server server;
   late Session session;
   late Repository repo;
-  late NativeChannels nativeChannels;
 
   bool bittorrentDhtEnabled = false;
 
@@ -49,24 +51,19 @@ class _MyAppState extends State<MyApp> {
       localDiscoveryEnabled: false,
     ));
 
-    const repoName = 'my repo';
     Repository repo;
 
     try {
-      repo = await session.findRepository(repoName);
+      repo = await session.findRepository(_repoName);
     } on NotFound catch (_) {
-      repo = await session.createRepository(path: repoName);
+      repo = await session.createRepository(path: _repoName);
     }
 
     bittorrentDhtEnabled = await repo.isDhtEnabled();
 
-    final nativeChannels = NativeChannels();
-    nativeChannels.repository = repo;
-
     setState(() {
       this.session = session;
       this.repo = repo;
-      this.nativeChannels = nativeChannels;
     });
   }
 
@@ -140,18 +137,21 @@ class _MyAppState extends State<MyApp> {
   }
 
   Widget fileList() => ListView.separated(
-      separatorBuilder: (context, index) =>
-          const Divider(height: 1, color: Colors.transparent),
-      shrinkWrap: true,
-      itemCount: contents.length,
-      itemBuilder: (context, index) {
-        final item = contents[index];
+        separatorBuilder: (context, index) =>
+            const Divider(height: 1, color: Colors.transparent),
+        shrinkWrap: true,
+        itemCount: contents.length,
+        itemBuilder: (context, index) {
+          final item = contents[index];
 
-        return Card(
+          return Card(
             child: ListTile(
-                title: Text(item),
-                onTap: () => showAlertDialog(context, item, 1)));
-      });
+              title: Text(item),
+              onTap: () => showAlertDialog(context, item),
+            ),
+          );
+        },
+      );
 
   Future<void> addFile() async {
     FilePickerResult? result =
@@ -214,22 +214,21 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
-  void showAlertDialog(BuildContext context, String path, int size) {
+  void showAlertDialog(BuildContext context, String path) {
     Widget previewFileButton = TextButton(
       child: const Text("Preview"),
       onPressed: () async {
         Navigator.of(context).pop();
-        await nativeChannels.previewOuiSyncFile(
-            "org.equalitie.ouisync_example", path, size);
+        await viewFile(_getFileUrl(path));
       },
     );
     Widget shareFileButton = TextButton(
-        child: const Text("Share"),
-        onPressed: () async {
-          Navigator.of(context).pop();
-          await nativeChannels.shareOuiSyncFile(
-              "org.equalitie.ouisync_example", path, size);
-        });
+      child: const Text("Share"),
+      onPressed: () async {
+        Navigator.of(context).pop();
+        await shareFile(_getFileUrl(path));
+      },
+    );
     Widget cancelButton = TextButton(
       child: const Text("Cancel"),
       onPressed: () {
@@ -255,3 +254,9 @@ class _MyAppState extends State<MyApp> {
     );
   }
 }
+
+Uri _getFileUrl(String path) => Uri(
+      scheme: 'content',
+      host: 'org.equalitie.ouisync.dart.example.provider',
+      path: posix.join(_repoName, path),
+    );

@@ -3,7 +3,6 @@ package org.equalitie.ouisync.dart
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
@@ -23,55 +22,38 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import org.equalitie.ouisync.kotlin.client.LogLevel
 import org.equalitie.ouisync.kotlin.server.initLog
-import java.net.URLConnection
 
 internal const val TAG = "ouisync"
 
-/** OuisyncPlugin */
 class OuisyncPlugin :
     FlutterPlugin,
     MethodCallHandler,
     ActivityAware,
     ServiceConnection {
-    private var context: Context? = null
-    private val connectionCallbacks = mutableListOf<(OuisyncService.LocalBinder) -> Unit>()
-
-    // To run stuff on the main thread.
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    var activity: Activity? = null
     var channel: MethodChannel? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var activity: Activity? = null
+    private var startCallbacks = mutableListOf<(Result<Unit>) -> Unit>()
 
     companion object {
         private const val CHANNEL_NAME = "org.equalitie.ouisync.plugin"
-
-        private var channels = HashSet<MethodChannel>()
-
-        // Each instance of this class has its own method channel, but one of them is also accessible
-        // via this getter. Only those instances that are currently attached to an activity can have
-        // their channel shared here. This is because an instance can also be attached to a Service
-        // which might not have created the other (dart) end of the channel and so such channel would
-        // not be usable.
-        val sharedChannel: MethodChannel?
-            get() = synchronized(channels) { channels.firstOrNull() }
-
-        private fun enableSharingForChannel(channel: MethodChannel) = synchronized(channels) { channels.add(channel) }
-
-        private fun disableSharingForChannel(channel: MethodChannel) = synchronized(channels) { channels.remove(channel) }
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-        requestPermissions(binding.activity)
+        val activity = binding.activity
 
-        activity = binding.activity
+        requestPermissions(activity)
 
-        channel?.let { enableSharingForChannel(it) }
+        activity.bindService(Intent(activity, OuisyncService::class.java), this, 0)
+
+        this.activity = activity
     }
 
     override fun onDetachedFromActivity() {
-        activity = null
+        activity?.let { activity -> activity.unbindService(this) }
 
-        channel?.let { disableSharingForChannel(it) }
+        activity = null
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
@@ -103,55 +85,41 @@ class OuisyncPlugin :
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        context = binding.getApplicationContext()
-
         channel =
-            MethodChannel(binding.binaryMessenger, CHANNEL_NAME).also {
-                it.setMethodCallHandler(this)
-
-                if (activity != null) {
-                    enableSharingForChannel(it)
-                }
-            }
+            MethodChannel(binding.binaryMessenger, CHANNEL_NAME).also { it.setMethodCallHandler(this) }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        channel?.let {
-            disableSharingForChannel(it)
-            it.setMethodCallHandler(null)
-        }
+        channel?.let { it.setMethodCallHandler(null) }
         channel = null
-
-        context?.unbindService(this)
-        context = null
     }
 
     override fun onServiceConnected(
         name: ComponentName,
         binder: IBinder,
     ) {
-        val serviceBinder = binder as OuisyncService.LocalBinder
-
-        connectionCallbacks.forEach { it(serviceBinder) }
-        connectionCallbacks.clear()
+        (binder as OuisyncService.LocalBinder).onStart { result ->
+            startCallbacks.forEach { callback -> callback(result) }
+            startCallbacks.clear()
+        }
     }
 
-    override fun onServiceDisconnected(name: ComponentName) {}
+    override fun onServiceDisconnected(name: ComponentName) = Unit
 
     override fun onMethodCall(
         call: MethodCall,
         result: MethodChannel.Result,
     ) {
-        val arguments = call.arguments as Map<String, Any?>
-
         when (call.method) {
             "initLog" -> {
+                val arguments = call.arguments as Map<String, Any?>
                 val stdout = arguments["stdout"] as Boolean
                 val file = arguments["file"] as String?
                 onInitLog(stdout, file)
                 result.success(null)
             }
             "start" -> {
+                val arguments = call.arguments as Map<String, Any?>
                 val configPath = arguments["configPath"] as String
                 val debugLabel = arguments["debugLabel"] as String?
                 onStart(configPath, debugLabel) {
@@ -164,13 +132,13 @@ class OuisyncPlugin :
                 onStop()
                 result.success(null)
             }
-            "shareFile" -> {
-                startFileShareAction(arguments)
-                result.success("Share file intent started")
+            "viewFile" -> {
+                val uri = Uri.parse(call.arguments as String)
+                result.success(onViewFile(uri))
             }
-            "previewFile" -> {
-                val previewResult = startFilePreviewAction(arguments)
-                result.success(previewResult)
+            "shareFile" -> {
+                val uri = Uri.parse(call.arguments as String)
+                result.success(onShareFile(uri))
             }
             else -> {
                 result.notImplemented()
@@ -205,38 +173,28 @@ class OuisyncPlugin :
         debugLabel: String?,
         callback: (Result<Unit>) -> Unit,
     ) {
-        val context = requireNotNull(this.context)
+        val activity = requireNotNull(this.activity)
 
-        connectionCallbacks.add { binder -> binder.onStart(callback) }
+        startCallbacks.add(callback)
 
-        // start the service so that it can outlive this plugin instance...
-        context.startForegroundService(
-            Intent(context, OuisyncService::class.java).apply {
+        activity.startForegroundService(
+            Intent(activity, OuisyncService::class.java).apply {
                 putExtra(OuisyncService.EXTRA_CONFIG_PATH, configPath)
                 putExtra(OuisyncService.EXTRA_DEBUG_LABEL, debugLabel)
             },
         )
-
-        // ...but also bind to it so we can observe when the service startup completes.
-        context.bindService(Intent(context, OuisyncService::class.java), this, 0)
     }
 
     private fun onStop() {
-        val context = requireNotNull(this.context)
-
-        context.unbindService(this)
-        context.stopService(Intent(context, OuisyncService::class.java))
+        activity?.let { activity ->
+            activity.unbindService(this)
+            activity.stopService(Intent(activity, OuisyncService::class.java))
+        }
     }
 
-    private fun startFilePreviewAction(arguments: Map<String, Any?>): String {
-        val authority = arguments["authority"]
-        val path = arguments["path"] as String
-        val size = arguments["size"]
-        val useDefaultApp = arguments["useDefaultApp"] as Boolean? ?: false
-
-        val uri = Uri.parse("content://$authority.pipe/$size$path")
-        val mimeType = URLConnection.guessContentTypeFromName(path) ?: "application/octet-stream"
-
+    private fun onViewFile(uri: Uri): Boolean {
+        val context = requireNotNull(activity)
+        val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
         val intent =
             Intent(Intent.ACTION_VIEW)
                 // Some apps (e.g., Google Files) can't open the file unless we specify the type
@@ -245,40 +203,27 @@ class OuisyncPlugin :
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
         try {
-            if (useDefaultApp) {
-                // Note that not using Intent.createChooser let's the user choose a
-                // default app and then use that the next time the same file type is
-                // opened.
-                activity?.startActivity(intent)
-            } else {
-                val title = "Preview file from Ouisync"
-                activity?.startActivity(Intent.createChooser(intent, title))
-            }
+            context.startActivity(intent)
         } catch (e: ActivityNotFoundException) {
-            Log.d(javaClass.simpleName, "Exception: No default app for this file type was found")
-            return "noDefaultApp"
+            Log.d(TAG, "no default app found for $uri")
+            return false
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to start activity", e)
+            throw e
         }
 
-        return "previewOK"
+        return true
     }
 
-    private fun startFileShareAction(arguments: Map<String, Any?>) {
-        val authority = arguments["authority"]
-        val path = arguments["path"]
-        val size = arguments["size"]
-        val title = "Share file from Ouisync"
-
-        val uri = Uri.parse("content://$authority.pipe/$size$path")
-
-        Log.d(javaClass.simpleName, "Uri: $uri")
-
+    private fun onShareFile(uri: Uri) {
+        val context = requireNotNull(activity)
         val intent =
             Intent(Intent.ACTION_SEND)
                 .setType("*/*")
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-        activity?.startActivity(Intent.createChooser(intent, title))
+        context.startActivity(Intent.createChooser(intent, null))
     }
 }
 

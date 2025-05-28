@@ -12,7 +12,6 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import kotlin.collections.firstOrNull
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,10 +19,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.server.Server
+import kotlin.collections.firstOrNull
 
 class OuisyncService : Service() {
-    // / Local binder allows observing when the service startup completes.
+    // Local binder allows observing when the service startup completes.
     inner class LocalBinder : Binder() {
+        // Invokes the callback when the server has been started.
         fun onStart(callback: (Result<Unit>) -> Unit) {
             server.invokeOnCompletion { cause ->
                 if (cause == null) {
@@ -143,8 +144,7 @@ class OuisyncService : Service() {
                 if (intent != null) {
                     setContentIntent(intent)
                 }
-            }
-            .build()
+            }.build()
 
     protected open val notificationChannelName: String = "Ouisync notification channel"
     protected open val notificationContentTitle: String = "Ouisync is running"
@@ -156,17 +156,19 @@ class OuisyncService : Service() {
             return null
         }
 
-        val intent = Intent(this, activityClass).apply {
-            setAction(Intent.ACTION_MAIN)
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val intent =
+            Intent(this, activityClass).apply {
+                setAction(Intent.ACTION_MAIN)
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
 
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PendingIntent.FLAG_IMMUTABLE
-        } else {
-            0
-        }
+        val flags =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
 
         return PendingIntent.getActivity(this, 0, intent, flags)
     }
@@ -175,23 +177,21 @@ class OuisyncService : Service() {
     // only one launchable activity in the app. If that's not the case, it arbitrarily returns one
     // such activity which might not be what you want. In such cases it's recommented to override
     // this method.
-    protected open fun getMainActivityClass(): Class<*>? = applicationContext.let { context ->
-        context.packageManager
-            .getPackageInfo(context.packageName, PackageManager.GET_ACTIVITIES)
-            .activities
-            .asSequence()
-            .map { info -> Class.forName(info.name) }
-            .filter { klass ->
-                val intent = Intent(context, klass).apply {
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                }
+    protected open fun getMainActivityClass(): Class<*>? =
+        applicationContext.let { context ->
+            context.packageManager
+                .getPackageInfo(context.packageName, PackageManager.GET_ACTIVITIES)
+                .activities
+                .asSequence()
+                .map { info -> Class.forName(info.name) }
+                .filter { klass ->
+                    val intent = Intent(context, klass).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
 
-                context
-                    .packageManager
-                    .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
-                    .isNotEmpty()
-            }.firstOrNull()
-    }
+                    context.packageManager
+                        .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                        .isNotEmpty()
+                }.firstOrNull()
+        }
 
     companion object {
         const val EXTRA_CONFIG_PATH = "config-path"
