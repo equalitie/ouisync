@@ -149,7 +149,6 @@ impl TopicState {
                 Some(Output::OutgoingCreate(self.nonce))
             }
             (IncomingState::Created(_), OutgoingState::Failed) => {
-                self.incoming = IncomingState::Init;
                 self.outgoing = OutgoingState::Creating;
                 Some(Output::OutgoingCreate(self.nonce))
             }
