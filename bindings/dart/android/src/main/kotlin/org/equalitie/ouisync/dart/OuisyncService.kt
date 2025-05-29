@@ -5,13 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
-import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
 import androidx.datastore.core.DataStore
@@ -19,21 +17,19 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.server.Server
 import kotlin.collections.firstOrNull
-
 
 class OuisyncService : Service() {
     // Local binder allows observing when the service startup completes.
@@ -50,7 +46,11 @@ class OuisyncService : Service() {
         suspend fun getConfigPath(): String = config.get(EXTRA_CONFIG_PATH.stringKey)
 
         // Setup service notification.
-        fun notify(channelName: String?, contentTitle: String?, contentText: String?) {
+        fun notify(
+            channelName: String?,
+            contentTitle: String?,
+            contentText: String?,
+        ) {
             setupForeground(channelName, contentTitle, contentText)
         }
     }
@@ -59,12 +59,13 @@ class OuisyncService : Service() {
 
     private val config: DataStore<Preferences> by preferencesDataStore(CONFIG_NAME)
 
-    private val server: Deferred<Server> = scope.async {
-        val configPath = config.get(EXTRA_CONFIG_PATH.stringKey)
-        val debugLabel = config.getOrNull(EXTRA_DEBUG_LABEL.stringKey)
+    private val server: Deferred<Server> =
+        scope.async {
+            val configPath = config.get(EXTRA_CONFIG_PATH.stringKey)
+            val debugLabel = config.getOrNull(EXTRA_DEBUG_LABEL.stringKey)
 
-        Server.start(configPath, debugLabel)
-    }
+            Server.start(configPath, debugLabel)
+        }
 
     private var isForeground = false
 
@@ -110,29 +111,35 @@ class OuisyncService : Service() {
         server.await()
     }
 
-    private suspend fun updateConfig(intent: Intent) =    config.edit { prefs ->
-                for (name in arrayOf(EXTRA_CONFIG_PATH, EXTRA_DEBUG_LABEL)) {
-                    intent.getStringExtra(name)?.let { value ->
-                        val key = name.stringKey
+    private suspend fun updateConfig(intent: Intent) =
+        config.edit { prefs ->
+            for (name in arrayOf(EXTRA_CONFIG_PATH, EXTRA_DEBUG_LABEL)) {
+                intent.getStringExtra(name)?.let { value ->
+                    val key = name.stringKey
 
-                        if (value.isNotEmpty()) {
-                            prefs[key] = value
-                        } else {
-                            prefs.remove(key)
-                        }
+                    if (value.isNotEmpty()) {
+                        prefs[key] = value
+                    } else {
+                        prefs.remove(key)
                     }
                 }
             }
+        }
 
-    private fun setupForeground(channelName: String?, contentTitle: String?, contentText: String?) {
+    private fun setupForeground(
+        channelName: String?,
+        contentTitle: String?,
+        contentText: String?,
+    ) {
         val manager = getSystemService(NotificationManager::class.java)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                channelName ?: DEFAULT_NOTIFICATION_CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_LOW
-            )
+            val channel =
+                NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    channelName ?: DEFAULT_NOTIFICATION_CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_LOW,
+                )
 
             manager.createNotificationChannel(channel)
         }
@@ -143,7 +150,11 @@ class OuisyncService : Service() {
             manager.notify(NOTIFICATION_ID, notification)
         } else {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
@@ -154,7 +165,7 @@ class OuisyncService : Service() {
 
     protected open fun createNotification(
         contentTitle: String? = null,
-        contentText: String? = null
+        contentText: String? = null,
     ): Notification =
         Notification
             .Builder(this, NOTIFICATION_CHANNEL_ID)
@@ -235,9 +246,6 @@ class OuisyncService : Service() {
 private val String.stringKey: Preferences.Key<String>
     get() = stringPreferencesKey(substringAfterLast('.'))
 
-private suspend fun <T> DataStore<Preferences>.get(key: Preferences.Key<T>): T =
-    data.map { prefs -> prefs[key] }.filterNotNull().first()
+private suspend fun <T> DataStore<Preferences>.get(key: Preferences.Key<T>): T = data.map { prefs -> prefs[key] }.filterNotNull().first()
 
-private suspend fun <T> DataStore<Preferences>.getOrNull(key: Preferences.Key<T>): T? =
-    data.map { prefs -> prefs[key] }.firstOrNull()
-
+private suspend fun <T> DataStore<Preferences>.getOrNull(key: Preferences.Key<T>): T? = data.map { prefs -> prefs[key] }.firstOrNull()

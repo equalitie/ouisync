@@ -21,7 +21,6 @@ import android.os.ProxyFileDescriptorCallback
 import android.os.storage.StorageManager
 import android.provider.OpenableColumns
 import android.util.Log
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -47,33 +46,35 @@ class PipeProvider : ContentProvider() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val session: Deferred<Session> = scope.async {
-        val context = requireNotNull(context)
-        val intent = Intent(context, OuisyncService::class.java)
+    private val session: Deferred<Session> =
+        scope.async {
+            val context = requireNotNull(context)
+            val intent = Intent(context, OuisyncService::class.java)
 
-        // Binding to OusyncService initiates startup of the ouisync server.
-        // TODO: How do we unbind here?
-        val binder = suspendCoroutine<OuisyncService.LocalBinder> { cont ->
-            context.bindService(
-                intent,
-                object : ServiceConnection {
-                    override fun onServiceConnected(
-                        name: ComponentName,
-                        binder: IBinder,
-                    ) = cont.resume(binder as OuisyncService.LocalBinder)
+            // Binding to OusyncService initiates startup of the ouisync server.
+            // TODO: How do we unbind here?
+            val binder =
+                suspendCoroutine<OuisyncService.LocalBinder> { cont ->
+                    context.bindService(
+                        intent,
+                        object : ServiceConnection {
+                            override fun onServiceConnected(
+                                name: ComponentName,
+                                binder: IBinder,
+                            ) = cont.resume(binder as OuisyncService.LocalBinder)
 
-                    override fun onServiceDisconnected(name: ComponentName) = Unit
-                },
-                Service.BIND_AUTO_CREATE,
-            )
+                            override fun onServiceDisconnected(name: ComponentName) = Unit
+                        },
+                        Service.BIND_AUTO_CREATE,
+                    )
+                }
+
+            // Wait until the server has been started.
+            binder.ensureStarted()
+
+            // Create ousync Session which connects to the server created above.
+            Session.create(binder.getConfigPath())
         }
-
-        // Wait until the server has been started.
-        binder.ensureStarted()
-
-        // Create ousync Session which connects to the server created above.
-        Session.create(binder.getConfigPath())
-    }
 
     // Handler for running proxy file descriptor's callbacks
     // TODO: consider using thread pool so we can handle multiple files concurrently.

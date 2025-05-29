@@ -15,6 +15,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.Fragment
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -27,10 +28,10 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import org.equalitie.ouisync.kotlin.client.LogLevel
 import org.equalitie.ouisync.kotlin.server.initLog
 
@@ -48,15 +49,23 @@ class OuisyncPlugin :
     private var activity: Activity? = null
     private var activityLifecycle: Lifecycle? = null
 
-    private val activityLifecycleObserver = object : DefaultLifecycleObserver {
-        override fun onDestroy(owner: LifecycleOwner) {
-            // Stop the service when the activity is destoyed by the user (e.g., swiped off from the
-            // recent apps screen) as opposed to being destroyed automatically by the os.
-            if (owner is Activity && owner.isFinishing) {
-                this@OuisyncPlugin.onStop()
+    private val activityLifecycleObserver =
+        object : DefaultLifecycleObserver {
+            override fun onDestroy(owner: LifecycleOwner) {
+                // Stop the service when the activity is destoyed by the user (e.g., swiped off from the
+                // recent apps screen) as opposed to being destroyed automatically by the os.
+                val finishing =
+                    when (owner) {
+                        is Activity -> owner.isFinishing
+                        is Fragment -> owner.activity?.isFinishing ?: false
+                        else -> false
+                    }
+
+                if (finishing) {
+                    this@OuisyncPlugin.onStop()
+                }
             }
         }
-    }
 
     private val binder: MutableStateFlow<OuisyncService.LocalBinder?> = MutableStateFlow(null)
 
@@ -65,9 +74,10 @@ class OuisyncPlugin :
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-        activityLifecycle = FlutterLifecycleAdapter.getActivityLifecycle(binding).also { lifecycle ->
-            lifecycle.addObserver(activityLifecycleObserver)
-        }
+        activityLifecycle =
+            FlutterLifecycleAdapter.getActivityLifecycle(binding).apply {
+                addObserver(activityLifecycleObserver)
+            }
 
         val activity = binding.activity
 
@@ -76,7 +86,7 @@ class OuisyncPlugin :
         activity.bindService(
             Intent(activity, OuisyncService::class.java),
             this,
-            Service.BIND_AUTO_CREATE
+            Service.BIND_AUTO_CREATE,
         )
 
         this.activity = activity
@@ -156,9 +166,7 @@ class OuisyncPlugin :
                 val configPath = arguments["configPath"] as String
                 val debugLabel = arguments["debugLabel"] as String?
 
-                launch(result) {
-                    onStart(configPath, debugLabel)
-                }
+                launch(result) { onStart(configPath, debugLabel) }
             }
             "stop" -> {
                 onStop()
@@ -170,9 +178,7 @@ class OuisyncPlugin :
                 val contentTitle = arguments["contentTitle"] as String?
                 val contentText = arguments["contentText"] as String?
 
-                launch(result) {
-                    onNotify(channelName, contentTitle, contentText)
-                }
+                launch(result) { onNotify(channelName, contentTitle, contentText) }
             }
             "viewFile" -> {
                 val uri = Uri.parse(call.arguments as String)
@@ -210,7 +216,10 @@ class OuisyncPlugin :
         }
     }
 
-    private suspend fun onStart(configPath: String, debugLabel: String?) {
+    private suspend fun onStart(
+        configPath: String,
+        debugLabel: String?,
+    ) {
         val activity = requireNotNull(this.activity)
 
         activity.startService(
@@ -274,7 +283,10 @@ class OuisyncPlugin :
 
     // Launch the given coroutine and assign its return value (or exception, if it throws) to the
     // given method channel result.
-    private fun launch(result: MethodChannel.Result, block: suspend () -> Any?) = scope.launch {
+    private fun launch(
+        result: MethodChannel.Result,
+        block: suspend () -> Any?,
+    ) = scope.launch {
         try {
             val value = block()
             result.success(if (value is Unit) null else value)
