@@ -1,5 +1,6 @@
 package org.equalitie.ouisync.dart
 
+import android.app.Service
 import android.content.ComponentName
 import android.content.ContentProvider
 import android.content.ContentValues
@@ -50,6 +51,7 @@ class PipeProvider : ContentProvider() {
     private val session = CompletableDeferred<Session>()
 
     // Handler for running proxy file descriptor's callbacks
+    // TODO: consider using thread pool so we can handle multiple files concurrently.
     private val handler =
         Handler(
             HandlerThread("${javaClass.simpleName} handler thread")
@@ -65,24 +67,23 @@ class PipeProvider : ContentProvider() {
         val context = requireNotNull(context)
 
         scope.launch {
-            // Bind to OusyncService and wait until the ousiync service has been started.
-            suspendCoroutine<Unit> { cont ->
+            // Bind to OusyncService and wait until ousiync server has been started.
+            val configPath = suspendCoroutine<String> { cont ->
                 val intent = Intent(context, OuisyncService::class.java)
                 val connection =
                     object : ServiceConnection {
                         override fun onServiceConnected(
                             name: ComponentName,
                             binder: IBinder,
-                        ) = (binder as OuisyncService.LocalBinder).onStart { cont.resume(Unit) }
+                        ) = (binder as OuisyncService.LocalBinder).onStart(cont::resumeWith)
 
                         override fun onServiceDisconnected(name: ComponentName) = Unit
                     }
 
-                context.bindService(intent, connection, 0)
+                context.bindService(intent, connection, Service.BIND_AUTO_CREATE)
             }
 
             // Create ousync Session which should connect to the server we just started above.
-            val configPath = context.loadConfigPath()
             session.complete(Session.create(configPath))
         }
 
@@ -180,6 +181,8 @@ class PipeProvider : ContentProvider() {
             val file = openRepoFile(uri)
 
             try {
+                // TODO: copy_to_fd is implemented in the ouisync library but not yet exposed
+                // through ousiync-service
                 TODO("File.copyToRawFd is not yet implemented")
                 // file.copyToFd(dstFd)
             } finally {
@@ -200,7 +203,7 @@ class PipeProvider : ContentProvider() {
     inner class ProxyCallback(
         val uri: Uri,
     ) : ProxyFileDescriptorCallback() {
-        private val file: Deferred<File> by lazy { scope.async { openRepoFile(uri) } }
+        private val file: Deferred<File> = scope.async { openRepoFile(uri) }
 
         override fun onGetSize() = runBlocking { file.await().getLength() }
 

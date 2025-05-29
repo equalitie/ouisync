@@ -64,6 +64,8 @@ android {
         debugImplementation   'ie.equalit.ouinet:ouisync-server-debug:+'
         releaseImplementation 'ie.equalit.ouinet:ouisync-server:+'
 
+        implementation 'androidx.datastore:datastore-preferences:1.1.7'
+
         testImplementation 'org.jetbrains.kotlin:kotlin-test'
         testImplementation 'org.mockito:mockito-core:5.10.0'
     }

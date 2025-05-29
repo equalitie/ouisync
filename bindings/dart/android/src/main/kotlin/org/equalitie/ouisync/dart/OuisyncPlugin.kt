@@ -1,6 +1,7 @@
 package org.equalitie.ouisync.dart
 
 import android.app.Activity
+import android.app.Service
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
@@ -45,14 +46,17 @@ class OuisyncPlugin :
 
         requestPermissions(activity)
 
-        activity.bindService(Intent(activity, OuisyncService::class.java), this, 0)
+        activity.bindService(
+            Intent(activity, OuisyncService::class.java),
+            this,
+            Service.BIND_AUTO_CREATE
+        )
 
         this.activity = activity
     }
 
     override fun onDetachedFromActivity() {
-        activity?.let { activity -> activity.unbindService(this) }
-
+        activity?.unbindService(this)
         activity = null
     }
 
@@ -98,7 +102,8 @@ class OuisyncPlugin :
         name: ComponentName,
         binder: IBinder,
     ) {
-        (binder as OuisyncService.LocalBinder).onStart { result ->
+        (binder as OuisyncService.LocalBinder).onStart {
+            val result = it.map { Unit }
             startCallbacks.forEach { callback -> callback(result) }
             startCallbacks.clear()
         }
@@ -122,7 +127,17 @@ class OuisyncPlugin :
                 val arguments = call.arguments as Map<String, Any?>
                 val configPath = arguments["configPath"] as String
                 val debugLabel = arguments["debugLabel"] as String?
-                onStart(configPath, debugLabel) {
+                val notificationChannelName = arguments["notificationChannelName"] as String?
+                val notificationContentTitle = arguments["notificationContentTitle"] as String?
+                val notificationContentText = arguments["notificationContentText"] as String?
+
+                onStart(
+                    configPath,
+                    debugLabel,
+                    notificationChannelName,
+                    notificationContentTitle,
+                    notificationContentText,
+                ) {
                     // TODO: do we need to explicitly call `result.error` on failure?
                     it.getOrThrow()
                     result.success(null)
@@ -171,6 +186,9 @@ class OuisyncPlugin :
     private fun onStart(
         configPath: String,
         debugLabel: String?,
+        notificationChannelName: String?,
+        notificationContentTitle: String?,
+        notificationContentText: String?,
         callback: (Result<Unit>) -> Unit,
     ) {
         val activity = requireNotNull(this.activity)
@@ -181,6 +199,9 @@ class OuisyncPlugin :
             Intent(activity, OuisyncService::class.java).apply {
                 putExtra(OuisyncService.EXTRA_CONFIG_PATH, configPath)
                 putExtra(OuisyncService.EXTRA_DEBUG_LABEL, debugLabel)
+                putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME, notificationChannelName)
+                putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TITLE, notificationContentTitle)
+                putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TEXT, notificationContentText)
             },
         )
     }

@@ -40,7 +40,10 @@ class _MyAppState extends State<MyApp> {
     final dataDir = (await getApplicationSupportDirectory()).path;
     final configDir = join(dataDir, 'config.db');
 
-    final server = Server.create(configPath: configDir)..initLog(stdout: true);
+    final server = Server.create(
+      configPath: configDir,
+      notificationContentTitle: 'Ouisync example is running',
+    )..initLog(stdout: true);
     await server.start();
 
     final session = await Session.create(configPath: configDir);

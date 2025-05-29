@@ -6,10 +6,20 @@ import '../server.dart';
 import '../../generated/api.g.dart' show LogLevel;
 
 class MethodChannelServer extends Server {
+  final String? notificationChannelName;
+  final String? notificationContentTitle;
+  final String? notificationContentText;
+
   final _channel = MethodChannel('org.equalitie.ouisync.plugin');
   Function(LogLevel, String)? _logCallback;
 
-  MethodChannelServer({required super.configPath, super.debugLabel}) {
+  MethodChannelServer({
+    required super.configPath,
+    this.notificationChannelName,
+    this.notificationContentTitle,
+    this.notificationContentText,
+    super.debugLabel,
+  }) {
     _channel.setMethodCallHandler(_handleMethodCall);
   }
 
@@ -27,6 +37,9 @@ class MethodChannelServer extends Server {
   Future<void> start() => _channel.invokeMethod<int>('start', {
         'configPath': configPath,
         'debugLabel': debugLabel,
+        'notificationChannelName': notificationChannelName,
+        'notificationContentTitle': notificationContentTitle,
+        'notificationContentText': notificationContentText,
       });
 
   @override

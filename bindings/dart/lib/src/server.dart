@@ -11,11 +11,20 @@ abstract class Server {
 
   Server({required this.configPath, this.debugLabel});
 
-  factory Server.create({required String configPath, String? debugLabel}) {
+  factory Server.create({
+    required String configPath,
+    String? notificationChannelName,
+    String? notificationContentTitle,
+    String? notificationContentText,
+    String? debugLabel,
+  }) {
     if (Platform.isAndroid) {
       return MethodChannelServer(
         configPath: configPath,
         debugLabel: debugLabel,
+        notificationChannelName: notificationChannelName,
+        notificationContentTitle: notificationContentTitle,
+        notificationContentText: notificationContentText,
       );
     } else {
       return FfiServer(
