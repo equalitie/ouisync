@@ -51,4 +51,14 @@ abstract class Server {
 
   /// Stops the server.
   Future<void> stop();
+
+  /// Setup notification indicating the server is running. Currently this has effect only on
+  /// Android (where the server is backed by [foreground service]
+  /// (https://developer.android.com/develop/background-work/services/fgs)).
+  Future<void> notify({
+    String? channelName,
+    String? contentTitle,
+    String? contentText,
+  }) =>
+      Future.value();
 }

@@ -42,9 +42,9 @@ class _MyAppState extends State<MyApp> {
 
     final server = Server.create(
       configPath: configDir,
-      notificationContentTitle: 'Ouisync example is running',
     )..initLog(stdout: true);
     await server.start();
+    await server.notify(contentTitle: 'Ouisync example is running');
 
     final session = await Session.create(configPath: configDir);
     await session.setStoreDir(join(dataDir, 'repos'));

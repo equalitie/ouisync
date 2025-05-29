@@ -25,6 +25,12 @@ import io.flutter.embedding.engine.plugins.lifecycle.FlutterLifecycleAdapter
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import org.equalitie.ouisync.kotlin.client.LogLevel
 import org.equalitie.ouisync.kotlin.server.initLog
 
@@ -35,10 +41,10 @@ class OuisyncPlugin :
     MethodCallHandler,
     ActivityAware,
     ServiceConnection {
+    private val scope = CoroutineScope(Dispatchers.Main)
+
     private var channel: MethodChannel? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var startCallbacks = mutableListOf<(Result<Unit>) -> Unit>()
-
     private var activity: Activity? = null
     private var activityLifecycle: Lifecycle? = null
 
@@ -51,6 +57,8 @@ class OuisyncPlugin :
             }
         }
     }
+
+    private val binder: MutableStateFlow<OuisyncService.LocalBinder?> = MutableStateFlow(null)
 
     companion object {
         private const val CHANNEL_NAME = "org.equalitie.ouisync.plugin"
@@ -124,14 +132,12 @@ class OuisyncPlugin :
         name: ComponentName,
         binder: IBinder,
     ) {
-        (binder as OuisyncService.LocalBinder).onStart {
-            val result = it.map { Unit }
-            startCallbacks.forEach { callback -> callback(result) }
-            startCallbacks.clear()
-        }
+        this.binder.value = binder as OuisyncService.LocalBinder
     }
 
-    override fun onServiceDisconnected(name: ComponentName) = Unit
+    override fun onServiceDisconnected(name: ComponentName) {
+        this.binder.value = null
+    }
 
     override fun onMethodCall(
         call: MethodCall,
@@ -149,25 +155,24 @@ class OuisyncPlugin :
                 val arguments = call.arguments as Map<String, Any?>
                 val configPath = arguments["configPath"] as String
                 val debugLabel = arguments["debugLabel"] as String?
-                val notificationChannelName = arguments["notificationChannelName"] as String?
-                val notificationContentTitle = arguments["notificationContentTitle"] as String?
-                val notificationContentText = arguments["notificationContentText"] as String?
 
-                onStart(
-                    configPath,
-                    debugLabel,
-                    notificationChannelName,
-                    notificationContentTitle,
-                    notificationContentText,
-                ) {
-                    // TODO: do we need to explicitly call `result.error` on failure?
-                    it.getOrThrow()
-                    result.success(null)
+                launch(result) {
+                    onStart(configPath, debugLabel)
                 }
             }
             "stop" -> {
                 onStop()
                 result.success(null)
+            }
+            "notify" -> {
+                val arguments = call.arguments as Map<String, Any>
+                val channelName = arguments["channelName"] as String?
+                val contentTitle = arguments["contentTitle"] as String?
+                val contentText = arguments["contentText"] as String?
+
+                launch(result) {
+                    onNotify(channelName, contentTitle, contentText)
+                }
             }
             "viewFile" -> {
                 val uri = Uri.parse(call.arguments as String)
@@ -205,27 +210,17 @@ class OuisyncPlugin :
         }
     }
 
-    private fun onStart(
-        configPath: String,
-        debugLabel: String?,
-        notificationChannelName: String?,
-        notificationContentTitle: String?,
-        notificationContentText: String?,
-        callback: (Result<Unit>) -> Unit,
-    ) {
+    private suspend fun onStart(configPath: String, debugLabel: String?) {
         val activity = requireNotNull(this.activity)
 
-        startCallbacks.add(callback)
-
-        activity.startForegroundService(
+        activity.startService(
             Intent(activity, OuisyncService::class.java).apply {
                 putExtra(OuisyncService.EXTRA_CONFIG_PATH, configPath)
                 putExtra(OuisyncService.EXTRA_DEBUG_LABEL, debugLabel)
-                putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME, notificationChannelName)
-                putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TITLE, notificationContentTitle)
-                putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TEXT, notificationContentText)
             },
         )
+
+        binder.filterNotNull().first().ensureStarted()
     }
 
     private fun onStop() {
@@ -233,6 +228,14 @@ class OuisyncPlugin :
             activity.unbindService(this)
             activity.stopService(Intent(activity, OuisyncService::class.java))
         }
+    }
+
+    private suspend fun onNotify(
+        channelName: String?,
+        contentTitle: String?,
+        contentText: String?,
+    ) {
+        binder.filterNotNull().first().notify(channelName, contentTitle, contentText)
     }
 
     private fun onViewFile(uri: Uri): Boolean {
@@ -267,6 +270,17 @@ class OuisyncPlugin :
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
         context.startActivity(Intent.createChooser(intent, null))
+    }
+
+    // Launch the given coroutine and assign its return value (or exception, if it throws) to the
+    // given method channel result.
+    private fun launch(result: MethodChannel.Result, block: suspend () -> Any?) = scope.launch {
+        try {
+            val value = block()
+            result.success(if (value is Unit) null else value)
+        } catch (e: Exception) {
+            result.error(e::class.simpleName ?: "error", e.toString(), null)
+        }
     }
 }
 

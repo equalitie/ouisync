@@ -37,13 +37,22 @@ class MethodChannelServer extends Server {
   Future<void> start() => _channel.invokeMethod<int>('start', {
         'configPath': configPath,
         'debugLabel': debugLabel,
-        'notificationChannelName': notificationChannelName,
-        'notificationContentTitle': notificationContentTitle,
-        'notificationContentText': notificationContentText,
       });
 
   @override
   Future<void> stop() => _channel.invokeMethod<int>('stop');
+
+  @override
+  Future<void> notify({
+    String? channelName,
+    String? contentTitle,
+    String? contentText,
+  }) =>
+      _channel.invokeMethod<void>('notify', {
+        'channelName': channelName,
+        'contentTitle': contentTitle,
+        'contentText': contentText,
+      });
 
   Future<void> _handleMethodCall(MethodCall call) {
     switch (call.method) {

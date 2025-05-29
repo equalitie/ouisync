@@ -45,10 +45,35 @@ class PipeProvider : ContentProvider() {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
     }
 
-    private val supervisorJob = SupervisorJob()
-    private val scope = CoroutineScope(Dispatchers.IO + supervisorJob)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val session = CompletableDeferred<Session>()
+    private val session: Deferred<Session> = scope.async {
+        val context = requireNotNull(context)
+        val intent = Intent(context, OuisyncService::class.java)
+
+        // Binding to OusyncService initiates startup of the ouisync server.
+        // TODO: How do we unbind here?
+        val binder = suspendCoroutine<OuisyncService.LocalBinder> { cont ->
+            context.bindService(
+                intent,
+                object : ServiceConnection {
+                    override fun onServiceConnected(
+                        name: ComponentName,
+                        binder: IBinder,
+                    ) = cont.resume(binder as OuisyncService.LocalBinder)
+
+                    override fun onServiceDisconnected(name: ComponentName) = Unit
+                },
+                Service.BIND_AUTO_CREATE,
+            )
+        }
+
+        // Wait until the server has been started.
+        binder.ensureStarted()
+
+        // Create ousync Session which connects to the server created above.
+        Session.create(binder.getConfigPath())
+    }
 
     // Handler for running proxy file descriptor's callbacks
     // TODO: consider using thread pool so we can handle multiple files concurrently.
@@ -63,32 +88,7 @@ class PipeProvider : ContentProvider() {
                 }.getLooper(),
         )
 
-    override fun onCreate(): Boolean {
-        val context = requireNotNull(context)
-
-        scope.launch {
-            // Bind to OusyncService and wait until ousiync server has been started.
-            val configPath = suspendCoroutine<String> { cont ->
-                val intent = Intent(context, OuisyncService::class.java)
-                val connection =
-                    object : ServiceConnection {
-                        override fun onServiceConnected(
-                            name: ComponentName,
-                            binder: IBinder,
-                        ) = (binder as OuisyncService.LocalBinder).onStart(cont::resumeWith)
-
-                        override fun onServiceDisconnected(name: ComponentName) = Unit
-                    }
-
-                context.bindService(intent, connection, Service.BIND_AUTO_CREATE)
-            }
-
-            // Create ousync Session which should connect to the server we just started above.
-            session.complete(Session.create(configPath))
-        }
-
-        return true
-    }
+    override fun onCreate(): Boolean = true
 
     override fun query(
         uri: Uri,

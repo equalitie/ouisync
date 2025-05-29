@@ -38,17 +38,20 @@ import kotlin.collections.firstOrNull
 class OuisyncService : Service() {
     // Local binder allows observing when the service startup completes.
     inner class LocalBinder : Binder() {
-        // Invokes the callback when the server has been started.
-        fun onStart(callback: (Result<String>) -> Unit) {
-            scope.launch {
-                try {
-                    server.await()
-                    val configPath = config.get(EXTRA_CONFIG_PATH.stringKey)
-                    callback(Result.success(configPath))
-                } catch (e: Throwable) {
-                    callback(Result.failure(e))
-                }
-            }
+        // Waits (without blocking) for the server to complete its startup. If the server is already
+        // running, returns immediatelly.
+        suspend fun ensureStarted() {
+            server.await()
+        }
+
+        // Returns the path to the server's config directory. If it hasn't been set yet, this
+        // function waits (without blocking) until it is. The config directory is set with the
+        // `EXTRA_CONFIG_PATH` extra on the intent passed to [startService] or [bindService]
+        suspend fun getConfigPath(): String = config.get(EXTRA_CONFIG_PATH.stringKey)
+
+        // Setup service notification.
+        fun notify(channelName: String?, contentTitle: String?, contentText: String?) {
+            setupForeground(channelName, contentTitle, contentText)
         }
     }
 
@@ -62,6 +65,8 @@ class OuisyncService : Service() {
 
         Server.start(configPath, debugLabel)
     }
+
+    private var isForeground = false
 
     override fun onCreate() {
         super.onCreate()
@@ -88,66 +93,63 @@ class OuisyncService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
-        scope.launch {
-            updateConfig(intent?.extras ?: Bundle.EMPTY)
-            setupForeground()
-            server.await()
-        }
-
+        scope.launch { init(intent) }
         return START_REDELIVER_INTENT
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        scope.launch {
-            setupForeground()
-            server.await()
-        }
-
+        scope.launch { init(intent) }
         return LocalBinder()
     }
 
-    private suspend fun updateConfig(extras: Bundle) = config.edit { prefs ->
-        for (name in arrayOf(
-            EXTRA_CONFIG_PATH,
-            EXTRA_DEBUG_LABEL,
-            EXTRA_NOTIFICATION_CHANNEL_NAME,
-            EXTRA_NOTIFICATION_CONTENT_TITLE,
-            EXTRA_NOTIFICATION_CONTENT_TEXT
-        )) {
-            val value = extras.getString(name)
+    private suspend fun init(intent: Intent?) {
+        if (intent != null) {
+            updateConfig(intent)
+        }
 
-            if (value != null) {
-                prefs[name.stringKey] = value
+        server.await()
+    }
+
+    private suspend fun updateConfig(intent: Intent) =    config.edit { prefs ->
+                for (name in arrayOf(EXTRA_CONFIG_PATH, EXTRA_DEBUG_LABEL)) {
+                    intent.getStringExtra(name)?.let { value ->
+                        val key = name.stringKey
+
+                        if (value.isNotEmpty()) {
+                            prefs[key] = value
+                        } else {
+                            prefs.remove(key)
+                        }
+                    }
+                }
             }
-        }
-    }
 
-    private suspend fun setupForeground() {
+    private fun setupForeground(channelName: String?, contentTitle: String?, contentText: String?) {
+        val manager = getSystemService(NotificationManager::class.java)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channelName = config.getOrNull(EXTRA_NOTIFICATION_CHANNEL_NAME.stringKey) ?: DEFAULT_NOTIFICATION_CHANNEL_NAME
-            createNotificationChannel(channelName)
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                channelName ?: DEFAULT_NOTIFICATION_CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_LOW
+            )
+
+            manager.createNotificationChannel(channel)
         }
 
-        val notification = createNotification(
-            contentTitle = config.getOrNull(EXTRA_NOTIFICATION_CONTENT_TITLE.stringKey),
-            contentText  = config.getOrNull(EXTRA_NOTIFICATION_CONTENT_TEXT.stringKey),
-        )
+        val notification = createNotification(contentTitle, contentText)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        if (isForeground) {
+            manager.notify(NOTIFICATION_ID, notification)
         } else {
-            startForeground(NOTIFICATION_ID, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+
+            isForeground = true
         }
-    }
-
-    protected open fun createNotificationChannel(name: String) {
-        val channel = NotificationChannel(
-            NOTIFICATION_CHANNEL_ID,
-            name,
-            NotificationManager.IMPORTANCE_LOW
-        )
-
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     protected open fun createNotification(
@@ -221,9 +223,6 @@ class OuisyncService : Service() {
     companion object {
         const val EXTRA_CONFIG_PATH = "org.equalitie.ouisync.service.extra.config_path"
         const val EXTRA_DEBUG_LABEL = "org.equalitie.ouisync.service.extra.debug_label"
-        const val EXTRA_NOTIFICATION_CHANNEL_NAME = "org.equalitie.ouisync.service.extra.notification_channel_name"
-        const val EXTRA_NOTIFICATION_CONTENT_TITLE = "org.equalitie.ouisync.service.extra.notification_content_title"
-        const val EXTRA_NOTIFICATION_CONTENT_TEXT = "org.equalitie.ouisync.service.extra.notification_content_text"
 
         private const val CONFIG_NAME = "org.equalitie.ouisync.service"
 
