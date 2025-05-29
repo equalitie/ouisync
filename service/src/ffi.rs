@@ -180,6 +180,8 @@ fn run(
         }
     };
 
+    service.enable_panic_monitor();
+
     // Run the service until `service_stop` is called.
     runtime.block_on(
         async {
