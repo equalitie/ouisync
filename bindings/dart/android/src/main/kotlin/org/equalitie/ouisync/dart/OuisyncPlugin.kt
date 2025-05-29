@@ -15,9 +15,13 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
+import io.flutter.embedding.engine.plugins.lifecycle.FlutterLifecycleAdapter
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
@@ -31,17 +35,32 @@ class OuisyncPlugin :
     MethodCallHandler,
     ActivityAware,
     ServiceConnection {
-    var channel: MethodChannel? = null
-
+    private var channel: MethodChannel? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var activity: Activity? = null
     private var startCallbacks = mutableListOf<(Result<Unit>) -> Unit>()
+
+    private var activity: Activity? = null
+    private var activityLifecycle: Lifecycle? = null
+
+    private val activityLifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onDestroy(owner: LifecycleOwner) {
+            // Stop the service when the activity is destoyed by the user (e.g., swiped off from the
+            // recent apps screen) as opposed to being destroyed automatically by the os.
+            if (owner is Activity && owner.isFinishing) {
+                this@OuisyncPlugin.onStop()
+            }
+        }
+    }
 
     companion object {
         private const val CHANNEL_NAME = "org.equalitie.ouisync.plugin"
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activityLifecycle = FlutterLifecycleAdapter.getActivityLifecycle(binding).also { lifecycle ->
+            lifecycle.addObserver(activityLifecycleObserver)
+        }
+
         val activity = binding.activity
 
         requestPermissions(activity)
@@ -56,6 +75,9 @@ class OuisyncPlugin :
     }
 
     override fun onDetachedFromActivity() {
+        activityLifecycle?.removeObserver(activityLifecycleObserver)
+        activityLifecycle = null
+
         activity?.unbindService(this)
         activity = null
     }
