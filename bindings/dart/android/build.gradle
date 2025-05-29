@@ -1,39 +1,37 @@
 buildscript {
-    ext.kotlin_version = "2.0.20"
+    ext.kotlin_version = "2.1.20"
     repositories {
         google()
         mavenCentral()
-
-        maven {
-            url "https://plugins.gradle.org/m2/"
-        }
     }
 
     dependencies {
-        classpath("com.android.tools.build:gradle:8.7.2")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
+        classpath "com.android.tools.build:gradle:8.10.0"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
 }
 
 plugins {
-    id "com.android.library"
-    id "kotlin-android"
-    id "org.mozilla.rust-android-gradle.rust-android" version '0.9.4'
+    id "com.diffplug.spotless" version "7.0.3"
 }
 
 allprojects {
     repositories {
         google()
+        mavenLocal()
         mavenCentral()
     }
 }
 
-group = "org.equalitie.ouisync.lib"
+group = "org.equalitie.ouisync.dart"
 version = "1.0-SNAPSHOT"
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
 
 android {
     if (project.android.hasProperty("namespace")) {
-        namespace = "org.equalitie.ouisync.lib"
+        namespace = "org.equalitie.ouisync.dart"
     }
 
     compileSdk = 34
@@ -45,8 +43,8 @@ android {
     }
 
     defaultConfig {
-        minSdk = 21
-        targetSdkVersion = 34
+        minSdk = 26
+        targetSdk = 34
     }
 
     kotlin {
@@ -62,8 +60,14 @@ android {
     }
 
     dependencies {
-        testImplementation("org.jetbrains.kotlin:kotlin-test")
-        testImplementation("org.mockito:mockito-core:5.10.0")
+        implementation        'ie.equalit.ouinet:ouisync-client:+'
+        debugImplementation   'ie.equalit.ouinet:ouisync-server-debug:+'
+        releaseImplementation 'ie.equalit.ouinet:ouisync-server:+'
+
+        implementation 'androidx.datastore:datastore-preferences:1.1.7'
+
+        testImplementation 'org.jetbrains.kotlin:kotlin-test'
+        testImplementation 'org.mockito:mockito-core:5.10.0'
     }
 
     testOptions {
@@ -79,41 +83,47 @@ android {
     }
 }
 
-def abiTargets = {
-    if (project.hasProperty("target-platform")) {
+afterEvaluate {
+    def rustTargets = project.findProperty('target-platform')?.split(',').collect {
         // https://github.com/flutter/flutter/blob/37dbe030feb47cdf15f3d4c1921857dbbac8aedf/packages/flutter_tools/gradle/flutter.gradle#L78-L82
-        return project.property("target-platform").split(',').collect{
-            if (it == "android-arm") {
-                return "arm"
-            } else if (it == "android-arm64") {
-                return "arm64"
-            } else if (it == "android-x86") {
-                return "x86"
-            } else if (it == "android-x64") {
-                return "x86_64"
-            } else {
-                println("Unknown target platform: " + it)
-                System.exit(1)
-            }
+        switch (it) {
+            case 'android-arm':   return 'arm'
+            case 'android-arm64': return 'arm64'
+            case 'android-x86':   return 'x86'
+            case 'android-x64':   return 'x86_64'
+            default: throw new IllegalArgumentException("unknown target platform: $it")
         }
     }
-    else {
-        // NOTE: x86 is not added by default when invoking `flutter build aar`
-        // so we don't include it here neither.
-        return ["arm", "arm64", /* "x86", */ "x86_64"]
+
+    android.libraryVariants.each {
+        def variant = it.name.capitalize()
+
+        // Build kotlin bindings and publish them to a local maven repository.
+        tasks.register("build${variant}KotlinBindings", GradleBuild) {
+            dir = "${projectDir}/../../kotlin"
+            tasks = [
+                "publishClientPublicationToMavenLocal",
+                "publish${variant}ServerPublicationToMavenLocal".toString(),
+            ]
+
+            // Pass the rust targets from flutter.
+            if (rustTargets != null) {
+                startParameter.projectProperties = [
+                    'rust-targets': rustTargets.join(',')
+                ]
+            }
+        }
+
+        tasks.named("pre${variant}Build") {
+            dependsOn "build${variant}KotlinBindings"
+        }
     }
-}()
-
-cargo {
-    // MacOS no longer has `python` (only has `python3`) and `python3` is present on all other
-    // systems.
-    pythonCommand = "python3"
-    module = "../../.."
-    libname = "ouisync_service"
-    targets = abiTargets
-    profile = gradle.startParameter.taskNames.any{it.toLowerCase().contains("debug")} ? "debug" : "release"
-
-    extraCargoBuildArguments = ['-p', 'ouisync-service']
 }
 
-preBuild.dependsOn 'cargoBuild'
+spotless {
+    kotlin {
+        target("**/*.kt")
+        ktfmt()
+        ktlint()
+    }
+}

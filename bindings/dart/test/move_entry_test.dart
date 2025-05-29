@@ -9,6 +9,7 @@ import 'utils.dart';
 
 void main() {
   late io.Directory temp;
+  late Server server;
   late Session session;
   late Repository repository;
 
@@ -21,9 +22,12 @@ void main() {
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
 
-    session = await Session.create(
-      configPath: '${temp.path}/config',
-    );
+    final configPath = '${temp.path}/config';
+
+    server = Server.create(configPath: configPath);
+    await server.start();
+
+    session = await Session.create(configPath: configPath);
     await session.setStoreDir('${temp.path}/store');
 
     repository = await session.createRepository(
@@ -35,6 +39,7 @@ void main() {
 
   tearDown(() async {
     await session.close();
+    await server.stop();
     await deleteTempDir(temp);
   });
 

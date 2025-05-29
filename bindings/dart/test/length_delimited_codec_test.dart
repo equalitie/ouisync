@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:ouisync/internal/length_delimited_codec.dart';
+import 'package:ouisync/src/length_delimited_codec.dart';
 import 'package:test/test.dart';
 
 void main() {

@@ -322,7 +322,7 @@ impl Inner {
     ) -> Result<()> {
         let proof = match proof.verify(self.vault.repository_id()) {
             Ok(proof) => proof,
-            Err(ProofError(_)) => {
+            Err(ProofError) => {
                 tracing::trace!("Invalid proof");
                 return Ok(());
             }

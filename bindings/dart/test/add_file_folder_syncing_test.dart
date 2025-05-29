@@ -10,6 +10,7 @@ import 'utils.dart';
 
 void main() {
   late io.Directory temp;
+  late Server server;
   late Session session;
 
   late Repository repository;
@@ -29,8 +30,13 @@ void main() {
   setUp(() async {
     temp = await io.Directory.systemTemp.createTemp();
 
+    final configPath = '${temp.path}/device_id.conf';
+
+    server = Server.create(configPath: configPath);
+    await server.start();
+
     session = await Session.create(
-      configPath: '${temp.path}/device_id.conf',
+      configPath: configPath,
     );
     await session.setStoreDir('${temp.path}/store');
 
@@ -51,6 +57,7 @@ void main() {
   tearDown(() async {
     await subscription.cancel();
     await session.close();
+    await server.stop();
     await deleteTempDir(temp);
   });
 

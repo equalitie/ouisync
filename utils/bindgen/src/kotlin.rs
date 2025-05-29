@@ -9,7 +9,7 @@ use std::{
     io::{self, Write},
 };
 
-const PACKAGE: &str = "org.equalitie.ouisync.lib";
+const PACKAGE: &str = "org.equalitie.ouisync.kotlin.client";
 
 pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     writeln!(
@@ -103,6 +103,20 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
     writeln!(out, "{I}{I}{I}else -> throw IllegalArgumentException()")?;
 
     writeln!(out, "{I}{I}}}")?;
+    writeln!(out, "{I}}}")?;
+    writeln!(out)?;
+
+    writeln!(out, "{I}fun toValue() = when (this) {{")?;
+
+    for (variant_name, variant) in &item.variants {
+        writeln!(
+            out,
+            "{I}{I}{} -> {}",
+            AsShoutySnakeCase(variant_name),
+            variant.value
+        )?;
+    }
+
     writeln!(out, "{I}}}")?;
 
     writeln!(out, "}}")?;
@@ -235,7 +249,7 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
     writeln!(out, "{I}companion object {{")?;
 
     // fun dispatch
-    writeln!(out, "{I}{I}internal fun dispatch(")?;
+    writeln!(out, "{I}{I}fun dispatch(")?;
     writeln!(out, "{I}{I}{I}code: ErrorCode,")?;
     writeln!(out, "{I}{I}{I}message: String? = null,")?;
     writeln!(out, "{I}{I}{I}sources: List<String> = emptyList(),")?;

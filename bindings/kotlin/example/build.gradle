@@ -2,7 +2,7 @@ plugins {
     id 'com.android.application'
     id 'kotlin-android'
     id 'org.jetbrains.kotlin.plugin.compose' version '2.0.0'
-    id 'org.jetbrains.kotlin.plugin.serialization' version '2.0.21'
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.21'
 }
 
 Properties localProperties = new Properties()
@@ -16,10 +16,10 @@ def useLocalLib = localProperties.getProperty("useLocalLib", "false").toBoolean(
 
 android {
     compileSdkVersion 35
-    namespace 'org.equalitie.ouisync.example'
+    namespace = 'org.equalitie.ouisync.kotlin.example'
 
     defaultConfig {
-        applicationId 'org.equalitie.ouisync.example'
+        applicationId 'org.equalitie.ouisync.kotlin.example'
         minSdkVersion 26
         targetSdkVersion 35
         versionCode 1
@@ -36,7 +36,7 @@ android {
     }
 
     buildFeatures {
-        compose true
+        compose = true
     }
 
     composeOptions {
@@ -45,17 +45,19 @@ android {
 }
 
 dependencies {
-    implementation platform('androidx.compose:compose-bom:2024.10.00')
-    implementation 'androidx.compose.material3:material3:1.3.0'
-    implementation "androidx.compose.material:material-icons-extended:1.7.4"
-    implementation "androidx.compose.ui:ui:1.7.4"
-    implementation "androidx.activity:activity-compose:1.9.3"
-    implementation "androidx.navigation:navigation-compose:2.8.3"
-    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3'
+    implementation platform('androidx.compose:compose-bom:2025.05.00')
+    implementation 'androidx.compose.material3:material3:1.3.2'
+    implementation "androidx.compose.material:material-icons-extended:1.7.8"
+    implementation "androidx.compose.ui:ui:1.8.1"
+    implementation "androidx.activity:activity-compose:1.10.1"
+    implementation "androidx.navigation:navigation-compose:2.9.0"
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0'
 
     if (useLocalLib) {
-        implementation project(':lib')
+        implementation project(':ouisync-client')
+        implementation project(':ouisync-server')
     } else {
-        implementation 'ie.equalit.ouinet:ouisync-omni:+'
+        implementation 'ie.equalit.ouinet:ouisync-client:+'
+        implementation 'ie.equalit.ouinet:ouisync-server-omni:+'
     }
 }

@@ -1,5 +1,7 @@
 # Ouisync library Kotlin bindings
 
+⚠️ **FIXME**: this README is outdated ⚠️
+
 [![Maven Central Version](https://img.shields.io/maven-central/v/ie.equalit.ouinet/ouisync-omni?label=MavenCentral&logo=apache-maven)](https://search.maven.org/artifact/ie.equalit.ouinet/ouisync-omni)
 
 This project provides kotlin bindings for the ouisync library in the form of self-contained AAR

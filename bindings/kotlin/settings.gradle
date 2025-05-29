@@ -1,5 +1,9 @@
 rootProject.name = 'ouisync'
 
-include 'lib'
-include 'example'
+include 'ouisync-client'
+project(':ouisync-client').projectDir = new File(settingsDir, 'client')
 
+include 'ouisync-server'
+project(':ouisync-server').projectDir = new File(settingsDir, 'server')
+
+include 'example'

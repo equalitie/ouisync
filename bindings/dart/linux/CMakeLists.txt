@@ -14,8 +14,8 @@ project(${PROJECT_NAME} LANGUAGES CXX)
 
 include(FetchContent)
 
-# CMAKE_SOURCE_DIR points to `.../ouisync-app/linux` (absolute path)
-file(CREATE_LINK ${CMAKE_SOURCE_DIR}/../ouisync ${CMAKE_SOURCE_DIR}/../ouisync/bindings/dart/ouisync SYMBOLIC)
+file(REAL_PATH ${CMAKE_CURRENT_SOURCE_DIR} RESOLVED_CMAKE_CURRENT_SOURCE_DIR)
+set(ROOT_DIR "${RESOLVED_CMAKE_CURRENT_SOURCE_DIR}/../../..")
 
 FetchContent_Declare(
     Corrosion
@@ -25,10 +25,8 @@ FetchContent_Declare(
 # Set any global configuration variables such as `Rust_TOOLCHAIN` before this line!
 FetchContent_MakeAvailable(Corrosion)
 
-set(OUISYNC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ouisync")
-
 corrosion_import_crate(
-  MANIFEST_PATH "${OUISYNC_DIR}/Cargo.toml"
+  MANIFEST_PATH "${ROOT_DIR}/Cargo.toml"
   CRATES ouisync-service
 )
 
@@ -58,8 +56,9 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 
 # Source include directories and library dependencies. Add any plugin-specific
 # dependencies here.
-target_include_directories(${PLUGIN_NAME} INTERFACE
-  "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(${PLUGIN_NAME}
+  INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
 target_link_libraries(${PLUGIN_NAME} PUBLIC ouisync_service)

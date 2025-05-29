@@ -77,7 +77,7 @@ impl UntrustedProof {
         {
             Ok(Proof(self))
         } else {
-            Err(ProofError(self))
+            Err(ProofError)
         }
     }
 }
@@ -94,4 +94,4 @@ fn signature_material(writer_id: &PublicKey, version_vector: &VersionVector, has
 
 #[derive(Debug, Error)]
 #[error("proof is invalid")]
-pub struct ProofError(pub UntrustedProof);
+pub struct ProofError;

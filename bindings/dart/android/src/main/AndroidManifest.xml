@@ -1,11 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
     <application>
         <provider
-            tools:replace="android:authorities"
             android:name=".PipeProvider"
-            android:authorities="${applicationId}.pipe"
+            android:authorities="${applicationId}.provider"
             android:exported="true"/>
+
+        <service
+            android:name=".OuisyncService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false">
+        </service>
     </application>
 </manifest>

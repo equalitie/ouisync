@@ -30,6 +30,8 @@ pub enum Error {
     Busy,
     #[error("operation not supported")]
     OperationNotSupported,
+    #[error("operation was interrupted")]
+    OperationInterrupted,
     #[error("permission denied")]
     PermissionDenied,
     #[error("repository error")]

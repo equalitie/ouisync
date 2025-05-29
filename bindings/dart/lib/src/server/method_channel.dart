@@ -1,0 +1,72 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
+
+import '../server.dart';
+import '../../generated/api.g.dart' show LogLevel;
+
+class MethodChannelServer extends Server {
+  final String? notificationChannelName;
+  final String? notificationContentTitle;
+  final String? notificationContentText;
+
+  final _channel = MethodChannel('org.equalitie.ouisync.plugin');
+  Function(LogLevel, String)? _logCallback;
+
+  MethodChannelServer({
+    required super.configPath,
+    this.notificationChannelName,
+    this.notificationContentTitle,
+    this.notificationContentText,
+    super.debugLabel,
+  }) {
+    _channel.setMethodCallHandler(_handleMethodCall);
+  }
+
+  @override
+  void initLog({
+    bool stdout = false,
+    String? file,
+    Function(LogLevel, String)? callback,
+  }) {
+    _logCallback = callback;
+    _channel.invokeMethod('initLog', {'stdout': stdout, 'file': file});
+  }
+
+  @override
+  Future<void> start() => _channel.invokeMethod<int>('start', {
+        'configPath': configPath,
+        'debugLabel': debugLabel,
+      });
+
+  @override
+  Future<void> stop() => _channel.invokeMethod<int>('stop');
+
+  @override
+  Future<void> notify({
+    String? channelName,
+    String? contentTitle,
+    String? contentText,
+  }) =>
+      _channel.invokeMethod<void>('notify', {
+        'channelName': channelName,
+        'contentTitle': contentTitle,
+        'contentText': contentText,
+      });
+
+  Future<void> _handleMethodCall(MethodCall call) {
+    switch (call.method) {
+      case 'log':
+        final logCallback = _logCallback;
+        if (logCallback != null) {
+          final args = call.arguments as Map<Object?, Object?>;
+          final level = LogLevel.fromInt(args['level'] as int)!;
+          final message = args['message'] as String;
+
+          logCallback(level, message);
+        }
+    }
+
+    return Future.value();
+  }
+}
