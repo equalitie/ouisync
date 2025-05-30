@@ -59,12 +59,14 @@ impl From<[u8; Self::SIZE]> for TopicNonce {
     }
 }
 
+#[cfg(test)]
 impl From<u128> for TopicNonce {
     fn from(n: u128) -> Self {
         Self(n.to_be_bytes())
     }
 }
 
+#[cfg(test)]
 impl From<u64> for TopicNonce {
     fn from(n: u64) -> Self {
         Self::from(u128::from(n))
@@ -94,6 +96,7 @@ pub(super) enum Output {
 }
 
 /// State machine for establishing topic streams
+#[derive(Clone)]
 pub(super) struct TopicState {
     pub nonce: TopicNonce,
     incoming: IncomingState,
@@ -173,7 +176,7 @@ impl TopicState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum IncomingState {
     Init,
     Creating,
@@ -181,7 +184,7 @@ enum IncomingState {
     Failed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum OutgoingState {
     Init,
     Creating,
@@ -398,6 +401,300 @@ mod tests {
 
         fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
             any::<u128>().prop_map(Self::from)
+        }
+    }
+
+    mod exhaustive {
+        use super::super::*;
+        use std::{
+            collections::{BTreeSet, VecDeque},
+            fmt,
+        };
+
+        // Simulate all possible executions of two peers establishing a connection on a single
+        // topic.
+        #[test]
+        fn start() {
+            // This test produces a lot of debug output, so remove all unnecessary formatting
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .compact()
+                .with_target(false)
+                .with_level(false)
+                .without_time()
+                .try_init()
+                .ok();
+
+            let client_nonce = TopicNonce::from(0u128);
+            let server_nonce = TopicNonce::from(1u128);
+
+            let client = Actor::new(ActorKind::Client, client_nonce);
+            let server = Actor::new(ActorKind::Server, server_nonce);
+
+            let mut actions = BTreeSet::new();
+
+            actions.insert(Action::Poll(ActorKind::Client));
+            actions.insert(Action::Poll(ActorKind::Server));
+
+            // For debugging particular paths
+            let path_to_take = VecDeque::new();
+
+            // Derived experimentally, may be increased but better check why
+            let max_depth = 13;
+
+            run(client, server, actions, path_to_take, Vec::new(), max_depth);
+        }
+
+        // Recursively run actions in `actions` in all possible orders, adding new actions to the
+        // set as needed. Recursion ends when there are no more actions to run.
+        // Use `path_to_take` argument to debug a particular execution order.
+        fn run(
+            client: Actor,
+            server: Actor,
+            actions: BTreeSet<Action>,
+            mut path_to_take: VecDeque<Action>,
+            path_taken: Vec<Action>,
+            max_depth: usize,
+        ) {
+            assert!(path_taken.len() <= max_depth);
+            let pad = " ".repeat(path_taken.len() * 4);
+
+            let predetermined_action = path_to_take.pop_front();
+
+            let filtered_actions = if let Some(predetermined_action) = predetermined_action {
+                // Pick action deterministically if we're debugging with `path_to_take`.
+                let predetermined: BTreeSet<_> = actions
+                    .iter()
+                    .find(|action| **action == predetermined_action)
+                    .iter()
+                    .cloned()
+                    .collect();
+
+                assert!(
+                    !predetermined.is_empty(),
+                    "Action {predetermined_action:?} is not in {actions:?}"
+                );
+
+                predetermined
+            } else {
+                // Stop processing actions of actors which are done (have "accepted" a connection)
+                actions
+                    .iter()
+                    .filter(|action| match action.actor_kind() {
+                        ActorKind::Client => !client.is_done(),
+                        ActorKind::Server => !server.is_done(),
+                    })
+                    .collect()
+            };
+
+            tracing::debug!("{pad} {path_taken:?}");
+            tracing::debug!("{pad} {client:?}");
+            tracing::debug!("{pad} {server:?}");
+
+            // Check for termination
+            if filtered_actions.is_empty() {
+                tracing::debug!("{pad} No more work");
+
+                assert!(
+                    client.has_outgoing && server.has_incoming,
+                    "Server did not establish outgoing streams"
+                );
+                assert!(
+                    server.has_outgoing && client.has_incoming,
+                    "Server did not establish outgoing streams"
+                );
+                assert!(
+                    client.accepted_stream.unwrap() != server.accepted_stream.unwrap(),
+                    "Actors did not agree on the same substream"
+                );
+                return;
+            }
+
+            for action in filtered_actions {
+                let mut client = client.clone();
+                let mut server = server.clone();
+
+                let mut actions = actions.clone();
+
+                assert!(actions.remove(&action));
+
+                let (this_actor, that_actor) = match action.actor_kind() {
+                    ActorKind::Client => (&mut client, &mut server),
+                    ActorKind::Server => (&mut server, &mut client),
+                };
+
+                // Simulate the second half of the loop in `TopicHandler::run`.
+                match action {
+                    Action::Poll(_) => {
+                        let tasks = this_actor.poll();
+
+                        if tasks.create_incoming {
+                            assert!(!this_actor.is_accepting);
+                            this_actor.is_accepting = true;
+                        }
+
+                        if tasks.create_outgoing {
+                            assert!(!this_actor.is_connecting);
+                            this_actor.is_connecting = true;
+                            assert!(actions.insert(Action::HandleAccept(that_actor.kind)));
+                        }
+                    }
+                    Action::HandleAccept(_) => {
+                        if this_actor.is_accepting {
+                            assert!(!this_actor.has_incoming);
+
+                            this_actor.is_accepting = false;
+                            this_actor.has_incoming = true;
+
+                            this_actor
+                                .state
+                                .handle(Input::IncomingCreated(that_actor.state.nonce));
+
+                            actions.insert(Action::Poll(this_actor.kind));
+                            actions.insert(Action::HandleConnect(that_actor.kind, true));
+                        } else {
+                            // Unsolicited accepts don't trigger `poll`.
+                            actions.insert(Action::HandleConnect(that_actor.kind, false));
+                        }
+                    }
+                    Action::HandleConnect(_, success) => {
+                        assert!(this_actor.is_connecting);
+                        assert!(!this_actor.has_outgoing);
+
+                        this_actor.is_connecting = false;
+
+                        if *success {
+                            this_actor.has_outgoing = true;
+                            this_actor.state.handle(Input::OutgoingCreated);
+                        } else {
+                            this_actor.state.handle(Input::OutgoingFailed);
+                        }
+
+                        actions.insert(Action::Poll(this_actor.kind));
+                    }
+                }
+
+                let mut path_taken = path_taken.clone();
+                path_taken.push(*action);
+
+                run(
+                    client,
+                    server,
+                    actions,
+                    path_to_take.clone(),
+                    path_taken,
+                    max_depth,
+                );
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+        enum StreamType {
+            Incoming,
+            Outgoing,
+        }
+
+        #[derive(Clone)]
+        struct Actor {
+            kind: ActorKind,
+            state: TopicState,
+            is_connecting: bool,
+            is_accepting: bool,
+            has_incoming: bool,
+            has_outgoing: bool,
+            accepted_stream: Option<StreamType>,
+        }
+
+        impl Actor {
+            fn new(kind: ActorKind, topic_nonce: TopicNonce) -> Self {
+                Self {
+                    kind,
+                    state: TopicState {
+                        nonce: topic_nonce,
+                        incoming: IncomingState::Init,
+                        outgoing: OutgoingState::Init,
+                    },
+                    is_connecting: false,
+                    is_accepting: false,
+                    has_incoming: false,
+                    has_outgoing: false,
+                    accepted_stream: None,
+                }
+            }
+
+            fn poll(&mut self) -> PollTasks {
+                let mut tasks = PollTasks {
+                    create_incoming: false,
+                    create_outgoing: false,
+                };
+
+                // Simulate the first half of the loop in `TopicHandler::run`.
+                while let Some(output) = self.state.poll() {
+                    match output {
+                        Output::IncomingCreate => {
+                            tasks.create_incoming = true;
+                        }
+                        Output::IncomingAccept => {
+                            assert!(self.has_incoming);
+                            self.accepted_stream = Some(StreamType::Incoming);
+                            break;
+                        }
+                        Output::OutgoingCreate(_) => {
+                            tasks.create_outgoing = true;
+                        }
+                        Output::OutgoingAccept => {
+                            assert!(self.has_outgoing);
+                            self.accepted_stream = Some(StreamType::Outgoing);
+                            break;
+                        }
+                    }
+                }
+
+                tasks
+            }
+
+            fn is_done(&self) -> bool {
+                self.accepted_stream.is_some()
+            }
+        }
+
+        impl fmt::Debug for Actor {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(
+                    f,
+                    "{:?} in:{:?} out:{:?}",
+                    self.kind, self.state.incoming, self.state.outgoing
+                )
+            }
+        }
+
+        #[derive(Clone, Debug)]
+        struct PollTasks {
+            create_incoming: bool,
+            create_outgoing: bool,
+        }
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+        enum ActorKind {
+            Client,
+            Server,
+        }
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+        enum Action {
+            Poll(ActorKind),
+            HandleAccept(ActorKind),
+            HandleConnect(ActorKind, bool /* success */),
+        }
+
+        impl Action {
+            fn actor_kind(&self) -> ActorKind {
+                match self {
+                    Self::Poll(actor) => *actor,
+                    Self::HandleAccept(actor) => *actor,
+                    Self::HandleConnect(actor, _) => *actor,
+                }
+            }
         }
     }
 }
