@@ -8,15 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.8.11...develop)
 
+- Ongoing work towards improving iOS and macOS support.
+- Implement `ouisync-service` to exposes the Ouisync API over a simple IPC protocol used as a bridge
+  between the Ouisync library and various language bindings. Also implement automatic generation of
+  the public API for such bindings.
+- Implement Android [Service](https://developer.android.com/develop/background-work/services) to
+  support syncing in the background on newer versions of Android.
+- Refactor and optimize the low-level networking module.
+- Implement an algorithm to better distribute the network load between peers and improve sync
+  performance
+- Fix [quinn](https://github.com/quinn-rs/quinn) bugs causing syncing to sometimes stop on Android
+  and Linux.
+- Fix mount failure if repo not unmounted cleanly during the previous run of the app on Linux.
+- Fix file sizes being reported incorrectly by some Linux utilities (https://github.com/equalitie/ouisync/issues/173).
+- Update dependencies to their latest versions
+
 ## [v0.8.11](https://github.com/equalitie/ouisync/compare/v0.8.10...v0.8.11) - 2025-01-27
 
-### Added
-
-- Add support for EC private keys for TLS
-
-### Changed
-
-- Update [NDK](https://developer.android.com/ndk) to 27.2.12479018
+- Add support for EC private keys for TLS.
+- Update [NDK](https://developer.android.com/ndk) to 27.2.12479018.
 
 # Appendix A: Git tags reference
 
