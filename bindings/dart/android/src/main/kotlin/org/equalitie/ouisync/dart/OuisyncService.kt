@@ -217,9 +217,12 @@ class OuisyncService : Service() {
     // this method.
     protected open fun getMainActivityClass(): Class<*>? =
         applicationContext.let { context ->
-            context.packageManager
-                .getPackageInfo(context.packageName, PackageManager.GET_ACTIVITIES)
-                .activities
+            val activities =
+                context.packageManager
+                    .getPackageInfo(context.packageName, PackageManager.GET_ACTIVITIES)
+                    .activities ?: emptyArray()
+
+            activities
                 .asSequence()
                 .map { info -> Class.forName(info.name) }
                 .filter { klass ->

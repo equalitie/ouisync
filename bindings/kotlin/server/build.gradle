@@ -18,14 +18,14 @@ group   = rootProject.group
 android {
     namespace = 'org.equalitie.ouisync.kotlin.server'
 
-    compileSdk = 34
+    compileSdk = 35
     ndkVersion = '27.2.12479018'
 
     defaultConfig {
-        targetSdkVersion 34
-        minSdkVersion 26
-        versionCode 1
-        versionName version
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = version
     }
 
     kotlin {

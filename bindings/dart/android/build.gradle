@@ -34,7 +34,7 @@ android {
         namespace = "org.equalitie.ouisync.dart"
     }
 
-    compileSdk = 34
+    compileSdk = 35
     ndkVersion = '27.2.12479018'
 
     sourceSets {
@@ -44,7 +44,7 @@ android {
 
     defaultConfig {
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
     }
 
     kotlin {
