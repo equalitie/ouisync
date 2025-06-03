@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-- See changes [v0.8.10...HEAD](https://github.com/equalitie/ouisync/compare/v0.8.10...HEAD)
+- See changes [v0.8.11...HEAD](https://github.com/equalitie/ouisync/compare/v0.8.11...HEAD)
 
 # Appendix A: Git tags reference
 
@@ -16,6 +16,10 @@ This section lists older tags in the repository as a reference to the changes
 released before adhering to consistent release note format. A link to the
 comparison between the previous version and the listed version is provided to
 give some idea of the changes included in the version. 
+
+## [v0.8.11](https://github.com/equalitie/ouisync/releases/tag/v0.8.11) - 2025-01-27
+
+- See changes [v0.8.10...v0.8.11](https://github.com/equalitie/ouisync/compare/v0.8.10...v0.8.11)
 
 ## [v0.8.10](https://github.com/equalitie/ouisync/releases/tag/v0.8.10) - 2024-11-06
 
