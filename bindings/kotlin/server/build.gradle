@@ -26,6 +26,8 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = version
+
+        consumerProguardFiles 'proguard-rules.pro'
     }
 
     kotlin {
@@ -98,6 +100,10 @@ afterEvaluate {
             doLast {
                 cargo.profile = cargoProfile
             }
+        }
+
+        tasks.named('cargoBuild') {
+            mustRunAfter "pre${variant}Build"
         }
     }
 
