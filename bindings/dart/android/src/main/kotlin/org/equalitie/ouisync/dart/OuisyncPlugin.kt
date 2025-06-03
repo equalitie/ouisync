@@ -68,6 +68,7 @@ class OuisyncPlugin :
         }
 
     private val binder: MutableStateFlow<OuisyncService.LocalBinder?> = MutableStateFlow(null)
+    private var bound = false
 
     companion object {
         private const val CHANNEL_NAME = "org.equalitie.ouisync.plugin"
@@ -83,11 +84,13 @@ class OuisyncPlugin :
 
         requestPermissions(activity)
 
-        activity.bindService(
-            Intent(activity, OuisyncService::class.java),
-            this,
-            Service.BIND_AUTO_CREATE,
-        )
+        bound =
+            bound ||
+            activity.bindService(
+                Intent(activity, OuisyncService::class.java),
+                this,
+                Service.BIND_AUTO_CREATE,
+            )
 
         this.activity = activity
     }
@@ -96,7 +99,11 @@ class OuisyncPlugin :
         activityLifecycle?.removeObserver(activityLifecycleObserver)
         activityLifecycle = null
 
-        activity?.unbindService(this)
+        if (bound) {
+            activity?.unbindService(this)
+            bound = false
+        }
+
         activity = null
     }
 
@@ -234,7 +241,11 @@ class OuisyncPlugin :
 
     private fun onStop() {
         activity?.let { activity ->
-            activity.unbindService(this)
+            if (bound) {
+                activity.unbindService(this)
+                bound = false
+            }
+
             activity.stopService(Intent(activity, OuisyncService::class.java))
         }
     }
