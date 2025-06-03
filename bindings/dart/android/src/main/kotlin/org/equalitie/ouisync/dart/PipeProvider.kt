@@ -20,6 +20,8 @@ import android.os.ParcelFileDescriptor
 import android.os.ProxyFileDescriptorCallback
 import android.os.storage.StorageManager
 import android.provider.OpenableColumns
+import android.system.ErrnoException
+import android.system.OsConstants
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -29,6 +31,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.client.File
+import org.equalitie.ouisync.kotlin.client.OuisyncException
 import org.equalitie.ouisync.kotlin.client.Session
 import org.equalitie.ouisync.kotlin.client.create
 import java.net.URLConnection
@@ -81,15 +84,11 @@ class PipeProvider : ContentProvider() {
     private val handler =
         Handler(
             HandlerThread("${javaClass.simpleName} handler thread")
-                .apply {
-                    setUncaughtExceptionHandler { thread, e ->
-                        Log.e(TAG, "uncaught exception in ${thread.name}", e)
-                    }
-                    start()
-                }.getLooper(),
+                .apply { start() }
+                .getLooper(),
         )
 
-    override fun onCreate(): Boolean = true
+    override fun onCreate() = true
 
     override fun query(
         uri: Uri,
@@ -206,20 +205,42 @@ class PipeProvider : ContentProvider() {
     ) : ProxyFileDescriptorCallback() {
         private val file: Deferred<File> = scope.async { openRepoFile(uri) }
 
-        override fun onGetSize() = runBlocking { file.await().getLength() }
+        override fun onGetSize() = run("onGetSize") {
+            file.await().getLength()
+        }
 
         override fun onRead(
             offset: Long,
             chunkSize: Int,
             outData: ByteArray,
-        ) = runBlocking {
+        ) = run("onRead") {
             val chunk = file.await().read(offset, chunkSize.toLong())
             chunk.copyInto(outData)
             chunk.size
         }
 
-        override fun onFsync() = runBlocking { file.await().flush() }
+        override fun onFsync() = run("onFsync") {
+            file.await().flush()
+        }
 
-        override fun onRelease() = runBlocking { file.await().close() }
+        override fun onRelease() = run("onRelease") {
+            file.await().close()
+        }
+
+        private fun <T> run(name: String, block: suspend CoroutineScope.() -> T): T = try {
+            runBlocking(block = block)
+        } catch (e: Exception) {
+            Log.e(TAG, "uncaught exception in ${PipeProvider::class.simpleName}.${ProxyCallback::class.simpleName}.$name ($uri)", e)
+            throw ErrnoException(name, e.errno, e)
+        }
     }
 }
+
+private val Exception.errno: Int
+    get() = when (this) {
+        is OuisyncException.NotFound -> OsConstants.ENOENT
+        is OuisyncException.PermissionDenied -> OsConstants.EPERM
+        is OuisyncException.IsDirectory -> OsConstants.EISDIR
+        is OuisyncException.NotDirectory -> OsConstants.ENOTDIR
+        else -> OsConstants.EIO
+    }
