@@ -34,11 +34,11 @@ class Client {
   static Future<Client> connect({
     required String configPath,
     Duration? timeout,
-    Duration minDelay = const Duration(milliseconds: 50),
-    Duration maxDelay = const Duration(seconds: 1),
+    Duration minWait = const Duration(milliseconds: 50),
+    Duration maxWait = const Duration(seconds: 1),
   }) async {
     DateTime start = DateTime.now();
-    Duration delay = minDelay;
+    Duration wait = minWait;
     Exception? lastException;
 
     final portFile = File('$configPath/local_control_port.conf');
@@ -62,8 +62,8 @@ class Client {
         return Client._(socket, stream);
       } on SocketException catch (e) {
         lastException = e;
-        delay = _minDuration(delay * 2, maxDelay);
-        await Future.delayed(delay);
+        wait = _minDuration(wait * 2, maxWait);
+        await Future.delayed(wait);
       }
     }
   }

@@ -194,8 +194,6 @@ class OuisyncPlugin :
         configPath: String,
         debugLabel: String?,
     ) {
-        Log.d(TAG, "OuisyncPlugin.onStart(configPath = $configPath, debugLabel = $debugLabel)")
-
         val activity = requireNotNull(activity)
 
         scope.launch {
@@ -207,8 +205,6 @@ class OuisyncPlugin :
     }
 
     private fun onStop() {
-        Log.d(TAG, "OuisyncPlugin.onStop")
-
         activity?.let { activity -> activity.stopService(Intent(activity, OuisyncService::class.java)) }
     }
 
@@ -217,11 +213,6 @@ class OuisyncPlugin :
         contentTitle: String?,
         contentText: String?,
     ) {
-        Log.d(
-            TAG,
-            "OuisyncPlugin.onNotify(channelName = $channelName, contentTitle = $contentTitle, contentText = $contentText)",
-        )
-
         val activity = requireNotNull(activity)
 
         activity.startService(

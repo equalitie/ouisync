@@ -68,8 +68,6 @@ class OuisyncService : Service() {
         val notificationContentTitle = intent?.getStringExtra(EXTRA_NOTIFICATION_CONTENT_TITLE)
         val notificationContentText = intent?.getStringExtra(EXTRA_NOTIFICATION_CONTENT_TEXT)
 
-        Log.d(TAG, "OuisyncService.onStartCommand(notification = ${notificationContentTitle != null})")
-
         if (notificationContentTitle != null) {
             setupForeground(
                 notificationChannelName,

@@ -170,8 +170,8 @@ class PipeProvider : ContentProvider() {
     }
 
     private suspend fun openRepoFile(uri: Uri): File {
-        val repoName = uri.pathSegments.first()
-        val filePath = uri.pathSegments.drop(1).joinToString("/")
+        val repoName = Uri.decode(uri.pathSegments.first())
+        val filePath = uri.pathSegments.drop(1).map(Uri::decode).joinToString("/")
 
         return session.await().findRepository(repoName).openFile(filePath)
     }

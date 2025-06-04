@@ -12,16 +12,20 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.UseSerializers
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.net.ConnectException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketAddress
@@ -32,16 +36,29 @@ import java.nio.channels.AsynchronousSocketChannel
 import java.nio.channels.CompletionHandler
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.TimeoutException
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.max
+import kotlin.time.Clock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 internal class Client private constructor(private val socket: AsynchronousSocket) {
     companion object {
-        @OptIn(kotlin.ExperimentalStdlibApi::class)
-        suspend fun connect(configPath: String): Client {
+        @OptIn(
+            kotlin.ExperimentalStdlibApi::class,
+            kotlin.time.ExperimentalTime::class,
+        )
+        suspend fun connect(
+            configPath: String,
+            timeout: Duration? = null,
+            minWait: Duration = 50.milliseconds,
+            maxWait: Duration = 1.seconds,
+        ): Client {
             val portRaw = File("$configPath/local_control_port.conf").readText()
             val port = Json.decodeFromString<Int>(portRaw)
 
@@ -50,12 +67,29 @@ internal class Client private constructor(private val socket: AsynchronousSocket
 
             val addr = InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), port)
 
-            // TODO: retry connect
-            val socket = AsynchronousSocket.connect(addr)
+            var start = Clock.System.now()
+            var wait = minWait
+            var error: Exception? = null
 
-            authenticate(socket, authKey)
+            while (true) {
+                if (timeout != null) {
+                    if (Clock.System.now() - start >= timeout) {
+                        throw error ?: TimeoutException()
+                    }
+                }
 
-            return Client(socket)
+                try {
+                    val socket = AsynchronousSocket.connect(addr)
+                    authenticate(socket, authKey)
+                    return Client(socket)
+                } catch (e: ConnectException) {
+                    error = e
+                    wait = wait * 2
+                    wait = if (wait < maxWait) wait else maxWait
+
+                    delay(wait)
+                }
+            }
         }
     }
 
@@ -310,6 +344,10 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
         }
     }
 
+    // Prevents `WritePendingException` on concurrent writes
+    // TODO: Do we also need readMutex?
+    private val writeMutex = Mutex()
+
     suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.read(buffer, cont, IOHandler()) }
 
     suspend fun readExact(buffer: ByteBuffer): Int {
@@ -328,13 +366,15 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
         return total
     }
 
-    suspend fun write(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.write(buffer, cont, IOHandler()) }
+    suspend fun write(buffer: ByteBuffer) = writeMutex.withLock { writeUnlocked(buffer) }
 
-    suspend fun writeAll(buffer: ByteBuffer) {
+    suspend fun writeAll(buffer: ByteBuffer) = writeMutex.withLock {
         while (buffer.hasRemaining()) {
-            write(buffer)
+            writeUnlocked(buffer)
         }
     }
+
+    private suspend fun writeUnlocked(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.write(buffer, cont, IOHandler()) }
 
     fun close() {
         channel.close()
