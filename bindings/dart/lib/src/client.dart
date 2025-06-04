@@ -44,8 +44,8 @@ class Client {
     final portFile = File('$configPath/local_control_port.conf');
     final authKeyFile = File('$configPath/local_control_auth_key.conf');
 
-    final port = json.decode(await portFile.readAsString()) as int;
-    final authKey = HEX.decode(json.decode(await authKeyFile.readAsString()));
+    final port = json.decode(await _waitRead(portFile)) as int;
+    final authKey = HEX.decode(json.decode(await _waitRead(authKeyFile)));
 
     while (true) {
       if (timeout != null) {
@@ -209,5 +209,33 @@ class _Reader {
     builder.add(bytes.sublist(length));
 
     return output;
+  }
+}
+
+Future<String> _waitRead(File file) async {
+  while (true) {
+    try {
+      return await file.readAsString();
+    } on PathNotFoundException {
+      await _waitExists(file);
+    }
+  }
+}
+
+Future<void> _waitExists(FileSystemEntity file) async {
+  if (await file.exists()) {
+    return;
+  }
+
+  await _waitExists(file.parent);
+
+  final watch = StreamIterator(file.parent.watch());
+
+  while (true) {
+    if (await file.exists()) {
+      return;
+    }
+
+    await watch.moveNext();
   }
 }
