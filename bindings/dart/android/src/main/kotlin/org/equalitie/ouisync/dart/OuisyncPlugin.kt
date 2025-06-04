@@ -2,7 +2,10 @@ package org.equalitie.ouisync.dart
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -27,6 +30,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.equalitie.ouisync.kotlin.client.LogLevel
 import org.equalitie.ouisync.kotlin.server.initLog
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 internal const val TAG = "ouisync"
 
@@ -138,8 +143,7 @@ class OuisyncPlugin :
                 val configPath = arguments["configPath"] as String
                 val debugLabel = arguments["debugLabel"] as String?
 
-                onStart(configPath, debugLabel)
-                result.success(null)
+                onStart(configPath, debugLabel) { result.success(null) }
             }
             "stop" -> {
                 onStop()
@@ -193,15 +197,36 @@ class OuisyncPlugin :
     private fun onStart(
         configPath: String,
         debugLabel: String?,
+        onStarted: () -> Unit,
     ) {
         val activity = requireNotNull(activity)
 
         scope.launch {
             activity.setConfigPath(configPath)
-            // TODO: should we bother with debugLabel?
-        }
 
-        activity.startService(Intent(activity, OuisyncService::class.java))
+            suspendCoroutine<Unit> { cont ->
+                val receiver =
+                    object : BroadcastReceiver() {
+                        override fun onReceive(
+                            context: Context,
+                            intent: Intent,
+                        ) {
+                            context.unregisterReceiver(this)
+                            cont.resume(Unit)
+                        }
+                    }
+
+                activity.registerReceiver(
+                    receiver,
+                    IntentFilter(OuisyncService.ACTION_STARTED),
+                    Context.RECEIVER_NOT_EXPORTED,
+                )
+
+                activity.startService(Intent(activity, OuisyncService::class.java))
+            }
+
+            onStarted()
+        }
     }
 
     private fun onStop() {

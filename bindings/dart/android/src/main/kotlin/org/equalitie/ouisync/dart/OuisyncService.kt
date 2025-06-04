@@ -46,11 +46,9 @@ class OuisyncService : Service() {
             ) {
                 Log.d(TAG, "OuisyncService.receiver.onReceive(${intent.action})")
 
-                if (intent.action == ACTION_STOP) {
-                    scope.launch {
-                        stopServer()
-                        stopSelf()
-                    }
+                scope.launch {
+                    stopServer()
+                    stopSelf()
                 }
             }
         }
@@ -93,7 +91,12 @@ class OuisyncService : Service() {
             )
         }
 
-        scope.launch { server.await() }
+        scope.launch {
+            server.await()
+
+            // TODO: consider also broadcasting failure
+            sendBroadcast(Intent(OuisyncService.ACTION_STARTED).setPackage(getPackageName()))
+        }
 
         return START_REDELIVER_INTENT
     }
@@ -215,6 +218,7 @@ class OuisyncService : Service() {
 
     companion object {
         const val ACTION_STOP = "org.equalitie.ouisync.service.action.stop"
+        const val ACTION_STARTED = "org.equalitie.ouisync.service.action.started"
 
         const val EXTRA_NOTIFICATION_CHANNEL_NAME =
             "org.equalitie.ouisync.service.extra.notification.channel.name"

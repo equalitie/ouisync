@@ -1,9 +1,11 @@
 package org.equalitie.ouisync.dart
 
+import android.content.BroadcastReceiver
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -19,17 +21,20 @@ import android.provider.OpenableColumns
 import android.system.ErrnoException
 import android.system.OsConstants
 import android.util.Log
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.client.File
 import org.equalitie.ouisync.kotlin.client.OuisyncException
 import org.equalitie.ouisync.kotlin.client.Session
+import org.equalitie.ouisync.kotlin.client.close
 import org.equalitie.ouisync.kotlin.client.create
 import java.net.URLConnection
 import kotlin.collections.joinToString
@@ -43,10 +48,7 @@ class PipeProvider : ContentProvider() {
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val deferredContext = CompletableDeferred<Context>()
-
-    private val session: Deferred<Session> =
-        scope.async { Session.create(deferredContext.await().getConfigPath()) }
+    private val session = MutableStateFlow<Session?>(null)
 
     // Handler for running proxy file descriptor's callbacks
     // TODO: consider using thread pool so we can handle multiple files concurrently.
@@ -55,13 +57,29 @@ class PipeProvider : ContentProvider() {
             HandlerThread("${javaClass.simpleName} handler thread").apply { start() }.getLooper(),
         )
 
+    private val receiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context,
+                intent: Intent,
+            ) {
+                scope.launch {
+                    session.value?.close()
+                    session.value = Session.create(context.getConfigPath())
+                }
+            }
+        }
+
     override fun onCreate(): Boolean {
         Log.d(TAG, "PipeProvider.onCreate")
 
         val context = requireNotNull(context)
-
+        context.registerReceiver(
+            receiver,
+            IntentFilter(OuisyncService.ACTION_STARTED),
+            Context.RECEIVER_NOT_EXPORTED,
+        )
         context.startService(Intent(context, OuisyncService::class.java))
-        deferredContext.complete(context)
 
         return true
     }
@@ -177,7 +195,11 @@ class PipeProvider : ContentProvider() {
                 .map(Uri::decode)
                 .joinToString("/")
 
-        return session.await().findRepository(repoName).openFile(filePath)
+        return session
+            .filterNotNull()
+            .first()
+            .findRepository(repoName)
+            .openFile(filePath)
     }
 
     inner class ProxyCallback(
