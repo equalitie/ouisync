@@ -12,13 +12,13 @@ import kotlin.coroutines.suspendCoroutine
 
 private val bindings = Bindings.INSTANCE
 
-class Server private constructor(private val handle: Pointer) {
+class Server private constructor(private var handle: Pointer?) {
     companion object {
         suspend fun start(
             configPath: String,
             debugLabel: String? = null,
         ): Server {
-            var handle = Pointer.NULL
+            var handle: Pointer? = null
 
             suspendCancellableCoroutine<Unit> { cont ->
                 handle =
@@ -36,7 +36,16 @@ class Server private constructor(private val handle: Pointer) {
         }
     }
 
-    suspend fun stop() = suspendCoroutine<Unit> { cont -> bindings.stop_service(handle, CoroutineHandler(cont), null) }
+    suspend fun stop() {
+        val handle = this.handle
+        if (handle == null) {
+            return
+        }
+
+        this.handle = null
+
+        suspendCoroutine<Unit> { cont -> bindings.stop_service(handle, CoroutineHandler(cont), null) }
+    }
 }
 
 private class CoroutineHandler(val cont: Continuation<Unit>) : StatusCallback {

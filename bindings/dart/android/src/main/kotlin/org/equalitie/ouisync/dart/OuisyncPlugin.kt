@@ -205,7 +205,12 @@ class OuisyncPlugin :
     }
 
     private fun onStop() {
-        activity?.let { activity -> activity.stopService(Intent(activity, OuisyncService::class.java)) }
+        // Send `ACTION_STOP` intent to the service and let it stop itself gracefully.
+        activity?.let { activity ->
+            activity.sendBroadcast(
+                Intent(OuisyncService.ACTION_STOP).setPackage(activity.getPackageName()),
+            )
+        }
     }
 
     private fun onNotify(

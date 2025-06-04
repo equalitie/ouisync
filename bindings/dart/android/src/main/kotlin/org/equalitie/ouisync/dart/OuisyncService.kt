@@ -5,14 +5,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -25,24 +28,43 @@ import org.equalitie.ouisync.kotlin.server.Server
 import kotlin.collections.firstOrNull
 
 class OuisyncService : Service() {
-    private val exceptionHandler = CoroutineExceptionHandler() { _, e ->
-        Log.e(TAG, "uncaught exception in OuisyncService", e)
-    }
+    private val exceptionHandler =
+        CoroutineExceptionHandler { _, e ->
+            Log.e(TAG, "uncaught exception in OuisyncService", e)
+        }
     private val scope = CoroutineScope(Dispatchers.Main + exceptionHandler)
 
-    private val server: Deferred<Server> =
-        scope.async {
-            val configPath = getConfigPath()
-
-            Server.start(configPath)
-        }
+    private val server: Deferred<Server> = scope.async { Server.start(getConfigPath()) }
 
     private var isForeground = false
+
+    private val receiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context,
+                intent: Intent,
+            ) {
+                Log.d(TAG, "OuisyncService.receiver.onReceive(${intent.action})")
+
+                if (intent.action == ACTION_STOP) {
+                    scope.launch {
+                        stopServer()
+                        stopSelf()
+                    }
+                }
+            }
+        }
 
     override fun onCreate() {
         Log.d(TAG, "OuisyncService.onCreate")
 
         super.onCreate()
+
+        registerReceiver(
+            receiver,
+            IntentFilter(ACTION_STOP),
+            RECEIVER_NOT_EXPORTED,
+        )
     }
 
     override fun onDestroy() {
@@ -50,13 +72,8 @@ class OuisyncService : Service() {
 
         super.onDestroy()
 
-        runBlocking(exceptionHandler) {
-            scope.cancel()
-
-            if (server.isCompleted) {
-                server.getCompleted().stop()
-            }
-        }
+        unregisterReceiver(receiver)
+        runBlocking(exceptionHandler) { stopServer() }
     }
 
     override fun onStartCommand(
@@ -82,6 +99,14 @@ class OuisyncService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private suspend fun stopServer() {
+        server.cancel()
+
+        if (server.isCompleted && !server.isCancelled) {
+            server.getCompleted().stop()
+        }
+    }
 
     private fun setupForeground(
         channelName: String?,
@@ -189,6 +214,8 @@ class OuisyncService : Service() {
         }
 
     companion object {
+        const val ACTION_STOP = "org.equalitie.ouisync.service.action.stop"
+
         const val EXTRA_NOTIFICATION_CHANNEL_NAME =
             "org.equalitie.ouisync.service.extra.notification.channel.name"
         const val EXTRA_NOTIFICATION_CONTENT_TITLE =
