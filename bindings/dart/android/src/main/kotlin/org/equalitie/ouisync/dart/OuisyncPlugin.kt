@@ -1,16 +1,12 @@
 package org.equalitie.ouisync.dart
 
 import android.app.Activity
-import android.app.Service
 import android.content.ActivityNotFoundException
-import android.content.ComponentName
 import android.content.Intent
-import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.ActivityCompat
@@ -28,9 +24,6 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.equalitie.ouisync.kotlin.client.LogLevel
 import org.equalitie.ouisync.kotlin.server.initLog
@@ -40,8 +33,7 @@ internal const val TAG = "ouisync"
 class OuisyncPlugin :
     FlutterPlugin,
     MethodCallHandler,
-    ActivityAware,
-    ServiceConnection {
+    ActivityAware {
     private val scope = CoroutineScope(Dispatchers.Main)
 
     private var channel: MethodChannel? = null
@@ -61,14 +53,13 @@ class OuisyncPlugin :
                         else -> false
                     }
 
+                Log.d(TAG, "OuisyncPlugin.activityLifecycleObserver.onDestroy(finishing = $finishing)")
+
                 if (finishing) {
                     this@OuisyncPlugin.onStop()
                 }
             }
         }
-
-    private val binder: MutableStateFlow<OuisyncService.LocalBinder?> = MutableStateFlow(null)
-    private var bound = false
 
     companion object {
         private const val CHANNEL_NAME = "org.equalitie.ouisync.plugin"
@@ -80,29 +71,14 @@ class OuisyncPlugin :
                 addObserver(activityLifecycleObserver)
             }
 
-        val activity = binding.activity
+        requestPermissions(binding.activity)
 
-        requestPermissions(activity)
-
-        bound =
-            bound ||
-            activity.bindService(
-                Intent(activity, OuisyncService::class.java),
-                this,
-                Service.BIND_AUTO_CREATE,
-            )
-
-        this.activity = activity
+        activity = binding.activity
     }
 
     override fun onDetachedFromActivity() {
         activityLifecycle?.removeObserver(activityLifecycleObserver)
         activityLifecycle = null
-
-        if (bound) {
-            activity?.unbindService(this)
-            bound = false
-        }
 
         activity = null
     }
@@ -145,17 +121,6 @@ class OuisyncPlugin :
         channel = null
     }
 
-    override fun onServiceConnected(
-        name: ComponentName,
-        binder: IBinder,
-    ) {
-        this.binder.value = binder as OuisyncService.LocalBinder
-    }
-
-    override fun onServiceDisconnected(name: ComponentName) {
-        this.binder.value = null
-    }
-
     override fun onMethodCall(
         call: MethodCall,
         result: MethodChannel.Result,
@@ -173,7 +138,8 @@ class OuisyncPlugin :
                 val configPath = arguments["configPath"] as String
                 val debugLabel = arguments["debugLabel"] as String?
 
-                launch(result) { onStart(configPath, debugLabel) }
+                onStart(configPath, debugLabel)
+                result.success(null)
             }
             "stop" -> {
                 onStop()
@@ -185,7 +151,8 @@ class OuisyncPlugin :
                 val contentTitle = arguments["contentTitle"] as String?
                 val contentText = arguments["contentText"] as String?
 
-                launch(result) { onNotify(channelName, contentTitle, contentText) }
+                onNotify(channelName, contentTitle, contentText)
+                result.success(null)
             }
             "viewFile" -> {
                 val uri = Uri.parse(call.arguments as String)
@@ -223,39 +190,47 @@ class OuisyncPlugin :
         }
     }
 
-    private suspend fun onStart(
+    private fun onStart(
         configPath: String,
         debugLabel: String?,
     ) {
-        val activity = requireNotNull(this.activity)
+        Log.d(TAG, "OuisyncPlugin.onStart(configPath = $configPath, debugLabel = $debugLabel)")
 
-        activity.startService(
-            Intent(activity, OuisyncService::class.java).apply {
-                putExtra(OuisyncService.EXTRA_CONFIG_PATH, configPath)
-                putExtra(OuisyncService.EXTRA_DEBUG_LABEL, debugLabel)
-            },
-        )
+        val activity = requireNotNull(activity)
 
-        binder.filterNotNull().first().ensureStarted()
+        scope.launch {
+            activity.setConfigPath(configPath)
+            // TODO: should we bother with debugLabel?
+        }
+
+        activity.startService(Intent(activity, OuisyncService::class.java))
     }
 
     private fun onStop() {
-        activity?.let { activity ->
-            if (bound) {
-                activity.unbindService(this)
-                bound = false
-            }
+        Log.d(TAG, "OuisyncPlugin.onStop")
 
-            activity.stopService(Intent(activity, OuisyncService::class.java))
-        }
+        activity?.let { activity -> activity.stopService(Intent(activity, OuisyncService::class.java)) }
     }
 
-    private suspend fun onNotify(
+    private fun onNotify(
         channelName: String?,
         contentTitle: String?,
         contentText: String?,
     ) {
-        binder.filterNotNull().first().notify(channelName, contentTitle, contentText)
+        Log.d(
+            TAG,
+            "OuisyncPlugin.onNotify(channelName = $channelName, contentTitle = $contentTitle, contentText = $contentText)",
+        )
+
+        val activity = requireNotNull(activity)
+
+        activity.startService(
+            Intent(activity, OuisyncService::class.java).apply {
+                putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME, channelName)
+                putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TITLE, contentTitle)
+                putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TEXT, contentText)
+            },
+        )
     }
 
     private fun onViewFile(uri: Uri): Boolean {
@@ -290,20 +265,6 @@ class OuisyncPlugin :
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
         context.startActivity(Intent.createChooser(intent, null))
-    }
-
-    // Launch the given coroutine and assign its return value (or exception, if it throws) to the
-    // given method channel result.
-    private fun launch(
-        result: MethodChannel.Result,
-        block: suspend () -> Any?,
-    ) = scope.launch {
-        try {
-            val value = block()
-            result.success(if (value is Unit) null else value)
-        } catch (e: Exception) {
-            result.error(e::class.simpleName ?: "error", e.toString(), null)
-        }
     }
 }
 

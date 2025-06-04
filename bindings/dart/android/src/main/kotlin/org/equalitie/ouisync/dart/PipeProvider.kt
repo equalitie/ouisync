@@ -1,12 +1,9 @@
 package org.equalitie.ouisync.dart
 
-import android.app.Service
-import android.content.ComponentName
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -15,7 +12,6 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.ProxyFileDescriptorCallback
 import android.os.storage.StorageManager
@@ -23,6 +19,7 @@ import android.provider.OpenableColumns
 import android.system.ErrnoException
 import android.system.OsConstants
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -36,8 +33,6 @@ import org.equalitie.ouisync.kotlin.client.Session
 import org.equalitie.ouisync.kotlin.client.create
 import java.net.URLConnection
 import kotlin.collections.joinToString
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 
 class PipeProvider : ContentProvider() {
     companion object {
@@ -48,47 +43,28 @@ class PipeProvider : ContentProvider() {
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val deferredContext = CompletableDeferred<Context>()
 
     private val session: Deferred<Session> =
-        scope.async {
-            val context = requireNotNull(context)
-            val intent = Intent(context, OuisyncService::class.java)
-
-            // Binding to OusyncService initiates startup of the ouisync server.
-            // TODO: How do we unbind here?
-            val binder =
-                suspendCoroutine<OuisyncService.LocalBinder> { cont ->
-                    context.bindService(
-                        intent,
-                        object : ServiceConnection {
-                            override fun onServiceConnected(
-                                name: ComponentName,
-                                binder: IBinder,
-                            ) = cont.resume(binder as OuisyncService.LocalBinder)
-
-                            override fun onServiceDisconnected(name: ComponentName) = Unit
-                        },
-                        Service.BIND_AUTO_CREATE,
-                    )
-                }
-
-            // Wait until the server has been started.
-            binder.ensureStarted()
-
-            // Create ousync Session which connects to the server created above.
-            Session.create(binder.getConfigPath())
-        }
+        scope.async { Session.create(deferredContext.await().getConfigPath()) }
 
     // Handler for running proxy file descriptor's callbacks
     // TODO: consider using thread pool so we can handle multiple files concurrently.
     private val handler =
         Handler(
-            HandlerThread("${javaClass.simpleName} handler thread")
-                .apply { start() }
-                .getLooper(),
+            HandlerThread("${javaClass.simpleName} handler thread").apply { start() }.getLooper(),
         )
 
-    override fun onCreate() = true
+    override fun onCreate(): Boolean {
+        Log.d(TAG, "PipeProvider.onCreate")
+
+        val context = requireNotNull(context)
+
+        context.startService(Intent(context, OuisyncService::class.java))
+        deferredContext.complete(context)
+
+        return true
+    }
 
     override fun query(
         uri: Uri,
@@ -205,9 +181,7 @@ class PipeProvider : ContentProvider() {
     ) : ProxyFileDescriptorCallback() {
         private val file: Deferred<File> = scope.async { openRepoFile(uri) }
 
-        override fun onGetSize() = run("onGetSize") {
-            file.await().getLength()
-        }
+        override fun onGetSize() = run("onGetSize") { file.await().getLength() }
 
         override fun onRead(
             offset: Long,
@@ -219,28 +193,33 @@ class PipeProvider : ContentProvider() {
             chunk.size
         }
 
-        override fun onFsync() = run("onFsync") {
-            file.await().flush()
-        }
+        override fun onFsync() = run("onFsync") { file.await().flush() }
 
-        override fun onRelease() = run("onRelease") {
-            file.await().close()
-        }
+        override fun onRelease() = run("onRelease") { file.await().close() }
 
-        private fun <T> run(name: String, block: suspend CoroutineScope.() -> T): T = try {
-            runBlocking(block = block)
-        } catch (e: Exception) {
-            Log.e(TAG, "uncaught exception in ${PipeProvider::class.simpleName}.${ProxyCallback::class.simpleName}.$name ($uri)", e)
-            throw ErrnoException(name, e.errno, e)
-        }
+        private fun <T> run(
+            name: String,
+            block: suspend CoroutineScope.() -> T,
+        ): T =
+            try {
+                runBlocking(block = block)
+            } catch (e: Exception) {
+                Log.e(
+                    TAG,
+                    "uncaught exception in ${PipeProvider::class.simpleName}.${ProxyCallback::class.simpleName}.$name ($uri)",
+                    e,
+                )
+                throw ErrnoException(name, e.errno, e)
+            }
     }
 }
 
 private val Exception.errno: Int
-    get() = when (this) {
-        is OuisyncException.NotFound -> OsConstants.ENOENT
-        is OuisyncException.PermissionDenied -> OsConstants.EPERM
-        is OuisyncException.IsDirectory -> OsConstants.EISDIR
-        is OuisyncException.NotDirectory -> OsConstants.ENOTDIR
-        else -> OsConstants.EIO
-    }
+    get() =
+        when (this) {
+            is OuisyncException.NotFound -> OsConstants.ENOENT
+            is OuisyncException.PermissionDenied -> OsConstants.EPERM
+            is OuisyncException.IsDirectory -> OsConstants.EISDIR
+            is OuisyncException.NotDirectory -> OsConstants.ENOTDIR
+            else -> OsConstants.EIO
+        }

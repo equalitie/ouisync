@@ -8,22 +8,15 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -32,59 +25,36 @@ import org.equalitie.ouisync.kotlin.server.Server
 import kotlin.collections.firstOrNull
 
 class OuisyncService : Service() {
-    // Local binder allows observing when the service startup completes.
-    inner class LocalBinder : Binder() {
-        // Waits (without blocking) for the server to complete its startup. If the server is already
-        // running, returns immediatelly.
-        suspend fun ensureStarted() {
-            server.await()
-        }
-
-        // Returns the path to the server's config directory. If it hasn't been set yet, this
-        // function waits (without blocking) until it is. The config directory is set with the
-        // `EXTRA_CONFIG_PATH` extra on the intent passed to [startService] or [bindService]
-        suspend fun getConfigPath(): String = config.get(EXTRA_CONFIG_PATH.stringKey)
-
-        // Setup service notification.
-        fun notify(
-            channelName: String?,
-            contentTitle: String?,
-            contentText: String?,
-        ) {
-            setupForeground(channelName, contentTitle, contentText)
-        }
+    private val exceptionHandler = CoroutineExceptionHandler() { _, e ->
+        Log.e(TAG, "uncaught exception in OuisyncService", e)
     }
-
-    private val scope = CoroutineScope(Dispatchers.Main)
-
-    private val config: DataStore<Preferences> by preferencesDataStore(CONFIG_NAME)
+    private val scope = CoroutineScope(Dispatchers.Main + exceptionHandler)
 
     private val server: Deferred<Server> =
         scope.async {
-            val configPath = config.get(EXTRA_CONFIG_PATH.stringKey)
-            val debugLabel = config.getOrNull(EXTRA_DEBUG_LABEL.stringKey)
+            val configPath = getConfigPath()
 
-            Server.start(configPath, debugLabel)
+            Server.start(configPath)
         }
 
     private var isForeground = false
 
     override fun onCreate() {
+        Log.d(TAG, "OuisyncService.onCreate")
+
         super.onCreate()
     }
 
     override fun onDestroy() {
+        Log.d(TAG, "OuisyncService.onDestroy")
+
         super.onDestroy()
 
-        runBlocking {
+        runBlocking(exceptionHandler) {
             scope.cancel()
 
             if (server.isCompleted) {
-                try {
-                    server.getCompleted().stop()
-                } catch (e: Exception) {
-                    Log.e(TAG, "failed to stop server", e)
-                }
+                server.getCompleted().stop()
             }
         }
     }
@@ -94,54 +64,40 @@ class OuisyncService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
-        scope.launch { init(intent) }
+        val notificationChannelName = intent?.getStringExtra(EXTRA_NOTIFICATION_CHANNEL_NAME)
+        val notificationContentTitle = intent?.getStringExtra(EXTRA_NOTIFICATION_CONTENT_TITLE)
+        val notificationContentText = intent?.getStringExtra(EXTRA_NOTIFICATION_CONTENT_TEXT)
+
+        Log.d(TAG, "OuisyncService.onStartCommand(notification = ${notificationContentTitle != null})")
+
+        if (notificationContentTitle != null) {
+            setupForeground(
+                notificationChannelName,
+                notificationContentTitle,
+                notificationContentText,
+            )
+        }
+
+        scope.launch { server.await() }
+
         return START_REDELIVER_INTENT
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        scope.launch { init(intent) }
-        return LocalBinder()
-    }
-
-    private suspend fun init(intent: Intent?) {
-        if (intent != null) {
-            updateConfig(intent)
-        }
-
-        server.await()
-    }
-
-    private suspend fun updateConfig(intent: Intent) =
-        config.edit { prefs ->
-            for (name in arrayOf(EXTRA_CONFIG_PATH, EXTRA_DEBUG_LABEL)) {
-                intent.getStringExtra(name)?.let { value ->
-                    val key = name.stringKey
-
-                    if (value.isNotEmpty()) {
-                        prefs[key] = value
-                    } else {
-                        prefs.remove(key)
-                    }
-                }
-            }
-        }
+    override fun onBind(intent: Intent?): IBinder? = null
 
     private fun setupForeground(
         channelName: String?,
-        contentTitle: String?,
+        contentTitle: String,
         contentText: String?,
     ) {
         val manager = getSystemService(NotificationManager::class.java)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel =
-                NotificationChannel(
-                    NOTIFICATION_CHANNEL_ID,
-                    channelName ?: DEFAULT_NOTIFICATION_CHANNEL_NAME,
-                    NotificationManager.IMPORTANCE_LOW,
-                )
-
-            manager.createNotificationChannel(channel)
+            NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                channelName ?: DEFAULT_NOTIFICATION_CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_LOW,
+            ).also { channel -> manager.createNotificationChannel(channel) }
         }
 
         val notification = createNotification(contentTitle, contentText)
@@ -235,20 +191,15 @@ class OuisyncService : Service() {
         }
 
     companion object {
-        const val EXTRA_CONFIG_PATH = "org.equalitie.ouisync.service.extra.config_path"
-        const val EXTRA_DEBUG_LABEL = "org.equalitie.ouisync.service.extra.debug_label"
-
-        private const val CONFIG_NAME = "org.equalitie.ouisync.service"
+        const val EXTRA_NOTIFICATION_CHANNEL_NAME =
+            "org.equalitie.ouisync.service.extra.notification.channel.name"
+        const val EXTRA_NOTIFICATION_CONTENT_TITLE =
+            "org.equalitie.ouisync.service.extra.notification.content.title"
+        const val EXTRA_NOTIFICATION_CONTENT_TEXT =
+            "org.equalitie.ouisync.service.extra.notification.content.text"
 
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_CHANNEL_ID = "org.equalitie.ouisync.service"
         private const val DEFAULT_NOTIFICATION_CHANNEL_NAME = "Ouisync"
     }
 }
-
-private val String.stringKey: Preferences.Key<String>
-    get() = stringPreferencesKey(substringAfterLast('.'))
-
-private suspend fun <T> DataStore<Preferences>.get(key: Preferences.Key<T>): T = data.map { prefs -> prefs[key] }.filterNotNull().first()
-
-private suspend fun <T> DataStore<Preferences>.getOrNull(key: Preferences.Key<T>): T? = data.map { prefs -> prefs[key] }.firstOrNull()
