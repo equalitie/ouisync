@@ -69,13 +69,13 @@ jobs:
 
       - name: Build docs for the kotlin bindings
         working-directory: bindings/kotlin
-        run: ./gradlew lib:dokkaHtml
+        run: ./gradlew dokkaGenerate
 
       - name: Prepare the files
         run: |
           mkdir -p _site
           cp -r target/doc _site/rust
-          cp -r bindings/kotlin/build/lib/dokka/html _site/kotlin
+          cp -r bindings/kotlin/build/dokka/html _site/kotlin
           cp doc/index.html _site/
 
       - name: Upload artifact
