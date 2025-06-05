@@ -1,7 +1,4 @@
-use crate::{
-    crypto::{Digest, Hashable},
-    format,
-};
+use crate::crypto::{Digest, Hashable};
 use ed25519_dalek::{self as ext, Signer, Verifier};
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
@@ -104,7 +101,7 @@ impl Ord for PublicKey {
 
 impl fmt::LowerHex for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        format::hex(f, self.0.as_bytes())
+        hex_fmt::HexFmt(self.0.as_bytes()).fmt(f)
     }
 }
 
@@ -142,7 +139,7 @@ impl fmt::Display for PublicKey {
 
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{self:8x}")
+        write!(f, "{self:<8x}")
     }
 }
 
@@ -235,7 +232,10 @@ impl sqlx::Type<Sqlite> for Signature {
 }
 
 impl<'q> sqlx::Encode<'q, Sqlite> for &'q Signature {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> sqlx::encode::IsNull {
+    fn encode_by_ref(
+        &self,
+        args: &mut Vec<SqliteArgumentValue<'q>>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         // It seems there is no way to avoid the allocation here because sqlx doesn't implement
         // `Encode` for arrays.
         sqlx::Encode::<Sqlite>::encode(self.to_bytes().to_vec(), args)
@@ -274,7 +274,7 @@ mod tests {
         );
 
         assert_eq!(
-            dump_signature(&keypair.sign(&rng.gen::<[u8; 32]>())),
+            dump_signature(&keypair.sign(&rng.r#gen::<[u8; 32]>())),
             "3230b7f98529273c71f8af92b1581d290bf424fd7bd5015399c6213cbc461ca79ff932a7fcbb5e19d2ef6efa8ed9b833b6d17431793facf1b810c3b579570d0d"
         );
     }

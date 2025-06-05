@@ -108,7 +108,7 @@ struct LocalDiscoveryInner {
 
 impl LocalDiscoveryInner {
     fn add(&mut self, interface: IpAddr, parent_monitor: &StateMonitor) {
-        use crate::collections::hash_map::Entry;
+        use std::collections::hash_map::Entry;
 
         if interface.is_loopback() {
             return;
@@ -165,7 +165,7 @@ impl PerInterfaceLocalDiscovery {
         parent_monitor: &StateMonitor,
     ) -> io::Result<Self> {
         // Only used to filter out multicast packets from self.
-        let id = OsRng.gen();
+        let id = OsRng.r#gen();
         let socket_provider = Arc::new(SocketProvider::new(interface));
 
         let monitor = parent_monitor.make_child(format!("{interface}"));
@@ -401,7 +401,7 @@ impl SocketProvider {
                 let mut last_error: Option<io::ErrorKind> = None;
 
                 let socket = loop {
-                    match UdpSocket::bind_multicast(self.interface).await {
+                    match UdpSocket::bind_multicast(self.interface) {
                         Ok(socket) => break Arc::new(socket),
                         Err(error) => {
                             if last_error != Some(error.kind()) {

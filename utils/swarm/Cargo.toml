@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true  }
-ctrlc = { version = "3.4.1", features = ["termination"] }
+ctrlc = { version = "3.4.5", features = ["termination"] }
 os_pipe = "1.1.4"
 
 [target.'cfg(any(target_os = "linux", target_os = "osx"))'.dependencies]

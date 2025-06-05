@@ -189,8 +189,7 @@ fn relay() {
 
     // "relay" node
     let r = Bin::start();
-    r.bind();
-    let r_port = r.get_port();
+    let r_port = r.bind();
     r.create(None);
     let share_token = r.share();
 
@@ -341,30 +340,29 @@ fn check_concurrent_versions(file_path: &Path, expected_contents: &[&[u8]]) -> R
     Ok(())
 }
 
-// This test is similar to the `relay` test but using a "mirror server" for the relay node instead
+// This test is similar to the `relay` test but using a "cache server" for the relay node instead
 // of a regular peer.
 #[test]
 fn mirror() {
-    // mirror server
-    let m = Bin::start();
-    m.bind();
-    let m_sync_port = m.get_port();
-    let m_rpc_port = m.bind_rpc();
+    // the cache server
+    let r = Bin::start();
+    let r_sync_port = r.bind();
+    let r_remote_control_port = r.enable_remote_control();
 
     let a = Bin::start();
     a.bind();
-    a.add_peer(m_sync_port);
+    a.add_peer(r_sync_port);
     a.create(None);
     let share_token = a.share();
     a.mount();
 
     let b = Bin::start();
     b.bind();
-    b.add_peer(m_sync_port);
+    b.add_peer(r_sync_port);
     b.create(Some(&share_token));
     b.mount();
 
-    a.mirror(&format!("localhost:{m_rpc_port}"));
+    a.mirror(&format!("localhost:{r_remote_control_port}"));
 
     let file_name = "test.dat";
     let size = 1024;
@@ -388,8 +386,7 @@ fn mirror() {
 
 fn setup() -> (Bin, Bin) {
     let a = Bin::start();
-    a.bind();
-    let a_port = a.get_port();
+    let a_port = a.bind();
     a.create(None);
     a.mount();
     let share_token = a.share();

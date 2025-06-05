@@ -1,6 +1,7 @@
+pub(crate) mod monitor;
+
 mod credentials;
 mod metadata;
-mod monitor;
 mod params;
 mod vault;
 mod worker;
@@ -12,13 +13,13 @@ pub use self::{credentials::Credentials, metadata::Metadata, params::RepositoryP
 
 pub(crate) use self::{
     metadata::{data_version, quota},
-    monitor::RepositoryMonitor,
     vault::Vault,
 };
 
+use self::monitor::RepositoryMonitor;
 use crate::{
     access_control::{Access, AccessChange, AccessKeys, AccessMode, AccessSecrets, LocalSecret},
-    block_tracker::RequestMode,
+    block_tracker::BlockRequestMode,
     branch::{Branch, BranchShared},
     crypto::{sign::PublicKey, PasswordSalt},
     db::{self, DatabaseId},
@@ -42,9 +43,14 @@ use futures_util::{stream, StreamExt};
 use metrics::{NoopRecorder, Recorder};
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
-use std::{borrow::Cow, io, path::Path, pin::pin, sync::Arc, time::SystemTime};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+    pin::pin,
+    sync::Arc,
+    time::SystemTime,
+};
 use tokio::{
-    fs,
     sync::broadcast::{self, error::RecvError},
     time::Duration,
 };
@@ -58,27 +64,26 @@ pub struct Repository {
     progress_reporter_handle: BlockingMutex<Option<ScopedJoinHandle<()>>>,
 }
 
-/// Delete the repository database
-pub async fn delete(store: impl AsRef<Path>) -> io::Result<()> {
+/// List of repository database files. Includes the main db file and any auxiliary files.
+///
+/// The aux files don't always exists but when they do and one wants to rename, move or delete the
+/// repository, they should rename/move/delete these files as well.
+///
+/// Note ideally the aux files should be deleted automatically when the repo has been closed. But
+/// because of a [bug][1] in sqlx, they are sometimes not and need to be handled
+/// (move,deleted) manually. When the bug is fixed, this function can be removed.
+///
+/// [1]: https://github.com/launchbadge/sqlx/issues/3217
+pub fn database_files(store_path: impl AsRef<Path>) -> Vec<PathBuf> {
     // Sqlite database consists of up to three files: main db (always present), WAL and WAL-index.
-    // Try to delete all of them even if any of them fail then return the first error (if any)
-    future::join_all(["", "-wal", "-shm"].into_iter().map(|suffix| {
-        let mut path = store.as_ref().as_os_str().to_owned();
-        path.push(suffix);
-
-        async move {
-            match fs::remove_file(&path).await {
-                Ok(()) => Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            }
-        }
-    }))
-    .await
-    .into_iter()
-    .find_map(Result::err)
-    .map(Err)
-    .unwrap_or(Ok(()))
+    ["", "-wal", "-shm"]
+        .into_iter()
+        .map(|suffix| {
+            let mut path = store_path.as_ref().as_os_str().to_owned();
+            path.push(suffix);
+            path.into()
+        })
+        .collect()
 }
 
 impl Repository {
@@ -279,7 +284,13 @@ impl Repository {
             )
         };
 
-        metadata::set_read_key(tx, &id, &read_key, local.as_deref()).await?;
+        metadata::set_read_key(
+            tx,
+            &id,
+            &read_key,
+            local.as_ref().map(|(k, s)| (k.as_ref(), s.as_ref())),
+        )
+        .await?;
 
         Ok(())
     }
@@ -311,8 +322,13 @@ impl Repository {
             )
         };
 
-        metadata::set_write_key(tx, &write_secrets, local.as_deref()).await?;
-        metadata::set_writer_id(tx, &writer_id, local.as_deref().map(|ks| &ks.key)).await?;
+        metadata::set_write_key(
+            tx,
+            &write_secrets,
+            local.as_ref().map(|(k, s)| (k.as_ref(), s.as_ref())),
+        )
+        .await?;
+        metadata::set_writer_id(tx, &writer_id, local.as_ref().map(|(k, _)| k.as_ref())).await?;
 
         Ok(())
     }
@@ -580,7 +596,7 @@ impl Repository {
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
-    /// If the entry exists, returns its `JointEntryType`, otherwise returns `EntryNotFound`.
+    /// If the entry exists, returns its `EntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
         match path::decompose(path.as_ref()) {
             Some((parent, name)) => {
@@ -665,11 +681,12 @@ impl Repository {
     /// If both source and destination refer to the same entry, this is a no-op.
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
-        src_dir_path: S,
-        src_name: &str,
-        dst_dir_path: D,
-        dst_name: &str,
+        src: S,
+        dst: D,
     ) -> Result<()> {
+        let (src_dir_path, src_name) = path::decompose(src.as_ref()).ok_or(Error::EntryNotFound)?;
+        let (dst_dir_path, dst_name) = path::decompose(dst.as_ref()).ok_or(Error::EntryNotFound)?;
+
         let local_branch = self.local_branch()?;
         let src_joint_dir = self.cd(src_dir_path).await?;
 
@@ -756,10 +773,6 @@ impl Repository {
     #[cfg(test)]
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
         self.shared.get_branch(id)
-    }
-
-    pub async fn load_branches(&self) -> Result<Vec<Branch>> {
-        self.shared.load_branches().await
     }
 
     /// Returns version vector of the given branch. Works in all access moded.
@@ -960,7 +973,7 @@ impl Repository {
         self.shared
             .vault
             .block_tracker
-            .set_request_mode(request_mode(&credentials.secrets));
+            .set_request_mode(block_request_mode(&credentials.secrets));
 
         *self.shared.credentials.write().unwrap() = credentials;
         *self.worker_handle.lock().unwrap() = Some(spawn_worker(self.shared.clone()));
@@ -984,7 +997,7 @@ impl Shared {
 
         vault
             .block_tracker
-            .set_request_mode(request_mode(&credentials.secrets));
+            .set_request_mode(block_request_mode(&credentials.secrets));
 
         Self {
             vault,
@@ -1076,10 +1089,10 @@ async fn report_sync_progress(vault: Vault) {
     }
 }
 
-fn request_mode(secrets: &AccessSecrets) -> RequestMode {
+fn block_request_mode(secrets: &AccessSecrets) -> BlockRequestMode {
     if secrets.can_read() {
-        RequestMode::Lazy
+        BlockRequestMode::Lazy
     } else {
-        RequestMode::Greedy
+        BlockRequestMode::Greedy
     }
 }

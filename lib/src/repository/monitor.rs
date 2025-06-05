@@ -5,7 +5,6 @@ use metrics::{
 use state_monitor::{MonitoredValue, StateMonitor};
 use std::{
     fmt,
-    future::Future,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
@@ -19,27 +18,7 @@ use tracing::{Instrument, Span};
 
 pub(crate) struct RepositoryMonitor {
     pub info_hash: MonitoredValue<Option<InfoHash>>,
-
-    // Total number of index requests sent.
-    pub index_requests_sent: Counter,
-    // Current number of sent index request for which responses haven't been received yet.
-    pub index_requests_inflight: Gauge,
-    // Total number of block requests sent.
-    pub block_requests_sent: Counter,
-    // Current number of sent block request for which responses haven't been received yet.
-    pub block_requests_inflight: Gauge,
-    // Total number of received requests
-    pub requests_received: Counter,
-    // Time from sending a request to receiving its response.
-    pub request_latency: Histogram,
-    // Total number of timeouted requests.
-    pub request_timeouts: Counter,
-
-    // Total number of responses sent.
-    pub responses_sent: Counter,
-    // Total number of responses received.
-    pub responses_received: Counter,
-
+    pub traffic: TrafficMonitor,
     pub scan_job: JobMonitor,
     pub merge_job: JobMonitor,
     pub prune_job: JobMonitor,
@@ -57,21 +36,7 @@ impl RepositoryMonitor {
         let span = tracing::info_span!("repo", message = node.id().name());
 
         let info_hash = node.make_value("info-hash", None);
-
-        let index_requests_sent = create_counter(recorder, "index requests sent", Unit::Count);
-        let index_requests_inflight =
-            create_gauge(recorder, "index requests inflight", Unit::Count);
-        let block_requests_sent = create_counter(recorder, "block requests sent", Unit::Count);
-        let block_requests_inflight =
-            create_gauge(recorder, "block requests inflight", Unit::Count);
-
-        let requests_received = create_counter(recorder, "requests received", Unit::Count);
-        let request_latency = create_histogram(recorder, "request latency", Unit::Seconds);
-        let request_timeouts = create_counter(recorder, "request timeouts", Unit::Count);
-
-        let responses_sent = create_counter(recorder, "responses sent", Unit::Count);
-        let responses_received = create_counter(recorder, "responses received", Unit::Count);
-
+        let traffic = TrafficMonitor::new(recorder);
         let scan_job = JobMonitor::new(&node, recorder, "scan");
         let merge_job = JobMonitor::new(&node, recorder, "merge");
         let prune_job = JobMonitor::new(&node, recorder, "prune");
@@ -79,23 +44,11 @@ impl RepositoryMonitor {
 
         Self {
             info_hash,
-
-            index_requests_sent,
-            index_requests_inflight,
-            block_requests_sent,
-            block_requests_inflight,
-            requests_received,
-            request_latency,
-            request_timeouts,
-
-            responses_sent,
-            responses_received,
-
+            traffic,
             scan_job,
             merge_job,
             prune_job,
             trash_job,
-
             span,
             node,
         }
@@ -111,6 +64,65 @@ impl RepositoryMonitor {
 
     pub fn name(&self) -> &str {
         self.node.id().name()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct TrafficMonitor {
+    // Total number of index requests sent.
+    pub index_requests_sent: Counter,
+    // Current number of sent index request for which responses haven't been received yet.
+    pub index_requests_inflight: Gauge,
+    // Total number of block requests sent.
+    pub block_requests_sent: Counter,
+    // Current number of sent block request for which responses haven't been received yet.
+    pub block_requests_inflight: Gauge,
+
+    // Time from sending a request to receiving its response.
+    pub request_rtt: Histogram,
+    // Total number of timeouted requests.
+    pub request_timeouts: Counter,
+    // Current number of requests being processed.
+    pub request_processing: Gauge,
+    // Time it takes to process a request.
+    pub request_process_time: Histogram,
+
+    // Total number of responses sent.
+    pub responses_sent: Counter,
+    // Total number of responses received.
+    pub responses_received: Counter,
+    // Current number of queued responses (received but not yet processed)
+    pub responses_queued: Gauge,
+    // Current number of responses being processed
+    pub responses_processing: Gauge,
+    // Time it takes to process a response
+    pub responses_process_time: Histogram,
+}
+
+impl TrafficMonitor {
+    pub fn new<R>(recorder: &R) -> Self
+    where
+        R: Recorder + ?Sized,
+    {
+        Self {
+            index_requests_sent: create_counter(recorder, "index requests sent", Unit::Count),
+            index_requests_inflight: create_gauge(recorder, "index requests inflight", Unit::Count),
+            block_requests_sent: create_counter(recorder, "block requests sent", Unit::Count),
+            block_requests_inflight: create_gauge(recorder, "block requests inflight", Unit::Count),
+            request_rtt: create_histogram(recorder, "request rtt", Unit::Seconds),
+            request_timeouts: create_counter(recorder, "request timeouts", Unit::Count),
+            request_processing: create_gauge(recorder, "request processing", Unit::Count),
+            request_process_time: create_histogram(recorder, "request process time", Unit::Seconds),
+            responses_sent: create_counter(recorder, "responses sent", Unit::Count),
+            responses_received: create_counter(recorder, "responses received", Unit::Count),
+            responses_queued: create_gauge(recorder, "responses queued", Unit::Count),
+            responses_processing: create_gauge(recorder, "responses processing", Unit::Count),
+            responses_process_time: create_histogram(
+                recorder,
+                "responses process time",
+                Unit::Seconds,
+            ),
+        }
     }
 }
 

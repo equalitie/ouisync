@@ -6,7 +6,6 @@ use std::{
     future::{self, Future},
     io,
     path::{Path, PathBuf},
-    pin::Pin,
     sync::Arc,
 };
 
@@ -14,17 +13,29 @@ pub struct MultiRepoVFS;
 
 impl MultiRepoMount for MultiRepoVFS {
     fn create(
-        _mount_point: impl AsRef<Path>,
-    ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>> + Send>> {
-        Box::pin(future::ready(Err(MountError::Unsupported)))
+        _mount_root: impl AsRef<Path>,
+    ) -> impl Future<Output = Result<Self, MountError>> + Send
+    where
+        Self: Sized,
+    {
+        future::ready(Err(MountError::Unsupported))
     }
 
-    fn insert(&self, _store_path: PathBuf, _repo: Arc<Repository>) -> Result<(), io::Error> {
+    fn insert(&self, _repo_name: String, _repo: Arc<Repository>) -> Result<PathBuf, io::Error> {
         Err(io::ErrorKind::Unsupported.into())
     }
 
-    fn remove(&self, _store_path: &Path) -> Result<(), io::Error> {
+    fn remove(&self, _repo_name: &str) -> Result<(), io::Error> {
         Err(io::ErrorKind::Unsupported.into())
+    }
+
+    /// If the repo is mounted, returns its mount point. Otherwise return `None`.
+    fn mount_point(&self, _repo_name: &str) -> Option<PathBuf> {
+        None
+    }
+
+    fn mount_root(&self) -> &Path {
+        Path::new("")
     }
 }
 

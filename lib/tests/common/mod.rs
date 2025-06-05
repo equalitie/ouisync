@@ -13,7 +13,6 @@ pub(crate) use self::env::*;
 use self::wait_map::WaitMap;
 use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
-use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File,
     Network, Payload, PeerAddr, Registration, Repository, Result, StoreError,
@@ -22,13 +21,11 @@ use ouisync_tracing_fmt::Formatter;
 use rand::Rng;
 use state_monitor::StateMonitor;
 use std::{
-    fmt,
-    future::Future,
-    io,
+    fmt, io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     thread,
 };
 use tokio::{
@@ -50,7 +47,7 @@ pub(crate) const DEFAULT_REPO: &str = "default";
 
 // Timeout for waiting for an event. Can be overwritten using "TEST_EVENT_TIMEOUT" env variable
 // (in seconds).
-pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
+pub(crate) static EVENT_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_secs(
         std::env::var("TEST_EVENT_TIMEOUT")
             .ok()
@@ -59,7 +56,7 @@ pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
     )
 });
 
-pub(crate) static TEST_TIMEOUT: Lazy<Duration> = Lazy::new(|| 4 * *EVENT_TIMEOUT);
+pub(crate) static TEST_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| 4 * *EVENT_TIMEOUT);
 
 #[cfg(not(feature = "simulation"))]
 pub(crate) mod env {
@@ -131,7 +128,7 @@ pub(crate) mod env {
         runner: turmoil::Sim<'a>,
     }
 
-    impl<'a> Env<'a> {
+    impl Env<'_> {
         pub fn new() -> Self {
             let context = Context::new(&Handle::current());
             let runner = turmoil::Builder::new()
@@ -249,7 +246,7 @@ pub(crate) mod actor {
         ACTOR.with(|actor| {
             RepositoryParams::new(actor.repo_path(name))
                 .with_device_id(actor.device_id)
-                .with_parent_monitor(actor.monitor.clone())
+                .with_monitor(actor.monitor.make_child(name))
                 .with_recorder(NoopRecorder)
         })
     }
@@ -296,7 +293,7 @@ pub(crate) mod actor {
         network: &Network,
     ) -> (Repository, Registration) {
         let repo = create_repo(name).await;
-        let reg = network.register(repo.handle()).await;
+        let reg = network.register(repo.handle());
 
         (repo, reg)
     }
@@ -708,8 +705,8 @@ pub(crate) fn init_log_with_writer<W>(writer: W)
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
-    tracing_subscriber::fmt()
-        .event_format(Formatter::<SystemTime>::default())
+    let result = tracing_subscriber::fmt()
+        .event_format(Formatter::default().with_timer(SystemTime))
         .with_writer(writer)
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
@@ -717,9 +714,9 @@ where
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
-        .try_init()
         // `Err` here just means the logger is already initialized, it's OK to ignore it.
-        .unwrap_or(());
+        .try_init()
+        .ok();
 }
 
 #[cfg(all(feature = "prometheus", not(feature = "influxdb")))]

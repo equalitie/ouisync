@@ -16,8 +16,12 @@ fn main() {
     // Override TMPDIR so that all temp files/directories created in the tests are created inside
     // it, for easier cleanup.
     let temp_root = TempDir::new().unwrap();
-    env::set_var("TMPDIR", temp_root.path()); // unix
-    env::set_var("TEMP", temp_root.path()); // windows
+
+    // SAFETY: This is the only thread accessing these env vars at this moment.
+    unsafe {
+        env::set_var("TMPDIR", temp_root.path()); // unix
+        env::set_var("TEMP", temp_root.path()); // windows
+    }
 
     // Build the test binaries
     let exes = build(&options);
@@ -106,6 +110,10 @@ struct Options {
     #[arg(short = 'F', long)]
     features: Vec<String>,
 
+    /// Build package in release mode
+    #[arg(short, long)]
+    release: bool,
+
     /// Test only this package's library
     #[arg(long)]
     lib: bool,
@@ -134,9 +142,12 @@ fn build(options: &Options) -> Vec<String> {
         .arg("--no-run")
         .arg("--package")
         .arg(&options.package)
-        .arg("--release")
         .arg("--message-format")
         .arg("json");
+
+    if options.release {
+        command.arg("--release");
+    }
 
     for feature in &options.features {
         command.arg("--features").arg(feature);

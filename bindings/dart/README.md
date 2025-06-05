@@ -23,12 +23,12 @@ to list all available triples):
 
 ## Before using/building this plugin
 
-In order to use this plugin, one must generate the `lib/bindings.g.dart` file:
+In order to use this plugin, one must generate the `lib/generated/api.g.dart` file:
 
-    $ dart run util/bindgen.dart
+    $ dart run tool/bindgen.dart
 
 Note that the above needs to be done every time the public interface of the
-`ouisync_ffi` library changes.
+`ouisync_service` library changes.
 
 ## Building the AAR
 

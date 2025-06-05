@@ -1,6 +1,3 @@
-// From experience, this lint is almost never useful. Disabling it globally.
-#![allow(clippy::large_enum_variant)]
-
 #[macro_use]
 mod macros;
 
@@ -21,7 +18,6 @@ mod directory;
 mod error;
 mod event;
 mod file;
-mod format;
 mod future;
 mod iterator;
 mod joint_directory;
@@ -40,7 +36,7 @@ mod versioned;
 
 pub use self::{
     access_control::{
-        Access, AccessChange, AccessMode, AccessSecrets, KeyAndSalt, LocalSecret, SetLocalSecret,
+        Access, AccessChange, AccessMode, AccessSecrets, DecodeError, LocalSecret, SetLocalSecret,
         ShareToken, WriteSecrets,
     },
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
@@ -55,15 +51,14 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
     network::{
-        repository_info_hash, DhtContactsStoreTrait, NatBehavior, Network, PeerAddr, PeerInfo,
-        PeerInfoCollector, PeerSource, PeerState, PublicRuntimeId, Registration, SecretRuntimeId,
-        Stats, DHT_ROUTERS,
+        repository_info_hash, DhtContactsStoreTrait, NatBehavior, Network, NetworkEvent,
+        NetworkEventReceiver, NetworkEventStream, PeerAddr, PeerInfo, PeerInfoCollector,
+        PeerSource, PeerState, PublicRuntimeId, Registration, SecretRuntimeId, Stats, DHT_ROUTERS,
     },
     progress::Progress,
     protocol::{RepositoryId, StorageSize, BLOCK_SIZE},
     repository::{
-        delete as delete_repository, Credentials, Metadata, Repository, RepositoryHandle,
-        RepositoryParams,
+        database_files, Credentials, Metadata, Repository, RepositoryHandle, RepositoryParams,
     },
     store::{Error as StoreError, DATA_VERSION},
     version_vector::VersionVector,

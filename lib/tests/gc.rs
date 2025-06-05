@@ -262,7 +262,7 @@ fn change_access_mode() {
             file.write_all(&content1).await.unwrap();
             file.flush().await.unwrap();
 
-            let _reg = network.register(repo.handle()).await;
+            let _reg = network.register(repo.handle());
 
             rx.recv().await.unwrap();
         }
@@ -283,7 +283,7 @@ fn change_access_mode() {
             file.flush().await.unwrap();
             drop(file);
 
-            let _reg = network.register(repo.handle()).await;
+            let _reg = network.register(repo.handle());
 
             // Ensure the remote file is completely reveived to avoid false positives in the
             // check that follows.

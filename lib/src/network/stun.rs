@@ -9,7 +9,6 @@ use net::{
 };
 use rand::seq::SliceRandom;
 use std::{
-    future::Future,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{Arc, Mutex},
     time::Duration,

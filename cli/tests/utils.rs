@@ -1,6 +1,5 @@
 use anyhow::{format_err, Error};
 use backoff::{self, ExponentialBackoffBuilder};
-use once_cell::sync::Lazy;
 use rand::Rng;
 use std::{
     cell::Cell,
@@ -9,7 +8,9 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    str, thread,
+    str::{self},
+    sync::LazyLock,
+    thread,
     time::Duration,
 };
 use tempfile::TempDir;
@@ -24,11 +25,10 @@ pub struct Bin {
 const COMMAND: &str = env!("CARGO_BIN_EXE_ouisync");
 const MOUNT_DIR: &str = "mnt";
 const CONFIG_DIR: &str = "config";
-const API_SOCKET: &str = "api.sock";
 const DEFAULT_REPO: &str = "test";
 
-static CERT: Lazy<rcgen::Certificate> =
-    Lazy::new(|| rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap());
+static CERT: LazyLock<rcgen::CertifiedKey> =
+    LazyLock::new(|| rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap());
 
 impl Bin {
     /// Start ouisync as server
@@ -36,29 +36,24 @@ impl Bin {
         let id = Id::new();
         let base_dir = TempDir::new().unwrap();
         let config_dir = base_dir.path().join(CONFIG_DIR);
-        let socket_path = base_dir.path().join(API_SOCKET);
+        let store_dir = base_dir.path().join("store");
         let mount_dir = base_dir.path().join(MOUNT_DIR);
 
         fs::create_dir_all(mount_dir.join(DEFAULT_REPO)).unwrap();
         fs::create_dir_all(config_dir.join("root_certs")).unwrap();
 
         // Install the certificate
-        let cert = CERT.serialize_pem().unwrap();
+        let cert = CERT.cert.pem();
 
         // For server:
         fs::write(config_dir.join("cert.pem"), &cert).unwrap();
-        fs::write(config_dir.join("key.pem"), CERT.serialize_private_key_pem()).unwrap();
+        fs::write(config_dir.join("key.pem"), CERT.key_pair.serialize_pem()).unwrap();
 
         // For client:
         fs::write(config_dir.join("root_certs").join("localhost.pem"), &cert).unwrap();
 
         let mut command = Command::new(COMMAND);
-        command
-            .arg("--store-dir")
-            .arg(base_dir.path().join("store"));
         command.arg("--config-dir").arg(&config_dir);
-        command.arg("--mount-dir").arg(&mount_dir);
-        command.arg("--socket").arg(&socket_path);
         command.arg("start");
 
         command.stdout(Stdio::piped());
@@ -72,13 +67,36 @@ impl Bin {
         let stderr = BufReader::new(process.stderr.take().unwrap());
         copy_lines_prefixed(stderr, OutputStream::Stderr, &id);
 
-        wait_for_file_exists(&socket_path);
+        wait_for_file_exists(&config_dir.join("local_control_port.conf"));
+        wait_for_file_exists(&config_dir.join("local_control_auth_key.conf"));
 
-        Self {
+        let bin = Self {
             id,
             base_dir,
             process,
-        }
+        };
+
+        expect_output(
+            &bin.id,
+            "",
+            bin.client_command()
+                .arg("store-dir")
+                .arg(store_dir)
+                .output()
+                .unwrap(),
+        );
+
+        expect_output(
+            &bin.id,
+            "",
+            bin.client_command()
+                .arg("mount-dir")
+                .arg(mount_dir)
+                .output()
+                .unwrap(),
+        );
+
+        bin
     }
 
     pub fn root(&self) -> PathBuf {
@@ -86,32 +104,16 @@ impl Bin {
     }
 
     #[track_caller]
-    pub fn bind(&self) {
-        expect_output(
+    pub fn bind(&self) -> u16 {
+        process_output(
             &self.id,
-            "",
             self.client_command()
                 .arg("bind")
                 .arg(format!("tcp/{}:0", Ipv4Addr::LOCALHOST))
                 .output()
                 .unwrap(),
+            |line| line.split(' ').nth(1)?.parse().ok(),
         )
-    }
-
-    #[track_caller]
-    pub fn get_port(&self) -> u16 {
-        str::from_utf8(
-            &self
-                .client_command()
-                .arg("list-binds")
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .lines()
-        .find_map(|line| line.split(' ').nth(1)?.parse().ok())
-        .unwrap()
     }
 
     #[track_caller]
@@ -134,9 +136,9 @@ impl Bin {
         command.arg("create");
 
         if let Some(share_token) = share_token {
-            command.arg("--share-token").arg(share_token);
+            command.arg("--token").arg(share_token);
         } else {
-            command.arg("--name").arg(DEFAULT_REPO);
+            command.arg(DEFAULT_REPO);
         }
 
         expect_output(&self.id, "", command.output().unwrap());
@@ -145,23 +147,17 @@ impl Bin {
     /// Create a share token for the repository
     #[track_caller]
     pub fn share(&self) -> String {
-        str::from_utf8(
-            &self
-                .client_command()
+        process_output(
+            &self.id,
+            self.client_command()
                 .arg("share")
-                .arg("--name")
                 .arg(DEFAULT_REPO)
                 .arg("--mode")
                 .arg("write")
                 .output()
-                .unwrap()
-                .stdout,
+                .unwrap(),
+            |line| Some(line.to_owned()),
         )
-        .unwrap()
-        .lines()
-        .next()
-        .unwrap()
-        .to_owned()
     }
 
     #[track_caller]
@@ -169,20 +165,16 @@ impl Bin {
         expect_output(
             &self.id,
             "",
-            self.client_command()
-                .arg("mount")
-                .arg("--all")
-                .output()
-                .unwrap(),
+            self.client_command().arg("mount").output().unwrap(),
         )
     }
 
     #[track_caller]
-    pub fn bind_rpc(&self) -> u16 {
+    pub fn enable_remote_control(&self) -> u16 {
         let addr: SocketAddr = str::from_utf8(
             &self
                 .client_command()
-                .arg("bind-rpc")
+                .arg("remote-control")
                 .arg(format!("{}:0", Ipv4Addr::LOCALHOST))
                 .output()
                 .unwrap()
@@ -205,9 +197,8 @@ impl Bin {
             "",
             self.client_command()
                 .arg("mirror")
-                .arg("--name")
+                .arg("create")
                 .arg(DEFAULT_REPO)
-                .arg("--host")
                 .arg(host)
                 .output()
                 .unwrap(),
@@ -226,9 +217,8 @@ impl Bin {
     fn client_command(&self) -> Command {
         let mut command = Command::new(COMMAND);
         command
-            .arg("--socket")
-            .arg(self.base_dir.path().join(API_SOCKET))
-            .env("RUST_LOG", "off");
+            .arg("--config-dir")
+            .arg(self.base_dir.path().join(CONFIG_DIR));
         command
     }
 }
@@ -240,6 +230,9 @@ impl Drop for Bin {
 }
 
 thread_local! {
+    // HACK: This is being falsely triggered on android. Using `expect` to silence it and also to
+    // get notified when it gets fixed upstream.
+    #[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local))]
     static NEXT_ID: Cell<u32> = const { Cell::new(0) };
 }
 
@@ -324,6 +317,22 @@ fn expect_output(id: &Id, expected: &str, output: Output) {
     }
 
     assert_eq!(str::from_utf8(&output.stdout).map(str::trim), Ok(expected));
+}
+
+#[track_caller]
+fn process_output<F, R>(id: &Id, output: Output, f: F) -> R
+where
+    F: FnMut(&str) -> Option<R>,
+{
+    if !output.status.success() {
+        fail(id, output);
+    }
+
+    str::from_utf8(&output.stdout)
+        .unwrap()
+        .lines()
+        .find_map(f)
+        .unwrap()
 }
 
 #[track_caller]

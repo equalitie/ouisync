@@ -10,13 +10,13 @@ use super::{
     Error,
 };
 use crate::{
-    block_tracker::{BlockPromise, OfferState},
+    block_tracker::BlockOfferState,
     collections::HashSet,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
     future::TryStreamExt as _,
     protocol::{
-        Block, BlockId, InnerNode, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, Proof,
+        Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, Proof,
         RootNodeFilter, SingleBlockPresence, Summary,
     },
     repository, StorageSize,
@@ -29,7 +29,7 @@ pub(crate) struct ClientWriter {
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     quota: Option<StorageSize>,
     summary_updates: Vec<Hash>,
-    saved_blocks: Vec<SavedBlock>,
+    new_blocks: Vec<BlockId>,
     block_id_cache: BlockIdCache,
     block_id_cache_updates: Vec<(Hash, BlockId)>,
 }
@@ -47,10 +47,17 @@ impl ClientWriter {
             block_expiration_tracker,
             quota,
             summary_updates: Vec::new(),
-            saved_blocks: Vec::new(),
+            new_blocks: Vec::new(),
             block_id_cache,
             block_id_cache_updates: Vec::new(),
         })
+    }
+
+    pub fn as_reader_mut(&mut self) -> ClientReaderMut<'_> {
+        ClientReaderMut {
+            db: &mut self.db,
+            quota: &self.quota,
+        }
     }
 
     /// Saves received root node into the store.
@@ -79,14 +86,15 @@ impl ClientWriter {
     pub async fn save_inner_nodes(
         &mut self,
         nodes: CacheHash<InnerNodes>,
-    ) -> Result<InnerNodesStatus, Error> {
+    ) -> Result<Vec<InnerNodeStatus>, Error> {
         let parent_hash = nodes.hash();
 
         if !index::parent_exists(&mut self.db, &parent_hash).await? {
-            return Ok(InnerNodesStatus::default());
+            tracing::warn!("parent node not found");
+            return Ok(Vec::new());
         }
 
-        let mut new_children = Vec::with_capacity(nodes.len());
+        let mut statuses = Vec::with_capacity(nodes.len());
         let nodes = nodes.into_inner();
 
         for (_, remote_node) in &nodes {
@@ -96,11 +104,16 @@ impl ClientWriter {
             }
 
             let local_node = inner_node::load(&mut self.db, &remote_node.hash).await?;
-            if local_node
-                .map(|local_node| local_node.summary.is_outdated(&remote_node.summary))
-                .unwrap_or(true)
-            {
-                new_children.push(*remote_node);
+            let local_node_summary = local_node
+                .map(|node| node.summary)
+                .unwrap_or(Summary::INCOMPLETE);
+
+            if local_node_summary.is_outdated(&remote_node.summary) {
+                statuses.push(InnerNodeStatus {
+                    hash: remote_node.hash,
+                    local_block_presence: local_node_summary.block_presence,
+                    remote_block_presence: remote_node.summary.block_presence,
+                });
             }
         }
 
@@ -111,7 +124,7 @@ impl ClientWriter {
             self.summary_updates.push(parent_hash);
         }
 
-        Ok(InnerNodesStatus { new_children })
+        Ok(statuses)
     }
 
     pub async fn save_leaf_nodes(
@@ -121,6 +134,7 @@ impl ClientWriter {
         let parent_hash = nodes.hash();
 
         if !index::parent_exists(&mut self.db, &parent_hash).await? {
+            tracing::warn!("parent node not found");
             return Ok(LeafNodesStatus::default());
         }
 
@@ -141,16 +155,16 @@ impl ClientWriter {
                     match leaf_node::load_block_presence(&mut self.db, &node.block_id).await? {
                         Some(SingleBlockPresence::Missing) | None => {
                             // Missing, expired or not yet stored locally
-                            let offer_state = if self.quota.is_some() {
+                            let node_state = if self.quota.is_some() {
                                 // OPTIMIZE: the state is the same for all the nodes in `nodes`, so
                                 // it only needs to be loaded once.
-                                load_block_offer_state_assuming_quota(&mut self.db, &node.block_id)
+                                root_node::load_node_state_of_missing(&mut self.db, &node.block_id)
                                     .await?
                             } else {
-                                Some(OfferState::Approved)
+                                NodeState::Approved
                             };
 
-                            if let Some(offer_state) = offer_state {
+                            if let Some(offer_state) = block_offer_state(node_state) {
                                 new_block_offers.push((node.block_id, offer_state));
                             }
                         }
@@ -168,11 +182,7 @@ impl ClientWriter {
         Ok(LeafNodesStatus { new_block_offers })
     }
 
-    pub async fn save_block(
-        &mut self,
-        block: &Block,
-        block_promise: Option<BlockPromise>,
-    ) -> Result<(), Error> {
+    pub async fn save_block(&mut self, block: &Block) -> Result<(), Error> {
         let updated = {
             let mut updated = false;
             let mut updates = leaf_node::set_present(&mut self.db, &block.id);
@@ -193,12 +203,9 @@ impl ClientWriter {
             if let Some(tracker) = &self.block_expiration_tracker {
                 tracker.handle_block_update(&block.id, false);
             }
-        }
 
-        self.saved_blocks.push(match block_promise {
-            Some(block_promise) => SavedBlock::WithPromise(block_promise),
-            None => SavedBlock::WithoutPromise(block.id),
-        });
+            self.new_blocks.push(block.id);
+        }
 
         Ok(())
     }
@@ -219,15 +226,9 @@ impl ClientWriter {
             .load_approved_missing_blocks(&approved_branches)
             .await?;
 
-        let new_blocks = self
-            .saved_blocks
-            .iter()
-            .map(|saved_block| *saved_block.id())
-            .collect();
-
         let Self {
             db,
-            saved_blocks,
+            new_blocks,
             block_id_cache,
             block_id_cache_updates,
             ..
@@ -243,13 +244,6 @@ impl ClientWriter {
         let output = db
             .commit_and_then(move || {
                 block_id_cache.set_present(&block_id_cache_updates);
-
-                for saved_block in saved_blocks {
-                    if let SavedBlock::WithPromise(promise) = saved_block {
-                        promise.complete();
-                    }
-                }
-
                 f(status)
             })
             .await?;
@@ -350,18 +344,32 @@ impl ClientReader {
         Ok(Self { db, quota })
     }
 
-    /// Returns the state (`Pending` or `Approved`) that the offer for the given block should be
-    /// registered with. If the block isn't referenced or isn't missing, returns `None`.
+    pub fn as_mut(&mut self) -> ClientReaderMut<'_> {
+        ClientReaderMut {
+            db: &mut self.db,
+            quota: &self.quota,
+        }
+    }
+}
+
+pub(crate) struct ClientReaderMut<'a> {
+    db: &'a mut db::ReadTransaction,
+    quota: &'a Option<StorageSize>,
+}
+
+impl ClientReaderMut<'_> {
+    /// Loads the state that should be used for offers for the given block.
     pub async fn load_block_offer_state(
         &mut self,
         block_id: &BlockId,
-    ) -> Result<Option<OfferState>, Error> {
+    ) -> Result<Option<BlockOfferState>, Error> {
         if self.quota.is_some() {
-            load_block_offer_state_assuming_quota(&mut self.db, block_id).await
+            let node_state = root_node::load_node_state_of_missing(self.db, block_id).await?;
+            Ok(block_offer_state(node_state))
         } else {
-            match leaf_node::load_block_presence(&mut self.db, block_id).await? {
+            match leaf_node::load_block_presence(self.db, block_id).await? {
                 Some(SingleBlockPresence::Missing) | Some(SingleBlockPresence::Expired) => {
-                    Ok(Some(OfferState::Approved))
+                    Ok(Some(BlockOfferState::Approved))
                 }
                 Some(SingleBlockPresence::Present) | None => Ok(None),
             }
@@ -369,16 +377,16 @@ impl ClientReader {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct InnerNodesStatus {
-    /// Which of the received nodes should we request the children of.
-    pub new_children: Vec<InnerNode>,
+pub(crate) struct InnerNodeStatus {
+    pub hash: Hash,
+    pub local_block_presence: MultiBlockPresence,
+    pub remote_block_presence: MultiBlockPresence,
 }
 
 #[derive(Default)]
 pub(crate) struct LeafNodesStatus {
-    /// Number of new blocks offered by the received nodes.
-    pub new_block_offers: Vec<(BlockId, OfferState)>,
+    /// New blocks offered by the received nodes together with their root node states.
+    pub new_block_offers: Vec<(BlockId, BlockOfferState)>,
 }
 
 pub(crate) struct CommitStatus {
@@ -397,28 +405,11 @@ struct FinalizeStatus {
     rejected_branches: Vec<PublicKey>,
 }
 
-async fn load_block_offer_state_assuming_quota(
-    conn: &mut db::Connection,
-    block_id: &BlockId,
-) -> Result<Option<OfferState>, Error> {
-    match root_node::load_node_state_of_missing(conn, block_id).await? {
-        NodeState::Incomplete | NodeState::Complete => Ok(Some(OfferState::Pending)),
-        NodeState::Approved => Ok(Some(OfferState::Approved)),
-        NodeState::Rejected => Ok(None),
-    }
-}
-
-enum SavedBlock {
-    WithPromise(BlockPromise),
-    WithoutPromise(BlockId),
-}
-
-impl SavedBlock {
-    fn id(&self) -> &BlockId {
-        match self {
-            SavedBlock::WithPromise(promise) => promise.block_id(),
-            SavedBlock::WithoutPromise(block_id) => block_id,
-        }
+fn block_offer_state(root_node_state: NodeState) -> Option<BlockOfferState> {
+    match root_node_state {
+        NodeState::Approved => Some(BlockOfferState::Approved),
+        NodeState::Complete | NodeState::Incomplete => Some(BlockOfferState::Pending),
+        NodeState::Rejected => None,
     }
 }
 
@@ -551,8 +542,8 @@ mod tests {
         let remote_id = PublicKey::generate(&mut rng);
 
         // Create one block locally
-        let block: Block = rng.gen();
-        let locator = rng.gen();
+        let block: Block = rng.r#gen();
+        let locator = rng.r#gen();
 
         let mut tx = store.begin_write().await.unwrap();
         let mut changeset = Changeset::new();
@@ -692,15 +683,15 @@ mod tests {
 
             let local_id = PublicKey::generate(&mut rng);
 
-            let locator_0 = rng.gen();
-            let block_id_0_0 = rng.gen();
-            let block_id_0_1 = rng.gen();
+            let locator_0 = rng.r#gen();
+            let block_id_0_0 = rng.r#gen();
+            let block_id_0_1 = rng.r#gen();
 
-            let locator_1 = rng.gen();
-            let block_1: Block = rng.gen();
+            let locator_1 = rng.r#gen();
+            let block_1: Block = rng.r#gen();
 
-            let locator_2 = rng.gen();
-            let block_id_2 = rng.gen();
+            let locator_2 = rng.r#gen();
+            let block_id_2 = rng.r#gen();
 
             // Insert one present and two missing, so the root block presence is `Some`
             let mut tx = store.begin_write().await.unwrap();
@@ -733,7 +724,7 @@ mod tests {
             // Mark one of the missing block as present so the block presences are different (but still
             // `Some`).
             let mut writer = store.begin_client_write().await.unwrap();
-            writer.save_block(&block_1, None).await.unwrap();
+            writer.save_block(&block_1).await.unwrap();
             writer.commit().await.unwrap();
 
             // Receive the same node we already have. The hashes and version vectors are equal but the
@@ -834,24 +825,22 @@ mod tests {
             .unwrap();
         writer.commit().await.unwrap();
 
-        for layer in snapshot.inner_layers() {
-            for (hash, inner_nodes) in layer.inner_maps() {
-                let mut writer = store.begin_client_write().await.unwrap();
-                writer
-                    .save_inner_nodes(inner_nodes.clone().into())
-                    .await
-                    .unwrap();
-                writer.commit().await.unwrap();
+        for (hash, inner_nodes) in snapshot.inner_sets() {
+            let mut writer = store.begin_client_write().await.unwrap();
+            writer
+                .save_inner_nodes(inner_nodes.clone().into())
+                .await
+                .unwrap();
+            writer.commit().await.unwrap();
 
-                assert!(!store
-                    .acquire_read()
-                    .await
-                    .unwrap()
-                    .load_inner_nodes(hash)
-                    .await
-                    .unwrap()
-                    .is_empty());
-            }
+            assert!(!store
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_inner_nodes(hash)
+                .await
+                .unwrap()
+                .is_empty());
         }
 
         for (hash, leaf_nodes) in snapshot.leaf_sets() {
@@ -880,26 +869,24 @@ mod tests {
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
         // Try to save the inner nodes
-        for layer in snapshot.inner_layers() {
-            let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
-            let mut writer = store.begin_client_write().await.unwrap();
-            let status = writer
-                .save_inner_nodes(inner_nodes.clone().into())
-                .await
-                .unwrap();
-            assert!(status.new_children.is_empty());
-            writer.commit().await.unwrap();
+        let (hash, inner_nodes) = snapshot.inner_sets().next().unwrap();
+        let mut writer = store.begin_client_write().await.unwrap();
+        let statuses = writer
+            .save_inner_nodes(inner_nodes.clone().into())
+            .await
+            .unwrap();
+        assert!(statuses.is_empty());
+        writer.commit().await.unwrap();
 
-            // The orphaned inner nodes were not written to the db.
-            let inner_nodes = store
-                .acquire_read()
-                .await
-                .unwrap()
-                .load_inner_nodes(hash)
-                .await
-                .unwrap();
-            assert!(inner_nodes.is_empty());
-        }
+        // The orphaned inner nodes were not written to the db.
+        let inner_nodes = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_inner_nodes(hash)
+            .await
+            .unwrap();
+        assert!(inner_nodes.is_empty());
 
         // Try to save the leaf nodes
         let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();
@@ -968,7 +955,7 @@ mod tests {
 
         let mut writer = store.begin_client_write().await.unwrap();
         for block in snapshot.blocks().values() {
-            writer.save_block(block, None).await.unwrap();
+            writer.save_block(block).await.unwrap();
         }
         writer.commit().await.unwrap();
 
@@ -1025,7 +1012,7 @@ mod tests {
         assert_eq!(node.summary.state, NodeState::Incomplete);
 
         // Remove the block
-        let snapshot = Snapshot::new(
+        let snapshot = Snapshot::from_present_blocks(
             snapshot
                 .locators_and_blocks()
                 .filter(|(_, block)| block.id != block_to_remove)

@@ -1,14 +1,14 @@
-import 'dart:io' as io;
 import 'dart:async';
 
 import 'package:async/async.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:ouisync/ouisync.dart';
-import 'package:ouisync/native_channels.dart';
+import 'package:ouisync/helpers.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
+
+const _repoName = 'my repo';
 
 void main() async {
   runApp(const MaterialApp(home: MyApp()));
@@ -22,9 +22,9 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
+  late Server server;
   late Session session;
   late Repository repo;
-  late NativeChannels nativeChannels;
 
   bool bittorrentDhtEnabled = false;
 
@@ -38,32 +38,44 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> initObjects() async {
     final dataDir = (await getApplicationSupportDirectory()).path;
-    final session = Session.create(configPath: join(dataDir, 'config.db'));
+    final configDir = join(dataDir, 'config.db');
 
-    final store = join(dataDir, 'repo.db');
-    final storeExists = await io.File(store).exists();
+    final server = Server.create(
+      configPath: configDir,
+    )..initLog(stdout: true);
+    await server.start();
+    await server.notify(contentTitle: 'Ouisync example is running');
 
-    final repo = storeExists
-        ? await Repository.open(session, store: store, secret: null)
-        : await Repository.create(session,
-            store: store, readSecret: null, writeSecret: null);
+    final session = await Session.create(configPath: configDir);
+    await session.setStoreDir(join(dataDir, 'repos'));
+    await session.initNetwork(NetworkDefaults(
+      bind: ["quic/0.0.0.0:0"],
+      portForwardingEnabled: false,
+      localDiscoveryEnabled: false,
+    ));
 
-    bittorrentDhtEnabled = await repo.isDhtEnabled;
+    Repository repo;
 
-    final nativeChannels = NativeChannels(session);
-    nativeChannels.repository = repo;
+    try {
+      repo = await session.findRepository(_repoName);
+    } on NotFound catch (_) {
+      repo = await session.createRepository(path: _repoName);
+    }
+
+    bittorrentDhtEnabled = await repo.isDhtEnabled();
 
     setState(() {
       this.session = session;
       this.repo = repo;
-      this.nativeChannels = nativeChannels;
     });
   }
 
   @override
   void dispose() {
-    repo.close();
-    unawaited(session.close());
+    unawaited(Future(() async {
+      await server.stop();
+      await session.close();
+    }));
 
     super.dispose();
   }
@@ -120,7 +132,7 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> setDhtEnabled(bool enable) async {
     await repo.setDhtEnabled(enable);
-    final isEnabled = await repo.isDhtEnabled;
+    final isEnabled = await repo.isDhtEnabled();
 
     setState(() {
       bittorrentDhtEnabled = isEnabled;
@@ -128,18 +140,21 @@ class _MyAppState extends State<MyApp> {
   }
 
   Widget fileList() => ListView.separated(
-      separatorBuilder: (context, index) =>
-          const Divider(height: 1, color: Colors.transparent),
-      shrinkWrap: true,
-      itemCount: contents.length,
-      itemBuilder: (context, index) {
-        final item = contents[index];
+        separatorBuilder: (context, index) =>
+            const Divider(height: 1, color: Colors.transparent),
+        shrinkWrap: true,
+        itemCount: contents.length,
+        itemBuilder: (context, index) {
+          final item = contents[index];
 
-        return Card(
+          return Card(
             child: ListTile(
-                title: Text(item),
-                onTap: () => showAlertDialog(context, item, 1)));
-      });
+              title: Text(item),
+              onTap: () => showAlertDialog(context, item),
+            ),
+          );
+        },
+      );
 
   Future<void> addFile() async {
     FilePickerResult? result =
@@ -156,14 +171,10 @@ class _MyAppState extends State<MyApp> {
     File? newFile;
 
     try {
-      if (kDebugMode) {
-        print('Creating file $filePath');
-      }
-      newFile = await File.create(repo, filePath);
+      debugPrint('Creating file $filePath');
+      newFile = await repo.createFile(filePath);
     } catch (e) {
-      if (kDebugMode) {
-        print('Error creating file $filePath: $e');
-      }
+      debugPrint('Error creating file $filePath: $e');
     }
 
     return newFile!;
@@ -171,9 +182,7 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> saveFile(
       File file, String path, Stream<List<int>> stream) async {
-    if (kDebugMode) {
-      print('Writing file $path');
-    }
+    debugPrint('Writing file $path');
 
     int offset = 0;
 
@@ -181,14 +190,10 @@ class _MyAppState extends State<MyApp> {
       final streamReader = ChunkedStreamReader(stream);
       while (true) {
         final buffer = await streamReader.readChunk(64000);
-        if (kDebugMode) {
-          print('Buffer size: ${buffer.length} - offset: $offset');
-        }
+        debugPrint('Buffer size: ${buffer.length} - offset: $offset');
 
         if (buffer.isEmpty) {
-          if (kDebugMode) {
-            print('The buffer is empty; reading from the stream is done!');
-          }
+          debugPrint('The buffer is empty; reading from the stream is done!');
           break;
         }
 
@@ -196,22 +201,15 @@ class _MyAppState extends State<MyApp> {
         offset += buffer.length;
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('Exception writing the file $path:\n${e.toString()}');
-      }
+      debugPrint('Exception writing the file $path:\n${e.toString()}');
     } finally {
       await file.close();
     }
   }
 
   Future<void> getFiles(String path) async {
-    final dir = await Directory.open(repo, path);
-
-    final items = <String>[];
-    final iterator = dir.iterator;
-    while (iterator.moveNext()) {
-      items.add(iterator.current.name);
-    }
+    final dir = await repo.readDirectory(path);
+    final items = dir.map((entry) => entry.name).toList();
 
     setState(() {
       contents.clear();
@@ -219,22 +217,21 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
-  void showAlertDialog(BuildContext context, String path, int size) {
+  void showAlertDialog(BuildContext context, String path) {
     Widget previewFileButton = TextButton(
       child: const Text("Preview"),
       onPressed: () async {
         Navigator.of(context).pop();
-        await nativeChannels.previewOuiSyncFile(
-            "org.equalitie.ouisync_example", path, size);
+        await viewFile(_getFileUrl(path));
       },
     );
     Widget shareFileButton = TextButton(
-        child: const Text("Share"),
-        onPressed: () async {
-          Navigator.of(context).pop();
-          await nativeChannels.shareOuiSyncFile(
-              "org.equalitie.ouisync_example", path, size);
-        });
+      child: const Text("Share"),
+      onPressed: () async {
+        Navigator.of(context).pop();
+        await shareFile(_getFileUrl(path));
+      },
+    );
     Widget cancelButton = TextButton(
       child: const Text("Cancel"),
       onPressed: () {
@@ -260,3 +257,9 @@ class _MyAppState extends State<MyApp> {
     );
   }
 }
+
+Uri _getFileUrl(String path) => Uri(
+      scheme: 'content',
+      host: 'org.equalitie.ouisync.dart.example.provider',
+      path: posix.join(_repoName, path),
+    );

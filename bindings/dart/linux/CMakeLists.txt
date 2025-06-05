@@ -14,22 +14,20 @@ project(${PROJECT_NAME} LANGUAGES CXX)
 
 include(FetchContent)
 
-# CMAKE_SOURCE_DIR points to `.../ouisync-app/linux` (absolute path)
-file(CREATE_LINK ${CMAKE_SOURCE_DIR}/../ouisync ${CMAKE_SOURCE_DIR}/../ouisync/bindings/dart/ouisync SYMBOLIC)
+file(REAL_PATH ${CMAKE_CURRENT_SOURCE_DIR} RESOLVED_CMAKE_CURRENT_SOURCE_DIR)
+set(ROOT_DIR "${RESOLVED_CMAKE_CURRENT_SOURCE_DIR}/../../..")
 
 FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.5.0 # Optionally specify a commit hash, version tag or branch here
+    GIT_TAG v0.5.1 # Optionally specify a commit hash, version tag or branch here
 )
 # Set any global configuration variables such as `Rust_TOOLCHAIN` before this line!
 FetchContent_MakeAvailable(Corrosion)
 
-set(OUISYNC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ouisync")
-
 corrosion_import_crate(
-  MANIFEST_PATH "${OUISYNC_DIR}/Cargo.toml"
-  CRATES ouisync-ffi
+  MANIFEST_PATH "${ROOT_DIR}/Cargo.toml"
+  CRATES ouisync-service
 )
 
 # This value is used when generating builds using this plugin, so it must
@@ -58,15 +56,16 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 
 # Source include directories and library dependencies. Add any plugin-specific
 # dependencies here.
-target_include_directories(${PLUGIN_NAME} INTERFACE
-  "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(${PLUGIN_NAME}
+  INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
-target_link_libraries(${PLUGIN_NAME} PUBLIC ouisync_ffi)
+target_link_libraries(${PLUGIN_NAME} PUBLIC ouisync_service)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
 # external build triggered from this build file.
-set(ouisync_bundled_libraries "${CMAKE_CURRENT_BINARY_DIR}/libouisync_ffi.so"
+set(ouisync_bundled_libraries "${CMAKE_CURRENT_BINARY_DIR}/libouisync_service.so"
   PARENT_SCOPE
 )

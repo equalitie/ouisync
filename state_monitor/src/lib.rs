@@ -316,7 +316,7 @@ impl Drop for StateMonitor {
             return;
         }
 
-        entry.remove();
+        entry.shift_remove();
         parent.shared.changed();
     }
 }
@@ -466,7 +466,7 @@ impl<T> Drop for MonitoredValue<T> {
                 let v = e.get_mut();
                 v.refcount -= 1;
                 if v.refcount == 0 {
-                    e.remove();
+                    e.shift_remove();
                     self.monitor.shared.changed();
                 }
             }
@@ -511,6 +511,12 @@ impl fmt::Display for ValueError {
 impl std::error::Error for ValueError {}
 
 // --- Serialization
+
+impl fmt::Debug for StateMonitor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StateMonitor").finish_non_exhaustive()
+    }
+}
 
 impl Serialize for StateMonitor {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

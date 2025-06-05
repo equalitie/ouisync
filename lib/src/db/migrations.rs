@@ -1,9 +1,9 @@
 use super::{get_pragma, set_pragma, Connection, Error, Pool};
 use include_dir::{include_dir, Dir, File};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 /// Latest schema version
-pub static SCHEMA_VERSION: Lazy<u32> = Lazy::new(|| {
+pub static SCHEMA_VERSION: LazyLock<u32> = LazyLock::new(|| {
     MIGRATIONS
         .files()
         .filter_map(get_migration)

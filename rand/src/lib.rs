@@ -29,12 +29,12 @@ mod implementation {
 
         /// ThreadRng
         pub(super) mod thread {
-            use once_cell::sync::Lazy;
             use rand::{rngs::StdRng, CryptoRng, Error, Rng, RngCore, SeedableRng};
             use std::{
                 cell::RefCell,
                 env::{self, VarError},
                 rc::Rc,
+                sync::LazyLock,
             };
 
             thread_local! {
@@ -46,12 +46,12 @@ mod implementation {
                 // Generate/parse the seed only once per process, but log it for every thread. This
                 // is so that every test logs the seed separately so that when the test fails we
                 // knows what seed it was using.
-                static SEED: Lazy<u64> = Lazy::new(|| {
+                static SEED: LazyLock<u64> = LazyLock::new(|| {
                     const PARSE_ERROR: &str = "failed to parse OUISYNC_TEST_SEED";
 
                     match env::var("OUISYNC_TEST_SEED") {
                         Ok(seed) => seed.parse().expect(PARSE_ERROR),
-                        Err(VarError::NotPresent) => rand::rngs::OsRng.gen(),
+                        Err(VarError::NotPresent) => rand::rngs::OsRng.r#gen(),
                         Err(VarError::NotUnicode(_)) => panic!("{}", PARSE_ERROR),
                     }
                 });
@@ -124,7 +124,7 @@ mod implementation {
     where
         Standard: Distribution<T>,
     {
-        thread_rng().gen()
+        thread_rng().r#gen()
     }
 
     /// Drop-in replacement for `std::collections::hash_map::RandomState` which uses the seedable

@@ -47,6 +47,11 @@ pub fn mount(
     repository: Arc<Repository>,
     mount_point: impl AsRef<Path>,
 ) -> Result<MountGuard, io::Error> {
+    // TODO: Would be great if we could use MountOption::AutoUnmount, but the documentation
+    // say it can't be used without MountOption::AllowOther or MountOption::AllowRoot. However
+    // the two latter options require modifications to /etc/fuse.conf. It's not clear to me
+    // whether this is a limitation of fuser or libfuse. Fuser has an open ticket for it here
+    // https://github.com/cberner/fuser/issues/230
     let session = fuser::spawn_mount2(
         VirtualFilesystem::new(runtime_handle, repository),
         mount_point,
@@ -159,7 +164,7 @@ impl fuser::Filesystem for VirtualFilesystem {
         self.inner.forget(inode, lookups)
     }
 
-    fn getattr(&mut self, _req: &Request, inode: Inode, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request, inode: Inode, _fh: Option<u64>, reply: ReplyAttr) {
         let attr = try_request!(self.rt.block_on(self.inner.getattr(inode)), reply);
         reply.attr(&TTL, &attr)
     }
@@ -876,17 +881,15 @@ impl Inner {
         );
 
         let src_dir = self.inodes.get(src_parent).calculate_path();
+        let src = src_dir.join(src_name);
 
-        let dst_dir = if src_parent == dst_parent {
-            // TODO: Maybe we could use something like Cow?
-            src_dir.clone()
+        let dst = if src_parent == dst_parent {
+            src_dir.join(dst_name)
         } else {
-            self.inodes.get(dst_parent).calculate_path()
+            self.inodes.get(dst_parent).calculate_path().join(dst_name)
         };
 
-        self.repository
-            .move_entry(src_dir, src_name, dst_dir, dst_name)
-            .await
+        self.repository.move_entry(src, dst).await
     }
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
@@ -939,10 +942,21 @@ async fn make_file_attr_for_entry(
 }
 
 fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64, uid: u32, gid: u32) -> FileAttr {
+    // From POSIX <sys/stat.h> reference:
+    // https://pubs.opengroup.org/onlinepubs/009696699/basedefs/sys/stat.h.html
+    //
+    // > The unit for the st_blocks member of the stat structure is not defined within
+    // > POSIX.1-2017. In some implementations it is 512 bytes. It may differ on a file system
+    // > basis.
+    //
+    // TODO: Attempt to get the actual value of the system.
+    const S_BLKSIZE: u64 = 512;
+    use ouisync_lib::protocol::BLOCK_RECORD_SIZE;
+
     FileAttr {
         ino: inode,
         size: len,
-        blocks: 0,                      // TODO: ?
+        blocks: len.next_multiple_of(BLOCK_RECORD_SIZE).div_ceil(S_BLKSIZE),
         atime: SystemTime::UNIX_EPOCH,  // TODO
         mtime: SystemTime::UNIX_EPOCH,  // TODO
         ctime: SystemTime::UNIX_EPOCH,  // TODO
@@ -956,6 +970,14 @@ fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64, uid: u32, gid: 
         uid,
         gid,
         rdev: 0,
+        // From POSIX <sys/stat.h> reference:
+        //
+        // > A file system-specific preferred I/O block size for this object.
+        // ...
+        // > There is no correlation between values of the st_blocks and st_blksize, and the
+        // > f_bsize (from <sys/statvfs.h>) structure members.
+        //
+        // TODO: Ouisync's BLOCK_SIZE might be a good guess, but shold be benchmarked.
         blksize: 0, // ?
         flags: 0,
     }

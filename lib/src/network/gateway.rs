@@ -1,48 +1,44 @@
-use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, raw, seen_peers::SeenPeer};
-use crate::sync::atomic_slot::AtomicSlot;
+use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, seen_peers::SeenPeer};
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use futures_util::future::Either;
 use net::{
-    quic,
-    tcp::{TcpListener, TcpStream},
+    quic, tcp,
+    unified::{Acceptor, Connection},
+    SocketOptions,
 };
 use scoped_task::ScopedJoinHandle;
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
-};
+use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
 use tokio::{
     select,
-    sync::{mpsc, oneshot, watch},
+    sync::{mpsc, watch},
+    task::JoinSet,
     time::{self, Duration},
 };
 use tracing::{field, Instrument, Span};
 
 /// Established incoming and outgoing connections.
 pub(super) struct Gateway {
-    stacks: AtomicSlot<Stacks>,
-    incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
-    connectivity_tx: watch::Sender<Connectivity>,
+    stacks: watch::Sender<Stacks>,
+    incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
 }
 
 impl Gateway {
     /// Create a new `Gateway` that is initially disabled.
     ///
     /// `incoming_tx` is the sender for the incoming connections.
-    pub fn new(incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>) -> Self {
+    pub fn new(incoming_tx: mpsc::Sender<(Connection, PeerAddr)>) -> Self {
         let stacks = Stacks::unbound();
-        let stacks = AtomicSlot::new(stacks);
+        let stacks = watch::Sender::new(stacks);
 
         Self {
             stacks,
             incoming_tx,
-            connectivity_tx: watch::channel(Connectivity::Disabled).0,
         }
     }
 
     pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
-        let stacks = self.stacks.read();
+        let stacks = self.stacks.borrow();
         [
             stacks
                 .quic_listener_local_addr_v4()
@@ -67,7 +63,7 @@ impl Gateway {
     }
 
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
-    pub async fn bind(
+    pub fn bind(
         &self,
         bind: &StackAddresses,
     ) -> (
@@ -75,10 +71,10 @@ impl Gateway {
         Option<quic::SideChannelMaker>,
     ) {
         let (next, side_channel_maker_v4, side_channel_maker_v6) =
-            Stacks::bind(bind, self.incoming_tx.clone()).await;
+            Stacks::bind(bind, self.incoming_tx.clone());
 
-        let prev = self.stacks.swap(next);
-        let next = self.stacks.read();
+        let prev = self.stacks.send_replace(next);
+        let next = self.stacks.borrow();
 
         if prev.quic_v4.is_some() && next.quic_v4.is_none() {
             tracing::info!("Terminated IPv4 QUIC stack");
@@ -96,15 +92,16 @@ impl Gateway {
             tracing::info!("Terminated IPv6 TCP stack");
         }
 
-        self.connectivity_tx.send_if_modified(|conn| {
-            let old_conn = *conn;
-            *conn = Connectivity::infer(&next.addresses().ip_addrs());
-            let changed = *conn != old_conn;
-            if changed {
-                tracing::info!("Changed connectivity from {:?} to {:?}", old_conn, *conn);
-            }
-            changed
-        });
+        let prev_conn = prev.connectivity();
+        let next_conn = next.connectivity();
+
+        if prev_conn != next_conn {
+            tracing::info!(
+                "Changed connectivity from {:?} to {:?}",
+                prev_conn,
+                next_conn
+            );
+        }
 
         prev.close();
 
@@ -112,18 +109,14 @@ impl Gateway {
     }
 
     pub fn connectivity(&self) -> Connectivity {
-        *self.connectivity_tx.borrow()
-    }
-
-    pub fn connectivity_subscribe(&self) -> watch::Receiver<Connectivity> {
-        self.connectivity_tx.subscribe()
+        self.stacks.borrow().connectivity()
     }
 
     pub async fn connect_with_retries(
         &self,
         peer: &SeenPeer,
         source: PeerSource,
-    ) -> Option<raw::Stream> {
+    ) -> Option<Connection> {
         if !ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
             tracing::debug!("Invalid peer address - discarding");
             return None;
@@ -141,8 +134,8 @@ impl Gateway {
         let mut backoff = create_backoff();
 
         let mut hole_punching_task = None;
-        let mut last_conn = Connectivity::Disabled;
-        let mut connectivity_rx = self.connectivity_subscribe();
+        let mut prev_conn = Connectivity::Disabled;
+        let mut stacks_rx = self.stacks.subscribe();
 
         loop {
             // Note: This needs to be probed each time the loop starts. When the `addr` fn returns
@@ -150,38 +143,38 @@ impl Gateway {
             // found it is no longer seeing it.
             let addr = *peer.addr_if_seen()?;
 
-            // Wait for `Connectivity` to be such that it allows us to connect. E.g. if it's
-            // `Connectivity::LocalOnly` then we can't connect to global addresses.
-            loop {
-                let conn = *connectivity_rx.borrow_and_update();
+            // Wait for a connector matching the address (in protocol and ip version) to become
+            // available. Also wait for `Connectivity` to be such that it allows us to connect.
+            // E.g. if it's `Connectivity::LocalOnly` then we can't connect to global addresses.
+            let wait_for_connectivity =
+                stacks_rx.wait_for(|stacks| stacks.allows_connection_to(&addr));
 
-                if conn.allows_connection_to(addr) {
-                    if conn.is_less_restrictive_than(last_conn) {
-                        backoff = create_backoff();
-                    }
-                    last_conn = conn;
-                    break;
-                }
-
-                select! {
-                    result = connectivity_rx.changed() => {
-                        // Unwrap is OK because `connectivity_tx` lives in `self` so it can't be
-                        // destroyed while this function is being executed.
-                        result.unwrap();
+            // Ensure `stacks` is not borrowed across `await`.
+            let connect = {
+                let stacks = select! {
+                    result = wait_for_connectivity => {
+                        // unwrap is OK here because `self.stacks` still lives.
+                        result.unwrap()
                     },
-                    _ = peer.on_unseen() => return None
+                    _ = peer.on_unseen() => return None,
+                };
+
+                let next_conn = stacks.connectivity();
+
+                if next_conn.is_less_restrictive_than(prev_conn) {
+                    backoff = create_backoff();
                 }
-            }
 
-            // Note: we need to grab fresh stacks on each loop because the network might get
-            // re-bound in the meantime which would change the connectors.
-            let stacks = self.stacks.read();
+                prev_conn = next_conn;
 
-            if hole_punching_task.is_none() {
-                hole_punching_task = stacks.start_punching_holes(addr);
-            }
+                if hole_punching_task.is_none() {
+                    hole_punching_task = stacks.start_punching_holes(addr);
+                }
 
-            match stacks.connect(addr).await {
+                stacks.connect(addr)
+            };
+
+            match connect.await {
                 Ok(socket) => {
                     // This condition is to avoid a race condition for when `Connectivity` grants
                     // us connection, but then there is a re-`bind` after which the connection
@@ -193,15 +186,13 @@ impl Gateway {
                     // (note this already works for QUIC connections because they share a common
                     // UDP socket inside `stack`, but it does not work this way for TCP
                     // connections).
-                    if !connectivity_rx.borrow().allows_connection_to(addr) {
+                    if !stacks_rx.borrow().allows_connection_to(&addr) {
                         continue;
                     }
 
                     return Some(socket);
                 }
                 Err(error) => {
-                    tracing::debug!(?error, "Connection failed");
-
                     if error.is_localy_closed() {
                         // Connector locally closed - no point in retrying.
                         return None;
@@ -209,7 +200,11 @@ impl Gateway {
 
                     match backoff.next_backoff() {
                         Some(duration) => {
-                            tracing::debug!("Next connection attempt in {:?}", duration);
+                            tracing::trace!(
+                                ?error,
+                                "Connection failed. Next attempt in {:?}",
+                                duration
+                            );
                             time::sleep(duration).await;
                         }
                         // We set max elapsed time to None above.
@@ -221,18 +216,18 @@ impl Gateway {
     }
 
     pub fn addresses(&self) -> StackAddresses {
-        self.stacks.read().addresses()
+        self.stacks.borrow().addresses()
     }
 }
 
 #[derive(Debug, Error)]
 pub(super) enum ConnectError {
     #[error("TCP error")]
-    Tcp(std::io::Error),
+    Tcp(tcp::Error),
     #[error("QUIC error")]
     Quic(quic::Error),
-    #[error("No corresponding QUIC connector")]
-    NoSuitableQuicConnector,
+    #[error("No corresponding connector")]
+    NoSuitableConnector,
 }
 
 impl ConnectError {
@@ -263,9 +258,9 @@ impl Stacks {
         }
     }
 
-    async fn bind(
+    fn bind(
         bind: &StackAddresses,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> (
         Self,
         Option<quic::SideChannelMaker>,
@@ -273,7 +268,6 @@ impl Stacks {
     ) {
         let (quic_v4, side_channel_maker_v4) = if let Some(addr) = bind.quic_v4 {
             QuicStack::new(addr, incoming_tx.clone())
-                .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
                 .unwrap_or((None, None))
         } else {
@@ -282,7 +276,6 @@ impl Stacks {
 
         let (quic_v6, side_channel_maker_v6) = if let Some(addr) = bind.quic_v6 {
             QuicStack::new(addr, incoming_tx.clone())
-                .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
                 .unwrap_or((None, None))
         } else {
@@ -290,13 +283,13 @@ impl Stacks {
         };
 
         let tcp_v4 = if let Some(addr) = bind.tcp_v4 {
-            TcpStack::new(addr, incoming_tx.clone()).await
+            TcpStack::new(addr, incoming_tx.clone())
         } else {
             None
         };
 
         let tcp_v6 = if let Some(addr) = bind.tcp_v6 {
-            TcpStack::new(addr, incoming_tx).await
+            TcpStack::new(addr, incoming_tx)
         } else {
             None
         };
@@ -320,6 +313,21 @@ impl Stacks {
         }
     }
 
+    fn connectivity(&self) -> Connectivity {
+        Connectivity::infer(&self.addresses())
+    }
+
+    fn allows_connection_to(&self, addr: &PeerAddr) -> bool {
+        let has_connector = match addr {
+            PeerAddr::Tcp(SocketAddr::V4(_)) => self.tcp_v4.is_some(),
+            PeerAddr::Tcp(SocketAddr::V6(_)) => self.tcp_v6.is_some(),
+            PeerAddr::Quic(SocketAddr::V4(_)) => self.quic_v4.is_some(),
+            PeerAddr::Quic(SocketAddr::V6(_)) => self.quic_v6.is_some(),
+        };
+
+        has_connector && self.connectivity().allows_connection_to(addr.ip())
+    }
+
     fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
         self.quic_v4
             .as_ref()
@@ -340,23 +348,38 @@ impl Stacks {
         self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
     }
 
-    async fn connect(&self, addr: PeerAddr) -> Result<raw::Stream, ConnectError> {
+    fn connect(
+        &self,
+        addr: PeerAddr,
+    ) -> impl Future<Output = Result<Connection, ConnectError>> + Send + 'static {
         match addr {
-            PeerAddr::Tcp(addr) => TcpStream::connect(addr)
-                .await
-                .map(raw::Stream::Tcp)
-                .map_err(ConnectError::Tcp),
-            PeerAddr::Quic(addr) => {
-                let stack = self
-                    .quic_stack_for(&addr.ip())
-                    .ok_or(ConnectError::NoSuitableQuicConnector)?;
+            PeerAddr::Tcp(addr) => {
+                let connect = self
+                    .tcp_stack_for(&addr.ip())
+                    .ok_or(ConnectError::NoSuitableConnector)
+                    .map(|stack| stack.connector.connect(addr));
+                let connect = async move {
+                    connect?
+                        .await
+                        .map(Connection::Tcp)
+                        .map_err(ConnectError::Tcp)
+                };
 
-                stack
-                    .connector
-                    .connect(addr)
-                    .await
-                    .map(raw::Stream::Quic)
-                    .map_err(ConnectError::Quic)
+                Either::Left(connect)
+            }
+            PeerAddr::Quic(addr) => {
+                let connect = self
+                    .quic_stack_for(&addr.ip())
+                    .ok_or(ConnectError::NoSuitableConnector)
+                    .map(|stack| stack.connector.connect(addr));
+                let connect = async move {
+                    connect?
+                        .await
+                        .map(Connection::Quic)
+                        .map_err(ConnectError::Quic)
+                };
+
+                Either::Right(connect)
             }
         }
     }
@@ -414,6 +437,13 @@ impl Stacks {
         Some(task)
     }
 
+    fn tcp_stack_for(&self, ip: &IpAddr) -> Option<&TcpStack> {
+        match ip {
+            IpAddr::V4(_) => self.tcp_v4.as_ref(),
+            IpAddr::V6(_) => self.tcp_v6.as_ref(),
+        }
+    }
+
     fn quic_stack_for(&self, ip: &IpAddr) -> Option<&QuicStack> {
         match ip {
             IpAddr::V4(_) => self.quic_v4.as_ref(),
@@ -440,36 +470,38 @@ struct QuicStack {
 }
 
 impl QuicStack {
-    async fn new(
+    fn new(
         bind_addr: SocketAddr,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<(Self, quic::SideChannelMaker)> {
-        let span = tracing::info_span!("listener", addr = field::Empty);
+        let span = tracing::info_span!("quic", addr = field::Empty);
 
-        let (connector, listener, side_channel_maker) = match quic::configure(bind_addr).await {
-            Ok((connector, listener, side_channel_maker)) => {
-                span.record(
-                    "addr",
-                    field::display(PeerAddr::Quic(*listener.local_addr())),
-                );
-                tracing::info!(parent: &span, "Listener started");
+        let (connector, acceptor, side_channel_maker) =
+            match quic::configure(bind_addr, SocketOptions::default().with_reuse_addr()) {
+                Ok((connector, acceptor, side_channel_maker)) => {
+                    span.record(
+                        "addr",
+                        field::display(PeerAddr::Quic(*acceptor.local_addr())),
+                    );
+                    tracing::info!(parent: &span, "Stack configured");
 
-                (connector, listener, side_channel_maker)
-            }
-            Err(error) => {
-                tracing::warn!(
-                    parent: &span,
-                    bind_addr = %PeerAddr::Quic(bind_addr),
-                    ?error,
-                    "Failed to start listener"
-                );
-                return None;
-            }
-        };
+                    (connector, acceptor, side_channel_maker)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        parent: &span,
+                        bind_addr = %PeerAddr::Quic(bind_addr),
+                        ?error,
+                        "Failed to configure stack"
+                    );
+                    return None;
+                }
+            };
 
-        let listener_local_addr = *listener.local_addr();
-        let listener_task =
-            scoped_task::spawn(run_quic_listener(listener, incoming_tx).instrument(span));
+        let listener_local_addr = *acceptor.local_addr();
+        let listener_task = scoped_task::spawn(
+            run_listener(Acceptor::Quic(acceptor), incoming_tx).instrument(span),
+        );
 
         let hole_puncher = side_channel_maker.make().sender();
 
@@ -492,128 +524,81 @@ impl QuicStack {
 struct TcpStack {
     listener_local_addr: SocketAddr,
     _listener_task: ScopedJoinHandle<()>,
+    connector: tcp::Connector,
 }
 
 impl TcpStack {
-    async fn new(
+    fn new(
         bind_addr: SocketAddr,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<Self> {
-        let span = tracing::info_span!("listener", addr = field::Empty);
+        let span = tracing::info_span!("tcp", addr = field::Empty);
 
-        let listener = match TcpListener::bind(bind_addr).await {
-            Ok(listener) => listener,
-            Err(error) => {
-                tracing::warn!(
-                    parent: &span,
-                    bind_addr = %PeerAddr::Tcp(bind_addr),
-                    ?error,
-                    "Failed to start listener",
-                );
-                return None;
-            }
-        };
+        let (connector, acceptor) =
+            match tcp::configure(bind_addr, SocketOptions::default().with_reuse_addr()) {
+                Ok((connector, acceptor)) => {
+                    span.record(
+                        "addr",
+                        field::display(PeerAddr::Tcp(*acceptor.local_addr())),
+                    );
+                    tracing::info!(parent: &span, "Stack configured");
 
-        let listener_local_addr = match listener.local_addr() {
-            Ok(addr) => {
-                span.record("addr", field::display(PeerAddr::Tcp(addr)));
-                tracing::info!(parent: &span, "Listener started");
+                    (connector, acceptor)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        parent: &span,
+                        bind_addr = %PeerAddr::Tcp(bind_addr),
+                        ?error,
+                        "Failed to configure stack",
+                    );
+                    return None;
+                }
+            };
 
-                addr
-            }
-            Err(error) => {
-                tracing::warn!(
-                    parent: &span,
-                    bind_addr = %PeerAddr::Tcp(bind_addr),
-                    ?error,
-                    "Failed to get listener local address",
-                );
-                return None;
-            }
-        };
-
+        let listener_local_addr = *acceptor.local_addr();
         let listener_task =
-            scoped_task::spawn(run_tcp_listener(listener, incoming_tx).instrument(span));
+            scoped_task::spawn(run_listener(Acceptor::Tcp(acceptor), incoming_tx).instrument(span));
 
         Some(Self {
             listener_local_addr,
             _listener_task: listener_task,
+            connector,
         })
     }
 }
 
-async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(raw::Stream, PeerAddr)>) {
+async fn run_listener(listener: Acceptor, tx: mpsc::Sender<(Connection, PeerAddr)>) {
+    let mut tasks = JoinSet::new();
+
     loop {
-        let result = select! {
-            result = listener.accept() => result,
+        let connecting = select! {
+            connecting = listener.accept() => connecting,
             _ = tx.closed() => break,
         };
 
-        match result {
-            Ok((stream, addr)) => {
-                tx.send((raw::Stream::Tcp(stream), PeerAddr::Tcp(addr)))
-                    .await
-                    .ok();
-            }
-            Err(error) => {
-                tracing::error!(?error, "Failed to accept connection");
-                break;
-            }
-        }
-    }
-}
+        match connecting {
+            Ok(connecting) => {
+                let tx = tx.clone();
 
-async fn run_quic_listener(
-    mut listener: quic::Acceptor,
-    tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
-) {
-    // Using `futures_util::stream::FuturesUnordered` may have been a nicer solution but I'm not
-    // sure whether `quic::Acceptor::accept()` is cancel safe.
-    let connectings = Arc::new(Mutex::new(HashMap::new()));
-    let mut next_connecting_id = 0;
-
-    loop {
-        let result = select! {
-            result = listener.accept() => result,
-            _ = tx.closed() => break,
-        };
-
-        match result {
-            Some(connecting) => {
-                // Using this channel to ensure the task is not removed from `connectings` before
-                // it's inserted.
-                let (start_task_tx, start_task_rx) = oneshot::channel();
-
-                let connecting_id = next_connecting_id;
-                next_connecting_id += 1;
+                let addr = connecting.remote_addr();
+                let addr = match listener {
+                    Acceptor::Tcp(_) => PeerAddr::Tcp(addr),
+                    Acceptor::Quic(_) => PeerAddr::Quic(addr),
+                };
 
                 // Spawn so we can start listening for the next connection ASAP.
-                let task = scoped_task::spawn({
-                    let tx = tx.clone();
-                    let connectings = connectings.clone();
-                    async move {
-                        if start_task_rx.await.is_ok() {
-                            match connecting.finish().await {
-                                Ok(socket) => {
-                                    let addr = *socket.remote_address();
-                                    tx.send((raw::Stream::Quic(socket), PeerAddr::Quic(addr)))
-                                        .await
-                                        .ok();
-                                }
-                                Err(error) => {
-                                    tracing::error!(?error, "Failed to accept connection");
-                                }
-                            };
+                tasks.spawn(async move {
+                    match connecting.await {
+                        Ok(connection) => {
+                            tx.send((connection, addr)).await.ok();
                         }
-                        connectings.lock().unwrap().remove(&connecting_id);
+                        Err(error) => tracing::error!(?error, %addr, "Failed to accept connection"),
                     }
                 });
-
-                connectings.lock().unwrap().insert(connecting_id, task);
-                start_task_tx.send(()).unwrap_or(());
             }
-            None => {
-                tracing::error!("Stopped accepting new connections");
+            Err(error) => {
+                tracing::error!(?error, "Stopped accepting new connections");
                 break;
             }
         }
@@ -655,8 +640,8 @@ fn ok_to_connect(addr: &SocketAddr, source: PeerSource) -> bool {
 
             if source == PeerSource::Dht
                 && (ip_addr.is_loopback()
-                    || ip::is_unicast_link_local(ip_addr)
-                    || ip::is_unique_local(ip_addr))
+                    || ip_addr.is_unicast_link_local()
+                    || ip_addr.is_unique_local())
             {
                 return false;
             }
@@ -682,14 +667,16 @@ impl StackAddresses {
             || needs_rebind(&self.tcp_v6, &new_stack_addresses.tcp_v6)
     }
 
-    fn ip_addrs(&self) -> Vec<IpAddr> {
+    fn is_empty(&self) -> bool {
+        self.iter().next().is_none()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &SocketAddr> {
         self.quic_v4
             .iter()
-            .chain(self.quic_v6.iter())
-            .chain(self.tcp_v4.iter())
-            .chain(self.tcp_v6.iter())
-            .map(|addr| addr.ip())
-            .collect()
+            .chain(&self.quic_v6)
+            .chain(&self.tcp_v4)
+            .chain(&self.tcp_v6)
     }
 }
 
@@ -773,14 +760,15 @@ pub(crate) enum Connectivity {
 
 impl Connectivity {
     // `addrs` are the local addresses we're binding to.
-    pub fn infer(addrs: &[IpAddr]) -> Self {
+    pub fn infer(addrs: &StackAddresses) -> Self {
         if addrs.is_empty() {
             return Self::Disabled;
         }
 
         let global = addrs
             .iter()
-            .any(|ip| ip.is_unspecified() || ip::is_global(ip));
+            .map(|addr| addr.ip())
+            .any(|ip| ip.is_unspecified() || ip::is_global(&ip));
 
         if global {
             Self::Full
@@ -789,10 +777,10 @@ impl Connectivity {
         }
     }
 
-    pub fn allows_connection_to(&self, addr: PeerAddr) -> bool {
+    pub fn allows_connection_to(&self, addr: IpAddr) -> bool {
         match self {
             Self::Disabled => false,
-            Self::LocalOnly => !ip::is_global(&addr.ip()),
+            Self::LocalOnly => !ip::is_global(&addr),
             Self::Full => true,
         }
     }

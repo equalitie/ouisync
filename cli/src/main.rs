@@ -1,52 +1,51 @@
 mod client;
-mod error;
-mod geo_ip;
-mod handler;
-mod metrics;
+mod defaults;
+mod format;
 mod options;
-mod protocol;
-mod repository;
 mod server;
-mod state;
-mod transport;
-mod utils;
 
 use clap::Parser;
-use options::Options;
-use protocol::Request;
-use std::process::ExitCode;
-
-pub(crate) const APP_NAME: &str = "ouisync";
-pub(crate) const DB_EXTENSION: &str = "ouisyncdb";
+use options::{Command, Options};
+use ouisync_service::{transport::ClientError, Error as ServerError};
+use std::{error::Error as _, process::ExitCode};
+use thiserror::Error;
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let options = Options::parse();
 
-    let result = if let Request::Start = &options.request {
-        server::run(
-            options.dirs,
-            options.socket,
-            options.log_format,
-            options.log_color,
-        )
-        .await
-    } else {
-        client::run(
-            options.dirs,
-            options.socket,
-            options.log_format,
-            options.log_color,
-            options.request,
-        )
-        .await
+    let result = match options.command {
+        Command::Server(command) => server::run(options.config_dir, command)
+            .await
+            .map_err(Error::from),
+        Command::Client(command) => client::run(options.config_dir, command)
+            .await
+            .map_err(Error::from),
     };
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{:#}", error);
+            let mut source = error.source();
+            let mut first = true;
+
+            while let Some(error) = source {
+                eprint!("{}{}", if first { "" } else { " → " }, error);
+                source = error.source();
+                first = false;
+            }
+
+            eprintln!();
+
             ExitCode::FAILURE
         }
     }
+}
+
+#[derive(Debug, Error)]
+enum Error {
+    #[error("server error")]
+    Server(#[from] ServerError),
+    #[error("client error")]
+    Client(#[from] ClientError),
 }

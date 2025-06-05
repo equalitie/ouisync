@@ -4,19 +4,22 @@ version: 0.1.0
 homepage: null
 
 environment:
-  sdk: ^3.1.3
+  sdk: ^3.5.0
   flutter: ^3.13.6
 
 dependencies:
   async: ^2.11.0
   collection: ^1.16.0
+  crypto: ^3.0.6
   flutter:
     sdk: flutter
-  ffi: ^2.0.1
+  flutter_plugin_android_lifecycle: ^2.0.28
+  ffi: ^2.1.3
   hex: ^0.2.0
+  messagepack: ^0.2.1
   path: ^1.8.0
-  msgpack_dart: ^1.0.1
   platform: ^3.1.0
+  win32: ^5.9.0
 
 dev_dependencies:
   flutter_test:
@@ -35,14 +38,16 @@ flutter:
   plugin:
     platforms:
       android:
-        package: org.equalitie.ouisync.lib
+        package: org.equalitie.ouisync.dart
         pluginClass: OuisyncPlugin
       ios:
         pluginClass: OuisyncPlugin
+        sharedDarwinSource: true
       windows:
         pluginClass: OuisyncPlugin
       linux:
         pluginClass: OuisyncPlugin
       macos:
         pluginClass: OuisyncPlugin
+        sharedDarwinSource: true
 

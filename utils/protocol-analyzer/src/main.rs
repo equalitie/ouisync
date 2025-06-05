@@ -374,10 +374,8 @@ mod parse {
     }
 
     pub(super) fn alphanumeric_char(s: &mut &str) -> Option<char> {
-        let c = match s.chars().next() {
-            Some(c) => c,
-            None => return None,
-        };
+        let c = s.chars().next()?;
+
         if is_alphanumeric(c) {
             *s = &s[c.len_utf8()..];
             return Some(c);
@@ -448,10 +446,7 @@ mod parse {
         F: Fn(&mut &str) -> Option<usize>,
     {
         let mut s2 = *s;
-        let c = match count(f, &mut s2) {
-            Some(c) => c,
-            None => return None,
-        };
+        let c = count(f, &mut s2)?;
         let (parsed, rest) = s.split_at(c);
         *s = rest;
         Some(parsed)

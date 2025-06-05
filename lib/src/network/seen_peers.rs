@@ -1,3 +1,13 @@
+//! When a peer is found using some discovery mechanisms (local discovery, DHT, PEX, ...), the
+//! networking code will try to connect to it. However, if connecting to the peer fails we would
+//! like to keep trying to connect to it again. On one hand we don't want to keep trying to connect
+//! to the peer indefinitely, but on the other hand we also don't want to wait until the next time
+//! the discovery mechanism finds the peer (which may be more than 10 minutes).
+//!
+//! This code solves the problem by giving the networking code a `SeenPeer` structure that
+//! dereferences to `Some(PeerAddr)` for as long as the discovery mechanism "thinks" the peer
+//! is still available, and to `None` once the mechanism hasn't seen the peer for a while.
+
 use super::PeerAddr;
 use crate::collections::{HashMap, HashSet};
 use deadlock::BlockingRwLock;
@@ -7,15 +17,6 @@ use tokio::sync::watch;
 // When a peer has not been seen after this many rounds, it'll be removed.
 const REMOVE_AFTER_ROUND_COUNT: u64 = 2;
 
-/// When a peer is found using some discovery mechanisms (local discovery, DHT, PEX, ...), the
-/// networking code will try to connect to it. However, if connecting to the peer fails we would
-/// like to keep trying to connect to it again. On one hand we don't want to keep trying to connect
-/// to the peer indefinitely, but on the other hand we also don't want to wait until the next time
-/// the discovery mechanism finds the peer (which may be more than 10 minutes).
-///
-/// This code solves the problem by giving the networking code a `SeenPeer` structure that
-/// dereferences to `Some(PeerAddr)` for as long as the discovery mechanism "thinks" the peer
-/// is still available, and to `None` once the mechanism hasn't seen the peer for a while.
 #[derive(Clone)]
 pub(crate) struct SeenPeers {
     inner: Arc<BlockingRwLock<SeenPeersInner>>,
@@ -64,7 +65,7 @@ impl SeenPeersInner {
     }
 
     fn start_new_round(&mut self) {
-        use crate::collections::hash_map::Entry;
+        use std::collections::hash_map::Entry;
 
         self.current_round_id += 1;
         self.rounds.retain(|round, peers| {
@@ -242,7 +243,7 @@ impl fmt::Debug for SeenPeer {
 
 impl Drop for SeenPeer {
     fn drop(&mut self) {
-        use crate::collections::hash_map::Entry;
+        use std::collections::hash_map::Entry;
 
         let mut seen_peers = self.seen_peers.write().unwrap();
 

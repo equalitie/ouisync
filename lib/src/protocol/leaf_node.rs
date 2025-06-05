@@ -3,9 +3,8 @@ use crate::{
     crypto::{Digest, Hash, Hashable},
     protocol::BlockId,
 };
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::{slice, vec};
+use std::{slice, sync::LazyLock, vec};
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct LeafNode {
@@ -53,7 +52,7 @@ impl Hashable for LeafNode {
 }
 
 /// Collection that acts as a ordered set of `LeafNode`s
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct LeafNodes(Vec<LeafNode>);
 
 impl LeafNodes {
@@ -161,6 +160,15 @@ impl<'a> IntoIterator for &'a LeafNodes {
     }
 }
 
+impl<'a> IntoIterator for &'a mut LeafNodes {
+    type Item = &'a mut LeafNode;
+    type IntoIter = slice::IterMut<'a, LeafNode>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
 impl IntoIterator for LeafNodes {
     type Item = LeafNode;
     type IntoIter = vec::IntoIter<LeafNode>;
@@ -178,4 +186,4 @@ impl Hashable for LeafNodes {
 }
 
 // Cached hash of an empty LeafNodeSet.
-pub(crate) static EMPTY_LEAF_HASH: Lazy<Hash> = Lazy::new(|| LeafNodes::default().hash());
+pub(crate) static EMPTY_LEAF_HASH: LazyLock<Hash> = LazyLock::new(|| LeafNodes::default().hash());

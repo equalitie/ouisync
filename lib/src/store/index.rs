@@ -281,12 +281,12 @@ mod tests {
         assert_eq!(summary.block_presence, MultiBlockPresence::Full);
     }
 
-    #[proptest]
-    fn check_complete(
+    #[proptest(async = "tokio")]
+    async fn check_complete(
         #[strategy(0usize..=32)] leaf_count: usize,
         #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
     ) {
-        test_utils::run(check_complete_case(leaf_count, rng_seed))
+        check_complete_case(leaf_count, rng_seed).await
     }
 
     async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
@@ -320,17 +320,15 @@ mod tests {
         // TODO: consider randomizing the order the nodes are saved so it's not always
         // breadth-first.
 
-        for layer in snapshot.inner_layers() {
-            for (parent_hash, nodes) in layer.inner_maps() {
-                inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
-                    .await
-                    .unwrap();
+        for (parent_hash, nodes) in snapshot.inner_sets() {
+            inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
+                .await
+                .unwrap();
 
-                update_summaries_and_approve(&mut tx, *parent_hash).await;
+            update_summaries_and_approve(&mut tx, *parent_hash).await;
 
-                reload_root_node(&mut tx, &mut root_node).await.unwrap();
-                assert!(!root_node.summary.state.is_approved());
-            }
+            reload_root_node(&mut tx, &mut root_node).await.unwrap();
+            assert!(!root_node.summary.state.is_approved());
         }
 
         let mut unsaved_leaves = snapshot.leaf_count();
@@ -368,12 +366,12 @@ mod tests {
         }
     }
 
-    #[proptest]
-    fn summary(
+    #[proptest(async = "tokio")]
+    async fn summary(
         #[strategy(0usize..=32)] leaf_count: usize,
         #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
     ) {
-        test_utils::run(summary_case(leaf_count, rng_seed))
+        summary_case(leaf_count, rng_seed).await
     }
 
     async fn summary_case(leaf_count: usize, rng_seed: u64) {
@@ -406,12 +404,10 @@ mod tests {
                 .unwrap();
         }
 
-        for layer in snapshot.inner_layers() {
-            for (parent_hash, nodes) in layer.inner_maps() {
-                inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
-                    .await
-                    .unwrap();
-            }
+        for (parent_hash, nodes) in snapshot.inner_sets() {
+            inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
+                .await
+                .unwrap();
         }
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {

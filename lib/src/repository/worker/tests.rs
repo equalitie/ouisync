@@ -15,7 +15,7 @@ use state_monitor::StateMonitor;
 use tempfile::TempDir;
 
 #[tokio::test]
-async fn prune() {
+async fn prune_sanity_check() {
     let mut rng = StdRng::from_entropy();
     let (_base_dir, shared) = setup(&mut rng).await;
     let secrets = shared
@@ -27,10 +27,10 @@ async fn prune() {
         .into_write_secrets()
         .unwrap();
 
-    let writer_a = sign::Keypair::generate(&mut rng).public_key();
-    let writer_b = sign::Keypair::generate(&mut rng).public_key();
-    let writer_c = sign::Keypair::generate(&mut rng).public_key();
-    let writer_d = sign::Keypair::generate(&mut rng).public_key();
+    let writer_a = sign::PublicKey::generate(&mut rng);
+    let writer_b = sign::PublicKey::generate(&mut rng);
+    let writer_c = sign::PublicKey::generate(&mut rng);
+    let writer_d = sign::PublicKey::generate(&mut rng);
 
     tracing::debug!(?writer_a, ?writer_b, ?writer_c, ?writer_d);
 
@@ -160,6 +160,156 @@ async fn prune() {
             .await
             .as_deref(),
         Ok([])
+    );
+}
+
+#[tokio::test]
+async fn do_not_prune_complete_snapshots_if_no_newer_snapshot_is_complete() {
+    let mut rng = StdRng::from_entropy();
+    let (_base_dir, shared) = setup(&mut rng).await;
+    let secrets = shared
+        .credentials
+        .read()
+        .unwrap()
+        .secrets
+        .clone()
+        .into_write_secrets()
+        .unwrap();
+
+    let writer = sign::PublicKey::generate(&mut rng);
+    let mut vv = VersionVector::first(writer);
+
+    // Create complete snapshot
+    let snapshot = Snapshot::generate(&mut rng, 1);
+    SnapshotWriter::begin(shared.vault.store(), &snapshot)
+        .await
+        .save_root_nodes(&secrets.write_keys, writer, vv.clone())
+        .await
+        .save_inner_nodes()
+        .await
+        .save_leaf_nodes()
+        .await
+        .commit()
+        .await;
+
+    vv.increment(writer);
+
+    // Create newer incomplete snapshot
+    let snapshot = Snapshot::generate(&mut rng, 1);
+    SnapshotWriter::begin(shared.vault.store(), &snapshot)
+        .await
+        .save_root_nodes(&secrets.write_keys, writer, vv.clone())
+        .await
+        .save_inner_nodes()
+        .await
+        .commit()
+        .await;
+
+    vv.increment(writer);
+
+    // Verify all snapshots are present
+    assert_matches!(
+        shared
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&writer)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
+    );
+
+    // Prune
+    let (unlock_tx, _unlock_rx) = unlock::channel();
+    prune::run(&shared, &unlock_tx, &Counter::new())
+        .await
+        .unwrap();
+
+    // Verify all snapshots are still present
+    assert_matches!(
+        shared
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&writer)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
+    );
+}
+
+#[tokio::test]
+async fn do_not_prune_incomplete_snapshots_if_no_newer_snapshot_is_complete() {
+    let mut rng = StdRng::from_entropy();
+    let (_base_dir, shared) = setup(&mut rng).await;
+    let secrets = shared
+        .credentials
+        .read()
+        .unwrap()
+        .secrets
+        .clone()
+        .into_write_secrets()
+        .unwrap();
+
+    let writer = sign::PublicKey::generate(&mut rng);
+    let mut vv = VersionVector::first(writer);
+
+    for _ in 0..2 {
+        let snapshot = Snapshot::generate(&mut rng, 2);
+
+        SnapshotWriter::begin(shared.vault.store(), &snapshot)
+            .await
+            .save_root_nodes(&secrets.write_keys, writer, vv.clone())
+            .await
+            .save_inner_nodes()
+            .await
+            // Do not save leaf nodes, to keep the snapshot incomplete.
+            .commit()
+            .await;
+
+        vv.increment(writer);
+    }
+
+    // Verify all snapshots are present
+    assert_matches!(
+        shared
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&writer)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
+    );
+
+    // Prune
+    let (unlock_tx, _unlock_rx) = unlock::channel();
+    prune::run(&shared, &unlock_tx, &Counter::new())
+        .await
+        .unwrap();
+
+    // Verify all snapshots are still present
+    assert_matches!(
+        shared
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&writer)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
     );
 }
 

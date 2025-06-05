@@ -40,17 +40,15 @@ async fn empty_blob() {
     store.close().await.unwrap();
 }
 
-#[proptest]
-fn write_and_read(
+#[proptest(async = "tokio")]
+async fn write_and_read(
     is_root: bool,
     #[strategy(1..3 * BLOCK_SIZE)] blob_len: usize,
     #[strategy(1..=#blob_len)] write_len: usize,
     #[strategy(1..=#blob_len + 1)] read_len: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(write_and_read_case(
-        is_root, blob_len, write_len, read_len, rng_seed,
-    ))
+    write_and_read_case(is_root, blob_len, write_len, read_len, rng_seed).await
 }
 
 async fn write_and_read_case(
@@ -64,7 +62,7 @@ async fn write_and_read_case(
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
 
-    let block_id = if is_root { BlobId::ROOT } else { rng.gen() };
+    let block_id = if is_root { BlobId::ROOT } else { rng.r#gen() };
 
     // Create the blob and write to it in chunks of `write_len` bytes.
     let mut blob = Blob::create(branch.clone(), block_id);
@@ -106,66 +104,60 @@ async fn write_and_read_case(
     store.close().await.unwrap();
 }
 
-#[proptest]
-fn len(
+#[proptest(async = "tokio")]
+async fn len(
     #[strategy(0..3 * BLOCK_SIZE)] content_len: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(async {
-        let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
-        let mut tx = store.begin_write().await.unwrap();
-        let mut changeset = Changeset::new();
+    let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
-        let content = random_bytes(rng, content_len);
+    let content = random_bytes(rng, content_len);
 
-        let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-        blob.write_all(&mut tx, &mut changeset, &content[..])
-            .await
-            .unwrap();
-        assert_eq!(blob.len(), content_len as u64);
+    let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
+    blob.write_all(&mut tx, &mut changeset, &content[..])
+        .await
+        .unwrap();
+    assert_eq!(blob.len(), content_len as u64);
 
-        blob.flush(&mut tx, &mut changeset).await.unwrap();
-        changeset
-            .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
-            .await
-            .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
+        .await
+        .unwrap();
 
-        assert_eq!(blob.len(), content_len as u64);
+    assert_eq!(blob.len(), content_len as u64);
 
-        let blob = Blob::open(&mut tx, branch, BlobId::ROOT).await.unwrap();
-        assert_eq!(blob.len(), content_len as u64);
+    let blob = Blob::open(&mut tx, branch, BlobId::ROOT).await.unwrap();
+    assert_eq!(blob.len(), content_len as u64);
 
-        drop(tx);
-        store.close().await.unwrap();
-    })
+    drop(tx);
+    store.close().await.unwrap();
 }
 
-#[proptest]
-fn seek_from_start(
+#[proptest(async = "tokio")]
+async fn seek_from_start(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
     #[strategy(0..=#content_len)] pos: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(seek_from(
-        content_len,
-        SeekFrom::Start(pos as u64),
-        pos,
-        rng_seed,
-    ))
+    seek_from(content_len, SeekFrom::Start(pos as u64), pos, rng_seed).await
 }
 
-#[proptest]
-fn seek_from_end(
+#[proptest(async = "tokio")]
+async fn seek_from_end(
     #[strategy(0..2 * BLOCK_SIZE)] content_len: usize,
     #[strategy(0..=#content_len)] pos: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(seek_from(
+    seek_from(
         content_len,
         SeekFrom::End(-((content_len - pos) as i64)),
         pos,
         rng_seed,
-    ))
+    )
+    .await
 }
 
 async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize, rng_seed: u64) {
@@ -196,44 +188,42 @@ async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize,
     store.close().await.unwrap();
 }
 
-#[proptest]
-fn seek_from_current(
+#[proptest(async = "tokio")]
+async fn seek_from_current(
     #[strategy(1..2 * BLOCK_SIZE)] content_len: usize,
     #[strategy(vec(0..#content_len, 1..10))] positions: Vec<usize>,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(async {
-        let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
-        let mut tx = store.begin_write().await.unwrap();
-        let mut changeset = Changeset::new();
+    let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
-        let content = random_bytes(rng, content_len);
+    let content = random_bytes(rng, content_len);
 
-        let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-        blob.write_all(&mut tx, &mut changeset, &content[..])
-            .await
-            .unwrap();
-        blob.flush(&mut tx, &mut changeset).await.unwrap();
-        changeset
-            .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
-            .await
-            .unwrap();
+    let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
+    blob.write_all(&mut tx, &mut changeset, &content[..])
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
+        .await
+        .unwrap();
 
-        blob.seek(SeekFrom::Start(0));
+    blob.seek(SeekFrom::Start(0));
 
-        let mut prev_pos = 0;
-        for pos in positions {
-            blob.seek(SeekFrom::Current(pos as i64 - prev_pos as i64));
-            prev_pos = pos;
-        }
+    let mut prev_pos = 0;
+    for pos in positions {
+        blob.seek(SeekFrom::Current(pos as i64 - prev_pos as i64));
+        prev_pos = pos;
+    }
 
-        let mut read_buffer = vec![0; content.len()];
-        let len = blob.read_all(&mut tx, &mut read_buffer[..]).await.unwrap();
-        assert_eq!(read_buffer[..len], content[prev_pos..]);
+    let mut read_buffer = vec![0; content.len()];
+    let len = blob.read_all(&mut tx, &mut read_buffer[..]).await.unwrap();
+    assert_eq!(read_buffer[..len], content[prev_pos..]);
 
-        drop(tx);
-        store.close().await.unwrap();
-    })
+    drop(tx);
+    store.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -302,7 +292,7 @@ async fn truncate_to_empty() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let id = rng.gen();
+    let id = rng.r#gen();
 
     let content = random_bytes(&mut rng, 2 * BLOCK_SIZE);
 
@@ -340,7 +330,7 @@ async fn truncate_to_shorter() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let id = rng.gen();
+    let id = rng.r#gen();
 
     let content = random_bytes(&mut rng, 3 * BLOCK_SIZE);
 
@@ -382,7 +372,7 @@ async fn truncate_marks_as_dirty() {
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
 
-    let id = rng.gen();
+    let id = rng.r#gen();
 
     let content = random_bytes(&mut rng, 2 * BLOCK_SIZE);
 
@@ -405,7 +395,7 @@ async fn modify_blob() {
 
     let mut tx = store.begin_write().await.unwrap();
 
-    let id = rng.gen();
+    let id = rng.r#gen();
     let locator0 = Locator::head(id);
     let locator1 = locator0.next();
 
@@ -464,7 +454,7 @@ async fn append() {
 
     let mut tx = store.begin_write().await.unwrap();
 
-    let id = rng.gen();
+    let id = rng.r#gen();
     let mut changeset = Changeset::new();
     let mut blob = Blob::create(branch.clone(), id);
     blob.write_all(&mut tx, &mut changeset, b"foo")
@@ -503,7 +493,7 @@ async fn write_reopen_and_read() {
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
 
-    let id = rng.gen();
+    let id = rng.r#gen();
 
     let mut blob = Blob::create(branch.clone(), id);
     blob.write_all(&mut tx, &mut changeset, b"foo")
@@ -524,21 +514,15 @@ async fn write_reopen_and_read() {
     store.close().await.unwrap();
 }
 
-#[proptest]
-fn fork_and_write(
+#[proptest(async = "tokio")]
+async fn fork_and_write(
     #[strategy(0..2 * BLOCK_SIZE)] src_len: usize,
     #[strategy(0..=#src_len)] seek_pos: usize,
     #[strategy(1..BLOCK_SIZE)] write_len: usize,
     src_locator_is_root: bool,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(fork_and_write_case(
-        src_len,
-        seek_pos,
-        write_len,
-        src_locator_is_root,
-        rng_seed,
-    ))
+    fork_and_write_case(src_len, seek_pos, write_len, src_locator_is_root, rng_seed).await
 }
 
 async fn fork_and_write_case(
@@ -553,7 +537,7 @@ async fn fork_and_write_case(
     let src_id = if src_id_is_root {
         BlobId::ROOT
     } else {
-        rng.gen()
+        rng.r#gen()
     };
 
     let src_content = random_bytes(&mut rng, src_len);
@@ -621,7 +605,7 @@ async fn fork_and_write_case(
 async fn fork_is_idempotent() {
     let (mut rng, _base_dir, store, [src_branch, dst_branch]) = setup(0).await;
 
-    let id = rng.gen();
+    let id = rng.r#gen();
     let content = random_bytes(&mut rng, 512 * 1024);
 
     let mut tx = store.begin_write().await.unwrap();
@@ -648,8 +632,8 @@ async fn fork_is_idempotent() {
 async fn fork_then_remove_src_branch() {
     let (mut rng, _base_dir, store, [src_branch, dst_branch]) = setup(0).await;
 
-    let id_0 = rng.gen();
-    let id_1 = rng.gen();
+    let id_0 = rng.r#gen();
+    let id_1 = rng.r#gen();
 
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
@@ -695,7 +679,7 @@ async fn fork_then_remove_src_branch() {
 async fn block_ids_test() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
 
-    let blob_id: BlobId = rng.gen();
+    let blob_id: BlobId = rng.r#gen();
     let mut blob = Blob::create(branch.clone(), blob_id);
 
     let content = random_bytes(rng, BLOCK_SIZE * 3 - HEADER_SIZE);
@@ -729,10 +713,10 @@ async fn block_ids_test() {
 async fn block_ids_of_identical_blobs_in_the_same_branch() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
 
-    let blob_id_0: BlobId = rng.gen();
+    let blob_id_0: BlobId = rng.r#gen();
     let mut blob_0 = Blob::create(branch.clone(), blob_id_0);
 
-    let blob_id_1: BlobId = rng.gen();
+    let blob_id_1: BlobId = rng.r#gen();
     let mut blob_1 = Blob::create(branch.clone(), blob_id_1);
 
     let content = random_bytes(rng, BLOCK_SIZE * 2 - HEADER_SIZE);
@@ -777,7 +761,7 @@ async fn block_ids_of_identical_blobs_in_the_same_branch() {
 async fn block_ids_of_identical_blobs_in_different_branches() {
     let (mut rng, _base_dir, store, [branch_0, branch_1]) = setup(0).await;
 
-    let blob_id: BlobId = rng.gen();
+    let blob_id: BlobId = rng.r#gen();
     let mut blob_0 = Blob::create(branch_0.clone(), blob_id);
     let mut blob_1 = Blob::create(branch_1.clone(), blob_id);
 
@@ -821,7 +805,7 @@ async fn block_ids_of_identical_blobs_in_different_branches() {
 async fn block_ids_of_identical_blocks_in_the_same_blob() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
 
-    let blob_id: BlobId = rng.gen();
+    let blob_id: BlobId = rng.r#gen();
     let mut blob = Blob::create(branch.clone(), blob_id);
 
     let content_block_0 = random_bytes(&mut rng, BLOCK_SIZE - HEADER_SIZE);

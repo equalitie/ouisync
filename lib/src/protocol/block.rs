@@ -1,7 +1,4 @@
-use crate::{
-    crypto::{Digest, Hash, Hashable},
-    format::Hex,
-};
+use crate::crypto::{Digest, Hash, Hashable};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,7 +12,7 @@ use zeroize::Zeroize;
 pub const BLOCK_SIZE: usize = 32 * 1024;
 
 /// Size of the block db record in bytes.
-pub(crate) const BLOCK_RECORD_SIZE: u64 =
+pub const BLOCK_RECORD_SIZE: u64 =
     BLOCK_SIZE as u64 + BlockId::SIZE as u64 + BLOCK_NONCE_SIZE as u64;
 
 pub(crate) const BLOCK_NONCE_SIZE: usize = 32;
@@ -88,7 +85,17 @@ impl Block {
 
 impl Distribution<Block> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
-        Block::new(rng.gen(), rng.gen())
+        let content = rng.r#gen();
+        let nonce = rng.r#gen();
+        Block::new(content, nonce)
+    }
+}
+
+impl fmt::Debug for Block {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Block")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
     }
 }
 
@@ -174,6 +181,40 @@ impl Distribution<BlockContent> for Standard {
 
 impl fmt::Debug for BlockContent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:6x}", Hex(&self[..]))
+        write!(f, "{:<8}", hex_fmt::HexFmt(&self[..]))
+    }
+}
+
+#[cfg(test)]
+mod test_utils {
+    use super::{Block, BlockContent, BlockNonce, BLOCK_SIZE};
+    use proptest::{
+        arbitrary::{any, Arbitrary, StrategyFor},
+        collection::{vec, VecStrategy},
+        strategy::{Map, NoShrink, Strategy},
+    };
+
+    impl Arbitrary for BlockContent {
+        type Parameters = ();
+        type Strategy = Map<NoShrink<VecStrategy<StrategyFor<u8>>>, fn(Vec<u8>) -> Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            vec(any::<u8>(), BLOCK_SIZE)
+                .no_shrink()
+                .prop_map(|bytes| Self(bytes.into_boxed_slice()))
+        }
+    }
+
+    impl Arbitrary for Block {
+        type Parameters = ();
+        type Strategy = Map<
+            (StrategyFor<BlockContent>, NoShrink<StrategyFor<BlockNonce>>),
+            fn((BlockContent, BlockNonce)) -> Self,
+        >;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (any::<BlockContent>(), any::<BlockNonce>().no_shrink())
+                .prop_map(|(content, nonce)| Self::new(content, nonce))
+        }
     }
 }

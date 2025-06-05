@@ -1,8 +1,11 @@
 use crate::udp::DatagramSocket;
 use bytecodec::{DecodeExt, EncodeExt};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ouisync_macros::api;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    io, mem,
+    fmt, io, mem,
     net::SocketAddr,
     sync::Mutex,
     time::Duration,
@@ -96,7 +99,7 @@ impl<T: DatagramSocket> StunClient<T> {
             // mapping is.
 
             if other_addr.ip() == server_addr.ip() {
-                return Err(io::Error::new(io::ErrorKind::Other, "Faulty STUN server"));
+                return Err(io::Error::other("Faulty STUN server"));
             }
 
             // test II
@@ -305,11 +308,26 @@ impl<T: DatagramSocket> StunClient<T> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize, IntoPrimitive, TryFromPrimitive,
+)]
+#[repr(u8)]
+#[serde(into = "u8", try_from = "u8")]
+#[api]
 pub enum NatBehavior {
     EndpointIndependent,
     AddressDependent,
     AddressAndPortDependent,
+}
+
+impl fmt::Display for NatBehavior {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::EndpointIndependent => write!(f, "endpoint independent"),
+            Self::AddressDependent => write!(f, "address dependent"),
+            Self::AddressAndPortDependent => write!(f, "address and port dependent"),
+        }
+    }
 }
 
 enum ResponseSlot {

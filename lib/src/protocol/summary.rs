@@ -1,5 +1,4 @@
 use super::{InnerNodes, LeafNodes};
-use crate::format::Hex;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     encode::IsNull,
@@ -7,9 +6,8 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::{fmt, hash::Hasher};
-use thiserror::Error;
-use twox_hash::xxh3::{Hash128, HasherExt};
+use std::fmt;
+use xxhash_rust::xxh3::Xxh3Default;
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
@@ -78,14 +76,16 @@ impl Summary {
         }
     }
 
-    /// Checks whether the subtree at `self` is outdated compared to the subtree at `other` in
-    /// terms of present blocks. That is, whether `other` has some blocks present that `self` is
-    /// missing.
+    /// Checks whether the subtree at `self` is outdated compared to the subtree at `other` in terms
+    /// of completeness and block presence. That is, `self` is considered outdated if it's
+    /// incomplete (regardless of what `other` is) or if `other` has some blocks present that
+    /// `self` is missing.
     ///
     /// NOTE: This function is NOT antisymetric, that is, `is_outdated(A, B)` does not imply
     /// !is_outdated(B, A)` (and vice-versa).
     pub fn is_outdated(&self, other: &Self) -> bool {
-        self.block_presence.is_outdated(&other.block_presence)
+        self.state == NodeState::Incomplete
+            || self.block_presence.is_outdated(&other.block_presence)
     }
 
     pub fn with_state(self, state: NodeState) -> Self {
@@ -93,7 +93,7 @@ impl Summary {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize, sqlx::Type)]
 #[repr(u8)]
 pub enum NodeState {
     Incomplete = 0, // Some nodes are missing
@@ -114,32 +114,6 @@ impl NodeState {
             (Self::Approved, Self::Approved) => Self::Approved,
             (Self::Rejected, Self::Rejected) => Self::Rejected,
             (Self::Approved, Self::Rejected) | (Self::Rejected, Self::Approved) => unreachable!(),
-        }
-    }
-}
-
-impl Type<Sqlite> for NodeState {
-    fn type_info() -> SqliteTypeInfo {
-        <u8 as Type<Sqlite>>::type_info()
-    }
-}
-
-impl<'q> Encode<'q, Sqlite> for NodeState {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        Encode::<Sqlite>::encode(*self as u8, args)
-    }
-}
-
-impl<'r> Decode<'r, Sqlite> for NodeState {
-    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        let num = <u8 as Decode<Sqlite>>::decode(value)?;
-
-        match num {
-            0 => Ok(Self::Incomplete),
-            1 => Ok(Self::Complete),
-            2 => Ok(Self::Approved),
-            3 => Ok(Self::Rejected),
-            _ => Err(InvalidValue(num).into()),
         }
     }
 }
@@ -167,16 +141,13 @@ mod test_utils {
     }
 }
 
-#[derive(Debug, Error)]
-#[error("invalid value: {0}")]
-pub(crate) struct InvalidValue(u8);
-
 /// Information about the presence of a single block.
-#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
+#[repr(u8)]
 pub enum SingleBlockPresence {
-    Missing,
-    Present,
-    Expired,
+    Missing = 0,
+    Present = 1,
+    Expired = 2,
 }
 
 impl SingleBlockPresence {
@@ -185,39 +156,6 @@ impl SingleBlockPresence {
             Self::Missing => true,
             Self::Present => false,
             Self::Expired => false,
-        }
-    }
-}
-
-impl Type<Sqlite> for SingleBlockPresence {
-    fn type_info() -> SqliteTypeInfo {
-        <u8 as Type<Sqlite>>::type_info()
-    }
-
-    fn compatible(ty: &SqliteTypeInfo) -> bool {
-        <u8 as Type<Sqlite>>::compatible(ty)
-    }
-}
-
-impl<'q> Encode<'q, Sqlite> for SingleBlockPresence {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        let n = match self {
-            SingleBlockPresence::Missing => 0,
-            SingleBlockPresence::Present => 1,
-            SingleBlockPresence::Expired => 2,
-        };
-
-        Encode::<Sqlite>::encode(n, args)
-    }
-}
-
-impl<'r> Decode<'r, Sqlite> for SingleBlockPresence {
-    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        match <u8 as Decode<'r, Sqlite>>::decode(value)? {
-            0 => Ok(SingleBlockPresence::Missing),
-            1 => Ok(SingleBlockPresence::Present),
-            2 => Ok(SingleBlockPresence::Expired),
-            n => Err(InvalidValue(n).into()),
         }
     }
 }
@@ -262,7 +200,7 @@ impl MultiBlockPresence {
         }
     }
 
-    fn checksum(&self) -> &[u8] {
+    pub fn checksum(&self) -> &[u8] {
         match self {
             Self::None => NONE.as_slice(),
             Self::Some(checksum) => checksum.as_slice(),
@@ -278,7 +216,10 @@ impl Type<Sqlite> for MultiBlockPresence {
 }
 
 impl<'q> Encode<'q, Sqlite> for &'q MultiBlockPresence {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+    fn encode_by_ref(
+        &self,
+        args: &mut Vec<SqliteArgumentValue<'q>>,
+    ) -> Result<IsNull, BoxDynError> {
         Encode::<Sqlite>::encode(self.checksum(), args)
     }
 }
@@ -300,7 +241,7 @@ impl fmt::Debug for MultiBlockPresence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::None => write!(f, "None"),
-            Self::Some(checksum) => write!(f, "Some({:10x})", Hex(checksum)),
+            Self::Some(checksum) => write!(f, "Some({:<8})", hex_fmt::HexFmt(checksum)),
             Self::Full => write!(f, "Full"),
         }
     }
@@ -308,7 +249,7 @@ impl fmt::Debug for MultiBlockPresence {
 
 struct MultiBlockPresenceBuilder {
     state: BuilderState,
-    hasher: Hash128,
+    hasher: Xxh3Default,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -323,12 +264,12 @@ impl MultiBlockPresenceBuilder {
     fn new() -> Self {
         Self {
             state: BuilderState::Init,
-            hasher: Hash128::default(),
+            hasher: Xxh3Default::default(),
         }
     }
 
     fn update(&mut self, p: MultiBlockPresence) {
-        self.hasher.write(p.checksum());
+        self.hasher.update(p.checksum());
 
         self.state = match (self.state, p) {
             (BuilderState::Init, MultiBlockPresence::None) => BuilderState::None,
@@ -348,7 +289,7 @@ impl MultiBlockPresenceBuilder {
         match self.state {
             BuilderState::Init | BuilderState::None => MultiBlockPresence::None,
             BuilderState::Some => {
-                MultiBlockPresence::Some(clamp(self.hasher.finish_ext()).to_le_bytes())
+                MultiBlockPresence::Some(clamp(self.hasher.digest128()).to_le_bytes())
             }
             BuilderState::Full => MultiBlockPresence::Full,
         }

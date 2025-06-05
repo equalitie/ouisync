@@ -1,0 +1,11 @@
+[package]
+name = "ouisync-macros"
+description = "Procedural macros for Ouisync"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+proc-macro = true

@@ -51,13 +51,11 @@ impl<'a> SnapshotWriter<'a> {
     }
 
     pub async fn save_inner_nodes(mut self) -> Self {
-        for layer in self.snapshot.inner_layers() {
-            for (_, nodes) in layer.inner_maps() {
-                self.writer
-                    .save_inner_nodes(nodes.clone().into())
-                    .await
-                    .unwrap();
-            }
+        for (_, nodes) in self.snapshot.inner_sets() {
+            self.writer
+                .save_inner_nodes(nodes.clone().into())
+                .await
+                .unwrap();
         }
 
         self
@@ -76,7 +74,7 @@ impl<'a> SnapshotWriter<'a> {
 
     pub async fn save_blocks(mut self) -> Self {
         for block in self.snapshot.blocks().values() {
-            self.writer.save_block(block, None).await.unwrap();
+            self.writer.save_block(block).await.unwrap();
         }
         self
     }

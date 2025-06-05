@@ -2,7 +2,7 @@ use metrics::{
     Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName, Label, Metadata,
     Recorder, SharedString, Unit,
 };
-use metrics_util::Summary;
+use metrics_util::storage::Summary;
 use reqwest::{
     header::{self, HeaderMap, HeaderValue},
     Client, ClientBuilder, StatusCode,
@@ -10,7 +10,6 @@ use reqwest::{
 use std::{
     collections::HashMap,
     fmt::Write,
-    future::Future,
     sync::Arc,
     time::{Duration, SystemTime},
 };

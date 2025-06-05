@@ -1,6 +1,5 @@
 pub use blake3::traits::digest::Digest;
 
-use crate::format;
 use generic_array::{typenum::U32, GenericArray};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -81,13 +80,13 @@ impl fmt::Display for Hash {
 
 impl fmt::Debug for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:8x}")
+        write!(f, "{self:<8x}")
     }
 }
 
 impl fmt::LowerHex for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        format::hex(f, self.as_ref())
+        hex_fmt::HexFmt(self.as_ref()).fmt(f)
     }
 }
 
@@ -102,7 +101,7 @@ derive_sqlx_traits_for_byte_array_wrapper!(Hash);
 #[cfg(test)]
 impl Distribution<Hash> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Hash {
-        let array: [u8; Hash::SIZE] = rng.gen();
+        let array: [u8; Hash::SIZE] = rng.r#gen();
         Hash(array.into())
     }
 }
@@ -274,6 +273,18 @@ where
     }
 }
 
+impl<T> Clone for CacheHash<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            owner: self.owner.clone(),
+            hash: self.hash,
+        }
+    }
+}
+
 impl<T> Hashable for CacheHash<T>
 where
     T: Hashable,
@@ -284,6 +295,12 @@ where
 
     fn hash(&self) -> Hash {
         self.hash
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for CacheHash<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.owner.fmt(f)
     }
 }
 

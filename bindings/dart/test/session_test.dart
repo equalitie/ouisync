@@ -14,35 +14,45 @@ void main() {
   });
 
   test('shared session', () async {
-    final session0 = Session.create(
-      kind: SessionKind.shared,
-      configPath: '${temp.path}/config',
-    );
+    final configPath = '${temp.path}/config';
 
-    final session1 = Session.create(
-      kind: SessionKind.shared,
-      configPath: '${temp.path}/config',
-    );
+    final server = Server.create(configPath: configPath);
+    await server.start();
+
+    final session0 = await Session.create(configPath: configPath);
+    final session1 = await Session.create(configPath: configPath);
 
     try {
       final vs = await Future.wait([
-        session0.currentProtocolVersion,
-        session1.currentProtocolVersion,
+        session0.getCurrentProtocolVersion(),
+        session1.getCurrentProtocolVersion(),
       ]);
 
       expect(vs[0], equals(vs[1]));
     } finally {
       await session0.close();
       await session1.close();
+      await server.stop();
     }
   });
 
   test('use after close', () async {
-    final session = Session.create(
-        kind: SessionKind.unique, configPath: '${temp.path}/config');
-    await session.close();
+    final configPath = '${temp.path}/config';
 
-    await expectLater(
-        session.currentProtocolVersion, throwsA(isA<StateError>()));
+    final server = Server.create(configPath: configPath);
+
+    try {
+      await server.start();
+
+      final session = await Session.create(configPath: configPath);
+      await session.close();
+
+      await expectLater(
+        session.getCurrentProtocolVersion(),
+        throwsA(isA<StateError>()),
+      );
+    } finally {
+      await server.stop();
+    }
   });
 }

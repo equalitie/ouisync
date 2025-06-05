@@ -12,7 +12,7 @@ pub(crate) use self::{block_ids::BlockIds, id::BlobId};
 use self::position::Position;
 use crate::{
     branch::Branch,
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     crypto::{
         cipher::{self, Nonce, SecretKey},
         sign::{Keypair, PublicKey},
@@ -25,7 +25,7 @@ use crate::{
     },
     store::{self, Changeset, ReadTransaction},
 };
-use std::{io::SeekFrom, iter, mem};
+use std::{collections::hash_map::Entry, io::SeekFrom, iter, mem};
 use thiserror::Error;
 
 /// Size of the blob header in bytes.
@@ -645,16 +645,24 @@ async fn read_block(
     locator: &Locator,
     read_key: &cipher::SecretKey,
 ) -> Result<(BlockId, BlockContent)> {
-    let (id, _) = tx
+    let (block_id, _) = tx
         .find_block_at(root_node, &locator.encode(read_key))
-        .await?;
+        .await
+        .inspect_err(|error| {
+            tracing::trace!(?error, root_hash = ?root_node.proof.hash, ?locator);
+        })?;
 
     let mut content = BlockContent::new();
-    let nonce = tx.read_block(&id, &mut content).await?;
+    let nonce = tx
+        .read_block(&block_id, &mut content)
+        .await
+        .inspect_err(|error| {
+            tracing::trace!(?error, root_hash = ?root_node.proof.hash, ?locator, ?block_id);
+        })?;
 
     decrypt_block(read_key, &nonce, &mut content);
 
-    Ok((id, content))
+    Ok((block_id, content))
 }
 
 fn write_block(

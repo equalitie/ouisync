@@ -4,13 +4,15 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 // First string in a handshake, helps with weeding out connections with completely different
 // protocols on the other end.
 pub(super) const MAGIC: &[u8; 7] = b"OUISYNC";
-pub(super) const VERSION: Version = Version(12);
+pub(super) const VERSION: Version = Version(13);
 
 /// Protocol version
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug)]
 pub(super) struct Version(u64);
 
 impl Version {
+    pub const ZERO: Self = Self(0);
+
     pub async fn read_from<R>(io: &mut R) -> io::Result<Self>
     where
         R: AsyncRead + Unpin,
@@ -35,8 +37,8 @@ impl Version {
     }
 }
 
-impl std::convert::From<Version> for u32 {
-    fn from(v: Version) -> u32 {
-        v.0 as u32
+impl std::convert::From<Version> for u64 {
+    fn from(v: Version) -> u64 {
+        v.0
     }
 }

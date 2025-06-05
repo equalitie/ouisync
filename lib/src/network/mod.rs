@@ -1,4 +1,4 @@
-mod barrier;
+mod choke;
 mod client;
 mod connection;
 mod connection_monitor;
@@ -6,21 +6,20 @@ mod constants;
 mod crypto;
 mod debug_payload;
 mod dht_discovery;
+mod event;
 mod gateway;
 mod ip;
 mod local_discovery;
 mod message;
 mod message_broker;
 mod message_dispatcher;
-mod message_io;
 mod peer_addr;
 mod peer_exchange;
 mod peer_info;
 mod peer_source;
 mod peer_state;
-mod pending;
 mod protocol;
-mod raw;
+mod request_tracker;
 mod runtime_id;
 mod seen_peers;
 mod server;
@@ -32,8 +31,9 @@ mod tests;
 mod upnp;
 
 pub use self::{
-    connection::{ConnectionSetSubscription, PeerInfoCollector},
+    connection::PeerInfoCollector,
     dht_discovery::{DhtContactsStoreTrait, DHT_ROUTERS},
+    event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
     peer_source::PeerSource,
@@ -41,12 +41,15 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
+use choke::Choker;
+use constants::REQUEST_TIMEOUT;
+use event::ProtocolVersions;
 pub use net::stun::NatBehavior;
+use request_tracker::RequestTracker;
 
 use self::{
     connection::{ConnectionPermit, ConnectionSet, ReserveResult},
     connection_monitor::ConnectionMonitor,
-    constants::MAX_UNCHOKED_COUNT,
     dht_discovery::DhtDiscovery,
     gateway::{Connectivity, Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
@@ -59,21 +62,20 @@ use self::{
     stun::StunClients,
 };
 use crate::{
-    collections::{hash_map::Entry, HashMap, HashSet},
-    network::stats::Instrumented,
+    collections::HashSet,
+    network::connection::ConnectionDirection,
     protocol::RepositoryId,
     repository::{RepositoryHandle, Vault},
-    sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use deadlock::BlockingMutex;
 use futures_util::future;
+use net::unified::{Connection, ConnectionError};
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;
 use std::{
-    future::Future,
     io, mem,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{Arc, Weak},
@@ -81,14 +83,11 @@ use std::{
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{mpsc, Semaphore},
+    sync::{mpsc, watch},
     task::{AbortHandle, JoinSet},
     time::Duration,
 };
 use tracing::{Instrument, Span};
-
-const DHT_ENABLED: &str = "dht_enabled";
-const PEX_ENABLED: &str = "pex_enabled";
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -121,8 +120,6 @@ impl Network {
         let (pex_discovery_tx, pex_discovery_rx) = mpsc::channel(1);
         let pex_discovery = PexDiscovery::new(pex_discovery_tx);
 
-        let (on_protocol_mismatch_tx, _) = uninitialized_watch::channel();
-
         let user_provided_peers = SeenPeers::new();
 
         let this_runtime_id = this_runtime_id.unwrap_or_else(SecretRuntimeId::random);
@@ -140,9 +137,9 @@ impl Network {
             span: Span::current(),
             gateway,
             this_runtime_id,
-            state: BlockingMutex::new(State {
-                message_brokers: Some(HashMap::default()),
-                registry: Slab::new(),
+            registry: BlockingMutex::new(Registry {
+                peers: Some(Slab::new()),
+                repos: Slab::new(),
             }),
             port_forwarder,
             port_forwarder_state: BlockingMutex::new(ComponentState::disabled(
@@ -156,10 +153,9 @@ impl Network {
             pex_discovery,
             stun_clients: StunClients::new(),
             connections: ConnectionSet::new(),
-            on_protocol_mismatch_tx,
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
-            highest_seen_protocol_version: BlockingMutex::new(VERSION),
+            protocol_versions: watch::Sender::new(ProtocolVersions::new()),
             our_addresses: BlockingMutex::new(HashSet::default()),
             stats_tracker: StatsTracker::default(),
         });
@@ -302,22 +298,20 @@ impl Network {
         self.inner.connections.get_peer_info(addr)
     }
 
-    pub fn current_protocol_version(&self) -> u32 {
-        VERSION.into()
+    pub fn current_protocol_version(&self) -> u64 {
+        self.inner.protocol_versions.borrow().our.into()
     }
 
-    pub fn highest_seen_protocol_version(&self) -> u32 {
-        (*self.inner.highest_seen_protocol_version.lock().unwrap()).into()
+    pub fn highest_seen_protocol_version(&self) -> u64 {
+        self.inner.protocol_versions.borrow().highest_seen.into()
     }
 
-    /// Subscribe to network protocol mismatch events.
-    pub fn on_protocol_mismatch(&self) -> uninitialized_watch::Receiver<()> {
-        self.inner.on_protocol_mismatch_tx.subscribe()
-    }
-
-    /// Subscribe change in connected peers events.
-    pub fn on_peer_set_change(&self) -> ConnectionSetSubscription {
-        self.inner.connections.subscribe()
+    /// Subscribe to network events.
+    pub fn subscribe(&self) -> NetworkEventReceiver {
+        NetworkEventReceiver::new(
+            self.inner.protocol_versions.subscribe(),
+            self.inner.connections.subscribe(),
+        )
     }
 
     /// Register a local repository into the network. This links the repository with all matching
@@ -328,52 +322,36 @@ impl Network {
     /// Note: A repository should have at most one registration - creating more than one has
     /// undesired effects. This is currently not enforced and so it's a responsibility of the
     /// caller.
-    pub async fn register(&self, handle: RepositoryHandle) -> Registration {
+    pub fn register(&self, handle: RepositoryHandle) -> Registration {
         *handle.vault.monitor.info_hash.get() =
             Some(repository_info_hash(handle.vault.repository_id()));
 
-        let metadata = handle.vault.metadata();
-        let dht_enabled = metadata
-            .get(DHT_ENABLED)
-            .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-        let pex_enabled = metadata
-            .get(PEX_ENABLED)
-            .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-
-        let dht = if dht_enabled {
-            Some(
-                self.inner
-                    .start_dht_lookup(repository_info_hash(handle.vault.repository_id())),
-            )
-        } else {
-            None
-        };
-
         let pex = self.inner.pex_discovery.new_repository();
-        pex.set_enabled(pex_enabled);
 
-        // TODO: This should be global, not per repo
-        let response_limiter = Arc::new(Semaphore::new(MAX_UNCHOKED_COUNT));
+        let request_tracker = RequestTracker::new(handle.vault.monitor.traffic.clone());
+        request_tracker.set_timeout(REQUEST_TIMEOUT);
+
+        // TODO: Should this be global instead of per repo?
+        let choker = Choker::new();
+
         let stats_tracker = StatsTracker::default();
 
-        let mut network_state = self.inner.state.lock().unwrap();
+        let mut registry = self.inner.registry.lock().unwrap();
 
-        network_state.create_link(
+        registry.create_link(
             handle.vault.clone(),
             &pex,
-            response_limiter.clone(),
+            &request_tracker,
+            &choker,
             stats_tracker.bytes.clone(),
         );
 
-        let key = network_state.registry.insert(RegistrationHolder {
+        let key = registry.repos.insert(RegistrationHolder {
             vault: handle.vault,
-            dht,
+            dht: None,
             pex,
-            response_limiter,
+            request_tracker,
+            choker,
             stats_tracker,
         });
 
@@ -391,12 +369,20 @@ impl Network {
     pub async fn shutdown(&self) {
         // TODO: Would be a nice-to-have to also wait for all the spawned tasks here (e.g. dicovery
         // mechanisms).
-        let Some(message_brokers) = self.inner.state.lock().unwrap().message_brokers.take() else {
+        let Some(peers) = self.inner.registry.lock().unwrap().peers.take() else {
             tracing::warn!("Network already shut down");
             return;
         };
 
-        shutdown_brokers(message_brokers).await;
+        shutdown_peers(peers).await;
+    }
+
+    /// Change the sync protocol request timeout. Useful mostly for testing and benchmarking as the
+    /// default value should be sufficient for most use cases.
+    pub fn set_request_timeout(&self, timeout: Duration) {
+        for (_, holder) in &self.inner.registry.lock().unwrap().repos {
+            holder.request_tracker.set_timeout(timeout);
+        }
     }
 }
 
@@ -406,11 +392,9 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub async fn set_dht_enabled(&self, enabled: bool) {
-        set_metadata_bool(&self.inner, self.key, DHT_ENABLED, enabled).await;
-
-        let mut state = self.inner.state.lock().unwrap();
-        let holder = &mut state.registry[self.key];
+    pub fn set_dht_enabled(&self, enabled: bool) {
+        let mut registry = self.inner.registry.lock().unwrap();
+        let holder = &mut registry.repos[self.key];
 
         if enabled {
             holder.dht = Some(
@@ -427,7 +411,7 @@ impl Registration {
     /// difference is in that this function should return true even in case e.g. the whole network
     /// is disabled.
     pub fn is_dht_enabled(&self) -> bool {
-        self.inner.state.lock().unwrap().registry[self.key]
+        self.inner.registry.lock().unwrap().repos[self.key]
             .dht
             .is_some()
     }
@@ -437,22 +421,20 @@ impl Registration {
     /// Note: sending/receiving over PEX for this repo is enabled only if it's enabled using this
     /// function and also globally using [Network::set_pex_send_enabled] and/or
     /// [Network::set_pex_recv_enabled].
-    pub async fn set_pex_enabled(&self, enabled: bool) {
-        set_metadata_bool(&self.inner, self.key, PEX_ENABLED, enabled).await;
-
-        let state = self.inner.state.lock().unwrap();
-        state.registry[self.key].pex.set_enabled(enabled);
+    pub fn set_pex_enabled(&self, enabled: bool) {
+        let registry = self.inner.registry.lock().unwrap();
+        registry.repos[self.key].pex.set_enabled(enabled);
     }
 
     pub fn is_pex_enabled(&self) -> bool {
-        self.inner.state.lock().unwrap().registry[self.key]
+        self.inner.registry.lock().unwrap().repos[self.key]
             .pex
             .is_enabled()
     }
 
     /// Fetch per-repository network statistics.
     pub fn stats(&self) -> Stats {
-        self.inner.state.lock().unwrap().registry[self.key]
+        self.inner.registry.lock().unwrap().repos[self.key]
             .stats_tracker
             .read()
     }
@@ -460,28 +442,26 @@ impl Registration {
 
 impl Drop for Registration {
     fn drop(&mut self) {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut registry = self
+            .inner
+            .registry
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
 
-        if let Some(holder) = state.registry.try_remove(self.key) {
-            if let Some(brokers) = &mut state.message_brokers {
-                for broker in brokers.values_mut() {
-                    broker.destroy_link(holder.vault.repository_id());
-                }
+        if let Some(holder) = registry.repos.try_remove(self.key) {
+            for (_, peer) in registry.peers.as_mut().into_iter().flatten() {
+                peer.destroy_link(holder.vault.repository_id());
             }
         }
     }
-}
-
-async fn set_metadata_bool(inner: &Inner, key: usize, name: &str, value: bool) {
-    let metadata = inner.state.lock().unwrap().registry[key].vault.metadata();
-    metadata.set(name, value).await.ok();
 }
 
 struct RegistrationHolder {
     vault: Vault,
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexRepository,
-    response_limiter: Arc<Semaphore>,
+    request_tracker: RequestTracker,
+    choker: Choker,
     stats_tracker: StatsTracker,
 }
 
@@ -492,7 +472,7 @@ struct Inner {
     span: Span,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
-    state: BlockingMutex<State>,
+    registry: BlockingMutex<Registry>,
     port_forwarder: upnp::PortForwarder,
     port_forwarder_state: BlockingMutex<ComponentState<PortMappings>>,
     local_discovery_state: BlockingMutex<ComponentState<ScopedAbortHandle>>,
@@ -501,37 +481,38 @@ struct Inner {
     pex_discovery: PexDiscovery,
     stun_clients: StunClients,
     connections: ConnectionSet,
-    on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
+    protocol_versions: watch::Sender<ProtocolVersions>,
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<BlockingMutex<JoinSet<()>>>,
-    highest_seen_protocol_version: BlockingMutex<Version>,
     // Used to prevent repeatedly connecting to self.
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
     stats_tracker: StatsTracker,
 }
 
-struct State {
+struct Registry {
     // This is None once the network calls shutdown.
-    message_brokers: Option<HashMap<PublicRuntimeId, MessageBroker>>,
-    registry: Slab<RegistrationHolder>,
+    peers: Option<Slab<MessageBroker>>,
+    repos: Slab<RegistrationHolder>,
 }
 
-impl State {
+impl Registry {
     fn create_link(
         &mut self,
         repo: Vault,
         pex: &PexRepository,
-        response_limiter: Arc<Semaphore>,
+        request_tracker: &RequestTracker,
+        choker: &Choker,
         byte_counters: Arc<ByteCounters>,
     ) {
-        if let Some(brokers) = &mut self.message_brokers {
-            for broker in brokers.values_mut() {
-                broker.create_link(
+        if let Some(peers) = &mut self.peers {
+            for (_, peer) in peers {
+                peer.create_link(
                     repo.clone(),
                     pex,
-                    response_limiter.clone(),
+                    request_tracker.clone(),
+                    choker.clone(),
                     byte_counters.clone(),
                 )
             }
@@ -541,7 +522,7 @@ impl State {
 
 impl Inner {
     fn is_shutdown(&self) -> bool {
-        self.state.lock().unwrap().message_brokers.is_none()
+        self.registry.lock().unwrap().peers.is_none()
     }
 
     async fn bind(self: &Arc<Self>, bind: &[PeerAddr]) {
@@ -553,7 +534,7 @@ impl Inner {
         }
 
         // Gateway
-        let side_channel_makers = self.gateway.bind(&bind).instrument(self.span.clone()).await;
+        let side_channel_makers = self.span.in_scope(|| self.gateway.bind(&bind));
 
         let conn = self.gateway.connectivity();
 
@@ -616,14 +597,11 @@ impl Inner {
 
     // Disconnect from all currently connected peers, regardless of their source.
     async fn disconnect_all(&self) {
-        let Some(message_brokers) = mem::replace(
-            &mut self.state.lock().unwrap().message_brokers,
-            Some(HashMap::default()),
-        ) else {
+        let Some(peers) = self.registry.lock().unwrap().peers.replace(Slab::default()) else {
             return;
         };
 
-        shutdown_brokers(message_brokers).await;
+        shutdown_peers(peers).await;
     }
 
     fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {
@@ -718,9 +696,9 @@ impl Inner {
 
     async fn handle_incoming_connections(
         self: Arc<Self>,
-        mut rx: mpsc::Receiver<(raw::Stream, PeerAddr)>,
+        mut rx: mpsc::Receiver<(Connection, PeerAddr)>,
     ) {
-        while let Some((stream, addr)) = rx.recv().await {
+        while let Some((connection, addr)) = rx.recv().await {
             match self.connections.reserve(addr, PeerSource::Listener) {
                 ReserveResult::Permit(permit) => {
                     if self.is_shutdown() {
@@ -739,7 +717,7 @@ impl Inner {
                     monitor.mark_as_connecting(permit.id());
 
                     self.spawn(async move {
-                        this.handle_connection(stream, permit, &monitor).await;
+                        this.handle_connection(connection, permit, &monitor).await;
                     });
                 }
                 ReserveResult::Occupied(_, _their_source, permit_id) => {
@@ -840,7 +818,7 @@ impl Inner {
     /// Return true iff the peer is suitable for reconnection.
     async fn handle_connection(
         &self,
-        mut stream: raw::Stream,
+        connection: Connection,
         permit: ConnectionPermit,
         monitor: &ConnectionMonitor,
     ) -> bool {
@@ -849,7 +827,13 @@ impl Inner {
         permit.mark_as_handshaking();
         monitor.mark_as_handshaking();
 
-        let handshake_result = perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await;
+        let handshake_result = perform_handshake(
+            &connection,
+            VERSION,
+            &self.this_runtime_id,
+            ConnectionDirection::from_source(permit.source()),
+        )
+        .await;
 
         if let Err(error) = &handshake_result {
             tracing::debug!(parent: monitor.span(), ?error, "Handshake failed");
@@ -861,9 +845,12 @@ impl Inner {
                 self.on_protocol_mismatch(their_version);
                 return false;
             }
-            Err(HandshakeError::Timeout | HandshakeError::BadMagic | HandshakeError::Fatal(_)) => {
-                return false
-            }
+            Err(
+                HandshakeError::Timeout
+                | HandshakeError::BadMagic
+                | HandshakeError::Io(_)
+                | HandshakeError::Connection(_),
+            ) => return false,
         };
 
         // prevent self-connections.
@@ -875,72 +862,71 @@ impl Inner {
 
         permit.mark_as_active(that_runtime_id);
         monitor.mark_as_active(that_runtime_id);
-        tracing::info!(parent: monitor.span(), "Connected");
 
-        let released = permit.released();
+        let closed = connection.closed();
 
-        {
-            let mut state = self.state.lock().unwrap();
-            let state = &mut *state;
+        let key = {
+            let mut registry = self.registry.lock().unwrap();
+            let registry = &mut *registry;
 
-            let brokers = match &mut state.message_brokers {
-                Some(brokers) => brokers,
+            let Some(peers) = &mut registry.peers else {
                 // Network has been shut down.
-                None => return false,
+                return false;
             };
 
-            let broker = brokers.entry(that_runtime_id).or_insert_with(|| {
-                let mut broker = self.span.in_scope(|| {
-                    MessageBroker::new(
-                        self.this_runtime_id.public(),
-                        that_runtime_id,
-                        self.pex_discovery.new_peer(),
-                        self.peers_monitor
-                            .make_child(format!("{:?}", that_runtime_id.as_public_key())),
-                    )
-                });
+            let pex_peer = self.pex_discovery.new_peer();
+            pex_peer.handle_connection(permit.addr(), permit.source(), permit.released());
 
-                // TODO: for DHT connection we should only link the repository for which we did the
-                // lookup but make sure we correctly handle edge cases, for example, when we have
-                // more than one repository shared with the peer.
-                for (_, holder) in &state.registry {
-                    broker.create_link(
-                        holder.vault.clone(),
-                        &holder.pex,
-                        holder.response_limiter.clone(),
-                        holder.stats_tracker.bytes.clone(),
-                    );
-                }
-
-                broker
+            let mut peer = monitor.span().in_scope(|| {
+                MessageBroker::new(
+                    self.this_runtime_id.public(),
+                    that_runtime_id,
+                    connection,
+                    pex_peer,
+                    self.peers_monitor
+                        .make_child(format!("{:?}", that_runtime_id.as_public_key())),
+                    self.stats_tracker.bytes.clone(),
+                    permit.byte_counters(),
+                )
             });
 
-            let stream = Instrumented::new(stream, self.stats_tracker.bytes.clone());
-            broker.add_connection(stream, permit);
-        }
+            // TODO: for DHT connection we should only link the repository for which we did the
+            // lookup but make sure we correctly handle edge cases, for example, when we have
+            // more than one repository shared with the peer.
+            for (_, holder) in &registry.repos {
+                peer.create_link(
+                    holder.vault.clone(),
+                    &holder.pex,
+                    holder.request_tracker.clone(),
+                    holder.choker.clone(),
+                    holder.stats_tracker.bytes.clone(),
+                );
+            }
 
-        let _remover = MessageBrokerEntryGuard {
-            state: &self.state,
-            that_runtime_id,
-            monitor,
+            peers.insert(peer)
         };
 
-        released.await;
+        // Wait until the connection gets closed, then remove the `MessageBroker` instance. Using a
+        // RAII to also remove it in case this function gets cancelled.
+        let _guard = PeerGuard {
+            registry: &self.registry,
+            key,
+        };
+
+        closed.await;
 
         true
     }
 
     fn on_protocol_mismatch(&self, their_version: Version) {
-        // We know that `their_version` is higher than our version because otherwise this function
-        // wouldn't get called, but let's double check.
-        assert!(VERSION < their_version);
-
-        let mut highest = self.highest_seen_protocol_version.lock().unwrap();
-
-        if *highest < their_version {
-            *highest = their_version;
-            self.on_protocol_mismatch_tx.send(()).unwrap_or(());
-        }
+        self.protocol_versions.send_if_modified(|versions| {
+            if versions.highest_seen < their_version {
+                versions.highest_seen = their_version;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     fn spawn<Fut>(&self, f: Fut) -> AbortHandle
@@ -962,28 +948,37 @@ impl Inner {
 
 // Exchange runtime ids with the peer. Returns their (verified) runtime id.
 async fn perform_handshake(
-    stream: &mut raw::Stream,
+    connection: &Connection,
     this_version: Version,
     this_runtime_id: &SecretRuntimeId,
+    dir: ConnectionDirection,
 ) -> Result<PublicRuntimeId, HandshakeError> {
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
-        stream.write_all(MAGIC).await?;
+        let (mut writer, mut reader) = match dir {
+            ConnectionDirection::Incoming => connection.incoming().await?,
+            ConnectionDirection::Outgoing => connection.outgoing().await?,
+        };
 
-        this_version.write_into(stream).await?;
+        writer.write_all(MAGIC).await?;
+
+        this_version.write_into(&mut writer).await?;
 
         let mut that_magic = [0; MAGIC.len()];
-        stream.read_exact(&mut that_magic).await?;
+        reader.read_exact(&mut that_magic).await?;
 
         if MAGIC != &that_magic {
             return Err(HandshakeError::BadMagic);
         }
 
-        let that_version = Version::read_from(stream).await?;
+        let that_version = Version::read_from(&mut reader).await?;
         if that_version > this_version {
             return Err(HandshakeError::ProtocolVersionMismatch(that_version));
         }
 
-        let that_runtime_id = runtime_id::exchange(this_runtime_id, stream).await?;
+        let that_runtime_id =
+            runtime_id::exchange(this_runtime_id, &mut writer, &mut reader).await?;
+
+        writer.shutdown().await?;
 
         Ok(that_runtime_id)
     })
@@ -1003,28 +998,27 @@ enum HandshakeError {
     BadMagic,
     #[error("timeout")]
     Timeout,
-    #[error("fatal error")]
-    Fatal(#[from] io::Error),
+    #[error("IO error")]
+    Io(#[from] io::Error),
+    #[error("connection error")]
+    Connection(#[from] ConnectionError),
 }
 
-// RAII guard which when dropped removes the broker from the network state if it has no connections.
-struct MessageBrokerEntryGuard<'a> {
-    state: &'a BlockingMutex<State>,
-    that_runtime_id: PublicRuntimeId,
-    monitor: &'a ConnectionMonitor,
+// RAII guard which when dropped removes the peer from the registry.
+struct PeerGuard<'a> {
+    registry: &'a BlockingMutex<Registry>,
+    key: usize,
 }
 
-impl Drop for MessageBrokerEntryGuard<'_> {
+impl Drop for PeerGuard<'_> {
     fn drop(&mut self) {
-        tracing::info!(parent: self.monitor.span(), "Disconnected");
-
-        let mut state = self.state.lock().unwrap();
-        if let Some(brokers) = &mut state.message_brokers {
-            if let Entry::Occupied(entry) = brokers.entry(self.that_runtime_id) {
-                if !entry.get().has_connections() {
-                    entry.remove();
-                }
-            }
+        if let Some(peers) = &mut self
+            .registry
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .peers
+        {
+            peers.try_remove(self.key);
         }
     }
 }
@@ -1132,11 +1126,6 @@ pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
         .unwrap()
 }
 
-async fn shutdown_brokers(message_brokers: HashMap<PublicRuntimeId, MessageBroker>) {
-    future::join_all(
-        message_brokers
-            .into_values()
-            .map(|message_broker| message_broker.shutdown()),
-    )
-    .await;
+async fn shutdown_peers(peers: Slab<MessageBroker>) {
+    future::join_all(peers.into_iter().map(|(_, peer)| peer.shutdown())).await;
 }

@@ -8,14 +8,19 @@
 //! based on the identity of the replicas is needed.
 
 use super::{
-    message_dispatcher::{ChannelClosed, ContentSink, ContentStream, ContentStreamError},
+    message_dispatcher::{MessageSink, MessageStream},
     runtime_id::PublicRuntimeId,
-    stats::Instrumented,
 };
 use crate::protocol::RepositoryId;
+use bytes::{Bytes, BytesMut};
+use futures_util::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use noise_protocol::Cipher as _;
 use noise_rust_crypto::{Blake2s, ChaCha20Poly1305, X25519};
-use std::mem;
+use std::{
+    io,
+    pin::Pin,
+    task::{ready, Context, Poll},
+};
 use thiserror::Error;
 
 type Cipher = ChaCha20Poly1305;
@@ -60,56 +65,70 @@ impl Role {
 // session.
 const MAX_NONCE: u64 = u64::MAX - 1;
 
-/// Wrapper for [`ContentStream`] that decrypts incoming messages.
+/// Wrapper for [`MessageStream`] that decrypts incoming messages.
 pub(super) struct DecryptingStream<'a> {
-    inner: &'a mut Instrumented<ContentStream>,
+    inner: &'a mut MessageStream,
     cipher: CipherState,
-    buffer: Vec<u8>,
 }
 
-impl DecryptingStream<'_> {
-    pub async fn recv(&mut self) -> Result<Vec<u8>, RecvError> {
+impl Stream for DecryptingStream<'_> {
+    type Item = Result<BytesMut, RecvError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.cipher.get_next_n() >= MAX_NONCE {
-            return Err(RecvError::Exhausted);
+            return Poll::Ready(Some(Err(RecvError::Exhausted)));
         }
 
-        let mut content = self.inner.recv().await?;
+        let mut item = match ready!(self.inner.poll_next_unpin(cx)) {
+            Some(Ok(item)) => item,
+            Some(Err(error)) => return Poll::Ready(Some(Err(error.into()))),
+            None => return Poll::Ready(None),
+        };
 
-        let plain_len = content
-            .len()
-            .checked_sub(Cipher::tag_len())
-            .ok_or(RecvError::Crypto)?;
-        self.buffer.resize(plain_len, 0);
-        self.cipher
-            .decrypt_ad(self.inner.channel().as_ref(), &content, &mut self.buffer)
-            .map_err(|_| RecvError::Crypto)?;
+        let ciphertext_len = item.len();
 
-        mem::swap(&mut content, &mut self.buffer);
-
-        Ok(content)
+        match self.cipher.decrypt_in_place(&mut item, ciphertext_len) {
+            Ok(n) => Poll::Ready(Some(Ok(item.split_to(n)))),
+            Err(_) => Poll::Ready(Some(Err(RecvError::Crypto))),
+        }
     }
 }
 
-/// Wrapper for [`ContentSink`] that encrypts outgoing messages.
+/// Wrapper for [`MessageSink`] that encrypts outgoing messages.
 pub(super) struct EncryptingSink<'a> {
-    inner: &'a mut Instrumented<ContentSink>,
+    inner: &'a mut MessageSink,
     cipher: CipherState,
-    buffer: Vec<u8>,
 }
 
-impl EncryptingSink<'_> {
-    pub async fn send(&mut self, mut content: Vec<u8>) -> Result<(), SendError> {
+impl Sink<Bytes> for EncryptingSink<'_> {
+    type Error = SendError;
+
+    fn start_send(mut self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
         if self.cipher.get_next_n() >= MAX_NONCE {
             return Err(SendError::Exhausted);
         }
 
-        self.buffer.resize(content.len() + Cipher::tag_len(), 0);
-        self.cipher
-            .encrypt_ad(self.inner.channel().as_ref(), &content, &mut self.buffer);
+        let plaintext_len = item.len();
+        let mut item = BytesMut::from(item);
 
-        mem::swap(&mut content, &mut self.buffer);
+        item.resize(plaintext_len + Cipher::tag_len(), 0);
+        let n = self.cipher.encrypt_in_place(&mut item, plaintext_len);
 
-        Ok(self.inner.send(content).await?)
+        self.inner.start_send_unpin(item.split_to(n).freeze())?;
+
+        Ok(())
+    }
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready_unpin(cx).map_err(Into::into)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_flush_unpin(cx).map_err(Into::into)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_close_unpin(cx).map_err(Into::into)
     }
 }
 
@@ -118,8 +137,8 @@ impl EncryptingSink<'_> {
 pub(super) async fn establish_channel<'a>(
     role: Role,
     repo_id: &RepositoryId,
-    stream: &'a mut Instrumented<ContentStream>,
-    sink: &'a mut Instrumented<ContentSink>,
+    stream: &'a mut MessageStream,
+    sink: &'a mut MessageSink,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     let mut handshake_state = build_handshake_state(role, repo_id);
 
@@ -146,13 +165,11 @@ pub(super) async fn establish_channel<'a>(
     let stream = DecryptingStream {
         inner: stream,
         cipher: recv_cipher,
-        buffer: vec![],
     };
 
     let sink = EncryptingSink {
         inner: sink,
         cipher: send_cipher,
-        buffer: vec![],
     };
 
     Ok((stream, sink))
@@ -160,67 +177,33 @@ pub(super) async fn establish_channel<'a>(
 
 #[derive(Debug, Error)]
 pub(super) enum SendError {
-    #[error("channel closed")]
-    Closed,
     #[error("nonce counter exhausted")]
     Exhausted,
-}
-
-impl From<ChannelClosed> for SendError {
-    fn from(_: ChannelClosed) -> Self {
-        Self::Closed
-    }
+    #[error("IO error")]
+    Io(#[from] io::Error),
 }
 
 #[derive(Debug, Error)]
 pub(super) enum RecvError {
     #[error("decryption failed")]
     Crypto,
-    #[error("channel closed")]
-    Closed,
     #[error("nonce counter exhausted")]
     Exhausted,
-    #[error("network transport changed")]
-    TransportChanged,
-}
-
-impl From<ContentStreamError> for RecvError {
-    fn from(error: ContentStreamError) -> Self {
-        match error {
-            ContentStreamError::ChannelClosed => Self::Closed,
-            ContentStreamError::TransportChanged => Self::TransportChanged,
-        }
-    }
+    #[error("IO error")]
+    Io(#[from] io::Error),
 }
 
 #[derive(Debug, Error)]
 pub(super) enum EstablishError {
     #[error("encryption / decryption failed")]
     Crypto,
-    #[error("channel closed")]
-    Closed,
-    #[error("network transport changed")]
-    TransportChanged,
+    #[error("IO error")]
+    Io(#[from] io::Error),
 }
 
 impl From<noise_protocol::Error> for EstablishError {
     fn from(_: noise_protocol::Error) -> Self {
         Self::Crypto
-    }
-}
-
-impl From<ChannelClosed> for EstablishError {
-    fn from(_: ChannelClosed) -> Self {
-        Self::Closed
-    }
-}
-
-impl From<ContentStreamError> for EstablishError {
-    fn from(error: ContentStreamError) -> Self {
-        match error {
-            ContentStreamError::ChannelClosed => Self::Closed,
-            ContentStreamError::TransportChanged => Self::TransportChanged,
-        }
     }
 }
 
@@ -242,17 +225,81 @@ fn build_handshake_state(role: Role, repo_id: &RepositoryId) -> HandshakeState {
 
 async fn handshake_send(
     state: &mut HandshakeState,
-    sink: &mut Instrumented<ContentSink>,
+    sink: &mut MessageSink,
     msg: &[u8],
 ) -> Result<(), EstablishError> {
     let content = state.write_message_vec(msg)?;
-    Ok(sink.send(content).await?)
+    sink.send(content.into()).await?;
+    Ok(())
 }
 
 async fn handshake_recv(
     state: &mut HandshakeState,
-    stream: &mut Instrumented<ContentStream>,
+    stream: &mut MessageStream,
 ) -> Result<Vec<u8>, EstablishError> {
-    let content = stream.recv().await?;
+    let content = stream
+        .try_next()
+        .await?
+        .ok_or_else(|| io::Error::from(io::ErrorKind::BrokenPipe))?;
+
     Ok(state.read_message_vec(&content)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::{
+        message_dispatcher::{create_connection_pair, MessageDispatcher},
+        stats::ByteCounters,
+    };
+    use futures_util::future;
+    use net::bus::TopicId;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn sanity_check() {
+        let (client, server) = create_connection_pair().await;
+
+        let client = MessageDispatcher::builder(client).build();
+        let server = MessageDispatcher::builder(server).build();
+
+        let repo_id = RepositoryId::random();
+        let topic_id = TopicId::random();
+
+        let (mut client_sink, mut client_stream) =
+            client.open(topic_id, Arc::new(ByteCounters::default()));
+
+        let (mut server_sink, mut server_stream) =
+            server.open(topic_id, Arc::new(ByteCounters::default()));
+
+        let ((mut client_stream, mut client_sink), (mut server_stream, mut server_sink)) =
+            future::try_join(
+                establish_channel(
+                    Role::Initiator,
+                    &repo_id,
+                    &mut client_stream,
+                    &mut client_sink,
+                ),
+                establish_channel(
+                    Role::Responder,
+                    &repo_id,
+                    &mut server_stream,
+                    &mut server_sink,
+                ),
+            )
+            .await
+            .unwrap();
+
+        client_sink.send(Bytes::from_static(b"ping")).await.unwrap();
+        assert_eq!(
+            server_stream.try_next().await.unwrap().unwrap().as_ref(),
+            b"ping"
+        );
+
+        server_sink.send(Bytes::from_static(b"pong")).await.unwrap();
+        assert_eq!(
+            client_stream.try_next().await.unwrap().unwrap().as_ref(),
+            b"pong"
+        );
+    }
 }

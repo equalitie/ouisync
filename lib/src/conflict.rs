@@ -6,7 +6,16 @@ const SUFFIX_SEPARATOR: &str = ".v";
 /// Create non-ambiguous name for a file/directory with `name` by appending a suffix derived from
 /// `branch_id`.
 pub fn create_unique_name(name: &str, branch_id: &PublicKey) -> String {
-    format!("{}{}{:-3$x}", name, SUFFIX_SEPARATOR, branch_id, SUFFIX_LEN)
+    let mut output = format!(
+        "{}{}{:<3$x}",
+        name,
+        SUFFIX_SEPARATOR,
+        branch_id,
+        SUFFIX_LEN + 2
+    );
+    // Trim the trailing ellipsis
+    output.truncate(name.len() + SUFFIX_SEPARATOR.len() + SUFFIX_LEN);
+    output
 }
 
 /// Parse a name created with `create_unique_name` into the original name and the disambiguation

@@ -47,7 +47,7 @@ impl Locator {
 
     /// Sequence of locators starting at `self` and continuing with the corresponding trunk
     /// locators in their sequential order.
-    pub fn sequence(&self) -> impl Iterator<Item = Self> {
+    pub fn sequence(&self) -> impl Iterator<Item = Self> + use<> {
         let blob = self.blob;
         (self.block..).map(move |block| Self { blob, block })
     }

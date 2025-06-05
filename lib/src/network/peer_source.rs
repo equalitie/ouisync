@@ -1,4 +1,5 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -18,17 +19,18 @@ use std::fmt;
 )]
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
+#[api]
 pub enum PeerSource {
     /// Explicitly added by the user.
-    UserProvided,
+    UserProvided = 0,
     /// Peer connected to us.
-    Listener,
+    Listener = 1,
     /// Discovered on the Local Discovery.
-    LocalDiscovery,
+    LocalDiscovery = 2,
     /// Discovered on the DHT.
-    Dht,
+    Dht = 3,
     /// Discovered on the Peer Exchange.
-    PeerExchange,
+    PeerExchange = 4,
 }
 
 impl fmt::Display for PeerSource {

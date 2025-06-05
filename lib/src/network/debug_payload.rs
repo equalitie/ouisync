@@ -11,51 +11,25 @@ mod meaningful_data {
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
-    #[derive(Clone, Eq, PartialEq, Hash, Debug)]
-    pub(crate) struct PendingDebugRequest {
-        exchange_id: u64,
-    }
-
-    impl PendingDebugRequest {
-        pub(crate) fn start() -> Self {
-            let exchange_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            Self { exchange_id }
-        }
-
-        pub(crate) fn send(&self) -> DebugRequest {
-            DebugRequest {
-                exchange_id: self.exchange_id,
-            }
-        }
-    }
-
     #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
     pub(crate) struct DebugRequest {
         exchange_id: u64,
     }
 
     impl DebugRequest {
-        pub(crate) fn begin_reply(self) -> PendingDebugResponse {
-            PendingDebugResponse {
-                exchange_id: self.exchange_id,
-            }
+        pub(crate) fn start() -> Self {
+            let exchange_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            Self { exchange_id }
         }
-    }
 
-    #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
-    pub(crate) struct PendingDebugResponse {
-        exchange_id: u64,
-    }
-
-    impl PendingDebugResponse {
-        pub(crate) fn send(self) -> DebugResponse {
+        pub(crate) fn reply(&self) -> DebugResponse {
             DebugResponse {
                 exchange_id: self.exchange_id,
             }
         }
     }
 
-    #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
+    #[derive(Eq, PartialEq, Serialize, Deserialize, Debug)]
     pub(crate) struct DebugResponse {
         exchange_id: u64,
     }
@@ -66,8 +40,8 @@ mod meaningful_data {
             Self { exchange_id }
         }
 
-        pub(crate) fn follow_up(self) -> PendingDebugRequest {
-            PendingDebugRequest {
+        pub(crate) fn follow_up(&self) -> DebugRequest {
+            DebugRequest {
                 exchange_id: self.exchange_id,
             }
         }
@@ -78,38 +52,20 @@ mod meaningful_data {
 mod dummy_data {
     use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Eq, PartialEq, Hash, Debug)]
-    pub(crate) struct PendingDebugRequest {}
-
-    impl PendingDebugRequest {
-        pub(crate) fn start() -> Self {
-            Self {}
-        }
-
-        pub(crate) fn send(&self) -> DebugRequest {
-            DebugRequest {}
-        }
-    }
-
     #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
     pub(crate) struct DebugRequest {}
 
     impl DebugRequest {
-        pub(crate) fn begin_reply(self) -> PendingDebugResponse {
-            PendingDebugResponse {}
+        pub(crate) fn start() -> Self {
+            Self {}
         }
-    }
 
-    #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
-    pub(crate) struct PendingDebugResponse {}
-
-    impl PendingDebugResponse {
-        pub(crate) fn send(self) -> DebugResponse {
+        pub(crate) fn reply(&self) -> DebugResponse {
             DebugResponse {}
         }
     }
 
-    #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
+    #[derive(Eq, PartialEq, Serialize, Deserialize, Debug)]
     pub(crate) struct DebugResponse {}
 
     impl DebugResponse {
@@ -117,8 +73,8 @@ mod dummy_data {
             Self {}
         }
 
-        pub(crate) fn follow_up(self) -> PendingDebugRequest {
-            PendingDebugRequest {}
+        pub(crate) fn follow_up(&self) -> DebugRequest {
+            DebugRequest {}
         }
     }
 }

@@ -8,32 +8,35 @@ use tracing_subscriber::{
     registry::LookupSpan,
 };
 
-#[derive(Default)]
 pub struct Formatter<T> {
-    timer: T,
+    timer: Option<T>,
+    level: bool,
+}
+
+impl Default for Formatter<()> {
+    fn default() -> Self {
+        Self {
+            timer: None,
+            level: true,
+        }
+    }
 }
 
 impl<T> Formatter<T>
 where
     T: FormatTime,
 {
-    fn format_timestamp(&self, writer: &mut Writer<'_>) -> FmtResult {
-        if writer.has_ansi_escapes() {
-            let style = Style::new().dimmed();
-            write!(writer, "{}", style.prefix())?;
+    pub fn with_timer<U>(self, timer: U) -> Formatter<U> {
+        Formatter {
+            timer: Some(timer),
+            level: self.level,
+        }
+    }
 
-            if self.timer.format_time(writer).is_err() {
-                writer.write_str("<unknown time>")?;
-            }
-
-            write!(writer, "{} ", style.suffix())?;
-
-            Ok(())
-        } else {
-            if self.timer.format_time(writer).is_err() {
-                writer.write_str("<unknown time>")?;
-            }
-            writer.write_char(' ')
+    pub fn with_level(self, enabled: bool) -> Self {
+        Self {
+            level: enabled,
+            ..self
         }
     }
 }
@@ -61,10 +64,14 @@ where
         const SEPARATOR: &str = " :: ";
 
         // Timestamp
-        self.format_timestamp(&mut writer)?;
+        if let Some(timer) = &self.timer {
+            format_timestamp(timer, &mut writer)?;
+        }
 
         // Level
-        format_level(*metadata.level(), &mut writer)?;
+        if self.level {
+            format_level(*metadata.level(), &mut writer)?;
+        }
 
         // Fields
         ctx.format_fields(writer.by_ref(), event)?;
@@ -140,5 +147,28 @@ fn format_level(level: Level, writer: &mut Writer<'_>) -> FmtResult {
         Level::INFO => write!(writer, "{}  ", style.paint("INFO")),
         Level::WARN => write!(writer, "{}  ", style.paint("WARN")),
         Level::ERROR => write!(writer, "{} ", style.paint("ERROR")),
+    }
+}
+
+fn format_timestamp<T>(timer: &T, writer: &mut Writer<'_>) -> FmtResult
+where
+    T: FormatTime,
+{
+    if writer.has_ansi_escapes() {
+        let style = Style::new().dimmed();
+        write!(writer, "{}", style.prefix())?;
+
+        if timer.format_time(writer).is_err() {
+            writer.write_str("<unknown time>")?;
+        }
+
+        write!(writer, "{} ", style.suffix())?;
+
+        Ok(())
+    } else {
+        if timer.format_time(writer).is_err() {
+            writer.write_str("<unknown time>")?;
+        }
+        writer.write_char(' ')
     }
 }

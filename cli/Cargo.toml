@@ -20,35 +20,38 @@ bytes = "1.4.0"
 camino = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-dirs = "4.0.0"
+dirs = "5.0.1"
 futures-util = { workspace = true }
-hyper = { version = "0.14.27", features = ["server", "http1", "http2"] }
-hyper-rustls = { version = "0.24.1", default-features = false, features = ["acceptor"] }
-interprocess = { version = "1.2.1", features = ["tokio_support"] }
-maxminddb = "0.23.0"
+hyper = { version = "1.4.1", features = ["server", "http1"] }
+interprocess = { version = "2.2.1", features = ["tokio"] }
+maxminddb = "0.24.0"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
-ouisync-bridge = { path = "../bridge" }
-ouisync-lib = { package = "ouisync", path = "../lib" }
+ouisync = { path = "../lib" }
+ouisync-service = { path = "../service" }
 ouisync-vfs = { path = "../vfs" }
 rand = { workspace = true }
-rustls = { workspace = true }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 state_monitor = { path = "../state_monitor" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["signal", "io-std"] }
+tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "compat"] }
 tracing = { workspace = true }
-walkdir = "2.3.3"
+walkdir = "2.5.0"
+
+# HACK: This is only a transitive dependency of `interprocess` but the version they depend on has a
+# bug. Forcing the fixed version here.
+# TODO: Remove this when we bump `interprocess`.
+async-channel = "2.3.1"
 
 [dev-dependencies]
-anyhow = "1.0.57"
+anyhow = { workspace = true }
 assert_matches = { workspace = true }
 backoff = "0.4.0"
 hex = "0.4.3"
-once_cell = { workspace = true }
 rcgen = { workspace = true, features = ["pem"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

@@ -1,6 +1,6 @@
 use super::Error;
 use crate::{
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     crypto::Hash,
     db,
     protocol::{BlockId, RootNode, SingleBlockPresence},
@@ -10,6 +10,7 @@ use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{
     cmp::Ordering,
+    collections::hash_map::Entry,
     sync::{Arc, Mutex},
 };
 use tokio::sync::Notify;
@@ -232,11 +233,7 @@ mod tests {
         // ... make some of them as present.
         for node in snapshot.leaf_nodes().take(num_present) {
             let block = snapshot.blocks().get(&node.block_id).unwrap();
-            writer
-                .client_writer()
-                .save_block(block, None)
-                .await
-                .unwrap();
+            writer.client_writer().save_block(block).await.unwrap();
         }
 
         writer.commit().await;
@@ -267,8 +264,7 @@ mod tests {
 
         // Now we get cache hits.
         for (leaf_node, expected_block_presence) in snapshot.leaf_nodes().zip(
-            iter::repeat(SingleBlockPresence::Present)
-                .take(num_present)
+            iter::repeat_n(SingleBlockPresence::Present, num_present)
                 .chain(iter::repeat(SingleBlockPresence::Missing)),
         ) {
             assert_eq!(
@@ -278,7 +274,7 @@ mod tests {
         }
 
         // Looking up a non-existing locator fails.
-        let invalid_locator: Hash = rng.gen();
+        let invalid_locator: Hash = rng.r#gen();
         assert_eq!(
             cache.lookup(snapshot.root_hash(), &invalid_locator),
             Err(LookupError::NotFound)

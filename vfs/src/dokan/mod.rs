@@ -826,10 +826,6 @@ impl VirtualFilesystem {
             return Ok(());
         }
 
-        let (src_dir, src_name) = path::decompose(&src_path).ok_or(STATUS_INVALID_PARAMETER)?;
-
-        let (dst_dir, dst_name) = path::decompose(&dst_path).ok_or(STATUS_INVALID_PARAMETER)?;
-
         // Lock this entry in `self.shared` so that no other thread can open/create the `File`
         // while we're renaming it.
         let mut shared_lock = handle.entry.shared().write().await;
@@ -855,9 +851,7 @@ impl VirtualFilesystem {
             }
         }
 
-        self.repo
-            .move_entry(&src_dir, src_name, &dst_dir, dst_name)
-            .await?;
+        self.repo.move_entry(&src_path, &dst_path).await?;
 
         Ok(())
     }

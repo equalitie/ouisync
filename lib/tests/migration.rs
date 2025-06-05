@@ -5,7 +5,6 @@ mod common;
 
 use common::{dump, sync_watch};
 use futures_util::future;
-use once_cell::sync::Lazy;
 use ouisync::{
     Access, AccessMode, AccessSecrets, Network, PeerAddr, Repository, RepositoryParams,
     DATA_VERSION, DIRECTORY_VERSION, SCHEMA_VERSION,
@@ -24,6 +23,7 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     str,
+    sync::LazyLock,
 };
 use tempfile::TempDir;
 use tokio::{fs, process::Command};
@@ -32,7 +32,7 @@ use tracing::{instrument, Instrument};
 const DB_EXTENSION: &str = "db";
 const DB_DUMP_EXTENSION: &str = "db.dump";
 
-static DUMP: Lazy<dump::Directory> = Lazy::new(|| {
+static DUMP: LazyLock<dump::Directory> = LazyLock::new(|| {
     dump::Directory::new()
         .add("empty.txt", vec![])
         .add("small.txt", b"foo".to_vec())
@@ -157,8 +157,8 @@ async fn test_sync(work_dir: &Path, input_dump: &Path) {
     .instrument(info_span!("b"))
     .await;
 
-    let _reg_a = network_a.register(repo_a.handle()).await;
-    let _reg_b = network_b.register(repo_b.handle()).await;
+    let _reg_a = network_a.register(repo_a.handle());
+    let _reg_b = network_b.register(repo_b.handle());
 
     network_b.add_user_provided_peer(&network_a.listener_local_addrs().into_iter().next().unwrap());
 
@@ -283,5 +283,5 @@ fn seeded_random<T>(seed: u64) -> T
 where
     Standard: Distribution<T>,
 {
-    StdRng::seed_from_u64(seed).gen()
+    StdRng::seed_from_u64(seed).r#gen()
 }

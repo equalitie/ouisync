@@ -22,11 +22,7 @@ struct SingleRepoVFS {
 
 impl SingleRepoVFS {
     fn enter_span(&self) -> Option<span::Entered<'_>> {
-        if let Some(span) = &self.span {
-            Some(span.enter())
-        } else {
-            None
-        }
+        self.span.as_ref().map(|span| span.enter())
     }
 }
 

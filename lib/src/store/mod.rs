@@ -25,7 +25,7 @@ pub use migrations::DATA_VERSION;
 pub(crate) use {
     block_ids::BlockIdsPage,
     changeset::Changeset,
-    client::{ClientReader, ClientWriter},
+    client::{ClientReader, ClientReaderMut, ClientWriter},
 };
 
 #[cfg(test)]
@@ -53,7 +53,6 @@ use crate::{
 use futures_util::{Stream, TryStreamExt};
 use std::{
     borrow::Cow,
-    future::Future,
     ops::{Deref, DerefMut},
     path::Path,
     sync::{Arc, RwLock},
