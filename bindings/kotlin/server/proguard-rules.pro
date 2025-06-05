@@ -3,5 +3,7 @@
 -keep class com.sun.jna.* { *; }
 -keepclassmembers class * extends com.sun.jna.* { public *; }
 
-# Prevent optimizing out `Bindings` (for some reason the above rules are not enough).
+# These additional rules seem to be necessary to prevent runtime exceptions
+-dontwarn sun.nio.ch.DirectBuffer
 -keep class org.equalitie.ouisync.kotlin.server.Bindings { *; }
+-keep class org.msgpack.core.buffer.MessageBufferU { *; }
