@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.0...develop)
 
-## [v0.9.0](https://github.com/equalitie/ouisync/compare/v0.8.11...v0.9.0)
+## [v0.9.0](https://github.com/equalitie/ouisync/compare/v0.8.11...v0.9.0) - 2025-06-05
 
 - Ongoing work towards improving iOS and macOS support.
 - Implement `ouisync-service` to exposes the Ouisync API over a simple IPC protocol used as a bridge
