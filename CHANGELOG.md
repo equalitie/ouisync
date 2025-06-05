@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [v0.9.0](https://github.com/equalitie/ouisync/compare/v0.8.11...v0.9.0) - 2025-06-05
 
+### Breaking changes
+
+- This release contains breaking changes in the syncing protocol and so apps on this version won't
+  be able to sync with those on the previous version.
+- Changed syntax of some of the CLI commands.
+- (Temporary) Using the CLI app now requires running Ouisync server. This limitation will be lifted
+  in the next version.
+
+### Other changes
+
 - Ongoing work towards improving iOS and macOS support.
 - Implement `ouisync-service` to exposes the Ouisync API over a simple IPC protocol used as a bridge
   between the Ouisync library and various language bindings. Also implement automatic generation of
