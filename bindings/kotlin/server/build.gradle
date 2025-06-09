@@ -50,6 +50,9 @@ cargo {
     module = "$rootDir/../.."
     libname = 'ouisync_service'
 
+    // https://stackoverflow.com/questions/66054763/build-rust-on-android
+    pythonCommand = "python3"
+
     // Read targets from the 'rust-targets' project property that can be set in `gradle.properties`
     // or using the `-P` command line option when invoking gradle. Example: `gradle
     // assemble -Prust-targets=x86_64`
