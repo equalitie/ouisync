@@ -46,6 +46,7 @@ pub enum NetworkEvent {
 pub struct NetworkEventReceiver {
     protocol_versions: watch::Receiver<ProtocolVersions>,
     connections: watch::Receiver<HashMap<ConnectionKey, ConnectionData>>,
+    highest_seen: Version,
 }
 
 impl NetworkEventReceiver {
@@ -56,12 +57,16 @@ impl NetworkEventReceiver {
         Self {
             protocol_versions,
             connections,
+            highest_seen: Version::ZERO,
         }
     }
 
     pub async fn recv(&mut self) -> Option<NetworkEvent> {
         select! {
-            Ok(_) = self.protocol_versions.wait_for(|versions| versions.highest_seen > versions.our) => {
+            Ok(versions) = self.protocol_versions.wait_for(|versions| {
+                    versions.highest_seen > self.highest_seen && versions.highest_seen > versions.our
+            }) => {
+                self.highest_seen = versions.highest_seen;
                 Some(NetworkEvent::ProtocolVersionMismatch)
             }
             Ok(_) = self.connections.changed() => Some(NetworkEvent::PeerSetChange),
