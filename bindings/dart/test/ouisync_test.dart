@@ -16,10 +16,7 @@ void main() {
     final configPath = '${temp.path}/config';
 
     server = Server.create(configPath: configPath);
-    server.initLog(callback: (level, message) {
-      // ignore: avoid_print
-      print('${level.name.toUpperCase()} $message');
-    });
+    await server.initLog();
     await server.start();
 
     session = await Session.create(

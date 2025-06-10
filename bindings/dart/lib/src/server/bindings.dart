@@ -7,9 +7,6 @@ import 'package:path/path.dart';
 /// Callback for `start_service` and `stop_service`.
 typedef StatusCallback = Void Function(Pointer<Void>, Uint16);
 
-/// Callback for `init_log`.
-typedef LogCallback = Void Function(Uint8, Pointer<Uint8>, Uint64, Uint64);
-
 ///
 typedef StartService = Pointer<Void> Function(
   Pointer<Char>,
@@ -31,20 +28,8 @@ typedef StopService = void Function(
 typedef _StopServiceC = Void Function(
     Pointer<Void>, Pointer<NativeFunction<StatusCallback>>, Pointer<Void>);
 
-typedef InitLog = int Function(
-  int,
-  Pointer<Char>,
-  Pointer<NativeFunction<LogCallback>>,
-);
-
-typedef _InitLogC = Uint16 Function(
-  Uint8,
-  Pointer<Char>,
-  Pointer<NativeFunction<LogCallback>>,
-);
-
-typedef ReleaseLogMessage = void Function(Pointer<Uint8>, int, int);
-typedef _ReleaseLogMessageC = Void Function(Pointer<Uint8>, Uint64, Uint64);
+typedef InitLog = void Function();
+typedef _InitLogC = Void Function();
 
 class Bindings {
   Bindings(DynamicLibrary library)
@@ -52,10 +37,7 @@ class Bindings {
             .lookupFunction<_StartServiceC, StartService>('start_service'),
         stopService =
             library.lookupFunction<_StopServiceC, StopService>('stop_service'),
-        initLog = library.lookupFunction<_InitLogC, InitLog>('init_log'),
-        releaseLogMessage =
-            library.lookupFunction<_ReleaseLogMessageC, ReleaseLogMessage>(
-                'release_log_message');
+        initLog = library.lookupFunction<_InitLogC, InitLog>('init_log');
 
   /// Bidings instance that uses the default library.
   static Bindings instance = Bindings(_defaultLib());
@@ -63,7 +45,6 @@ class Bindings {
   final StartService startService;
   final StopService stopService;
   final InitLog initLog;
-  final ReleaseLogMessage releaseLogMessage;
 }
 
 DynamicLibrary _defaultLib() {

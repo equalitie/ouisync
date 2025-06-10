@@ -4,8 +4,8 @@ use anyhow::{bail, format_err, Context as _, Error, Result};
 use heck::AsPascalCase;
 use syn::{
     parenthesized, punctuated::Punctuated, Attribute, BinOp, Expr, ExprBinary, FnArg,
-    GenericArgument, ImplItem, ItemEnum, ItemStruct, Lit, Meta, Pat, PathArguments, ReturnType,
-    Signature, Token,
+    GenericArgument, ImplItem, ItemEnum, ItemMod, ItemStruct, Lit, Meta, Pat, PathArguments,
+    ReturnType, Signature, Token,
 };
 
 use crate::{
@@ -66,7 +66,10 @@ fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()
             }
             syn::Item::Mod(item) => match item.content {
                 Some((_, items)) => parse_mod(ctx, path, items)?,
-                None => parse_mod_in_file(ctx, path, &item.ident.to_string())?,
+                None => {
+                    let name = parse_mod_name(&item);
+                    parse_mod_in_file(ctx, path, &name)?
+                }
             },
             syn::Item::Impl(item) => {
                 parse_impl(ctx, item.items).with_context(|| {
@@ -82,6 +85,22 @@ fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()
     }
 
     Ok(())
+}
+
+fn parse_mod_name(item: &ItemMod) -> String {
+    item.attrs
+        .iter()
+        .find_map(|attr| match &attr.meta {
+            Meta::NameValue(meta) if meta.path.is_ident("path") => match &meta.value {
+                Expr::Lit(expr) => match &expr.lit {
+                    Lit::Str(lit) => Some(lit.value()),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap_or_else(|| item.ident.to_string())
 }
 
 fn parse_mod_in_file(ctx: &mut Context, parent_path: &Path, name: &str) -> Result<()> {

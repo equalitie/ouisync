@@ -25,7 +25,7 @@ class SessionTest {
         tempDir = File(createTempDirectory().toString())
         val configDir = "$tempDir/config"
 
-        initLog(stdout = true)
+        initLog()
 
         server = Server.start(configDir)
         session = Session.create(configDir)
