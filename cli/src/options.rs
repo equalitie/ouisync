@@ -179,7 +179,11 @@ pub(crate) enum ClientCommand {
         name: Option<String>,
     },
     /// Get or set the mount directory
-    MountDir { path: Option<PathBuf> },
+    MountDir {
+        /// Path to the mount directory. Mounted repositories appear as subdirectories of this
+        /// directory. If omitted, prints the current mount directory, if specified.
+        path: Option<PathBuf>,
+    },
     /// Open a repository at the given path
     Open {
         path: PathBuf,

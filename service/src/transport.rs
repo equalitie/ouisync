@@ -15,8 +15,11 @@ use self::{
     local::{AcceptedLocalConnection, LocalServerReader, LocalServerWriter},
     remote::{AcceptedRemoteConnection, RemoteServerReader, RemoteServerWriter},
 };
-use crate::protocol::{
-    DecodeError, EncodeError, Message, MessageId, ProtocolError, Request, ResponseResult,
+use crate::{
+    config_store::ConfigError,
+    protocol::{
+        DecodeError, EncodeError, Message, MessageId, ProtocolError, Request, ResponseResult,
+    },
 };
 
 pub(crate) enum AcceptedConnection {
@@ -135,13 +138,13 @@ pub enum ClientError {
     #[error("request argument is invalid")]
     InvalidArgument,
     #[error("server endpoint is invalid")]
-    InvalidEndpoint,
+    InvalidEndpoint(#[source] ConfigError),
     #[error("I/O error")]
     Io(#[from] io::Error),
     #[error("failed to receive response")]
     Read(#[from] ReadError),
-    #[error("server responded with error")]
-    Response(#[source] ProtocolError),
+    #[error(transparent)]
+    Response(ProtocolError),
     #[error("unexpected response")]
     UnexpectedResponse,
     #[error("failed to send request")]

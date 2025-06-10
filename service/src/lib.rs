@@ -209,13 +209,13 @@ pub async fn local_control_endpoint(config_path: &Path) -> Result<(u16, AuthKey)
         .entry(LOCAL_CONTROL_PORT_KEY)
         .get()
         .await
-        .map_err(|_| ClientError::InvalidEndpoint)?;
+        .map_err(ClientError::InvalidEndpoint)?;
 
     let auth_key = store
         .entry(LOCAL_CONTROL_AUTH_KEY_KEY)
         .get()
         .await
-        .map_err(|_| ClientError::InvalidEndpoint)?;
+        .map_err(ClientError::InvalidEndpoint)?;
 
     Ok((port, auth_key))
 }

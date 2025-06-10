@@ -28,8 +28,6 @@ pub enum Error {
     Ambiguous,
     #[error("resource is busy")]
     Busy,
-    #[error("operation not supported")]
-    OperationNotSupported,
     #[error("operation was interrupted")]
     OperationInterrupted,
     #[error("permission denied")]
@@ -40,6 +38,8 @@ pub enum Error {
     Store(#[from] ouisync::StoreError),
     #[error("store dir not specified")]
     StoreDirUnspecified,
+    #[error("mount dir not specified")]
+    MountDirUnspecified,
     #[error("TLS certificates not found")]
     TlsCertificatesNotFound,
     #[error("TLS certificates failed to load")]
