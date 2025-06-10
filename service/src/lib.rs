@@ -42,15 +42,14 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 use transport::{
-    local::{AuthKey, LocalServer},
+    local::{AuthKey, LocalEndpoint, LocalServer},
     AcceptedConnection, ClientError,
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 // Don't use comments here so the file can be parsed as json.
-const LOCAL_CONTROL_PORT_KEY: ConfigKey<u16> = ConfigKey::new("local_control_port", "");
-const LOCAL_CONTROL_AUTH_KEY_KEY: ConfigKey<AuthKey> = ConfigKey::new("local_control_auth_key", "");
+const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpoint", "");
 
 pub struct Service {
     state: Arc<State>,
@@ -63,25 +62,26 @@ impl Service {
     pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
 
-        let local_port_entry = config.entry(LOCAL_CONTROL_PORT_KEY);
-        let local_port = match local_port_entry.get().await {
-            Ok(port) => port,
-            Err(ConfigError::NotFound) => 0,
+        migrate_config(&config).await;
+
+        let local_endpoint_entry = config.entry(LOCAL_ENDPOINT_KEY);
+        let local_endpoint = match local_endpoint_entry.get().await {
+            Ok(value) => value,
+            Err(ConfigError::NotFound) => LocalEndpoint {
+                port: 0,
+                auth_key: AuthKey::random(),
+            },
             Err(error) => return Err(error.into()),
         };
 
-        let local_auth_key = fetch_local_control_auth_key(&config).await?;
-
-        let local_server = LocalServer::bind(local_port, local_auth_key)
+        let local_server = LocalServer::bind(local_endpoint)
             .await
             .map_err(|error| match error.kind() {
                 io::ErrorKind::AddrInUse => Error::ServiceAlreadyRunning,
                 _ => Error::Bind(error),
             })?;
 
-        if local_port == 0 {
-            local_port_entry.set(&local_server.port()).await?;
-        }
+        local_endpoint_entry.set(local_server.endpoint()).await?;
 
         let state = State::init(config).await?;
         let state = Arc::new(state);
@@ -134,12 +134,8 @@ impl Service {
         .await;
     }
 
-    pub fn local_port(&self) -> u16 {
-        self.local_server.port()
-    }
-
-    pub fn local_auth_key(&self) -> &AuthKey {
-        self.local_server.auth_key()
+    pub fn local_endpoint(&self) -> &LocalEndpoint {
+        self.local_server.endpoint()
     }
 
     pub fn store_dir(&self) -> Option<PathBuf> {
@@ -202,36 +198,26 @@ impl Service {
 
 /// Returns the loopback TCP port and authentication key for establishing local connection to the
 /// service.
-pub async fn local_control_endpoint(config_path: &Path) -> Result<(u16, AuthKey), ClientError> {
-    let store = ConfigStore::new(config_path);
-
-    let port = store
-        .entry(LOCAL_CONTROL_PORT_KEY)
+pub async fn local_endpoint(config_path: &Path) -> Result<LocalEndpoint, ClientError> {
+    ConfigStore::new(config_path)
+        .entry(LOCAL_ENDPOINT_KEY)
         .get()
         .await
-        .map_err(ClientError::InvalidEndpoint)?;
-
-    let auth_key = store
-        .entry(LOCAL_CONTROL_AUTH_KEY_KEY)
-        .get()
-        .await
-        .map_err(ClientError::InvalidEndpoint)?;
-
-    Ok((port, auth_key))
+        .map_err(ClientError::InvalidEndpoint)
 }
 
-async fn fetch_local_control_auth_key(config: &ConfigStore) -> Result<AuthKey, ConfigError> {
-    let entry = config.entry(LOCAL_CONTROL_AUTH_KEY_KEY);
-
-    match entry.get().await {
-        Ok(key) => Ok(key),
-        Err(ConfigError::NotFound) => {
-            let key = AuthKey::random();
-            entry.set(&key).await?;
-            Ok(key)
-        }
-        Err(error) => Err(error),
-    }
+async fn migrate_config(config: &ConfigStore) {
+    // Delete obsolete entries
+    config
+        .entry(ConfigKey::<()>::new("local_control_port", ""))
+        .remove()
+        .await
+        .ok();
+    config
+        .entry(ConfigKey::<()>::new("local_control_auth_key", ""))
+        .remove()
+        .await
+        .ok();
 }
 
 #[cfg(test)]

@@ -41,11 +41,8 @@ class Client {
     Duration wait = minWait;
     Exception? lastException;
 
-    final portFile = File('$configPath/local_control_port.conf');
-    final authKeyFile = File('$configPath/local_control_auth_key.conf');
-
-    final port = json.decode(await portFile.readAsString()) as int;
-    final authKey = HEX.decode(json.decode(await authKeyFile.readAsString()));
+    final (port, authKey) =
+        await _readLocalEndpoint('$configPath/local_endpoint.conf');
 
     while (true) {
       if (timeout != null) {
@@ -156,6 +153,17 @@ class Client {
 }
 
 _minDuration(Duration a, Duration b) => (a < b) ? a : b;
+
+Future<(int, List<int>)> _readLocalEndpoint(String path) async {
+  final file = File(path);
+  final content = await file.readAsString();
+  final raw = json.decode(content) as Map<String, Object?>;
+
+  final port = raw['port'] as int;
+  final authKey = HEX.decode(raw['auth_key'] as String);
+
+  return (port, authKey);
+}
 
 Future<void> _authenticate(
   Stream<Uint8List> stream,
