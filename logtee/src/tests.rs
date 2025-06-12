@@ -15,47 +15,49 @@ use super::*;
 
 #[test]
 fn sanity_check() {
-    let mut test = Test::new(false);
+    let mut env = Env::new(false);
 
-    let logtee = Logtee::new(test.log_file_path(), RotateOptions::default());
+    let logtee = Logtee::new(env.log_file_path(), RotateOptions::default());
 
     tracing::debug!("first line");
     tracing::info!("second line");
     tracing::warn!("third line");
 
-    test.check_log_file_line(Level::DEBUG, "first line");
-    test.check_log_file_line(Level::INFO, "second line");
-    test.check_log_file_line(Level::WARN, "third line");
+    env.expect_log_file_line(Level::DEBUG, "first line");
+    env.expect_log_file_line(Level::INFO, "second line");
+    env.expect_log_file_line(Level::WARN, "third line");
 
     drop(logtee);
+    thread::sleep(Duration::from_millis(1));
 
     tracing::info!("this line is not captured");
 
-    let _logtee = Logtee::new(test.log_file_path(), RotateOptions::default());
+    let _logtee = Logtee::new(env.log_file_path(), RotateOptions::default());
 
     tracing::info!("last line");
 
-    test.check_log_file_line(Level::INFO, "last line");
+    env.expect_log_file_line(Level::INFO, "last line");
 }
 
 #[test]
 fn stip_ansi() {
-    let mut test = Test::new(true);
-    let _logtee = Logtee::new(test.log_file_path(), RotateOptions::default());
+    let mut env = Env::new(true);
+    let _logtee = Logtee::new(env.log_file_path(), RotateOptions::default());
 
     tracing::debug!("colored line");
 
-    test.check_log_file_line(Level::DEBUG, "colored line");
+    env.expect_log_file_line(Level::DEBUG, "colored line");
 }
 
-struct Test {
+// Test environment. Create one at the begining of each test.
+struct Env {
     _mutex: MutexGuard<'static, ()>,
     _tracing: DefaultGuard,
     log_file: Tail,
     _temp_dir: TempDir,
 }
 
-impl Test {
+impl Env {
     fn new(ansi: bool) -> Self {
         // Allow only one test to run at a time. This is because these tests use a global resource
         // and we don't want them to interfere with each other.
@@ -77,14 +79,14 @@ impl Test {
     }
 
     #[track_caller]
-    fn check_log_file_line(&mut self, level: Level, message: &str) {
+    fn expect_log_file_line(&mut self, level: Level, message: &str) {
         let line = self.log_file.next().unwrap().unwrap();
-        check_log_message(&line, level, message);
+        assert_log_message(&line, level, message);
     }
 }
 
 #[track_caller]
-fn check_log_message(actual: &str, expected_level: Level, expected_message: &str) {
+fn assert_log_message(actual: &str, expected_level: Level, expected_message: &str) {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[track_caller]
     fn check(actual: &str, expected_level: Level, expected_message: &str) {
@@ -98,7 +100,7 @@ fn check_log_message(actual: &str, expected_level: Level, expected_message: &str
         use std::process;
 
         let regex = Regex::new(
-            r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\S)/(\S+)\s*\((\d+)\):\s*(.*)",
+            r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \+0000) (\S)/(\S+)\s*\((\d+)\):\s*(.*)",
         )
         .unwrap();
 
@@ -144,7 +146,7 @@ fn init_log(ansi: bool) -> DefaultGuard {
         .set_default()
 }
 
-// Iterator that tails a file (like `tail -F FILE`).
+// Iterator that tails a file. Like `tail -F FILE` but always starts at the beginning of the file.
 struct Tail {
     path: PathBuf,
     file: Option<BufReader<File>>,

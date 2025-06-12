@@ -5,11 +5,10 @@ use std::{
     io::{self, Read, Write},
     os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
     panic,
-    path::Path,
     thread::{self, JoinHandle},
 };
 
-use super::{create_file, RotateOptions};
+use file_rotate::{suffix::AppendCount, FileRotate};
 
 pub(super) struct Inner {
     orig: OwnedFd,
@@ -17,8 +16,8 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    pub fn new(path: &Path, options: RotateOptions) -> io::Result<Self> {
-        let mut file = strip_ansi_escapes::Writer::new(create_file(path, options));
+    pub fn new(file: FileRotate<AppendCount>) -> io::Result<Self> {
+        let mut file = strip_ansi_escapes::Writer::new(file);
 
         // Create anonymous pipe and redirect stdout to the write end of it. Also keep the
         // original (not redirected) stdout around for later.

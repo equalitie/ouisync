@@ -17,7 +17,7 @@ strip-ansi-escapes = "0.2.1"
 libc = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-regex = "1.11.1"
+chrono             = { workspace = true }
 
 [dev-dependencies]
 tempfile           = { workspace = true }
@@ -26,6 +26,7 @@ tracing-subscriber = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
 paranoid-android   = "0.2.2"
+regex              = "1.11.1"
 
 [lints]
 workspace = true

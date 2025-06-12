@@ -1,16 +1,14 @@
 // Implementation based on piping logcat output to the log file.
 
 use std::{
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, PipeReader, Write},
     panic,
-    path::Path,
     process::{self, Child, Command},
     thread::{self, JoinHandle},
 };
 
-use regex::bytes::Regex;
-
-use super::{create_file, RotateOptions};
+use chrono::{DateTime, Utc};
+use file_rotate::{suffix::AppendCount, FileRotate};
 
 pub(super) struct Inner {
     process: Child,
@@ -18,23 +16,14 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    pub fn new(path: &Path, options: RotateOptions) -> io::Result<Self> {
-        let mut file = create_file(path, options);
+    pub fn new(mut file: FileRotate<AppendCount>) -> io::Result<Self> {
         let (pipe_reader, pipe_writer) = io::pipe()?;
-
-        let header_regex = Regex::new(r"^\-+\s+beginning of (main|system|crash)").unwrap();
 
         let handle = thread::spawn(move || {
             let mut pipe_reader = BufReader::new(pipe_reader);
 
-            // Skip the buffer header
-            let mut line = Vec::new();
-            pipe_reader.read_until(b'\n', &mut line)?;
-
-            if !header_regex.is_match(&line) {
-                file.write_all(&line)?;
-            }
-
+            let line = skip_irrelevant_lines(&mut pipe_reader)?;
+            file.write_all(line.as_bytes())?;
             drop(line);
 
             loop {
@@ -55,6 +44,7 @@ impl Inner {
             .arg(process::id().to_string())
             .arg("-vtime")
             .arg("-vyear")
+            .arg("-vUTC")
             .stdout(pipe_writer)
             .spawn()?;
 
@@ -68,6 +58,27 @@ impl Inner {
         match self.handle.join() {
             Ok(result) => result,
             Err(payload) => panic::resume_unwind(payload),
+        }
+    }
+}
+
+// Skip lines that don't start with a timestamp (e.g., a buffer header) or whose timestamp is in the
+// past. Returns the first relevant line.
+fn skip_irrelevant_lines(reader: &mut BufReader<PipeReader>) -> io::Result<String> {
+    let now = Utc::now();
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        reader.read_line(&mut line)?;
+
+        if line.is_empty() {
+            return Ok(line);
+        }
+
+        match DateTime::parse_and_remainder(&line, "%Y-%m-%d %H:%M:%S%.f %z") {
+            Ok((timestamp, _)) if timestamp >= now => return Ok(line),
+            Ok(_) | Err(_) => continue,
         }
     }
 }

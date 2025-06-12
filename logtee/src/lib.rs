@@ -6,6 +6,8 @@ mod inner;
 #[path = "android.rs"]
 mod inner;
 
+// TODO: ios and macos
+
 #[cfg(test)]
 mod tests;
 
@@ -14,14 +16,24 @@ use std::{io, path::Path};
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use inner::Inner;
 
+/// Utility to capture the log messages produced by the running program and write them to the
+/// specified file.
 pub struct Logtee {
     inner: Option<Inner>,
 }
 
 impl Logtee {
     pub fn new(path: impl AsRef<Path>, options: RotateOptions) -> io::Result<Self> {
+        let file = FileRotate::new(
+            path,
+            AppendCount::new(options.max_files),
+            ContentLimit::Bytes(options.max_file_size),
+            Compression::None,
+            None,
+        );
+
         Ok(Self {
-            inner: Some(Inner::new(path.as_ref(), options)?),
+            inner: Some(Inner::new(file)?),
         })
     }
 
@@ -54,14 +66,4 @@ impl Default for RotateOptions {
             max_files: 1,
         }
     }
-}
-
-pub(crate) fn create_file(path: &Path, options: RotateOptions) -> FileRotate<AppendCount> {
-    FileRotate::new(
-        path,
-        AppendCount::new(options.max_files),
-        ContentLimit::Bytes(options.max_file_size),
-        Compression::None,
-        None,
-    )
 }
