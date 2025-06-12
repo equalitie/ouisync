@@ -16,6 +16,9 @@ strip-ansi-escapes = "0.2.1"
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 libc = { workspace = true }
 
+[target.'cfg(target_os = "android")'.dependencies]
+regex = "1.11.1"
+
 [dev-dependencies]
 tempfile           = { workspace = true }
 tracing            = { workspace = true }

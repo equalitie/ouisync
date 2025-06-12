@@ -2346,6 +2346,7 @@ dependencies = [
  "file-rotate",
  "libc",
  "paranoid-android",
+ "regex",
  "strip-ansi-escapes",
  "tempfile",
  "tracing",

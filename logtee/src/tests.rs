@@ -8,7 +8,7 @@ use std::{
 };
 
 use tempfile::TempDir;
-use tracing::subscriber::DefaultGuard;
+use tracing::{subscriber::DefaultGuard, Level};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use super::*;
@@ -23,11 +23,9 @@ fn sanity_check() {
     tracing::info!("second line");
     tracing::warn!("third line");
 
-    test.check_log_file_content(&[
-        "DEBUG first line\n",
-        " INFO second line\n",
-        " WARN third line\n",
-    ]);
+    test.check_log_file_line(Level::DEBUG, "first line");
+    test.check_log_file_line(Level::INFO, "second line");
+    test.check_log_file_line(Level::WARN, "third line");
 
     drop(logtee);
 
@@ -37,7 +35,7 @@ fn sanity_check() {
 
     tracing::info!("last line");
 
-    test.check_log_file_content(&[" INFO last line\n"]);
+    test.check_log_file_line(Level::INFO, "last line");
 }
 
 #[test]
@@ -47,7 +45,7 @@ fn stip_ansi() {
 
     tracing::debug!("colored line");
 
-    test.check_log_file_content(&["DEBUG colored line\n"]);
+    test.check_log_file_line(Level::DEBUG, "colored line");
 }
 
 struct Test {
@@ -67,7 +65,7 @@ impl Test {
         let log_file = Tail::new(temp_dir.path().join("test.log"));
 
         Self {
-            _mutex: MUTEX.lock().unwrap(),
+            _mutex: MUTEX.lock().unwrap_or_else(|error| error.into_inner()),
             _tracing: init_log(ansi),
             log_file,
             _temp_dir: temp_dir,
@@ -79,11 +77,53 @@ impl Test {
     }
 
     #[track_caller]
-    fn check_log_file_content(&mut self, expected: &[&str]) {
-        for line in expected {
-            assert_eq!(self.log_file.next().transpose().unwrap().unwrap(), *line);
-        }
+    fn check_log_file_line(&mut self, level: Level, message: &str) {
+        let line = self.log_file.next().unwrap().unwrap();
+        check_log_message(&line, level, message);
     }
+}
+
+#[track_caller]
+fn check_log_message(actual: &str, expected_level: Level, expected_message: &str) {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[track_caller]
+    fn check(actual: &str, expected_level: Level, expected_message: &str) {
+        assert_eq!(actual, format!("{expected_level:>5} {expected_message}\n"));
+    }
+
+    #[cfg(target_os = "android")]
+    #[track_caller]
+    fn check(actual: &str, expected_level: Level, expected_message: &str) {
+        use regex::Regex;
+        use std::process;
+
+        let regex = Regex::new(
+            r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (\S)/(\S+)\s*\((\d+)\):\s*(.*)",
+        )
+        .unwrap();
+
+        let captures = regex.captures(actual).unwrap();
+        let (_, [_, actual_level, actual_tag, actual_pid, actual_message]) = captures.extract();
+
+        let expected_level = match expected_level {
+            Level::ERROR => "E",
+            Level::WARN => "W",
+            Level::INFO => "I",
+            Level::DEBUG => "D",
+            Level::TRACE => "V",
+        };
+
+        let actual = format!("{actual_level}/{actual_tag} ({actual_pid}): {actual_message}");
+        let expected = format!(
+            "{expected_level}/{} ({}): {expected_message}",
+            env!("CARGO_PKG_NAME"),
+            process::id()
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    check(actual, expected_level, expected_message);
 }
 
 fn init_log(ansi: bool) -> DefaultGuard {
