@@ -17,7 +17,7 @@ use super::*;
 fn sanity_check() {
     let mut env = Env::new(false);
 
-    let logtee = Logtee::new(env.log_file_path(), RotateOptions::default());
+    let logtee = Logtee::start(env.log_file_path(), RotateOptions::default()).unwrap();
 
     tracing::debug!("first line");
     tracing::info!("second line");
@@ -32,7 +32,7 @@ fn sanity_check() {
 
     tracing::info!("this line is not captured");
 
-    let _logtee = Logtee::new(env.log_file_path(), RotateOptions::default());
+    let _logtee = Logtee::start(env.log_file_path(), RotateOptions::default()).unwrap();
 
     tracing::info!("last line");
 
@@ -42,7 +42,7 @@ fn sanity_check() {
 #[test]
 fn stip_ansi() {
     let mut env = Env::new(true);
-    let _logtee = Logtee::new(env.log_file_path(), RotateOptions::default());
+    let _logtee = Logtee::start(env.log_file_path(), RotateOptions::default()).unwrap();
 
     tracing::debug!("colored line");
 

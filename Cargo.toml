@@ -4,7 +4,7 @@ members = [
     "cli",
     "deadlock",
     "lib",
-    "logtee",
+    "logtee/rust",
     "macros",
     "metrics_ext",
     "net",
