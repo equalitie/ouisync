@@ -4,6 +4,7 @@ members = [
     "cli",
     "deadlock",
     "lib",
+    "logtee",
     "macros",
     "metrics_ext",
     "net",
@@ -32,7 +33,7 @@ authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie
 repository = "https://github.com/equalitie/ouisync"
 license = "MPL-2.0"
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.87.0"
 
 [workspace.dependencies]
 anyhow = "1.0.90"
@@ -50,6 +51,7 @@ hex = "0.4.3"
 hex_fmt = "0.3.0"
 hmac = { version = "0.12.1", default-features = false }
 indexmap = "2.6.0"
+libc = "0.2.172"
 metrics = "0.24.2"
 metrics-exporter-prometheus = { version = "0.17.0", default-features = false }
 metrics-util = { version = "0.19.0", default-features = false }
