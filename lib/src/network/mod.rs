@@ -961,6 +961,16 @@ async fn perform_handshake(
 
         writer.write_all(MAGIC).await?;
 
+        // Backward fix for Ouisync *App* versions v0.8.3 (and possibly prior)
+        {
+            // Those versions of Ouisync App had a race condition where if some peer with a higher
+            // protocol version managed to connect and handshake before the app subscribed to
+            // "higher protocol version" notifications then they would never get the notification.
+            // On Pixel 9a, and when connecting to a PC, the handshake happened ~100ms prior to
+            // subscribe. Using 700ms to account for slower devices.
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        }
+
         this_version.write_into(&mut writer).await?;
 
         let mut that_magic = [0; MAGIC.len()];
