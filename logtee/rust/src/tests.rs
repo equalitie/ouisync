@@ -15,74 +15,78 @@ use super::*;
 
 #[test]
 fn sanity_check() {
-    let mut env = Env::new(false);
+    let _lock = lock();
+    let _log = init_log(false);
+    let mut log_file = LogFile::new();
 
-    let logtee = Logtee::start(env.log_file_path(), RotateOptions::default()).unwrap();
+    let logtee = Logtee::start(log_file.path(), RotateOptions::default()).unwrap();
 
     tracing::debug!("first line");
     tracing::info!("second line");
     tracing::warn!("third line");
 
-    env.expect_log_file_line(Level::DEBUG, "first line");
-    env.expect_log_file_line(Level::INFO, "second line");
-    env.expect_log_file_line(Level::WARN, "third line");
+    log_file.expect_line(Level::DEBUG, "first line");
+    log_file.expect_line(Level::INFO, "second line");
+    log_file.expect_line(Level::WARN, "third line");
 
     drop(logtee);
     thread::sleep(Duration::from_millis(1));
 
     tracing::info!("this line is not captured");
 
-    let _logtee = Logtee::start(env.log_file_path(), RotateOptions::default()).unwrap();
+    let _logtee = Logtee::start(log_file.path(), RotateOptions::default()).unwrap();
 
     tracing::info!("last line");
 
-    env.expect_log_file_line(Level::INFO, "last line");
+    log_file.expect_line(Level::INFO, "last line");
 }
 
 #[test]
 fn stip_ansi() {
-    let mut env = Env::new(true);
-    let _logtee = Logtee::start(env.log_file_path(), RotateOptions::default()).unwrap();
+    let _lock = lock();
+    let _log = init_log(true);
+    let mut log_file = LogFile::new();
+
+    let _logtee = Logtee::start(log_file.path(), RotateOptions::default()).unwrap();
 
     tracing::debug!("colored line");
 
-    env.expect_log_file_line(Level::DEBUG, "colored line");
+    log_file.expect_line(Level::DEBUG, "colored line");
 }
 
-// Test environment. Create one at the begining of each test.
-struct Env {
-    _mutex: MutexGuard<'static, ()>,
-    _tracing: DefaultGuard,
-    log_file: Tail,
+struct LogFile {
+    tail: Tail,
     _temp_dir: TempDir,
 }
 
-impl Env {
-    fn new(ansi: bool) -> Self {
-        // Allow only one test to run at a time. This is because these tests use a global resource
-        // and we don't want them to interfere with each other.
-        static MUTEX: Mutex<()> = Mutex::new(());
-
+impl LogFile {
+    fn new() -> Self {
         let temp_dir = TempDir::new().unwrap();
-        let log_file = Tail::new(temp_dir.path().join("test.log"));
+        let tail = Tail::new(temp_dir.path().join("test.log"));
 
         Self {
-            _mutex: MUTEX.lock().unwrap_or_else(|error| error.into_inner()),
-            _tracing: init_log(ansi),
-            log_file,
+            tail,
             _temp_dir: temp_dir,
         }
     }
 
-    fn log_file_path(&self) -> &Path {
-        self.log_file.path()
+    fn path(&self) -> &Path {
+        self.tail.path()
     }
 
     #[track_caller]
-    fn expect_log_file_line(&mut self, level: Level, message: &str) {
-        let line = self.log_file.next().unwrap().unwrap();
+    fn expect_line(&mut self, level: Level, message: &str) {
+        let line = self.tail.next().unwrap().unwrap();
         assert_log_message(&line, level, message);
     }
+}
+
+// Allow only one test to run at a time. This is because these tests use a global resource and we
+// don't want them to interfere with each other.
+static MUTEX: Mutex<()> = Mutex::new(());
+
+fn lock() -> MutexGuard<'static, ()> {
+    MUTEX.lock().unwrap()
 }
 
 #[track_caller]
@@ -154,8 +158,6 @@ struct Tail {
 }
 
 impl Tail {
-    const SLEEP: Duration = Duration::from_millis(100);
-
     fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
@@ -172,18 +174,12 @@ impl Tail {
         let mut line = String::new();
 
         loop {
-            let Some(file) = &mut self.file else {
-                match File::open(&self.path) {
-                    Ok(mut file) => {
-                        self.pos = file.seek(SeekFrom::Start(self.pos))?;
-                        self.file = Some(BufReader::new(file));
-                        continue;
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                        thread::sleep(Self::SLEEP);
-                        continue;
-                    }
-                    Err(error) => return Err(error),
+            let file = match &mut self.file {
+                Some(file) => file,
+                None => {
+                    let mut file = wait_for_file(&self.path)?;
+                    self.pos = file.seek(SeekFrom::Start(self.pos))?;
+                    self.file.insert(BufReader::new(file))
                 }
             };
 
@@ -194,7 +190,6 @@ impl Tail {
                 }
                 Ok(_) => {
                     self.file = None;
-                    thread::sleep(Self::SLEEP);
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -210,3 +205,18 @@ impl Iterator for Tail {
         Some(self.read())
     }
 }
+
+fn wait_for_file(path: &Path) -> io::Result<File> {
+    loop {
+        match File::open(path) {
+            Ok(file) => return Ok(file),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                thread::sleep(SLEEP);
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+const SLEEP: Duration = Duration::from_millis(100);
