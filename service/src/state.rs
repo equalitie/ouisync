@@ -99,7 +99,15 @@ impl State {
         };
 
         let mounter = if let Some(mount_dir) = mount_dir {
-            Some(MultiRepoVFS::create(mount_dir).await?)
+            match MultiRepoVFS::create(&mount_dir).await {
+                Ok(mounter) => Some(mounter),
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to create MultiRepoVFS for dir {mount_dir:?}: {error:?}"
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
