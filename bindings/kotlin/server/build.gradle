@@ -22,7 +22,7 @@ android {
     ndkVersion = '27.2.12479018'
 
     defaultConfig {
-        minSdk = 26
+        minSdk = 23
         targetSdk = 35
         versionCode = 1
         versionName = version
