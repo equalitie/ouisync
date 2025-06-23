@@ -145,7 +145,7 @@ class PipeProvider : ContentProvider() {
     ): Int = throw NotImplementedError()
 
     private fun getFileSize(uri: Uri): Long =
-        runBlocking {
+        runBlocking(Dispatchers.IO) {
             val file = openRepoFile(uri)
 
             try {
