@@ -1299,6 +1299,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
+name = "fs_util"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "walkdir",
+]
+
+[[package]]
 name = "fuser"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2838,6 +2849,7 @@ dependencies = [
  "chrono",
  "clap 4.5.21",
  "dirs",
+ "fs_util",
  "futures-util",
  "hex",
  "hyper 1.6.0",
@@ -2951,6 +2963,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "clap 4.5.21",
+ "fs_util",
  "futures-util",
  "heck 0.5.0",
  "hex",
@@ -2991,7 +3004,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "walkdir",
  "webpki-roots 0.26.7",
 ]
 

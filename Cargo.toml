@@ -3,6 +3,7 @@ members = [
     "api_parser",
     "cli",
     "deadlock",
+    "fs_util",
     "lib",
     "logtee/rust",
     "macros",
