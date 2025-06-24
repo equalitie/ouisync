@@ -11,6 +11,9 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
 
     logger::init(log_format, log_color);
 
+    // Migrate config and store directories from previous versions.
+    defaults::migrate_dirs().await;
+
     let mut service = Service::init(config_dir).await?;
 
     if service.store_dir().is_none() {
