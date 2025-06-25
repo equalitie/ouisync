@@ -118,7 +118,7 @@ impl<'a> Context<'a> {
                 continue;
             }
 
-            fs_util::move_file(&src, &dst).await?;
+            fs_util::safe_move(&src, &dst).await?;
             undo_stack.push(Action::MoveFile { src, dst });
         }
 
@@ -212,7 +212,7 @@ impl Action {
                 context.repos.replace(context.handle, holder);
             }
             Self::MoveFile { src, dst } => {
-                fs_util::move_file(&dst, &src).await?;
+                fs_util::safe_move(&dst, &src).await?;
             }
             Self::RemoveDir { path } => {
                 fs::create_dir_all(path).await?;
