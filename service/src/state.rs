@@ -474,7 +474,7 @@ impl State {
 
     #[api]
     pub fn session_get_metrics_listener_addr(&self) -> Option<SocketAddr> {
-        todo!()
+        self.metrics_server.listener_addr()
     }
 
     #[api]

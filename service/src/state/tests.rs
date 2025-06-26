@@ -433,6 +433,39 @@ async fn delete_repository_outside_of_store_dir() {
     assert!(fs::try_exists(parent_dir).await.unwrap());
 }
 
+#[tokio::test]
+async fn metrics() {
+    let (temp_dir, state) = setup().await;
+    let config_dir = temp_dir.path().join("config");
+
+    // Install TLS certificate
+    let certs = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+
+    fs::write(config_dir.join("cert.pem"), &certs.cert.pem())
+        .await
+        .unwrap();
+    fs::write(config_dir.join("key.pem"), certs.key_pair.serialize_pem())
+        .await
+        .unwrap();
+
+    assert_eq!(state.session_get_metrics_listener_addr(), None);
+    state
+        .session_bind_metrics(Some((Ipv4Addr::LOCALHOST, 0).into()))
+        .await
+        .unwrap();
+    let addr = state.session_get_metrics_listener_addr().unwrap();
+    let url = format!("https://localhost:{}", addr.port());
+
+    let http_client = reqwest::Client::builder()
+        .add_root_certificate(reqwest::tls::Certificate::from_der(certs.cert.der()).unwrap())
+        .build()
+        .unwrap();
+
+    let response = http_client.get(&url).send().await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert!(response.content_length().unwrap() > 0);
+}
+
 async fn setup() -> (TempDir, State) {
     let temp_dir = TempDir::new().unwrap();
     let state = State::init(ConfigStore::new(temp_dir.path().join("config")))

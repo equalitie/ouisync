@@ -7,6 +7,7 @@ use std::{
     collections::HashSet,
     fs::{self, File},
     io::{self, Read, Write},
+    net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     thread,
 };
@@ -382,6 +383,19 @@ fn mirror() {
 
         check_eq(dst.0, size)
     });
+}
+
+#[test]
+fn metrics() {
+    let b = Bin::start();
+    let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0));
+
+    assert_eq!(b.metrics_get(), None);
+
+    b.metrics_set(Some(addr));
+
+    let addr = b.metrics_get().unwrap();
+    assert_ne!(addr.port(), 0);
 }
 
 fn setup() -> (Bin, Bin) {

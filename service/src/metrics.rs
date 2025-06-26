@@ -34,11 +34,12 @@ const GEO_IP_PATH: &str = "GeoLite2-Country.mmdb";
 const COLLECT_INTERVAL: Duration = Duration::from_secs(10);
 
 pub(crate) struct MetricsServer {
-    inner: Mutex<Inner>,
+    inner: Mutex<Option<Inner>>,
 }
 
 struct Inner {
-    handle: Option<ScopedAbortHandle>,
+    _handle: ScopedAbortHandle,
+    listener_addr: SocketAddr,
 }
 
 impl MetricsServer {
@@ -55,13 +56,11 @@ impl MetricsServer {
             Err(error) => return Err(error.into()),
         };
 
-        let handle = if let Some(addr) = addr {
+        let inner = if let Some(addr) = addr {
             Some(start(config, network, tls_config, addr).await?)
         } else {
             None
         };
-
-        let inner = Inner { handle };
 
         Ok(Self {
             inner: Mutex::new(inner),
@@ -75,22 +74,30 @@ impl MetricsServer {
         tls_config: &TlsConfig,
         addr: SocketAddr,
     ) -> Result<(), Error> {
-        let handle = start(config, network, tls_config, addr).await?;
-        self.inner.lock().unwrap().handle = Some(handle);
+        let inner = start(config, network, tls_config, addr).await?;
+        *self.inner.lock().unwrap() = Some(inner);
         config.entry(BIND_METRICS_KEY).set(&addr).await?;
 
         Ok(())
     }
 
     pub async fn unbind(&self, config: &ConfigStore) -> Result<(), Error> {
-        self.inner.lock().unwrap().handle = None;
+        *self.inner.lock().unwrap() = None;
         config.entry(BIND_METRICS_KEY).remove().await?;
 
         Ok(())
     }
 
+    pub fn listener_addr(&self) -> Option<SocketAddr> {
+        self.inner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|inner| inner.listener_addr)
+    }
+
     pub fn close(&self) {
-        self.inner.lock().unwrap().handle = None;
+        *self.inner.lock().unwrap() = None;
     }
 }
 
@@ -99,7 +106,7 @@ async fn start(
     network: &Network,
     tls_config: &TlsConfig,
     addr: SocketAddr,
-) -> Result<ScopedAbortHandle, Error> {
+) -> Result<Inner, Error> {
     let recorder = PrometheusBuilder::new().build_recorder();
     let recorder_handle = recorder.handle();
 
@@ -107,13 +114,19 @@ async fn start(
 
     let tcp_listener = TcpListener::bind(&addr).await.map_err(Error::Bind)?;
 
-    match tcp_listener.local_addr() {
-        Ok(addr) => tracing::info!("Metrics server listening on {addr}"),
-        Err(error) => tracing::error!(
-            ?error,
-            "Metrics server failed to retrieve the listening address"
-        ),
-    }
+    let listener_addr = match tcp_listener.local_addr() {
+        Ok(addr) => {
+            tracing::info!("Metrics server listening on {addr}");
+            addr
+        }
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                "Metrics server failed to retrieve the listening address"
+            );
+            addr
+        }
+    };
 
     let tls_acceptor = TlsAcceptor::from(tls_config.server().await?);
 
@@ -181,7 +194,10 @@ async fn start(
     .abort_handle()
     .into();
 
-    Ok(handle)
+    Ok(Inner {
+        _handle: handle,
+        listener_addr,
+    })
 }
 
 async fn collect(

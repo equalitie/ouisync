@@ -191,6 +191,35 @@ impl Bin {
     }
 
     #[track_caller]
+    pub fn metrics_get(&self) -> Option<SocketAddr> {
+        str::from_utf8(
+            &self
+                .client_command()
+                .arg("metrics")
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .lines()
+        .next()
+        .map(|line| line.parse().unwrap())
+    }
+
+    #[track_caller]
+    pub fn metrics_set(&self, addr: Option<SocketAddr>) {
+        let addr = addr.map(|addr| addr.to_string());
+
+        assert!(self
+            .client_command()
+            .arg("metrics")
+            .arg(addr.as_deref().unwrap_or("--disable"))
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    #[track_caller]
     pub fn mirror(&self, host: &str) {
         expect_output(
             &self.id,

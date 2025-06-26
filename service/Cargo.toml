@@ -58,6 +58,7 @@ assert_matches              = { workspace = true }
 rcgen                       = { workspace = true, features = ["pem"] }
 rmp                         = { workspace = true }
 tempfile                    = { workspace = true }
+reqwest                     = { workspace = true, features = ["rustls-tls"] }
 
 [build-dependencies]
 anyhow                      = { workspace = true }
