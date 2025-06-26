@@ -8,6 +8,7 @@ use crate::{
 };
 use geo_ip::{CountryCode, GeoIp};
 use hyper::{server::conn::http1, service::service_fn, Response};
+use hyper_util::rt::TokioIo;
 use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
 use ouisync::{Network, PeerInfoCollector, PeerState, PublicRuntimeId};
@@ -15,16 +16,12 @@ use scoped_task::ScopedAbortHandle;
 use std::{
     collections::HashMap,
     convert::Infallible,
-    io,
     net::SocketAddr,
     path::PathBuf,
-    pin::Pin,
     sync::Mutex,
-    task::{Context, Poll},
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
     net::TcpListener,
     task::{self, JoinSet},
 };
@@ -170,7 +167,7 @@ async fn start(
                 };
 
                 match http1::Builder::new()
-                    .serve_connection(StreamCompat(stream), service_fn(service))
+                    .serve_connection(TokioIo::new(stream), service_fn(service))
                     .await
                 {
                     Ok(()) => (),
@@ -338,72 +335,5 @@ mod sync {
         pub async fn accept(&mut self) -> Option<oneshot::Sender<()>> {
             self.rx.recv().await
         }
-    }
-}
-
-// hyper no longer accepts `tokio::AsyncRead` and `tokio::AsyncWrite` and uses its own traits
-// instead so we now need this compatibility wrapper.
-struct StreamCompat<T>(T);
-
-impl<T> hyper::rt::Read for StreamCompat<T>
-where
-    T: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        mut buf: hyper::rt::ReadBufCursor<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        unsafe {
-            let mut buf = ReadBuf::uninit(buf.as_mut());
-
-            let n = match Pin::new(&mut self.0).poll_read(cx, &mut buf) {
-                Poll::Ready(Ok(())) => buf.filled().len(),
-                other => return other,
-            };
-
-            buf.advance(n);
-        }
-
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl<T> hyper::rt::Write for StreamCompat<T>
-where
-    T: AsyncWrite + Unpin,
-{
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        Pin::new(&mut self.0).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.0).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.0).poll_shutdown(cx)
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        self.0.is_write_vectored()
-    }
-
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        Pin::new(&mut self.0).poll_write_vectored(cx, bufs)
     }
 }
