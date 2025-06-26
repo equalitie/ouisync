@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.0...master)
+## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.1...master)
+
+- Fix repositories not being closed cleanly on shutdown of the CLI app
+
+## [v0.9.1](https://github.com/equalitie/ouisync/compare/v0.9.0...v0.9.1) - 2025-06-26
 
 - Fix panics when accessing the metrics endpoint.
 
@@ -16,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - This release contains breaking changes in the syncing protocol and so apps on this version won't
   be able to sync with those on the previous version.
 - Changed syntax of some of the CLI commands.
-- (Temporary) Using the CLI app now requires running Ouisync server. This limitation will be lifted
-  in the next version.
+- Using the CLI app now requires running Ouisync server. This limitation may be lifted
+  in a future version.
 
 ### Other changes
 
