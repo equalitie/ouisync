@@ -25,7 +25,7 @@ pub use error::Error;
 
 use config_store::{ConfigError, ConfigKey, ConfigStore};
 use connection::Connection;
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use protocol::NetworkDefaults;
 use state::State;
 use std::{
@@ -126,13 +126,12 @@ impl Service {
         // Signal connections to close themselves
         self.closed.send(true).ok();
 
-        // Wait for each connection to shutdown
-        let close_connections = async { while self.connections.next().await.is_some() {} };
-
-        select! {
-            _ = self.state.close() => (),
-            _ = close_connections => (),
-        }
+        // Wait for each connection to shutdown and close the state.
+        future::join(
+            self.state.close(),
+            self.connections.by_ref().collect::<()>(),
+        )
+        .await;
     }
 
     pub fn local_port(&self) -> u16 {
