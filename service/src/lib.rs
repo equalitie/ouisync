@@ -16,7 +16,6 @@ mod repository;
 mod state;
 mod subscription;
 mod tls;
-mod utils;
 
 #[cfg(test)]
 mod test_utils;

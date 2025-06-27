@@ -16,6 +16,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 async-trait                 = { workspace = true }
 bytes                       = { workspace = true }
 clap                        = { workspace = true }
+fs_util                     = { path = "../fs_util" }
 futures-util                = { workspace = true }
 hex                         = { workspace = true }
 hmac                        = { workspace = true }
@@ -49,7 +50,6 @@ tokio-tungstenite           = { version = "0.24.0", features = ["rustls-tls-webp
 tokio-util                  = { workspace = true, features = ["codec"] }
 tracing                     = { workspace = true }
 tracing-subscriber          = { workspace = true, features = ["env-filter", "json"] }
-walkdir                     = "2.5.0"
 webpki-roots                = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
