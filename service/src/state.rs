@@ -976,9 +976,7 @@ impl State {
         repo.metadata().set(AUTOMOUNT_KEY, true).await?;
 
         let mounter = self.mounter.lock().unwrap();
-        let Some(mounter) = mounter.as_ref() else {
-            return Err(Error::OperationNotSupported);
-        };
+        let mounter = mounter.as_ref().ok_or(Error::MountDirUnspecified)?;
 
         if let Some(mount_point) = mounter.mount_point(&short_name) {
             // Already mounted

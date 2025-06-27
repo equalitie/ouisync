@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:ouisync/ouisync.dart';
@@ -34,9 +35,10 @@ void main() {
     final configPath = '${temp.path}/config';
 
     await io.Directory(configPath).create(recursive: true);
-    await io.File('$configPath/local_control_port.conf').writeAsString('0');
-    await io.File('$configPath/local_control_auth_key.conf')
-        .writeAsString('"0123456789abcdef"');
+    await io.File('$configPath/local_endpoint.conf').writeAsString(json.encode({
+      'port': 0,
+      'auth_key': '0123456789abcdef',
+    }));
 
     await expectLater(
       Client.connect(

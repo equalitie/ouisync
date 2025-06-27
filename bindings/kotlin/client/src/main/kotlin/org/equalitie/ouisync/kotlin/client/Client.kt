@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.UseSerializers
 import kotlinx.serialization.json.Json
@@ -59,11 +60,10 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             minWait: Duration = 50.milliseconds,
             maxWait: Duration = 1.seconds,
         ): Client {
-            val portRaw = File("$configPath/local_control_port.conf").readText()
-            val port = Json.decodeFromString<Int>(portRaw)
-
-            val authKeyRaw = File("$configPath/local_control_auth_key.conf").readText()
-            val authKey = Json.decodeFromString<String>(authKeyRaw).hexToByteArray()
+            val endpointRaw = File("$configPath/local_endpoint.conf").readText()
+            val endpoint = Json.decodeFromString<LocalEndpoint>(endpointRaw)
+            val port = endpoint.port
+            val authKey = endpoint.authKey.hexToByteArray()
 
             val addr = InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), port)
 
@@ -208,6 +208,9 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         }
     }
 }
+
+@Serializable
+private data class LocalEndpoint(val port: Int, @SerialName("auth_key") val authKey: String)
 
 @Serializable
 private sealed interface ResponseResult {
