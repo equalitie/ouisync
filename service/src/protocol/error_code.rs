@@ -67,8 +67,6 @@ pub enum ErrorCode {
     // # Service errors
     /// Failed to initialize runtime
     RuntimeInitializeError = 4096 + 1,
-    /// Failed to initialize logger
-    LoggerInitializeError = 4096 + 2,
     /// Failed to read from or write into the config file
     ConfigError = 4096 + 3,
     /// TLS certificated not found
@@ -104,7 +102,6 @@ impl ToErrorCode for Error {
             Self::AlreadyExists => ErrorCode::AlreadyExists,
             Self::Config(_) => ErrorCode::ConfigError,
             Self::CreateMounter(error) => error.to_error_code(),
-            Self::InitializeLogger(_) => ErrorCode::LoggerInitializeError,
             Self::InitializeRuntime(_) => ErrorCode::RuntimeInitializeError,
             Self::InvalidArgument => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,

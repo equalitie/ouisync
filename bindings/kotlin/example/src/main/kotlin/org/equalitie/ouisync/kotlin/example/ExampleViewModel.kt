@@ -8,7 +8,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.equalitie.ouisync.kotlin.client.LogLevel
 import org.equalitie.ouisync.kotlin.client.OuisyncException
 import org.equalitie.ouisync.kotlin.client.Repository
 import org.equalitie.ouisync.kotlin.client.Session
@@ -34,18 +33,7 @@ class ExampleViewModel(
         private set
 
     init {
-        initLog { level, message ->
-            val priority =
-                when (level) {
-                    LogLevel.ERROR -> Log.ERROR
-                    LogLevel.WARN -> Log.WARN
-                    LogLevel.INFO -> Log.INFO
-                    LogLevel.DEBUG -> Log.DEBUG
-                    LogLevel.TRACE -> Log.VERBOSE
-                }
-
-            Log.println(priority, TAG, message)
-        }
+        initLog()
 
         viewModelScope.launch(Dispatchers.IO) {
             try {

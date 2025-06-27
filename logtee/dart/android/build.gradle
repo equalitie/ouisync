@@ -1,0 +1,73 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        // The Android Gradle Plugin knows how to build native code with the NDK.
+        classpath("com.android.tools.build:gradle:8.7.0")
+    }
+}
+
+plugins {
+    id 'com.android.library'
+    id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.6'
+}
+
+group = "org.equalitie.logtee"
+version = "1.0"
+
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+android {
+    namespace = "org.equalitie.logtee"
+
+    // Bumping the plugin compileSdk version requires all clients of this plugin
+    // to bump the version in their app.
+    compileSdk = 35
+
+    // Use the NDK version
+    // declared in /android/app/build.gradle file of the Flutter project.
+    // Replace it with a version number if this plugin requires a specific NDK version.
+    // (e.g. ndkVersion "23.1.7779620")
+    ndkVersion = android.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    defaultConfig {
+        minSdk = 21
+
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        }
+    }
+}
+
+cargo {
+    module = '../../..'
+    libname = 'logtee'
+    profile = 'release'
+    targets = ['arm', 'arm64', 'x86_64']
+    extraCargoBuildArguments = ['--package', 'logtee']
+}
+
+afterEvaluate {
+    android.libraryVariants.each {
+        def variant = it.name.capitalize()
+
+        // Build the native library for the target android platforms.
+        tasks.named("merge${variant}JniLibFolders") {
+            dependsOn 'cargoBuild'
+        }
+    }
+}

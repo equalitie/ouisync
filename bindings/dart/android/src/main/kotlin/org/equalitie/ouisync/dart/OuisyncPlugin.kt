@@ -132,10 +132,7 @@ class OuisyncPlugin :
     ) {
         when (call.method) {
             "initLog" -> {
-                val arguments = call.arguments as Map<String, Any?>
-                val stdout = arguments["stdout"] as Boolean
-                val file = arguments["file"] as String?
-                onInitLog(stdout, file)
+                onInitLog()
                 result.success(null)
             }
             "start" -> {
@@ -172,27 +169,7 @@ class OuisyncPlugin :
         }
     }
 
-    private fun onInitLog(
-        stdout: Boolean,
-        file: String?,
-    ) {
-        if (stdout) {
-            initLog(
-                stdout = false,
-                file = file,
-                callback = { level, message -> Log.println(logPriority(level), TAG, message) },
-            )
-        } else {
-            initLog(
-                file = file,
-                callback = { level, message ->
-                    mainHandler.post {
-                        channel?.invokeMethod("log", mapOf("level" to level.toValue(), "message" to message))
-                    }
-                },
-            )
-        }
-    }
+    private fun onInitLog() = initLog()
 
     private fun onStart(
         configPath: String,

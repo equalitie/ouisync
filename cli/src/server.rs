@@ -1,5 +1,5 @@
 use crate::{defaults, options::ServerCommand};
-use ouisync_service::{logger::Logger, Error, Service};
+use ouisync_service::{logger, Error, Service};
 use std::{io, path::PathBuf};
 use tokio::select;
 
@@ -9,11 +9,7 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
         log_color,
     } = command;
 
-    let _logger = Logger::builder()
-        .stdout()
-        .format(log_format)
-        .color(log_color)
-        .build()?;
+    logger::init(log_format, log_color);
 
     let mut service = Service::init(config_dir).await?;
 

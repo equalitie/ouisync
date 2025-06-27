@@ -16,7 +16,6 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 async-trait                 = { workspace = true }
 bytes                       = { workspace = true }
 clap                        = { workspace = true }
-file-rotate                 = "0.7.5"
 futures-util                = { workspace = true }
 hex                         = { workspace = true }
 hmac                        = { workspace = true }
@@ -52,6 +51,9 @@ tracing                     = { workspace = true }
 tracing-subscriber          = { workspace = true, features = ["env-filter", "json"] }
 walkdir                     = "2.5.0"
 webpki-roots                = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+paranoid-android            = "0.2.2"
 
 [dev-dependencies]
 assert_matches              = { workspace = true }

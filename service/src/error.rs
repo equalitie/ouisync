@@ -14,8 +14,6 @@ pub enum Error {
     Config(#[from] ConfigError),
     #[error("failed to create mounter")]
     CreateMounter(#[from] MountError),
-    #[error("failed to initialize logger")]
-    InitializeLogger(#[source] io::Error),
     #[error("failed to initialize runtime")]
     InitializeRuntime(#[source] io::Error),
     #[error("argument is invalid")]

@@ -17,14 +17,7 @@ class MethodChannelServer extends Server {
   }
 
   @override
-  void initLog({
-    bool stdout = false,
-    String? file,
-    Function(LogLevel, String)? callback,
-  }) {
-    _logCallback = callback;
-    _channel.invokeMethod('initLog', {'stdout': stdout, 'file': file});
-  }
+  Future<void> initLog() => _channel.invokeMethod('initLog');
 
   @override
   Future<void> start() => _channel.invokeMethod<void>('start', {

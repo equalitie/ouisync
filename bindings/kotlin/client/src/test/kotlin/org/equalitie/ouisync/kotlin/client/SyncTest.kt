@@ -24,7 +24,7 @@ class SyncTest {
 
     @BeforeEach
     fun setup() = runTest {
-        initLog { level, message -> println("[$level] $message") }
+        initLog()
 
         tempDir = JFile(createTempDirectory().toString())
 

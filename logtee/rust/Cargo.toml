@@ -1,0 +1,35 @@
+[package]
+name = "logtee"
+description = "Library to capture log messages to a file"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version = "0.1.0"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+file-rotate        = "0.8.0"
+strip-ansi-escapes = "0.2.1"
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+chrono             = { workspace = true }
+
+[dev-dependencies]
+tempfile           = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+paranoid-android   = "0.2.2"
+regex              = "1.11.1"
+
+[lints]
+workspace = true
