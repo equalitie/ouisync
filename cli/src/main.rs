@@ -1,6 +1,7 @@
 mod client;
 mod defaults;
 mod format;
+mod migration;
 mod options;
 mod server;
 

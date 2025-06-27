@@ -1,4 +1,4 @@
-use crate::{defaults, options::ServerCommand};
+use crate::{defaults, migration, options::ServerCommand};
 use ouisync_service::{logger, Error, Service};
 use std::{io, path::PathBuf};
 use tokio::select;
@@ -11,12 +11,12 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
 
     logger::init(log_format, log_color);
 
-    // Migrate config and store directories from previous versions.
-    defaults::migrate_dirs().await;
+    migration::migrate_config_dir().await;
 
     let mut service = Service::init(config_dir).await?;
 
     if service.store_dir().is_none() {
+        migration::migrate_store_dir().await;
         service.set_store_dir(defaults::store_dir()).await?;
     }
 
