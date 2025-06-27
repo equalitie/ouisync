@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.1...master)
 
 - Improve some error messages in the CLI app.
+- Introduce the "logtee" library for capturing log messages from multiple sources
 
 ## [v0.9.1](https://github.com/equalitie/ouisync/compare/v0.9.0...v0.9.1) - 2025-06-26
 
