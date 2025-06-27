@@ -1808,12 +1808,12 @@ impl State {
     // Find all repositories in the store dir and open them.
     async fn load_repositories(&self) {
         let Some(store_dir) = self.store.get() else {
-            tracing::warn!("store dir not specified");
+            tracing::debug!("store dir not specified");
             return;
         };
 
         if !fs::try_exists(&store_dir).await.unwrap_or(false) {
-            tracing::error!("store dir doesn't exist");
+            tracing::debug!("store dir doesn't exist");
             return;
         }
 

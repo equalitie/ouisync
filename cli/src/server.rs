@@ -11,14 +11,21 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
 
     logger::init(log_format, log_color);
 
-    migration::migrate_config_dir().await;
+    if config_dir == defaults::config_dir() {
+        migration::migrate_config_dir().await;
+    }
 
     let mut service = Service::init(config_dir).await?;
 
-    if service.store_dir().is_none() {
-        migration::migrate_store_dir().await;
-        service.set_store_dir(defaults::store_dir()).await?;
-    }
+    let store_dir = if let Some(store_dir) = service.store_dir() {
+        store_dir
+    } else {
+        let store_dir = defaults::store_dir();
+        service.set_store_dir(&store_dir).await?;
+        store_dir
+    };
+
+    migration::check_store_dir(&store_dir).await;
 
     service.init_network().await;
     service.set_sync_enabled_all(true).await?;

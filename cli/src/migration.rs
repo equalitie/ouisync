@@ -1,6 +1,5 @@
 use std::{
-    ffi::OsStr,
-    io,
+    env, io,
     path::{Path, PathBuf},
 };
 
@@ -13,40 +12,55 @@ use crate::defaults;
 
 const OLD_APP_ID: &str = "ouisync";
 
-fn old_config_dirs() -> impl Iterator<Item = PathBuf> {
-    dirs::config_dir()
-        .map(|base| base.join(OLD_APP_ID))
-        .into_iter()
-}
-
-fn old_store_dirs() -> impl Iterator<Item = PathBuf> {
-    dirs::data_dir()
-        .map(|base| base.join(OLD_APP_ID))
-        .into_iter()
-}
-
+/// Migrate config files from the old config directory to the new one.
 pub(crate) async fn migrate_config_dir() {
     let new = defaults::config_dir();
-    for old in old_config_dirs() {
-        run_migration(&old, &new, ConflictStrategy::KeepDst).await;
-    }
-}
+    let Some(old) = dirs::config_dir().map(|base| base.join(OLD_APP_ID)) else {
+        return;
+    };
 
-pub(crate) async fn migrate_store_dir() {
-    let new = defaults::store_dir();
-    for old in old_store_dirs() {
-        run_migration(&old, &new, ConflictStrategy::Rename).await;
-    }
-}
-
-async fn run_migration(src: &Path, dst: &Path, conflict_strategy: ConflictStrategy) {
     let (report_tx, report_rx) = mpsc::channel(1);
 
-    future::join(
-        migrate_dir(src, dst, conflict_strategy, report_tx.clone()),
-        log_reports(report_rx),
-    )
-    .await;
+    future::join(migrate_dir(&old, &new, report_tx), log_reports(report_rx)).await;
+}
+
+/// Check whether the old store directory still exists and if so, print a warning.
+pub(crate) async fn check_store_dir(new: &Path) {
+    let Some(old) = dirs::data_dir().map(|base| base.join(OLD_APP_ID)) else {
+        return;
+    };
+
+    if old == new {
+        return;
+    }
+
+    if !fs::metadata(&old)
+        .await
+        .map(|meta| meta.is_dir())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let exe_name = env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(|s| s.file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or("ouisync")
+        .to_owned();
+
+    tracing::warn!(
+        "The default store directory was changed in order to unify the CLI and GUI variants of \
+         Ouisync. The new directory is '{1}' but the old one at '{0}' still exists. \
+         No repositories from the old directory will be loaded. To silence this warning move all \
+         files from the old directory to the new one and delete the old one. Alternatively, to \
+         keep using the old directory, change the current store directory by running the command \
+         '{2} store-dir {0}'",
+        old.display(),
+        new.display(),
+        exe_name,
+    );
 }
 
 async fn log_reports(mut rx: mpsc::Receiver<MigrateReport>) {
@@ -67,12 +81,7 @@ async fn log_reports(mut rx: mpsc::Receiver<MigrateReport>) {
     }
 }
 
-async fn migrate_dir(
-    src: &Path,
-    dst: &Path,
-    conflict_strategy: ConflictStrategy,
-    report_tx: mpsc::Sender<MigrateReport>,
-) {
+async fn migrate_dir(src: &Path, dst: &Path, report_tx: mpsc::Sender<MigrateReport>) {
     let mut entries = WalkDir::new(src).contents_first(true).into_stream();
 
     while let Some(entry) = entries.next().await {
@@ -145,58 +154,28 @@ async fn migrate_dir(
             }
         }
 
-        let mut dst_entry_path = dst_entry_path;
-
-        loop {
-            match fs_util::safe_move(src_entry_path, &dst_entry_path).await {
-                Ok(()) => {
-                    report_tx
-                        .send(MigrateReport::ok(src_entry_path, &dst_entry_path))
-                        .await
-                        .ok();
-                    break;
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    match conflict_strategy {
-                        ConflictStrategy::KeepDst => {
-                            report_tx
-                                .send(MigrateReport::err(
-                                    src_entry_path,
-                                    &dst_entry_path,
-                                    "dst already exists",
-                                ))
-                                .await
-                                .ok();
-                            break;
-                        }
-                        ConflictStrategy::Rename => {
-                            dst_entry_path = next_path(&dst_entry_path);
-                            continue;
-                        }
-                    }
-                }
-                Err(error) => {
-                    report_tx
-                        .send(MigrateReport::err(
-                            src_entry_path,
-                            &dst_entry_path,
-                            format!("failed to move file: {error}"),
-                        ))
-                        .await
-                        .ok();
-                    continue;
-                }
+        match fs_util::safe_move(src_entry_path, &dst_entry_path).await {
+            Ok(()) => {
+                report_tx
+                    .send(MigrateReport::ok(src_entry_path, &dst_entry_path))
+                    .await
+                    .ok();
+            }
+            Err(error) => {
+                report_tx
+                    .send(MigrateReport::err(
+                        src_entry_path,
+                        &dst_entry_path,
+                        format!("failed to move file: {error}"),
+                    ))
+                    .await
+                    .ok();
             }
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum ConflictStrategy {
-    KeepDst,
-    Rename,
-}
-
+#[derive(Debug)]
 struct MigrateReport {
     src: PathBuf,
     dst: PathBuf,
@@ -221,35 +200,6 @@ impl MigrateReport {
     }
 }
 
-fn next_path(path: &Path) -> PathBuf {
-    let stem = path.file_stem().unwrap_or(OsStr::new(""));
-    let stem_str = stem.to_string_lossy();
-
-    let parts = stem_str
-        .rsplit_once('-')
-        .and_then(|(prefix, suffix)| suffix.parse::<u64>().ok().map(|seq| (prefix, seq)));
-
-    let stem = if let Some((prefix, seq)) = parts {
-        format!("{prefix}-{}", seq + 1).into()
-    } else {
-        let mut stem = stem.to_os_string();
-        stem.push("-1");
-        stem
-    };
-
-    let output = if let Some(parent) = path.parent() {
-        parent.join(stem)
-    } else {
-        PathBuf::from(stem)
-    };
-
-    if let Some(extension) = path.extension() {
-        output.with_extension(extension)
-    } else {
-        output
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -259,13 +209,12 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn migrate_src_missing() {
+    async fn src_missing() {
         let temp_dir = TempDir::new().unwrap();
         let src_path = temp_dir.path().join("src");
         let dst_path = temp_dir.path().join("dst");
 
-        let reports =
-            migrate_and_collect_reports(&src_path, &dst_path, ConflictStrategy::Rename).await;
+        let reports = migrate_and_collect_reports(&src_path, &dst_path).await;
         assert!(reports.is_empty());
 
         assert!(!fs::try_exists(src_path).await.unwrap());
@@ -273,7 +222,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrate_file() {
+    async fn file() {
         let temp_dir = TempDir::new().unwrap();
         let src_path = temp_dir.path().join("src");
         let dst_path = temp_dir.path().join("dst");
@@ -282,8 +231,7 @@ mod tests {
         fs::create_dir_all(&src_path).await.unwrap();
         fs::write(src_path.join("file.txt"), content).await.unwrap();
 
-        let reports =
-            migrate_and_collect_reports(&src_path, &dst_path, ConflictStrategy::Rename).await;
+        let reports = migrate_and_collect_reports(&src_path, &dst_path).await;
 
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].src, src_path.join("file.txt"));
@@ -298,7 +246,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrate_subdirectory() {
+    async fn subdirectory() {
         let temp_dir = TempDir::new().unwrap();
         let src_path = temp_dir.path().join("src");
         let dst_path = temp_dir.path().join("dst");
@@ -319,8 +267,7 @@ mod tests {
             .unwrap();
         fs::write(src_path.join(path_b), content_b).await.unwrap();
 
-        let mut reports =
-            migrate_and_collect_reports(&src_path, &dst_path, ConflictStrategy::Rename).await;
+        let mut reports = migrate_and_collect_reports(&src_path, &dst_path).await;
         reports.sort_by(|a, b| a.src.cmp(&b.src));
 
         assert_eq!(reports.len(), 2);
@@ -345,7 +292,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrate_conflict_keep_dst() {
+    async fn conflict() {
         let temp_dir = TempDir::new().unwrap();
         let src_path = temp_dir.path().join("src");
         let dst_path = temp_dir.path().join("dst");
@@ -363,8 +310,7 @@ mod tests {
             .await
             .unwrap();
 
-        let reports =
-            migrate_and_collect_reports(&src_path, &dst_path, ConflictStrategy::KeepDst).await;
+        let reports = migrate_and_collect_reports(&src_path, &dst_path).await;
 
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].src, src_path.join("file.txt"));
@@ -381,74 +327,10 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn migrate_conflict_rename() {
-        let temp_dir = TempDir::new().unwrap();
-        let src_path = temp_dir.path().join("src");
-        let dst_path = temp_dir.path().join("dst");
-
-        let src_content = "src content";
-        let dst_content = "dst content";
-
-        fs::create_dir_all(&src_path).await.unwrap();
-        fs::write(src_path.join("file.txt"), src_content)
-            .await
-            .unwrap();
-
-        fs::create_dir_all(&dst_path).await.unwrap();
-        fs::write(dst_path.join("file.txt"), dst_content)
-            .await
-            .unwrap();
-
-        let reports =
-            migrate_and_collect_reports(&src_path, &dst_path, ConflictStrategy::Rename).await;
-
-        assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0].src, src_path.join("file.txt"));
-        assert_eq!(reports[0].dst, dst_path.join("file-1.txt"));
-        assert_eq!(reports[0].result, Ok(()));
-
-        assert_eq!(
-            fs::read_to_string(dst_path.join("file.txt")).await.unwrap(),
-            dst_content,
-        );
-        assert_eq!(
-            fs::read_to_string(dst_path.join("file-1.txt"))
-                .await
-                .unwrap(),
-            src_content,
-        );
-        assert!(!fs::try_exists(src_path).await.unwrap());
-    }
-
-    #[test]
-    fn next_path_sanity_check() {
-        assert_eq!(next_path(Path::new("foo")), Path::new("foo-1"));
-        assert_eq!(next_path(Path::new("foo.txt")), Path::new("foo-1.txt"));
-        assert_eq!(next_path(Path::new("foo-1.txt")), Path::new("foo-2.txt"));
-        assert_eq!(next_path(Path::new("foo-10.txt")), Path::new("foo-11.txt"));
-        assert_eq!(
-            next_path(Path::new("foo/bar-42.txt")),
-            Path::new("foo/bar-43.txt")
-        );
-        assert_eq!(next_path(Path::new("")), Path::new("-1"));
-        assert_eq!(
-            next_path(Path::new("foo-bar.txt")),
-            Path::new("foo-bar-1.txt")
-        );
-    }
-
-    async fn migrate_and_collect_reports(
-        src: &Path,
-        dst: &Path,
-        conflict_strategy: ConflictStrategy,
-    ) -> Vec<MigrateReport> {
+    async fn migrate_and_collect_reports(src: &Path, dst: &Path) -> Vec<MigrateReport> {
         let (tx, rx) = mpsc::channel(1);
-        let (_, reports) = future::join(
-            migrate_dir(src, dst, conflict_strategy, tx),
-            ReceiverStream::new(rx).collect(),
-        )
-        .await;
+        let (_, reports) =
+            future::join(migrate_dir(src, dst, tx), ReceiverStream::new(rx).collect()).await;
 
         reports
     }

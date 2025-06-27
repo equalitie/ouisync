@@ -11,9 +11,7 @@ pub(crate) fn config_dir() -> PathBuf {
 
 /// Path to the repository store directory.
 pub(crate) fn store_dir() -> PathBuf {
-    env::var_os("OUISYNC_STORE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| base_dir().join("repositories"))
+    base_dir().join("repositories")
 }
 
 fn base_dir() -> PathBuf {
