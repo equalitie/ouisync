@@ -7,7 +7,14 @@ cmake_minimum_required(VERSION 3.10)
 set(PROJECT_NAME "logtee")
 project(${PROJECT_NAME})
 
-file(REAL_PATH ${CMAKE_CURRENT_SOURCE_DIR} RESOLVED_CMAKE_CURRENT_SOURCE_DIR)
+# Resolve the symlink in CMAKE_CURRENT_SOURCE_DIR using powershell because
+# `file(REAL_PATH)` doesn't work on Windows or is not yet fixed in the `cmake`
+# version 3.31.6-msvc6 bundled with Visual Studio 17.
+# https://gitlab.kitware.com/cmake/cmake/-/issues/17206
+execute_process(
+    COMMAND powershell.exe -Command "(Get-Item ${CMAKE_CURRENT_SOURCE_DIR}).Target"
+    OUTPUT_VARIABLE RESOLVED_CMAKE_CURRENT_SOURCE_DIR)
+
 set(ROOT_DIR "${RESOLVED_CMAKE_CURRENT_SOURCE_DIR}/../..")
 
 include(FetchContent)
