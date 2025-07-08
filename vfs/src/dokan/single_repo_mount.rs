@@ -286,10 +286,9 @@ pub fn mount_with_span(
     let mount_point = match U16CString::from_os_str(mount_point.as_ref().as_os_str()) {
         Ok(mount_point) => mount_point,
         Err(error) => {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to convert mount point to U16CString: {error:?}"),
-            ));
+            return Err(io::Error::other(format!(
+                "Failed to convert mount point to U16CString: {error:?}"
+            )));
         }
     };
 
@@ -314,10 +313,7 @@ pub fn mount_with_span(
             Ok(file_system) => file_system,
             Err(error) => {
                 on_mount_tx
-                    .send(Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Failed to mount: {error:?}"),
-                    )))
+                    .send(Err(io::Error::other(format!("Failed to mount: {error:?}"))))
                     .unwrap_or(());
                 return;
             }
