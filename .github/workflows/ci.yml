@@ -17,18 +17,17 @@ jobs:
           - name: android
             os: ubuntu-24.04
             cargo-command: cross
-            cargo-dir: ~/.cargo
             target: aarch64-linux-android
 
           - name: linux
             os: ubuntu-24.04
             cargo-command: cargo
-            cargo-dir: ~/.cargo
+            test: true
 
           - name: windows
             os: windows-latest
             cargo-command: cargo
-            cargo-dir: ~\cargo
+            test: true
 
     steps:
       - uses: actions/checkout@v4
@@ -43,12 +42,13 @@ jobs:
       - uses: actions/cache@v3
         with:
           path: |
-            ${{ matrix.cargo-dir }}/bin/
-            ${{ matrix.cargo-dir }}/registry/index/
-            ${{ matrix.cargo-dir }}/registry/cache/
-            ${{ matrix.cargo-dir }}/git/db/
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install system dependencies
         if: matrix.name == 'linux'
@@ -64,24 +64,30 @@ jobs:
       - name: Run clippy
         run: >
           ${{ matrix.cargo-command }} clippy
-          --package ouisync --package ouisync-service --package ouisync-cli
+          --package ouisync
+          --package ouisync-cli
+          --package ouisync-net
+          --package ouisync-service
+          --package ouisync-vfs
+          --package fs_util
+          --package logtee
           ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
           --all-targets
           --no-deps
           -- -Dwarnings
 
       - name: Run unit tests
-        if: matrix.name == 'linux'
+        if: matrix.test == 'true'
         run: ${{ matrix.cargo-command }} test --lib
 
       - name: Run lib integration tests
-        if: matrix.name == 'linux'
+        if: matrix.test == 'true'
         run: ${{ matrix.cargo-command }} test --package ouisync --test gc --test network --test sync
         env:
           RUST_LOG: ouisync=debug,gc=debug,network=debug,sync=debug
 
       - name: Run cli integration tests
-        if: matrix.name == 'linux'
+        if: matrix.test == 'true'
         run: ${{ matrix.cargo-command }} test --package ouisync-cli --test cli
 
   check_kotlin_bindings:
@@ -170,14 +176,12 @@ jobs:
             os: ubuntu-24.04
             env:
               OUISYNC_LIB: ../../target/debug/libouisync_service.so
-            cargo-dir: ~/.cargo
 
           - name: windows
             os: windows-latest
             env:
               OUISYNC_LIB: ..\..\target\debug\ouisync_service.dll
               DOKAN_DLL_OUTPUT_PATH: C:\Windows\System32
-            cargo-dir: ~\cargo
 
     env: ${{ matrix.env }}
 
@@ -193,10 +197,10 @@ jobs:
       - uses: actions/cache@v3
         with:
           path: |
-            ${{ matrix.cargo-dir }}/bin/
-            ${{ matrix.cargo-dir }}/registry/index/
-            ${{ matrix.cargo-dir }}/registry/cache/
-            ${{ matrix.cargo-dir }}/git/db/
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
