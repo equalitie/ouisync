@@ -16,8 +16,10 @@ crate-type = ["rlib", "cdylib"]
 file-rotate        = "0.8.0"
 strip-ansi-escapes = "0.2.1"
 
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
-libc = { workspace = true }
+[target.'cfg(arget_os = "linux")'.dependencies]
+libc               = { workspace = true }
+
+# [target.'cfg(arget_os = "windows")'.dependencies]
 
 [target.'cfg(target_os = "android")'.dependencies]
 chrono             = { workspace = true }

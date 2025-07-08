@@ -1,5 +1,9 @@
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-#[path = "redirect.rs"]
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod inner;
+
+#[cfg(target_os = "windows")]
+#[path = "windows.rs"]
 mod inner;
 
 #[cfg(target_os = "android")]
