@@ -216,7 +216,7 @@ trait Human {
 
 impl Human for u64 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
@@ -231,15 +231,15 @@ impl Human for f64 {
         if abs < 0.0001 {
             write!(f, "0")
         } else if abs < 0.1 {
-            write!(f, "{}{:.4}", sign, abs)
+            write!(f, "{sign}{abs:.4}")
         } else if abs < 1.0 {
-            write!(f, "{}{:.3}", sign, abs)
+            write!(f, "{sign}{abs:.3}")
         } else if abs < 10.0 {
-            write!(f, "{}{:.2}", sign, abs)
+            write!(f, "{sign}{abs:.2}")
         } else if abs < 100.0 {
-            write!(f, "{}{:.1}", sign, abs)
+            write!(f, "{sign}{abs:.1}")
         } else {
-            write!(f, "{}{:.0}", sign, abs)
+            write!(f, "{sign}{abs:.0}")
         }
     }
 }

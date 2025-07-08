@@ -242,7 +242,7 @@ async fn concurrent_write_and_read_file() {
                         }
                     }
                     Err(Error::EntryNotFound) => (),
-                    Err(error) => panic!("unexpected error: {:?}", error),
+                    Err(error) => panic!("unexpected error: {error:?}"),
                 };
 
                 wait_for_notification(&mut rx).await;
@@ -734,7 +734,7 @@ async fn version_vector_deep_hierarchy() {
         let dir = dirs
             .last_mut()
             .unwrap()
-            .create_directory(format!("dir-{}", i), rand::random(), &VersionVector::new())
+            .create_directory(format!("dir-{i}"), rand::random(), &VersionVector::new())
             .await
             .unwrap();
         dirs.push(dir);

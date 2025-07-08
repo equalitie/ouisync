@@ -37,7 +37,7 @@ async fn no_conflict() {
     assert_eq!(entries[1].entry_type(), EntryType::File);
 
     for (index, entry) in entries.iter().enumerate() {
-        let name = format!("file{}.txt", index);
+        let name = format!("file{index}.txt");
 
         let lookup: Vec<_> = root.lookup(&name).collect();
         assert_eq!(lookup.len(), 1);

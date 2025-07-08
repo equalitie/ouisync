@@ -63,7 +63,7 @@ fn block_nonce_tamper() {
             match repo.get_branch_version_vector(&alice_id).await {
                 Ok(alice_actual_vv) => alice_actual_vv == alice_expected_vv,
                 Err(Error::Store(StoreError::BranchNotFound)) => false,
-                Err(error) => panic!("unexpected error: {:?}", error),
+                Err(error) => panic!("unexpected error: {error:?}"),
             }
         })
         .await;

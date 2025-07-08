@@ -590,7 +590,7 @@ async fn receive_snapshot(
     {
         Ok(node) => node.proof.into_version_vector(),
         Err(store::Error::BranchNotFound) => VersionVector::new(),
-        Err(error) => panic!("unexpected error: {:?}", error),
+        Err(error) => panic!("unexpected error: {error:?}"),
     };
     let vv = vv.incremented(writer_id);
 

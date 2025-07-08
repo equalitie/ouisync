@@ -399,7 +399,7 @@ pub enum Error {
 }
 
 async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {
-    Ok(sqlx::query(&format!("PRAGMA {}", name))
+    Ok(sqlx::query(&format!("PRAGMA {name}"))
         .fetch_one(&mut *conn)
         .await?
         .get(0))
@@ -407,7 +407,7 @@ async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {
 
 async fn set_pragma(conn: &mut Connection, name: &str, value: u32) -> Result<(), Error> {
     // `bind` doesn't seem to be supported for setting PRAGMAs...
-    sqlx::query(&format!("PRAGMA {} = {}", name, value))
+    sqlx::query(&format!("PRAGMA {name} = {value}"))
         .execute(&mut *conn)
         .await?;
 

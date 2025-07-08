@@ -658,7 +658,7 @@ pub(super) async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter
                 ));
             }
             Err(err) => {
-                printer.debug(&format_args!("RootNode: error: {:?}", err));
+                printer.debug(&format_args!("RootNode: error: {err:?}"));
             }
         }
     }

@@ -163,9 +163,9 @@ impl ToResponseVariantName for str {
 
 fn pluralize(word: &str) -> String {
     if let Some(word) = word.strip_suffix('y') {
-        format!("{}ies", word)
+        format!("{word}ies")
     } else {
-        format!("{}s", word)
+        format!("{word}s")
     }
 }
 

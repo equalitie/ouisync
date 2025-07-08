@@ -70,15 +70,14 @@ impl FromStr for PeerAddr {
             Some((proto, addr)) => (proto, addr),
             None => {
                 return Err(format!(
-                    "Could not find '/' delimiter in the address {:?}",
-                    s
+                    "Could not find '/' delimiter in the address {s:?}"
                 ));
             }
         };
 
         let addr = match SocketAddr::from_str(addr) {
             Ok(addr) => addr,
-            Err(_) => return Err(format!("Failed to parse IP:PORT {:?}", addr)),
+            Err(_) => return Err(format!("Failed to parse IP:PORT {addr:?}")),
         };
 
         if proto.eq_ignore_ascii_case("tcp") {
@@ -86,7 +85,7 @@ impl FromStr for PeerAddr {
         } else if proto.eq_ignore_ascii_case("quic") {
             Ok(PeerAddr::Quic(addr))
         } else {
-            Err(format!("Unrecognized protocol {:?} in {:?}", proto, s))
+            Err(format!("Unrecognized protocol {proto:?} in {s:?}"))
         }
     }
 }
@@ -94,8 +93,8 @@ impl FromStr for PeerAddr {
 impl fmt::Display for PeerAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Tcp(addr) => write!(f, "tcp/{}", addr),
-            Self::Quic(addr) => write!(f, "quic/{}", addr),
+            Self::Tcp(addr) => write!(f, "tcp/{addr}"),
+            Self::Quic(addr) => write!(f, "quic/{addr}"),
         }
     }
 }
@@ -192,7 +191,7 @@ mod tests {
         ] {
             let expected = addr.to_string();
             let actual = serde_json::to_string(&addr).unwrap();
-            assert_eq!(actual, format!("\"{}\"", expected))
+            assert_eq!(actual, format!("\"{expected}\""))
         }
     }
 }

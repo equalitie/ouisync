@@ -429,7 +429,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 .await?;
 
             if let Some(addr) = addr {
-                println!("{}", addr);
+                println!("{addr}");
             }
         }
         ClientCommand::RemovePeers { addrs } => {

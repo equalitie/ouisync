@@ -101,7 +101,7 @@ impl AsRef<[u8]> for PasswordSalt {
 
 impl fmt::Debug for PasswordSalt {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:<8x}", self)
+        write!(f, "{self:<8x}")
     }
 }
 

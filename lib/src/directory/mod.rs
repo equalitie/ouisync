@@ -702,7 +702,7 @@ impl Directory {
     #[async_recursion]
     pub async fn debug_print(&self, print: DebugPrinter) {
         for (name, entry_data) in &self.content {
-            print.display(&format_args!("{:?}: {:?}", name, entry_data));
+            print.display(&format_args!("{name:?}: {entry_data:?}"));
 
             match entry_data {
                 EntryData::File(file_data) => {
@@ -731,12 +731,12 @@ impl Directory {
                                     ));
                                 }
                                 Err(e) => {
-                                    print.display(&format!("Failed to read {:?}", e));
+                                    print.display(&format!("Failed to read {e:?}"));
                                 }
                             }
                         }
                         Err(e) => {
-                            print.display(&format!("Failed to open {:?}", e));
+                            print.display(&format!("Failed to open {e:?}"));
                         }
                     }
                 }
@@ -758,7 +758,7 @@ impl Directory {
                             dir.debug_print(print).await;
                         }
                         Err(e) => {
-                            print.display(&format!("Failed to open {:?}", e));
+                            print.display(&format!("Failed to open {e:?}"));
                         }
                     }
                 }

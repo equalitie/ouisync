@@ -78,7 +78,7 @@ impl fmt::Display for Verbose<'_> {
         let mut current = self.0 as &dyn Error;
 
         while let Some(source) = current.source() {
-            writeln!(f, "    caused by: {}", source)?;
+            writeln!(f, "    caused by: {source}")?;
             current = source;
         }
 

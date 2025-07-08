@@ -436,7 +436,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 {
                     Ok(root_node) => root_node,
                     Err(Error::BranchNotFound) => continue,
-                    Err(error) => panic!("unexpected error: {:?}", error),
+                    Err(error) => panic!("unexpected error: {error:?}"),
                 };
 
                 store.remove_outdated_snapshots(&root_node).await.unwrap();

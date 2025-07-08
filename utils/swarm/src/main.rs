@@ -55,7 +55,7 @@ fn spawn(index: u64, mode: Mode, working_directory: &Path) -> Child {
 
     thread::spawn(move || {
         if let Err(error) = Replica::new(name.clone(), mode, working_directory, tx).run() {
-            eprintln!("[{}] {}", name, error);
+            eprintln!("[{name}] {error}");
         }
     });
 
@@ -188,7 +188,7 @@ impl Replica {
                     break;
                 }
 
-                write!(writer, "[{:4}] {}", name, line)?;
+                write!(writer, "[{name:4}] {line}")?;
             }
 
             Ok::<_, anyhow::Error>(())

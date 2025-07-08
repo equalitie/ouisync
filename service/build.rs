@@ -11,7 +11,7 @@ use ouisync_api_parser::{Context, Field, Fields, Request, Response, Type};
 
 fn main() {
     if let Err(error) = generate() {
-        println!("cargo::error={:#}", error);
+        println!("cargo::error={error:#}");
     }
 }
 
@@ -197,7 +197,7 @@ fn generate_dispatch(request: &Request) -> Result<()> {
         }
 
         writeln!(out, " => {{")?;
-        writeln!(out, "{I}{I}{I}let ret = state.{}(", name)?;
+        writeln!(out, "{I}{I}{I}let ret = state.{name}(")?;
 
         for (name, field) in &variant.fields {
             if matches!(field.ty, Type::Unit) {

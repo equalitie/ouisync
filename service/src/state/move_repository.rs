@@ -138,7 +138,7 @@ impl<'a> Context<'a> {
 
     async fn undo(&self, undo_stack: &mut Vec<Action>) {
         while let Some(action) = undo_stack.pop() {
-            let action_debug = format!("{:?}", action);
+            let action_debug = format!("{action:?}");
             action
                 .undo(self)
                 .await

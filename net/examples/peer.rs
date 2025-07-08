@@ -134,12 +134,12 @@ async fn run_server(options: &Options) -> Result<()> {
 async fn run_server_connection(connection: Connection) {
     let addr = connection.remote_addr();
 
-    println!("[{}] accepted", addr);
+    println!("[{addr}] accepted");
 
     let (mut tx, mut rx) = match connection.incoming().await {
         Ok(stream) => stream,
         Err(error) => {
-            println!("[{}] accept stream failed: {}", addr, error);
+            println!("[{addr}] accept stream failed: {error}");
             return;
         }
     };
@@ -148,23 +148,23 @@ async fn run_server_connection(connection: Connection) {
         let message = match read_message(&mut rx).await {
             Ok(message) => message,
             Err(error) => {
-                println!("[{}] read failed: {}", addr, error);
+                println!("[{addr}] read failed: {error}");
                 break;
             }
         };
 
-        println!("[{}] received \"{}\"", addr, message);
+        println!("[{addr}] received \"{message}\"");
 
         match write_message(&mut tx, "ok").await {
             Ok(_) => (),
             Err(error) => {
-                println!("[{}] write failed: {}", addr, error);
+                println!("[{addr}] write failed: {error}");
                 break;
             }
         }
     }
 
-    println!("[{}] closed", addr);
+    println!("[{addr}] closed");
 }
 
 async fn read_message(reader: &mut RecvStream) -> Result<String> {

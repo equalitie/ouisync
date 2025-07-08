@@ -458,8 +458,7 @@ mod tests {
         let orig = AccessChange::Enable(Some(SetLocalSecret::KeyAndSalt { key, salt }));
 
         let expected_serialized = format!(
-            "{{\"enable\":{{\"key_and_salt\":{{\"key\":{}, \"salt\":{}}}}}}}",
-            key_serialized, salt_serialized
+            "{{\"enable\":{{\"key_and_salt\":{{\"key\":{key_serialized}, \"salt\":{salt_serialized}}}}}}}"
         );
 
         let serialized = serde_json::to_string(&orig).unwrap();

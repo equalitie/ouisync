@@ -919,7 +919,7 @@ impl Repository {
         let branches = match self.shared.load_branches().await {
             Ok(branches) => branches,
             Err(error) => {
-                print.display(&format_args!("failed to load branches: {:?}", error));
+                print.display(&format_args!("failed to load branches: {error:?}"));
                 return;
             }
         };

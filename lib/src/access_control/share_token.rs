@@ -117,7 +117,7 @@ fn decode_version(mut input: &[u8]) -> Result<&[u8], DecodeError> {
 
 impl fmt::Display for ShareToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}#", PREFIX)?;
+        write!(f, "{PREFIX}#")?;
 
         let mut buffer = Vec::new();
         encode_version(&mut buffer, VERSION);

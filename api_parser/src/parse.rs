@@ -551,7 +551,7 @@ fn parse_type(ty: &syn::Type) -> Result<Type> {
                 let arg = parse_generic_type(arg)?;
                 let arg = arg
                     .as_scalar()
-                    .with_context(|| format!("unsupported type argument for Option: {:?}", arg))?
+                    .with_context(|| format!("unsupported type argument for Option: {arg:?}"))?
                     .to_owned();
 
                 return Ok(Type::Option(arg.to_owned()));
@@ -573,7 +573,7 @@ fn parse_type(ty: &syn::Type) -> Result<Type> {
                         let err = parse_generic_type(err)?;
                         let err = err
                             .as_scalar()
-                            .with_context(|| format!("unsupported error type: {:?}", err))?
+                            .with_context(|| format!("unsupported error type: {err:?}"))?
                             .to_owned();
 
                         (ok, err)
@@ -598,7 +598,7 @@ fn parse_type(ty: &syn::Type) -> Result<Type> {
                 let arg = parse_generic_type(arg)?;
                 let arg = arg
                     .as_scalar()
-                    .with_context(|| format!("unsupported type argument for Vec: {:?}", arg))?
+                    .with_context(|| format!("unsupported type argument for Vec: {arg:?}"))?
                     .to_owned();
 
                 if arg == "u8" {
@@ -620,14 +620,14 @@ fn parse_type(ty: &syn::Type) -> Result<Type> {
                 let key = parse_generic_type(key)?;
                 let key = key
                     .as_scalar()
-                    .with_context(|| format!("unsupported map key type: {:?}", key))?
+                    .with_context(|| format!("unsupported map key type: {key:?}"))?
                     .to_owned();
 
                 let val = args.args.get(1).unwrap();
                 let val = parse_generic_type(val)?;
                 let val = val
                     .as_scalar()
-                    .with_context(|| format!("unsupported map value type: {:?}", val))?
+                    .with_context(|| format!("unsupported map value type: {val:?}"))?
                     .to_owned();
 
                 return Ok(Type::Map(key, val));

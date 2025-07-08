@@ -90,7 +90,7 @@ impl fmt::Display for Inner {
 
         if !self.sources.is_empty() {
             for source in &self.sources {
-                write!(f, " → {}", source)?;
+                write!(f, " → {source}")?;
             }
         }
 

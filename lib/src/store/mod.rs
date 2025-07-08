@@ -317,7 +317,7 @@ impl Store {
     pub async fn debug_print_root_node(&self, printer: DebugPrinter) {
         match self.acquire_read().await {
             Ok(mut reader) => root_node::debug_print(reader.db(), printer).await,
-            Err(error) => printer.display(&format!("Failed to acquire reader {:?}", error)),
+            Err(error) => printer.display(&format!("Failed to acquire reader {error:?}")),
         }
     }
 
