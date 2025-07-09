@@ -758,7 +758,7 @@ impl VirtualFilesystem {
     ) -> Result<(), Error> {
         tracing::trace!("enter");
         let file_entry = context.entry.as_file()?;
-        file_entry.shared.write().await.delete_on_close = info.delete_on_close();
+        file_entry.shared.write().await.delete_on_close = info.delete_pending();
         Ok(())
     }
 
@@ -787,7 +787,7 @@ impl VirtualFilesystem {
 
         let dir = self.repo.cd(&path).await?;
 
-        match (dir.is_empty(), info.delete_on_close()) {
+        match (dir.is_empty(), info.delete_pending()) {
             (true, true) => shared.delete_on_close = true,
             (true, false) => shared.delete_on_close = false,
             (false, true) => return Err(STATUS_DIRECTORY_NOT_EMPTY.into()),

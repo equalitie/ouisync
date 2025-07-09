@@ -36,11 +36,13 @@ winapi = { workspace = true, features = ["ntstatus", "winnt"]  }
 
 [target.'cfg(target_os = "windows")'.dependencies.dokan]
 git = "https://github.com/dokan-dev/dokan-rust"
-rev = "d1ed57a508d93b3bbb04c37e9ba56ef9692176f7"
+# rev = "d1ed57a508d93b3bbb04c37e9ba56ef9692176f7"
+rev = "ce2ec8565591d21ed5b58f8233e9d81a730823ad"
 
 [target.'cfg(target_os = "windows")'.dependencies.dokan-sys]
 git = "https://github.com/dokan-dev/dokan-rust"
-rev = "d1ed57a508d93b3bbb04c37e9ba56ef9692176f7"
+# rev = "d1ed57a508d93b3bbb04c37e9ba56ef9692176f7"
+rev = "ce2ec8565591d21ed5b58f8233e9d81a730823ad"
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }

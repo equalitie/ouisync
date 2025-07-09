@@ -398,12 +398,10 @@ impl Setup {
         fs::create_dir(&mount_dir).await.unwrap();
 
         let span_guard = span.entered();
-        let mount_guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir).unwrap();
+        let mount_guard =
+            super::mount(tokio::runtime::Handle::current(), repo, mount_dir.clone()).unwrap();
 
-        // TODO: There is likely a bug in Dokan causing the repository not to appear as mounted righ
-        // after the `mount` (or `mount_with_span`) finishes, which makes the tests fail.
-        #[cfg(target_os = "windows")]
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        wait_mounted(&mount_dir).await;
 
         Self {
             base_dir,
@@ -425,14 +423,11 @@ impl Setup {
 
         fs::create_dir(&mount_dir).await.unwrap();
 
-        let vfs = MultiRepoVFS::create(mount_dir).await.unwrap();
+        let vfs = MultiRepoVFS::create(mount_dir.clone()).await.unwrap();
 
         vfs.insert("repo".to_owned(), repo).unwrap();
 
-        // TODO: There is likely a bug in Dokan causing the repository not to appear as mounted righ
-        // after the `mount` (or `mount_with_span`) finishes, which makes the tests fail.
-        #[cfg(target_os = "windows")]
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        wait_mounted(&mount_dir).await;
 
         Self {
             base_dir,
@@ -458,7 +453,7 @@ impl Setup {
                 secrets: WriteSecrets::random(),
             },
         )
-        .instrument(span.clone())
+        .instrument(span)
         .await
         .unwrap();
 
@@ -504,3 +499,28 @@ fn init_log() {
         .try_init()
         .ok();
 }
+
+// TODO: There is likely a bug in Dokan causing the repository not to appear as mounted right after
+// the `mount` finishes, which makes the tests fail.
+#[cfg(target_os = "windows")]
+async fn wait_mounted(mount_dir: &Path) {
+    use std::time::Duration;
+    use tokio::time;
+
+    time::timeout(Duration::from_secs(10), async {
+        loop {
+            match fs::read_dir(mount_dir).await {
+                Ok(_) => break,
+                Err(_) => {
+                    time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn wait_mounted(_mount_dir: &Path) {}
