@@ -50,12 +50,13 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Install system dependencies
+      - name: Install system dependencies (linux)
         if: matrix.name == 'linux'
-        # NOTE: libfuse-dev is required only to build and run the ouisync
-        # application. It is not required for building and using the ouisync
-        # library.
         run: sudo apt-get install libfuse-dev
+
+      - name: Install system dependencies (windows)
+        if: matrix.name == 'windows'
+        run: choco install dokany2 --version=2.3.0.1000
 
       - name: Install cross
         if: matrix.cargo-command == 'cross'
