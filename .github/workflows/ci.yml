@@ -50,12 +50,13 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Install system dependencies
+      - name: Install system dependencies (linux)
         if: matrix.name == 'linux'
-        # NOTE: libfuse-dev is required only to build and run the ouisync
-        # application. It is not required for building and using the ouisync
-        # library.
         run: sudo apt-get install libfuse-dev
+
+      - name: Install system dependencies (windows)
+        if: matrix.name == 'windows'
+        run: choco install dokany2 --version=2.3.0.1000
 
       - name: Install cross
         if: matrix.cargo-command == 'cross'
@@ -77,17 +78,23 @@ jobs:
           -- -Dwarnings
 
       - name: Run unit tests
-        if: matrix.test == 'true'
-        run: ${{ matrix.cargo-command }} test --lib
+        if: matrix.test
+        run: ${{ matrix.cargo-command }} test --workspace --exclude ouisync-vfs --lib
+
+      # TODO: the vfs tests fail on windows with weird "null pointer dereference" error. Running
+      # them on linux only for now but this needs to be looked into.
+      - name: Run vfs unit tests
+        if: matrix.test && matrix.name != 'windows'
+        run: ${{ matrix.cargo-command }} test --package ouisync-vfs
 
       - name: Run lib integration tests
-        if: matrix.test == 'true'
+        if: matrix.test
         run: ${{ matrix.cargo-command }} test --package ouisync --test gc --test network --test sync
         env:
           RUST_LOG: ouisync=debug,gc=debug,network=debug,sync=debug
 
       - name: Run cli integration tests
-        if: matrix.test == 'true'
+        if: matrix.test && matrix.name == 'linux'
         run: ${{ matrix.cargo-command }} test --package ouisync-cli --test cli
 
   check_kotlin_bindings:

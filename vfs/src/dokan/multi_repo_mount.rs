@@ -131,7 +131,7 @@ impl MultiRepoMount for MultiRepoVFS {
                 return Err(io::Error::new(
                     // InvalidFilename would have been better, but it's unstable.
                     io::ErrorKind::InvalidInput,
-                    format!("repository name contains nulls {:?}", name),
+                    format!("repository name contains nulls {name:?}"),
                 ));
             }
         };
@@ -221,6 +221,7 @@ impl Handler {
     }
 }
 
+#[expect(clippy::large_enum_variant)]
 enum MultiRepoEntryHandle {
     EntryHandle {
         vfs: Arc<VirtualFilesystem>,
