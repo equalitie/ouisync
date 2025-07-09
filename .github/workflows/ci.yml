@@ -4,6 +4,7 @@ on: [push]
 
 env:
   PROPTEST_CASES: 32
+  RUST_BACKTRACE: 1
 
 jobs:
   check_rust_crates:
