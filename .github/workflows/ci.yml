@@ -77,17 +77,17 @@ jobs:
           -- -Dwarnings
 
       - name: Run unit tests
-        if: matrix.test == 'true'
+        if: matrix.test
         run: ${{ matrix.cargo-command }} test --lib
 
       - name: Run lib integration tests
-        if: matrix.test == 'true'
+        if: matrix.test
         run: ${{ matrix.cargo-command }} test --package ouisync --test gc --test network --test sync
         env:
           RUST_LOG: ouisync=debug,gc=debug,network=debug,sync=debug
 
       - name: Run cli integration tests
-        if: matrix.test == 'true'
+        if: matrix.test && matrix.name == 'linux'
         run: ${{ matrix.cargo-command }} test --package ouisync-cli --test cli
 
   check_kotlin_bindings:
