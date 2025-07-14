@@ -79,6 +79,8 @@ class OuisyncService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
+        Log.d(TAG, "OuisyncService.onStartCommand($intent, $flags, $startId)")
+
         val notificationChannelName = intent?.getStringExtra(EXTRA_NOTIFICATION_CHANNEL_NAME)
         val notificationContentTitle = intent?.getStringExtra(EXTRA_NOTIFICATION_CONTENT_TITLE)
         val notificationContentText = intent?.getStringExtra(EXTRA_NOTIFICATION_CONTENT_TEXT)
@@ -94,7 +96,7 @@ class OuisyncService : Service() {
         scope.launch {
             server.await()
 
-            // TODO: consider also broadcasting failure
+            // TODO: consider broadcasting failures as well
             sendBroadcast(Intent(OuisyncService.ACTION_STARTED).setPackage(getPackageName()))
         }
 

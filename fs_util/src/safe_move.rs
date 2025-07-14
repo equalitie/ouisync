@@ -48,7 +48,7 @@ async fn safe_rename(src: &Path, dst: &Path) -> io::Result<()> {
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn blocking_safe_rename(src: &Path, dst: &Path) -> io::Result<()> {
     use std::{
-        ffi::CString,
+        ffi::{c_char, c_int, c_uint, CString},
         path::{self, PathBuf},
     };
 
@@ -57,13 +57,34 @@ fn blocking_safe_rename(src: &Path, dst: &Path) -> io::Result<()> {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
     }
 
+    // In older linux/android distros the `renameat2` function is not available. Implement it by
+    // invoking the raw syscall.
+    unsafe extern "C" fn renameat2(
+        olddirfd: c_int,
+        oldpath: *const c_char,
+        newdirfd: c_int,
+        newpath: *const c_char,
+        flags: c_uint,
+    ) -> c_int {
+        unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                olddirfd,
+                oldpath,
+                newdirfd,
+                newpath,
+                flags,
+            ) as _
+        }
+    }
+
     let src = to_cstring(path::absolute(src)?)?;
     let dst = to_cstring(path::absolute(dst)?)?;
 
     // SAFETY: Both paths are valid and are passed in as pointers to valid 0-terminated C-style
     // strings.
     let result = unsafe {
-        libc::renameat2(
+        renameat2(
             0,
             src.as_ptr(),
             0,
