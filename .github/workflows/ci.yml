@@ -57,7 +57,7 @@ jobs:
 
       - name: Install system dependencies (windows)
         if: matrix.name == 'windows'
-        run: choco install dokany2 --version=2.3.0.1000
+        run: choco install dokany2
 
       - name: Install cross
         if: matrix.cargo-command == 'cross'
@@ -212,9 +212,13 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
-      - name: Install system dependencies
+      - name: Install system dependencies (linux)
         if: matrix.name == 'linux'
         run: sudo apt-get install libfuse-dev
+
+      - name: Install system dependencies (windows)
+        if: matrix.name == 'windows'
+        run: choco install dokany2
 
       - name: Get dart dependencies
         working-directory: bindings/dart
