@@ -677,9 +677,20 @@ impl State {
 
         tracing::info!(name = holder.short_name(), "repository created");
 
-        // unwrap is ok because we already checked that the repo doesn't exist earlier and we have
-        // exclusive access to this state.
-        let handle = self.repos.try_insert(holder).unwrap();
+        let handle = match self.repos.try_insert(holder) {
+            Ok(handle) => handle,
+            Err(holder) => {
+                // Someone managed to insert the repo concurrently after we checked above
+                // whether the repo already exists.
+                if let Err(error) = holder.close().await {
+                    tracing::warn!(
+                        "Failed to close a redundantly opened repo {:?}, {error:?}",
+                        holder.path()
+                    )
+                }
+                return Err(Error::AlreadyExists);
+            }
+        };
 
         Ok(handle)
     }
@@ -722,8 +733,19 @@ impl State {
             handle
         } else {
             let holder = self.load_repository(&path, local_secret, false).await?;
-            // unwrap is ok because we already handled the case when the repo already exists.
-            self.repos.try_insert(holder).unwrap()
+            match self.repos.try_insert(holder) {
+                Ok(handle) => handle,
+                Err(holder) => {
+                    // Someone managed to insert the repo concurrently after we checked above
+                    // whether the repo already exists.
+                    if let Err(error) = holder.close().await {
+                        tracing::warn!(
+                            "Failed to close a redundantly opened repo {path:?}, {error:?}"
+                        )
+                    }
+                    return Err(Error::AlreadyExists);
+                }
+            }
         };
 
         Ok(handle)
@@ -1846,7 +1868,7 @@ impl State {
                 }
             };
 
-            if self.repos.try_insert(holder).is_none() {
+            if self.repos.try_insert(holder).is_err() {
                 tracing::error!(?path, "repository already exists");
                 continue;
             }
