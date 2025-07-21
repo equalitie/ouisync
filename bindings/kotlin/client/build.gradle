@@ -119,6 +119,13 @@ afterEvaluate {
         dependsOn 'cargoBuildUnitTest'
         systemProperty('jna.library.path', "$rootDir/../../target/debug")
     }
+
+}
+
+dokka {
+    dokkaSourceSets.main {
+        sourceRoots.from(project.layout.buildDirectory.file('gen/Api.kt'))
+    }
 }
 
 // TODO: publishing
