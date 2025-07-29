@@ -25,6 +25,7 @@ class Client {
   int _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
   final _notifications = <int, StreamSink<Object?>>{};
+  bool _closed = false;
 
   Client._(this._socket, this._stream) {
     _streamSubscription =
@@ -83,6 +84,7 @@ class Client {
   }
 
   Future<void> close() async {
+    _closed = true;
     await _streamSubscription?.cancel();
     await _socket.close();
   }
@@ -148,6 +150,7 @@ class Client {
 
   Future<void> _onSubscriptionCancel(int id) async {
     _notifications.remove(id);
+    if (_closed) return;
     await invoke(RequestSessionUnsubscribe(id: MessageId(id)));
   }
 }
