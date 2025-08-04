@@ -371,6 +371,8 @@ mod prune {
             (uptodate.into_iter().chain(outdated).collect(), Vec::new())
         };
 
+        let mut locked = false;
+
         // Remove outdated branches
         for node in outdated {
             // Never remove local branch
@@ -391,6 +393,7 @@ mod prune {
                 Err((notify, _)) => {
                     tracing::trace!(id = ?node.proof.writer_id, "outdated branch not removed - in use");
                     unlock_tx.send(notify).await;
+                    locked = true;
                     continue;
                 }
             };
@@ -425,7 +428,14 @@ mod prune {
                 .await?;
         }
 
-        Ok(())
+        if locked {
+            // An error is returned here to ensure that this maintenance job is not considered
+            // complete and that the 'MaintenanceComplete' event is not emitted. This is because
+            // the job will start again once the locks are released.
+            Err(Error::Locked)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -453,6 +463,7 @@ mod trash {
 
         let mut unreachable_block_ids_page =
             shared.vault.store().block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
+        let mut locked = false;
 
         loop {
             let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;
@@ -461,7 +472,9 @@ mod trash {
                 break;
             }
 
-            exclude_locked_blocks(shared, &mut unreachable_block_ids, unlock_tx).await?;
+            if exclude_locked_blocks(shared, &mut unreachable_block_ids, unlock_tx).await? {
+                locked = true;
+            }
 
             traverse_root_in_all_branches(shared, local_branch, &mut unreachable_block_ids).await?;
 
@@ -479,7 +492,14 @@ mod trash {
             remove_unreachable_blocks(shared, local_branch, unreachable_block_ids).await?;
         }
 
-        Ok(())
+        if locked {
+            // An error is returned here to ensure that this maintenance job is not considered
+            // complete and that the 'MaintenanceComplete' event is not emitted. This is because
+            // the job will start again once the locks are released.
+            Err(Error::Locked)
+        } else {
+            Ok(())
+        }
     }
 
     async fn traverse_root_in_all_branches(
@@ -588,11 +608,12 @@ mod trash {
     }
 
     /// Exclude blocks of locked blobs from the `unreachable_block_ids` set.
+    /// Returns whether any locks were held.
     async fn exclude_locked_blocks(
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
         unlock_tx: &unlock::Sender,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         // This can sometimes include pruned branches. It happens when a branch is first loaded,
         // then pruned, then in an attempt to open the root directory, it's read lock is acquired
         // but before the open fails and the lock is dropped, we already return the lock here.
@@ -600,8 +621,10 @@ mod trash {
         // but we ignore it because it's harmless.
         let locks = shared.branch_shared.locker.all();
         if locks.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
+
+        let mut locked = false;
 
         for (branch_id, locks) in locks {
             let Ok(branch) = shared.get_branch(branch_id) else {
@@ -616,6 +639,7 @@ mod trash {
                 };
 
                 unlock_tx.send(notify).await;
+                locked = true;
 
                 while let Some((block_id, _)) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);
@@ -623,7 +647,7 @@ mod trash {
             }
         }
 
-        Ok(())
+        Ok(locked)
     }
 
     async fn remove_unreachable_blocks(
