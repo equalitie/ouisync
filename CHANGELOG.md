@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.2...master) -->
 
-## [v0.9.2](https://github.com/equalitie/ouisync/compare/v0.9.1...v0.9.2)
+## [v0.9.2](https://github.com/equalitie/ouisync/compare/v0.9.1...v0.9.2) - 2025-08-05
 
 - Use the same config and store directories as the [GUI app](https://github.com/equalitie/ouisync-app).
 - Improve some error messages in the CLI app.
