@@ -51,6 +51,9 @@ jobs:
       - name: Setup gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Install NDK
+        run: $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.2.12479018"
+
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5
