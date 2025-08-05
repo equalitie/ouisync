@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Use the same config and store directories as the [GUI app](https://github.com/equalitie/ouisync-app).
 - Improve some error messages in the CLI app.
-- Introduce the "logtee" library for capturing log messages from multiple sources
+- Introduce the [logtee](https://github.com/equalitie/ouisync/tree/master/logtee) library for
+  capturing log messages from multiple sources
+- Fix crash on older Linux and Android versions due to missing libc function
+- Fix crash due to race condition when concurrently opening the same repo multiple times
+- Fix kotlin API docs not being generated completely
+- Fix notification events being sometimes spammed indefinitely after creating new directory
 
 ## [v0.9.1](https://github.com/equalitie/ouisync/compare/v0.9.0...v0.9.1) - 2025-06-26
 
