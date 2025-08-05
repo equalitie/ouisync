@@ -4,6 +4,7 @@ on: [push]
 
 env:
   PROPTEST_CASES: 32
+  RUST_BACKTRACE: 1
 
 jobs:
   check_rust_crates:
@@ -17,18 +18,17 @@ jobs:
           - name: android
             os: ubuntu-24.04
             cargo-command: cross
-            cargo-dir: ~/.cargo
             target: aarch64-linux-android
 
           - name: linux
             os: ubuntu-24.04
             cargo-command: cargo
-            cargo-dir: ~/.cargo
+            test: true
 
           - name: windows
             os: windows-latest
             cargo-command: cargo
-            cargo-dir: ~\cargo
+            test: true
 
     steps:
       - uses: actions/checkout@v4
@@ -43,19 +43,21 @@ jobs:
       - uses: actions/cache@v3
         with:
           path: |
-            ${{ matrix.cargo-dir }}/bin/
-            ${{ matrix.cargo-dir }}/registry/index/
-            ${{ matrix.cargo-dir }}/registry/cache/
-            ${{ matrix.cargo-dir }}/git/db/
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Install system dependencies
+      - name: Install system dependencies (linux)
         if: matrix.name == 'linux'
-        # NOTE: libfuse-dev is required only to build and run the ouisync
-        # application. It is not required for building and using the ouisync
-        # library.
         run: sudo apt-get install libfuse-dev
+
+      - name: Install system dependencies (windows)
+        if: matrix.name == 'windows'
+        run: choco install dokany2
 
       - name: Install cross
         if: matrix.cargo-command == 'cross'
@@ -64,24 +66,36 @@ jobs:
       - name: Run clippy
         run: >
           ${{ matrix.cargo-command }} clippy
-          --package ouisync --package ouisync-service --package ouisync-cli
+          --package ouisync
+          --package ouisync-cli
+          --package ouisync-net
+          --package ouisync-service
+          --package ouisync-vfs
+          --package fs_util
+          --package logtee
           ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
           --all-targets
           --no-deps
           -- -Dwarnings
 
       - name: Run unit tests
-        if: matrix.name == 'linux'
-        run: ${{ matrix.cargo-command }} test --lib
+        if: matrix.test
+        run: ${{ matrix.cargo-command }} test --workspace --exclude ouisync-vfs --lib
+
+      # TODO: the vfs tests fail on windows with weird "null pointer dereference" error. Running
+      # them on linux only for now but this needs to be looked into.
+      - name: Run vfs unit tests
+        if: matrix.test && matrix.name != 'windows'
+        run: ${{ matrix.cargo-command }} test --package ouisync-vfs
 
       - name: Run lib integration tests
-        if: matrix.name == 'linux'
+        if: matrix.test
         run: ${{ matrix.cargo-command }} test --package ouisync --test gc --test network --test sync
         env:
           RUST_LOG: ouisync=debug,gc=debug,network=debug,sync=debug
 
       - name: Run cli integration tests
-        if: matrix.name == 'linux'
+        if: matrix.test && matrix.name == 'linux'
         run: ${{ matrix.cargo-command }} test --package ouisync-cli --test cli
 
   check_kotlin_bindings:
@@ -108,12 +122,8 @@ jobs:
         # and the linux version does currently unconditionally depend on fuse.
         run: sudo apt-get install libfuse-dev
 
-      # - name: Install NDK
-      #   uses: nttld/setup-ndk@v1
-      #   with:
-      #     ndk-version: r27c
-      #     link-to-sdk: true
-      #     local-cache: true
+      - name: Install NDK
+        run: $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.2.12479018"
 
       - name: Cache cargo artifacts
         uses: actions/cache@v3
@@ -170,14 +180,12 @@ jobs:
             os: ubuntu-24.04
             env:
               OUISYNC_LIB: ../../target/debug/libouisync_service.so
-            cargo-dir: ~/.cargo
 
           - name: windows
             os: windows-latest
             env:
               OUISYNC_LIB: ..\..\target\debug\ouisync_service.dll
               DOKAN_DLL_OUTPUT_PATH: C:\Windows\System32
-            cargo-dir: ~\cargo
 
     env: ${{ matrix.env }}
 
@@ -193,16 +201,20 @@ jobs:
       - uses: actions/cache@v3
         with:
           path: |
-            ${{ matrix.cargo-dir }}/bin/
-            ${{ matrix.cargo-dir }}/registry/index/
-            ${{ matrix.cargo-dir }}/registry/cache/
-            ${{ matrix.cargo-dir }}/git/db/
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
-      - name: Install system dependencies
+      - name: Install system dependencies (linux)
         if: matrix.name == 'linux'
         run: sudo apt-get install libfuse-dev
+
+      - name: Install system dependencies (windows)
+        if: matrix.name == 'windows'
+        run: choco install dokany2
 
       - name: Get dart dependencies
         working-directory: bindings/dart

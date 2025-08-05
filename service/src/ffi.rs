@@ -1,9 +1,6 @@
 use std::{
-    ffi::{c_char, c_uchar, c_void, CStr, CString},
-    io, mem,
-    path::Path,
+    ffi::{c_char, c_void, CStr, CString},
     pin::pin,
-    sync::OnceLock,
     thread,
 };
 
@@ -12,8 +9,8 @@ use tracing::{Instrument, Span};
 
 use self::callback::Callback;
 use crate::{
-    logger::{BufferPool, Logger},
-    protocol::{ErrorCode, LogLevel, ToErrorCode},
+    logger::{self, LogColor, LogFormat},
+    protocol::{ErrorCode, ToErrorCode},
     Error, Service,
 };
 
@@ -207,97 +204,10 @@ fn run(
     );
 }
 
-pub type LogCallback = extern "C" fn(LogLevel, *const c_uchar, u64, u64);
-
 /// Initialize logging. Should be called before `service_start`.
-///
-/// - If `stdout` is not zero, write log messages to the standard output.
-/// - If `file` is not null, write log messages to the given file.
-/// - If `callback` is not null, it is invoked for each log message. After the log message has been
-///   processed, it needs to be released by calling `release_log_message`. Failure to do so will
-///   cause memory leak. The messages can be processed asynchronously (e.g., in another thread).
-///
-/// # Safety
-///
-/// `file` must be either null or it must be safe to pass to [std::ffi::CStr::from_ptr].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn init_log(
-    stdout: c_uchar,
-    file: *const c_char,
-    callback: Option<LogCallback>,
-) -> ErrorCode {
-    unsafe { try_init_log(stdout != 0, file, callback) }.to_error_code()
-}
-
-/// Release a log message back to the backend. See `init_log` for more details.
-///
-/// # Safety
-///
-/// `ptr`, `len` and `cap` must have been obtained through the callback to `init_log` and not
-/// modified.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn release_log_message(ptr: *const c_uchar, len: u64, cap: u64) {
-    let message = unsafe { Vec::from_raw_parts(ptr as _, len as _, cap as _) };
-
-    if let Some(pool) = LOGGER.get().and_then(|wrapper| wrapper.pool.as_ref()) {
-        pool.release(message);
-    }
-}
-
-struct LoggerWrapper {
-    _logger: Logger,
-    pool: Option<BufferPool>,
-}
-
-static LOGGER: OnceLock<LoggerWrapper> = OnceLock::new();
-
-unsafe fn try_init_log(
-    stdout: bool,
-    file: *const c_char,
-    callback: Option<LogCallback>,
-) -> Result<(), Error> {
-    let builder = Logger::builder();
-
-    let builder = if stdout { builder.stdout() } else { builder };
-
-    let builder = if !file.is_null() {
-        builder.file(Path::new(unsafe { CStr::from_ptr(file) }.to_str()?))
-    } else {
-        builder
-    };
-
-    let (builder, pool) = if let Some(callback) = callback {
-        let pool = BufferPool::default();
-        let callback = Box::new(move |level, message: &mut Vec<u8>| {
-            let message = mem::take(message);
-            let ptr = message.as_ptr();
-            let len = message.len();
-            let cap = message.capacity();
-            mem::forget(message);
-
-            callback(LogLevel::from(level), ptr, len as _, cap as _);
-        });
-
-        (builder.callback(callback, pool.clone()), Some(pool))
-    } else {
-        (builder, None)
-    };
-
-    let logger = builder.build().map_err(Error::InitializeLogger)?;
-
-    LOGGER
-        .set(LoggerWrapper {
-            _logger: logger,
-            pool,
-        })
-        .map_err(|_| {
-            Error::InitializeLogger(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "logger already initialized",
-            ))
-        })?;
-
-    Ok(())
+pub extern "C" fn init_log() {
+    logger::init(LogFormat::Human, LogColor::Auto);
 }
 
 #[cfg(test)]

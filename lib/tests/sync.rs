@@ -568,9 +568,7 @@ fn recreate_local_branch() {
         assert_eq!(
             vv_b.partial_cmp(&vv_a_0),
             Some(Ordering::Greater),
-            "expected {:?} > {:?}",
-            vv_b,
-            vv_a_0
+            "expected {vv_b:?} > {vv_a_0:?}"
         );
 
         common::eventually(&repo, || async {
@@ -1168,9 +1166,7 @@ fn quota_exceed() {
             let size0 = repo.size().await.unwrap();
             assert!(
                 size0 <= quota,
-                "quota exceeded (size: {}, quota: {})",
-                size0,
-                quota
+                "quota exceeded (size: {size0}, quota: {quota})"
             );
 
             info!("read 0.dat");

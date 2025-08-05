@@ -25,6 +25,7 @@ class Client {
   int _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
   final _notifications = <int, StreamSink<Object?>>{};
+  bool _closed = false;
 
   Client._(this._socket, this._stream) {
     _streamSubscription =
@@ -41,11 +42,8 @@ class Client {
     Duration wait = minWait;
     Exception? lastException;
 
-    final portFile = File('$configPath/local_control_port.conf');
-    final authKeyFile = File('$configPath/local_control_auth_key.conf');
-
-    final port = json.decode(await portFile.readAsString()) as int;
-    final authKey = HEX.decode(json.decode(await authKeyFile.readAsString()));
+    final (port, authKey) =
+        await _readLocalEndpoint('$configPath/local_endpoint.conf');
 
     while (true) {
       if (timeout != null) {
@@ -86,6 +84,7 @@ class Client {
   }
 
   Future<void> close() async {
+    _closed = true;
     await _streamSubscription?.cancel();
     await _socket.close();
   }
@@ -151,11 +150,23 @@ class Client {
 
   Future<void> _onSubscriptionCancel(int id) async {
     _notifications.remove(id);
+    if (_closed) return;
     await invoke(RequestSessionUnsubscribe(id: MessageId(id)));
   }
 }
 
 _minDuration(Duration a, Duration b) => (a < b) ? a : b;
+
+Future<(int, List<int>)> _readLocalEndpoint(String path) async {
+  final file = File(path);
+  final content = await file.readAsString();
+  final raw = json.decode(content) as Map<String, Object?>;
+
+  final port = raw['port'] as int;
+  final authKey = HEX.decode(raw['auth_key'] as String);
+
+  return (port, authKey);
+}
 
 Future<void> _authenticate(
   Stream<Uint8List> stream,

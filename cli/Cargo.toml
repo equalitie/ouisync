@@ -21,9 +21,10 @@ camino = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 dirs = "5.0.1"
+fs_util = { path = "../fs_util" }
 futures-util = { workspace = true }
 hyper = { version = "1.4.1", features = ["server", "http1"] }
-interprocess = { version = "2.2.1", features = ["tokio"] }
+interprocess = { version = "2.2.3", features = ["tokio"] }
 maxminddb = "0.24.0"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
@@ -57,5 +58,5 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
-[target.'cfg(any(target_os = "linux", target_os = "osx"))'.dev-dependencies]
-libc = "0.2.126"
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]
+libc = { workspace = true }

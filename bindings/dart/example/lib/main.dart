@@ -42,7 +42,7 @@ class _MyAppState extends State<MyApp> {
 
     final server = Server.create(
       configPath: configDir,
-    )..initLog(stdout: true);
+    )..initLog();
     await server.start();
     await server.notify(contentTitle: 'Ouisync example is running');
 

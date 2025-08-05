@@ -291,12 +291,12 @@ fn write_header(output: &mut String, key: &Key) {
 }
 
 fn write_counter(output: &mut String, value: u64, ts: SystemTime) {
-    write!(output, " value={}", value).unwrap();
+    write!(output, " value={value}").unwrap();
     write_timestamp(output, ts);
 }
 
 fn write_gauge(output: &mut String, value: f64, ts: SystemTime) {
-    write!(output, " value={}", value).unwrap();
+    write!(output, " value={value}").unwrap();
     write_timestamp(output, ts);
 }
 

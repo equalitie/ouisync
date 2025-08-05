@@ -21,7 +21,7 @@ class RepositoryTest {
 
     @BeforeEach
     fun setup() = runTest {
-        initLog { level, message -> println("[$level] $message") }
+        initLog()
 
         tempDir = JFile(createTempDirectory().toString())
         val configDir = "$tempDir/config"

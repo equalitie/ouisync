@@ -67,8 +67,6 @@ pub enum ErrorCode {
     // # Service errors
     /// Failed to initialize runtime
     RuntimeInitializeError = 4096 + 1,
-    /// Failed to initialize logger
-    LoggerInitializeError = 4096 + 2,
     /// Failed to read from or write into the config file
     ConfigError = 4096 + 3,
     /// TLS certificated not found
@@ -87,6 +85,8 @@ pub enum ErrorCode {
     ServiceAlreadyRunning = 4096 + 10,
     /// Store directory is not specified
     StoreDirUnspecified = 4096 + 11,
+    /// Mount directory is not specified
+    MountDirUnspecified = 4096 + 12,
 
     /// Unspecified error
     Other = 65535,
@@ -102,19 +102,18 @@ impl ToErrorCode for Error {
             Self::AlreadyExists => ErrorCode::AlreadyExists,
             Self::Config(_) => ErrorCode::ConfigError,
             Self::CreateMounter(error) => error.to_error_code(),
-            Self::InitializeLogger(_) => ErrorCode::LoggerInitializeError,
             Self::InitializeRuntime(_) => ErrorCode::RuntimeInitializeError,
             Self::InvalidArgument => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,
             Self::NotFound => ErrorCode::NotFound,
             Self::Ambiguous => ErrorCode::Ambiguous,
             Self::Busy => ErrorCode::ResourceBusy,
-            Self::OperationNotSupported => ErrorCode::Unsupported,
             Self::OperationInterrupted => ErrorCode::Interrupted,
             Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::Repository(error) => error.to_error_code(),
             Self::Store(_) => ErrorCode::StoreError,
             Self::StoreDirUnspecified => ErrorCode::StoreDirUnspecified,
+            Self::MountDirUnspecified => ErrorCode::MountDirUnspecified,
             Self::TlsCertificatesNotFound => ErrorCode::TlsCertificatesNotFound,
             Self::TlsCertificatesInvalid(_) => ErrorCode::TlsCertificatesInvalid,
             Self::TlsConfig(_) => ErrorCode::TlsConfigError,
@@ -149,7 +148,7 @@ impl ToErrorCode for ClientError {
             Self::Connect(_) => ErrorCode::ConnectionRefused,
             Self::Disconnected => ErrorCode::ConnectionAborted,
             Self::InvalidArgument => ErrorCode::InvalidInput,
-            Self::InvalidEndpoint => ErrorCode::InvalidInput,
+            Self::InvalidEndpoint(_) => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,
             Self::Read(ReadError::Receive(_)) => ErrorCode::TransportError,
             Self::Read(ReadError::Decode(_)) => ErrorCode::InvalidData,

@@ -67,8 +67,7 @@ impl Bin {
         let stderr = BufReader::new(process.stderr.take().unwrap());
         copy_lines_prefixed(stderr, OutputStream::Stderr, &id);
 
-        wait_for_file_exists(&config_dir.join("local_control_port.conf"));
-        wait_for_file_exists(&config_dir.join("local_control_auth_key.conf"));
+        wait_for_file_exists(&config_dir.join("local_endpoint.conf"));
 
         let bin = Self {
             id,

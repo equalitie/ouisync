@@ -18,7 +18,6 @@ use crate::{
     repository::{self, RepositoryHandle, RepositoryHolder, RepositorySet},
     tls::TlsConfig,
     transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
-    utils,
 };
 use ouisync::{
     crypto::{cipher::SecretKey, Password, PasswordSalt},
@@ -678,9 +677,20 @@ impl State {
 
         tracing::info!(name = holder.short_name(), "repository created");
 
-        // unwrap is ok because we already checked that the repo doesn't exist earlier and we have
-        // exclusive access to this state.
-        let handle = self.repos.try_insert(holder).unwrap();
+        let handle = match self.repos.try_insert(holder) {
+            Ok(handle) => handle,
+            Err(holder) => {
+                // Someone managed to insert the repo concurrently after we checked above
+                // whether the repo already exists.
+                if let Err(error) = holder.close().await {
+                    tracing::warn!(
+                        "Failed to close a redundantly opened repo {:?}, {error:?}",
+                        holder.path()
+                    )
+                }
+                return Err(Error::AlreadyExists);
+            }
+        };
 
         Ok(handle)
     }
@@ -723,8 +733,19 @@ impl State {
             handle
         } else {
             let holder = self.load_repository(&path, local_secret, false).await?;
-            // unwrap is ok because we already handled the case when the repo already exists.
-            self.repos.try_insert(holder).unwrap()
+            match self.repos.try_insert(holder) {
+                Ok(handle) => handle,
+                Err(holder) => {
+                    // Someone managed to insert the repo concurrently after we checked above
+                    // whether the repo already exists.
+                    if let Err(error) = holder.close().await {
+                        tracing::warn!(
+                            "Failed to close a redundantly opened repo {path:?}, {error:?}"
+                        )
+                    }
+                    return Err(Error::AlreadyExists);
+                }
+            }
         };
 
         Ok(handle)
@@ -976,9 +997,7 @@ impl State {
         repo.metadata().set(AUTOMOUNT_KEY, true).await?;
 
         let mounter = self.mounter.lock().unwrap();
-        let Some(mounter) = mounter.as_ref() else {
-            return Err(Error::OperationNotSupported);
-        };
+        let mounter = mounter.as_ref().ok_or(Error::MountDirUnspecified)?;
 
         if let Some(mount_point) = mounter.mount_point(&short_name) {
             // Already mounted
@@ -1811,16 +1830,16 @@ impl State {
     // Find all repositories in the store dir and open them.
     async fn load_repositories(&self) {
         let Some(store_dir) = self.store.get() else {
-            tracing::warn!("store dir not specified");
+            tracing::debug!("store dir not specified");
             return;
         };
 
         if !fs::try_exists(&store_dir).await.unwrap_or(false) {
-            tracing::error!("store dir doesn't exist");
+            tracing::debug!("store dir doesn't exist");
             return;
         }
 
-        let mut walkdir = utils::walk_dir(store_dir);
+        let mut walkdir = fs_util::WalkDir::new(store_dir).into_stream();
 
         while let Some(entry) = walkdir.next().await {
             let entry = match entry {
@@ -1849,7 +1868,7 @@ impl State {
                 }
             };
 
-            if self.repos.try_insert(holder).is_none() {
+            if self.repos.try_insert(holder).is_err() {
                 tracing::error!(?path, "repository already exists");
                 continue;
             }

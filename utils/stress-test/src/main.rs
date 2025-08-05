@@ -1,6 +1,7 @@
 use clap::{value_parser, Parser};
 use serde::Deserialize;
 use std::{
+    borrow::Cow,
     env, fmt,
     io::{self, BufRead, BufReader},
     process::{self, Command, Output, Stdio},
@@ -186,14 +187,14 @@ fn build(options: &Options) -> Vec<String> {
             let line = line.unwrap();
             let message: BuildMessage = serde_json::from_str(&line).unwrap();
 
-            message.executable.map(|exe| exe.to_owned())
+            message.executable.map(|exe| exe.into_owned())
         })
         .collect()
 }
 
 #[derive(Deserialize)]
 struct BuildMessage<'a> {
-    executable: Option<&'a str>,
+    executable: Option<Cow<'a, str>>,
 }
 
 fn run(process: u64, exes: Vec<String>, args: Vec<String>, tx: mpsc::SyncSender<Status>) {

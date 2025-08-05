@@ -419,8 +419,7 @@ fn write_api_class(
             Type::Option(_) => {
                 write!(
                     out,
-                    "{I}{I}{I}is Response.{} -> return ",
-                    response_variant_name,
+                    "{I}{I}{I}is Response.{response_variant_name} -> return ",
                 )?;
 
                 match ret_stripped {
@@ -440,8 +439,7 @@ fn write_api_class(
             _ => {
                 write!(
                     out,
-                    "{I}{I}{I}is Response.{} -> return ",
-                    response_variant_name,
+                    "{I}{I}{I}is Response.{response_variant_name} -> return ",
                 )?;
 
                 match ret_stripped {
@@ -500,7 +498,7 @@ fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> io::Result<()> 
     writeln!(out, "{prefix}/**")?;
 
     for line in &docs.lines {
-        writeln!(out, "{prefix} *{}", line)?;
+        writeln!(out, "{prefix} *{line}")?;
     }
 
     writeln!(out, "{prefix} */")?;

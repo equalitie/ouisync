@@ -135,7 +135,7 @@ mod tests {
 
         match read(&mut conn, &id, &mut content).await {
             Err(Error::BlockNotFound) => (),
-            Err(error) => panic!("unexpected error: {:?}", error),
+            Err(error) => panic!("unexpected error: {error:?}"),
             Ok(_) => panic!("unexpected success"),
         }
     }

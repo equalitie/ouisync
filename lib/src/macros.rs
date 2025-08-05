@@ -141,19 +141,19 @@ mod tests {
         ]);
 
         assert_eq!(
-            format!("{:x}", id),
+            format!("{id:x}"),
             "0001020305070b0d1113171d1f25292b2f353b3d4347494f53596165676b6d71"
         );
-        assert_eq!(format!("{:<1x}", id), ".");
-        assert_eq!(format!("{:<2x}", id), "..");
-        assert_eq!(format!("{:<3x}", id), "0..");
-        assert_eq!(format!("{:<4x}", id), "00..");
-        assert_eq!(format!("{:<6x}", id), "0001..");
-        assert_eq!(format!("{:<8x}", id), "000102..");
+        assert_eq!(format!("{id:<1x}"), ".");
+        assert_eq!(format!("{id:<2x}"), "..");
+        assert_eq!(format!("{id:<3x}"), "0..");
+        assert_eq!(format!("{id:<4x}"), "00..");
+        assert_eq!(format!("{id:<6x}"), "0001..");
+        assert_eq!(format!("{id:<8x}"), "000102..");
 
-        assert_eq!(format!("{:?}", id), "000102..");
+        assert_eq!(format!("{id:?}"), "000102..");
         assert_eq!(
-            format!("{}", id),
+            format!("{id}"),
             "0001020305070b0d1113171d1f25292b2f353b3d4347494f53596165676b6d71"
         );
     }

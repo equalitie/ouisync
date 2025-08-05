@@ -1,5 +1,5 @@
 use std::{
-    fmt, io,
+    fmt,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -118,7 +118,7 @@ impl<'a> Context<'a> {
                 continue;
             }
 
-            move_file(&src, &dst).await?;
+            fs_util::safe_move(&src, &dst).await?;
             undo_stack.push(Action::MoveFile { src, dst });
         }
 
@@ -138,7 +138,7 @@ impl<'a> Context<'a> {
 
     async fn undo(&self, undo_stack: &mut Vec<Action>) {
         while let Some(action) = undo_stack.pop() {
-            let action_debug = format!("{:?}", action);
+            let action_debug = format!("{action:?}");
             action
                 .undo(self)
                 .await
@@ -212,7 +212,7 @@ impl Action {
                 context.repos.replace(context.handle, holder);
             }
             Self::MoveFile { src, dst } => {
-                move_file(&dst, &src).await?;
+                fs_util::safe_move(&dst, &src).await?;
             }
             Self::RemoveDir { path } => {
                 fs::create_dir_all(path).await?;
@@ -239,21 +239,4 @@ impl fmt::Debug for Action {
             Self::RemoveDir { path } => f.debug_struct("RemoveDir").field("path", path).finish(),
         }
     }
-}
-
-/// Move file from `src` to `dst`. If they are on the same filesystem, it does a simple rename.
-/// Otherwise it copies `src` to `dst` first and then deletes `src`.
-async fn move_file(src: &Path, dst: &Path) -> io::Result<()> {
-    // First try rename
-    match fs::rename(src, dst).await {
-        Ok(()) => return Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => (),
-        Err(error) => return Err(error),
-    }
-
-    // `src` and `dst` are on different filesystems, fall back to copy + remove.
-    fs::copy(src, dst).await?;
-    fs::remove_file(src).await?;
-
-    Ok(())
 }

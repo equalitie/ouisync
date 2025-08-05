@@ -116,10 +116,10 @@ mod tests {
 
         for (input, expected) in test_vectors {
             let s = rmp_serde::to_vec(&input).unwrap();
-            assert_eq!(s, expected, "{:?}", input);
+            assert_eq!(s, expected, "{input:?}");
 
             let d: Request = rmp_serde::from_slice(&s).unwrap();
-            assert_eq!(d, input, "{:?}", input);
+            assert_eq!(d, input, "{input:?}");
         }
     }
 }

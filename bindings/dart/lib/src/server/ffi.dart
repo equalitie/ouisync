@@ -1,12 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
 
 import 'bindings.dart';
 import '../server.dart';
-import '../../generated/api.g.dart' show ErrorCode, LogLevel, OuisyncException;
+import '../../generated/api.g.dart' show ErrorCode, OuisyncException;
 
 class FfiServer extends Server {
   Pointer<Void> _handle = nullptr;
@@ -14,41 +13,7 @@ class FfiServer extends Server {
   FfiServer({required super.configPath, super.debugLabel});
 
   @override
-  void initLog({
-    bool stdout = false,
-    String? file,
-    Function(LogLevel, String)? callback,
-  }) {
-    final filePtr =
-        file != null ? file.toNativeUtf8(allocator: malloc) : nullptr;
-
-    NativeCallable<LogCallback>? nativeCallback;
-
-    if (callback != null) {
-      nativeCallback = NativeCallable<LogCallback>.listener(
-        (int level, Pointer<Uint8> ptr, int len, int cap) {
-          callback(
-            LogLevel.fromInt(level) ?? LogLevel.error,
-            utf8.decode(ptr.asTypedList(len)),
-          );
-
-          Bindings.instance.releaseLogMessage(ptr, len, cap);
-        },
-      );
-    }
-
-    try {
-      Bindings.instance.initLog(
-        stdout ? 1 : 0,
-        filePtr.cast(),
-        nativeCallback?.nativeFunction ?? nullptr,
-      );
-    } finally {
-      if (filePtr != nullptr) {
-        malloc.free(filePtr);
-      }
-    }
-  }
+  Future<void> initLog() async => Bindings.instance.initLog();
 
   @override
   Future<void> start() async {

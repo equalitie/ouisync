@@ -84,7 +84,7 @@ impl From<Message> for Request {
         match message {
             Message::Request(request) => request,
             Message::Response(_) | Message::Pex(_) => {
-                panic!("not a request: {:?}", message)
+                panic!("not a request: {message:?}")
             }
         }
     }
@@ -96,7 +96,7 @@ impl From<Message> for Response {
         match message {
             Message::Response(response) => response,
             Message::Request(_) | Message::Pex(_) => {
-                panic!("not a response: {:?}", message)
+                panic!("not a response: {message:?}")
             }
         }
     }

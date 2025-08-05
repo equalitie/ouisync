@@ -758,7 +758,7 @@ impl VirtualFilesystem {
     ) -> Result<(), Error> {
         tracing::trace!("enter");
         let file_entry = context.entry.as_file()?;
-        file_entry.shared.write().await.delete_on_close = info.delete_on_close();
+        file_entry.shared.write().await.delete_on_close = info.delete_pending();
         Ok(())
     }
 
@@ -787,7 +787,7 @@ impl VirtualFilesystem {
 
         let dir = self.repo.cd(&path).await?;
 
-        match (dir.is_empty(), info.delete_on_close()) {
+        match (dir.is_empty(), info.delete_pending()) {
             (true, true) => shared.delete_on_close = true,
             (true, false) => shared.delete_on_close = false,
             (false, true) => return Err(STATUS_DIRECTORY_NOT_EMPTY.into()),
@@ -1096,11 +1096,9 @@ impl fmt::Debug for Error {
                 STATUS_LOCK_NOT_GRANTED => write!(f, "STATUS_LOCK_NOT_GRANTED"),
                 STATUS_INVALID_DEVICE_REQUEST => write!(f, "STATUS_INVALID_DEVICE_REQUEST"),
                 STATUS_FILE_CLOSED => write!(f, "STATUS_FILE_CLOSED"),
-                other => write!(f, "{:#x}", other),
+                other => write!(f, "{other:#x}"),
             },
-            Self::OuiSync(error) => {
-                write!(f, "{:?}", error)
-            }
+            Self::OuiSync(error) => write!(f, "{error:?}"),
         }
     }
 }
@@ -1222,6 +1220,7 @@ impl DirEntry {
     }
 }
 
+#[expect(clippy::large_enum_variant)]
 enum Entry {
     File(FileEntry),
     Directory(DirEntry),
@@ -1272,6 +1271,7 @@ pub(crate) struct EntryHandle {
     entry: Entry,
 }
 
+#[expect(clippy::large_enum_variant)]
 enum OpenState {
     Open(File),
     Lazy {
@@ -1416,7 +1416,7 @@ impl fmt::Debug for AccessMask {
                     write!(f, "|")?;
                 }
                 first = false;
-                write!(f, "{}", name)?;
+                write!(f, "{name}")?;
                 mask ^= flag;
             }
         }
@@ -1425,8 +1425,9 @@ impl fmt::Debug for AccessMask {
             if !first {
                 write!(f, "|")?;
             }
-            write!(f, "{:#x}", mask)?;
+            write!(f, "{mask:#x}")?;
         }
+
         Ok(())
     }
 }

@@ -36,7 +36,7 @@ impl ConnectionMonitor {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
-        let name = format!("id:{} {} {}", id, direction_glyph, addr);
+        let name = format!("id:{id} {direction_glyph} {addr}");
         let node = parent.make_child(name);
 
         let source = node.make_value("source", source);

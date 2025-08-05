@@ -3,7 +3,6 @@ package org.equalitie.ouisync.kotlin.server
 import com.sun.jna.Pointer
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.equalitie.ouisync.kotlin.client.ErrorCode
-import org.equalitie.ouisync.kotlin.client.LogLevel
 import org.equalitie.ouisync.kotlin.client.OuisyncException
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
@@ -64,29 +63,4 @@ private object NoopHandler : StatusCallback {
     override fun invoke(context: Pointer?, error_code: Short) = Unit
 }
 
-typealias LogFunction = (level: LogLevel, message: String) -> Unit
-
-// Need to keep the callback referenced to prevent it from being GC'd.
-private var logHandler: LogHandler? = null
-
-fun initLog(
-    stdout: Boolean = false,
-    file: String? = null,
-    callback: LogFunction? = null,
-) {
-    logHandler = logHandler ?: callback?.let(::LogHandler)
-    bindings.init_log(if (stdout) 1 else 0, file, logHandler)
-}
-
-private class LogHandler(val function: LogFunction) : LogCallback {
-    override fun invoke(level: Byte, ptr: Pointer, len: Long, cap: Long) {
-        val level = LogLevel.fromValue(level)
-        val message = ptr.getByteArray(0, len.toInt()).decodeToString()
-
-        try {
-            function(level, message)
-        } finally {
-            bindings.release_log_message(ptr, len, cap)
-        }
-    }
-}
+fun initLog() = bindings.init_log()

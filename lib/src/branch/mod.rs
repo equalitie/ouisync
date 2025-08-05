@@ -169,7 +169,7 @@ impl Branch {
         {
             Ok(root) => root.debug_print(print).await,
             Err(error) => {
-                print.display(&format_args!("failed to open root directory: {:?}", error))
+                print.display(&format_args!("failed to open root directory: {error:?}"))
             }
         }
     }

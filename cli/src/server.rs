@@ -1,5 +1,5 @@
-use crate::{defaults, options::ServerCommand};
-use ouisync_service::{logger::Logger, Error, Service};
+use crate::{defaults, migration, options::ServerCommand};
+use ouisync_service::{logger, Error, Service};
 use std::{io, path::PathBuf};
 use tokio::select;
 
@@ -9,17 +9,23 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
         log_color,
     } = command;
 
-    let _logger = Logger::builder()
-        .stdout()
-        .format(log_format)
-        .color(log_color)
-        .build()?;
+    logger::init(log_format, log_color);
+
+    if config_dir == defaults::config_dir() {
+        migration::migrate_config_dir().await;
+    }
 
     let mut service = Service::init(config_dir).await?;
 
-    if service.store_dir().is_none() {
-        service.set_store_dir(defaults::store_dir()).await?;
-    }
+    let store_dir = if let Some(store_dir) = service.store_dir() {
+        store_dir
+    } else {
+        let store_dir = defaults::store_dir();
+        service.set_store_dir(&store_dir).await?;
+        store_dir
+    };
+
+    migration::check_store_dir(&store_dir).await;
 
     service.init_network().await;
     service.set_sync_enabled_all(true).await?;

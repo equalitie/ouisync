@@ -111,7 +111,7 @@ pub(super) mod strs {
         let mut s = s.serialize_seq(Some(value.len()))?;
 
         for item in value {
-            write!(&mut buffer, "{}", item).expect("failed to format item");
+            write!(&mut buffer, "{item}").expect("failed to format item");
             s.serialize_element(&buffer)?;
             buffer.clear();
         }

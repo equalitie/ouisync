@@ -508,11 +508,10 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
         }
 
         write_docs(out, "", &variant.docs)?;
-        writeln!(out, "class {} extends OuisyncException {{", variant_name)?;
+        writeln!(out, "class {variant_name} extends OuisyncException {{")?;
         writeln!(
             out,
-            "{I}{}([String? message, List<String> sources = const[]])",
-            variant_name,
+            "{I}{variant_name}([String? message, List<String> sources = const[]])",
         )?;
         writeln!(
             out,
@@ -661,8 +660,7 @@ fn write_api_class(
             DartType::Nullable(_) => {
                 write!(
                     out,
-                    "{I}{I}{I}case Response{}(value: final value): return ",
-                    response_variant_name,
+                    "{I}{I}{I}case Response{response_variant_name}(value: final value): return ",
                 )?;
 
                 match ret_stripped {
@@ -679,8 +677,7 @@ fn write_api_class(
             _ => {
                 write!(
                     out,
-                    "{I}{I}{I}case Response{}(value: final value): return ",
-                    response_variant_name,
+                    "{I}{I}{I}case Response{response_variant_name}(value: final value): return ",
                 )?;
 
                 match ret_stripped {
@@ -821,7 +818,7 @@ fn write_class_body(out: &mut dyn Write, name: &str, fields: &Fields) -> Result<
 
 fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> Result<()> {
     for line in &docs.lines {
-        writeln!(out, "{prefix}///{}", line)?;
+        writeln!(out, "{prefix}///{line}")?;
     }
 
     Ok(())

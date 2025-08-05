@@ -571,7 +571,7 @@ impl fmt::Debug for State {
                 write!(f, "AddingPortMappingFirstStage")
             }
             Self::StageOneFailure(err) => {
-                write!(f, "StageOneFailure({:?})", err)
+                write!(f, "StageOneFailure({err:?})")
             }
             Self::SleepingFirstStage(wake_up_time) => {
                 write!(f, "SleepingFirstStage {}", wake_up_time.format("%T"))
@@ -583,7 +583,7 @@ impl fmt::Debug for State {
                 write!(f, "SleepingSecondStage {}", wake_up_time.format("%T"))
             }
             Self::StageTwoFailure(err) => {
-                write!(f, "StageTwoFailure({:?})", err)
+                write!(f, "StageTwoFailure({err:?})")
             }
         }
     }
@@ -627,21 +627,21 @@ async fn local_address_to(url: &Uri) -> io::Result<net::IpAddr> {
         let host = url.host().ok_or_else(|| {
             Error::new(
                 ErrorKind::InvalidInput,
-                format!("Failed to get the host part from URL {:?}", url),
+                format!("Failed to get the host part from URL {url:?}"),
             )
         })?;
 
         let addr = host.parse::<net::IpAddr>().map_err(|_| {
             Error::new(
                 ErrorKind::InvalidInput,
-                format!("Failed to parse IP from URL {:?}", url),
+                format!("Failed to parse IP from URL {url:?}"),
             )
         })?;
 
         let port = url.port_u16().ok_or_else(|| {
             Error::new(
                 ErrorKind::InvalidInput,
-                format!("Failed to parse PORT from URL {:?}", url),
+                format!("Failed to parse PORT from URL {url:?}"),
             )
         })?;
 

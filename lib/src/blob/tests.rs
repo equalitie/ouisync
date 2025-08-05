@@ -624,7 +624,7 @@ async fn fork_is_idempotent() {
     for i in 0..2 {
         fork(id, &src_branch, &dst_branch)
             .await
-            .unwrap_or_else(|error| panic!("fork failed in iteration {}: {:?}", i, error));
+            .unwrap_or_else(|error| panic!("fork failed in iteration {i}: {error:?}"));
     }
 }
 
@@ -670,7 +670,7 @@ async fn fork_then_remove_src_branch() {
     // The unforked is gone
     match Blob::open(&mut tx, src_branch, id_1).await {
         Err(Error::Store(store::Error::BranchNotFound)) => (),
-        Err(error) => panic!("unexpected error {:?}", error),
+        Err(error) => panic!("unexpected error {error:?}"),
         Ok(_) => panic!("unexpected success"),
     }
 }

@@ -33,7 +33,10 @@ impl RepositorySet {
         }
     }
 
-    pub fn try_insert(&self, holder: RepositoryHolder) -> Option<RepositoryHandle> {
+    pub fn try_insert(
+        &self,
+        holder: RepositoryHolder,
+    ) -> Result<RepositoryHandle, RepositoryHolder> {
         let mut inner = self.inner.write().unwrap();
         let inner = &mut *inner;
 
@@ -41,9 +44,9 @@ impl RepositorySet {
             Entry::Vacant(entry) => {
                 let handle = inner.repos.insert(holder);
                 entry.insert(handle);
-                Some(RepositoryHandle(handle))
+                Ok(RepositoryHandle(handle))
             }
-            Entry::Occupied(_) => None,
+            Entry::Occupied(_) => Err(holder),
         }
     }
 

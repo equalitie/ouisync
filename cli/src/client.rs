@@ -10,7 +10,7 @@ use ouisync_service::{
         Response, ResponseResult, UnexpectedResponse,
     },
     transport::{
-        local::{self, AuthKey, LocalClientReader, LocalClientWriter},
+        local::{self, LocalClientReader, LocalClientWriter, LocalEndpoint},
         ClientError,
     },
 };
@@ -19,8 +19,8 @@ use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_stream::StreamExt;
 
 pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
-    let (port, auth_key) = ouisync_service::local_control_endpoint(&config_path).await?;
-    let mut client = LocalClient::connect(port, &auth_key).await?;
+    let endpoint = ouisync_service::local_endpoint(&config_path).await?;
+    let mut client = LocalClient::connect(endpoint).await?;
 
     match command {
         ClientCommand::AddPeers { addrs } => {
@@ -429,7 +429,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 .await?;
 
             if let Some(addr) = addr {
-                println!("{}", addr);
+                println!("{addr}");
             }
         }
         ClientCommand::RemovePeers { addrs } => {
@@ -499,8 +499,8 @@ struct LocalClient {
 }
 
 impl LocalClient {
-    async fn connect(port: u16, auth_key: &AuthKey) -> Result<Self, ClientError> {
-        let (reader, writer) = local::connect(port, auth_key).await?;
+    async fn connect(endpoint: LocalEndpoint) -> Result<Self, ClientError> {
+        let (reader, writer) = local::connect(endpoint).await?;
         Ok(Self { reader, writer })
     }
 

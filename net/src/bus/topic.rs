@@ -516,7 +516,7 @@ mod tests {
 
                 let mut actions = actions.clone();
 
-                assert!(actions.remove(&action));
+                assert!(actions.remove(action));
 
                 let (this_actor, that_actor) = match action.actor_kind() {
                     ActorKind::Client => (&mut client, &mut server),

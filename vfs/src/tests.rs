@@ -389,7 +389,7 @@ impl Setup {
     async fn new_single(span_params: &str) -> Self {
         init_log();
 
-        let span = Self::create_span(span_params).await;
+        let span = Self::create_span(span_params);
         let base_dir = TempDir::new().unwrap();
         let store_path = base_dir.path().join("repo.db");
         let repo = Self::create_repo(&store_path, span.clone()).await;
@@ -397,26 +397,15 @@ impl Setup {
 
         fs::create_dir(&mount_dir).await.unwrap();
 
-        #[cfg(target_os = "windows")]
-        let mount_guard = super::dokan::single_repo_mount::mount_with_span(
-            tokio::runtime::Handle::current(),
-            repo,
-            mount_dir,
-            Some(span.clone()),
-        )
-        .unwrap();
+        let span_guard = span.entered();
+        let mount_guard =
+            super::mount(tokio::runtime::Handle::current(), repo, mount_dir.clone()).unwrap();
 
-        #[cfg(not(target_os = "windows"))]
-        let mount_guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir).unwrap();
-
-        // TODO: There is likely a bug in Dokan causing the repository not to appear as mounted righ
-        // after the `mount` (or `mount_with_span`) finishes, which makes the tests fail.
-        #[cfg(target_os = "windows")]
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        wait_mounted(&mount_dir).await;
 
         Self {
             base_dir,
-            _span_guard: span.entered(),
+            _span_guard: span_guard,
             mount_guard: MountGuardType::Single {
                 _guard: mount_guard,
             },
@@ -426,7 +415,7 @@ impl Setup {
     async fn new_multi(span_params: &str) -> Self {
         init_log();
 
-        let span = Self::create_span(span_params).await;
+        let span = Self::create_span(span_params);
         let base_dir = TempDir::new().unwrap();
         let store_path = base_dir.path().join("repo.db");
         let repo = Self::create_repo(&store_path, span.clone()).await;
@@ -434,14 +423,11 @@ impl Setup {
 
         fs::create_dir(&mount_dir).await.unwrap();
 
-        let vfs = MultiRepoVFS::create(mount_dir).await.unwrap();
+        let vfs = MultiRepoVFS::create(mount_dir.clone()).await.unwrap();
 
         vfs.insert("repo".to_owned(), repo).unwrap();
 
-        // TODO: There is likely a bug in Dokan causing the repository not to appear as mounted righ
-        // after the `mount` (or `mount_with_span`) finishes, which makes the tests fail.
-        #[cfg(target_os = "windows")]
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        wait_mounted(&mount_dir).await;
 
         Self {
             base_dir,
@@ -450,8 +436,8 @@ impl Setup {
         }
     }
 
-    async fn create_span(span_params: &str) -> tracing::Span {
-        tracing::trace_span!(
+    fn create_span(span_params: &str) -> tracing::Span {
+        tracing::info_span!(
             "test",
             test_name = format!("{}({span_params})", thread::current().name().unwrap())
         )
@@ -467,7 +453,7 @@ impl Setup {
                 secrets: WriteSecrets::random(),
             },
         )
-        .instrument(span.clone())
+        .instrument(span)
         .await
         .unwrap();
 
@@ -513,3 +499,28 @@ fn init_log() {
         .try_init()
         .ok();
 }
+
+// TODO: There is likely a bug in Dokan causing the repository not to appear as mounted right after
+// the `mount` finishes, which makes the tests fail.
+#[cfg(target_os = "windows")]
+async fn wait_mounted(mount_dir: &Path) {
+    use std::time::Duration;
+    use tokio::time;
+
+    time::timeout(Duration::from_secs(10), async {
+        loop {
+            match fs::read_dir(mount_dir).await {
+                Ok(_) => break,
+                Err(_) => {
+                    time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn wait_mounted(_mount_dir: &Path) {}
