@@ -105,6 +105,11 @@ class OuisyncService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.d(TAG, "OuisyncService.onTimeout($startId, $fgsType)")
+        stopForeground(0)
+    }
+
     private suspend fun stopServer() {
         server.cancel()
 
