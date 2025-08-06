@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix crash due to race condition when concurrently opening the same repo multiple times
 - Fix kotlin API docs not being generated completely
 - Fix notification events being sometimes spammed indefinitely after creating new directory
+- Gracefully handle [foreground service timeout](https://developer.android.com/develop/background-work/services/fgs/timeout)
 
 ## [v0.9.1](https://github.com/equalitie/ouisync/compare/v0.9.0...v0.9.1) - 2025-06-26
 
