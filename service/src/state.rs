@@ -758,6 +758,16 @@ impl State {
             return Ok(());
         };
 
+        if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
+            if let Err(error) = mounter.remove(holder.short_name()) {
+                tracing::error!(
+                    ?error,
+                    name = holder.short_name(),
+                    "failed to unmount repository"
+                );
+            }
+        }
+
         holder.close().await?;
 
         for path in ouisync::database_files(holder.path()) {
