@@ -29,7 +29,11 @@ class Client {
 
   Client._(this._socket, this._stream) {
     _streamSubscription =
-        _stream.transform(LengthDelimitedCodec()).listen(_receive);
+        _stream.transform(LengthDelimitedCodec()).listen(_receive, onDone: () {
+      if (!_closed) {
+        throw RemoteClosedConnectionClientException();
+      }
+    });
   }
 
   static Future<Client> connect({
@@ -48,7 +52,7 @@ class Client {
     while (true) {
       if (timeout != null) {
         if (DateTime.now().difference(start) >= timeout) {
-          throw lastException ?? TimeoutException('connect timeout');
+          throw lastException ?? ConnectTimeoutClientException();
         }
       }
 
@@ -221,4 +225,19 @@ class _Reader {
 
     return output;
   }
+}
+
+sealed class ClientException {
+  @override
+  String toString();
+}
+
+class ConnectTimeoutClientException {
+  @override
+  String toString() => 'Timeout connecting to the service';
+}
+
+class RemoteClosedConnectionClientException {
+  @override
+  String toString() => 'Remote closed connection';
 }
