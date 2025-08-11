@@ -6,11 +6,12 @@ use tokio::{
 };
 
 /// Moves file from `src` to `dst`. If they are on the same filesystem, it does a simple rename.
-/// Otherwise it copies `src` to `dst` first and then deletes `src`. Also this function never
-/// overwrite `dst` if it already exists - instead it fails with `AlreadyExists` error. On
-/// sufficiently modern platforms and filesystems (see below for details) it does it atomically so
-/// it doesn't suffer from the [TOCTOU]
-/// (https://en.wikipedia.org/wiki/Time-of-check_to_time-of-use) problem.
+/// Otherwise it copies `src` to `dst` first and then deletes `src`. This function makes best
+/// effort to never overwrite `dst` if it already exists - instead it fails with `AlreadyExists`
+/// error. On sufficiently modern platforms and filesystems (see below for details) it does it
+/// atomically so it doesn't suffer from the [TOCTOU]
+/// (https://en.wikipedia.org/wiki/Time-of-check_to_time-of-use) problem. Otherwise it falls back
+/// to a non-atomic approach.
 ///
 /// # Atomicity
 ///
@@ -23,8 +24,8 @@ use tokio::{
 ///   (https://man7.org/linux/man-pages/man2/rename.2.html) manpage for more details.
 ///
 /// Oh other platforms/filesystems the implementation falls back to a non-atomic approach where it
-/// first check if the destination exists and ifit doesn't proceeds with the rename. This suffers
-/// from the above mentioned TOCTOU problem and so in specific circumstances can cause the
+/// first checks if the destination exists and if it doesn't it proceeds with the rename. This
+/// suffers from the above mentioned TOCTOU problem and so in specific circumstances can cause the
 /// destination file to still be overwritten.
 pub async fn safe_move(src: &Path, dst: &Path) -> io::Result<()> {
     // First try atomic rename
@@ -143,7 +144,7 @@ fn blocking_rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 // Renames `src` to `dst` but fails if `dst` already exists. This is not atomic so it's possible
-// that the dst file might still get deleted if it's created concurrently with this calling
+// that the dst file might still get deleted if it's created concurrently with calling this
 // function. This is used only as a fallback on platforms/filesystems which don't support the
 // atomic rename.
 async fn rename_no_replace_best_effort(src: &Path, dst: &Path) -> io::Result<()> {
