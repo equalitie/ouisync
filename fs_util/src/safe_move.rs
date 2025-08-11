@@ -7,30 +7,49 @@ use tokio::{
 
 /// Moves file from `src` to `dst`. If they are on the same filesystem, it does a simple rename.
 /// Otherwise it copies `src` to `dst` first and then deletes `src`. Also this function never
-/// overwrite `dst` if it already exists - instead it fails with `AlreadyExists` error. It does it
-/// atomically so it doesn't suffer from the [TOCTOU]
+/// overwrite `dst` if it already exists - instead it fails with `AlreadyExists` error. On
+/// sufficiently modern platforms and filesystems (see below for details) it does it atomically so
+/// it doesn't suffer from the [TOCTOU]
 /// (https://en.wikipedia.org/wiki/Time-of-check_to_time-of-use) problem.
+///
+/// # Atomicity
+///
+/// The rename is atomic (and so guaranteed to never overwrite the destination file) on the
+/// following platforms:
+///
+/// - Windows
+/// - Linux and Android whose kernel version and filesystem support the `renameat2` syscall with the
+///   `RENAME_NOREPLACE` flag. See the [renameat2]
+///   (https://man7.org/linux/man-pages/man2/rename.2.html) manpage for more details.
+///
+/// Oh other platforms/filesystems the implementation falls back to a non-atomic approach where it
+/// first check if the destination exists and ifit doesn't proceeds with the rename. This suffers
+/// from the above mentioned TOCTOU problem and so in specific circumstances can cause the
+/// destination file to still be overwritten.
 pub async fn safe_move(src: &Path, dst: &Path) -> io::Result<()> {
-    // First try rename
-    match safe_rename(src, dst).await {
-        Ok(()) => return Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => (),
-        Err(error) => return Err(error),
+    // First try atomic rename
+    match rename_no_replace_atomic(src, dst).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+            // Src and dst are on different filesystems. Fallback to copy+remove.
+            move_across_devices(src, dst).await
+        }
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+            // Atomic rename not supported on this platform and/or filesystem. Fallback to the "best
+            // effor" version.
+            rename_no_replace_best_effort(src, dst).await
+        }
+        Err(error) => Err(error),
     }
-
-    // `src` and `dst` are on different filesystems, fall back to copy + remove.
-    safe_copy(src, dst).await?;
-    fs::remove_file(src).await?;
-
-    Ok(())
 }
 
-// Renames `src` to `dst` but fails if `dst` already exists.
-async fn safe_rename(src: &Path, dst: &Path) -> io::Result<()> {
+// Renames `src` to `dst` but fails if `dst` already exists. This is guaranteed to never overwrite
+// dst but it doesn't work on all platforms and/or filesystems.
+async fn rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
     let src = src.to_owned();
     let dst = dst.to_owned();
 
-    match task::spawn_blocking(move || blocking_safe_rename(&src, &dst)).await {
+    match task::spawn_blocking(move || blocking_rename_no_replace_atomic(&src, &dst)).await {
         Ok(result) => result,
         Err(error) => {
             if let Ok(panic) = error.try_into_panic() {
@@ -46,7 +65,7 @@ async fn safe_rename(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn blocking_safe_rename(src: &Path, dst: &Path) -> io::Result<()> {
+fn blocking_rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
     use std::{
         ffi::{c_char, c_int, c_uint, CString},
         path::{self, PathBuf},
@@ -101,7 +120,7 @@ fn blocking_safe_rename(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-fn blocking_safe_rename(src: &Path, dst: &Path) -> io::Result<()> {
+fn blocking_rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
     use std::{iter, os::windows::ffi::OsStrExt};
 
     fn to_cwstring(path: &Path) -> Vec<u16> {
@@ -123,8 +142,41 @@ fn blocking_safe_rename(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
+// Renames `src` to `dst` but fails if `dst` already exists. This is not atomic so it's possible
+// that the dst file might still get deleted if it's created concurrently with this calling
+// function. This is used only as a fallback on platforms/filesystems which don't support the
+// atomic rename.
+async fn rename_no_replace_best_effort(src: &Path, dst: &Path) -> io::Result<()> {
+    if !fs::try_exists(dst).await? {
+        fs::rename(src, dst).await
+    } else {
+        Err(io::ErrorKind::AlreadyExists.into())
+    }
+}
+
+async fn move_across_devices(src: &Path, dst: &Path) -> io::Result<()> {
+    match copy_no_replace(src, dst).await {
+        Ok(_) => {
+            // Copy succeeeded - remove the source file.
+            fs::remove_file(src).await?;
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            // Destination file already exists. Do nothing.
+            Err(error)
+        }
+        Err(error) => {
+            // Copy failed. Try to remove the partially copied destination file (if any) before
+            // returning the error. If the removal fails, return the original error which is more
+            // relevant.
+            fs::remove_file(dst).await.ok();
+            Err(error)
+        }
+    }
+}
+
 // Copies `src` to `dst` but fails if `dst` already exists.
-async fn safe_copy(src: &Path, dst: &Path) -> io::Result<u64> {
+async fn copy_no_replace(src: &Path, dst: &Path) -> io::Result<u64> {
     let mut src = OpenOptions::new().read(true).open(src).await?;
     let mut dst = OpenOptions::new()
         .write(true)
@@ -142,7 +194,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn safe_rename_when_dst_does_not_exist() {
+    async fn rename_when_dst_does_not_exist() {
         let temp_dir = TempDir::new().unwrap();
         let src_path = temp_dir.path().join("src");
         let dst_path = temp_dir.path().join("dst");
@@ -150,14 +202,16 @@ mod tests {
 
         fs::write(&src_path, content).await.unwrap();
 
-        safe_rename(&src_path, &dst_path).await.unwrap();
+        rename_no_replace_atomic(&src_path, &dst_path)
+            .await
+            .unwrap();
 
         assert_eq!(fs::read_to_string(&dst_path).await.unwrap(), content);
         assert!(!fs::try_exists(&src_path).await.unwrap());
     }
 
     #[tokio::test]
-    async fn safe_rename_when_dst_exists() {
+    async fn rename_when_dst_exists() {
         let temp_dir = TempDir::new().unwrap();
 
         let src_path = temp_dir.path().join("src");
@@ -169,7 +223,7 @@ mod tests {
         fs::write(&src_path, src_content).await.unwrap();
         fs::write(&dst_path, dst_content).await.unwrap();
 
-        match safe_rename(&src_path, &dst_path).await {
+        match rename_no_replace_atomic(&src_path, &dst_path).await {
             Ok(()) => panic!("unexpected success"),
             Err(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
         }
@@ -179,7 +233,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn safe_copy_when_dst_does_not_exists() {
+    async fn copy_when_dst_does_not_exists() {
         let temp_dir = TempDir::new().unwrap();
         let src_path = temp_dir.path().join("src");
         let dst_path = temp_dir.path().join("dst");
@@ -187,14 +241,14 @@ mod tests {
 
         fs::write(&src_path, content).await.unwrap();
 
-        safe_copy(&src_path, &dst_path).await.unwrap();
+        copy_no_replace(&src_path, &dst_path).await.unwrap();
 
         assert_eq!(fs::read_to_string(&src_path).await.unwrap(), content);
         assert_eq!(fs::read_to_string(&dst_path).await.unwrap(), content);
     }
 
     #[tokio::test]
-    async fn safe_copy_when_dst_exists() {
+    async fn copy_when_dst_exists() {
         let temp_dir = TempDir::new().unwrap();
 
         let src_path = temp_dir.path().join("src");
@@ -206,7 +260,7 @@ mod tests {
         fs::write(&src_path, src_content).await.unwrap();
         fs::write(&dst_path, dst_content).await.unwrap();
 
-        match safe_copy(&src_path, &dst_path).await {
+        match copy_no_replace(&src_path, &dst_path).await {
             Ok(_) => panic!("unexpected success"),
             Err(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
         }
@@ -243,5 +297,27 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&dst_path).await.unwrap(), content);
         assert!(!fs::try_exists(&src_path).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn attempt_to_move_to_subdir_of_src() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let src_path = temp_dir.path().join("src");
+        fs::create_dir_all(&src_path).await.unwrap();
+        fs::write(src_path.join("file"), "hello world")
+            .await
+            .unwrap();
+
+        let dst_path = src_path.join("dst");
+
+        match safe_move(&src_path, &dst_path).await {
+            Ok(_) => panic!("unexpected success"),
+            Err(error) => assert_eq!(
+                error.kind(),
+                io::ErrorKind::InvalidInput,
+                "unexpected error: {error:?}"
+            ),
+        }
     }
 }
