@@ -135,14 +135,11 @@ impl<'a> Context<'a> {
         let holder = self
             .load_repository(&self.dst, credentials, sync_enabled)
             .await?;
-        undo_stack.push(Action::Open {
-            repo: holder.repository().clone(),
-        });
+        self.repos.replace(self.handle, holder);
+        undo_stack.push(Action::Open);
 
         // 7. Remount the repository
         self.mount_repository(&self.dst)?;
-
-        self.repos.replace(self.handle, holder);
 
         Ok(())
     }
@@ -214,9 +211,7 @@ enum Action {
     RemoveDir {
         path: PathBuf,
     },
-    Open {
-        repo: Arc<Repository>,
-    },
+    Open,
 }
 
 impl Action {
@@ -241,8 +236,8 @@ impl Action {
             Self::RemoveDir { path } => {
                 fs::create_dir_all(path).await?;
             }
-            Self::Open { repo } => {
-                repo.close().await?;
+            Self::Open => {
+                context.get_repository().close().await?;
             }
         }
 
@@ -265,7 +260,7 @@ impl fmt::Debug for Action {
                 .field("dst", dst)
                 .finish(),
             Self::RemoveDir { path } => f.debug_struct("RemoveDir").field("path", path).finish(),
-            Self::Open { .. } => f.debug_struct("Open").finish_non_exhaustive(),
+            Self::Open => f.debug_struct("Open").finish(),
         }
     }
 }

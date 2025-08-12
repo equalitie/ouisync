@@ -305,7 +305,7 @@ async fn expire_synced_repository() {
 async fn move_repository() {
     test_utils::init_log();
 
-    let (_temp_dir, state) = setup().await;
+    let (temp_dir, state) = setup().await;
     let src = Path::new("foo");
     let dst = Path::new("bar");
 
@@ -322,17 +322,17 @@ async fn move_repository() {
     state.file_write(file, 0, b"hello".to_vec()).await.unwrap();
     state.file_close(file).await.unwrap();
 
+    // Mount
+    state
+        .session_set_mount_root(Some(temp_dir.path().join("mnt")))
+        .await
+        .unwrap();
+    state.repository_mount(repo).await.unwrap();
+
     state.repository_move(repo, dst.into()).await.unwrap();
     let dst_full = state.repository_get_path(repo).unwrap();
 
-    let file = state
-        .repository_open_file(repo, "test.txt".to_owned())
-        .await
-        .unwrap();
-    let len = state.file_get_length(file).unwrap();
-    let content = state.file_read(file, 0, len).await.unwrap();
-    assert_eq!(content, b"hello");
-
+    // Check the repo now exists at the new path
     assert!(fs::try_exists(dst_full).await.unwrap());
 
     // Check none of the src files (including the aux files) exist anymore
@@ -353,6 +353,20 @@ async fn move_repository() {
             .unwrap();
 
     assert_eq!(src_files, Vec::<PathBuf>::new());
+
+    // Check the repo can be accessed via the API
+    let file = state
+        .repository_open_file(repo, "test.txt".to_owned())
+        .await
+        .unwrap();
+    let len = state.file_get_length(file).unwrap();
+    let content = state.file_read(file, 0, len).await.unwrap();
+    assert_eq!(content, b"hello");
+
+    // Check the repo can be accessed via the mountpoint
+    let mount_point = state.repository_get_mount_point(repo).unwrap().unwrap();
+    let content = fs::read(mount_point.join("test.txt")).await.unwrap();
+    assert_eq!(content, b"hello");
 }
 
 #[tokio::test]
