@@ -57,6 +57,7 @@ pub fn mount(
         mount_point,
         &[MountOption::FSName(FS_NAME.into())],
     )?;
+
     Ok(MountGuard(Some(session)))
 }
 

@@ -61,11 +61,19 @@ impl RepositorySet {
         let old_holder = inner.repos.get_mut(handle.0)?;
 
         match inner.index.entry(holder.path.clone()) {
-            Entry::Vacant(entry) => entry.insert(handle.0),
-            Entry::Occupied(_) => return None,
+            Entry::Vacant(entry) => {
+                entry.insert(handle.0);
+            }
+            Entry::Occupied(entry) => {
+                if *entry.get() != handle.0 {
+                    return None;
+                }
+            }
         };
 
-        inner.index.remove(&old_holder.path);
+        if holder.path != old_holder.path {
+            inner.index.remove(&old_holder.path);
+        }
 
         Some(mem::replace(old_holder, holder))
     }

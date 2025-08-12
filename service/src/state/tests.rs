@@ -356,6 +356,72 @@ async fn move_repository() {
 }
 
 #[tokio::test]
+async fn attempt_to_move_repository_over_existing_file() {
+    test_utils::init_log();
+
+    let (temp_dir, state) = setup().await;
+
+    let src = Path::new("foo");
+    let dst = Path::new("dst");
+
+    let repo = state
+        .session_create_repository(src.into(), None, None, None, false, false, false)
+        .await
+        .unwrap();
+    let src_full = state.repository_get_path(repo).unwrap();
+
+    let file = state
+        .repository_create_file(repo, "test.txt".into())
+        .await
+        .unwrap();
+    state.file_write(file, 0, b"hello".to_vec()).await.unwrap();
+    state.file_close(file).await.unwrap();
+
+    // Mount
+    state
+        .session_set_mount_root(Some(temp_dir.path().join("mnt")))
+        .await
+        .unwrap();
+    state.repository_mount(repo).await.unwrap();
+
+    // Create a dummy file at the destination. This prevents the repo from being moved there as it
+    // would overwrite the file.
+    fs::File::create(
+        state
+            .session_get_store_dir()
+            .unwrap()
+            .join(dst)
+            .with_extension(REPOSITORY_FILE_EXTENSION),
+    )
+    .await
+    .unwrap();
+
+    assert_matches!(
+        state.repository_move(repo, dst.into()).await,
+        Err(Error::Io(error)) => {
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists)
+        }
+    );
+
+    // Check the repo still exists at the original path
+    assert_eq!(state.session_list_repositories(), [(src_full, repo)].into());
+
+    // Check the repo can still be accessed via the API
+    let file = state
+        .repository_open_file(repo, "test.txt".to_owned())
+        .await
+        .unwrap();
+    let len = state.file_get_length(file).unwrap();
+    let content = state.file_read(file, 0, len).await.unwrap();
+    assert_eq!(content, b"hello");
+
+    // Check the repo can still be accessed via the mountpoint
+    let mount_point = state.repository_get_mount_point(repo).unwrap().unwrap();
+    let content = fs::read(mount_point.join("test.txt")).await.unwrap();
+    assert_eq!(content, b"hello");
+}
+
+#[tokio::test]
 async fn delete_repository_with_simple_name() {
     let (_temp_dir, state) = setup().await;
 

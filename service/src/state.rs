@@ -2028,7 +2028,6 @@ async fn load_repository(
     let params = RepositoryParams::new(path)
         .with_device_id(device_id::get_or_create(config).await?)
         .with_monitor(repos_monitor.make_child(path.to_string_lossy()));
-
     let repo = Repository::open(&params, local_secret, AccessMode::Write).await?;
     let holder = RepositoryHolder::new(path.to_owned(), repo);
 

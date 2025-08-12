@@ -43,7 +43,6 @@ struct Context<'a> {
     mounter: Option<Arc<MultiRepoVFS>>,
     repos_monitor: &'a StateMonitor,
     handle: RepositoryHandle,
-    repo: Arc<Repository>,
     sync_enabled: bool,
     src: PathBuf,
     dst: PathBuf,
@@ -57,26 +56,30 @@ impl<'a> Context<'a> {
             return Err(Error::AlreadyExists);
         }
 
-        let (repo, sync_enabled, src) = state
+        let (sync_enabled, src) = state
             .repos
             .with(handle, |holder| {
-                (
-                    holder.repository().clone(),
-                    holder.is_sync_enabled(),
-                    holder.path().to_owned(),
-                )
+                (holder.is_sync_enabled(), holder.path().to_owned())
             })
             .ok_or(Error::InvalidArgument)?;
+
+        // Grab mounter only if mounting is supported, enabled and the repo is currently mounted.
+        let mounter = state
+            .mounter
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|mounter| mounter.mount_point(repository::short_name(&src)).is_some())
+            .cloned();
 
         Ok(Self {
             config: &state.config,
             network: &state.network,
             store: &state.store,
             repos: &state.repos,
-            mounter: state.mounter.lock().unwrap().as_ref().cloned(),
+            mounter,
             repos_monitor: &state.repos_monitor,
             handle,
-            repo,
             sync_enabled,
             src,
             dst,
@@ -100,10 +103,11 @@ impl<'a> Context<'a> {
         });
 
         // 3. Close the repo
-        let credentials = self.repo.credentials();
+        let repo = self.get_repository();
+        let credentials = repo.credentials();
         let sync_enabled = self.sync_enabled;
 
-        self.repo.close().await?;
+        repo.close().await?;
         undo_stack.push(Action::CloseRepository {
             credentials: credentials.clone(),
             sync_enabled,
@@ -131,6 +135,13 @@ impl<'a> Context<'a> {
         let holder = self
             .load_repository(&self.dst, credentials, sync_enabled)
             .await?;
+        undo_stack.push(Action::Open {
+            repo: holder.repository().clone(),
+        });
+
+        // 7. Remount the repository
+        self.mount_repository(&self.dst)?;
+
         self.repos.replace(self.handle, holder);
 
         Ok(())
@@ -147,6 +158,11 @@ impl<'a> Context<'a> {
         }
     }
 
+    fn get_repository(&self) -> Arc<Repository> {
+        // unwrap is ok because the handle validity is checked at construction.
+        self.repos.get_repository(self.handle).unwrap()
+    }
+
     async fn load_repository(
         &self,
         path: &Path,
@@ -160,12 +176,24 @@ impl<'a> Context<'a> {
             self.config,
             self.network,
             self.repos_monitor,
-            self.mounter.as_deref(),
+            None,
         )
         .await?;
+
         holder.repository().set_credentials(credentials).await?;
 
         Ok(holder)
+    }
+
+    fn mount_repository(&self, path: &Path) -> Result<(), Error> {
+        if let Some(mounter) = &self.mounter {
+            mounter.insert(
+                repository::short_name(path).to_owned(),
+                self.get_repository(),
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -186,19 +214,15 @@ enum Action {
     RemoveDir {
         path: PathBuf,
     },
+    Open {
+        repo: Arc<Repository>,
+    },
 }
 
 impl Action {
     async fn undo(self, context: &Context<'_>) -> Result<(), Error> {
         match self {
-            Self::Unmount => {
-                if let Some(mounter) = &context.mounter {
-                    mounter.insert(
-                        repository::short_name(&context.src).to_owned(),
-                        context.repo.clone(),
-                    )?;
-                }
-            }
+            Self::Unmount => context.mount_repository(&context.src)?,
             Self::CreateDir { path } => {
                 context.store.remove_empty_ancestor_dirs(&path).await?;
             }
@@ -217,6 +241,9 @@ impl Action {
             Self::RemoveDir { path } => {
                 fs::create_dir_all(path).await?;
             }
+            Self::Open { repo } => {
+                repo.close().await?;
+            }
         }
 
         Ok(())
@@ -228,15 +255,17 @@ impl fmt::Debug for Action {
         match self {
             Self::Unmount => f.debug_tuple("Unmount").finish(),
             Self::CreateDir { path } => f.debug_struct("CreateDir").field("path", path).finish(),
-            Self::CloseRepository { .. } => {
-                f.debug_struct("CloseRepository").finish_non_exhaustive()
-            }
+            Self::CloseRepository { sync_enabled, .. } => f
+                .debug_struct("CloseRepository")
+                .field("sync_enabled", sync_enabled)
+                .finish_non_exhaustive(),
             Self::MoveFile { src, dst } => f
                 .debug_struct("MoveFile")
                 .field("src", src)
                 .field("dst", dst)
                 .finish(),
             Self::RemoveDir { path } => f.debug_struct("RemoveDir").field("path", path).finish(),
+            Self::Open { .. } => f.debug_struct("Open").finish_non_exhaustive(),
         }
     }
 }
