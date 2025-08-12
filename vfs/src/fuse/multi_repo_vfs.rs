@@ -125,8 +125,7 @@ fn prepare_mountpoint(repo_name: &str, mount_root: &Path) -> Result<PathBuf, io:
 
     if !dir_is_empty {
         return Err(io::Error::new(
-            // TODO: io::ErrorKind::DirectoryNotEmpty would have been better, but it's unstable
-            io::ErrorKind::InvalidInput,
+            io::ErrorKind::DirectoryNotEmpty,
             format!("Mount directory {mount_point:?} is not empty"),
         ));
     }
