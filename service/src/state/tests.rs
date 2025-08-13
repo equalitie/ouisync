@@ -305,7 +305,13 @@ async fn expire_synced_repository() {
 async fn move_repository() {
     test_utils::init_log();
 
-    let (temp_dir, state) = setup().await;
+    // Using a separate TempDir here instead of subdir of `_temp_dir`, otherwise mounting fails with
+    // `InvalidMountPoint` on windows for some reason. Also, `mount_dir` must not be dropped before
+    // `state` otherwise this test hangs (creating it before `state` ensures this).
+    let mount_dir = TempDir::new().unwrap();
+
+    let (_temp_dir, state) = setup().await;
+
     let src = Path::new("foo");
     let dst = Path::new("bar");
 
@@ -323,8 +329,9 @@ async fn move_repository() {
     state.file_close(file).await.unwrap();
 
     // Mount
+
     state
-        .session_set_mount_root(Some(temp_dir.path().join("mnt")))
+        .session_set_mount_root(Some(mount_dir.path().into()))
         .await
         .unwrap();
     state.repository_mount(repo).await.unwrap();
@@ -373,7 +380,12 @@ async fn move_repository() {
 async fn attempt_to_move_repository_over_existing_file() {
     test_utils::init_log();
 
-    let (temp_dir, state) = setup().await;
+    // Using a separate TempDir here instead of subdir of `_temp_dir`, otherwise mounting fails with
+    // `InvalidMountPoint` on windows for some reason. Also, `mount_dir` must not be dropped before
+    // `state` otherwise this test hangs (creating it before `state` ensures this).
+    let mount_dir = TempDir::new().unwrap();
+
+    let (_temp_dir, state) = setup().await;
 
     let src = Path::new("foo");
     let dst = Path::new("dst");
@@ -393,7 +405,7 @@ async fn attempt_to_move_repository_over_existing_file() {
 
     // Mount
     state
-        .session_set_mount_root(Some(temp_dir.path().join("mnt")))
+        .session_set_mount_root(Some(mount_dir.path().into()))
         .await
         .unwrap();
     state.repository_mount(repo).await.unwrap();
