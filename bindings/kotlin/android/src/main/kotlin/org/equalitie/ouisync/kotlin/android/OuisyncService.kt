@@ -1,4 +1,6 @@
-package org.equalitie.ouisync.dart
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
+package org.equalitie.ouisync.kotlin.android
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -27,7 +29,7 @@ import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.server.Server
 import kotlin.collections.firstOrNull
 
-class OuisyncService : Service() {
+open class OuisyncService : Service() {
     private val exceptionHandler =
         CoroutineExceptionHandler { _, e ->
             Log.e(TAG, "uncaught exception in OuisyncService", e)
@@ -44,7 +46,7 @@ class OuisyncService : Service() {
                 context: Context,
                 intent: Intent,
             ) {
-                Log.d(TAG, "OuisyncService.receiver.onReceive(${intent.action})")
+                Log.d(TAG, "receiver.onReceive(${intent.action})")
 
                 scope.launch {
                     stopServer()
@@ -54,7 +56,7 @@ class OuisyncService : Service() {
         }
 
     override fun onCreate() {
-        Log.d(TAG, "OuisyncService.onCreate")
+        Log.d(TAG, "onCreate")
 
         super.onCreate()
 
@@ -66,7 +68,7 @@ class OuisyncService : Service() {
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "OuisyncService.onDestroy")
+        Log.d(TAG, "onDestroy")
 
         super.onDestroy()
 
@@ -79,7 +81,7 @@ class OuisyncService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
-        Log.d(TAG, "OuisyncService.onStartCommand($intent, $flags, $startId)")
+        Log.d(TAG, "onStartCommand($intent, $flags, $startId)")
 
         val notificationChannelName = intent?.getStringExtra(EXTRA_NOTIFICATION_CHANNEL_NAME)
         val notificationContentTitle = intent?.getStringExtra(EXTRA_NOTIFICATION_CONTENT_TITLE)
@@ -106,8 +108,8 @@ class OuisyncService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTimeout(startId: Int, fgsType: Int) {
-        Log.d(TAG, "OuisyncService.onTimeout($startId, $fgsType)")
-        stopForeground(0)
+        Log.d(TAG, "onTimeout($startId, $fgsType)")
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     private suspend fun stopServer() {
@@ -160,7 +162,6 @@ class OuisyncService : Service() {
             .Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ouisync_notification_icon)
             .setOngoing(true)
-            .setPriority(Notification.PRIORITY_LOW)
             .setCategory(Notification.CATEGORY_SERVICE)
             .apply {
                 if (contentTitle != null) {
@@ -224,6 +225,8 @@ class OuisyncService : Service() {
         }
 
     companion object {
+        private val TAG = OuisyncService::class.simpleName
+
         const val ACTION_STOP = "org.equalitie.ouisync.service.action.stop"
         const val ACTION_STARTED = "org.equalitie.ouisync.service.action.started"
 

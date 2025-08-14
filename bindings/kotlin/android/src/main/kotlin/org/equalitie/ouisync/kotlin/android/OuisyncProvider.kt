@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.dart
+package org.equalitie.ouisync.kotlin.android
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -22,6 +22,8 @@ import org.equalitie.ouisync.kotlin.client.create
 // Provider that exposes Ouisync repositories to other apps.
 class OuisyncProvider : DocumentsProvider() {
     companion object {
+        private val TAG = OuisyncProvider::class.simpleName
+
         val DEFAULT_ROOT_PROJECTION = arrayOf(
             DocumentsContract.Root.COLUMN_DOCUMENT_ID,
             DocumentsContract.Root.COLUMN_FLAGS,
@@ -60,13 +62,13 @@ class OuisyncProvider : DocumentsProvider() {
         }
 
     override fun onCreate(): Boolean {
-        Log.d(TAG, "${this::class.simpleName}.onCreate")
+        Log.d(TAG, "onCreate")
 
         return true
     }
 
     override fun queryRoots(projection: Array<out String>?): Cursor {
-        Log.d(TAG, "${this::class.simpleName}.queryRoots($projection)");
+        Log.d(TAG, "queryRoots($projection)");
 
         val result = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
         val row = result.newRow()
@@ -87,7 +89,7 @@ class OuisyncProvider : DocumentsProvider() {
         projection: Array<out String>?,
         sortOrder: String?
     ): Cursor {
-        Log.d(TAG, "${this::class.simpleName}.queryChildDocuments($parentDocumentId, $projection, $sortOrder)")
+        Log.d(TAG, "queryChildDocuments($parentDocumentId, $projection, $sortOrder)")
 
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
 
@@ -95,10 +97,10 @@ class OuisyncProvider : DocumentsProvider() {
     }
 
     override fun queryDocument(documentId: String?, projection: Array<out String>?): Cursor {
-        Log.d(TAG, "${this::class.simpleName}.queryDocument($documentId, $projection)")
+        Log.d(TAG, "queryDocument($documentId, $projection)")
 
         val locator = if (documentId != null) Locator.parse(documentId) else Locator.ROOT
-        Log.d(TAG, "${this::class.simpleName}.queryDocument locator=$locator")
+        Log.d(TAG, "queryDocument locator=$locator")
 
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         // val row = result
@@ -112,7 +114,7 @@ class OuisyncProvider : DocumentsProvider() {
         mode: String,
         signal: CancellationSignal?
     ): ParcelFileDescriptor {
-        Log.d(TAG, "${this::class.simpleName}.openDocument($documentId, $mode, ..)")
+        Log.d(TAG, "openDocument($documentId, $mode, ..)")
 
         throw NotImplementedError()
     }

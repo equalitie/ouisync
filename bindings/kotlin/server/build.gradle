@@ -46,6 +46,17 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
 }
 
+def rustTargets = project.findProperty('target-platform')?.split(',').collect {
+    // https://github.com/flutter/flutter/blob/37dbe030feb47cdf15f3d4c1921857dbbac8aedf/packages/flutter_tools/gradle/flutter.gradle#L78-L82
+    switch (it) {
+        case 'android-arm':   return 'arm'
+        case 'android-arm64': return 'arm64'
+        case 'android-x86':   return 'x86'
+        case 'android-x64':   return 'x86_64'
+        default: throw new IllegalArgumentException("unknown target platform: $it")
+    }
+}
+
 cargo {
     module = "$rootDir/../.."
     libname = 'ouisync_service'
@@ -53,13 +64,11 @@ cargo {
     // https://stackoverflow.com/questions/66054763/build-rust-on-android
     pythonCommand = "python3"
 
-    // Read targets from the 'rust-targets' project property that can be set in `gradle.properties`
-    // or using the `-P` command line option when invoking gradle. Example: `gradle
-    // assemble -Prust-targets=x86_64`
+    // Read targets from the 'target-platform' project property that can be set in
+    // `gradle.properties` or using the `-P` command line option when invoking gradle.
     //
-    // Can be also overriden with "rust.targets" in local.properties. Example:
-    // `rust.targets=arm64,x86_64`. More info: https://github.com/mozilla/rust-android-gradle.
-    targets = (project.findProperty('rust-targets') ?: 'arm,arm64,x86_64').split(',')
+    //Example: `gradle assemble -Ptarget-platform=android-x64`
+    targets = rustTargets ?: ['arm', 'arm64', 'x86_64']
 
     extraCargoBuildArguments = ['--package', 'ouisync-service']
 

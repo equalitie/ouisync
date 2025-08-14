@@ -1,0 +1,101 @@
+plugins {
+    id 'com.android.library'
+    id 'kotlin-android'
+    // id 'org.jetbrains.dokka'
+}
+
+version = rootProject.version
+group   = rootProject.group
+
+android {
+    namespace = 'org.equalitie.ouisync.kotlin.android'
+
+    compileSdk = 35
+    ndkVersion = '27.2.12479018'
+
+    defaultConfig {
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = version
+
+        // consumerProguardFiles 'proguard-rules.pro'
+    }
+
+    kotlin {
+        jvmToolchain(17)
+    }
+
+    publishing {
+        singleVariant 'release'
+        singleVariant 'debug'
+    }
+}
+
+dependencies {
+    implementation project(':ouisync-client')
+    implementation project(':ouisync-server')
+
+    // HACK: Using `implementation` here fails compilation in the downstream packages for some
+    // reason. Using `api` fixes it even though the datastore API is only used internally by this
+    // project.
+    api 'androidx.datastore:datastore-preferences:1.1.7'
+
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            android.libraryVariants.each {
+                def variant = it.name
+                def packageNameSuffix = variant == 'release' ? '' : "-${variant}"
+
+                create("${variant}Android", MavenPublication) {
+                    def packageName = "${project.name}${packageNameSuffix}"
+
+                    from components.getByName(variant)
+
+                    artifactId = packageName
+
+                    pom {
+                        name = packageName
+                        description = "Android components for Ouisync"
+                        url = 'https://github.com/equalitie/ouisync'
+                        licenses {
+                            license {
+                                name = 'MPL-2.0'
+                                url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                            }
+                        }
+                        developers {
+                            developer {
+                                name = 'Ouisync Developers'
+                                email = 'ouisync@equalit.ie'
+                            }
+                        }
+
+                        scm {
+                            connection = 'scm:git:github.com/equalitie/ouisync.git'
+                            developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                            url = 'https://github.com/equalitie/ouisync/tree/master'
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+signing {
+    // Only sign when publishing to sonatype, not local
+    required = {
+        gradle.taskGraph.hasTask("server:publishToSonatype")
+    }
+
+    if (signingKey) {
+        useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    }
+
+    sign publishing.publications
+}

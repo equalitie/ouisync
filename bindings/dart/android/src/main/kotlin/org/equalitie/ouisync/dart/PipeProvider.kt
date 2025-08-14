@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.equalitie.ouisync.kotlin.android.OuisyncService
+import org.equalitie.ouisync.kotlin.android.getConfigPath
 import org.equalitie.ouisync.kotlin.client.File
 import org.equalitie.ouisync.kotlin.client.OuisyncException
 import org.equalitie.ouisync.kotlin.client.Session
@@ -41,6 +43,8 @@ import kotlin.collections.joinToString
 
 class PipeProvider : ContentProvider() {
     companion object {
+        private val TAG = PipeProvider::class.simpleName
+
         private const val CHUNK_SIZE = 64000
 
         private val supportsProxyFileDescriptor: Boolean =
@@ -71,7 +75,7 @@ class PipeProvider : ContentProvider() {
         }
 
     override fun onCreate(): Boolean {
-        Log.d(TAG, "PipeProvider.onCreate")
+        Log.d(TAG, "onCreate")
 
         val context = requireNotNull(context)
         context.registerReceiver(
@@ -232,7 +236,7 @@ class PipeProvider : ContentProvider() {
             } catch (e: Exception) {
                 Log.e(
                     TAG,
-                    "uncaught exception in ${PipeProvider::class.simpleName}.${ProxyCallback::class.simpleName}.$name ($uri)",
+                    "uncaught exception in ${ProxyCallback::class.simpleName}.$name ($uri)",
                     e,
                 )
                 throw ErrnoException(name, e.errno, e)

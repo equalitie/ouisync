@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.dart
+package org.equalitie.ouisync.kotlin.android
 
 import android.content.Context
 import androidx.datastore.core.DataStore
@@ -15,13 +15,13 @@ private val CONFIG_PATH_KEY = stringPreferencesKey("config_path")
 
 private val Context.config: DataStore<Preferences> by preferencesDataStore(CONFIG_NAME)
 
-internal suspend fun Context.getConfigPath() =
+suspend fun Context.getConfigPath() =
     config.data
         .map { prefs -> prefs[CONFIG_PATH_KEY] }
         .filterNotNull()
         .first()
 
-internal suspend fun Context.setConfigPath(value: String?) =
+suspend fun Context.setConfigPath(value: String?) =
     config.edit { prefs ->
         if (value != null) {
             prefs[CONFIG_PATH_KEY] = value

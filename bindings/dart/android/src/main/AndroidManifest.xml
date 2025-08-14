@@ -13,7 +13,7 @@
  -->
 
         <provider
-            android:name=".OuisyncProvider"
+            android:name="org.equalitie.ouisync.kotlin.android.OuisyncProvider"
             android:authorities="${applicationId}.documents"
             android:exported="true"
             android:grantUriPermissions="true"
@@ -24,7 +24,7 @@
         </provider>
 
         <service
-            android:name=".OuisyncService"
+            android:name="org.equalitie.ouisync.kotlin.android.OuisyncService"
             android:foregroundServiceType="dataSync"
             android:exported="false">
         </service>

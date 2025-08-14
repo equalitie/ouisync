@@ -6,4 +6,7 @@ project(':ouisync-client').projectDir = new File(settingsDir, 'client')
 include 'ouisync-server'
 project(':ouisync-server').projectDir = new File(settingsDir, 'server')
 
+include 'ouisync-android'
+project(':ouisync-android').projectDir = new File(settingsDir, 'android')
+
 include 'example'
