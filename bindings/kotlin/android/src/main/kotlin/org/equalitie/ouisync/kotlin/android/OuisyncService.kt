@@ -30,10 +30,9 @@ import org.equalitie.ouisync.kotlin.server.Server
 import kotlin.collections.firstOrNull
 
 open class OuisyncService : Service() {
-    private val exceptionHandler =
-        CoroutineExceptionHandler { _, e ->
-            Log.e(TAG, "uncaught exception in OuisyncService", e)
-        }
+    private val exceptionHandler = CoroutineExceptionHandler { _, e ->
+        Log.e(TAG, "uncaught exception in OuisyncService", e)
+    }
     private val scope = CoroutineScope(Dispatchers.Main + exceptionHandler)
 
     private val server: Deferred<Server> = scope.async { Server.start(getConfigPath()) }
@@ -132,7 +131,8 @@ open class OuisyncService : Service() {
                 NOTIFICATION_CHANNEL_ID,
                 channelName ?: DEFAULT_NOTIFICATION_CHANNEL_NAME,
                 NotificationManager.IMPORTANCE_LOW,
-            ).also { channel -> manager.createNotificationChannel(channel) }
+            )
+                .also { channel -> manager.createNotificationChannel(channel) }
         }
 
         val notification = createNotification(contentTitle, contentText)
@@ -157,26 +157,25 @@ open class OuisyncService : Service() {
     protected open fun createNotification(
         contentTitle: String? = null,
         contentText: String? = null,
-    ): Notification =
-        Notification
-            .Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ouisync_notification_icon)
-            .setOngoing(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .apply {
-                if (contentTitle != null) {
-                    setContentTitle(contentTitle)
-                }
+    ): Notification = Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+        .setSmallIcon(R.mipmap.ouisync_notification_icon)
+        .setOngoing(true)
+        .setCategory(Notification.CATEGORY_SERVICE)
+        .apply {
+            if (contentTitle != null) {
+                setContentTitle(contentTitle)
+            }
 
-                if (contentText != null) {
-                    setContentText(contentText)
-                }
+            if (contentText != null) {
+                setContentText(contentText)
+            }
 
-                val intent = createContentIntent()
-                if (intent != null) {
-                    setContentIntent(intent)
-                }
-            }.build()
+            val intent = createContentIntent()
+            if (intent != null) {
+                setContentIntent(intent)
+            }
+        }
+        .build()
 
     private fun createContentIntent(): PendingIntent? {
         val activityClass = getMainActivityClass()
@@ -205,24 +204,24 @@ open class OuisyncService : Service() {
     // only one launchable activity in the app. If that's not the case, it arbitrarily returns one
     // such activity which might not be what you want. In such cases it's recommented to override
     // this method.
-    protected open fun getMainActivityClass(): Class<*>? =
-        applicationContext.let { context ->
-            val activities =
+    protected open fun getMainActivityClass(): Class<*>? = applicationContext.let { context ->
+        val activities =
+            context.packageManager
+                .getPackageInfo(context.packageName, PackageManager.GET_ACTIVITIES)
+                .activities ?: emptyArray()
+
+        activities
+            .asSequence()
+            .map { info -> Class.forName(info.name) }
+            .filter { klass ->
+                val intent = Intent(context, klass).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+
                 context.packageManager
-                    .getPackageInfo(context.packageName, PackageManager.GET_ACTIVITIES)
-                    .activities ?: emptyArray()
-
-            activities
-                .asSequence()
-                .map { info -> Class.forName(info.name) }
-                .filter { klass ->
-                    val intent = Intent(context, klass).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
-
-                    context.packageManager
-                        .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
-                        .isNotEmpty()
-                }.firstOrNull()
-        }
+                    .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                    .isNotEmpty()
+            }
+            .firstOrNull()
+    }
 
     companion object {
         private val TAG = OuisyncService::class.simpleName

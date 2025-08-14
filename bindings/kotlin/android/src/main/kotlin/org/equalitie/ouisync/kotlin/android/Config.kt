@@ -15,17 +15,12 @@ private val CONFIG_PATH_KEY = stringPreferencesKey("config_path")
 
 private val Context.config: DataStore<Preferences> by preferencesDataStore(CONFIG_NAME)
 
-suspend fun Context.getConfigPath() =
-    config.data
-        .map { prefs -> prefs[CONFIG_PATH_KEY] }
-        .filterNotNull()
-        .first()
+suspend fun Context.getConfigPath() = config.data.map { prefs -> prefs[CONFIG_PATH_KEY] }.filterNotNull().first()
 
-suspend fun Context.setConfigPath(value: String?) =
-    config.edit { prefs ->
-        if (value != null) {
-            prefs[CONFIG_PATH_KEY] = value
-        } else {
-            prefs.remove(CONFIG_PATH_KEY)
-        }
+suspend fun Context.setConfigPath(value: String?) = config.edit { prefs ->
+    if (value != null) {
+        prefs[CONFIG_PATH_KEY] = value
+    } else {
+        prefs.remove(CONFIG_PATH_KEY)
     }
+}

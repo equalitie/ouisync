@@ -1,20 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-
+xmlns:tools="http://schemas.android.com/tools">
     <application>
- <!--        <provider
-            android:name=".PipeProvider"
-            android:authorities="${applicationId}.provider"
-            android:exported="true"/>
- -->
-
         <provider
             android:name="org.equalitie.ouisync.kotlin.android.OuisyncProvider"
-            android:authorities="${applicationId}.provider"
+            android:authorities="${applicationId}.documents"
             android:exported="true"
             android:grantUriPermissions="true"
             android:permission="android.permission.MANAGE_DOCUMENTS">

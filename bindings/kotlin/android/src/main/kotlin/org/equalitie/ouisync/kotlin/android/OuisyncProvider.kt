@@ -24,25 +24,29 @@ class OuisyncProvider : DocumentsProvider() {
     companion object {
         private val TAG = OuisyncProvider::class.simpleName
 
-        val DEFAULT_ROOT_PROJECTION = arrayOf(
-            DocumentsContract.Root.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Root.COLUMN_FLAGS,
-            DocumentsContract.Root.COLUMN_ICON,
-            DocumentsContract.Root.COLUMN_ROOT_ID,
-            DocumentsContract.Root.COLUMN_SUMMARY,
-            DocumentsContract.Root.COLUMN_TITLE,
-        )
+        val DEFAULT_ROOT_PROJECTION =
+            arrayOf(
+                DocumentsContract.Root.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Root.COLUMN_FLAGS,
+                DocumentsContract.Root.COLUMN_ICON,
+                DocumentsContract.Root.COLUMN_MIME_TYPES,
+                DocumentsContract.Root.COLUMN_ROOT_ID,
+                DocumentsContract.Root.COLUMN_SUMMARY,
+                DocumentsContract.Root.COLUMN_TITLE,
+            )
 
-        val DEFAULT_DOCUMENT_PROJECTION = arrayOf(
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            // DocumentsContract.Document.COLUMN_MIME_TYPE,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            // DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-            // DocumentsContract.Document.COLUMN_FLAGS,
-            // DocumentsContract.Document.COLUMN_SIZE
-        )
+        val DEFAULT_DOCUMENT_PROJECTION =
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                // DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                // DocumentsContract.Document.COLUMN_FLAGS,
+                // DocumentsContract.Document.COLUMN_SIZE
+            )
 
-        val ROOT_ID = "root"
+        private val ROOT_ID = "default"
+        private val ROOT_DOCUMENT_ID = "repos"
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -68,12 +72,12 @@ class OuisyncProvider : DocumentsProvider() {
     }
 
     override fun queryRoots(projection: Array<out String>?): Cursor {
-        Log.d(TAG, "queryRoots($projection)");
+        Log.d(TAG, "queryRoots($projection)")
 
         val result = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
         val row = result.newRow()
 
-        row.add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, "$ROOT_ID:")
+        row.add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, ROOT_DOCUMENT_ID)
         row.add(DocumentsContract.Root.COLUMN_FLAGS, DocumentsContract.Root.FLAG_SUPPORTS_IS_CHILD)
         row.add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ouisync_provider_root_icon)
         row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, DocumentsContract.Root.MIME_TYPE_ITEM)
@@ -87,7 +91,7 @@ class OuisyncProvider : DocumentsProvider() {
     override fun queryChildDocuments(
         parentDocumentId: String?,
         projection: Array<out String>?,
-        sortOrder: String?
+        sortOrder: String?,
     ): Cursor {
         Log.d(TAG, "queryChildDocuments($parentDocumentId, $projection, $sortOrder)")
 
@@ -100,11 +104,13 @@ class OuisyncProvider : DocumentsProvider() {
         Log.d(TAG, "queryDocument($documentId, $projection)")
 
         val locator = if (documentId != null) Locator.parse(documentId) else Locator.ROOT
-        Log.d(TAG, "queryDocument locator=$locator")
-
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
-        // val row = result
 
+        if (locator == Locator.ROOT) {
+            // val row =
+        } else {
+
+        }
 
         return result
     }
@@ -112,7 +118,7 @@ class OuisyncProvider : DocumentsProvider() {
     override fun openDocument(
         documentId: String,
         mode: String,
-        signal: CancellationSignal?
+        signal: CancellationSignal?,
     ): ParcelFileDescriptor {
         Log.d(TAG, "openDocument($documentId, $mode, ..)")
 
@@ -122,34 +128,22 @@ class OuisyncProvider : DocumentsProvider() {
     private data class Locator(val repo: String, val path: String) {
         companion object {
             fun parse(documentId: String): Locator {
-                val rootSepIndex = documentId.indexOf(':')
-                require(rootSepIndex >= 0) { "invalid document id" }
-
-                val rootId = documentId.substring(0, rootSepIndex)
-                require(rootId == ROOT_ID) { "invalid root id" }
-
-                val rest = documentId.substring(rootSepIndex + 1)
-
-                if (rest.isEmpty()) {
+                if (documentId == ROOT_DOCUMENT_ID) {
                     return ROOT
                 }
 
-                val repoSepIndex = rest.indexOf('/')
-                if (repoSepIndex < 0) {
-                    return Locator(rest, "")
-                } else {
-                    return Locator(
-                        repo = rest.substring(0, repoSepIndex),
-                        path = rest.substring(repoSepIndex + 1)
-                    )
-                }
+                val index = documentId.indexOf('/')
+                require(index >= 0) { "invalid document id" }
+
+                return Locator(
+                    repo = documentId.substring(0, index),
+                    path = documentId.substring(index + 1),
+                )
             }
 
             val ROOT = Locator("", "")
         }
 
-        override fun toString() = if (repo.isEmpty()) "" else "$repo/$path"
+        override fun toString() = if (repo.isEmpty()) ROOT_DOCUMENT_ID else "$repo/$path"
     }
 }
-
-
