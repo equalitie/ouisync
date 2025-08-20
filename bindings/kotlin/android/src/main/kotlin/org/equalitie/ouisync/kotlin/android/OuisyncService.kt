@@ -39,6 +39,8 @@ open class OuisyncService : Service() {
 
     private var isForeground = false
 
+    // Receiver for the ACTION_STOP intent. For ordered broadcasts, it sets result code to 1 after
+    // the service has been completely stoped.
     private val receiver =
         object : BroadcastReceiver() {
             override fun onReceive(
@@ -50,6 +52,10 @@ open class OuisyncService : Service() {
                 scope.launch {
                     stopServer()
                     stopSelf()
+
+                    if (isOrderedBroadcast()) {
+                        setResultCode(1)
+                    }
                 }
             }
         }

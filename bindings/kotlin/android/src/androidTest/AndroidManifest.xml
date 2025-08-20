@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
 xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application>
         <provider
             android:name="org.equalitie.ouisync.kotlin.android.OuisyncProvider"
@@ -19,3 +22,4 @@ xmlns:tools="http://schemas.android.com/tools">
         </service>
     </application>
 </manifest>
+

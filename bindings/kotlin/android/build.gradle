@@ -35,18 +35,21 @@ android {
 }
 
 dependencies {
+    def kotlinx_coroutines_version = '1.10.2'
+
     implementation project(':ouisync-client')
     implementation project(':ouisync-server')
 
     // HACK: Using `implementation` here fails compilation in the downstream packages for some
-    // reason. Using `api` fixes it even though the datastore API is only used internally by this
-    // project.
+    // reason even though the datastore API is only used internally by this project. Using `api`
+    // seems to fix it.
     api 'androidx.datastore:datastore-preferences:1.1.7'
 
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinx_coroutines_version"
 
-    androidTestImplementation "androidx.test:runner:1.7.0"
-    androidTestImplementation "androidx.test.ext:junit:1.3.0"
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$kotlinx_coroutines_version"
 }
 
 afterEvaluate {
