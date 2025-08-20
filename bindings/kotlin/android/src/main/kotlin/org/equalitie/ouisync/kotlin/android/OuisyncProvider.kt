@@ -49,8 +49,9 @@ class OuisyncProvider : DocumentsProvider() {
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_FLAGS,
                 DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_SUMMARY,
                 // DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-                // DocumentsContract.Document.COLUMN_SIZE
             )
 
         private val ROOT_ID = "default"
@@ -68,7 +69,7 @@ class OuisyncProvider : DocumentsProvider() {
     }
 
     override fun queryRoots(projection: Array<out String>?): Cursor {
-        Log.d(TAG, "queryRoots($projection)")
+        Log.d(TAG, "queryRoots(${projection?.contentToString()})")
 
         val result = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
         val row = result.newRow()
@@ -99,17 +100,64 @@ class OuisyncProvider : DocumentsProvider() {
         projection: Array<out String>?,
         sortOrder: String?,
     ): Cursor {
-        Log.d(TAG, "queryChildDocuments($parentDocumentId, $projection, $sortOrder)")
+        Log.d(TAG, "queryChildDocuments($parentDocumentId, ${projection?.contentToString()}, $sortOrder)")
 
+        val locator = Locator.parse(parentDocumentId)
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
+
+        if (locator == Locator.ROOT) {
+            runBlocking {
+                for (repo in session.await().listRepositories().values) {
+                    val name = repo.getShortName()
+                    val size = repo.getQuota().size
+
+                    val row = result.newRow()
+
+                    row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, name)
+                    row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, Locator(repo = name, path = ""))
+                    row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
+                    row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
+                    row.add(DocumentsContract.Document.COLUMN_SIZE, size)
+                    row.add(DocumentsContract.Document.COLUMN_SUMMARY, "TODO: repo summary")
+                }
+            }
+        } else {
+            runBlocking {
+                val repo = session.await().findRepository(locator.repo)
+
+                for (entry in repo.readDirectory(locator.path)) {
+                    val entryLocator = locator.join(entry.name)
+
+                    val row = result.newRow()
+
+                    row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, entry.name)
+                    row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, entryLocator)
+                    row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
+
+                    val mime = when (entry.entryType) {
+                        EntryType.FILE -> URLConnection.guessContentTypeFromName(entry.name)
+                        EntryType.DIRECTORY -> DocumentsContract.Document.MIME_TYPE_DIR
+                    }
+
+                    val size = when (entry.entryType) {
+                        EntryType.FILE -> repo.openFile(entryLocator.path).getLength()
+                        EntryType.DIRECTORY -> null
+                    }
+
+                    row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, mime)
+                    row.add(DocumentsContract.Document.COLUMN_SIZE, size)
+                    row.add(DocumentsContract.Document.COLUMN_SUMMARY, "TODO: entry summary")
+                }
+            }
+        }
 
         return result
     }
 
     override fun queryDocument(documentId: String?, projection: Array<out String>?): Cursor {
-        Log.d(TAG, "queryDocument($documentId, $projection)")
+        Log.d(TAG, "queryDocument($documentId, ${projection?.contentToString()})")
 
-        val locator = if (documentId != null) Locator.parse(documentId) else Locator.ROOT
+        val locator = Locator.parse(documentId)
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         val row = result.newRow()
 
@@ -153,10 +201,12 @@ class OuisyncProvider : DocumentsProvider() {
         throw NotImplementedError()
     }
 
+
+
     private data class Locator(val repo: String, val path: String) {
         companion object {
-            fun parse(documentId: String): Locator {
-                if (documentId == ROOT_DOCUMENT_ID) {
+            fun parse(documentId: String?): Locator {
+                if (documentId == null || documentId == ROOT_DOCUMENT_ID) {
                     return ROOT
                 }
 
@@ -175,5 +225,11 @@ class OuisyncProvider : DocumentsProvider() {
         override fun toString() = if (repo.isEmpty()) ROOT_DOCUMENT_ID else "$repo/$path"
 
         val name: String = path.substringAfterLast('/')
+
+        fun join(name: String): Locator = when {
+            repo.isEmpty() -> Locator(repo = name, path = "")
+            path.isEmpty() -> Locator(repo = repo, path = name)
+            else -> Locator(repo = repo, path = "$path/$name")
+        }
     }
 }
