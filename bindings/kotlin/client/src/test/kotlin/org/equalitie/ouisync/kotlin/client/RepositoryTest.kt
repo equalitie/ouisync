@@ -407,6 +407,15 @@ class RepositoryTest {
         }
     }
 
+    @Test
+    fun quota() = runTest {
+        val repo = createRepo(name = "foo")
+        val info = repo.getQuota()
+
+        assertNull(info.quota)
+        assertEquals(0, info.size.bytes)
+    }
+
     private suspend fun createRepo(name: String? = null, token: ShareToken? = null): Repository = session.createRepository(
         name ?: repoName,
         token = token,
