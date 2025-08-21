@@ -41,6 +41,7 @@ import org.equalitie.ouisync.kotlin.client.create
 import java.net.URLConnection
 import kotlin.collections.joinToString
 
+@Deprecated("use OuisyncProvider")
 class PipeProvider : ContentProvider() {
     companion object {
         private val TAG = PipeProvider::class.simpleName

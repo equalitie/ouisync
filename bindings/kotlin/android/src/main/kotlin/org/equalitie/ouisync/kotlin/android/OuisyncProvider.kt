@@ -6,10 +6,16 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.database.Cursor
 import android.database.MatrixCursor
+import android.os.Bundle
 import android.os.CancellationSignal
+import android.os.Handler
 import android.os.ParcelFileDescriptor
+import android.os.ProxyFileDescriptorCallback
+import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.DocumentsProvider
+import android.system.ErrnoException
+import android.system.OsConstants
 import android.util.Log
 import java.io.FileNotFoundException
 import java.net.URLConnection
@@ -22,7 +28,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.equalitie.ouisync.kotlin.client.AccessMode
 import org.equalitie.ouisync.kotlin.client.EntryType
+import org.equalitie.ouisync.kotlin.client.File
+import org.equalitie.ouisync.kotlin.client.OuisyncException
+import org.equalitie.ouisync.kotlin.client.Repository
 import org.equalitie.ouisync.kotlin.client.Session
 import org.equalitie.ouisync.kotlin.client.close
 import org.equalitie.ouisync.kotlin.client.create
@@ -39,7 +49,6 @@ class OuisyncProvider : DocumentsProvider() {
                 DocumentsContract.Root.COLUMN_ICON,
                 DocumentsContract.Root.COLUMN_MIME_TYPES,
                 DocumentsContract.Root.COLUMN_ROOT_ID,
-                DocumentsContract.Root.COLUMN_SUMMARY,
                 DocumentsContract.Root.COLUMN_TITLE,
             )
 
@@ -51,14 +60,17 @@ class OuisyncProvider : DocumentsProvider() {
                 DocumentsContract.Document.COLUMN_MIME_TYPE,
                 DocumentsContract.Document.COLUMN_SIZE,
                 DocumentsContract.Document.COLUMN_SUMMARY,
+
                 // DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                // DocumentsContract.Document.COLUMN_ICON,
             )
 
         private val ROOT_ID = "default"
         private val ROOT_DOCUMENT_ID = "repos"
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     private val session: Deferred<Session> = scope.async(start = CoroutineStart.LAZY) {
         Session.create(requireNotNull(context).getConfigPath())
     }
@@ -79,17 +91,6 @@ class OuisyncProvider : DocumentsProvider() {
         row.add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ouisync_provider_root_icon)
         row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, DocumentsContract.Root.MIME_TYPE_ITEM)
         row.add(DocumentsContract.Root.COLUMN_ROOT_ID, ROOT_ID)
-
-        val numRepos = runBlocking { session.await().listRepositories().size }
-        // TODO: localize
-        val summary = when (numRepos) {
-            0 -> "no repositories"
-            1 -> "1 repository"
-            else -> "$numRepos repositories"
-        }
-
-        row.add(DocumentsContract.Root.COLUMN_SUMMARY, summary)
-
         row.add(DocumentsContract.Root.COLUMN_TITLE, "Ouisync")
 
         return result
@@ -99,96 +100,64 @@ class OuisyncProvider : DocumentsProvider() {
         parentDocumentId: String?,
         projection: Array<out String>?,
         sortOrder: String?,
-    ): Cursor {
+    ): Cursor = run {
         Log.d(TAG, "queryChildDocuments($parentDocumentId, ${projection?.contentToString()}, $sortOrder)")
 
         val locator = Locator.parse(parentDocumentId)
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
 
         if (locator == Locator.ROOT) {
-            runBlocking {
-                for (repo in session.await().listRepositories().values) {
-                    val name = repo.getShortName()
-                    val size = repo.getQuota().size
-
-                    val row = result.newRow()
-
-                    row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, name)
-                    row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, Locator(repo = name, path = ""))
-                    row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
-                    row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
-                    row.add(DocumentsContract.Document.COLUMN_SIZE, size)
-                    row.add(DocumentsContract.Document.COLUMN_SUMMARY, "TODO: repo summary")
-                }
+            for (repo in session.await().listRepositories().values) {
+                buildEntryRow(
+                    result,
+                    repo,
+                    EntryType.DIRECTORY,
+                    Locator(repo = repo.getShortName(), path = ""),
+                )
             }
         } else {
-            runBlocking {
-                val repo = session.await().findRepository(locator.repo)
+            val repo = session.await().findRepository(locator.repo)
+            val isReadable = when (repo.getAccessMode()) {
+                AccessMode.READ, AccessMode.WRITE -> true
+                AccessMode.BLIND -> false
+            }
 
+            if (isReadable) {
                 for (entry in repo.readDirectory(locator.path)) {
-                    val entryLocator = locator.join(entry.name)
-
-                    val row = result.newRow()
-
-                    row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, entry.name)
-                    row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, entryLocator)
-                    row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
-
-                    val mime = when (entry.entryType) {
-                        EntryType.FILE -> URLConnection.guessContentTypeFromName(entry.name)
-                        EntryType.DIRECTORY -> DocumentsContract.Document.MIME_TYPE_DIR
-                    }
-
-                    val size = when (entry.entryType) {
-                        EntryType.FILE -> repo.openFile(entryLocator.path).getLength()
-                        EntryType.DIRECTORY -> null
-                    }
-
-                    row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, mime)
-                    row.add(DocumentsContract.Document.COLUMN_SIZE, size)
-                    row.add(DocumentsContract.Document.COLUMN_SUMMARY, "TODO: entry summary")
+                    buildEntryRow(
+                        result,
+                        repo,
+                        entry.entryType,
+                        locator.join(entry.name),
+                    )
                 }
+            } else {
+                result.setExtras(Bundle().apply {
+                    // TODO: localize
+                    putString(DocumentsContract.EXTRA_INFO, "This repository is locked")
+                })
             }
         }
 
-        return result
+        result
     }
 
-    override fun queryDocument(documentId: String?, projection: Array<out String>?): Cursor {
+    override fun queryDocument(documentId: String?, projection: Array<out String>?): Cursor = run {
         Log.d(TAG, "queryDocument($documentId, ${projection?.contentToString()})")
 
         val locator = Locator.parse(documentId)
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
-        val row = result.newRow()
 
         if (locator == Locator.ROOT) {
-            // TODO: localize
-            row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, "Repositories")
-            row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, documentId)
-            row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
-            row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
+            buildRepoListRow(result)
         } else {
-            row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, locator.name)
-            row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, documentId)
-            row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
+            val repo = session.await().findRepository(locator.repo)
+            val entryType = repo.getEntryType(locator.path) ?: throw FileNotFoundException()
 
-            val type = runBlocking {
-                session
-                    .await()
-                    .findRepository(locator.repo)
-                    .getEntryType(locator.path)
-            }
-
-            val mime = when (type) {
-                EntryType.FILE -> URLConnection.guessContentTypeFromName(locator.path)
-                EntryType.DIRECTORY -> DocumentsContract.Document.MIME_TYPE_DIR
-                null -> throw FileNotFoundException()
-            }
-
-            row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, mime)
+            buildEntryRow(result, repo, entryType, locator)
         }
 
-        return result
+        result
     }
 
     override fun openDocument(
@@ -198,10 +167,61 @@ class OuisyncProvider : DocumentsProvider() {
     ): ParcelFileDescriptor {
         Log.d(TAG, "openDocument($documentId, $mode, ..)")
 
-        throw NotImplementedError()
+        val context = requireNotNull(context)
+        val locator = Locator.parse(documentId)
+        val storage = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
+        val handler = Handler(context.mainLooper)
+
+        // TODO: use the cancellation signal
+
+        return storage.openProxyFileDescriptor(
+            ParcelFileDescriptor.MODE_READ_ONLY,
+            ProxyCallback(locator),
+            handler,
+        )
     }
 
+    private suspend fun buildEntryRow(cursor: MatrixCursor, repo: Repository, entryType: EntryType, locator: Locator) {
+        val row = cursor.newRow()
 
+        row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, locator.name)
+        row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, locator)
+
+        when (entryType) {
+            EntryType.FILE -> {
+                val file = repo.openFile(locator.path)
+                val size = file.getLength()
+                val mime = URLConnection.guessContentTypeFromName(locator.name)
+
+                row.add(DocumentsContract.Document.COLUMN_SIZE, size)
+                row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, mime)
+                row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
+            }
+            EntryType.DIRECTORY -> {
+                val size = if (locator.path.isEmpty()) {
+                    repo.getQuota().size.bytes
+                } else {
+                    null
+                }
+
+                row.add(DocumentsContract.Document.COLUMN_SIZE, size)
+                row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
+                row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
+            }
+        }
+
+        // TODO: for repos, use custom icon to indicate read/write/blind access
+    }
+
+    private fun buildRepoListRow(cursor: MatrixCursor) {
+        val row = cursor.newRow()
+
+        // TODO: localize
+        row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, "Repositories")
+        row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, ROOT_DOCUMENT_ID)
+        row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
+        row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
+    }
 
     private data class Locator(val repo: String, val path: String) {
         companion object {
@@ -224,7 +244,7 @@ class OuisyncProvider : DocumentsProvider() {
 
         override fun toString() = if (repo.isEmpty()) ROOT_DOCUMENT_ID else "$repo/$path"
 
-        val name: String = path.substringAfterLast('/')
+        val name = if (path.isEmpty()) repo else path.substringAfterLast('/')
 
         fun join(name: String): Locator = when {
             repo.isEmpty() -> Locator(repo = name, path = "")
@@ -232,4 +252,66 @@ class OuisyncProvider : DocumentsProvider() {
             else -> Locator(repo = repo, path = "$path/$name")
         }
     }
+
+    private fun <T> run(block: suspend CoroutineScope.() -> T): T = runBlocking {
+        scope.async(block = block).await()
+    }
+
+    // Callback for proxy file descriptor which wraps a Ouisync file and exposes it as
+    // ParcelFileDescriptor.
+    private inner class ProxyCallback(
+        val locator: Locator,
+    ) : ProxyFileDescriptorCallback() {
+        private val file: Deferred<File> = scope.async {
+            session.await().findRepository(locator.repo).openFile(locator.path)
+        }
+
+        override fun onGetSize() = run("onGetSize") {
+            file.await().getLength()
+        }
+
+        override fun onRead(
+            offset: Long,
+            chunkSize: Int,
+            outData: ByteArray,
+        ) = run("onRead") {
+            val chunk = file.await().read(offset, chunkSize.toLong())
+            chunk.copyInto(outData)
+            chunk.size
+        }
+
+        override fun onFsync() = run("onFsync") {
+            file.await().flush()
+        }
+
+        override fun onRelease() = run("onRelease") {
+            file.await().close()
+        }
+
+        private fun <T> run(
+            name: String,
+            block: suspend CoroutineScope.() -> T,
+        ): T {
+            try {
+                return this@OuisyncProvider.run(block)
+            } catch (e: Exception) {
+                Log.e(
+                    TAG,
+                    "uncaught exception in ${ProxyCallback::class.simpleName}.$name",
+                    e,
+                )
+
+                throw ErrnoException(name, e.errno, e)
+            }
+        }
+    }
 }
+
+private val Exception.errno: Int
+    get() = when (this) {
+        is OuisyncException.NotFound -> OsConstants.ENOENT
+        is OuisyncException.PermissionDenied -> OsConstants.EPERM
+        is OuisyncException.IsDirectory -> OsConstants.EISDIR
+        is OuisyncException.NotDirectory -> OsConstants.ENOTDIR
+        else -> OsConstants.EIO
+    }
