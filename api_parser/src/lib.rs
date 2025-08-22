@@ -61,7 +61,7 @@ impl Request {
     }
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct RequestVariant {
     pub docs: Docs,
     pub fields: Fields,
@@ -272,6 +272,16 @@ impl Fields {
             Self::Unit => FieldsIter::Unnamed(None),
         }
     }
+
+    pub fn default_named<'a>(&'a self, default_name: &'a str) -> DefaultNamedFieldsIter<'a> {
+        match self {
+            Self::Named(fields) => DefaultNamedFieldsIter::Named(fields.iter()),
+            Self::Unnamed(field) => {
+                DefaultNamedFieldsIter::DefaultNamed(Some((default_name, field)))
+            }
+            Self::Unit => DefaultNamedFieldsIter::DefaultNamed(None),
+        }
+    }
 }
 
 impl<'a> IntoIterator for &'a Fields {
@@ -283,6 +293,7 @@ impl<'a> IntoIterator for &'a Fields {
     }
 }
 
+#[derive(Clone)]
 pub enum FieldsIter<'a> {
     Named(slice::Iter<'a, (String, Field)>),
     Unnamed(Option<&'a Field>),
@@ -295,6 +306,29 @@ impl<'a> Iterator for FieldsIter<'a> {
         match self {
             Self::Named(i) => i.next().map(|(name, field)| (Some(name.as_str()), field)),
             Self::Unnamed(i) => i.take().map(|field| (None, field)),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum DefaultNamedFieldsIter<'a> {
+    Named(slice::Iter<'a, (String, Field)>),
+    DefaultNamed(Option<(&'a str, &'a Field)>),
+}
+
+impl<'a> DefaultNamedFieldsIter<'a> {
+    pub fn names(self) -> impl Iterator<Item = &'a str> + Clone {
+        self.map(|(name, _field)| name)
+    }
+}
+
+impl<'a> Iterator for DefaultNamedFieldsIter<'a> {
+    type Item = (&'a str, &'a Field);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Named(i) => i.next().map(|(name, field)| (name.as_str(), field)),
+            Self::DefaultNamed(i) => i.take().map(|(default_name, field)| (default_name, field)),
         }
     }
 }

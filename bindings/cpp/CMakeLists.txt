@@ -1,0 +1,119 @@
+cmake_minimum_required(VERSION 3.5)
+
+include(FetchContent)
+
+# Show compilation times
+#set_property(GLOBAL PROPERTY RULE_MESSAGES OFF)
+set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/custom_output.sh")
+set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_CURRENT_SOURCE_DIR}/custom_output.sh")
+
+############################
+# Boost
+############################
+
+# TODO: Get rid of this
+# https://stackoverflow.com/a/71864590/273348
+set(Boost_NO_WARN_NEW_VERSIONS ON)
+
+# If you need to specify path to custom Boost installation, use `cmake
+# -D<VAR>=<VAL>` in the _configure_ stage where `<VAR>` is either `BOOST_ROOT`
+# or the pair of `BOOST_INCLUDEDIR` and `BOOST_LIBRARYDIR`.
+# https://cmake.org/cmake/help/v3.0/module/FindBoost.html
+find_package(Boost
+    # Boost.Hash2 needed for HMAC had initial release in 1.88.0
+    1.88.0 REQUIRED
+    COMPONENTS context filesystem
+)
+
+FetchContent_Declare(
+    Corrosion
+    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+    GIT_TAG v0.5.2
+)
+
+############################
+# Ouisync Rust code
+############################
+
+FetchContent_MakeAvailable(Corrosion)
+
+# CMAKE_CURRENT_SOURCE_DIR points to the dir path of this CMakeLists.txt file
+set(OUISYNC_SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../)
+
+# This creates the 'ouisync_service' library target whose sources are written in Rust
+corrosion_import_crate(
+    MANIFEST_PATH ${OUISYNC_SRC_ROOT}/Cargo.toml
+    # Can also create a dynamic library if crate type is set to `cdylib`.
+    CRATE_TYPES staticlib
+    CRATES ouisync-service
+)
+
+# TODO: This doesn't seem to do anything apart from preventing
+# `externalproject_add` that adds this project from failing when its
+# `INSTALL_COMMAND` is left unset.
+install(TARGETS ouisync_service DESTINATION ${CMAKE_INSTALL_PREFIX})
+
+############################
+# C++ API code generation
+############################
+
+set(OUISYNC_GENERATED_BINDING_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ouisync)
+# To avoid re-building every time, the generated files are first written into a
+# temporary directory and then copied to where the compiler can find them only
+# if they have not changed.
+set(OUISYNC_GENERATED_BINDING_TMP_DIR ${CMAKE_CURRENT_BINARY_DIR}/ouisync/generated.tmp)
+
+set(GENERATED_CPP_FILES
+    ${OUISYNC_GENERATED_BINDING_DIR}/api.g.cpp
+    ${OUISYNC_GENERATED_BINDING_DIR}/data.g.cpp
+    ${OUISYNC_GENERATED_BINDING_DIR}/message.g.cpp
+)
+
+set(GENERATED_HPP_FILES
+    ${OUISYNC_GENERATED_BINDING_DIR}/api.g.hpp
+    ${OUISYNC_GENERATED_BINDING_DIR}/data.g.hpp
+    ${OUISYNC_GENERATED_BINDING_DIR}/data_dsc.g.hpp
+    ${OUISYNC_GENERATED_BINDING_DIR}/message.g.hpp
+    ${OUISYNC_GENERATED_BINDING_DIR}/message_dsc.g.hpp
+)
+
+add_custom_target(ouisync_generate_api
+    COMMAND
+        mkdir -p ${OUISYNC_GENERATED_BINDING_TMP_DIR} &&
+        cargo run --package ouisync-bindgen -- cpp ${OUISYNC_GENERATED_BINDING_TMP_DIR} &&
+        ${CMAKE_COMMAND} -E copy_directory_if_different
+            ${OUISYNC_GENERATED_BINDING_TMP_DIR}/
+            ${OUISYNC_GENERATED_BINDING_DIR}
+    WORKING_DIRECTORY
+        ${OUISYNC_SRC_ROOT}
+    BYPRODUCTS
+        ${GENERATED_CPP_FILES}
+        ${GENERATED_HPP_FILES}
+)
+
+add_library(ouisync_client
+    STATIC
+        ouisync/client.cpp
+        ouisync/serialize.cpp
+        ouisync/error.cpp
+        ${GENERATED_CPP_FILES}
+)
+
+target_include_directories(ouisync_client
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    PRIVATE
+        ${Boost_INCLUDE_DIRS}
+)
+
+target_link_libraries(ouisync_client
+    PUBLIC
+        #ouisync_service
+    PUBLIC
+        # Required when using Boost.Asio with stackful coroutines
+        Boost::context
+        # For reading ouisync config files
+        Boost::filesystem
+)
+
+target_compile_features(ouisync_client PRIVATE cxx_std_20)

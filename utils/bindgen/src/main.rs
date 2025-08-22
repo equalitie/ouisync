@@ -1,10 +1,11 @@
+mod cpp;
 mod dart;
 mod kotlin;
 
 use anyhow::Result;
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand};
 use ouisync_api_parser::Context;
-use std::io;
+use std::{io, path::PathBuf};
 
 fn main() -> Result<()> {
     let options = Options::parse();
@@ -15,6 +16,7 @@ fn main() -> Result<()> {
     match options.language {
         Language::Dart => dart::generate(&context, &mut io::stdout())?,
         Language::Kotlin => kotlin::generate(&context, &mut io::stdout())?,
+        Language::Cpp { out_dir } => cpp::generate(&context, &out_dir)?,
     }
 
     Ok(())
@@ -24,12 +26,16 @@ fn main() -> Result<()> {
 #[command(about)]
 struct Options {
     /// Language to generate the bindings for
-    #[arg(short, long)]
+    #[command(subcommand)]
     language: Language,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Debug, Subcommand)]
 enum Language {
     Dart,
     Kotlin,
+    Cpp {
+        /// Output directory for generated *.{hpp,cpp} files
+        out_dir: PathBuf,
+    },
 }
