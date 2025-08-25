@@ -26,6 +26,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.client.AccessMode
@@ -71,17 +76,61 @@ class OuisyncProvider : DocumentsProvider() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val session: Deferred<Session> = scope.async(start = CoroutineStart.LAZY) {
-        Session.create(requireNotNull(context).getConfigPath())
+    private val sessionFlow: StateFlow<Session?> by lazy {
+        val state = MutableStateFlow<Session?>(null)
+
+        // Receiver that (re)creates the session every time it receives an intent.
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                Log.v(TAG, "receiver.onReceive(action = ${intent.action}, resultCode = $resultCode)")
+
+                val restart = when {
+                    intent.action == OuisyncService.ACTION_STARTED ||
+                    intent.action == OuisyncService.ACTION_STATUS && resultCode != 0 -> true
+                    else -> false
+                }
+
+                if (restart) {
+                    scope.launch {
+                        state.update { session ->
+                            session?.close()
+                            Session.create(context.getConfigPath())
+                        }
+                    }
+                }
+            }
+        }
+
+        val context = requireNotNull(context)
+
+        // Trigger the receiver when the service starts
+        context.registerReceiver(
+            receiver,
+            IntentFilter(OuisyncService.ACTION_STARTED),
+            Context.RECEIVER_NOT_EXPORTED,
+        )
+
+        // Trigger the receiver also if the service has already been started
+        context.sendOrderedBroadcast(
+            Intent(OuisyncService.ACTION_STATUS),
+            null,
+            receiver,
+            null,
+            0,
+            null,
+            null,
+        )
+
+        state.asStateFlow()
     }
 
     override fun onCreate(): Boolean {
-        Log.d(TAG, "onCreate")
+        Log.v(TAG, "onCreate")
         return true
     }
 
     override fun queryRoots(projection: Array<out String>?): Cursor {
-        Log.d(TAG, "queryRoots(${projection?.contentToString()})")
+        Log.v(TAG, "queryRoots(${projection?.contentToString()})")
 
         val result = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
         val row = result.newRow()
@@ -101,13 +150,13 @@ class OuisyncProvider : DocumentsProvider() {
         projection: Array<out String>?,
         sortOrder: String?,
     ): Cursor = run {
-        Log.d(TAG, "queryChildDocuments($parentDocumentId, ${projection?.contentToString()}, $sortOrder)")
+        Log.v(TAG, "queryChildDocuments($parentDocumentId, ${projection?.contentToString()}, $sortOrder)")
 
         val locator = Locator.parse(parentDocumentId)
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
 
         if (locator == Locator.ROOT) {
-            for (repo in session.await().listRepositories().values) {
+            for (repo in session().listRepositories().values) {
                 buildEntryRow(
                     result,
                     repo,
@@ -116,7 +165,7 @@ class OuisyncProvider : DocumentsProvider() {
                 )
             }
         } else {
-            val repo = session.await().findRepository(locator.repo)
+            val repo = session().findRepository(locator.repo)
             val isReadable = when (repo.getAccessMode()) {
                 AccessMode.READ, AccessMode.WRITE -> true
                 AccessMode.BLIND -> false
@@ -143,7 +192,7 @@ class OuisyncProvider : DocumentsProvider() {
     }
 
     override fun queryDocument(documentId: String?, projection: Array<out String>?): Cursor = run {
-        Log.d(TAG, "queryDocument($documentId, ${projection?.contentToString()})")
+        Log.v(TAG, "queryDocument($documentId, ${projection?.contentToString()})")
 
         val locator = Locator.parse(documentId)
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
@@ -151,7 +200,7 @@ class OuisyncProvider : DocumentsProvider() {
         if (locator == Locator.ROOT) {
             buildRepoListRow(result)
         } else {
-            val repo = session.await().findRepository(locator.repo)
+            val repo = session().findRepository(locator.repo)
             val entryType = repo.getEntryType(locator.path) ?: throw FileNotFoundException()
 
             buildEntryRow(result, repo, entryType, locator)
@@ -165,7 +214,7 @@ class OuisyncProvider : DocumentsProvider() {
         mode: String,
         signal: CancellationSignal?,
     ): ParcelFileDescriptor {
-        Log.d(TAG, "openDocument($documentId, $mode, ..)")
+        Log.v(TAG, "openDocument($documentId, $mode, ..)")
 
         val context = requireNotNull(context)
         val locator = Locator.parse(documentId)
@@ -181,6 +230,25 @@ class OuisyncProvider : DocumentsProvider() {
         )
     }
 
+    override fun deleteDocument(documentId: String) = run {
+        Log.v(TAG, "deleteDocument($documentId)")
+
+        val locator = Locator.parse(documentId)
+        require(locator != Locator.ROOT)
+
+        val repo = session().findRepository(locator.repo)
+
+        if (locator.path.isEmpty()) {
+            repo.delete()
+        } else {
+            when (repo.getEntryType(locator.path)) {
+                EntryType.FILE -> repo.removeFile(locator.path)
+                EntryType.DIRECTORY -> repo.removeDirectory(locator.path, recursive = true)
+                null -> throw FileNotFoundException()
+            }
+        }
+    }
+
     private suspend fun buildEntryRow(cursor: MatrixCursor, repo: Repository, entryType: EntryType, locator: Locator) {
         val row = cursor.newRow()
 
@@ -192,10 +260,15 @@ class OuisyncProvider : DocumentsProvider() {
                 val file = repo.openFile(locator.path)
                 val size = file.getLength()
                 val mime = URLConnection.guessContentTypeFromName(locator.name)
+                val flags = if (repo.getAccessMode() == AccessMode.WRITE) {
+                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                } else {
+                    0
+                }
 
                 row.add(DocumentsContract.Document.COLUMN_SIZE, size)
                 row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, mime)
-                row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
+                row.add(DocumentsContract.Document.COLUMN_FLAGS, flags)
             }
             EntryType.DIRECTORY -> {
                 val size = if (locator.path.isEmpty()) {
@@ -204,9 +277,17 @@ class OuisyncProvider : DocumentsProvider() {
                     null
                 }
 
+                val flags = if (locator.path.isEmpty()) {
+                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                } else if (repo.getAccessMode() == AccessMode.WRITE) {
+                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                } else {
+                    0
+                }
+
                 row.add(DocumentsContract.Document.COLUMN_SIZE, size)
                 row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
-                row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
+                row.add(DocumentsContract.Document.COLUMN_FLAGS, flags)
             }
         }
 
@@ -253,8 +334,10 @@ class OuisyncProvider : DocumentsProvider() {
         }
     }
 
+    private suspend fun session() = sessionFlow.filterNotNull().first()
+
     private fun <T> run(block: suspend CoroutineScope.() -> T): T = runBlocking {
-        scope.async(block = block).await()
+        scope.block()
     }
 
     // Callback for proxy file descriptor which wraps a Ouisync file and exposes it as
@@ -263,7 +346,7 @@ class OuisyncProvider : DocumentsProvider() {
         val locator: Locator,
     ) : ProxyFileDescriptorCallback() {
         private val file: Deferred<File> = scope.async {
-            session.await().findRepository(locator.repo).openFile(locator.path)
+            session().findRepository(locator.repo).openFile(locator.path)
         }
 
         override fun onGetSize() = run("onGetSize") {

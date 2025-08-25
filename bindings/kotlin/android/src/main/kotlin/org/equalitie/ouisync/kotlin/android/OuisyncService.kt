@@ -22,6 +22,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -39,41 +40,53 @@ open class OuisyncService : Service() {
 
     private var isForeground = false
 
-    // Receiver for the ACTION_STOP intent. For ordered broadcasts, it sets result code to 1 after
-    // the service has been completely stoped.
     private val receiver =
         object : BroadcastReceiver() {
             override fun onReceive(
                 context: Context,
                 intent: Intent,
             ) {
-                Log.d(TAG, "receiver.onReceive(${intent.action})")
+                Log.v(TAG, "receiver.onReceive(${intent.action})")
 
-                scope.launch {
-                    stopServer()
-                    stopSelf()
+                when (intent.action) {
+                    ACTION_STOP -> {
+                        scope.launch {
+                            stopServer()
+                            stopSelf()
 
-                    if (isOrderedBroadcast()) {
-                        setResultCode(1)
+                            if (isOrderedBroadcast()) {
+                                setResultCode(1)
+                            }
+                        }
                     }
+                    ACTION_STATUS -> {
+                        if (server.isCompleted  && !server.isCancelled && isOrderedBroadcast()) {
+                            setResultCode(1)
+                        }
+                    }
+                    else -> {}
                 }
+
             }
         }
 
     override fun onCreate() {
-        Log.d(TAG, "onCreate")
+        Log.v(TAG, "onCreate")
 
         super.onCreate()
 
         registerReceiver(
             receiver,
-            IntentFilter(ACTION_STOP),
+            IntentFilter().apply {
+                addAction(ACTION_STATUS)
+                addAction(ACTION_STOP)
+            },
             RECEIVER_NOT_EXPORTED,
         )
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "onDestroy")
+        Log.v(TAG, "onDestroy")
 
         super.onDestroy()
 
@@ -86,7 +99,7 @@ open class OuisyncService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
-        Log.d(TAG, "onStartCommand($intent, $flags, $startId)")
+        Log.v(TAG, "onStartCommand($intent, $flags, $startId)")
 
         val notificationChannelName = intent?.getStringExtra(EXTRA_NOTIFICATION_CHANNEL_NAME)
         val notificationContentTitle = intent?.getStringExtra(EXTRA_NOTIFICATION_CONTENT_TITLE)
@@ -104,7 +117,7 @@ open class OuisyncService : Service() {
             server.await()
 
             // TODO: consider broadcasting failures as well
-            sendBroadcast(Intent(OuisyncService.ACTION_STARTED).setPackage(getPackageName()))
+            sendBroadcast(Intent(OuisyncService.ACTION_STARTED))
         }
 
         return START_REDELIVER_INTENT
@@ -113,7 +126,7 @@ open class OuisyncService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTimeout(startId: Int, fgsType: Int) {
-        Log.d(TAG, "onTimeout($startId, $fgsType)")
+        Log.v(TAG, "onTimeout($startId, $fgsType)")
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
@@ -232,8 +245,13 @@ open class OuisyncService : Service() {
     companion object {
         private val TAG = OuisyncService::class.simpleName
 
-        const val ACTION_STOP = "org.equalitie.ouisync.service.action.stop"
+        // Sent by the service to signal it's been started
         const val ACTION_STARTED = "org.equalitie.ouisync.service.action.started"
+        // Sent to the service to check whether it's been started. It so, it sets the result code to
+        // 1.
+        const val ACTION_STATUS = "org.equalitie.ouisync.service.action.status"
+        // Sent to the service to stop itself
+        const val ACTION_STOP = "org.equalitie.ouisync.service.action.stop"
 
         const val EXTRA_NOTIFICATION_CHANNEL_NAME =
             "org.equalitie.ouisync.service.extra.notification.channel.name"

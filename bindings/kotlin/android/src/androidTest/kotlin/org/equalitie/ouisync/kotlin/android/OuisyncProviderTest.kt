@@ -14,6 +14,7 @@ import java.io.File
 import java.util.concurrent.Semaphore
 import kotlin.random.Random
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.client.AccessMode
 import org.equalitie.ouisync.kotlin.client.Session
