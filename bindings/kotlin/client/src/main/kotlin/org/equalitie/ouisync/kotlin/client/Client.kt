@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -26,6 +27,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.UseSerializers
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.EOFException
 import java.net.ConnectException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -94,7 +96,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
     }
 
     private val messageMatcher = MessageMatcher()
-    private val coroutineScope = CoroutineScope(Dispatchers.Default)
+    private val coroutineScope = CoroutineScope(Dispatchers.IO)
 
     init {
         coroutineScope.launch { receive() }
@@ -138,6 +140,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
     suspend fun close() {
         coroutineScope.cancel()
         socket.close()
+        messageMatcher.close()
     }
 
     private suspend fun send(id: Long, request: Request) {
@@ -159,7 +162,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         socket.writeAll(buffer)
     }
 
-    private suspend fun receive() {
+    private suspend fun CoroutineScope.receive() {
         var buffer = ByteBuffer.allocate(HEADER_SIZE)
         buffer.order(ByteOrder.BIG_ENDIAN)
 
@@ -170,7 +173,6 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             buffer.flip()
 
             if (buffer.remaining() < HEADER_SIZE) {
-                messageMatcher.cancel()
                 break
             }
 
@@ -186,6 +188,10 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             buffer.rewind()
             socket.readExact(buffer)
             buffer.flip()
+
+            if (buffer.remaining() < size) {
+                break
+            }
 
             val completer = messageMatcher.completer(id)
 
@@ -206,6 +212,8 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 )
             }
         }
+
+        messageMatcher.close()
     }
 }
 
@@ -225,17 +233,26 @@ private class MessageMatcher {
     private var nextId: Long = 0
     private val oneshots: HashMap<Long, CompletableDeferred<ResponseResult>> = HashMap()
     private val channels: HashMap<Long, SendChannel<ResponseResult>> = HashMap()
+    private var closed = false
 
     @Synchronized fun nextId(): Long = nextId++
 
     @Synchronized
     fun register(id: Long, deferred: CompletableDeferred<ResponseResult>) {
-        oneshots.put(id, deferred)
+        if (!closed) {
+            oneshots.put(id, deferred)
+        } else {
+            deferred.completeExceptionally(EOFException())
+        }
     }
 
     @Synchronized
     fun register(id: Long, channel: SendChannel<ResponseResult>) {
-        channels.put(id, channel)
+        if (!closed) {
+            channels.put(id, channel)
+        } else {
+            channel.close(EOFException())
+        }
     }
 
     // This deregisters only channels because deferreds are unregistered automatically on
@@ -261,14 +278,16 @@ private class MessageMatcher {
     }
 
     @Synchronized
-    fun cancel() {
+    fun close() {
+        closed = true
+
         for (deferred in oneshots.values) {
-            deferred.cancel()
+            deferred.completeExceptionally(EOFException())
         }
         oneshots.clear()
 
         for (channel in channels.values) {
-            channel.close()
+            channel.close(EOFException())
         }
         channels.clear()
     }
@@ -351,7 +370,9 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
     // TODO: Do we also need readMutex?
     private val writeMutex = Mutex()
 
-    suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.read(buffer, cont, IOHandler()) }
+    suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont ->
+        channel.read(buffer, cont, IOHandler())
+    }
 
     suspend fun readExact(buffer: ByteBuffer): Int {
         var total = 0
@@ -359,7 +380,7 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
         while (buffer.hasRemaining()) {
             val n = read(buffer)
 
-            if (n == 0) {
+            if (n <= 0) {
                 break
             } else {
                 total += n
@@ -377,7 +398,10 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
         }
     }
 
-    private suspend fun writeUnlocked(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.write(buffer, cont, IOHandler()) }
+    private suspend fun writeUnlocked(buffer: ByteBuffer) =
+        suspendCancellableCoroutine<Int> { cont ->
+            channel.write(buffer, cont, IOHandler())
+        }
 
     fun close() {
         channel.close()
