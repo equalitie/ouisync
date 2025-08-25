@@ -58,7 +58,7 @@ class OuisyncPlugin :
                         else -> false
                     }
 
-                Log.d(TAG, "OuisyncPlugin.activityLifecycleObserver.onDestroy(finishing = $finishing)")
+                Log.d(TAG, "activityLifecycleObserver.onDestroy(finishing = $finishing)")
 
                 if (finishing) {
                     this@OuisyncPlugin.onStop()

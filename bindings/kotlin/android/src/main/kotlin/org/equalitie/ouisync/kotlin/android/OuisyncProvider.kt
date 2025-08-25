@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.os.Bundle
@@ -76,6 +77,7 @@ class OuisyncProvider : DocumentsProvider() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    // StateFlow that emits new session every time OuisyncService is (re)started.
     private val sessionFlow: StateFlow<Session?> by lazy {
         val state = MutableStateFlow<Session?>(null)
 
@@ -112,7 +114,7 @@ class OuisyncProvider : DocumentsProvider() {
 
         // Trigger the receiver also if the service has already been started
         context.sendOrderedBroadcast(
-            Intent(OuisyncService.ACTION_STATUS),
+            Intent(OuisyncService.ACTION_STATUS).setPackage(context.getPackageName()),
             null,
             receiver,
             null,
@@ -124,17 +126,30 @@ class OuisyncProvider : DocumentsProvider() {
         state.asStateFlow()
     }
 
+    private var authority: String? = null
+
     override fun onCreate(): Boolean {
         Log.v(TAG, "onCreate")
         return true
     }
 
+    // Override this method to get the authority of this provider which is needed to construct
+    // notification uris.
+    override fun attachInfo(context: Context, info: ProviderInfo) {
+        super.attachInfo(context, info)
+        authority = info.authority
+    }
+
     override fun queryRoots(projection: Array<out String>?): Cursor {
         Log.v(TAG, "queryRoots(${projection?.contentToString()})")
 
-        val result = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
-        val row = result.newRow()
+        val context = requireNotNull(context)
+        val uri = DocumentsContract.buildRootsUri(requireNotNull(authority))
 
+        val result = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
+        result.setNotificationUri(context.contentResolver, uri)
+
+        val row = result.newRow()
         row.add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, ROOT_DOCUMENT_ID)
         row.add(DocumentsContract.Root.COLUMN_FLAGS, DocumentsContract.Root.FLAG_SUPPORTS_IS_CHILD)
         row.add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ouisync_provider_root_icon)
@@ -153,7 +168,11 @@ class OuisyncProvider : DocumentsProvider() {
         Log.v(TAG, "queryChildDocuments($parentDocumentId, ${projection?.contentToString()}, $sortOrder)")
 
         val locator = Locator.parse(parentDocumentId)
+        val context = requireNotNull(context)
+        val uri = DocumentsContract.buildChildDocumentsUri(requireNotNull(authority), parentDocumentId)
+
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
+        result.setNotificationUri(context.contentResolver, uri)
 
         if (locator == Locator.ROOT) {
             for (repo in session().listRepositories().values) {
@@ -195,7 +214,11 @@ class OuisyncProvider : DocumentsProvider() {
         Log.v(TAG, "queryDocument($documentId, ${projection?.contentToString()})")
 
         val locator = Locator.parse(documentId)
+        val context = requireNotNull(context)
+        val uri = DocumentsContract.buildDocumentUri(requireNotNull(authority), documentId)
+
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
+        result.setNotificationUri(context.contentResolver, uri)
 
         if (locator == Locator.ROOT) {
             buildRepoListRow(result)
@@ -247,6 +270,12 @@ class OuisyncProvider : DocumentsProvider() {
                 null -> throw FileNotFoundException()
             }
         }
+
+        val context = requireNotNull(context)
+        val authority = requireNotNull(authority)
+        val uri = DocumentsContract.buildChildDocumentsUri(authority, locator.parent.toString())
+
+        context.contentResolver.notifyChange(uri, null)
     }
 
     private suspend fun buildEntryRow(cursor: MatrixCursor, repo: Repository, entryType: EntryType, locator: Locator) {
@@ -278,7 +307,10 @@ class OuisyncProvider : DocumentsProvider() {
                 }
 
                 val flags = if (locator.path.isEmpty()) {
-                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                    // TODO: Add `DocumentsContract.Document.FLAG_SUPPORTS_DELETE` here once repo
+                    // list notifications are implemented, so that the app gets notified about any
+                    // changes to the repo list made through the documents provider.
+                    0
                 } else if (repo.getAccessMode() == AccessMode.WRITE) {
                     DocumentsContract.Document.FLAG_SUPPORTS_DELETE
                 } else {
@@ -325,13 +357,20 @@ class OuisyncProvider : DocumentsProvider() {
 
         override fun toString() = if (repo.isEmpty()) ROOT_DOCUMENT_ID else "$repo/$path"
 
-        val name = if (path.isEmpty()) repo else path.substringAfterLast('/')
+        val name: String
+            get() = if (path.isEmpty()) repo else path.substringAfterLast('/')
 
         fun join(name: String): Locator = when {
             repo.isEmpty() -> Locator(repo = name, path = "")
             path.isEmpty() -> Locator(repo = repo, path = name)
             else -> Locator(repo = repo, path = "$path/$name")
         }
+
+        val parent: Locator
+            get() = when {
+                path.isEmpty() -> ROOT
+                else -> Locator(repo = repo, path = path.substringBeforeLast('/', ""))
+            }
     }
 
     private suspend fun session() = sessionFlow.filterNotNull().first()

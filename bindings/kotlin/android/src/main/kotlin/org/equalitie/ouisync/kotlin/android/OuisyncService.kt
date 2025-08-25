@@ -46,7 +46,7 @@ open class OuisyncService : Service() {
                 context: Context,
                 intent: Intent,
             ) {
-                Log.v(TAG, "receiver.onReceive(${intent.action})")
+                Log.v(TAG, "receiver.onReceive(action = ${intent.action})")
 
                 when (intent.action) {
                     ACTION_STOP -> {
@@ -117,7 +117,7 @@ open class OuisyncService : Service() {
             server.await()
 
             // TODO: consider broadcasting failures as well
-            sendBroadcast(Intent(OuisyncService.ACTION_STARTED))
+            sendBroadcast(Intent(OuisyncService.ACTION_STARTED).setPackage(getPackageName()))
         }
 
         return START_REDELIVER_INTENT
