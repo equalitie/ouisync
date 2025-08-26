@@ -5,13 +5,17 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.database.ContentObserver
 import android.database.Cursor
+import android.net.Uri
+import android.os.Handler
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
-import java.util.concurrent.Semaphore
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
@@ -242,7 +246,60 @@ class OuisyncProviderTest {
         }
     }
 
-    // Create a temporary Ouisync Session and pass it to the given block.
+    @Test
+    fun testDeleteFile() {
+        withSession { session ->
+            session.setStoreDir(storeDir)
+            session.createRepository("foo").apply {
+                createFile("a.txt").apply {
+                    write(0, "this is a".toByteArray())
+                    close()
+                }
+
+                createFile("b.txt").apply {
+                    write(0, "this is b".toByteArray())
+                    close()
+                }
+            }
+        }
+
+        // Check the file supportes delete
+        val fileUri = DocumentsContract.buildDocumentUri(AUTHORITY, "foo/a.txt")
+        contentResolver.query(fileUri, null, null, null, null)!!.use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and DocumentsContract.Document.FLAG_SUPPORTS_DELETE != 0)
+        }
+
+        val parentUri = DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/")
+
+        // Delete the file and wait for the notification
+        var latch = CountDownLatch(1)
+        val observer = object : ContentObserver(Handler(context.mainLooper)) {
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                Log.d(TAG, "onChange($selfChange, $uri)")
+                latch.countDown()
+            }
+        }
+
+        contentResolver.registerContentObserver(parentUri, false, observer)
+
+        try {
+            assertTrue(DocumentsContract.deleteDocument(contentResolver, fileUri))
+            assertTrue(latch.await(10, TimeUnit.SECONDS))
+        } finally {
+            contentResolver.unregisterContentObserver(observer)
+        }
+
+        withSession { session ->
+            session.findRepository("foo").apply {
+                val entries = readDirectory("")
+                assertEquals(1, entries.size)
+                assertEquals("b.txt", entries[0].name)
+            }
+        }
+    }
+
+    // Creates a temporary Ouisync Session and pass it to the given block.
     private fun <R> withSession(block: suspend (Session) -> R): R = runBlocking {
         val session = Session.create(context.getConfigPath())
 
@@ -253,12 +310,12 @@ class OuisyncProviderTest {
         }
     }
 
-    // Stat the OuisyncService
+    // Starts the OuisyncService
     private fun startService() {
-        val semaphore = Semaphore(1).apply { acquire() }
+        val latch = CountDownLatch(1)
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                semaphore.release()
+                latch.countDown()
             }
         }
 
@@ -270,7 +327,7 @@ class OuisyncProviderTest {
 
         try {
             context.startService(Intent(context, OuisyncService::class.java))
-            semaphore.acquire()
+            latch.await()
         } finally {
             context.unregisterReceiver(receiver)
         }
@@ -279,10 +336,10 @@ class OuisyncProviderTest {
     // Stops the OuisyncService and wait until it's fully stopped. If the service wasn't running,
     // returns immediately.
     private fun stopService() {
-        val semaphore = Semaphore(1).apply { acquire() }
+        val latch = CountDownLatch(1)
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                semaphore.release()
+                latch.countDown()
             }
         }
 
@@ -296,7 +353,7 @@ class OuisyncProviderTest {
             null,
         )
 
-        semaphore.acquire()
+        latch.await()
     }
 }
 
@@ -314,3 +371,4 @@ private fun randomString(size: Int): String {
 
 private fun Cursor.getString(columnName: String): String = getString(getColumnIndexOrThrow(columnName))
 private fun Cursor.getInt(columnName: String): Int = getInt(getColumnIndexOrThrow(columnName))
+

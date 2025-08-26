@@ -118,7 +118,7 @@ class OuisyncProvider : DocumentsProvider() {
             null,
             receiver,
             null,
-            0,
+            0, // The initial result code. If the service is running, it sets this to 1.
             null,
             null,
         )
