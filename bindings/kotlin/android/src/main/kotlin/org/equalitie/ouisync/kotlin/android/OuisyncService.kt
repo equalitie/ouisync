@@ -50,13 +50,14 @@ open class OuisyncService : Service() {
 
                 when (intent.action) {
                     ACTION_STOP -> {
-                        scope.launch {
+                        runBlocking {
                             stopServer()
-                            stopSelf()
+                        }
 
-                            if (isOrderedBroadcast()) {
-                                setResultCode(1)
-                            }
+                        stopSelf()
+
+                        if (isOrderedBroadcast()) {
+                            setResultCode(1)
                         }
                     }
                     ACTION_STATUS -> {
@@ -132,8 +133,9 @@ open class OuisyncService : Service() {
 
     private suspend fun stopServer() {
         server.cancel()
+        server.join()
 
-        if (server.isCompleted && !server.isCancelled) {
+        if (!server.isCancelled) {
             server.getCompleted().stop()
         }
     }
