@@ -189,7 +189,7 @@ class OuisyncProvider : DocumentsProvider() {
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         result.setNotificationUri(context.contentResolver, uri)
 
-        if (locator == Locator.ROOT) {
+        if (locator.isRoot()) {
             for (repo in session().listRepositories().values) {
                 buildEntryRow(
                     result,
@@ -235,7 +235,7 @@ class OuisyncProvider : DocumentsProvider() {
         val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         result.setNotificationUri(context.contentResolver, uri)
 
-        if (locator == Locator.ROOT) {
+        if (locator.isRoot()) {
             buildRepoListRow(result)
         } else {
             val repo = session().findRepository(locator.repo)
@@ -257,21 +257,45 @@ class OuisyncProvider : DocumentsProvider() {
         val context = requireNotNull(context)
         val locator = Locator.parse(documentId)
         val storage = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
+        val mode = ParcelFileDescriptor.parseMode(mode)
 
         // TODO: use the cancellation signal
 
-        return storage.openProxyFileDescriptor(
-            ParcelFileDescriptor.MODE_READ_ONLY,
-            ProxyCallback(locator),
-            handler,
-        )
+        return storage.openProxyFileDescriptor(mode, ProxyCallback(locator), handler)
+    }
+
+    override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String  = run {
+        Log.v(TAG, "createDocument($parentDocumentId, $mimeType, $displayName)")
+
+        val parentLocator = Locator.parse(parentDocumentId)
+
+        if (parentLocator.isRoot()) {
+            throw UnsupportedOperationException("Create repository not supported")
+        }
+
+        val locator = parentLocator.join(displayName)
+        val repo = session().findRepository(locator.repo)
+
+        if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+            repo.createDirectory(locator.path)
+        } else {
+            repo.createFile(locator.path).close()
+        }
+
+        val context = requireNotNull(context)
+        val authority = requireNotNull(authority)
+        val uri = DocumentsContract.buildChildDocumentsUri(authority, parentLocator.toString())
+
+        context.contentResolver.notifyChange(uri, null)
+
+        locator.toString()
     }
 
     override fun deleteDocument(documentId: String) = run {
         Log.v(TAG, "deleteDocument($documentId)")
 
         val locator = Locator.parse(documentId)
-        require(locator != Locator.ROOT)
+        require(!locator.isRoot())
 
         val repo = session().findRepository(locator.repo)
 
@@ -303,10 +327,10 @@ class OuisyncProvider : DocumentsProvider() {
                 val file = repo.openFile(locator.path)
                 val size = file.getLength()
                 val mime = URLConnection.guessContentTypeFromName(locator.name)
-                val flags = if (repo.getAccessMode() == AccessMode.WRITE) {
-                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE
-                } else {
-                    0
+                val flags = when (repo.getAccessMode()) {
+                    AccessMode.WRITE -> DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                    AccessMode.READ -> 0
+                    AccessMode.BLIND -> 0
                 }
 
                 row.add(DocumentsContract.Document.COLUMN_SIZE, size)
@@ -320,15 +344,14 @@ class OuisyncProvider : DocumentsProvider() {
                     null
                 }
 
-                val flags = if (locator.path.isEmpty()) {
-                    // TODO: Add `DocumentsContract.Document.FLAG_SUPPORTS_DELETE` here once repo
-                    // list notifications are implemented, so that the app gets notified about any
-                    // changes to the repo list made through the documents provider.
-                    0
-                } else if (repo.getAccessMode() == AccessMode.WRITE) {
-                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE
-                } else {
-                    0
+                val flags = when (repo.getAccessMode()) {
+                    AccessMode.WRITE -> {
+                        DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE or
+                        // TODO: Deleting repos disabled until repo list change notifications are implemented.
+                        if (locator.path.isEmpty()) 0 else DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                    }
+                    AccessMode.READ -> 0
+                    AccessMode.BLIND -> 0
                 }
 
                 row.add(DocumentsContract.Document.COLUMN_SIZE, size)
@@ -367,14 +390,15 @@ class OuisyncProvider : DocumentsProvider() {
             file.await().getLength()
         }
 
-        override fun onRead(
-            offset: Long,
-            chunkSize: Int,
-            outData: ByteArray,
-        ) = run("onRead") {
-            val chunk = file.await().read(offset, chunkSize.toLong())
-            chunk.copyInto(outData)
+        override fun onRead(offset: Long, size: Int, data: ByteArray) = run("onRead") {
+            val chunk = file.await().read(offset, size.toLong())
+            chunk.copyInto(data)
             chunk.size
+        }
+
+        override fun onWrite(offset: Long, size: Int, data: ByteArray) = run("onWrite") {
+            file.await().write(offset, data.copyOfRange(0, size))
+            size
         }
 
         override fun onFsync() = run("onFsync") {
