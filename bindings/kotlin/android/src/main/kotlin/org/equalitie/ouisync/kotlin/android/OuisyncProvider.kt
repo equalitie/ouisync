@@ -73,7 +73,6 @@ class OuisyncProvider : DocumentsProvider() {
             )
 
         private val ROOT_ID = "default"
-        private val ROOT_DOCUMENT_ID = "repos"
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -147,6 +146,11 @@ class OuisyncProvider : DocumentsProvider() {
         authority = info.authority
     }
 
+    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
+        Log.v(TAG, "isChildDocument($parentDocumentId, $documentId)")
+        return Locator.parse(documentId).isChildOf(Locator.parse(parentDocumentId))
+    }
+
     override fun queryRoots(projection: Array<out String>?): Cursor {
         Log.v(TAG, "queryRoots(${projection?.contentToString()})")
 
@@ -157,8 +161,12 @@ class OuisyncProvider : DocumentsProvider() {
         result.setNotificationUri(context.contentResolver, uri)
 
         val row = result.newRow()
-        row.add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, ROOT_DOCUMENT_ID)
-        row.add(DocumentsContract.Root.COLUMN_FLAGS, DocumentsContract.Root.FLAG_SUPPORTS_IS_CHILD)
+        row.add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, Locator.ROOT_DOCUMENT_ID)
+        row.add(
+            DocumentsContract.Root.COLUMN_FLAGS,
+            DocumentsContract.Root.FLAG_SUPPORTS_IS_CHILD or
+            DocumentsContract.Root.FLAG_SUPPORTS_CREATE
+        )
         row.add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ouisync_provider_root_icon)
         row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, DocumentsContract.Root.MIME_TYPE_ITEM)
         row.add(DocumentsContract.Root.COLUMN_ROOT_ID, ROOT_ID)
@@ -337,46 +345,9 @@ class OuisyncProvider : DocumentsProvider() {
 
         // TODO: localize
         row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, "Repositories")
-        row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, ROOT_DOCUMENT_ID)
+        row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, Locator.ROOT_DOCUMENT_ID)
         row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
         row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
-    }
-
-    private data class Locator(val repo: String, val path: String) {
-        companion object {
-            fun parse(documentId: String?): Locator {
-                if (documentId == null || documentId == ROOT_DOCUMENT_ID) {
-                    return ROOT
-                }
-
-                val index = documentId.indexOf('/')
-                require(index >= 0) { "invalid document id" }
-
-                return Locator(
-                    repo = documentId.substring(0, index),
-                    path = documentId.substring(index + 1),
-                )
-            }
-
-            val ROOT = Locator("", "")
-        }
-
-        override fun toString() = if (repo.isEmpty()) ROOT_DOCUMENT_ID else "$repo/$path"
-
-        val name: String
-            get() = if (path.isEmpty()) repo else path.substringAfterLast('/')
-
-        fun join(name: String): Locator = when {
-            repo.isEmpty() -> Locator(repo = name, path = "")
-            path.isEmpty() -> Locator(repo = repo, path = name)
-            else -> Locator(repo = repo, path = "$path/$name")
-        }
-
-        val parent: Locator
-            get() = when {
-                path.isEmpty() -> ROOT
-                else -> Locator(repo = repo, path = path.substringBeforeLast('/', ""))
-            }
     }
 
     private suspend fun session() = sessionFlow.filterNotNull().first()
@@ -393,7 +364,6 @@ class OuisyncProvider : DocumentsProvider() {
         }
 
         override fun onGetSize() = run("onGetSize") {
-            Log.v(TAG, "onGetSize")
             file.await().getLength()
         }
 
@@ -402,20 +372,16 @@ class OuisyncProvider : DocumentsProvider() {
             chunkSize: Int,
             outData: ByteArray,
         ) = run("onRead") {
-            Log.v(TAG, "onRead($offset, $chunkSize, ..)")
-
             val chunk = file.await().read(offset, chunkSize.toLong())
             chunk.copyInto(outData)
             chunk.size
         }
 
         override fun onFsync() = run("onFsync") {
-            Log.v(TAG, "onFSync")
             file.await().flush()
         }
 
-        override fun onRelease(): Unit = run("onRelease") {
-            Log.v(TAG, "onRelease")
+        override fun onRelease() = run("onRelease") {
             file.await().close()
         }
 
