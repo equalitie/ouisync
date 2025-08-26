@@ -10,6 +10,7 @@ import android.database.MatrixCursor
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.os.ProxyFileDescriptorCallback
 import android.os.storage.StorageManager
@@ -77,6 +78,14 @@ class OuisyncProvider : DocumentsProvider() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    // Handler for running proxy file descriptor's callbacks
+    private val handler =
+        Handler(
+            HandlerThread("${this::class.simpleName} handler thread")
+                .apply { start() }
+                .getLooper(),
+        )
+
     // StateFlow that emits new session every time OuisyncService is (re)started.
     private val sessionFlow: StateFlow<Session?> by lazy {
         val state = MutableStateFlow<Session?>(null)
@@ -84,8 +93,6 @@ class OuisyncProvider : DocumentsProvider() {
         // Receiver that (re)creates the session every time it receives an intent.
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                Log.v(TAG, "receiver.onReceive(action = ${intent.action}, resultCode = $resultCode)")
-
                 val restart = when {
                     intent.action == OuisyncService.ACTION_STARTED ||
                     intent.action == OuisyncService.ACTION_STATUS && resultCode != 0 -> true
@@ -242,7 +249,6 @@ class OuisyncProvider : DocumentsProvider() {
         val context = requireNotNull(context)
         val locator = Locator.parse(documentId)
         val storage = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
-        val handler = Handler(context.mainLooper)
 
         // TODO: use the cancellation signal
 
@@ -375,9 +381,7 @@ class OuisyncProvider : DocumentsProvider() {
 
     private suspend fun session() = sessionFlow.filterNotNull().first()
 
-    private fun <T> run(block: suspend CoroutineScope.() -> T): T = runBlocking {
-        scope.block()
-    }
+    private fun <T> run(block: suspend CoroutineScope.() -> T): T = runBlocking(scope.coroutineContext, block)
 
     // Callback for proxy file descriptor which wraps a Ouisync file and exposes it as
     // ParcelFileDescriptor.
@@ -389,6 +393,7 @@ class OuisyncProvider : DocumentsProvider() {
         }
 
         override fun onGetSize() = run("onGetSize") {
+            Log.v(TAG, "onGetSize")
             file.await().getLength()
         }
 
@@ -397,16 +402,20 @@ class OuisyncProvider : DocumentsProvider() {
             chunkSize: Int,
             outData: ByteArray,
         ) = run("onRead") {
+            Log.v(TAG, "onRead($offset, $chunkSize, ..)")
+
             val chunk = file.await().read(offset, chunkSize.toLong())
             chunk.copyInto(outData)
             chunk.size
         }
 
         override fun onFsync() = run("onFsync") {
+            Log.v(TAG, "onFSync")
             file.await().flush()
         }
 
-        override fun onRelease() = run("onRelease") {
+        override fun onRelease(): Unit = run("onRelease") {
+            Log.v(TAG, "onRelease")
             file.await().close()
         }
 
@@ -415,7 +424,7 @@ class OuisyncProvider : DocumentsProvider() {
             block: suspend CoroutineScope.() -> T,
         ): T {
             try {
-                return this@OuisyncProvider.run(block)
+                return runBlocking(block = block)
             } catch (e: Exception) {
                 Log.e(
                     TAG,
