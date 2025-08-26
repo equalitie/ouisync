@@ -105,10 +105,10 @@ class OuisyncProviderTest {
 
     @Test
     fun testQueryRepos() {
-        withSession { session ->
-            session.setStoreDir(storeDir)
-            session.createRepository("foo")
-            session.createRepository("bar")
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo")
+            createRepository("bar")
         }
 
         contentResolver.query(
@@ -176,9 +176,9 @@ class OuisyncProviderTest {
 
     @Test
     fun testQueryEmptyDirectory() {
-        withSession { session ->
-            session.setStoreDir(storeDir)
-            session.createRepository("foo")
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo")
         }
 
         contentResolver.query(
@@ -194,16 +194,15 @@ class OuisyncProviderTest {
 
     @Test
     fun testQueryNonEmptyDirectory() {
-        withSession { session ->
-            session.setStoreDir(storeDir)
-            val repo = session.createRepository("foo")
-
-            repo.createDirectory("a")
-
-            val file = repo.createFile("b.txt")
-            file.write(0, "hello world".toByteArray())
-            file.close()
-
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo").apply {
+                createDirectory("a")
+                createFile("b.txt").apply {
+                    write(0, "hello world".toByteArray())
+                    close()
+                }
+            }
         }
 
         contentResolver.query(
@@ -229,9 +228,9 @@ class OuisyncProviderTest {
 
     @Test
     fun testQueryBlindRepo() {
-        withSession { session ->
-            session.setStoreDir(storeDir)
-            session.createRepository("foo").setAccessMode(AccessMode.BLIND)
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo").setAccessMode(AccessMode.BLIND)
         }
 
         contentResolver.query(
@@ -247,10 +246,29 @@ class OuisyncProviderTest {
     }
 
     @Test
+    fun testReadFile() {
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo").apply {
+                createFile("a.txt").apply {
+                    write(0, "hello world".toByteArray())
+                    close()
+                }
+            }
+        }
+
+        val uri = DocumentsContract.buildDocumentUri(AUTHORITY, "foo/a.txt")
+        contentResolver.openInputStream(uri)!!.use { stream ->
+            val content = stream.readAllBytes().decodeToString()
+            assertEquals("hello world", content)
+        }
+    }
+
+    @Test
     fun testDeleteFile() {
-        withSession { session ->
-            session.setStoreDir(storeDir)
-            session.createRepository("foo").apply {
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo").apply {
                 createFile("a.txt").apply {
                     write(0, "this is a".toByteArray())
                     close()
@@ -290,8 +308,8 @@ class OuisyncProviderTest {
             contentResolver.unregisterContentObserver(observer)
         }
 
-        withSession { session ->
-            session.findRepository("foo").apply {
+        withSession {
+            findRepository("foo").apply {
                 val entries = readDirectory("")
                 assertEquals(1, entries.size)
                 assertEquals("b.txt", entries[0].name)
@@ -300,11 +318,11 @@ class OuisyncProviderTest {
     }
 
     // Creates a temporary Ouisync Session and pass it to the given block.
-    private fun <R> withSession(block: suspend (Session) -> R): R = runBlocking {
+    private fun <R> withSession(block: suspend Session.() -> R): R = runBlocking {
         val session = Session.create(context.getConfigPath())
 
         try {
-            block(session)
+            session.block()
         } finally {
             session.close()
         }
@@ -339,6 +357,7 @@ class OuisyncProviderTest {
         val latch = CountDownLatch(1)
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                assertEquals(1, resultCode)
                 latch.countDown()
             }
         }
