@@ -440,6 +440,68 @@ class OuisyncProviderTest {
         }
     }
 
+    @Test
+    fun testCopyFile() {
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo").apply {
+                createDirectory("a")
+                createDirectory("b")
+
+                createFile("a/hello.txt").apply {
+                    write(0, "hello world".toByteArray())
+                    close()
+                }
+            }
+        }
+
+        // Copy is not directly supported but can be performed by reading from the source file and
+        // writing to the destination file.
+        val srcMime = contentResolver.query(
+            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/a/hello.txt"),
+            null,
+            null,
+            null,
+            null,
+        )!!.use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(
+                0,
+                cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and DocumentsContract.Document.FLAG_SUPPORTS_COPY,
+            )
+
+            cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE)
+        }
+
+        val srcUri = DocumentsContract.buildDocumentUri(AUTHORITY, "foo/a/hello.txt")
+        val dstUri = DocumentsContract.createDocument(
+            contentResolver,
+            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/b"),
+            srcMime,
+            "hello.txt",
+        )
+
+        contentResolver.openInputStream(srcUri).use { srcStream ->
+            contentResolver.openOutputStream(dstUri!!, "w").use { dstStream ->
+                srcStream!!.transferTo(dstStream!!)
+            }
+        }
+
+        withSession {
+            findRepository("foo").apply {
+                val src = openFile("a/hello.txt")
+                val srcLength = src.getLength()
+                val srcContent = src.read(0, srcLength).decodeToString()
+
+                val dst = openFile("b/hello.txt")
+                val dstLength = dst.getLength()
+                val dstContent = dst.read(0, dstLength).decodeToString()
+
+                assertEquals(srcContent, dstContent)
+            }
+        }
+    }
+
     // Creates a temporary Ouisync Session and pass it to the given block.
     private fun <R> withSession(block: suspend Session.() -> R): R = runBlocking {
         val session = Session.create(context.getConfigPath())
