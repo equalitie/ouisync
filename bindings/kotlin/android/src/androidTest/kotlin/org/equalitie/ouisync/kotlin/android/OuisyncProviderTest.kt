@@ -305,7 +305,7 @@ class OuisyncProviderTest {
             )
         }
 
-        contentResolver.query(
+        val newUri = contentResolver.query(
             DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
             null,
             null,
@@ -313,7 +313,7 @@ class OuisyncProviderTest {
             null,
         )!!.use { cursor ->
             // Create the directory and wait for the notification
-            val newUri = waitForNotification(cursor) {
+            waitForNotification(cursor) {
                 DocumentsContract.createDocument(
                     contentResolver,
                     DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
@@ -321,12 +321,12 @@ class OuisyncProviderTest {
                     "bar",
                 )
             }
-
-            assertEquals(
-                DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar"),
-                newUri
-            )
         }
+
+        assertEquals(
+            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar"),
+            newUri
+        )
 
         withSession {
             findRepository("foo").apply {
@@ -334,6 +334,52 @@ class OuisyncProviderTest {
                 assertEquals(1, entries.size)
                 assertEquals("bar", entries[0].name)
                 assertEquals(EntryType.DIRECTORY, entries[0].entryType)
+            }
+        }
+    }
+
+    @Test
+    fun testCreateAndWriteFile() {
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo")
+        }
+
+        val newUri = contentResolver.query(
+            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+            null,
+            null,
+            null,
+            null,
+        )!!.use { cursor ->
+            waitForNotification(cursor) {
+                DocumentsContract.createDocument(
+                    contentResolver,
+                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
+                    "text/plain",
+                    "bar.txt",
+                )
+            }
+        }
+
+        assertEquals(
+            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar.txt"),
+            newUri,
+        )
+
+        contentResolver.openOutputStream(newUri!!, "w")!!.use { stream ->
+            stream.write("hello world".toByteArray())
+            stream.flush()
+        }
+
+        withSession {
+            findRepository("foo").apply {
+                openFile("bar.txt").apply {
+                    val length = getLength()
+                    val content = read(0, length).decodeToString()
+
+                    assertEquals("hello world", content)
+                }
             }
         }
     }
