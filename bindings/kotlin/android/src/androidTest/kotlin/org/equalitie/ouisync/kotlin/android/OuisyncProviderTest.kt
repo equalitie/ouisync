@@ -21,12 +21,14 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.client.AccessMode
+import org.equalitie.ouisync.kotlin.client.EntryType
 import org.equalitie.ouisync.kotlin.client.Session
 import org.equalitie.ouisync.kotlin.client.close
 import org.equalitie.ouisync.kotlin.client.create
 import org.equalitie.ouisync.kotlin.server.initLog
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -265,6 +267,78 @@ class OuisyncProviderTest {
     }
 
     @Test
+    fun testCreateDirectory() {
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo")
+        }
+
+        // Check creating documents is supported by the root...
+        contentResolver.query(
+            DocumentsContract.buildRootsUri(AUTHORITY),
+            null,
+            null,
+            null,
+            null
+        )!!.use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertNotEquals(
+                0,
+                cursor.getInt(DocumentsContract.Root.COLUMN_FLAGS) and
+                    DocumentsContract.Root.FLAG_SUPPORTS_CREATE
+            )
+        }
+
+        // ...and also by the parent directory.
+        contentResolver.query(
+            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
+            null,
+            null,
+            null,
+            null,
+        )!!.use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertNotEquals(
+                0,
+                cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
+                    DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE
+            )
+        }
+
+        contentResolver.query(
+            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+            null,
+            null,
+            null,
+            null,
+        )!!.use { cursor ->
+            // Create the directory and wait for the notification
+            val newUri = waitForNotification(cursor) {
+                DocumentsContract.createDocument(
+                    contentResolver,
+                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    "bar",
+                )
+            }
+
+            assertEquals(
+                DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar"),
+                newUri
+            )
+        }
+
+        withSession {
+            findRepository("foo").apply {
+                val entries = readDirectory("")
+                assertEquals(1, entries.size)
+                assertEquals("bar", entries[0].name)
+                assertEquals(EntryType.DIRECTORY, entries[0].entryType)
+            }
+        }
+    }
+
+    @Test
     fun testDeleteFile() {
         withSession {
             setStoreDir(storeDir)
@@ -281,31 +355,34 @@ class OuisyncProviderTest {
             }
         }
 
-        // Check the file supportes delete
-        val fileUri = DocumentsContract.buildDocumentUri(AUTHORITY, "foo/a.txt")
-        contentResolver.query(fileUri, null, null, null, null)!!.use { cursor ->
-            assertTrue(cursor.moveToFirst())
-            assertTrue(cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and DocumentsContract.Document.FLAG_SUPPORTS_DELETE != 0)
-        }
-
         val parentUri = DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/")
 
-        // Delete the file and wait for the notification
-        var latch = CountDownLatch(1)
-        val observer = object : ContentObserver(Handler(context.mainLooper)) {
-            override fun onChange(selfChange: Boolean, uri: Uri?) {
-                Log.d(TAG, "onChange($selfChange, $uri)")
-                latch.countDown()
+        contentResolver.query(
+            parentUri,
+            null,
+            null,
+            null,
+            null
+        )!!.use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("a.txt", cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
+
+            // Check the file supports delete
+            assertNotEquals(
+                0,
+                cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
+                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+            )
+
+            val fileId = cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val fileUri = DocumentsContract.buildDocumentUri(AUTHORITY, fileId)
+
+            // Delete the file and wait for the notification
+            val result = waitForNotification(cursor) {
+                DocumentsContract.deleteDocument(contentResolver, fileUri)
             }
-        }
 
-        contentResolver.registerContentObserver(parentUri, false, observer)
-
-        try {
-            assertTrue(DocumentsContract.deleteDocument(contentResolver, fileUri))
-            assertTrue(latch.await(10, TimeUnit.SECONDS))
-        } finally {
-            contentResolver.unregisterContentObserver(observer)
+            assertTrue(result)
         }
 
         withSession {
@@ -373,6 +450,23 @@ class OuisyncProviderTest {
         )
 
         latch.await()
+    }
+
+    // Execute the given block and wait until a notification of changes in the cursor's data is
+    // delivered.
+    private fun <T> waitForNotification(cursor: Cursor, block: () -> T): T {
+        var latch = CountDownLatch(1)
+        cursor.registerContentObserver(object : ContentObserver(Handler(context.mainLooper)) {
+            override fun onChange(selfChange: Boolean) {
+                latch.countDown()
+            }
+        })
+
+        val result = block()
+
+        assertTrue(latch.await(10, TimeUnit.SECONDS))
+
+        return result
     }
 }
 

@@ -151,7 +151,7 @@ class OuisyncProvider : DocumentsProvider() {
         return Locator.parse(documentId).isChildOf(Locator.parse(parentDocumentId))
     }
 
-    override fun queryRoots(projection: Array<out String>?): Cursor {
+    override fun queryRoots(projection: Array<String>?): Cursor {
         Log.v(TAG, "queryRoots(${projection?.contentToString()})")
 
         val context = requireNotNull(context)
@@ -177,7 +177,7 @@ class OuisyncProvider : DocumentsProvider() {
 
     override fun queryChildDocuments(
         parentDocumentId: String?,
-        projection: Array<out String>?,
+        projection: Array<String>?,
         sortOrder: String?,
     ): Cursor = run {
         Log.v(TAG, "queryChildDocuments($parentDocumentId, ${projection?.contentToString()}, $sortOrder)")
@@ -225,7 +225,7 @@ class OuisyncProvider : DocumentsProvider() {
         result
     }
 
-    override fun queryDocument(documentId: String?, projection: Array<out String>?): Cursor = run {
+    override fun queryDocument(documentId: String?, projection: Array<String>?): Cursor = run {
         Log.v(TAG, "queryDocument($documentId, ${projection?.contentToString()})")
 
         val locator = Locator.parse(documentId)
