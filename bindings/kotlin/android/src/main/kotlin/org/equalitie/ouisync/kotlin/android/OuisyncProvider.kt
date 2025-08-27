@@ -19,10 +19,7 @@ import android.provider.DocumentsProvider
 import android.system.ErrnoException
 import android.system.OsConstants
 import android.util.Log
-import java.io.FileNotFoundException
-import java.net.URLConnection
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -43,6 +40,8 @@ import org.equalitie.ouisync.kotlin.client.Repository
 import org.equalitie.ouisync.kotlin.client.Session
 import org.equalitie.ouisync.kotlin.client.close
 import org.equalitie.ouisync.kotlin.client.create
+import java.io.FileNotFoundException
+import java.net.URLConnection
 
 // Provider that exposes Ouisync repositories to other apps.
 class OuisyncProvider : DocumentsProvider() {
@@ -80,9 +79,7 @@ class OuisyncProvider : DocumentsProvider() {
     // Handler for running proxy file descriptor's callbacks
     private val handler =
         Handler(
-            HandlerThread("${this::class.simpleName} handler thread")
-                .apply { start() }
-                .getLooper(),
+            HandlerThread("${this::class.simpleName} handler thread").apply { start() }.getLooper(),
         )
 
     // StateFlow that emits new session every time OuisyncService is (re)started.
@@ -90,24 +87,26 @@ class OuisyncProvider : DocumentsProvider() {
         val state = MutableStateFlow<Session?>(null)
 
         // Receiver that (re)creates the session every time it receives an intent.
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                val restart = when {
-                    intent.action == OuisyncService.ACTION_STARTED ||
-                    intent.action == OuisyncService.ACTION_STATUS && resultCode != 0 -> true
-                    else -> false
-                }
+        val receiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    val restart =
+                        when {
+                            intent.action == OuisyncService.ACTION_STARTED ||
+                                intent.action == OuisyncService.ACTION_STATUS && resultCode != 0 -> true
+                            else -> false
+                        }
 
-                if (restart) {
-                    scope.launch {
-                        state.update { session ->
-                            session?.close()
-                            Session.create(context.getConfigPath())
+                    if (restart) {
+                        scope.launch {
+                            state.update { session ->
+                                session?.close()
+                                Session.create(context.getConfigPath())
+                            }
                         }
                     }
                 }
             }
-        }
 
         val context = requireNotNull(context)
 
@@ -165,7 +164,7 @@ class OuisyncProvider : DocumentsProvider() {
         row.add(
             DocumentsContract.Root.COLUMN_FLAGS,
             DocumentsContract.Root.FLAG_SUPPORTS_IS_CHILD or
-            DocumentsContract.Root.FLAG_SUPPORTS_CREATE
+                DocumentsContract.Root.FLAG_SUPPORTS_CREATE,
         )
         row.add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ouisync_provider_root_icon)
         row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, DocumentsContract.Root.MIME_TYPE_ITEM)
@@ -180,7 +179,10 @@ class OuisyncProvider : DocumentsProvider() {
         projection: Array<String>?,
         sortOrder: String?,
     ): Cursor = run {
-        Log.v(TAG, "queryChildDocuments($parentDocumentId, ${projection?.contentToString()}, $sortOrder)")
+        Log.v(
+            TAG,
+            "queryChildDocuments($parentDocumentId, ${projection?.contentToString()}, $sortOrder)",
+        )
 
         val locator = Locator.parse(parentDocumentId)
         val context = requireNotNull(context)
@@ -200,10 +202,13 @@ class OuisyncProvider : DocumentsProvider() {
             }
         } else {
             val repo = session().findRepository(locator.repo)
-            val isReadable = when (repo.getAccessMode()) {
-                AccessMode.READ, AccessMode.WRITE -> true
-                AccessMode.BLIND -> false
-            }
+            val isReadable =
+                when (repo.getAccessMode()) {
+                    AccessMode.READ,
+                    AccessMode.WRITE,
+                    -> true
+                    AccessMode.BLIND -> false
+                }
 
             if (isReadable) {
                 for (entry in repo.readDirectory(locator.path)) {
@@ -215,10 +220,12 @@ class OuisyncProvider : DocumentsProvider() {
                     )
                 }
             } else {
-                result.setExtras(Bundle().apply {
-                    // TODO: localize
-                    putString(DocumentsContract.EXTRA_INFO, "This repository is locked")
-                })
+                result.setExtras(
+                    Bundle().apply {
+                        // TODO: localize
+                        putString(DocumentsContract.EXTRA_INFO, "This repository is locked")
+                    },
+                )
             }
         }
 
@@ -264,7 +271,11 @@ class OuisyncProvider : DocumentsProvider() {
         return storage.openProxyFileDescriptor(mode, ProxyCallback(locator), handler)
     }
 
-    override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String  = run {
+    override fun createDocument(
+        parentDocumentId: String,
+        mimeType: String,
+        displayName: String,
+    ): String = run {
         Log.v(TAG, "createDocument($parentDocumentId, $mimeType, $displayName)")
 
         val parentLocator = Locator.parse(parentDocumentId)
@@ -319,9 +330,7 @@ class OuisyncProvider : DocumentsProvider() {
 
         val dstLocator = srcLocator.parent.join(displayName)
 
-        session()
-            .findRepository(srcLocator.repo)
-            .moveEntry(srcLocator.path, dstLocator.path)
+        session().findRepository(srcLocator.repo).moveEntry(srcLocator.path, dstLocator.path)
 
         notifyChildDocumentsChange(dstLocator.parent.toString())
 
@@ -347,9 +356,7 @@ class OuisyncProvider : DocumentsProvider() {
             throw UnsupportedOperationException("Move between repositories not supported")
         }
 
-        session()
-            .findRepository(srcLocator.repo)
-            .moveEntry(srcLocator.path, dstLocator.path)
+        session().findRepository(srcLocator.repo).moveEntry(srcLocator.path, dstLocator.path)
 
         revokeDocumentPermission(sourceDocumentId)
 
@@ -358,7 +365,12 @@ class OuisyncProvider : DocumentsProvider() {
         dstLocator.toString()
     }
 
-    private suspend fun buildEntryRow(cursor: MatrixCursor, repo: Repository, entryType: EntryType, locator: Locator) {
+    private suspend fun buildEntryRow(
+        cursor: MatrixCursor,
+        repo: Repository,
+        entryType: EntryType,
+        locator: Locator,
+    ) {
         val row = cursor.newRow()
 
         row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, locator.name)
@@ -369,46 +381,52 @@ class OuisyncProvider : DocumentsProvider() {
                 val file = repo.openFile(locator.path)
                 val size = file.getLength()
                 val mime = URLConnection.guessContentTypeFromName(locator.name)
-                val flags = when (repo.getAccessMode()) {
-                    AccessMode.WRITE -> {
-                        DocumentsContract.Document.FLAG_SUPPORTS_DELETE or
-                        DocumentsContract.Document.FLAG_SUPPORTS_MOVE or
-                        DocumentsContract.Document.FLAG_SUPPORTS_RENAME
+                val flags =
+                    when (repo.getAccessMode()) {
+                        AccessMode.WRITE -> {
+                            DocumentsContract.Document.FLAG_SUPPORTS_DELETE or
+                                DocumentsContract.Document.FLAG_SUPPORTS_MOVE or
+                                DocumentsContract.Document.FLAG_SUPPORTS_RENAME
+                        }
+                        AccessMode.READ -> 0
+                        AccessMode.BLIND -> 0
                     }
-                    AccessMode.READ -> 0
-                    AccessMode.BLIND -> 0
-                }
 
                 row.add(DocumentsContract.Document.COLUMN_SIZE, size)
                 row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, mime)
                 row.add(DocumentsContract.Document.COLUMN_FLAGS, flags)
             }
             EntryType.DIRECTORY -> {
-                val size = if (locator.path.isEmpty()) {
-                    repo.getQuota().size.bytes
-                } else {
-                    null
-                }
-
-                val flags = when (repo.getAccessMode()) {
-                    AccessMode.WRITE -> {
-                        DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE or
-                        // TODO: Deleting and moving/renaming repos disabled until repo list change
-                        // notifications are implemented.
-                        if (locator.path.isEmpty()) {
-                            0
-                        } else {
-                            DocumentsContract.Document.FLAG_SUPPORTS_DELETE or
-                            DocumentsContract.Document.FLAG_SUPPORTS_MOVE or
-                            DocumentsContract.Document.FLAG_SUPPORTS_RENAME
-                        }
+                val size =
+                    if (locator.path.isEmpty()) {
+                        repo.getQuota().size.bytes
+                    } else {
+                        null
                     }
-                    AccessMode.READ -> 0
-                    AccessMode.BLIND -> 0
-                }
+
+                val flags =
+                    when (repo.getAccessMode()) {
+                        AccessMode.WRITE -> {
+                            DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE or
+                                // TODO: Deleting and moving/renaming repos disabled until repo list change
+                                // notifications are implemented.
+                                if (locator.path.isEmpty()) {
+                                    0
+                                } else {
+                                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE or
+                                        DocumentsContract.Document.FLAG_SUPPORTS_MOVE or
+                                        DocumentsContract.Document.FLAG_SUPPORTS_RENAME
+                                }
+                        }
+                        AccessMode.READ -> 0
+                        AccessMode.BLIND -> 0
+                    }
 
                 row.add(DocumentsContract.Document.COLUMN_SIZE, size)
-                row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
+                row.add(
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                )
                 row.add(DocumentsContract.Document.COLUMN_FLAGS, flags)
             }
         }
@@ -445,13 +463,10 @@ class OuisyncProvider : DocumentsProvider() {
     private inner class ProxyCallback(
         val locator: Locator,
     ) : ProxyFileDescriptorCallback() {
-        private val file: Deferred<File> = scope.async {
-            session().findRepository(locator.repo).openFile(locator.path)
-        }
+        private val file: Deferred<File> =
+            scope.async { session().findRepository(locator.repo).openFile(locator.path) }
 
-        override fun onGetSize() = run("onGetSize") {
-            file.await().getLength()
-        }
+        override fun onGetSize() = run("onGetSize") { file.await().getLength() }
 
         override fun onRead(offset: Long, size: Int, data: ByteArray) = run("onRead") {
             val chunk = file.await().read(offset, size.toLong())
@@ -464,13 +479,9 @@ class OuisyncProvider : DocumentsProvider() {
             size
         }
 
-        override fun onFsync() = run("onFsync") {
-            file.await().flush()
-        }
+        override fun onFsync() = run("onFsync") { file.await().flush() }
 
-        override fun onRelease() = run("onRelease") {
-            file.await().close()
-        }
+        override fun onRelease() = run("onRelease") { file.await().close() }
 
         private fun <T> run(
             name: String,
@@ -492,10 +503,11 @@ class OuisyncProvider : DocumentsProvider() {
 }
 
 private val Exception.errno: Int
-    get() = when (this) {
-        is OuisyncException.NotFound -> OsConstants.ENOENT
-        is OuisyncException.PermissionDenied -> OsConstants.EPERM
-        is OuisyncException.IsDirectory -> OsConstants.EISDIR
-        is OuisyncException.NotDirectory -> OsConstants.ENOTDIR
-        else -> OsConstants.EIO
-    }
+    get() =
+        when (this) {
+            is OuisyncException.NotFound -> OsConstants.ENOENT
+            is OuisyncException.PermissionDenied -> OsConstants.EPERM
+            is OuisyncException.IsDirectory -> OsConstants.EISDIR
+            is OuisyncException.NotDirectory -> OsConstants.ENOTDIR
+            else -> OsConstants.EIO
+        }

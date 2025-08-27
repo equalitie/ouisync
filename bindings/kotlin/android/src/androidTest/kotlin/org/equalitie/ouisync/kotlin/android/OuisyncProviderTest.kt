@@ -7,18 +7,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.database.ContentObserver
 import android.database.Cursor
-import android.net.Uri
 import android.os.Handler
 import android.provider.DocumentsContract
-import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import java.io.File
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import kotlin.random.Random
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.client.AccessMode
 import org.equalitie.ouisync.kotlin.client.EntryType
@@ -29,11 +21,14 @@ import org.equalitie.ouisync.kotlin.server.initLog
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 @RunWith(AndroidJUnit4::class)
 class OuisyncProviderTest {
@@ -59,9 +54,7 @@ class OuisyncProviderTest {
 
         tempDir = context.getDir(randomString(16), 0)
 
-        runBlocking {
-            context.setConfigPath(configDir)
-        }
+        runBlocking { context.setConfigPath(configDir) }
 
         initLog()
         startService()
@@ -113,67 +106,65 @@ class OuisyncProviderTest {
             createRepository("bar")
         }
 
-        contentResolver.query(
-            DocumentsContract.buildDocumentUri(AUTHORITY, "repos"),
-            null,
-            null,
-            null,
-            null
-        )!!.use { cursor ->
-            assertEquals(1, cursor.count)
+        contentResolver
+            .query(DocumentsContract.buildDocumentUri(AUTHORITY, "repos"), null, null, null, null)!!
+            .use { cursor ->
+                assertEquals(1, cursor.count)
 
-            assertTrue(cursor.moveToFirst())
-            assertEquals(
-                "repos",
-                cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-            )
-            assertEquals(
-                "Repositories",
-                cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            )
-            assertEquals(
-                DocumentsContract.Document.MIME_TYPE_DIR,
-                cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE),
-            )
-        }
+                assertTrue(cursor.moveToFirst())
+                assertEquals(
+                    "repos",
+                    cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                )
+                assertEquals(
+                    "Repositories",
+                    cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                )
+                assertEquals(
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE),
+                )
+            }
 
-        contentResolver.query(
-            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "repos"),
-            null,
-            null,
-            null,
-            null,
-        )!!.use { cursor ->
-            assertEquals(2, cursor.count)
+        contentResolver
+            .query(
+                DocumentsContract.buildChildDocumentsUri(AUTHORITY, "repos"),
+                null,
+                null,
+                null,
+                null,
+            )!!
+            .use { cursor ->
+                assertEquals(2, cursor.count)
 
-            assertTrue(cursor.moveToFirst())
-            assertEquals(
-                "bar/",
-                cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-            )
-            assertEquals(
-                "bar",
-                cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            )
-            assertEquals(
-                DocumentsContract.Document.MIME_TYPE_DIR,
-                cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE),
-            )
+                assertTrue(cursor.moveToFirst())
+                assertEquals(
+                    "bar/",
+                    cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                )
+                assertEquals(
+                    "bar",
+                    cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                )
+                assertEquals(
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE),
+                )
 
-            assertTrue(cursor.moveToNext())
-            assertEquals(
-                "foo/",
-                cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-            )
-            assertEquals(
-                "foo",
-                cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            )
-            assertEquals(
-                DocumentsContract.Document.MIME_TYPE_DIR,
-                cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE),
-            )
-        }
+                assertTrue(cursor.moveToNext())
+                assertEquals(
+                    "foo/",
+                    cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                )
+                assertEquals(
+                    "foo",
+                    cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                )
+                assertEquals(
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE),
+                )
+            }
     }
 
     @Test
@@ -183,15 +174,15 @@ class OuisyncProviderTest {
             createRepository("foo")
         }
 
-        contentResolver.query(
-            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
-            null,
-            null,
-            null,
-            null,
-        )!!.use { cursor ->
-            assertEquals(0, cursor.count)
-        }
+        contentResolver
+            .query(
+                DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+                null,
+                null,
+                null,
+                null,
+            )!!
+            .use { cursor -> assertEquals(0, cursor.count) }
     }
 
     @Test
@@ -207,25 +198,30 @@ class OuisyncProviderTest {
             }
         }
 
-        contentResolver.query(
-            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
-            null,
-            null,
-            null,
-            null,
-        )!!.use { cursor ->
-            assertEquals(2, cursor.count)
+        contentResolver
+            .query(
+                DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+                null,
+                null,
+                null,
+                null,
+            )!!
+            .use { cursor ->
+                assertEquals(2, cursor.count)
 
-            assertTrue(cursor.moveToFirst())
-            assertEquals("a", cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
-            assertEquals("foo/a", cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID))
-            assertEquals(DocumentsContract.Document.MIME_TYPE_DIR, cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE))
+                assertTrue(cursor.moveToFirst())
+                assertEquals("a", cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
+                assertEquals("foo/a", cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID))
+                assertEquals(
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE),
+                )
 
-            assertTrue(cursor.moveToNext())
-            assertEquals("b.txt", cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
-            assertEquals("foo/b.txt", cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID))
-            assertEquals("text/plain", cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE))
-        }
+                assertTrue(cursor.moveToNext())
+                assertEquals("b.txt", cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
+                assertEquals("foo/b.txt", cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID))
+                assertEquals("text/plain", cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE))
+            }
     }
 
     @Test
@@ -235,16 +231,21 @@ class OuisyncProviderTest {
             createRepository("foo").setAccessMode(AccessMode.BLIND)
         }
 
-        contentResolver.query(
-            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
-            null,
-            null,
-            null,
-            null,
-        )!!.use { cursor ->
-            assertEquals(0, cursor.count)
-            assertEquals("This repository is locked", cursor.getExtras().getString(DocumentsContract.EXTRA_INFO))
-        }
+        contentResolver
+            .query(
+                DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+                null,
+                null,
+                null,
+                null,
+            )!!
+            .use { cursor ->
+                assertEquals(0, cursor.count)
+                assertEquals(
+                    "This repository is locked",
+                    cursor.getExtras().getString(DocumentsContract.EXTRA_INFO),
+                )
+            }
     }
 
     @Test
@@ -274,59 +275,57 @@ class OuisyncProviderTest {
         }
 
         // Check creating documents is supported by the root...
-        contentResolver.query(
-            DocumentsContract.buildRootsUri(AUTHORITY),
-            null,
-            null,
-            null,
-            null
-        )!!.use { cursor ->
-            assertTrue(cursor.moveToFirst())
-            assertNotEquals(
-                0,
-                cursor.getInt(DocumentsContract.Root.COLUMN_FLAGS) and
-                    DocumentsContract.Root.FLAG_SUPPORTS_CREATE
-            )
-        }
-
-        // ...and also by the parent directory.
-        contentResolver.query(
-            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
-            null,
-            null,
-            null,
-            null,
-        )!!.use { cursor ->
-            assertTrue(cursor.moveToFirst())
-            assertNotEquals(
-                0,
-                cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
-                    DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE
-            )
-        }
-
-        val newUri = contentResolver.query(
-            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
-            null,
-            null,
-            null,
-            null,
-        )!!.use { cursor ->
-            // Create the directory and wait for the notification
-            waitForNotification(cursor) {
-                DocumentsContract.createDocument(
-                    contentResolver,
-                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
-                    DocumentsContract.Document.MIME_TYPE_DIR,
-                    "bar",
+        contentResolver
+            .query(DocumentsContract.buildRootsUri(AUTHORITY), null, null, null, null)!!
+            .use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertNotEquals(
+                    0,
+                    cursor.getInt(DocumentsContract.Root.COLUMN_FLAGS) and
+                        DocumentsContract.Root.FLAG_SUPPORTS_CREATE,
                 )
             }
-        }
 
-        assertEquals(
-            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar"),
-            newUri
-        )
+        // ...and also by the parent directory.
+        contentResolver
+            .query(
+                DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
+                null,
+                null,
+                null,
+                null,
+            )!!
+            .use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertNotEquals(
+                    0,
+                    cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
+                        DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE,
+                )
+            }
+
+        val newUri =
+            contentResolver
+                .query(
+                    DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+                    null,
+                    null,
+                    null,
+                    null,
+                )!!
+                .use { cursor ->
+                    // Create the directory and wait for the notification
+                    waitForNotification(cursor) {
+                        DocumentsContract.createDocument(
+                            contentResolver,
+                            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
+                            DocumentsContract.Document.MIME_TYPE_DIR,
+                            "bar",
+                        )
+                    }
+                }
+
+        assertEquals(DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar"), newUri)
 
         withSession {
             findRepository("foo").apply {
@@ -345,22 +344,25 @@ class OuisyncProviderTest {
             createRepository("foo")
         }
 
-        val newUri = contentResolver.query(
-            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
-            null,
-            null,
-            null,
-            null,
-        )!!.use { cursor ->
-            waitForNotification(cursor) {
-                DocumentsContract.createDocument(
-                    contentResolver,
-                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
-                    "text/plain",
-                    "bar.txt",
-                )
-            }
-        }
+        val newUri =
+            contentResolver
+                .query(
+                    DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+                    null,
+                    null,
+                    null,
+                    null,
+                )!!
+                .use { cursor ->
+                    waitForNotification(cursor) {
+                        DocumentsContract.createDocument(
+                            contentResolver,
+                            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/"),
+                            "text/plain",
+                            "bar.txt",
+                        )
+                    }
+                }
 
         assertEquals(
             DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar.txt"),
@@ -403,13 +405,7 @@ class OuisyncProviderTest {
 
         val parentUri = DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/")
 
-        contentResolver.query(
-            parentUri,
-            null,
-            null,
-            null,
-            null
-        )!!.use { cursor ->
+        contentResolver.query(parentUri, null, null, null, null)!!.use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals("a.txt", cursor.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
 
@@ -417,16 +413,15 @@ class OuisyncProviderTest {
             assertNotEquals(
                 0,
                 cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
-                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                    DocumentsContract.Document.FLAG_SUPPORTS_DELETE,
             )
 
             val fileId = cursor.getString(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
             val fileUri = DocumentsContract.buildDocumentUri(AUTHORITY, fileId)
 
             // Delete the file and wait for the notification
-            val result = waitForNotification(cursor) {
-                DocumentsContract.deleteDocument(contentResolver, fileUri)
-            }
+            val result =
+                waitForNotification(cursor) { DocumentsContract.deleteDocument(contentResolver, fileUri) }
 
             assertTrue(result)
         }
@@ -457,29 +452,34 @@ class OuisyncProviderTest {
 
         // Copy is not directly supported but can be performed by reading from the source file and
         // writing to the destination file.
-        val srcMime = contentResolver.query(
-            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/a/hello.txt"),
-            null,
-            null,
-            null,
-            null,
-        )!!.use { cursor ->
-            assertTrue(cursor.moveToFirst())
-            assertEquals(
-                0,
-                cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and DocumentsContract.Document.FLAG_SUPPORTS_COPY,
-            )
+        val srcMime =
+            contentResolver
+                .query(
+                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/a/hello.txt"),
+                    null,
+                    null,
+                    null,
+                    null,
+                )!!
+                .use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    assertEquals(
+                        0,
+                        cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
+                            DocumentsContract.Document.FLAG_SUPPORTS_COPY,
+                    )
 
-            cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE)
-        }
+                    cursor.getString(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                }
 
         val srcUri = DocumentsContract.buildDocumentUri(AUTHORITY, "foo/a/hello.txt")
-        val dstUri = DocumentsContract.createDocument(
-            contentResolver,
-            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/b"),
-            srcMime,
-            "hello.txt",
-        )
+        val dstUri =
+            DocumentsContract.createDocument(
+                contentResolver,
+                DocumentsContract.buildDocumentUri(AUTHORITY, "foo/b"),
+                srcMime,
+                "hello.txt",
+            )
 
         contentResolver.openInputStream(srcUri).use { srcStream ->
             contentResolver.openOutputStream(dstUri!!, "w").use { dstStream ->
@@ -506,34 +506,34 @@ class OuisyncProviderTest {
     fun testRenameFile() {
         withSession {
             setStoreDir(storeDir)
-            createRepository("foo").apply {
-                createFile("bar.txt").close()
-            }
+            createRepository("foo").apply { createFile("bar.txt").close() }
         }
 
-        contentResolver.query(
-            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
-            null,
-            null,
-            null,
-            null
-        )!!.use { cursor ->
-            assertTrue(cursor.moveToFirst())
+        contentResolver
+            .query(
+                DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+                null,
+                null,
+                null,
+                null,
+            )!!
+            .use { cursor ->
+                assertTrue(cursor.moveToFirst())
 
-            assertNotEquals(
-                0,
-                cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
-                DocumentsContract.Document.FLAG_SUPPORTS_RENAME
-            )
-
-            waitForNotification(cursor) {
-                DocumentsContract.renameDocument(
-                    contentResolver,
-                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar.txt"),
-                    "baz.txt",
+                assertNotEquals(
+                    0,
+                    cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
+                        DocumentsContract.Document.FLAG_SUPPORTS_RENAME,
                 )
+
+                waitForNotification(cursor) {
+                    DocumentsContract.renameDocument(
+                        contentResolver,
+                        DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar.txt"),
+                        "baz.txt",
+                    )
+                }
             }
-        }
 
         withSession {
             findRepository("foo").apply {
@@ -556,37 +556,42 @@ class OuisyncProviderTest {
             }
         }
 
-        val newUri = contentResolver.query(
-            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/src"),
-            null,
-            null,
-            null,
-            null,
-        )!!.use { srcCursor ->
-            contentResolver.query(
-                DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/dst"),
-                null,
-                null,
-                null,
-                null,
-            )!!.use { dstCursor ->
-                assertTrue(srcCursor.moveToFirst())
-                assertNotEquals(
-                    0,
-                    srcCursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
-                    DocumentsContract.Document.FLAG_SUPPORTS_MOVE
-                )
+        val newUri =
+            contentResolver
+                .query(
+                    DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/src"),
+                    null,
+                    null,
+                    null,
+                    null,
+                )!!
+                .use { srcCursor ->
+                    contentResolver
+                        .query(
+                            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/dst"),
+                            null,
+                            null,
+                            null,
+                            null,
+                        )!!
+                        .use { dstCursor ->
+                            assertTrue(srcCursor.moveToFirst())
+                            assertNotEquals(
+                                0,
+                                srcCursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
+                                    DocumentsContract.Document.FLAG_SUPPORTS_MOVE,
+                            )
 
-                waitForNotification(srcCursor, dstCursor) {
-                    DocumentsContract.moveDocument(
-                        contentResolver,
-                        DocumentsContract.buildDocumentUri(AUTHORITY, "foo/src/a.txt"),
-                        DocumentsContract.buildDocumentUri(AUTHORITY, "foo/src"),
-                        DocumentsContract.buildDocumentUri(AUTHORITY, "foo/dst"),
-                    )
+                            waitForNotification(srcCursor, dstCursor) {
+                                DocumentsContract.moveDocument(
+                                    contentResolver,
+                                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/src/a.txt"),
+                                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/src"),
+                                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/dst"),
+                                )
+                            }
+                        }
                 }
-            }
-        }
 
         assertEquals(
             DocumentsContract.buildDocumentUri(AUTHORITY, "foo/dst/a.txt"),
@@ -619,11 +624,12 @@ class OuisyncProviderTest {
     // Starts the OuisyncService
     private fun startService() {
         val latch = CountDownLatch(1)
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                latch.countDown()
+        val receiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    latch.countDown()
+                }
             }
-        }
 
         context.registerReceiver(
             receiver,
@@ -643,12 +649,13 @@ class OuisyncProviderTest {
     // returns immediately.
     private fun stopService() {
         val latch = CountDownLatch(1)
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                assertEquals(1, resultCode)
-                latch.countDown()
+        val receiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    assertEquals(1, resultCode)
+                    latch.countDown()
+                }
             }
-        }
 
         context.sendOrderedBroadcast(
             Intent(OuisyncService.ACTION_STOP).setPackage(context.getPackageName()),
@@ -667,11 +674,12 @@ class OuisyncProviderTest {
     // cursors are delivered.
     private fun <T> waitForNotification(vararg cursors: Cursor, block: () -> T): T {
         var latch = CountDownLatch(cursors.size)
-        val observer = object : ContentObserver(Handler(context.mainLooper)) {
-            override fun onChange(selfChange: Boolean) {
-                latch.countDown()
+        val observer =
+            object : ContentObserver(Handler(context.mainLooper)) {
+                override fun onChange(selfChange: Boolean) {
+                    latch.countDown()
+                }
             }
-        }
 
         for (cursor in cursors) {
             cursor.registerContentObserver(observer)
@@ -690,7 +698,7 @@ private fun randomString(size: Int): String {
     val alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
     val builder = StringBuilder(size)
 
-    for (i in 0 ..< size) {
+    for (i in 0..<size) {
         builder.append(alphabet[rng.nextInt(alphabet.length)])
     }
 
@@ -698,5 +706,5 @@ private fun randomString(size: Int): String {
 }
 
 private fun Cursor.getString(columnName: String): String = getString(getColumnIndexOrThrow(columnName))
-private fun Cursor.getInt(columnName: String): Int = getInt(getColumnIndexOrThrow(columnName))
 
+private fun Cursor.getInt(columnName: String): Int = getInt(getColumnIndexOrThrow(columnName))

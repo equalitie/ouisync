@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -26,8 +25,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.UseSerializers
 import kotlinx.serialization.json.Json
-import java.io.File
 import java.io.EOFException
+import java.io.File
 import java.net.ConnectException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -370,9 +369,7 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
     // TODO: Do we also need readMutex?
     private val writeMutex = Mutex()
 
-    suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont ->
-        channel.read(buffer, cont, IOHandler())
-    }
+    suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.read(buffer, cont, IOHandler()) }
 
     suspend fun readExact(buffer: ByteBuffer): Int {
         var total = 0
@@ -398,10 +395,7 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
         }
     }
 
-    private suspend fun writeUnlocked(buffer: ByteBuffer) =
-        suspendCancellableCoroutine<Int> { cont ->
-            channel.write(buffer, cont, IOHandler())
-        }
+    private suspend fun writeUnlocked(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.write(buffer, cont, IOHandler()) }
 
     fun close() {
         channel.close()

@@ -22,7 +22,6 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -50,9 +49,7 @@ open class OuisyncService : Service() {
 
                 when (intent.action) {
                     ACTION_STOP -> {
-                        runBlocking {
-                            stopServer()
-                        }
+                        runBlocking { stopServer() }
 
                         stopSelf()
 
@@ -61,13 +58,12 @@ open class OuisyncService : Service() {
                         }
                     }
                     ACTION_STATUS -> {
-                        if (server.isCompleted  && !server.isCancelled && isOrderedBroadcast()) {
+                        if (server.isCompleted && !server.isCancelled && isOrderedBroadcast()) {
                             setResultCode(1)
                         }
                     }
                     else -> {}
                 }
-
             }
         }
 
@@ -249,9 +245,11 @@ open class OuisyncService : Service() {
 
         // Sent by the service to signal it's been started
         const val ACTION_STARTED = "org.equalitie.ouisync.service.action.started"
+
         // Sent to the service to check whether it's been started. It so, it sets the result code to
         // 1.
         const val ACTION_STATUS = "org.equalitie.ouisync.service.action.status"
+
         // Sent to the service to stop itself
         const val ACTION_STOP = "org.equalitie.ouisync.service.action.stop"
 

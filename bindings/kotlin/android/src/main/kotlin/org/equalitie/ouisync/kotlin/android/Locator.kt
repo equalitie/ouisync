@@ -34,10 +34,11 @@ internal data class Locator(val repo: String, val path: String) {
     }
 
     val parent: Locator
-        get() = when {
-            path.isEmpty() -> ROOT
-            else -> Locator(repo = repo, path = path.substringBeforeLast('/', ""))
-        }
+        get() =
+            when {
+                path.isEmpty() -> ROOT
+                else -> Locator(repo = repo, path = path.substringBeforeLast('/', ""))
+            }
 
     fun isChildOf(other: Locator): Boolean {
         if (isRoot()) return false
@@ -53,4 +54,3 @@ internal data class Locator(val repo: String, val path: String) {
 
     fun isRoot() = repo.isEmpty()
 }
-
