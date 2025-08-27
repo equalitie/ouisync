@@ -124,7 +124,7 @@ impl InodeMap {
     // # Panics
     //
     // Panics if the inode doesn't exist.
-    pub fn get(&self, inode: Inode) -> InodeView {
+    pub fn get(&self, inode: Inode) -> InodeView<'_> {
         self.forward
             .get(inode_to_index(inode))
             .map(|data| InodeView { inodes: self, data })
