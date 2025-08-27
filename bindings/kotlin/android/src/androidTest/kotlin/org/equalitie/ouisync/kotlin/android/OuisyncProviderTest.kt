@@ -502,6 +502,109 @@ class OuisyncProviderTest {
         }
     }
 
+    @Test
+    fun testRenameFile() {
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo").apply {
+                createFile("bar.txt").close()
+            }
+        }
+
+        contentResolver.query(
+            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+            null,
+            null,
+            null,
+            null
+        )!!.use { cursor ->
+            assertTrue(cursor.moveToFirst())
+
+            assertNotEquals(
+                0,
+                cursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
+                DocumentsContract.Document.FLAG_SUPPORTS_RENAME
+            )
+
+            waitForNotification(cursor) {
+                DocumentsContract.renameDocument(
+                    contentResolver,
+                    DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar.txt"),
+                    "baz.txt",
+                )
+            }
+        }
+
+        withSession {
+            findRepository("foo").apply {
+                val entries = readDirectory("")
+                assertEquals(1, entries.size)
+                assertEquals("baz.txt", entries[0].name)
+            }
+        }
+    }
+
+    @Test
+    fun testMoveFile() {
+        withSession {
+            setStoreDir(storeDir)
+            createRepository("foo").apply {
+                createDirectory("src")
+                createDirectory("dst")
+
+                createFile("src/a.txt").close()
+            }
+        }
+
+        val newUri = contentResolver.query(
+            DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/src"),
+            null,
+            null,
+            null,
+            null,
+        )!!.use { srcCursor ->
+            contentResolver.query(
+                DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/dst"),
+                null,
+                null,
+                null,
+                null,
+            )!!.use { dstCursor ->
+                assertTrue(srcCursor.moveToFirst())
+                assertNotEquals(
+                    0,
+                    srcCursor.getInt(DocumentsContract.Document.COLUMN_FLAGS) and
+                    DocumentsContract.Document.FLAG_SUPPORTS_MOVE
+                )
+
+                waitForNotification(srcCursor, dstCursor) {
+                    DocumentsContract.moveDocument(
+                        contentResolver,
+                        DocumentsContract.buildDocumentUri(AUTHORITY, "foo/src/a.txt"),
+                        DocumentsContract.buildDocumentUri(AUTHORITY, "foo/src"),
+                        DocumentsContract.buildDocumentUri(AUTHORITY, "foo/dst"),
+                    )
+                }
+            }
+        }
+
+        assertEquals(
+            DocumentsContract.buildDocumentUri(AUTHORITY, "foo/dst/a.txt"),
+            newUri,
+        )
+
+        withSession {
+            findRepository("foo").apply {
+                val srcEntries = readDirectory("src")
+                val dstEntries = readDirectory("dst")
+
+                assertTrue(srcEntries.isEmpty())
+                assertEquals(1, dstEntries.size)
+                assertEquals("a.txt", dstEntries[0].name)
+            }
+        }
+    }
+
     // Creates a temporary Ouisync Session and pass it to the given block.
     private fun <R> withSession(block: suspend Session.() -> R): R = runBlocking {
         val session = Session.create(context.getConfigPath())
@@ -560,15 +663,19 @@ class OuisyncProviderTest {
         latch.await()
     }
 
-    // Execute the given block and wait until a notification of changes in the cursor's data is
-    // delivered.
-    private fun <T> waitForNotification(cursor: Cursor, block: () -> T): T {
-        var latch = CountDownLatch(1)
-        cursor.registerContentObserver(object : ContentObserver(Handler(context.mainLooper)) {
+    // Execute the given block and wait until notifications of changes in the data of all the
+    // cursors are delivered.
+    private fun <T> waitForNotification(vararg cursors: Cursor, block: () -> T): T {
+        var latch = CountDownLatch(cursors.size)
+        val observer = object : ContentObserver(Handler(context.mainLooper)) {
             override fun onChange(selfChange: Boolean) {
                 latch.countDown()
             }
-        })
+        }
+
+        for (cursor in cursors) {
+            cursor.registerContentObserver(observer)
+        }
 
         val result = block()
 

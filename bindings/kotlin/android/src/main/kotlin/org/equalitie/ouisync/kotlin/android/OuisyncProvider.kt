@@ -282,11 +282,7 @@ class OuisyncProvider : DocumentsProvider() {
             repo.createFile(locator.path).close()
         }
 
-        val context = requireNotNull(context)
-        val authority = requireNotNull(authority)
-        val uri = DocumentsContract.buildChildDocumentsUri(authority, parentLocator.toString())
-
-        context.contentResolver.notifyChange(uri, null)
+        notifyChildDocumentsChange(parentLocator.toString())
 
         locator.toString()
     }
@@ -309,11 +305,57 @@ class OuisyncProvider : DocumentsProvider() {
             }
         }
 
-        val context = requireNotNull(context)
-        val authority = requireNotNull(authority)
-        val uri = DocumentsContract.buildChildDocumentsUri(authority, locator.parent.toString())
+        notifyChildDocumentsChange(locator.parent.toString())
+    }
 
-        context.contentResolver.notifyChange(uri, null)
+    override fun renameDocument(documentId: String, displayName: String): String? = run {
+        Log.v(TAG, "renameDocument($documentId, $displayName)")
+
+        val srcLocator = Locator.parse(documentId)
+
+        if (srcLocator.path.isEmpty()) {
+            throw UnsupportedOperationException("Rename repository not supported")
+        }
+
+        val dstLocator = srcLocator.parent.join(displayName)
+
+        session()
+            .findRepository(srcLocator.repo)
+            .moveEntry(srcLocator.path, dstLocator.path)
+
+        notifyChildDocumentsChange(dstLocator.parent.toString())
+
+        dstLocator.toString()
+    }
+
+    override fun moveDocument(
+        sourceDocumentId: String,
+        sourceParentDocumentId: String,
+        targetParentDocumentId: String,
+    ): String = run {
+        Log.v(TAG, "moveDocument($sourceDocumentId, $sourceParentDocumentId, $targetParentDocumentId)")
+
+        val srcLocator = Locator.parse(sourceDocumentId)
+
+        if (srcLocator.path.isEmpty()) {
+            throw UnsupportedOperationException("Move repository is not supported")
+        }
+
+        val dstLocator = Locator.parse(targetParentDocumentId).join(srcLocator.name)
+
+        if (srcLocator.repo != dstLocator.repo) {
+            throw UnsupportedOperationException("Move between repositories not supported")
+        }
+
+        session()
+            .findRepository(srcLocator.repo)
+            .moveEntry(srcLocator.path, dstLocator.path)
+
+        revokeDocumentPermission(sourceDocumentId)
+
+        notifyChildDocumentsChange(sourceParentDocumentId, targetParentDocumentId)
+
+        dstLocator.toString()
     }
 
     private suspend fun buildEntryRow(cursor: MatrixCursor, repo: Repository, entryType: EntryType, locator: Locator) {
@@ -328,7 +370,11 @@ class OuisyncProvider : DocumentsProvider() {
                 val size = file.getLength()
                 val mime = URLConnection.guessContentTypeFromName(locator.name)
                 val flags = when (repo.getAccessMode()) {
-                    AccessMode.WRITE -> DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                    AccessMode.WRITE -> {
+                        DocumentsContract.Document.FLAG_SUPPORTS_DELETE or
+                        DocumentsContract.Document.FLAG_SUPPORTS_MOVE or
+                        DocumentsContract.Document.FLAG_SUPPORTS_RENAME
+                    }
                     AccessMode.READ -> 0
                     AccessMode.BLIND -> 0
                 }
@@ -347,8 +393,15 @@ class OuisyncProvider : DocumentsProvider() {
                 val flags = when (repo.getAccessMode()) {
                     AccessMode.WRITE -> {
                         DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE or
-                        // TODO: Deleting repos disabled until repo list change notifications are implemented.
-                        if (locator.path.isEmpty()) 0 else DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+                        // TODO: Deleting and moving/renaming repos disabled until repo list change
+                        // notifications are implemented.
+                        if (locator.path.isEmpty()) {
+                            0
+                        } else {
+                            DocumentsContract.Document.FLAG_SUPPORTS_DELETE or
+                            DocumentsContract.Document.FLAG_SUPPORTS_MOVE or
+                            DocumentsContract.Document.FLAG_SUPPORTS_RENAME
+                        }
                     }
                     AccessMode.READ -> 0
                     AccessMode.BLIND -> 0
@@ -371,6 +424,16 @@ class OuisyncProvider : DocumentsProvider() {
         row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, Locator.ROOT_DOCUMENT_ID)
         row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
         row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
+    }
+
+    private fun notifyChildDocumentsChange(vararg parentDocumentIds: String) {
+        val context = requireNotNull(context)
+        val authority = requireNotNull(authority)
+
+        for (parentDocumentId in parentDocumentIds) {
+            val uri = DocumentsContract.buildChildDocumentsUri(authority, parentDocumentId)
+            context.contentResolver.notifyChange(uri, null)
+        }
     }
 
     private suspend fun session() = sessionFlow.filterNotNull().first()
