@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ouisync_provider_name">Ouisync</string>
+    <string name="ouisync_repositories">Repositories</string>
+    <string name="ouisync_repository_is_locked">This repository is locked</string>
+</resources>

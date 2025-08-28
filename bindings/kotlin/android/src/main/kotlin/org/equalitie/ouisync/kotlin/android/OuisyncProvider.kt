@@ -169,7 +169,10 @@ class OuisyncProvider : DocumentsProvider() {
         row.add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ouisync_provider_root_icon)
         row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, DocumentsContract.Root.MIME_TYPE_ITEM)
         row.add(DocumentsContract.Root.COLUMN_ROOT_ID, ROOT_ID)
-        row.add(DocumentsContract.Root.COLUMN_TITLE, "Ouisync")
+        row.add(
+            DocumentsContract.Root.COLUMN_TITLE,
+            context.getString(R.string.ouisync_provider_name)
+        )
 
         return result
     }
@@ -222,8 +225,10 @@ class OuisyncProvider : DocumentsProvider() {
             } else {
                 result.setExtras(
                     Bundle().apply {
-                        // TODO: localize
-                        putString(DocumentsContract.EXTRA_INFO, "This repository is locked")
+                        putString(
+                            DocumentsContract.EXTRA_INFO,
+                            context.getString(R.string.ouisync_repository_is_locked)
+                        )
                     },
                 )
             }
@@ -378,8 +383,6 @@ class OuisyncProvider : DocumentsProvider() {
 
         when (entryType) {
             EntryType.FILE -> {
-                val file = repo.openFile(locator.path)
-                val size = file.getLength()
                 val mime = URLConnection.guessContentTypeFromName(locator.name)
                 val flags =
                     when (repo.getAccessMode()) {
@@ -392,9 +395,31 @@ class OuisyncProvider : DocumentsProvider() {
                         AccessMode.BLIND -> 0
                     }
 
-                row.add(DocumentsContract.Document.COLUMN_SIZE, size)
                 row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, mime)
-                row.add(DocumentsContract.Document.COLUMN_FLAGS, flags)
+
+                try {
+                    val file = repo.openFile(locator.path)
+                    val size = file.getLength()
+                    val progress = file.getProgress()
+
+                    if (progress < size) {
+                        row.add(DocumentsContract.Document.COLUMN_SIZE, progress)
+                        row.add(
+                            DocumentsContract.Document.COLUMN_FLAGS,
+                            flags or DocumentsContract.Document.FLAG_PARTIAL
+                        )
+                    } else {
+                        row.add(DocumentsContract.Document.COLUMN_SIZE, size)
+                        row.add(DocumentsContract.Document.COLUMN_FLAGS, flags)
+                    }
+                } catch (e: OuisyncException.StoreError) {
+                    // `StoreError` is most likely caused by some blocks not being loaded yet.
+                    row.add(DocumentsContract.Document.COLUMN_SIZE, null)
+                    row.add(
+                        DocumentsContract.Document.COLUMN_FLAGS,
+                        flags or DocumentsContract.Document.FLAG_PARTIAL
+                    )
+                }
             }
             EntryType.DIRECTORY -> {
                 val size =
@@ -435,10 +460,13 @@ class OuisyncProvider : DocumentsProvider() {
     }
 
     private fun buildRepoListRow(cursor: MatrixCursor) {
+        val context = requireNotNull(context)
         val row = cursor.newRow()
 
-        // TODO: localize
-        row.add(DocumentsContract.Document.COLUMN_DISPLAY_NAME, "Repositories")
+        row.add(
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            context.getString(R.string.ouisync_repositories)
+        )
         row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, Locator.ROOT_DOCUMENT_ID)
         row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
         row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
