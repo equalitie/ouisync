@@ -1182,7 +1182,7 @@ struct DirEntry {
 }
 
 impl DirEntry {
-    async fn cached_or_load_dir(&self) -> Result<AsyncRwLockReadGuard<JointDirectory>, Error> {
+    async fn cached_or_load_dir(&self) -> Result<AsyncRwLockReadGuard<'_, JointDirectory>, Error> {
         let cached_dir =
             AsyncRwLockReadGuard::map(self.shared.read().await, |shared| &shared.cached_dir);
 
