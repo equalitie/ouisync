@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
+import android.net.Uri
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Handler
@@ -22,8 +23,10 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,6 +43,7 @@ import org.equalitie.ouisync.kotlin.client.Repository
 import org.equalitie.ouisync.kotlin.client.Session
 import org.equalitie.ouisync.kotlin.client.close
 import org.equalitie.ouisync.kotlin.client.create
+import org.equalitie.ouisync.kotlin.client.subscribe
 import java.io.FileNotFoundException
 import java.net.URLConnection
 
@@ -133,6 +137,8 @@ class OuisyncProvider : DocumentsProvider() {
 
     private var authority: String? = null
 
+    private val subscriptions = SubscriptionMap()
+
     override fun onCreate(): Boolean {
         Log.v(TAG, "onCreate")
         return true
@@ -191,10 +197,12 @@ class OuisyncProvider : DocumentsProvider() {
         val context = requireNotNull(context)
         val uri = DocumentsContract.buildChildDocumentsUri(requireNotNull(authority), parentDocumentId)
 
-        val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
-        result.setNotificationUri(context.contentResolver, uri)
 
         if (locator.isRoot()) {
+            // TODO: notify on repo list changes
+            val result = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
+            result.setNotificationUri(context.contentResolver, uri)
+
             for (repo in session().listRepositories().values) {
                 buildEntryRow(
                     result,
@@ -203,6 +211,8 @@ class OuisyncProvider : DocumentsProvider() {
                     Locator(repo = repo.getShortName(), path = ""),
                 )
             }
+
+            result
         } else {
             val repo = session().findRepository(locator.repo)
             val isReadable =
@@ -212,6 +222,17 @@ class OuisyncProvider : DocumentsProvider() {
                     -> true
                     AccessMode.BLIND -> false
                 }
+
+            subscriptions.insert(repo, uri)
+
+            val result = object: MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION) {
+                override fun close() {
+                    subscriptions.remove(repo, uri)
+                    super.close()
+                }
+            }
+
+            result.setNotificationUri(context.contentResolver, uri)
 
             if (isReadable) {
                 for (entry in repo.readDirectory(locator.path)) {
@@ -232,9 +253,9 @@ class OuisyncProvider : DocumentsProvider() {
                     },
                 )
             }
-        }
 
-        result
+            result
+        }
     }
 
     override fun queryDocument(documentId: String?, projection: Array<String>?): Cursor = run {
@@ -383,7 +404,7 @@ class OuisyncProvider : DocumentsProvider() {
 
         when (entryType) {
             EntryType.FILE -> {
-                val mime = URLConnection.guessContentTypeFromName(locator.name)
+                val mime = URLConnection.guessContentTypeFromName(locator.name) ?: "application/octet-stream"
                 val flags =
                     when (repo.getAccessMode()) {
                         AccessMode.WRITE -> {
@@ -413,7 +434,7 @@ class OuisyncProvider : DocumentsProvider() {
                         row.add(DocumentsContract.Document.COLUMN_FLAGS, flags)
                     }
                 } catch (e: OuisyncException.StoreError) {
-                    // `StoreError` is most likely caused by some blocks not being loaded yet.
+                    // `StoreError` is typically caused by some blocks not being loaded yet.
                     row.add(DocumentsContract.Document.COLUMN_SIZE, null)
                     row.add(
                         DocumentsContract.Document.COLUMN_FLAGS,
@@ -528,6 +549,47 @@ class OuisyncProvider : DocumentsProvider() {
             }
         }
     }
+
+    // Container for repository subscriptions to preserve them across successive queries.
+    private inner class SubscriptionMap {
+        val entries: HashMap<SubscriptionKey, SubscriptionData> = HashMap()
+
+        @Synchronized
+        fun insert(repo: Repository, uri: Uri) {
+            val key = SubscriptionKey(repo, uri)
+
+            entries.getOrPut(key) {
+                val contentResolver = requireNotNull(context).contentResolver
+                val job = scope.launch {
+                    Log.v(TAG, "subscribe to $uri")
+                    repo.subscribe().collect {
+                        contentResolver.notifyChange(uri, null)
+                    }
+                }
+
+                SubscriptionData(job)
+            }.refcount += 1
+        }
+
+        @Synchronized
+        fun remove(repo: Repository, uri: Uri) {
+            val key = SubscriptionKey(repo, uri)
+            val data = entries.get(key)
+            if (data == null) return
+
+            data.refcount -= 1
+
+            if (data.refcount <= 0) {
+                Log.v(TAG, "unsubscribe from $uri")
+                data.job.cancel()
+                entries.remove(key)
+            }
+        }
+
+    }
+
+    private data class SubscriptionKey(val repo: Repository, val uri: Uri)
+    private class SubscriptionData(val job: Job, var refcount: Int = 0)
 }
 
 private val Exception.errno: Int
