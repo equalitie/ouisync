@@ -97,7 +97,8 @@ class OuisyncProvider : DocumentsProvider() {
                     val restart =
                         when {
                             intent.action == OuisyncService.ACTION_STARTED ||
-                                intent.action == OuisyncService.ACTION_STATUS && resultCode != 0 -> true
+                                intent.action == OuisyncService.ACTION_STATUS &&
+                                resultCode != 0 -> true
                             else -> false
                         }
 
@@ -175,10 +176,7 @@ class OuisyncProvider : DocumentsProvider() {
         row.add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ouisync_provider_root_icon)
         row.add(DocumentsContract.Root.COLUMN_MIME_TYPES, DocumentsContract.Root.MIME_TYPE_ITEM)
         row.add(DocumentsContract.Root.COLUMN_ROOT_ID, ROOT_ID)
-        row.add(
-            DocumentsContract.Root.COLUMN_TITLE,
-            context.getString(R.string.ouisync_provider_name)
-        )
+        row.add(DocumentsContract.Root.COLUMN_TITLE, context.getString(R.string.ouisync_provider_name))
 
         return result
     }
@@ -196,7 +194,6 @@ class OuisyncProvider : DocumentsProvider() {
         val locator = Locator.parse(parentDocumentId)
         val context = requireNotNull(context)
         val uri = DocumentsContract.buildChildDocumentsUri(requireNotNull(authority), parentDocumentId)
-
 
         if (locator.isRoot()) {
             // TODO: notify on repo list changes
@@ -225,12 +222,13 @@ class OuisyncProvider : DocumentsProvider() {
 
             subscriptions.insert(repo, uri)
 
-            val result = object: MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION) {
-                override fun close() {
-                    subscriptions.remove(repo, uri)
-                    super.close()
+            val result =
+                object : MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION) {
+                    override fun close() {
+                        subscriptions.remove(repo, uri)
+                        super.close()
+                    }
                 }
-            }
 
             result.setNotificationUri(context.contentResolver, uri)
 
@@ -248,7 +246,7 @@ class OuisyncProvider : DocumentsProvider() {
                     Bundle().apply {
                         putString(
                             DocumentsContract.EXTRA_INFO,
-                            context.getString(R.string.ouisync_repository_is_locked)
+                            context.getString(R.string.ouisync_repository_is_locked),
                         )
                     },
                 )
@@ -404,7 +402,8 @@ class OuisyncProvider : DocumentsProvider() {
 
         when (entryType) {
             EntryType.FILE -> {
-                val mime = URLConnection.guessContentTypeFromName(locator.name) ?: "application/octet-stream"
+                val mime =
+                    URLConnection.guessContentTypeFromName(locator.name) ?: "application/octet-stream"
                 val flags =
                     when (repo.getAccessMode()) {
                         AccessMode.WRITE -> {
@@ -427,7 +426,7 @@ class OuisyncProvider : DocumentsProvider() {
                         row.add(DocumentsContract.Document.COLUMN_SIZE, progress)
                         row.add(
                             DocumentsContract.Document.COLUMN_FLAGS,
-                            flags or DocumentsContract.Document.FLAG_PARTIAL
+                            flags or DocumentsContract.Document.FLAG_PARTIAL,
                         )
                     } else {
                         row.add(DocumentsContract.Document.COLUMN_SIZE, size)
@@ -438,7 +437,7 @@ class OuisyncProvider : DocumentsProvider() {
                     row.add(DocumentsContract.Document.COLUMN_SIZE, null)
                     row.add(
                         DocumentsContract.Document.COLUMN_FLAGS,
-                        flags or DocumentsContract.Document.FLAG_PARTIAL
+                        flags or DocumentsContract.Document.FLAG_PARTIAL,
                     )
                 }
             }
@@ -486,7 +485,7 @@ class OuisyncProvider : DocumentsProvider() {
 
         row.add(
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            context.getString(R.string.ouisync_repositories)
+            context.getString(R.string.ouisync_repositories),
         )
         row.add(DocumentsContract.Document.COLUMN_DOCUMENT_ID, Locator.ROOT_DOCUMENT_ID)
         row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
@@ -558,17 +557,18 @@ class OuisyncProvider : DocumentsProvider() {
         fun insert(repo: Repository, uri: Uri) {
             val key = SubscriptionKey(repo, uri)
 
-            entries.getOrPut(key) {
-                val contentResolver = requireNotNull(context).contentResolver
-                val job = scope.launch {
-                    Log.v(TAG, "subscribe to $uri")
-                    repo.subscribe().collect {
-                        contentResolver.notifyChange(uri, null)
-                    }
-                }
+            entries
+                .getOrPut(key) {
+                    val contentResolver = requireNotNull(context).contentResolver
+                    val job =
+                        scope.launch {
+                            Log.v(TAG, "subscribe to $uri")
+                            repo.subscribe().collect { contentResolver.notifyChange(uri, null) }
+                        }
 
-                SubscriptionData(job)
-            }.refcount += 1
+                    SubscriptionData(job)
+                }
+                .refcount += 1
         }
 
         @Synchronized
@@ -585,10 +585,10 @@ class OuisyncProvider : DocumentsProvider() {
                 entries.remove(key)
             }
         }
-
     }
 
     private data class SubscriptionKey(val repo: Repository, val uri: Uri)
+
     private class SubscriptionData(val job: Job, var refcount: Int = 0)
 }
 

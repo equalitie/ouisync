@@ -9,6 +9,7 @@ import android.database.ContentObserver
 import android.database.Cursor
 import android.os.Handler
 import android.provider.DocumentsContract
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -17,6 +18,7 @@ import org.equalitie.ouisync.kotlin.client.EntryType
 import org.equalitie.ouisync.kotlin.client.Session
 import org.equalitie.ouisync.kotlin.client.close
 import org.equalitie.ouisync.kotlin.client.create
+import org.equalitie.ouisync.kotlin.server.Server
 import org.equalitie.ouisync.kotlin.server.initLog
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -610,6 +612,84 @@ class OuisyncProviderTest {
         }
     }
 
+    @Test
+    fun notifyOnSync() {
+        // Create repo and bind the network listener
+        val (addr, token) =
+            withSession {
+                setStoreDir(storeDir)
+                bindNetwork(listOf("quic/127.0.0.1:0"))
+                val addr = getLocalListenerAddrs().first()
+
+                val repo = createRepository("foo")
+                val token = repo.share(AccessMode.WRITE)
+
+                Pair(addr, token)
+            }
+
+        val fileName = "a.txt"
+        val fileContent = "hello world"
+        val fileUri = DocumentsContract.buildDocumentUri(AUTHORITY, "foo/$fileName")
+
+        // Create remote peer, connect to it and share the repo with it
+        val peer = runBlocking {
+            RemotePeer.create(context).apply {
+                session.createRepository("foo", token = token)
+                session.bindNetwork(listOf("quic/127.0.0.1:0"))
+                session.addUserProvidedPeers(listOf(addr))
+            }
+        }
+
+        try {
+            contentResolver
+                .query(
+                    DocumentsContract.buildChildDocumentsUri(AUTHORITY, "foo/"),
+                    null,
+                    null,
+                    null,
+                    null,
+                )!!
+                .use { cursor ->
+                    assertEquals(0, cursor.count)
+
+                    // Change the repo content by the remote peer and wait until we receive the changes.
+                    val latch = CountDownLatch(0)
+                    val observer =
+                        object : ContentObserver(Handler(context.mainLooper)) {
+                            override fun onChange(selfChange: Boolean) {
+                                try {
+                                    contentResolver.openInputStream(fileUri)?.use { stream ->
+                                        val content = stream.readAllBytes().decodeToString()
+                                        if (content == fileContent) {
+                                            latch.countDown()
+                                        } else {
+                                            Log.d(TAG, "ContentObserver: content doesn't match")
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    Log.d(TAG, "ContentObserver: openInputStream failed: $e")
+                                }
+                            }
+                        }
+
+                    cursor.registerContentObserver(observer)
+
+                    runBlocking {
+                        peer.session.findRepository("foo").apply {
+                            createFile(fileName).apply {
+                                write(0, fileContent.toByteArray())
+                                close()
+                            }
+                        }
+                    }
+
+                    assertTrue(latch.await(30, TimeUnit.SECONDS))
+                }
+        } finally {
+            runBlocking { peer.destroy() }
+        }
+    }
+
     // Creates a temporary Ouisync Session and pass it to the given block.
     private fun <R> withSession(block: suspend Session.() -> R): R = runBlocking {
         val session = Session.create(context.getConfigPath())
@@ -708,3 +788,27 @@ private fun randomString(size: Int): String {
 private fun Cursor.getString(columnName: String): String = getString(getColumnIndexOrThrow(columnName))
 
 private fun Cursor.getInt(columnName: String): Int = getInt(getColumnIndexOrThrow(columnName))
+
+// Simulated remote Ouisync instance
+private class RemotePeer(private val tempDir: File, val server: Server, val session: Session) {
+    companion object {
+        suspend fun create(context: Context): RemotePeer {
+            val tempDir = context.getDir(randomString(16), 0)
+            val configDir = "${tempDir.path}/config"
+            val storeDir = "${tempDir.path}/store"
+
+            val server = Server.start(configDir)
+
+            val session = Session.create(configDir)
+            session.setStoreDir(storeDir)
+
+            return RemotePeer(tempDir, server, session)
+        }
+    }
+
+    suspend fun destroy() {
+        session.close()
+        server.stop()
+        tempDir.deleteRecursively()
+    }
+}
