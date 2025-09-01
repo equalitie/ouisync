@@ -50,7 +50,7 @@ spotless {
         target("**/*.kt")
         targetExclude("**/build/**/*.kt")
 
-        ktfmt("0.57")
+        ktfmt("0.58")
         ktlint()
             .editorConfigOverride(
                 ["ktlint_function_naming_ignore_when_annotated_with": "Composable"]

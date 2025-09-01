@@ -97,8 +97,7 @@ class OuisyncProvider : DocumentsProvider() {
                     val restart =
                         when {
                             intent.action == OuisyncService.ACTION_STARTED ||
-                                intent.action == OuisyncService.ACTION_STATUS &&
-                                resultCode != 0 -> true
+                                intent.action == OuisyncService.ACTION_STATUS && resultCode != 0 -> true
                             else -> false
                         }
 
@@ -497,8 +496,7 @@ class OuisyncProvider : DocumentsProvider() {
         row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
     }
 
-    private fun getFileMimeType(name: String): String =
-        URLConnection.guessContentTypeFromName(name) ?: "application/octet-stream"
+    private fun getFileMimeType(name: String): String = URLConnection.guessContentTypeFromName(name) ?: "application/octet-stream"
 
     private fun notifyChildDocumentsChange(vararg parentDocumentIds: String) {
         val context = requireNotNull(context)
