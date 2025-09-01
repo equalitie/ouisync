@@ -157,6 +157,12 @@ class OuisyncProvider : DocumentsProvider() {
         return Locator.parse(documentId).isChildOf(Locator.parse(parentDocumentId))
     }
 
+    override fun getDocumentType(documentId: String): String {
+        Log.v(TAG, "getDocumentMimeType($documentId)")
+
+        return getFileMimeType(Locator.parse(documentId).name)
+    }
+
     override fun queryRoots(projection: Array<String>?): Cursor {
         Log.v(TAG, "queryRoots(${projection?.contentToString()})")
 
@@ -402,8 +408,7 @@ class OuisyncProvider : DocumentsProvider() {
 
         when (entryType) {
             EntryType.FILE -> {
-                val mime =
-                    URLConnection.guessContentTypeFromName(locator.name) ?: "application/octet-stream"
+                val mime = getFileMimeType(locator.name)
                 val flags =
                     when (repo.getAccessMode()) {
                         AccessMode.WRITE -> {
@@ -491,6 +496,9 @@ class OuisyncProvider : DocumentsProvider() {
         row.add(DocumentsContract.Document.COLUMN_FLAGS, 0)
         row.add(DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.MIME_TYPE_DIR)
     }
+
+    private fun getFileMimeType(name: String): String =
+        URLConnection.guessContentTypeFromName(name) ?: "application/octet-stream"
 
     private fun notifyChildDocumentsChange(vararg parentDocumentIds: String) {
         val context = requireNotNull(context)
