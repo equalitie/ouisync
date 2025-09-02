@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.UseSerializers
@@ -80,8 +81,11 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 }
 
                 try {
-                    val socket = AsynchronousSocket.connect(addr)
-                    authenticate(socket, authKey)
+                    val socket =
+                        withContext(Dispatchers.IO) {
+                            AsynchronousSocket.connect(addr).also { socket -> authenticate(socket, authKey) }
+                        }
+
                     return Client(socket)
                 } catch (e: ConnectException) {
                     error = e
@@ -158,10 +162,10 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         buffer.put(payload)
         buffer.flip()
 
-        socket.writeAll(buffer)
+        withContext(Dispatchers.IO) { socket.writeAll(buffer) }
     }
 
-    private suspend fun CoroutineScope.receive() {
+    private suspend fun receive() {
         var buffer = ByteBuffer.allocate(HEADER_SIZE)
         buffer.order(ByteOrder.BIG_ENDIAN)
 

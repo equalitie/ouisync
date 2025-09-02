@@ -20,9 +20,10 @@ import android.provider.DocumentsProvider
 import android.system.ErrnoException
 import android.system.OsConstants
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -78,13 +79,7 @@ class OuisyncProvider : DocumentsProvider() {
         private val ROOT_ID = "default"
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    // Handler for running proxy file descriptor's callbacks
-    private val handler =
-        Handler(
-            HandlerThread("${this::class.simpleName} handler thread").apply { start() }.getLooper(),
-        )
+    private val scope = CoroutineScope(SupervisorJob())
 
     // StateFlow that emits new session every time OuisyncService is (re)started.
     private val sessionFlow: StateFlow<Session?> by lazy {
@@ -97,7 +92,8 @@ class OuisyncProvider : DocumentsProvider() {
                     val restart =
                         when {
                             intent.action == OuisyncService.ACTION_STARTED ||
-                                intent.action == OuisyncService.ACTION_STATUS && resultCode != 0 -> true
+                                intent.action == OuisyncService.ACTION_STATUS &&
+                                resultCode != 0 -> true
                             else -> false
                         }
 
@@ -134,6 +130,10 @@ class OuisyncProvider : DocumentsProvider() {
 
         state.asStateFlow()
     }
+
+    // Handler for running the proxy file descriptor callbacks.
+    private val handler =
+        Handler(HandlerThread("${this::class.simpleName} proxy").apply { start() }.looper)
 
     private var authority: String? = null
 
@@ -295,9 +295,11 @@ class OuisyncProvider : DocumentsProvider() {
         val storage = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
         val mode = ParcelFileDescriptor.parseMode(mode)
 
-        // TODO: use the cancellation signal
-
-        return storage.openProxyFileDescriptor(mode, ProxyCallback(locator), handler)
+        return storage.openProxyFileDescriptor(
+            mode,
+            ProxyCallback(locator, signal),
+            handler,
+        )
     }
 
     override fun createDocument(
@@ -516,9 +518,21 @@ class OuisyncProvider : DocumentsProvider() {
     // ParcelFileDescriptor.
     private inner class ProxyCallback(
         val locator: Locator,
+        val signal: CancellationSignal?,
     ) : ProxyFileDescriptorCallback() {
+        private val scope =
+            CoroutineScope(SupervisorJob()).also { scope ->
+                signal?.setOnCancelListener { scope.cancel() }
+
+                if (signal?.isCanceled() ?: false) {
+                    scope.cancel()
+                }
+            }
+
         private val file: Deferred<File> =
-            scope.async { session().findRepository(locator.repo).openFile(locator.path) }
+            scope.async(start = CoroutineStart.LAZY) {
+                session().findRepository(locator.repo).openFile(locator.path)
+            }
 
         override fun onGetSize() = run("onGetSize") { file.await().getLength() }
 
@@ -542,11 +556,11 @@ class OuisyncProvider : DocumentsProvider() {
             block: suspend CoroutineScope.() -> T,
         ): T {
             try {
-                return runBlocking(block = block)
+                return runBlocking(scope.coroutineContext, block)
             } catch (e: Exception) {
                 Log.e(
                     TAG,
-                    "uncaught exception in ${ProxyCallback::class.simpleName}.$name",
+                    "uncaught exception in ${ProxyCallback::class.simpleName}.$name with $locator",
                     e,
                 )
 
@@ -605,5 +619,6 @@ private val Exception.errno: Int
             is OuisyncException.PermissionDenied -> OsConstants.EPERM
             is OuisyncException.IsDirectory -> OsConstants.EISDIR
             is OuisyncException.NotDirectory -> OsConstants.ENOTDIR
+            is CancellationException -> OsConstants.ECANCELED
             else -> OsConstants.EIO
         }

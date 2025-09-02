@@ -27,7 +27,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
@@ -264,7 +267,7 @@ class OuisyncProviderTest {
 
         val uri = DocumentsContract.buildDocumentUri(AUTHORITY, "foo/a.txt")
         contentResolver.openInputStream(uri)!!.use { stream ->
-            val content = stream.readAllBytes().decodeToString()
+            val content = readAllBytes(stream).decodeToString()
             assertEquals("hello world", content)
         }
     }
@@ -371,20 +374,14 @@ class OuisyncProviderTest {
             newUri,
         )
 
-        contentResolver.openOutputStream(newUri!!, "w")!!.use { stream ->
+        contentResolver.openOutputStream(newUri!!)!!.use { stream ->
             stream.write("hello world".toByteArray())
             stream.flush()
         }
 
-        withSession {
-            findRepository("foo").apply {
-                openFile("bar.txt").apply {
-                    val length = getLength()
-                    val content = read(0, length).decodeToString()
-
-                    assertEquals("hello world", content)
-                }
-            }
+        contentResolver.openInputStream(newUri)!!.use { stream ->
+            val content = readAllBytes(stream).decodeToString()
+            assertEquals("hello world", content)
         }
     }
 
@@ -483,21 +480,17 @@ class OuisyncProviderTest {
                 "hello.txt",
             )
 
-        contentResolver.openInputStream(srcUri).use { srcStream ->
-            contentResolver.openOutputStream(dstUri!!, "w").use { dstStream ->
-                srcStream!!.transferTo(dstStream!!)
+        contentResolver.openInputStream(srcUri)!!.use { srcStream ->
+            contentResolver.openOutputStream(dstUri!!, "w")!!.use { dstStream ->
+                transferTo(srcStream, dstStream)
+                dstStream.flush()
             }
         }
 
-        withSession {
-            findRepository("foo").apply {
-                val src = openFile("a/hello.txt")
-                val srcLength = src.getLength()
-                val srcContent = src.read(0, srcLength).decodeToString()
-
-                val dst = openFile("b/hello.txt")
-                val dstLength = dst.getLength()
-                val dstContent = dst.read(0, dstLength).decodeToString()
+        contentResolver.openInputStream(srcUri)!!.use { srcStream ->
+            contentResolver.openInputStream(dstUri!!)!!.use { dstStream ->
+                val srcContent = readAllBytes(srcStream).decodeToString()
+                val dstContent = readAllBytes(dstStream).decodeToString()
 
                 assertEquals(srcContent, dstContent)
             }
@@ -659,7 +652,7 @@ class OuisyncProviderTest {
                             override fun onChange(selfChange: Boolean) {
                                 try {
                                     contentResolver.openInputStream(fileUri)?.use { stream ->
-                                        val content = stream.readAllBytes().decodeToString()
+                                        val content = readAllBytes(stream).decodeToString()
                                         if (content == fileContent) {
                                             latch.countDown()
                                         } else {
@@ -812,3 +805,22 @@ private class RemotePeer(private val tempDir: File, val server: Server, val sess
         tempDir.deleteRecursively()
     }
 }
+
+// Shim for InputStream#transferTo
+private fun transferTo(src: InputStream, dst: OutputStream): Long {
+    val buffer = ByteArray(1024)
+    var total = 0L
+
+    while (true) {
+        val n = src.read(buffer, 0, buffer.size)
+        if (n <= 0) break
+
+        dst.write(buffer, 0, n)
+        total += n
+    }
+
+    return total
+}
+
+// Shim for InputStream#readAllBytes
+private fun readAllBytes(src: InputStream): ByteArray = ByteArrayOutputStream().also { transferTo(src, it) }.toByteArray()
