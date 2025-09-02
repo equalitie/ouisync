@@ -15,7 +15,7 @@ buildscript {
 }
 
 plugins {
-    id "com.diffplug.spotless" version "7.0.3"
+    id "com.diffplug.spotless" version '7.2.1'
     id "io.github.gradle-nexus.publish-plugin" version "2.0.0"
     id "maven-publish"
     id "org.jetbrains.dokka" version '2.0.0'
@@ -50,7 +50,7 @@ spotless {
         target("**/*.kt")
         targetExclude("**/build/**/*.kt")
 
-        ktfmt()
+        ktfmt("0.58")
         ktlint()
             .editorConfigOverride(
                 ["ktlint_function_naming_ignore_when_annotated_with": "Composable"]

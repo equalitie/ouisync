@@ -178,18 +178,31 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
 
     match &item.fields {
         Fields::Named(fields) => {
-            writeln!(out, "data class {name}(")?;
+            if fields.len() == 1 {
+                // TODO: Should we do this only for `repr(transparent)` / `serde(transparent)`
+                // structs?
+                let (field_name, field) = &fields[0];
 
-            for (field_name, field) in fields {
-                writeln!(
+                writeln!(out, "@JvmInline")?;
+                write!(
                     out,
-                    "{I}val {}: {},",
-                    AsLowerCamelCase(field_name),
+                    "value class {name}(val {field_name}: {})",
                     KotlinType(&field.ty)
                 )?;
-            }
+            } else {
+                writeln!(out, "data class {name}(")?;
 
-            write!(out, ")")?;
+                for (field_name, field) in fields {
+                    writeln!(
+                        out,
+                        "{I}val {}: {},",
+                        AsLowerCamelCase(field_name),
+                        KotlinType(&field.ty)
+                    )?;
+                }
+
+                write!(out, ")")?;
+            }
         }
         Fields::Unnamed(field) => {
             writeln!(out, "@JvmInline")?;

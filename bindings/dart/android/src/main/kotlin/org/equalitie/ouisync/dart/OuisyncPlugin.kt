@@ -28,12 +28,12 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import org.equalitie.ouisync.kotlin.android.OuisyncService
+import org.equalitie.ouisync.kotlin.android.setConfigPath
 import org.equalitie.ouisync.kotlin.client.LogLevel
 import org.equalitie.ouisync.kotlin.server.initLog
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
-
-internal const val TAG = "ouisync"
 
 class OuisyncPlugin :
     FlutterPlugin,
@@ -58,7 +58,7 @@ class OuisyncPlugin :
                         else -> false
                     }
 
-                Log.d(TAG, "OuisyncPlugin.activityLifecycleObserver.onDestroy(finishing = $finishing)")
+                Log.d(TAG, "activityLifecycleObserver.onDestroy(finishing = $finishing)")
 
                 if (finishing) {
                     this@OuisyncPlugin.onStop()
@@ -67,6 +67,7 @@ class OuisyncPlugin :
         }
 
     companion object {
+        private val TAG = OuisyncPlugin::class.simpleName
         private const val CHANNEL_NAME = "org.equalitie.ouisync.plugin"
     }
 

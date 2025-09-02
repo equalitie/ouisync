@@ -71,12 +71,12 @@ impl JointDirectory {
     /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
     /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
     /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
-    pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
+    pub fn entries(&self) -> impl Iterator<Item = JointEntryRef<'_>> {
         self.merge_entries()
             .flat_map(|(_, merge)| merge.ignore_tombstones())
     }
 
-    fn merge_entries(&self) -> impl Iterator<Item = (&str, Merge)> {
+    fn merge_entries(&self) -> impl Iterator<Item = (&str, Merge<'_>)> {
         let entries = self.versions.values().map(|directory| directory.entries());
         let entries = SortedUnion::new(entries, |entry| entry.name());
         let entries = Accumulate::new(entries, |entry| entry.name());
@@ -142,7 +142,11 @@ impl JointDirectory {
 
     /// Looks up a specific version of a file.
     #[instrument(skip(self), err(Debug))]
-    pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ PublicKey) -> Result<FileRef> {
+    pub fn lookup_version<'a>(
+        &'a self,
+        name: &'a str,
+        branch_id: &'a PublicKey,
+    ) -> Result<FileRef<'a>> {
         self.versions
             .get(branch_id)
             .ok_or(Error::EntryNotFound)
@@ -587,7 +591,7 @@ impl<'a> JointDirectoryRef<'a> {
         Ok(JointDirectory::new(self.local_branch.cloned(), versions))
     }
 
-    pub(crate) fn versions(&self) -> &[DirectoryRef] {
+    pub(crate) fn versions(&self) -> &[DirectoryRef<'_>] {
         &self.versions
     }
 

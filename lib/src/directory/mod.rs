@@ -110,7 +110,7 @@ impl Directory {
     }
 
     /// Lookup an entry of this directory by name.
-    pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
+    pub fn lookup<'a>(&'a self, name: &'a str) -> Result<EntryRef<'a>> {
         self.content
             .get_key_value(name)
             .map(|(name, data)| EntryRef::new(self, name, data))
@@ -118,7 +118,7 @@ impl Directory {
     }
 
     /// Returns iterator over the entries of this directory.
-    pub fn entries(&self) -> impl DoubleEndedIterator<Item = EntryRef> + Clone {
+    pub fn entries(&self) -> impl DoubleEndedIterator<Item = EntryRef<'_>> + Clone {
         self.content
             .iter()
             .map(move |(name, data)| EntryRef::new(self, name, data))

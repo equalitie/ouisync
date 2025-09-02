@@ -1,4 +1,6 @@
-package org.equalitie.ouisync.dart
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
+package org.equalitie.ouisync.kotlin.android
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -27,11 +29,10 @@ import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.kotlin.server.Server
 import kotlin.collections.firstOrNull
 
-class OuisyncService : Service() {
-    private val exceptionHandler =
-        CoroutineExceptionHandler { _, e ->
-            Log.e(TAG, "uncaught exception in OuisyncService", e)
-        }
+open class OuisyncService : Service() {
+    private val exceptionHandler = CoroutineExceptionHandler { _, e ->
+        Log.e(TAG, "uncaught exception in OuisyncService", e)
+    }
     private val scope = CoroutineScope(Dispatchers.Main + exceptionHandler)
 
     private val server: Deferred<Server> = scope.async { Server.start(getConfigPath()) }
@@ -44,29 +45,45 @@ class OuisyncService : Service() {
                 context: Context,
                 intent: Intent,
             ) {
-                Log.d(TAG, "OuisyncService.receiver.onReceive(${intent.action})")
+                Log.v(TAG, "receiver.onReceive(action = ${intent.action})")
 
-                scope.launch {
-                    stopServer()
-                    stopSelf()
+                when (intent.action) {
+                    ACTION_STOP -> {
+                        runBlocking { stopServer() }
+
+                        stopSelf()
+
+                        if (isOrderedBroadcast()) {
+                            setResultCode(1)
+                        }
+                    }
+                    ACTION_STATUS -> {
+                        if (server.isCompleted && !server.isCancelled && isOrderedBroadcast()) {
+                            setResultCode(1)
+                        }
+                    }
+                    else -> {}
                 }
             }
         }
 
     override fun onCreate() {
-        Log.d(TAG, "OuisyncService.onCreate")
+        Log.v(TAG, "onCreate")
 
         super.onCreate()
 
         registerReceiver(
             receiver,
-            IntentFilter(ACTION_STOP),
+            IntentFilter().apply {
+                addAction(ACTION_STATUS)
+                addAction(ACTION_STOP)
+            },
             RECEIVER_NOT_EXPORTED,
         )
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "OuisyncService.onDestroy")
+        Log.v(TAG, "onDestroy")
 
         super.onDestroy()
 
@@ -79,7 +96,7 @@ class OuisyncService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
-        Log.d(TAG, "OuisyncService.onStartCommand($intent, $flags, $startId)")
+        Log.v(TAG, "onStartCommand($intent, $flags, $startId)")
 
         val notificationChannelName = intent?.getStringExtra(EXTRA_NOTIFICATION_CHANNEL_NAME)
         val notificationContentTitle = intent?.getStringExtra(EXTRA_NOTIFICATION_CONTENT_TITLE)
@@ -106,14 +123,15 @@ class OuisyncService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTimeout(startId: Int, fgsType: Int) {
-        Log.d(TAG, "OuisyncService.onTimeout($startId, $fgsType)")
-        stopForeground(0)
+        Log.v(TAG, "onTimeout($startId, $fgsType)")
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     private suspend fun stopServer() {
         server.cancel()
+        server.join()
 
-        if (server.isCompleted && !server.isCancelled) {
+        if (!server.isCancelled) {
             server.getCompleted().stop()
         }
     }
@@ -130,7 +148,8 @@ class OuisyncService : Service() {
                 NOTIFICATION_CHANNEL_ID,
                 channelName ?: DEFAULT_NOTIFICATION_CHANNEL_NAME,
                 NotificationManager.IMPORTANCE_LOW,
-            ).also { channel -> manager.createNotificationChannel(channel) }
+            )
+                .also { channel -> manager.createNotificationChannel(channel) }
         }
 
         val notification = createNotification(contentTitle, contentText)
@@ -155,27 +174,25 @@ class OuisyncService : Service() {
     protected open fun createNotification(
         contentTitle: String? = null,
         contentText: String? = null,
-    ): Notification =
-        Notification
-            .Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ouisync_notification_icon)
-            .setOngoing(true)
-            .setPriority(Notification.PRIORITY_LOW)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .apply {
-                if (contentTitle != null) {
-                    setContentTitle(contentTitle)
-                }
+    ): Notification = Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+        .setSmallIcon(R.mipmap.ouisync_notification_icon)
+        .setOngoing(true)
+        .setCategory(Notification.CATEGORY_SERVICE)
+        .apply {
+            if (contentTitle != null) {
+                setContentTitle(contentTitle)
+            }
 
-                if (contentText != null) {
-                    setContentText(contentText)
-                }
+            if (contentText != null) {
+                setContentText(contentText)
+            }
 
-                val intent = createContentIntent()
-                if (intent != null) {
-                    setContentIntent(intent)
-                }
-            }.build()
+            val intent = createContentIntent()
+            if (intent != null) {
+                setContentIntent(intent)
+            }
+        }
+        .build()
 
     private fun createContentIntent(): PendingIntent? {
         val activityClass = getMainActivityClass()
@@ -204,28 +221,37 @@ class OuisyncService : Service() {
     // only one launchable activity in the app. If that's not the case, it arbitrarily returns one
     // such activity which might not be what you want. In such cases it's recommented to override
     // this method.
-    protected open fun getMainActivityClass(): Class<*>? =
-        applicationContext.let { context ->
-            val activities =
+    protected open fun getMainActivityClass(): Class<*>? = applicationContext.let { context ->
+        val activities =
+            context.packageManager
+                .getPackageInfo(context.packageName, PackageManager.GET_ACTIVITIES)
+                .activities ?: emptyArray()
+
+        activities
+            .asSequence()
+            .map { info -> Class.forName(info.name) }
+            .filter { klass ->
+                val intent = Intent(context, klass).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+
                 context.packageManager
-                    .getPackageInfo(context.packageName, PackageManager.GET_ACTIVITIES)
-                    .activities ?: emptyArray()
-
-            activities
-                .asSequence()
-                .map { info -> Class.forName(info.name) }
-                .filter { klass ->
-                    val intent = Intent(context, klass).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
-
-                    context.packageManager
-                        .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
-                        .isNotEmpty()
-                }.firstOrNull()
-        }
+                    .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                    .isNotEmpty()
+            }
+            .firstOrNull()
+    }
 
     companion object {
-        const val ACTION_STOP = "org.equalitie.ouisync.service.action.stop"
+        private val TAG = OuisyncService::class.simpleName
+
+        // Sent by the service to signal it's been started
         const val ACTION_STARTED = "org.equalitie.ouisync.service.action.started"
+
+        // Sent to the service to check whether it's been started. It so, it sets the result code to
+        // 1.
+        const val ACTION_STATUS = "org.equalitie.ouisync.service.action.status"
+
+        // Sent to the service to stop itself
+        const val ACTION_STOP = "org.equalitie.ouisync.service.action.stop"
 
         const val EXTRA_NOTIFICATION_CHANNEL_NAME =
             "org.equalitie.ouisync.service.extra.notification.channel.name"

@@ -21,10 +21,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.UseSerializers
 import kotlinx.serialization.json.Json
+import java.io.EOFException
 import java.io.File
 import java.net.ConnectException
 import java.net.InetAddress
@@ -79,8 +81,11 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 }
 
                 try {
-                    val socket = AsynchronousSocket.connect(addr)
-                    authenticate(socket, authKey)
+                    val socket =
+                        withContext(Dispatchers.IO) {
+                            AsynchronousSocket.connect(addr).also { socket -> authenticate(socket, authKey) }
+                        }
+
                     return Client(socket)
                 } catch (e: ConnectException) {
                     error = e
@@ -94,7 +99,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
     }
 
     private val messageMatcher = MessageMatcher()
-    private val coroutineScope = CoroutineScope(Dispatchers.Default)
+    private val coroutineScope = CoroutineScope(Dispatchers.IO)
 
     init {
         coroutineScope.launch { receive() }
@@ -138,6 +143,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
     suspend fun close() {
         coroutineScope.cancel()
         socket.close()
+        messageMatcher.close()
     }
 
     private suspend fun send(id: Long, request: Request) {
@@ -156,7 +162,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         buffer.put(payload)
         buffer.flip()
 
-        socket.writeAll(buffer)
+        withContext(Dispatchers.IO) { socket.writeAll(buffer) }
     }
 
     private suspend fun receive() {
@@ -170,7 +176,6 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             buffer.flip()
 
             if (buffer.remaining() < HEADER_SIZE) {
-                messageMatcher.cancel()
                 break
             }
 
@@ -186,6 +191,10 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             buffer.rewind()
             socket.readExact(buffer)
             buffer.flip()
+
+            if (buffer.remaining() < size) {
+                break
+            }
 
             val completer = messageMatcher.completer(id)
 
@@ -206,6 +215,8 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 )
             }
         }
+
+        messageMatcher.close()
     }
 }
 
@@ -225,17 +236,26 @@ private class MessageMatcher {
     private var nextId: Long = 0
     private val oneshots: HashMap<Long, CompletableDeferred<ResponseResult>> = HashMap()
     private val channels: HashMap<Long, SendChannel<ResponseResult>> = HashMap()
+    private var closed = false
 
     @Synchronized fun nextId(): Long = nextId++
 
     @Synchronized
     fun register(id: Long, deferred: CompletableDeferred<ResponseResult>) {
-        oneshots.put(id, deferred)
+        if (!closed) {
+            oneshots.put(id, deferred)
+        } else {
+            deferred.completeExceptionally(EOFException())
+        }
     }
 
     @Synchronized
     fun register(id: Long, channel: SendChannel<ResponseResult>) {
-        channels.put(id, channel)
+        if (!closed) {
+            channels.put(id, channel)
+        } else {
+            channel.close(EOFException())
+        }
     }
 
     // This deregisters only channels because deferreds are unregistered automatically on
@@ -261,14 +281,16 @@ private class MessageMatcher {
     }
 
     @Synchronized
-    fun cancel() {
+    fun close() {
+        closed = true
+
         for (deferred in oneshots.values) {
-            deferred.cancel()
+            deferred.completeExceptionally(EOFException())
         }
         oneshots.clear()
 
         for (channel in channels.values) {
-            channel.close()
+            channel.close(EOFException())
         }
         channels.clear()
     }
@@ -359,7 +381,7 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
         while (buffer.hasRemaining()) {
             val n = read(buffer)
 
-            if (n == 0) {
+            if (n <= 0) {
                 break
             } else {
                 total += n

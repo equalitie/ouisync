@@ -51,7 +51,7 @@ impl Content {
         output
     }
 
-    pub fn iter(&self) -> btree_map::Iter<String, EntryData> {
+    pub fn iter(&self) -> btree_map::Iter<'_, String, EntryData> {
         self.entries.iter()
     }
 
