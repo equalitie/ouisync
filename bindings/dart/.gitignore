@@ -17,3 +17,5 @@ pubspec.lock
 .DS_Store
 
 lib/generated
+
+doc/api
