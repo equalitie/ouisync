@@ -12,7 +12,9 @@ package to be used in android apps.
 Include ouisync with Gradle by adding the following to your `build.gradle` file:
 
 ```groovy
-implementation 'ie.equalit.ouinet:ouisync-omni:$ouisyncVersion'
+implementation 'ie.equalit.ouinet:ie.equalit.ouinet:ouisync-server:$ouisyncVersion'
+implementation 'ie.equalit.ouinet:ie.equalit.ouinet:ouisync-client:$ouisyncVersion'
+implementation 'ie.equalit.ouinet:ie.equalit.ouinet:ouisync-android:$ouisyncVersion'
 ```
 
 ## Documentation

@@ -1,43 +1,20 @@
-buildscript {
-    ext {
-        kotlin_version = '2.1.20'
-    }
-
-    repositories {
-        google()
-        mavenCentral()
-    }
-
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.10.0'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-    }
-}
-
 plugins {
-    id "com.diffplug.spotless" version '7.2.1'
-    id "io.github.gradle-nexus.publish-plugin" version "2.0.0"
-    id "maven-publish"
-    id "org.jetbrains.dokka" version '2.0.0'
-    id "signing"
+    // Note that the Kotlin Gradle Plugin and the Android Gradle Plugin are specified as
+    // dependencies in `buildSrc/build.gradle` instead of here as otherwise it was causing
+    // obscure errors during builds, for some reason.
+
+    id 'com.diffplug.spotless' version '7.2.1'
+    id 'io.github.gradle-nexus.publish-plugin' version '2.0.0'
+    id 'maven-publish'
+    id 'signing'
+
+    id 'dokka-conventions'
 }
 
 dependencies {
+    dokka project(':ouisync-android')
     dokka project(':ouisync-client')
     dokka project(':ouisync-server')
-}
-
-allprojects {
-    repositories {
-        // maven {
-        //     // Sonatype staging repo. Note this url changes on every publish.
-        //     url "https://s01.oss.sonatype.org/service/local/repositories/ieequalitouinet-1287/content/"
-        // }
-        // mavenLocal()
-
-        google()
-        mavenCentral()
-    }
 }
 
 subprojects {
@@ -60,16 +37,6 @@ spotless {
 }
 
 dokka {
-    pluginsConfiguration.html {
-        customStyleSheets.from("${rootDir}/docs/logo-styles.css")
-        customAssets.from("${rootDir}/docs/logo-icon.png")
-        footerMessage.set("""
-            Copyright (c) 2024 <a href="https://equalit.ie">eQualitie</a> |
-            <a href="https://ouisync.net">Ouisync website</a> |
-            <a href="https://github.com/equalitie/ouisync">Ouisync git repository</a>
-            """.stripIndent())
-    }
-
     dokkaPublications.html {
         includes.from(project.layout.projectDirectory.file('README.md'))
     }
