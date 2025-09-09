@@ -54,6 +54,9 @@ jobs:
       - name: Install NDK
         run: $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.2.12479018"
 
+      - name: Install dart
+        uses: dart-lang/setup-dart@v1
+
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5
@@ -67,7 +70,9 @@ jobs:
 
       - name: Build docs for the dart bindings
         working-directory: bindings/dart
-        run: dart doc
+        run: |
+          dart run tool/bindgen.dart
+          dart doc
 
       - name: Prepare the files
         run: |
