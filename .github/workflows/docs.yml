@@ -54,8 +54,11 @@ jobs:
       - name: Install NDK
         run: $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.2.12479018"
 
-      - name: Install dart
-        uses: dart-lang/setup-dart@v1
+      - name: Install flutter
+        uses: subosito/flutter-action@v2
+        with:
+            channel: 'stable'
+            cache: true
 
       - name: Setup Pages
         id: pages
@@ -72,7 +75,7 @@ jobs:
         working-directory: bindings/dart
         run: |
           dart run tool/bindgen.dart
-          dart doc
+          dart doc --verbose
 
       - name: Prepare the files
         run: |
