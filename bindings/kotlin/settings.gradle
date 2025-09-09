@@ -1,3 +1,16 @@
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        // maven {
+        //     // Sonatype staging repo. Note this url changes on every publish.
+        //     url "https://s01.oss.sonatype.org/service/local/repositories/ieequalitouinet-1287/content/"
+        // }
+        // mavenLocal()
+        mavenCentral()
+        google()
+    }
+}
+
 rootProject.name = 'ouisync'
 
 include 'ouisync-client'

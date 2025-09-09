@@ -65,11 +65,16 @@ jobs:
         working-directory: bindings/kotlin
         run: ./gradlew dokkaGenerate
 
+      - name: Build docs for the dart bindings
+        working-directory: bindings/dart
+        run: dart doc
+
       - name: Prepare the files
         run: |
           mkdir -p _site
           cp -r target/doc _site/rust
           cp -r bindings/kotlin/build/dokka/html _site/kotlin
+          cp -r bindings/dart/doc/api _site/dart
           cp doc/index.html _site/
 
       - name: Upload artifact

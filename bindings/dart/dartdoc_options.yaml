@@ -1,0 +1,4 @@
+dartdoc:
+  exclude:
+    - "api.g"
+  favicon: "../../doc/favicon-32x32.png"

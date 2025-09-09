@@ -1,8 +1,9 @@
 plugins {
     id 'org.jetbrains.kotlin.jvm'
     id 'java-library'
-    id 'org.jetbrains.dokka'
     id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.21'
+
+    id 'dokka-conventions'
 }
 
 version = rootProject.version
@@ -123,8 +124,9 @@ afterEvaluate {
 }
 
 dokka {
-    dokkaSourceSets.main {
+    dokkaSourceSets.configureEach {
         sourceRoots.from(project.layout.buildDirectory.file('gen/Api.kt'))
+        includes.from("Module.md")
     }
 }
 
