@@ -89,6 +89,19 @@ publishing {
     }
 }
 
+signing {
+    // Only sign when publishing to sonatype, not local
+    required {
+        gradle.taskGraph.hasTask("publishSessionPublicationToSonatypeRepository")
+    }
+
+    if (signingKey) {
+        useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    }
+
+    sign publishing.publications
+}
+
 tasks.register('generateApi', Exec) {
     description = 'Generate the API classes'
     group = 'Build'
