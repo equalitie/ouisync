@@ -33,11 +33,12 @@ kotlin {
 
         test {
             kotlin {
-                // HACK: The tests depend on the `:server` project but we can't add it as a regular
-                // test dependency because it's an android library and `:client` is a regular jvm
-                // library. There is probably a way to build `:server` as both, but adding the
-                // `:server`'s sources directly like this is simpler and good enough for now.
-                srcDir '../server/src/main'
+                // HACK: The tests depend on the `:ouisync-service` project but we can't add it as a
+                // regular test dependency because it's an android library and `:ouisync-session`
+                // is a regular jvm library. There is probably a way to build `:ouisync-service` as
+                // both, but adding the `:ouisync-service`'s sources directly like this is simpler
+                // and good enough for now.
+                srcDir '../ouisync-service/src/main'
             }
         }
     }
@@ -54,7 +55,7 @@ test {
 
 publishing {
     publications {
-        client(MavenPublication) {
+        session(MavenPublication) {
             def packageName = project.name
 
             from components.java

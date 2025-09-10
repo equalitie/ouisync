@@ -14,9 +14,7 @@ dependencyResolutionManagement {
 rootProject.name = 'ouisync'
 
 include 'ouisync-session'
-
-include 'ouisync-server'
-project(':ouisync-server').projectDir = new File(settingsDir, 'server')
+include 'ouisync-service'
 
 include 'ouisync-android'
 project(':ouisync-android').projectDir = new File(settingsDir, 'android')

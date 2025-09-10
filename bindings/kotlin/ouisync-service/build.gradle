@@ -17,7 +17,7 @@ version = rootProject.version
 group   = rootProject.group
 
 android {
-    namespace = 'org.equalitie.ouisync.kotlin.server'
+    namespace = 'org.equalitie.ouisync.service'
 
     compileSdk = 35
     ndkVersion = '27.2.12479018'
@@ -126,7 +126,7 @@ afterEvaluate {
                 def variant = it.name
                 def packageNameSuffix = variant == 'release' ? '' : "-${variant}"
 
-                create("${variant}Server", MavenPublication) {
+                create("${variant}Service", MavenPublication) {
                     def packageName = "${project.name}${packageNameSuffix}"
 
                     from components.getByName(variant)
@@ -165,7 +165,7 @@ afterEvaluate {
 signing {
     // Only sign when publishing to sonatype, not local
     required = {
-        gradle.taskGraph.hasTask("server:publishToSonatype")
+        gradle.taskGraph.hasTask("publishToSonatype")
     }
 
     if (signingKey) {

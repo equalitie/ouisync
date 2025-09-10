@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.kotlin.server
+package org.equalitie.ouisync.service
 
 import com.sun.jna.Pointer
 import kotlinx.coroutines.suspendCancellableCoroutine

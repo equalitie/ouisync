@@ -2,8 +2,8 @@ package org.equalitie.ouisync.session
 
 import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.test.runTest
-import org.equalitie.ouisync.kotlin.server.Server
-import org.equalitie.ouisync.kotlin.server.initLog
+import org.equalitie.ouisync.service.Server
+import org.equalitie.ouisync.service.initLog
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals

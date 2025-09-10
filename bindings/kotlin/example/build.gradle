@@ -55,9 +55,9 @@ dependencies {
 
     if (useLocalLib) {
         implementation project(':ouisync-session')
-        implementation project(':ouisync-server')
+        implementation project(':ouisync-service')
     } else {
         implementation 'ie.equalit.ouinet:ouisync-session:+'
-        implementation 'ie.equalit.ouinet:ouisync-server-omni:+'
+        implementation 'ie.equalit.ouinet:ouisync-service:+'
     }
 }

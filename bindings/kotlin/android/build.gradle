@@ -39,8 +39,8 @@ android {
 dependencies {
     def kotlinx_coroutines_version = '1.10.2'
 
+    implementation project(':ouisync-service')
     implementation project(':ouisync-session')
-    implementation project(':ouisync-server')
 
     // HACK: Using `implementation` here fails compilation in the downstream packages for some
     // reason even though the datastore API is only used internally by this project. Using `api`
@@ -102,7 +102,7 @@ afterEvaluate {
 signing {
     // Only sign when publishing to sonatype, not local
     required = {
-        gradle.taskGraph.hasTask("server:publishToSonatype")
+        gradle.taskGraph.hasTask("publishToSonatype")
     }
 
     if (signingKey) {

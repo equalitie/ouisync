@@ -8,8 +8,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.equalitie.ouisync.kotlin.server.Server
-import org.equalitie.ouisync.kotlin.server.initLog
+import org.equalitie.ouisync.service.Server
+import org.equalitie.ouisync.service.initLog
 import org.equalitie.ouisync.session.OuisyncException
 import org.equalitie.ouisync.session.Repository
 import org.equalitie.ouisync.session.Session

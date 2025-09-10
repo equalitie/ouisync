@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import org.equalitie.ouisync.kotlin.server.Server
+import org.equalitie.ouisync.service.Server
 import kotlin.collections.firstOrNull
 
 open class OuisyncService : Service() {

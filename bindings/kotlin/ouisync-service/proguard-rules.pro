@@ -5,5 +5,5 @@
 
 # These additional rules seem to be necessary to prevent runtime exceptions
 -dontwarn sun.nio.ch.DirectBuffer
--keep class org.equalitie.ouisync.kotlin.server.Bindings { *; }
+-keep class org.equalitie.ouisync.service.Bindings { *; }
 -keep class org.msgpack.core.buffer.MessageBufferU { *; }
