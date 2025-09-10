@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
-import org.equalitie.ouisync.service.Server
+import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -16,10 +16,10 @@ import java.io.File as JFile
 class SyncTest {
     lateinit var tempDir: JFile
 
-    lateinit var serverA: Server
+    lateinit var serviceA: Service
     lateinit var sessionA: Session
 
-    lateinit var serverB: Server
+    lateinit var serviceB: Service
     lateinit var sessionB: Session
 
     @BeforeEach
@@ -29,21 +29,21 @@ class SyncTest {
         tempDir = JFile(createTempDirectory().toString())
 
         val configDirA = "$tempDir/a/config"
-        serverA = Server.start(configDirA, "A")
+        serviceA = Service.start(configDirA, "A")
         sessionA = Session.create(configDirA)
 
         val configDirB = "$tempDir/b/config"
-        serverB = Server.start(configDirB, "B")
+        serviceB = Service.start(configDirB, "B")
         sessionB = Session.create(configDirB)
     }
 
     @AfterEach
     fun teardown() = runTest {
         sessionA.close()
-        serverA.stop()
+        serviceA.stop()
 
         sessionB.close()
-        serverB.stop()
+        serviceB.stop()
 
         tempDir.deleteRecursively()
     }

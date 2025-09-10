@@ -1,7 +1,7 @@
 package org.equalitie.ouisync.session
 
 import kotlinx.coroutines.test.runTest
-import org.equalitie.ouisync.service.Server
+import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -17,7 +17,7 @@ import java.io.File as JFile
 class RepositoryTest {
     lateinit var tempDir: JFile
     lateinit var session: Session
-    lateinit var server: Server
+    lateinit var service: Service
 
     @BeforeEach
     fun setup() = runTest {
@@ -26,7 +26,7 @@ class RepositoryTest {
         tempDir = JFile(createTempDirectory().toString())
         val configDir = "$tempDir/config"
 
-        server = Server.start(configDir)
+        service = Service.start(configDir)
 
         session = Session.create(configDir)
         session.setStoreDir("$tempDir/store")
@@ -35,7 +35,7 @@ class RepositoryTest {
     @AfterEach
     fun teardown() = runTest {
         session.close()
-        server.stop()
+        service.stop()
         tempDir.deleteRecursively()
     }
 

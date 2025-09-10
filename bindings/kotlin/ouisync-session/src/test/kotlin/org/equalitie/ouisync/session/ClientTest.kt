@@ -1,7 +1,7 @@
 package org.equalitie.ouisync.session
 
 import kotlinx.coroutines.test.runTest
-import org.equalitie.ouisync.service.Server
+import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -29,13 +29,13 @@ class ClientTest {
     @Test
     fun disconnect() = runTest {
         val configDir = "$tempDir/config"
-        val server = Server.start(configDir)
+        val service = Service.start(configDir)
         val client = Client.connect(configDir)
 
         val response = client.invoke(Request.SessionGetStoreDir)
         assertEquals(Response.None, response)
 
-        server.stop()
+        service.stop()
 
         try {
             client.invoke(Request.SessionGetStoreDir)

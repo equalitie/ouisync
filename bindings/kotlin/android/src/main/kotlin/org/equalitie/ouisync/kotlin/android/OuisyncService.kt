@@ -6,7 +6,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -26,16 +25,16 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import org.equalitie.ouisync.service.Server
+import org.equalitie.ouisync.service.Service
 import kotlin.collections.firstOrNull
 
-open class OuisyncService : Service() {
+open class OuisyncService : android.app.Service() {
     private val exceptionHandler = CoroutineExceptionHandler { _, e ->
         Log.e(TAG, "uncaught exception in OuisyncService", e)
     }
     private val scope = CoroutineScope(Dispatchers.Main + exceptionHandler)
 
-    private val server: Deferred<Server> = scope.async { Server.start(getConfigPath()) }
+    private val inner: Deferred<Service> = scope.async { Service.start(getConfigPath()) }
 
     private var isForeground = false
 
@@ -49,7 +48,7 @@ open class OuisyncService : Service() {
 
                 when (intent.action) {
                     ACTION_STOP -> {
-                        runBlocking { stopServer() }
+                        runBlocking { stopInner() }
 
                         stopSelf()
 
@@ -58,7 +57,7 @@ open class OuisyncService : Service() {
                         }
                     }
                     ACTION_STATUS -> {
-                        if (server.isCompleted && !server.isCancelled && isOrderedBroadcast()) {
+                        if (inner.isCompleted && !inner.isCancelled && isOrderedBroadcast()) {
                             setResultCode(1)
                         }
                     }
@@ -88,7 +87,7 @@ open class OuisyncService : Service() {
         super.onDestroy()
 
         unregisterReceiver(receiver)
-        runBlocking(exceptionHandler) { stopServer() }
+        runBlocking(exceptionHandler) { stopInner() }
     }
 
     override fun onStartCommand(
@@ -111,7 +110,7 @@ open class OuisyncService : Service() {
         }
 
         scope.launch {
-            server.await()
+            inner.await()
 
             // TODO: consider broadcasting failures as well
             sendBroadcast(Intent(OuisyncService.ACTION_STARTED).setPackage(getPackageName()))
@@ -127,12 +126,12 @@ open class OuisyncService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
-    private suspend fun stopServer() {
-        server.cancel()
-        server.join()
+    private suspend fun stopInner() {
+        inner.cancel()
+        inner.join()
 
-        if (!server.isCancelled) {
-            server.getCompleted().stop()
+        if (!inner.isCancelled) {
+            inner.getCompleted().stop()
         }
     }
 

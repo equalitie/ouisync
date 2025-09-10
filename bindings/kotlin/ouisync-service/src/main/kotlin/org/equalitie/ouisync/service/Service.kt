@@ -11,12 +11,16 @@ import kotlin.coroutines.suspendCoroutine
 
 private val bindings = Bindings.INSTANCE
 
-class Server private constructor(private var handle: Pointer?) {
+/**
+ * Service manages the repositories and runs the sync protocol. It can be interacted with using
+ * [Session].
+ */
+class Service private constructor(private var handle: Pointer?) {
     companion object {
         suspend fun start(
             configPath: String,
             debugLabel: String? = null,
-        ): Server {
+        ): Service {
             var handle: Pointer? = null
 
             suspendCancellableCoroutine<Unit> { cont ->
@@ -31,7 +35,7 @@ class Server private constructor(private var handle: Pointer?) {
                 cont.invokeOnCancellation { bindings.stop_service(handle, NoopHandler, null) }
             }
 
-            return Server(handle)
+            return Service(handle)
         }
     }
 

@@ -8,7 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.equalitie.ouisync.service.Server
+import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
 import org.equalitie.ouisync.session.OuisyncException
 import org.equalitie.ouisync.session.Repository
@@ -23,7 +23,7 @@ class ExampleViewModel(
     private val configDir: String,
     private val storeDir: String,
 ) : ViewModel() {
-    private var server: Server? = null
+    private var service: Service? = null
     private var session: Session? = null
 
     var sessionError by mutableStateOf<String?>(null)
@@ -37,15 +37,15 @@ class ExampleViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                server = Server.start(configDir)
+                service = Service.start(configDir)
             } catch (e: OuisyncException.ServiceAlreadyRunning) {
-                Log.d(TAG, "Server already running")
+                Log.d(TAG, "Service already running")
             } catch (e: Exception) {
-                Log.e(TAG, "Server.start failed", e)
+                Log.e(TAG, "Service.start failed", e)
                 sessionError = e.toString()
             }
 
-            if (server != null) {
+            if (service != null) {
                 try {
                     session = Session.create(configDir)
                     session?.setStoreDir(storeDir)

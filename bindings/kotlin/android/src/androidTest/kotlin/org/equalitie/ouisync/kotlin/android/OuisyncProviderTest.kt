@@ -13,13 +13,13 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
+import org.equalitie.ouisync.service.Server
+import org.equalitie.ouisync.service.initLog
 import org.equalitie.ouisync.session.AccessMode
 import org.equalitie.ouisync.session.EntryType
 import org.equalitie.ouisync.session.Session
 import org.equalitie.ouisync.session.close
 import org.equalitie.ouisync.session.create
-import org.equalitie.ouisync.service.Server
-import org.equalitie.ouisync.service.initLog
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
