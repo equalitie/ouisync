@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.kotlin.android
+package org.equalitie.ouisync.android
 
 // Structured identifier of a document in OuisyncProvider. Can represent either the list of
 // repositories, a single repository or a path to a file or directory in a repository.

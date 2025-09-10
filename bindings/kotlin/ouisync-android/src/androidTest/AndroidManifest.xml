@@ -5,7 +5,7 @@ xmlns:tools="http://schemas.android.com/tools">
 
     <application>
         <provider
-            android:name="org.equalitie.ouisync.kotlin.android.OuisyncProvider"
+            android:name="org.equalitie.ouisync.android.OuisyncProvider"
             android:authorities="${applicationId}.provider"
             android:exported="true"
             android:grantUriPermissions="true"
@@ -16,7 +16,7 @@ xmlns:tools="http://schemas.android.com/tools">
         </provider>
 
         <service
-            android:name="org.equalitie.ouisync.kotlin.android.OuisyncService"
+            android:name="org.equalitie.ouisync.android.OuisyncService"
             android:foregroundServiceType="dataSync"
             android:exported="false">
         </service>

@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.kotlin.android
+package org.equalitie.ouisync.android
 
 import android.content.BroadcastReceiver
 import android.content.ContentResolver
@@ -13,7 +13,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
-import org.equalitie.ouisync.service.Server
+import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
 import org.equalitie.ouisync.session.AccessMode
 import org.equalitie.ouisync.session.EntryType
@@ -39,7 +39,7 @@ import kotlin.random.Random
 class OuisyncProviderTest {
     companion object {
         private val TAG = OuisyncProviderTest::class.simpleName
-        private const val AUTHORITY = "org.equalitie.ouisync.kotlin.android.test.provider"
+        private const val AUTHORITY = "org.equalitie.ouisync.android.test.provider"
     }
 
     private lateinit var context: Context
@@ -783,25 +783,25 @@ private fun Cursor.getString(columnName: String): String = getString(getColumnIn
 private fun Cursor.getInt(columnName: String): Int = getInt(getColumnIndexOrThrow(columnName))
 
 // Simulated remote Ouisync instance
-private class RemotePeer(private val tempDir: File, val server: Server, val session: Session) {
+private class RemotePeer(private val tempDir: File, val service: Service, val session: Session) {
     companion object {
         suspend fun create(context: Context): RemotePeer {
             val tempDir = context.getDir(randomString(16), 0)
             val configDir = "${tempDir.path}/config"
             val storeDir = "${tempDir.path}/store"
 
-            val server = Server.start(configDir)
+            val service = Service.start(configDir)
 
             val session = Session.create(configDir)
             session.setStoreDir(storeDir)
 
-            return RemotePeer(tempDir, server, session)
+            return RemotePeer(tempDir, service, session)
         }
     }
 
     suspend fun destroy() {
         session.close()
-        server.stop()
+        service.stop()
         tempDir.deleteRecursively()
     }
 }

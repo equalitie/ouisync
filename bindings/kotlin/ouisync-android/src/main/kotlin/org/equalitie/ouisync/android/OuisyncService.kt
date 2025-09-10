@@ -1,6 +1,6 @@
 @file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 
-package org.equalitie.ouisync.kotlin.android
+package org.equalitie.ouisync.android
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -243,24 +243,24 @@ open class OuisyncService : android.app.Service() {
         private val TAG = OuisyncService::class.simpleName
 
         // Sent by the service to signal it's been started
-        const val ACTION_STARTED = "org.equalitie.ouisync.service.action.started"
+        const val ACTION_STARTED = "org.equalitie.ouisync.android.service.action.started"
 
         // Sent to the service to check whether it's been started. It so, it sets the result code to
         // 1.
-        const val ACTION_STATUS = "org.equalitie.ouisync.service.action.status"
+        const val ACTION_STATUS = "org.equalitie.ouisync.android.service.action.status"
 
         // Sent to the service to stop itself
-        const val ACTION_STOP = "org.equalitie.ouisync.service.action.stop"
+        const val ACTION_STOP = "org.equalitie.ouisync.android.service.action.stop"
 
         const val EXTRA_NOTIFICATION_CHANNEL_NAME =
-            "org.equalitie.ouisync.service.extra.notification.channel.name"
+            "org.equalitie.ouisync.android.service.extra.notification.channel.name"
         const val EXTRA_NOTIFICATION_CONTENT_TITLE =
-            "org.equalitie.ouisync.service.extra.notification.content.title"
+            "org.equalitie.ouisync.android.service.extra.notification.content.title"
         const val EXTRA_NOTIFICATION_CONTENT_TEXT =
-            "org.equalitie.ouisync.service.extra.notification.content.text"
+            "org.equalitie.ouisync.android.service.extra.notification.content.text"
 
         private const val NOTIFICATION_ID = 1
-        private const val NOTIFICATION_CHANNEL_ID = "org.equalitie.ouisync.service"
+        private const val NOTIFICATION_CHANNEL_ID = "org.equalitie.ouisync.android.service"
         private const val DEFAULT_NOTIFICATION_CHANNEL_NAME = "Ouisync"
     }
 }

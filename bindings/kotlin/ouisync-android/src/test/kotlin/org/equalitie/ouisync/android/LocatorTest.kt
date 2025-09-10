@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.kotlin.android
+package org.equalitie.ouisync.android
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

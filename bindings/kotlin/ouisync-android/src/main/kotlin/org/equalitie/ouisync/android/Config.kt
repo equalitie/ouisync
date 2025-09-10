@@ -1,4 +1,4 @@
-package org.equalitie.ouisync.kotlin.android
+package org.equalitie.ouisync.android
 
 import android.content.Context
 import androidx.datastore.core.DataStore
