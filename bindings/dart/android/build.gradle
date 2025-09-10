@@ -1,5 +1,5 @@
 buildscript {
-    ext.kotlin_version = "2.1.20"
+    ext.kotlin_version = "2.2.10"
     repositories {
         google()
         mavenCentral()
@@ -63,10 +63,10 @@ android {
         debugImplementation   'ie.equalit.ouinet:ouisync-android-debug:+'
         releaseImplementation 'ie.equalit.ouinet:ouisync-android:+'
 
-        implementation        'ie.equalit.ouinet:ouisync-client:+'
+        implementation        'ie.equalit.ouinet:ouisync-session:+'
 
-        debugImplementation   'ie.equalit.ouinet:ouisync-server-debug:+'
-        releaseImplementation 'ie.equalit.ouinet:ouisync-server:+'
+        debugImplementation   'ie.equalit.ouinet:ouisync-service-debug:+'
+        releaseImplementation 'ie.equalit.ouinet:ouisync-service:+'
 
         testImplementation    'org.jetbrains.kotlin:kotlin-test'
         testImplementation    'org.mockito:mockito-core:5.10.0'
