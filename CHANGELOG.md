@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.2...master)
 
 - Implement [DocumentsProvider](https://developer.android.com/reference/android/provider/DocumentsProvider) to expose Ouisync repositories to the [Storage Access Framework](https://developer.android.com/guide/topics/providers/document-provider) on Android.
+- Fix infinite busy loop when connection fails while establishing topic streams
 
 ## [v0.9.2](https://github.com/equalitie/ouisync/compare/v0.9.1...v0.9.2) - 2025-08-05
 
