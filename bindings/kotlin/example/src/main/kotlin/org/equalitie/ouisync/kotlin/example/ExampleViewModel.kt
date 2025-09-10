@@ -8,14 +8,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.equalitie.ouisync.kotlin.client.OuisyncException
-import org.equalitie.ouisync.kotlin.client.Repository
-import org.equalitie.ouisync.kotlin.client.Session
-import org.equalitie.ouisync.kotlin.client.ShareToken
-import org.equalitie.ouisync.kotlin.client.close
-import org.equalitie.ouisync.kotlin.client.create
 import org.equalitie.ouisync.kotlin.server.Server
 import org.equalitie.ouisync.kotlin.server.initLog
+import org.equalitie.ouisync.session.OuisyncException
+import org.equalitie.ouisync.session.Repository
+import org.equalitie.ouisync.session.Session
+import org.equalitie.ouisync.session.ShareToken
+import org.equalitie.ouisync.session.close
+import org.equalitie.ouisync.session.create
 
 private const val TAG = "ouisync.example"
 

@@ -9,7 +9,7 @@ use std::{
     io::{self, Write},
 };
 
-const PACKAGE: &str = "org.equalitie.ouisync.kotlin.client";
+const PACKAGE: &str = "org.equalitie.ouisync.session";
 
 pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     writeln!(

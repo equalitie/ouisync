@@ -42,7 +42,7 @@ android {
 }
 
 dependencies {
-    implementation project(':ouisync-client')
+    implementation project(':ouisync-session')
     implementation 'net.java.dev.jna:jna:5.17.0@aar'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
 }

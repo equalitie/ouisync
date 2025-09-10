@@ -13,8 +13,7 @@ dependencyResolutionManagement {
 
 rootProject.name = 'ouisync'
 
-include 'ouisync-client'
-project(':ouisync-client').projectDir = new File(settingsDir, 'client')
+include 'ouisync-session'
 
 include 'ouisync-server'
 project(':ouisync-server').projectDir = new File(settingsDir, 'server')

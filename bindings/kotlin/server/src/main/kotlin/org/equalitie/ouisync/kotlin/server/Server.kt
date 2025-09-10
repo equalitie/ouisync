@@ -2,8 +2,8 @@ package org.equalitie.ouisync.kotlin.server
 
 import com.sun.jna.Pointer
 import kotlinx.coroutines.suspendCancellableCoroutine
-import org.equalitie.ouisync.kotlin.client.ErrorCode
-import org.equalitie.ouisync.kotlin.client.OuisyncException
+import org.equalitie.ouisync.session.ErrorCode
+import org.equalitie.ouisync.session.OuisyncException
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException

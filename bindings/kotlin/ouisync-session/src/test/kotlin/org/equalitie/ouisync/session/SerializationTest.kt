@@ -1,6 +1,6 @@
 @file:OptIn(kotlin.ExperimentalStdlibApi::class)
 
-package org.equalitie.ouisync.kotlin.client
+package org.equalitie.ouisync.session
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable

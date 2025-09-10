@@ -39,7 +39,7 @@ android {
 dependencies {
     def kotlinx_coroutines_version = '1.10.2'
 
-    implementation project(':ouisync-client')
+    implementation project(':ouisync-session')
     implementation project(':ouisync-server')
 
     // HACK: Using `implementation` here fails compilation in the downstream packages for some

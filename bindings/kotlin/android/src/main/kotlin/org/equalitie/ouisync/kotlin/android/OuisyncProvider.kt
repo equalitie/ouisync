@@ -36,15 +36,15 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import org.equalitie.ouisync.kotlin.client.AccessMode
-import org.equalitie.ouisync.kotlin.client.EntryType
-import org.equalitie.ouisync.kotlin.client.File
-import org.equalitie.ouisync.kotlin.client.OuisyncException
-import org.equalitie.ouisync.kotlin.client.Repository
-import org.equalitie.ouisync.kotlin.client.Session
-import org.equalitie.ouisync.kotlin.client.close
-import org.equalitie.ouisync.kotlin.client.create
-import org.equalitie.ouisync.kotlin.client.subscribe
+import org.equalitie.ouisync.session.AccessMode
+import org.equalitie.ouisync.session.EntryType
+import org.equalitie.ouisync.session.File
+import org.equalitie.ouisync.session.OuisyncException
+import org.equalitie.ouisync.session.Repository
+import org.equalitie.ouisync.session.Session
+import org.equalitie.ouisync.session.close
+import org.equalitie.ouisync.session.create
+import org.equalitie.ouisync.session.subscribe
 import java.io.FileNotFoundException
 import java.net.URLConnection
 
