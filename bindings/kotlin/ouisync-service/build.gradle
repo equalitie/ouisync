@@ -135,7 +135,7 @@ afterEvaluate {
 
                     pom {
                         name = packageName
-                        description = "Library for secure peer-to-peer file syncing"
+                        description = "Secure peer-to-peer file syncing library (service component)"
                         url = 'https://github.com/equalitie/ouisync'
                         licenses {
                             license {
@@ -153,7 +153,7 @@ afterEvaluate {
                         scm {
                             connection = 'scm:git:github.com/equalitie/ouisync.git'
                             developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
-                            url = 'https://github.com/equalitie/ouisync/tree/master'
+                            url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
                         }
                     }
                 }

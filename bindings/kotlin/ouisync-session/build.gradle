@@ -44,6 +44,12 @@ kotlin {
     }
 }
 
+// Include javadoc and sources jars - this is needed for publishing to Maven Central.
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
 test {
     useJUnitPlatform()
 
@@ -64,7 +70,7 @@ publishing {
 
             pom {
                 name = packageName
-                description = "Library for secure peer-to-peer file syncing"
+                description = "Secure peer-to-peer file syncing library (session component)"
                 url = 'https://github.com/equalitie/ouisync'
                 licenses {
                     license {
@@ -82,7 +88,7 @@ publishing {
                 scm {
                     connection = 'scm:git:github.com/equalitie/ouisync.git'
                     developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
-                    url = 'https://github.com/equalitie/ouisync/tree/master'
+                    url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
                 }
             }
         }
