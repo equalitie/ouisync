@@ -24,7 +24,8 @@ dependencies {
 }
 ```
 
-Replace `$ouisync_version` with the version of Ouisync you want to use.
+Replace `$ouisync_version` with the version of Ouisync you want to use (all three packages always
+use the same version).
 
 ## API documentation
 

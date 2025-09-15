@@ -44,6 +44,10 @@ case "$1" in
     usage
     ;;
 "--all")
+    # Note that publishing release and debug variants in the same gradle invocation currently
+    # doesn't work as it would end up bundling the release version of the native libraries into
+    # both variants. This is a limitation of the Rust Android Gradle plugin we are using.
+    # Publishing release and debug separately works around it.
     publish "session" "releaseService" "releaseAndroid"
     publish           "debugService"   "debugAndroid"
     ;;

@@ -7,9 +7,9 @@ dokka {
         customStyleSheets.from(rootProject.layout.files("docs/logo-styles.css"))
         customAssets.from(rootProject.layout.files("docs/logo-icon.png"))
         footerMessage.set("""
-            Copyright (c) 2024 <a href="https://equalit.ie">eQualitie</a> |
-            <a href="https://ouisync.net">Ouisync website</a> |
-            <a href="https://github.com/equalitie/ouisync">Ouisync git repository</a>
+            Copyright (c) 2024 <a class="footer--link" href="https://equalit.ie">eQualitie</a> |
+            <a class="footer--link" href="https://ouisync.net">Ouisync website</a> |
+            <a class="footer--link" href="https://github.com/equalitie/ouisync">Ouisync git repository</a>
             """.trimIndent())
     }
 }
