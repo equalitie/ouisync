@@ -2,7 +2,7 @@ use anyhow::Result;
 use heck::{AsLowerCamelCase, AsPascalCase, AsShoutySnakeCase, AsSnakeCase};
 use ouisync_api_parser::{
     ComplexEnum, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
-    ToResponseVariantName, Type,
+    ToResponseVariantName, Type, Visibility,
 };
 use std::{
     fmt,
@@ -128,6 +128,12 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
 fn write_complex_enum(out: &mut dyn Write, name: &str, item: &ComplexEnum) -> Result<()> {
     write_docs(out, "", &item.docs)?;
     writeln!(out, "@Serializable")?;
+
+    match item.visibility {
+        Visibility::Public => (),
+        Visibility::Private => write!(out, "internal ")?,
+    }
+
     writeln!(out, "sealed interface {name} {{")?;
 
     // variants

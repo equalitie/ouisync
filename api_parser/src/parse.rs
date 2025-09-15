@@ -10,7 +10,7 @@ use syn::{
 
 use crate::{
     ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Fields, Item, RequestVariant,
-    SimpleEnum, SimpleVariant, Struct, Type,
+    SimpleEnum, SimpleVariant, Struct, Type, Visibility,
 };
 
 pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool) -> Result<bool> {
@@ -219,6 +219,7 @@ fn parse_enum(item: ItemEnum) -> Result<Item> {
         bail!("generic enums not supported");
     }
 
+    let visibility = parse_visibility(&item.vis);
     let docs = parse_docs(&item.attrs)?;
     let repr = parse_enum_repr(&item.attrs)?;
 
@@ -285,7 +286,11 @@ fn parse_enum(item: ItemEnum) -> Result<Item> {
             })
             .collect();
 
-        Ok(Item::ComplexEnum(ComplexEnum { docs, variants }))
+        Ok(Item::ComplexEnum(ComplexEnum {
+            visibility,
+            docs,
+            variants,
+        }))
     } else {
         let variants: Vec<_> = variants
             .into_iter()
@@ -485,6 +490,13 @@ fn into_complex_variant(v: SimpleVariant) -> ComplexVariant {
     ComplexVariant {
         docs: v.docs,
         fields: Fields::Unit,
+    }
+}
+
+fn parse_visibility(vis: &syn::Visibility) -> Visibility {
+    match vis {
+        syn::Visibility::Public(_) => Visibility::Public,
+        syn::Visibility::Restricted(_) | syn::Visibility::Inherited => Visibility::Private,
     }
 }
 

@@ -4,9 +4,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.mapNotNull
 
 /**
- * Creates a new Ouisync session.
+ * Creates a new Ouisync session and connects it to a
+ * [Service][org.equalitie.ouisync.service.Service].
  *
- * @param configPath path to the directory where ouisync stores its config files.
+ * @param configPath path to the config directory of the service to connect to. The session only
+ *   needs read access to it.
  */
 suspend fun Session.Companion.create(configPath: String): Session {
     val client = Client.connect(configPath)
@@ -16,14 +18,14 @@ suspend fun Session.Companion.create(configPath: String): Session {
 /**
  * Closes the session.
  *
- * Don't forget to call this when the session is no longer needed, to avoid leaking resources.
+ * This should be called when the session is no longer needed to prevent memory leaks.
  */
 suspend fun Session.close() {
     client.close()
 }
 
 /**
- * Returns a Flow of network events.
+ * Returns a Flow of [network events][NetworkEvent].
  *
  * Note the event subscription is created only after the flow starts being consumed.
  */

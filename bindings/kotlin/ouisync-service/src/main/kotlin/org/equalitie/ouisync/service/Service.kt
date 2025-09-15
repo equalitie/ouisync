@@ -23,10 +23,9 @@ class Service private constructor(private var handle: Pointer?) {
          * Starts the service.
          *
          * @param configPath path to the config directory of this service. If it doesn't exist, it's
-         *                   created automatically. The service requires both read and write access
-         *                   to it.
-         * @param debugLabel Optional label used to distinguish mutliple services running in the
-         *                   same process. Used mainly for testing and debugging the library itself.
+         *   created automatically. The service requires both read and write access to it.
+         * @param debugLabel Optional label used to distinguish mutliple services running in the same
+         *   process. Used mainly for testing and debugging the library itself.
          */
         suspend fun start(
             configPath: String,
@@ -50,9 +49,7 @@ class Service private constructor(private var handle: Pointer?) {
         }
     }
 
-    /**
-     * Stops this service. Has no effect if the service has already been stopped.
-     */
+    /** Stops this service. Has no effect if the service has already been stopped. */
     suspend fun stop() {
         val handle = this.handle
         if (handle == null) {
