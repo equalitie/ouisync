@@ -42,10 +42,10 @@ class SessionTest {
     fun storeDir() = runTest {
         val storeDir = "$tempDir/store"
 
-        assertNull(session.getStoreDir())
+        assertEquals(emptyList<String>(), session.getStoreDirs())
 
-        session.setStoreDir(storeDir)
-        assertEquals(storeDir, session.getStoreDir())
+        session.setStoreDirs(listOf(storeDir))
+        assertEquals(listOf(storeDir), session.getStoreDirs())
     }
 
     @Test

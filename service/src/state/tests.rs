@@ -14,7 +14,7 @@ use tracing::Instrument;
 #[tokio::test]
 async fn normalize_repository_path() {
     let store_dir = PathBuf::from("/home/alice/ouisync");
-    let store = Store::new(Some(store_dir.clone()));
+    let store = Store::new(vec![store_dir.clone()]);
 
     assert_eq!(
         store.normalize_repository_path(Path::new("foo")).unwrap(),
@@ -120,7 +120,8 @@ async fn open_already_opened_repository() {
     let handle1 = state
         .session_open_repository(
             state
-                .store_dir()
+                .store_dirs()
+                .first()
                 .unwrap()
                 .join(name)
                 .with_extension(REPOSITORY_FILE_EXTENSION),
@@ -182,7 +183,7 @@ async fn expire_empty_repository() {
         Err(Error::NotFound)
     );
     assert_eq!(
-        read_dir(state.store_dir().unwrap(), "").await,
+        read_dir(state.store_dirs().first().unwrap(), "").await,
         Vec::<PathBuf>::new()
     );
 }
@@ -237,7 +238,7 @@ async fn expire_synced_repository() {
         .unwrap();
 
     local_state
-        .session_set_store_dir(temp_dir.path().join("local/store"))
+        .session_insert_store_dirs(vec![temp_dir.path().join("local/store")])
         .await
         .unwrap();
     local_state
@@ -296,7 +297,7 @@ async fn expire_synced_repository() {
         Err(Error::NotFound)
     );
     assert_eq!(
-        read_dir(local_state.store_dir().unwrap(), "").await,
+        read_dir(local_state.store_dirs().first().unwrap(), "").await,
         Vec::<PathBuf>::new(),
     );
 }
@@ -414,7 +415,8 @@ async fn attempt_to_move_repository_over_existing_file() {
     // would overwrite the file.
     fs::File::create(
         state
-            .session_get_store_dir()
+            .session_get_store_dirs()
+            .first()
             .unwrap()
             .join(dst)
             .with_extension(REPOSITORY_FILE_EXTENSION),
@@ -468,10 +470,12 @@ async fn delete_repository_with_simple_name() {
     state.repository_delete(repo0).await.unwrap();
 
     // Check none of the repo0's files (including the aux files) exist anymore
-    assert_eq!(
-        read_dir(state.store_dir().unwrap(), path0.to_str().unwrap()).await,
-        Vec::<PathBuf>::new()
-    );
+    for store_dir in state.store_dirs() {
+        assert_eq!(
+            read_dir(store_dir, path0.to_str().unwrap()).await,
+            Vec::<PathBuf>::new()
+        );
+    }
 
     // Check the other repo still exists
     assert!(fs::try_exists(path1).await.unwrap());
@@ -493,7 +497,7 @@ async fn delete_repository_in_subdir_of_store_dir() {
     assert!(!fs::try_exists(&path).await.unwrap());
 
     for path in path.ancestors() {
-        if path == state.store_dir().unwrap() {
+        if path == state.store_dirs().first().unwrap() {
             break;
         }
 
@@ -503,7 +507,9 @@ async fn delete_repository_in_subdir_of_store_dir() {
         );
     }
 
-    assert!(fs::try_exists(state.store_dir().unwrap()).await.unwrap());
+    for store_dir in state.store_dirs() {
+        assert!(fs::try_exists(store_dir).await.unwrap());
+    }
 }
 
 #[tokio::test]
@@ -563,7 +569,7 @@ async fn setup() -> (TempDir, State) {
         .await
         .unwrap();
     state
-        .session_set_store_dir(temp_dir.path().join("store"))
+        .session_insert_store_dirs(vec![temp_dir.path().join("store")])
         .await
         .unwrap();
 

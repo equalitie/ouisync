@@ -32,8 +32,8 @@ void main() {
     await server2.start();
     session2 = await Session.create(configPath: configPath2);
 
-    await session1.setStoreDir('${temp.path}/1/store');
-    await session2.setStoreDir('${temp.path}/2/store');
+    await session1.setStoreDirs(['${temp.path}/1/store']);
+    await session2.setStoreDirs(['${temp.path}/2/store']);
 
     repo1 = await session1.createRepository(
       path: 'repo1',

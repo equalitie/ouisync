@@ -293,7 +293,7 @@ mod tests {
         let mut service = Service::init(config_dir).await.unwrap();
 
         service
-            .set_store_dir(temp_dir.path().join("store"))
+            .set_store_dirs(vec![temp_dir.path().join("store")])
             .await
             .unwrap();
 

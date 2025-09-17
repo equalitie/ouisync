@@ -17,15 +17,16 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
 
     let mut service = Service::init(config_dir).await?;
 
-    let store_dir = if let Some(store_dir) = service.store_dir() {
-        store_dir
+    let store_dirs = service.store_dirs();
+    let store_dirs = if store_dirs.is_empty() {
+        let dir = defaults::store_dir();
+        service.set_store_dirs(vec![dir.clone()]).await?;
+        vec![dir]
     } else {
-        let store_dir = defaults::store_dir();
-        service.set_store_dir(&store_dir).await?;
-        store_dir
+        store_dirs
     };
 
-    migration::check_store_dir(&store_dir).await;
+    migration::check_store_dir(&store_dirs).await;
 
     service.init_network().await;
     service.set_sync_enabled_all(true).await?;

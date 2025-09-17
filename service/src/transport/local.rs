@@ -221,7 +221,7 @@ mod tests {
         let endpoint = *service.local_endpoint();
         service
             .state()
-            .session_set_store_dir(store_dir.clone())
+            .session_insert_store_dirs(vec![store_dir.clone()])
             .await
             .unwrap();
 
@@ -230,12 +230,12 @@ mod tests {
         let mut client = TestClient::connect(endpoint).await;
 
         let message_id = MessageId::next();
-        let value: Option<PathBuf> = client
-            .invoke(message_id, Request::SessionGetStoreDir)
+        let value: Vec<PathBuf> = client
+            .invoke(message_id, Request::SessionGetStoreDirs)
             .await
             .unwrap();
         assert_eq!(client.unsolicited_responses, []);
-        assert_eq!(value, Some(store_dir));
+        assert_eq!(value, [store_dir]);
 
         runner.stop().await.close().await;
     }
@@ -275,7 +275,7 @@ mod tests {
         let endpoint = *service.local_endpoint();
         service
             .state()
-            .session_set_store_dir(store_dir)
+            .session_insert_store_dirs(vec![store_dir])
             .await
             .unwrap();
 
@@ -367,8 +367,8 @@ mod tests {
 
         // Verify we didn't receive any further notifications by sending some request and checking
         // we only received response to that request and nothing else.
-        let _: PathBuf = client
-            .invoke(MessageId::next(), Request::SessionGetStoreDir)
+        let _: Vec<PathBuf> = client
+            .invoke(MessageId::next(), Request::SessionGetStoreDirs)
             .await
             .unwrap();
         assert_eq!(client.unsolicited_responses, []);
@@ -390,7 +390,7 @@ mod tests {
             let endpoint = *service.local_endpoint();
             service
                 .state()
-                .session_set_store_dir(temp_dir.path().join("store_a"))
+                .session_insert_store_dirs(vec![temp_dir.path().join("store_a")])
                 .await
                 .unwrap();
             let runner = ServiceRunner::start(service);
@@ -407,7 +407,7 @@ mod tests {
             let endpoint = *service.local_endpoint();
             service
                 .state()
-                .session_set_store_dir(temp_dir.path().join("store_b"))
+                .session_insert_store_dirs(vec![temp_dir.path().join("store_b")])
                 .await
                 .unwrap();
             let runner = ServiceRunner::start(service);

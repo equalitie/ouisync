@@ -272,7 +272,7 @@ pub(crate) enum ClientCommand {
         #[arg(short, long)]
         token: String,
     },
-    /// Print the share token of a repository
+    /// Print the share token of a repository.
     Share {
         /// Name of the repository to share
         name: String,
@@ -285,8 +285,12 @@ pub(crate) enum ClientCommand {
         #[arg(short = 'P', long)]
         password: Option<String>,
     },
-    /// Get or set the store directory
-    StoreDir { path: Option<PathBuf> },
+    /// Manage the list of directories where repositories are stored.
+    #[command(alias = "store-dir")]
+    StoreDirs {
+        #[command(subcommand)]
+        command: StoreDirsCommand,
+    },
     /// Unmount repository
     #[command(alias = "umount")]
     Unmount {
@@ -303,4 +307,35 @@ pub(crate) enum MirrorCommand {
     Delete,
     /// Check whether the repository is mirrored on the specified server.
     Exists,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub(crate) enum StoreDirsCommand {
+    /// Insert new directories to the list.
+    ///
+    /// Duplicates are ignored.
+    #[command(visible_alias = "i")]
+    Insert {
+        /// Paths to the directories to insert.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Remove directories from the list.
+    ///
+    /// The directories themselves are not deleted. Directories not in the list are ignored.
+    #[command(visible_alias = "r", alias = "rm")]
+    Remove {
+        /// Paths to the directories to remove.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Replace all directories in the list.
+    #[command(visible_alias = "s")]
+    Set {
+        /// Paths to the directories to set. If empty, all currently set directories are removed.
+        paths: Vec<PathBuf>,
+    },
+    /// Print all directories in the list.
+    #[command(visible_alias = "l")]
+    List,
 }

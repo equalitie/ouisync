@@ -4,6 +4,7 @@ pub mod protocol;
 pub mod transport;
 
 mod config_keys;
+mod config_list;
 mod config_store;
 mod connection;
 mod device_id;
@@ -142,12 +143,12 @@ impl Service {
         self.local_server.endpoint()
     }
 
-    pub fn store_dir(&self) -> Option<PathBuf> {
-        self.state.store_dir()
+    pub fn store_dirs(&self) -> Vec<PathBuf> {
+        self.state.store_dirs()
     }
 
-    pub async fn set_store_dir(&mut self, path: impl Into<PathBuf>) -> Result<(), Error> {
-        self.state.session_set_store_dir(path.into()).await
+    pub async fn set_store_dirs(&mut self, paths: Vec<PathBuf>) -> Result<(), Error> {
+        self.state.session_set_store_dirs(paths).await
     }
 
     /// Initialize network according to the stored config.

@@ -25,14 +25,18 @@ pub(crate) async fn migrate_config_dir() {
 }
 
 /// Check whether the old store directory still exists and if so, print a warning.
-pub(crate) async fn check_store_dir(new: &Path) {
+pub(crate) async fn check_store_dir(new: &[PathBuf]) {
     let Some(old) = dirs::data_dir().map(|base| base.join(OLD_APP_ID)) else {
         return;
     };
 
-    if old == new {
+    if new.contains(&old) {
         return;
     }
+
+    let Some(new) = new.first() else {
+        return;
+    };
 
     if !fs::metadata(&old)
         .await

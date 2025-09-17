@@ -32,13 +32,13 @@ class ClientTest {
         val service = Service.start(configDir)
         val client = Client.connect(configDir)
 
-        val response = client.invoke(Request.SessionGetStoreDir)
-        assertEquals(Response.None, response)
+        val response = client.invoke(Request.SessionGetStoreDirs)
+        assertEquals(Response.Paths(emptyList()), response)
 
         service.stop()
 
         try {
-            client.invoke(Request.SessionGetStoreDir)
+            client.invoke(Request.SessionGetStoreDirs)
             fail("unexpected success")
         } catch (e: IOException) {}
     }

@@ -6,7 +6,7 @@ use crate::{
     config_keys::{
         BIND_KEY, DEFAULT_BLOCK_EXPIRATION_MILLIS, DEFAULT_QUOTA_KEY,
         DEFAULT_REPOSITORY_EXPIRATION_KEY, LOCAL_DISCOVERY_ENABLED_KEY, MOUNT_DIR_KEY, PEERS_KEY,
-        PEX_KEY, PORT_FORWARDING_ENABLED_KEY, STORE_DIR_KEY,
+        PEX_KEY, PORT_FORWARDING_ENABLED_KEY, STORE_DIRS_KEY,
     },
     config_store::{ConfigError, ConfigKey, ConfigStore},
     device_id, dht_contacts,
@@ -83,13 +83,13 @@ impl State {
             None,
         );
 
-        let store_dir = match config.entry(STORE_DIR_KEY).get().await {
-            Ok(dir) => Some(dir),
-            Err(ConfigError::NotFound) => None,
+        let store_dirs = match config.entry(STORE_DIRS_KEY).get().await {
+            Ok(dirs) => dirs.into(),
+            Err(ConfigError::NotFound) => Vec::new(),
             Err(error) => return Err(error.into()),
         };
 
-        let store = Store::new(store_dir);
+        let store = Store::new(store_dirs);
 
         let mount_dir = match config.entry(MOUNT_DIR_KEY).get().await {
             Ok(dir) => Some(dir),
@@ -141,7 +141,7 @@ impl State {
             metrics_server,
         };
 
-        state.load_repositories().await;
+        state.load_all_repositories().await;
 
         Ok(state)
     }
@@ -477,21 +477,41 @@ impl State {
     }
 
     #[api]
-    pub fn session_get_store_dir(&self) -> Option<PathBuf> {
-        self.store_dir().map(|path| path.to_owned())
+    pub fn session_get_store_dirs(&self) -> Vec<PathBuf> {
+        self.store_dirs()
     }
 
     #[api]
-    pub async fn session_set_store_dir(&self, path: PathBuf) -> Result<(), Error> {
-        if !self.store.set(Some(path.clone())) {
-            return Ok(());
+    pub async fn session_set_store_dirs(&self, paths: Vec<PathBuf>) -> Result<(), Error> {
+        let status = self.store.set(paths);
+        self.update_store_dirs(status).await
+    }
+
+    #[api]
+    pub async fn session_insert_store_dirs(&self, paths: Vec<PathBuf>) -> Result<(), Error> {
+        let status = self.store.insert(paths);
+        self.update_store_dirs(status).await
+    }
+
+    #[api]
+    pub async fn session_remove_store_dirs(&self, paths: Vec<PathBuf>) -> Result<(), Error> {
+        let status = self.store.remove(paths);
+        self.update_store_dirs(status).await
+    }
+
+    async fn update_store_dirs(&self, status: StoreStatus) -> Result<(), Error> {
+        self.config
+            .entry(STORE_DIRS_KEY)
+            .set(&status.snapshot)
+            .await?;
+
+        for path in &status.remove {
+            self.close_repositories(path).await;
         }
 
-        self.config.entry(STORE_DIR_KEY).set(&path).await?;
-
-        // Close repos from the previous store dir and load repos from the new dir.
-        self.close_repositories().await;
-        self.load_repositories().await;
+        for path in &status.insert {
+            self.load_repositories(path).await;
+        }
 
         Ok(())
     }
@@ -1777,7 +1797,7 @@ impl State {
         Ok(())
     }
 
-    pub fn store_dir(&self) -> Option<PathBuf> {
+    pub fn store_dirs(&self) -> Vec<PathBuf> {
         self.store.get()
     }
 
@@ -1841,18 +1861,27 @@ impl State {
     pub async fn close(&self) {
         self.metrics_server.close();
         self.network.shutdown().await;
-        self.close_repositories().await;
+        self.close_repositories(Path::new("")).await;
     }
 
-    // Find all repositories in the store dir and open them.
-    async fn load_repositories(&self) {
-        let Some(store_dir) = self.store.get() else {
-            tracing::debug!("store dir not specified");
+    // Find all repositories in all store dirs and open them.
+    async fn load_all_repositories(&self) {
+        let store_dirs = self.store.get();
+
+        if store_dirs.is_empty() {
+            tracing::debug!("no store dirs specified");
             return;
         };
 
-        if !fs::try_exists(&store_dir).await.unwrap_or(false) {
-            tracing::debug!("store dir doesn't exist");
+        for store_dir in &store_dirs {
+            self.load_repositories(store_dir).await;
+        }
+    }
+
+    // Find all repositories in the given store directory (recursively) and open them.
+    async fn load_repositories(&self, store_dir: &Path) {
+        if !fs::try_exists(store_dir).await.unwrap_or(false) {
+            tracing::debug!("store dir doesn't exist: {}", store_dir.display());
             return;
         }
 
@@ -1892,8 +1921,10 @@ impl State {
         }
     }
 
-    async fn close_repositories(&self) {
-        let repos: Vec<_> = self.repos.drain();
+    // Close all repositories that are inside the `prefix` directory or any of its subdirectories,
+    // recursively.
+    async fn close_repositories(&self, prefix: &Path) {
+        let repos: Vec<_> = self.repos.drain(prefix);
 
         // Unmount all repos
         if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
@@ -1950,38 +1981,91 @@ pub(crate) type RepositorySubscription = broadcast::Receiver<Event>;
 pub(crate) type StateMonitorSubscription = watch::Receiver<()>;
 
 struct Store {
-    dir: Mutex<Option<PathBuf>>,
+    dirs: Mutex<Vec<PathBuf>>,
 }
 
 impl Store {
-    fn new(dir: Option<PathBuf>) -> Self {
+    fn new(dirs: Vec<PathBuf>) -> Self {
         Self {
-            dir: Mutex::new(dir),
+            dirs: Mutex::new(dirs),
         }
     }
 
-    fn get(&self) -> Option<PathBuf> {
-        self.dir.lock().unwrap().as_ref().cloned()
+    fn get(&self) -> Vec<PathBuf> {
+        self.dirs.lock().unwrap().clone()
     }
 
-    fn set(&self, dir: Option<PathBuf>) -> bool {
-        let mut guard = self.dir.lock().unwrap();
+    fn set(&self, dirs: Vec<PathBuf>) -> StoreStatus {
+        let mut guard = self.dirs.lock().unwrap();
 
-        if *guard != dir {
-            *guard = dir;
-            true
-        } else {
-            false
+        let insert = dirs
+            .iter()
+            .filter(|dir| !guard.contains(dir))
+            .cloned()
+            .collect();
+        let remove = guard
+            .iter()
+            .filter(|dir| !dirs.contains(dir))
+            .cloned()
+            .collect();
+
+        *guard = dirs;
+
+        StoreStatus {
+            snapshot: guard.clone(),
+            insert,
+            remove,
+        }
+    }
+
+    fn insert(&self, dirs: Vec<PathBuf>) -> StoreStatus {
+        let mut guard = self.dirs.lock().unwrap();
+        let mut insert = Vec::new();
+
+        for dir in dirs {
+            if !guard.contains(&dir) {
+                guard.push(dir.clone());
+                insert.push(dir);
+            }
+        }
+
+        StoreStatus {
+            snapshot: guard.clone(),
+            insert,
+            remove: Vec::new(),
+        }
+    }
+
+    fn remove(&self, dirs: Vec<PathBuf>) -> StoreStatus {
+        let mut guard = self.dirs.lock().unwrap();
+        let mut remove = Vec::new();
+
+        for dir in dirs {
+            if let Some(index) = guard.iter().position(|e| *e == dir) {
+                guard.remove(index);
+                remove.push(dir);
+            }
+        }
+
+        StoreStatus {
+            snapshot: guard.clone(),
+            insert: Vec::new(),
+            remove,
         }
     }
 
     fn normalize_repository_path(&self, path: &Path) -> Result<PathBuf, Error> {
-        let dir = self.get();
+        let default_dir = self.dirs.lock().unwrap().first().cloned();
 
         let path = if path.is_absolute() {
             Cow::Borrowed(path)
         } else {
-            Cow::Owned(dir.as_deref().ok_or(Error::StoreDirUnspecified)?.join(path))
+            Cow::Owned(
+                default_dir
+                    .as_deref()
+                    .ok_or(Error::StoreDirUnspecified)?
+                    .join(path),
+            )
         };
 
         match path.extension() {
@@ -1997,18 +2081,28 @@ impl Store {
         }
     }
 
-    // Remove ancestors directories up to `store_dir` but only if they are empty.
+    // Remove ancestors directories of `path` up to the matching store dir, but only if they are
+    // empty.
     async fn remove_empty_ancestor_dirs(&self, path: &Path) -> Result<(), io::Error> {
-        let Some(store_dir) = self.get() else {
+        let prefix = self
+            .dirs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|dir| path.starts_with(dir))
+            .max_by_key(|path| path.components().count())
+            .cloned();
+
+        let Some(prefix) = prefix else {
             return Ok(());
         };
 
-        if !path.starts_with(&store_dir) {
+        if !path.starts_with(&prefix) {
             return Ok(());
         }
 
         for path in path.ancestors().skip(1) {
-            if path == store_dir {
+            if path == prefix {
                 break;
             }
 
@@ -2021,6 +2115,16 @@ impl Store {
 
         Ok(())
     }
+}
+
+// Status of modifying the list of store directories.
+struct StoreStatus {
+    // All directories, after the operation.
+    snapshot: Vec<PathBuf>,
+    // Directories that were actually inserted
+    insert: Vec<PathBuf>,
+    // Directories that were actually removed
+    remove: Vec<PathBuf>,
 }
 
 async fn load_repository(
