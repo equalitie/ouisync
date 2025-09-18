@@ -255,7 +255,7 @@ class OuisyncPlugin :
         return true
     }
 
-    private fun onShareFile(uri: Uri) {
+    private fun onShareFile(uri: Uri): Boolean {
         val context = requireNotNull(activity)
         val intent =
             Intent(Intent.ACTION_SEND)
@@ -263,7 +263,14 @@ class OuisyncPlugin :
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-        context.startActivity(Intent.createChooser(intent, null))
+        try {
+            context.startActivity(Intent.createChooser(intent, null))
+        } catch (e: ActivityNotFoundException) {
+            Log.d(TAG, "no app found for $uri")
+            return false
+        }
+
+        return true
     }
 }
 

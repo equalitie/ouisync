@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.database.ContentObserver
 import android.database.Cursor
+import android.net.Uri
 import android.os.Handler
 import android.provider.DocumentsContract
 import android.util.Log
@@ -606,7 +607,7 @@ class OuisyncProviderTest {
     }
 
     @Test
-    fun notifyOnSync() {
+    fun testNotifyOnSync() {
         // Create repo and bind the network listener
         val (addr, token) =
             withSession {
@@ -681,6 +682,18 @@ class OuisyncProviderTest {
         } finally {
             runBlocking { peer.destroy() }
         }
+    }
+
+    @Test
+    fun testType() {
+        assertEquals(
+            "text/plain",
+            contentResolver.getType(DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar/baz.txt"))
+        )
+        assertEquals(
+            "image/jpeg",
+            contentResolver.getType(DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar.jpg"))
+        )
     }
 
     // Creates a temporary Ouisync Session and pass it to the given block.
