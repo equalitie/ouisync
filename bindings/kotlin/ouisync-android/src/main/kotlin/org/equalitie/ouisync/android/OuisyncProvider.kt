@@ -157,8 +157,7 @@ class OuisyncProvider : DocumentsProvider() {
     }
 
     override fun getDocumentType(documentId: String): String {
-        Log.v(TAG, "getDocumentMimeType($documentId)")
-
+        Log.v(TAG, "getDocumentType($documentId)")
         return getFileMimeType(Locator.parse(documentId).name)
     }
 
