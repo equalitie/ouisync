@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.3...master)
 
+- Fix crash in `shareFile` in the dart bindings
+
 ## [v0.9.3](https://github.com/equalitie/ouisync/compare/v0.9.2...v0.9.3)
 
 - Implement [DocumentsProvider](https://developer.android.com/reference/android/provider/DocumentsProvider) to expose Ouisync repositories to the [Storage Access Framework](https://developer.android.com/guide/topics/providers/document-provider) on Android.
