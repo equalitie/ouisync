@@ -92,8 +92,7 @@ class OuisyncProvider : DocumentsProvider() {
                     val restart =
                         when {
                             intent.action == OuisyncService.ACTION_STARTED ||
-                                intent.action == OuisyncService.ACTION_STATUS &&
-                                resultCode != 0 -> true
+                                intent.action == OuisyncService.ACTION_STATUS && resultCode != 0 -> true
                             else -> false
                         }
 

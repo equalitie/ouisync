@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.database.ContentObserver
 import android.database.Cursor
-import android.net.Uri
 import android.os.Handler
 import android.provider.DocumentsContract
 import android.util.Log
@@ -688,11 +687,11 @@ class OuisyncProviderTest {
     fun testType() {
         assertEquals(
             "text/plain",
-            contentResolver.getType(DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar/baz.txt"))
+            contentResolver.getType(DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar/baz.txt")),
         )
         assertEquals(
             "image/jpeg",
-            contentResolver.getType(DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar.jpg"))
+            contentResolver.getType(DocumentsContract.buildDocumentUri(AUTHORITY, "foo/bar.jpg")),
         )
     }
 
