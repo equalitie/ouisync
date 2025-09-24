@@ -153,5 +153,10 @@ inline void throw_exception(error::Client ec, std::string message) {
     throw e;
 }
 
+inline void throw_exception(error::Service ec, std::string message) {
+    boost::system::system_error e(ec, std::move(message));
+    throw e;
+}
+
 } // ouisync namespace
 

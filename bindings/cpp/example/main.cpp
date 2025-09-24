@@ -1,8 +1,10 @@
 #include <ouisync.hpp>
+#include <ouisync/service.hpp>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/spawn.hpp>
 #include <boost/filesystem/path.hpp>
+#include <boost/filesystem/operations.hpp>
 
 #include <iostream>
 
@@ -28,18 +30,26 @@ namespace std {
 } // namespace std
 
 void async_main(asio::yield_context yield) {
-    fs::path config_dir =
+#if USE_BUILT_IN_SERVICE
+    fs::path service_dir =
+        fs::temp_directory_path() / "ouisync-cpp" / fs::unique_path("example-%%%%-%%%%");
+
+    fs::create_directories(service_dir);
+
+    ouisync::Service service(yield.get_executor());
+    service.start(service_dir.c_str(), "my-ouisync-service", yield);
+#else
+    fs::path service_dir =
         fs::path(getenv("HOME")) / ".local/share/org.equalitie.ouisync/configs";
+
+    std::cout << "Attempting to connect to a Ouisync app running on this PC\n";
+#endif
     
-    auto session = ouisync::Session::connect(config_dir, yield);
+    auto session = ouisync::Session::connect(service_dir, yield);
     
     auto repos = session.list_repositories(yield);
     
-    std::cout << "Ouisync service contains " << repos.size() << " repositories\n";
-
-    if (repos.empty()) {
-        return;
-    }
+    std::cout << "Found " << repos.size() << " repositories\n";
 
     // List content of the root directory of each repository
     for (auto& [name, repo] : repos) {
@@ -49,9 +59,15 @@ void async_main(asio::yield_context yield) {
             std::cout << I{2} << entry.entry_type << " " << entry.name << "\n";
         }
     }
+
+#if USE_BUILT_IN_SERVICE
+    service.stop(yield);
+#endif
 }
 
 int main() {
+    // Standard Boost.Asio boilerplate
+
     asio::io_context ctx(1); // TODO: Multi thread support
 
     asio::spawn(

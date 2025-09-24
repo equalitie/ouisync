@@ -53,6 +53,26 @@ corrosion_import_crate(
 # `INSTALL_COMMAND` is left unset.
 install(TARGETS ouisync_service DESTINATION ${CMAKE_INSTALL_PREFIX})
 
+add_library(cpp_ouisync_service
+    STATIC
+        ouisync/service.cpp
+)
+
+target_link_libraries(cpp_ouisync_service
+    PUBLIC
+        ouisync_service
+        # TODO: This should not be necessary when mounting repositories is not
+        # required
+        fuse3
+)
+
+target_include_directories(cpp_ouisync_service
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    PRIVATE
+        ${Boost_INCLUDE_DIRS}
+)
+
 ############################
 # C++ API code generation
 ############################
@@ -91,7 +111,7 @@ add_custom_target(ouisync_generate_api
         ${GENERATED_HPP_FILES}
 )
 
-add_library(ouisync_client
+add_library(cpp_ouisync_client
     STATIC
         ouisync/client.cpp
         ouisync/serialize.cpp
@@ -99,16 +119,14 @@ add_library(ouisync_client
         ${GENERATED_CPP_FILES}
 )
 
-target_include_directories(ouisync_client
+target_include_directories(cpp_ouisync_client
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
     PRIVATE
         ${Boost_INCLUDE_DIRS}
 )
 
-target_link_libraries(ouisync_client
-    PUBLIC
-        #ouisync_service
+target_link_libraries(cpp_ouisync_client
     PUBLIC
         # Required when using Boost.Asio with stackful coroutines
         Boost::context
@@ -116,4 +134,4 @@ target_link_libraries(ouisync_client
         Boost::filesystem
 )
 
-target_compile_features(ouisync_client PRIVATE cxx_std_20)
+target_compile_features(cpp_ouisync_client PRIVATE cxx_std_20)
