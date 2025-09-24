@@ -27,6 +27,14 @@ use tokio::sync::{
 
 const CERT_DOMAIN: &str = "ouisync.net";
 
+// Quinn has a problem with GSO on some Android devices
+// https://github.com/quinn-rs/quinn/issues/2246
+// TODO: Remove this when the issue is resolved as it's likely slowing down the transmission.
+#[cfg(target_os = "android")]
+const DISABLE_SEGMENTATION_OFFLOAD: bool = true;
+#[cfg(not(target_os = "android"))]
+const DISABLE_SEGMENTATION_OFFLOAD: bool = false;
+
 //------------------------------------------------------------------------------
 pub struct Connector {
     endpoint: quinn::Endpoint,
@@ -271,6 +279,10 @@ fn make_client_config() -> quinn::ClientConfig {
         .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL))
         .max_idle_timeout((2 * KEEP_ALIVE_INTERVAL).try_into().ok());
 
+    if DISABLE_SEGMENTATION_OFFLOAD {
+        transport_config.enable_segmentation_offload(false);
+    }
+
     client_config.transport_config(Arc::new(transport_config));
     client_config
 }
@@ -288,6 +300,10 @@ fn make_server_config() -> Result<quinn::ServerConfig, Error> {
     transport_config
         .max_concurrent_uni_streams(0_u8.into())
         .max_idle_timeout((2 * KEEP_ALIVE_INTERVAL).try_into().ok());
+
+    if DISABLE_SEGMENTATION_OFFLOAD {
+        transport_config.enable_segmentation_offload(false);
+    }
 
     Ok(server_config)
 }
