@@ -153,7 +153,7 @@ template<> struct describe::Struct<AccessChange::Enable> : std::true_type {
 template<> struct describe::Struct<AccessChange::Disable> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, AccessChange::Disable& v) {
+    static void describe(Observer&, AccessChange::Disable&) {
     }
 };
 
@@ -234,21 +234,21 @@ template<> struct describe::Struct<PublicRuntimeId> : std::true_type {
 template<> struct describe::Struct<PeerState::Known> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, PeerState::Known& v) {
+    static void describe(Observer&, PeerState::Known&) {
     }
 };
 
 template<> struct describe::Struct<PeerState::Connecting> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, PeerState::Connecting& v) {
+    static void describe(Observer&, PeerState::Connecting&) {
     }
 };
 
 template<> struct describe::Struct<PeerState::Handshaking> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, PeerState::Handshaking& v) {
+    static void describe(Observer&, PeerState::Handshaking&) {
     }
 };
 

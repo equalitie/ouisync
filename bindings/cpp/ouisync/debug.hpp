@@ -71,21 +71,6 @@ namespace ouisync::printer {
         return MsgPackObjType(obj_type);
     }
 
-    //template<class T> struct Cow {
-    //    struct Ref { const T& val; };
-    //    struct Own { const T  val; };
-    //    std::variant<Ref, Own> val;
-    //    Cow(const T& val) : val(Ref{val}) {}
-    //    Cow(T&& val) : val(Own{std::forward<T>(val)}) {}
-    //    T& ref() {
-    //        return std::visit([](auto&& val) {
-    //            using T = std::decay_t<decltype(val)>;
-    //            if constexpr (std::is_same_v<T, Ref>)
-    //                return 
-    //        }, val);
-    //    }
-    //};
-
     struct MsgPack {
         const msgpack::object& obj;
         MsgPack(const msgpack::object& obj) : obj(obj) {}
@@ -128,6 +113,7 @@ namespace ouisync::printer {
         }
     };
 
+    [[maybe_unused]] // Keeping for debugging
     static
     MsgPack display(const msgpack::object& obj) { return MsgPack(obj); }
 

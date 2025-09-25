@@ -7,6 +7,15 @@ include(FetchContent)
 set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/custom_output.sh")
 set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_CURRENT_SOURCE_DIR}/custom_output.sh")
 
+# Enable compilation warnings for all targets
+if (MSVC)
+    # warning level 4
+    add_compile_options(/W4 /WX)
+else()
+    # additional warnings
+    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+endif()
+
 ############################
 # Boost
 ############################

@@ -541,112 +541,112 @@ template<> struct describe::Struct<Request::SessionFindRepository> : std::true_t
 template<> struct describe::Struct<Request::SessionGeneratePasswordSalt> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGeneratePasswordSalt& v) {
+    static void describe(Observer&, Request::SessionGeneratePasswordSalt&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGenerateSecretKey> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGenerateSecretKey& v) {
+    static void describe(Observer&, Request::SessionGenerateSecretKey&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetCurrentProtocolVersion> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetCurrentProtocolVersion& v) {
+    static void describe(Observer&, Request::SessionGetCurrentProtocolVersion&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetDefaultBlockExpiration> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetDefaultBlockExpiration& v) {
+    static void describe(Observer&, Request::SessionGetDefaultBlockExpiration&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetDefaultQuota> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetDefaultQuota& v) {
+    static void describe(Observer&, Request::SessionGetDefaultQuota&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetDefaultRepositoryExpiration> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetDefaultRepositoryExpiration& v) {
+    static void describe(Observer&, Request::SessionGetDefaultRepositoryExpiration&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetExternalAddrV4> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetExternalAddrV4& v) {
+    static void describe(Observer&, Request::SessionGetExternalAddrV4&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetExternalAddrV6> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetExternalAddrV6& v) {
+    static void describe(Observer&, Request::SessionGetExternalAddrV6&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetHighestSeenProtocolVersion> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetHighestSeenProtocolVersion& v) {
+    static void describe(Observer&, Request::SessionGetHighestSeenProtocolVersion&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetLocalListenerAddrs> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetLocalListenerAddrs& v) {
+    static void describe(Observer&, Request::SessionGetLocalListenerAddrs&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetMetricsListenerAddr> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetMetricsListenerAddr& v) {
+    static void describe(Observer&, Request::SessionGetMetricsListenerAddr&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetMountRoot> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetMountRoot& v) {
+    static void describe(Observer&, Request::SessionGetMountRoot&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetNatBehavior> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetNatBehavior& v) {
+    static void describe(Observer&, Request::SessionGetNatBehavior&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetNetworkStats> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetNetworkStats& v) {
+    static void describe(Observer&, Request::SessionGetNetworkStats&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetPeers> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetPeers& v) {
+    static void describe(Observer&, Request::SessionGetPeers&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetRemoteControlListenerAddr> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetRemoteControlListenerAddr& v) {
+    static void describe(Observer&, Request::SessionGetRemoteControlListenerAddr&) {
     }
 };
 
@@ -661,7 +661,7 @@ template<> struct describe::Struct<Request::SessionGetRemoteListenerAddrs> : std
 template<> struct describe::Struct<Request::SessionGetRuntimeId> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetRuntimeId& v) {
+    static void describe(Observer&, Request::SessionGetRuntimeId&) {
     }
 };
 
@@ -700,14 +700,14 @@ template<> struct describe::Struct<Request::SessionGetStateMonitor> : std::true_
 template<> struct describe::Struct<Request::SessionGetStoreDir> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetStoreDir& v) {
+    static void describe(Observer&, Request::SessionGetStoreDir&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionGetUserProvidedPeers> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionGetUserProvidedPeers& v) {
+    static void describe(Observer&, Request::SessionGetUserProvidedPeers&) {
     }
 };
 
@@ -722,35 +722,35 @@ template<> struct describe::Struct<Request::SessionInitNetwork> : std::true_type
 template<> struct describe::Struct<Request::SessionIsLocalDiscoveryEnabled> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionIsLocalDiscoveryEnabled& v) {
+    static void describe(Observer&, Request::SessionIsLocalDiscoveryEnabled&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionIsPexRecvEnabled> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionIsPexRecvEnabled& v) {
+    static void describe(Observer&, Request::SessionIsPexRecvEnabled&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionIsPexSendEnabled> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionIsPexSendEnabled& v) {
+    static void describe(Observer&, Request::SessionIsPexSendEnabled&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionIsPortForwardingEnabled> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionIsPortForwardingEnabled& v) {
+    static void describe(Observer&, Request::SessionIsPortForwardingEnabled&) {
     }
 };
 
 template<> struct describe::Struct<Request::SessionListRepositories> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionListRepositories& v) {
+    static void describe(Observer&, Request::SessionListRepositories&) {
     }
 };
 
@@ -855,7 +855,7 @@ template<> struct describe::Struct<Request::SessionSetStoreDir> : std::true_type
 template<> struct describe::Struct<Request::SessionSubscribeToNetwork> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionSubscribeToNetwork& v) {
+    static void describe(Observer&, Request::SessionSubscribeToNetwork&) {
     }
 };
 
@@ -1297,7 +1297,7 @@ template<> struct describe::Struct<Response::NetworkEvent> : std::true_type {
 template<> struct describe::Struct<Response::None> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Response::None& v) {
+    static void describe(Observer&, Response::None&) {
     }
 };
 
@@ -1376,7 +1376,7 @@ template<> struct describe::Struct<Response::Repository> : std::true_type {
 template<> struct describe::Struct<Response::RepositoryEvent> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Response::RepositoryEvent& v) {
+    static void describe(Observer&, Response::RepositoryEvent&) {
     }
 };
 
@@ -1415,7 +1415,7 @@ template<> struct describe::Struct<Response::StateMonitor> : std::true_type {
 template<> struct describe::Struct<Response::StateMonitorEvent> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer& o, Response::StateMonitorEvent& v) {
+    static void describe(Observer&, Response::StateMonitorEvent&) {
     }
 };
 

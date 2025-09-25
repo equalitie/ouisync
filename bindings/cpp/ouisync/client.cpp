@@ -211,12 +211,12 @@ auto add_pending(
                     state->pending.erase(entry_i);
                     std::move(handler)({}, std::move(rs_));
                 },
-                [&](const std::exception_ptr& eptr) {
+                [&](std::exception_ptr& eptr) {
                     auto eptr_ = std::move(eptr);
                     state->pending.erase(entry_i);
                     std::move(handler)(std::move(eptr), {});
                 },
-                [&](Handler& handler) {
+                [&](Handler&) {
                     throw_exception(error::logic, "Handler already set");
                 },
             },

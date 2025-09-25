@@ -85,7 +85,7 @@ struct UnpackObserver {
     size_t parsed = 0;
 
     UnpackObserver(const msgpack::object& obj, Description dsc)
-        : obj(obj), dsc(dsc) {}
+        : dsc(dsc), obj(obj) {}
 
     template<class M> void field(M& member_out) {
         if (dsc.type == describe::FieldsType::DIRECT) {

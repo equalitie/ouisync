@@ -22,3 +22,11 @@ target_link_libraries(example ${LINKED_LIBRARIES})
 if(USE_BUILT_IN_SERVICE)
     target_compile_definitions(example PUBLIC USE_BUILT_IN_SERVICE)
 endif()
+
+if (MSVC)
+    # warning level 4
+    target_compile_options(example PRIVATE /W4 /WX)
+else()
+    # additional warnings
+    add_compile_options(example PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()

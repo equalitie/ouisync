@@ -364,16 +364,28 @@ impl FieldsParseType {
 }
 
 #[rustfmt::skip]
-fn describe_struct<'a>(out: &mut dyn Write, name: &str, base_type: Option<&str>, parse_type: FieldsParseType, fields: impl Iterator<Item = &'a str>) -> Result<()> {
+fn describe_struct<'a>(
+    out: &mut dyn Write,
+    name: &str,
+    base_type: Option<&str>,
+    parse_type: FieldsParseType,
+    fields: impl Iterator<Item = &'a str> + Clone,
+) -> Result<()> {
     let fields_type = match parse_type {
         FieldsParseType::Array => "ARRAY",
         FieldsParseType::Direct => "DIRECT",
     };
 
+    let empty = base_type.is_none() && fields.clone().count() == 0;
     writeln!(out, "template<> struct describe::Struct<{name}> : std::true_type {{")?;
     writeln!(out, "{I}static const describe::FieldsType fields_type = describe::FieldsType::{fields_type};")?;
     writeln!(out, "{I}template<class Observer>")?;
-    writeln!(out, "{I}static void describe(Observer& o, {name}& v) {{")?;
+    if !empty {
+        writeln!(out, "{I}static void describe(Observer& o, {name}& v) {{")?;
+    } else {
+        // Prevent "unused variable" warnings.
+        writeln!(out, "{I}static void describe(Observer&, {name}&) {{")?;
+    }
     if let Some(base_type) = base_type {
         writeln!(out, "{I}{I}o.field(static_cast<{base_type}&>(v));")?;
     }
