@@ -2,7 +2,7 @@ use anyhow::{bail, Context as _, Error, Result};
 use heck::{AsLowerCamelCase, AsPascalCase, ToLowerCamelCase, ToSnakeCase};
 use ouisync_api_parser::{
     ComplexEnum, Context, Docs, Field, Fields, Item, RequestVariant, SimpleEnum, Struct,
-    ToResponseVariantName, Type,
+    ToResponseVariantName, Type, Visibility,
 };
 use std::{borrow::Cow, fmt, io::Write};
 
@@ -117,6 +117,7 @@ fn write_complex_enum(
     encode: bool,
     decode: bool,
 ) -> Result<()> {
+    write_visibility(out, item.visibility)?;
     write_docs(out, "", &item.docs)?;
     writeln!(out, "sealed class {name} {{")?;
 
@@ -254,6 +255,7 @@ fn write_complex_enum(
     for (variant_name, variant) in &item.variants {
         let full_name = format!("{name}{variant_name}");
 
+        write_visibility(out, item.visibility)?;
         write_docs(out, "", &variant.docs)?;
         writeln!(out, "class {full_name} extends {name} {{")?;
         write_class_body(out, &full_name, &variant.fields)?;
@@ -812,6 +814,15 @@ fn write_class_body(out: &mut dyn Write, name: &str, fields: &Fields) -> Result<
     }
 
     writeln!(out, ");")?;
+
+    Ok(())
+}
+
+fn write_visibility(out: &mut dyn Write, visibility: Visibility) -> Result<()> {
+    match visibility {
+        Visibility::Public => (),
+        Visibility::Private => writeln!(out, "/// @nodoc")?,
+    }
 
     Ok(())
 }

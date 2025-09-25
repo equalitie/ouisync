@@ -12,7 +12,7 @@ use std::{
 pub(crate) trait TryStreamExt: TryStream {
     /// Attempts to collect all successful results of this stream into the specified collection.
     /// Similar to `try_collect` but uses existing collection.
-    fn try_collect_into<D>(self, dst: &mut D) -> TryCollectInto<Self, D>
+    fn try_collect_into<D>(self, dst: &mut D) -> TryCollectInto<'_, Self, D>
     where
         Self: Sized,
     {

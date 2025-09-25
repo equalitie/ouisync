@@ -1,28 +1,41 @@
-# Ouisync library Kotlin bindings
+# Ouisync Kotlin bindings
 
-⚠️ **FIXME**: this README is outdated ⚠️
+This project provides kotlin bindings for the Ouisync library. It consist of these packages:
 
-[![Maven Central Version](https://img.shields.io/maven-central/v/ie.equalit.ouinet/ouisync-omni?label=MavenCentral&logo=apache-maven)](https://search.maven.org/artifact/ie.equalit.ouinet/ouisync-omni)
+- **ouisync-service** provides the Ouisync *service* which maintains the repositories and runs the
+    sync protocol. It can be interacted with using *sessions*.
+- **ouisync-session** is the entry point to Ouisync. It's used to manage the repositories, access
+    their content and configure the sync protocol, among other things. Multiple *sessions* can
+    connect to the same *service*, even across process boundaries.
+- **ouisync-android** provides high-level components for developing Android apps:
+    [foreground service](https://developer.android.com/develop/background-work/services/fgs) and
+    [documents provider](https://developer.android.com/guide/topics/providers/document-provider#overview).
 
-This project provides kotlin bindings for the ouisync library in the form of self-contained AAR
-package to be used in android apps.
+## Installation
 
-## Usage
-
-Include ouisync with Gradle by adding the following to your `build.gradle` file:
+The packages are published on [Maven Central](https://central.sonatype.com/). Add them as
+dependencies to your project:
 
 ```groovy
-implementation 'ie.equalit.ouinet:ouisync-omni:$ouisyncVersion'
+dependencies {
+    implementation "ie.equalit.ouinet:ie.equalit.ouinet:ouisync-session:$ouisync_version"
+    implementation "ie.equalit.ouinet:ie.equalit.ouinet:ouisync-service:$ouisync_version"
+    implementation "ie.equalit.ouinet:ie.equalit.ouinet:ouisync-android:$ouisync_version"
+}
 ```
 
-## Documentation
+Replace `$ouisync_version` with the version of Ouisync you want to use (all three packages always
+use the same version).
 
-API documentation is available at https://docs.ouisync.net/kotlin/.
+## API documentation
 
-## Example app
+Documentation is available at [docs.ouisync.net](https://docs.ouisync.net/kotlin).
 
-There is a simple example app in the [example/](example) folder. To build it run
-`gradle example:assembleDebug`, then find the apk in
+## Examples
+
+A simple example app is in the
+[bindings/kotlin/example](https://github.com/equalitie/ouisync/tree/master/bindings/kotlin/example)
+folder. To build it run `gradle example:assembleDebug`. Find the apk in
 `build/example/outputs/apk/debug/example-debug.apk`, install and run it on a device or an emulator.
 
 ## Build from source
@@ -32,16 +45,7 @@ There is a simple example app in the [example/](example) folder. To build it run
 The Ousiync native library is built automatically but it requires a rust toolchain. The easiest way
 to get it is using [rustup](https://rustup.rs/).
 
-### Build the AAR
+### Build packages
 
-Run `gradle lib:assembleRelease` (or `lib:assembleDebug` for the debug variant), then find the aar
-in `build/lib/outputs/aar/lib-release.aar` (or `lib-debug.aar`).
-
-### Run unit tests
-
-Run `gradle lib:test` (To run a specific test, see [test filtering](https://docs.gradle.org/current/userguide/java_testing.html#test_filtering)).
-
-### Build the API documentation
-
-Generate the documentation with [dokka](https://kotlinlang.org/docs/dokka-introduction.html#0):
-`gradle lib:dokkaHtml` (or use any of the supported formats) then find it in `build/lib/dokka`.
+To build all packages in all variants (release, debug), run `gradle assembleRelease` from inside the
+`bindings/kotlin` folder. To see other available tasks, run `gradle tasks`.

@@ -2,14 +2,14 @@ use anyhow::Result;
 use heck::{AsLowerCamelCase, AsPascalCase, AsShoutySnakeCase, AsSnakeCase};
 use ouisync_api_parser::{
     ComplexEnum, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
-    ToResponseVariantName, Type,
+    ToResponseVariantName, Type, Visibility,
 };
 use std::{
     fmt,
     io::{self, Write},
 };
 
-const PACKAGE: &str = "org.equalitie.ouisync.kotlin.client";
+const PACKAGE: &str = "org.equalitie.ouisync.session";
 
 pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     writeln!(
@@ -128,6 +128,12 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
 fn write_complex_enum(out: &mut dyn Write, name: &str, item: &ComplexEnum) -> Result<()> {
     write_docs(out, "", &item.docs)?;
     writeln!(out, "@Serializable")?;
+
+    match item.visibility {
+        Visibility::Public => (),
+        Visibility::Private => write!(out, "internal ")?,
+    }
+
     writeln!(out, "sealed interface {name} {{")?;
 
     // variants
@@ -178,18 +184,31 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
 
     match &item.fields {
         Fields::Named(fields) => {
-            writeln!(out, "data class {name}(")?;
+            if fields.len() == 1 {
+                // TODO: Should we do this only for `repr(transparent)` / `serde(transparent)`
+                // structs?
+                let (field_name, field) = &fields[0];
 
-            for (field_name, field) in fields {
-                writeln!(
+                writeln!(out, "@JvmInline")?;
+                write!(
                     out,
-                    "{I}val {}: {},",
-                    AsLowerCamelCase(field_name),
+                    "value class {name}(val {field_name}: {})",
                     KotlinType(&field.ty)
                 )?;
-            }
+            } else {
+                writeln!(out, "data class {name}(")?;
 
-            write!(out, ")")?;
+                for (field_name, field) in fields {
+                    writeln!(
+                        out,
+                        "{I}val {}: {},",
+                        AsLowerCamelCase(field_name),
+                        KotlinType(&field.ty)
+                    )?;
+                }
+
+                write!(out, ")")?;
+            }
         }
         Fields::Unnamed(field) => {
             writeln!(out, "@JvmInline")?;

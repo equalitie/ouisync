@@ -3,12 +3,13 @@ use super::{
     topic::{Input, Output, TopicId, TopicNonce, TopicState},
 };
 use crate::unified::{Connection, RecvStream, SendStream};
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use futures_util::{future, stream::FuturesUnordered, StreamExt};
 use std::io;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     select,
     sync::{mpsc, oneshot},
+    task,
 };
 use tracing::instrument;
 
@@ -69,10 +70,7 @@ async fn create_topic(
 ) {
     // TODO: handle receiver cancellation
 
-    match TopicHandler::new(topic_id, TopicNonce::random(), dispatcher)
-        .run()
-        .await
-    {
+    match try_create_topic(topic_id, TopicNonce::random(), dispatcher).await {
         Ok((send_stream, recv_stream)) => {
             send_stream_tx.send(Ok(send_stream)).ok();
             recv_stream_tx.send(Ok(recv_stream)).ok();
@@ -86,82 +84,71 @@ async fn create_topic(
     }
 }
 
-struct TopicHandler<'a> {
+#[instrument(name = "topic", skip(dispatcher))]
+async fn try_create_topic(
     topic_id: TopicId,
-    state: TopicState,
-    dispatcher: &'a Dispatcher,
-}
+    nonce: TopicNonce,
+    dispatcher: &Dispatcher,
+) -> io::Result<(SendStream, RecvStream)> {
+    let mut state = TopicState::new(nonce);
+    let mut tasks = FuturesUnordered::new();
+    let mut incoming = None;
+    let mut outgoing = None;
+    let mut last_error = None;
 
-impl<'a> TopicHandler<'a> {
-    fn new(topic_id: TopicId, nonce: TopicNonce, dispatcher: &'a Dispatcher) -> Self {
-        let state = TopicState::new(nonce);
-
-        Self {
-            topic_id,
-            state,
-            dispatcher,
-        }
-    }
-
-    #[instrument(name = "topic", skip_all, fields(topic_id = ?self.topic_id, nonce = ?self.state.nonce))]
-    async fn run(mut self) -> io::Result<(SendStream, RecvStream)> {
-        let mut tasks = FuturesUnordered::new();
-        let mut incoming = None;
-        let mut outgoing = None;
-        let mut last_error = None;
-
-        loop {
-            while let Some(output) = self.state.poll() {
-                match output {
-                    Output::OutgoingCreate(nonce) => {
-                        tasks.push(create_stream(
-                            self.dispatcher,
-                            CreateInput::Outgoing(self.topic_id, nonce),
-                        ));
-                    }
-                    Output::OutgoingAccept => match outgoing {
-                        Some(streams) => return Ok(streams),
-                        None => unreachable!(),
-                    },
-                    Output::IncomingCreate => {
-                        tasks.push(create_stream(
-                            self.dispatcher,
-                            CreateInput::Incoming(self.topic_id),
-                        ));
-                    }
-                    Output::IncomingAccept => match incoming {
-                        Some(streams) => return Ok(streams),
-                        None => unreachable!(),
-                    },
-                }
-            }
-
-            let Some(output) = tasks.next().await else {
-                break;
-            };
-
+    loop {
+        while let Some(output) = state.poll() {
             match output {
-                CreateOutput::Incoming(Ok((nonce, send_stream, recv_stream))) => {
-                    incoming = Some((send_stream, recv_stream));
-                    self.state.handle(Input::IncomingCreated(nonce));
+                Output::OutgoingCreate(nonce) => {
+                    tasks.push(create_stream(
+                        dispatcher,
+                        CreateInput::Outgoing(topic_id, nonce),
+                    ));
                 }
-                CreateOutput::Incoming(Err(error)) => {
-                    last_error = Some(error);
-                    self.state.handle(Input::IncomingFailed);
+                Output::OutgoingAccept => match outgoing {
+                    Some(streams) => return Ok(streams),
+                    None => unreachable!(),
+                },
+                Output::IncomingCreate => {
+                    tasks.push(create_stream(dispatcher, CreateInput::Incoming(topic_id)));
                 }
-                CreateOutput::Outgoing(Ok((send_stream, recv_stream))) => {
-                    outgoing = Some((send_stream, recv_stream));
-                    self.state.handle(Input::OutgoingCreated);
-                }
-                CreateOutput::Outgoing(Err(error)) => {
-                    last_error = Some(error);
-                    self.state.handle(Input::OutgoingFailed);
-                }
+                Output::IncomingAccept => match incoming {
+                    Some(streams) => return Ok(streams),
+                    None => unreachable!(),
+                },
             }
         }
 
-        return Err(last_error.unwrap_or_else(|| io::ErrorKind::ConnectionAborted.into()));
+        // Make sure we yield to the runtime at least once here to prevent busy looping. This can
+        // happen when we successfully created one of the streams (incoming or outgoing) and then
+        // the connection fails. Trying to create the other steam afterwards might immediately
+        // fail without yielding and if we then tried to create the stream again we would enter
+        // infinite busy loop, not even giving the runtime chance to cancel this task.
+        let (Some(output), _) = future::join(tasks.next(), task::yield_now()).await else {
+            break;
+        };
+
+        match output {
+            CreateOutput::Incoming(Ok((nonce, send_stream, recv_stream))) => {
+                incoming = Some((send_stream, recv_stream));
+                state.handle(Input::IncomingCreated(nonce));
+            }
+            CreateOutput::Incoming(Err(error)) => {
+                last_error = Some(error);
+                state.handle(Input::IncomingFailed);
+            }
+            CreateOutput::Outgoing(Ok((send_stream, recv_stream))) => {
+                outgoing = Some((send_stream, recv_stream));
+                state.handle(Input::OutgoingCreated);
+            }
+            CreateOutput::Outgoing(Err(error)) => {
+                last_error = Some(error);
+                state.handle(Input::OutgoingFailed);
+            }
+        }
     }
+
+    return Err(last_error.unwrap_or_else(|| io::ErrorKind::ConnectionAborted.into()));
 }
 
 async fn create_stream(dispatcher: &Dispatcher, input: CreateInput) -> CreateOutput {

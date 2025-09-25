@@ -8,14 +8,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.equalitie.ouisync.kotlin.client.OuisyncException
-import org.equalitie.ouisync.kotlin.client.Repository
-import org.equalitie.ouisync.kotlin.client.Session
-import org.equalitie.ouisync.kotlin.client.ShareToken
-import org.equalitie.ouisync.kotlin.client.close
-import org.equalitie.ouisync.kotlin.client.create
-import org.equalitie.ouisync.kotlin.server.Server
-import org.equalitie.ouisync.kotlin.server.initLog
+import org.equalitie.ouisync.service.Service
+import org.equalitie.ouisync.service.initLog
+import org.equalitie.ouisync.session.OuisyncException
+import org.equalitie.ouisync.session.Repository
+import org.equalitie.ouisync.session.Session
+import org.equalitie.ouisync.session.ShareToken
+import org.equalitie.ouisync.session.close
+import org.equalitie.ouisync.session.create
 
 private const val TAG = "ouisync.example"
 
@@ -23,7 +23,7 @@ class ExampleViewModel(
     private val configDir: String,
     private val storeDir: String,
 ) : ViewModel() {
-    private var server: Server? = null
+    private var service: Service? = null
     private var session: Session? = null
 
     var sessionError by mutableStateOf<String?>(null)
@@ -37,15 +37,15 @@ class ExampleViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                server = Server.start(configDir)
+                service = Service.start(configDir)
             } catch (e: OuisyncException.ServiceAlreadyRunning) {
-                Log.d(TAG, "Server already running")
+                Log.d(TAG, "Service already running")
             } catch (e: Exception) {
-                Log.e(TAG, "Server.start failed", e)
+                Log.e(TAG, "Service.start failed", e)
                 sessionError = e.toString()
             }
 
-            if (server != null) {
+            if (service != null) {
                 try {
                     session = Session.create(configDir)
                     session?.setStoreDir(storeDir)

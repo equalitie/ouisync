@@ -28,12 +28,12 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.equalitie.ouisync.kotlin.client.LogLevel
-import org.equalitie.ouisync.kotlin.server.initLog
+import org.equalitie.ouisync.android.OuisyncService
+import org.equalitie.ouisync.android.setConfigPath
+import org.equalitie.ouisync.session.LogLevel
+import org.equalitie.ouisync.service.initLog
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
-
-internal const val TAG = "ouisync"
 
 class OuisyncPlugin :
     FlutterPlugin,
@@ -58,7 +58,7 @@ class OuisyncPlugin :
                         else -> false
                     }
 
-                Log.d(TAG, "OuisyncPlugin.activityLifecycleObserver.onDestroy(finishing = $finishing)")
+                Log.d(TAG, "activityLifecycleObserver.onDestroy(finishing = $finishing)")
 
                 if (finishing) {
                     this@OuisyncPlugin.onStop()
@@ -67,6 +67,7 @@ class OuisyncPlugin :
         }
 
     companion object {
+        private val TAG = OuisyncPlugin::class.simpleName
         private const val CHANNEL_NAME = "org.equalitie.ouisync.plugin"
     }
 
@@ -254,7 +255,7 @@ class OuisyncPlugin :
         return true
     }
 
-    private fun onShareFile(uri: Uri) {
+    private fun onShareFile(uri: Uri): Boolean {
         val context = requireNotNull(activity)
         val intent =
             Intent(Intent.ACTION_SEND)
@@ -262,7 +263,14 @@ class OuisyncPlugin :
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-        context.startActivity(Intent.createChooser(intent, null))
+        try {
+            context.startActivity(Intent.createChooser(intent, null))
+        } catch (e: ActivityNotFoundException) {
+            Log.d(TAG, "no app found for $uri")
+            return false
+        }
+
+        return true
     }
 }
 

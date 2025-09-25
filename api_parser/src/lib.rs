@@ -55,6 +55,7 @@ impl Request {
             .collect();
 
         ComplexEnum {
+            visibility: Visibility::Private,
             docs: Docs::default(),
             variants,
         }
@@ -99,6 +100,7 @@ impl Response {
             .collect();
 
         ComplexEnum {
+            visibility: Visibility::Private,
             docs: Docs::default(),
             variants,
         }
@@ -217,6 +219,7 @@ impl FromStr for EnumRepr {
 /// Complex enum (discriminated union / algebraic data type / sum type)
 #[derive(Debug)]
 pub struct ComplexEnum {
+    pub visibility: Visibility,
     pub docs: Docs,
     pub variants: Vec<(String, ComplexVariant)>,
 }
@@ -419,4 +422,10 @@ impl fmt::Display for Type {
             Self::Bytes => write!(f, "Bytes"),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Visibility {
+    Public,
+    Private,
 }

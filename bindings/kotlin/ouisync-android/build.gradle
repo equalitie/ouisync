@@ -1,0 +1,121 @@
+plugins {
+    id 'com.android.library'
+    id 'kotlin-android'
+
+    id 'dokka-conventions'
+}
+
+version = rootProject.version
+group   = rootProject.group
+
+android {
+    namespace = 'org.equalitie.ouisync.android'
+
+    compileSdk = 35
+    ndkVersion = '27.2.12479018'
+
+    defaultConfig {
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = version
+
+        // consumerProguardFiles 'proguard-rules.pro'
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    kotlin {
+        jvmToolchain(17)
+    }
+
+    publishing {
+        singleVariant 'release'
+        singleVariant 'debug'
+    }
+}
+
+
+dependencies {
+    def kotlinx_coroutines_version = '1.10.2'
+
+    implementation project(':ouisync-service')
+    implementation project(':ouisync-session')
+
+    // HACK: Using `implementation` here fails compilation in the downstream packages for some
+    // reason even though the datastore API is only used internally by this project. Using `api`
+    // seems to fix it.
+    api 'androidx.datastore:datastore-preferences:1.1.7'
+
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinx_coroutines_version"
+
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$kotlinx_coroutines_version"
+
+    testImplementation 'junit:junit:4.13.2'
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            android.libraryVariants.each {
+                def variant = it.name
+                def packageNameSuffix = variant == 'release' ? '' : "-${variant}"
+
+                create("${variant}Android", MavenPublication) {
+                    def packageName = "${project.name}${packageNameSuffix}"
+
+                    from components.getByName(variant)
+
+                    artifactId = packageName
+
+                    pom {
+                        name = packageName
+                        description = "Secure peer-to-peer file syncing library (android components)"
+                        url = 'https://github.com/equalitie/ouisync'
+                        licenses {
+                            license {
+                                name = 'MPL-2.0'
+                                url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                            }
+                        }
+                        developers {
+                            developer {
+                                name = 'Ouisync Developers'
+                                email = 'ouisync@equalit.ie'
+                            }
+                        }
+
+                        scm {
+                            connection = 'scm:git:github.com/equalitie/ouisync.git'
+                            developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                            url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+signing {
+    // Only sign when publishing to sonatype, not local
+    required {
+        android.libraryVariants.any { variant ->
+            gradle.taskGraph.hasTask("publish${variant}AndroidPublicationToSonatypeRepository")
+        }
+    }
+
+    if (signingKey) {
+        useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    }
+
+    sign publishing.publications
+}
+
+dokka {
+    dokkaSourceSets.configureEach {
+        includes.from("Module.md")
+    }
+}

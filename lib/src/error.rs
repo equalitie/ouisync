@@ -50,7 +50,7 @@ pub enum Error {
 impl Error {
     /// Returns an object that implements `Display` which prints this error together with its whole
     /// causal chain.
-    pub fn verbose(&self) -> Verbose {
+    pub fn verbose(&self) -> Verbose<'_> {
         Verbose(self)
     }
 }

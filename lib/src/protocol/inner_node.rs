@@ -60,11 +60,11 @@ impl InnerNodes {
         self.0.get_mut(&bucket)
     }
 
-    pub fn iter(&self) -> InnerNodesIter {
+    pub fn iter(&self) -> InnerNodesIter<'_> {
         InnerNodesIter(self.0.iter())
     }
 
-    pub fn iter_mut(&mut self) -> InnerNodesIterMut {
+    pub fn iter_mut(&mut self) -> InnerNodesIterMut<'_> {
         InnerNodesIterMut(self.0.iter_mut())
     }
 

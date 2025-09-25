@@ -868,6 +868,13 @@ impl State {
             .ok_or(Error::InvalidArgument)
     }
 
+    #[api]
+    pub fn repository_get_short_name(&self, repo: RepositoryHandle) -> Result<String, Error> {
+        self.repos
+            .with(repo, |holder| holder.short_name().to_owned())
+            .ok_or(Error::InvalidArgument)
+    }
+
     /// Return the info-hash of the repository formatted as hex string. This can be used as a
     /// globally unique, non-secret identifier of the repository.
     #[api]

@@ -6,7 +6,7 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use rand::Rng;
-use std::io::SeekFrom;
+use std::{io::SeekFrom, slice};
 use tempfile::TempDir;
 use tokio::{
     fs,
@@ -1228,7 +1228,7 @@ async fn export() {
         }
     }
 
-    assert_eq!(entries, [dst_path.clone()]);
+    assert_eq!(entries, slice::from_ref(&dst_path));
 
     // Open the exported repo
     let dst_repo = Repository::open(&RepositoryParams::new(dst_path), None, AccessMode::Write)

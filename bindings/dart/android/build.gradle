@@ -1,5 +1,5 @@
 buildscript {
-    ext.kotlin_version = "2.1.20"
+    ext.kotlin_version = "2.2.10"
     repositories {
         google()
         mavenCentral()
@@ -60,14 +60,16 @@ android {
     }
 
     dependencies {
-        implementation        'ie.equalit.ouinet:ouisync-client:+'
-        debugImplementation   'ie.equalit.ouinet:ouisync-server-debug:+'
-        releaseImplementation 'ie.equalit.ouinet:ouisync-server:+'
+        debugImplementation   'ie.equalit.ouinet:ouisync-android-debug:+'
+        releaseImplementation 'ie.equalit.ouinet:ouisync-android:+'
 
-        implementation 'androidx.datastore:datastore-preferences:1.1.7'
+        implementation        'ie.equalit.ouinet:ouisync-session:+'
 
-        testImplementation 'org.jetbrains.kotlin:kotlin-test'
-        testImplementation 'org.mockito:mockito-core:5.10.0'
+        debugImplementation   'ie.equalit.ouinet:ouisync-service-debug:+'
+        releaseImplementation 'ie.equalit.ouinet:ouisync-service:+'
+
+        testImplementation    'org.jetbrains.kotlin:kotlin-test'
+        testImplementation    'org.mockito:mockito-core:5.10.0'
     }
 
     testOptions {
@@ -79,43 +81,6 @@ android {
                outputs.upToDateWhen {false}
                showStandardStreams = true
             }
-        }
-    }
-}
-
-afterEvaluate {
-    def rustTargets = project.findProperty('target-platform')?.split(',').collect {
-        // https://github.com/flutter/flutter/blob/37dbe030feb47cdf15f3d4c1921857dbbac8aedf/packages/flutter_tools/gradle/flutter.gradle#L78-L82
-        switch (it) {
-            case 'android-arm':   return 'arm'
-            case 'android-arm64': return 'arm64'
-            case 'android-x86':   return 'x86'
-            case 'android-x64':   return 'x86_64'
-            default: throw new IllegalArgumentException("unknown target platform: $it")
-        }
-    }
-
-    android.libraryVariants.each {
-        def variant = it.name.capitalize()
-
-        // Build kotlin bindings and publish them to a local maven repository.
-        tasks.register("build${variant}KotlinBindings", GradleBuild) {
-            dir = "${projectDir}/../../kotlin"
-            tasks = [
-                "publishClientPublicationToMavenLocal",
-                "publish${variant}ServerPublicationToMavenLocal".toString(),
-            ]
-
-            // Pass the rust targets from flutter.
-            if (rustTargets != null) {
-                startParameter.projectProperties = [
-                    'rust-targets': rustTargets.join(',')
-                ]
-            }
-        }
-
-        tasks.named("pre${variant}Build") {
-            dependsOn "build${variant}KotlinBindings"
         }
     }
 }

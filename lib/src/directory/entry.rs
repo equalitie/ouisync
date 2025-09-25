@@ -96,7 +96,7 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    fn inner(&self) -> &RefInner {
+    fn inner(&self) -> &RefInner<'_> {
         match self {
             Self::File(r) => &r.inner,
             Self::Directory(r) => &r.inner,
