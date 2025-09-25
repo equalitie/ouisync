@@ -112,7 +112,7 @@ tasks.register('generateApi', Exec) {
     description = 'Generate the API classes'
     group = 'Build'
     workingDir "$rootDir/../.."
-    commandLine 'cargo', 'run', '--package', 'ouisync-bindgen', '--', '--language', 'kotlin'
+    commandLine 'cargo', 'run', '--package', 'ouisync-bindgen', '--', 'kotlin'
 
     doFirst {
         def dir = layout.buildDirectory.dir('gen').get().getAsFile()
