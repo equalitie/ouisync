@@ -323,6 +323,18 @@ QuotaInfo Repository::get_quota(
     return rsp.value;
 }
 
+std::string Repository::get_short_name(
+    boost::asio::yield_context yield
+) {
+    auto request = Request::RepositoryGetShortName{
+        handle,
+    };
+    // TODO: This won't throw if yield has ec assigned
+    auto response = client->invoke(request, yield);
+    Response::String rsp = std::move(response.get<Response::String>());
+    return rsp.value;
+}
+
 Stats Repository::get_stats(
     boost::asio::yield_context yield
 ) {

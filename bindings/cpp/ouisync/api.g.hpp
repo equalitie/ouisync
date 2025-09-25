@@ -222,6 +222,10 @@ public:
         boost::asio::yield_context yield
     );
 
+    std::string get_short_name(
+        boost::asio::yield_context yield
+    );
+
     Stats get_stats(
         boost::asio::yield_context yield
     );

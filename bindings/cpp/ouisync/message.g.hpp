@@ -120,6 +120,10 @@ struct Request {
         const ouisync::RepositoryHandle& repo;
     };
 
+    struct RepositoryGetShortName {
+        const ouisync::RepositoryHandle& repo;
+    };
+
     struct RepositoryGetStats {
         const ouisync::RepositoryHandle& repo;
     };
@@ -478,6 +482,7 @@ struct Request {
         RepositoryGetMountPoint,
         RepositoryGetPath,
         RepositoryGetQuota,
+        RepositoryGetShortName,
         RepositoryGetStats,
         RepositoryGetSyncProgress,
         RepositoryIsDhtEnabled,

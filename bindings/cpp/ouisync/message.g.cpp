@@ -81,6 +81,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::RepositoryGetQuota>(&variant) != nullptr) {
         return std::string_view("RepositoryGetQuota");
     }
+    if (std::get_if<Request::RepositoryGetShortName>(&variant) != nullptr) {
+        return std::string_view("RepositoryGetShortName");
+    }
     if (std::get_if<Request::RepositoryGetStats>(&variant) != nullptr) {
         return std::string_view("RepositoryGetStats");
     }

@@ -61,6 +61,10 @@ add_library(cpp_ouisync_service
 target_link_libraries(cpp_ouisync_service
     PUBLIC
         ouisync_service
+        # Required when using Boost.Asio with stackful coroutines
+        Boost::context
+        # For reading ouisync config files
+        Boost::filesystem
         # TODO: This should not be necessary when mounting repositories is not
         # required
         fuse3

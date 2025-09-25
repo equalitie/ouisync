@@ -219,6 +219,14 @@ template<> struct describe::Struct<Request::RepositoryGetQuota> : std::true_type
     }
 };
 
+template<> struct describe::Struct<Request::RepositoryGetShortName> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::RepositoryGetShortName& v) {
+        o.field(v.repo);
+    }
+};
+
 template<> struct describe::Struct<Request::RepositoryGetStats> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
@@ -960,6 +968,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "RepositoryGetQuota") {
             return builder.template build<Request::RepositoryGetQuota>();
+        }
+        if (name == "RepositoryGetShortName") {
+            return builder.template build<Request::RepositoryGetShortName>();
         }
         if (name == "RepositoryGetStats") {
             return builder.template build<Request::RepositoryGetStats>();
