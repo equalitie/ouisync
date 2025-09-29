@@ -48,7 +48,7 @@ class ExampleViewModel(
             if (service != null) {
                 try {
                     session = Session.create(configDir)
-                    session?.setStoreDir(storeDir)
+                    session?.setStoreDirs(listOf(storeDir))
                 } catch (e: Exception) {
                     Log.e(TAG, "Session.create failed", e)
                     sessionError = e.toString()
