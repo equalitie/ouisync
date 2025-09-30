@@ -166,9 +166,20 @@ Client::Client(std::shared_ptr<State>&& state)
         [state = _state](asio::yield_context yield) {
             receive_job(state, yield);
         },
-        [](std::exception_ptr e) {
-            // We're catching exceptions in the `receive_job`
-            assert(!e);
+        [](std::exception_ptr e) noexcept {
+            // We're catching exceptions in the `receive_job`, so if we get
+            // a non null `e` here, it's a bug and we log and terminate.
+            try {
+                if (e) std::rethrow_exception(e);
+            }
+            catch (const std::exception& e) {
+                std::cout << "Uncaught exception: " << e.what() << "\n";
+                std::terminate();
+            }
+            catch (...) {
+                std::cout << "Uncaught exception: unknown\n";
+                std::terminate();
+            }
         }
     );
 }
