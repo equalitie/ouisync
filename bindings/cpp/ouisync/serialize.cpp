@@ -209,11 +209,27 @@ struct Builder {
     }
 };
 
+template<class Variant>
+struct EmptyBuilder {
+    template<class Kind> Variant build() const {
+        return Kind{};
+    }
+};
+
 template<class... Ts>
 struct convert<std::variant<Ts...>> {
     msgpack::object const& operator()(msgpack::object const& obj, std::variant<Ts...>& out) const {
+        using Out = std::decay_t<decltype(out)>;
+
+        if (obj.type == msgpack::type::STR) {
+            // Variant alternatives with no member variables may be serialized simply as strings.
+            auto name = obj.as<std::string_view>();
+            out = ouisync::VariantBuilder<Out>::build(name, EmptyBuilder<Out>());
+            return obj;
+        }
+
         if (obj.type != msgpack::type::MAP) {
-            ouisync::throw_exception(ouisync::error::deserialize, "variant not packed as map");
+            ouisync::throw_exception(ouisync::error::deserialize, "variant not packed as map nor str");
         }
 
         if (obj.via.map.size != 1) {
@@ -223,7 +239,6 @@ struct convert<std::variant<Ts...>> {
         auto kv = obj.via.map.ptr[0];
         auto name = kv.key.as<std::string_view>();
 
-        using Out = std::decay_t<decltype(out)>;
         out = ouisync::VariantBuilder<Out>::build(name, Builder<Out>(kv.val));
 
         return obj;
