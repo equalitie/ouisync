@@ -33,6 +33,17 @@ pub enum PeerSource {
     PeerExchange = 4,
 }
 
+impl PeerSource {
+    pub(super) fn direction(&self) -> ConnectionDirection {
+        match self {
+            Self::Listener => ConnectionDirection::Incoming,
+            Self::UserProvided | Self::LocalDiscovery | Self::Dht | Self::PeerExchange => {
+                ConnectionDirection::Outgoing
+            }
+        }
+    }
+}
+
 impl fmt::Display for PeerSource {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -41,6 +52,23 @@ impl fmt::Display for PeerSource {
             PeerSource::LocalDiscovery => write!(f, "outgoing (locally discovered)"),
             PeerSource::Dht => write!(f, "outgoing (found on DHT)"),
             PeerSource::PeerExchange => write!(f, "outgoing (found on peer exchange)"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
+pub(super) enum ConnectionDirection {
+    /// Peer connected to us
+    Incoming,
+    /// We connected to the peer
+    Outgoing,
+}
+
+impl ConnectionDirection {
+    pub fn glyph(&self) -> char {
+        match self {
+            Self::Incoming => '↓',
+            Self::Outgoing => '↑',
         }
     }
 }

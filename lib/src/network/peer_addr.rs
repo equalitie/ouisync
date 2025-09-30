@@ -69,9 +69,7 @@ impl FromStr for PeerAddr {
         let (proto, addr) = match s.split_once('/') {
             Some((proto, addr)) => (proto, addr),
             None => {
-                return Err(format!(
-                    "Could not find '/' delimiter in the address {s:?}"
-                ));
+                return Err(format!("Could not find '/' delimiter in the address {s:?}"));
             }
         };
 

@@ -1,8 +1,4 @@
-use super::{
-    connection::{ConnectionDirection, ConnectionId},
-    peer_addr::PeerAddr,
-    PeerSource, PublicRuntimeId,
-};
+use super::{connection::ConnectionId, peer_addr::PeerAddr, PeerSource, PublicRuntimeId};
 use crate::crypto::sign::PublicKey;
 use state_monitor::{MonitoredValue, StateMonitor};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,10 +22,7 @@ impl ConnectionMonitor {
             runtime_id = field::Empty,
         );
 
-        let direction_glyph = match ConnectionDirection::from_source(source) {
-            ConnectionDirection::Incoming => '↓',
-            ConnectionDirection::Outgoing => '↑',
-        };
+        let direction_glyph = source.direction().glyph();
 
         // We need to ID the StateMonitor node because it is created prior to `addr` being
         // deduplicated and so we'd get an ambiguous entry otherwise.
