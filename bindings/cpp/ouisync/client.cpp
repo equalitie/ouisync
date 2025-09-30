@@ -22,8 +22,9 @@ namespace asio = boost::asio;
 namespace system = boost::system;
 namespace endian = boost::endian;
 
+using HandlerResult = std::variant<std::exception_ptr, ResponseResult>;
 using Socket = asio::ip::tcp::socket;
-using HandlerSig = void(std::exception_ptr, ResponseResult);
+using HandlerSig = void(HandlerResult);
 // If this breaks due to being in the detail namespace, consider using
 // asio::any_completion_handler<HandlerSig>
 using Handler = asio::detail::spawn_handler<asio::any_io_executor, HandlerSig, void>;
@@ -117,7 +118,7 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
                         handler = std::move(handler),
                         rs = std::move(rs)
                     ] () mutable {
-                        std::move(handler)(std::exception_ptr(), std::move(rs));
+                        std::move(handler)(std::move(rs));
                     };
                     state->pending.erase(entry_i);
                     asio::post(yield.get_executor(), std::move(h));
@@ -130,7 +131,7 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
         std::exception_ptr eptr = std::current_exception();
         auto pending = std::move(state->pending);
 
-        for (auto& [rq_id, entry] : state->pending) {
+        for (auto& [rq_id, entry] : pending) {
             std::visit(overloaded {
                 [&](Empty) {
                     entry = eptr;
@@ -146,7 +147,7 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
                         handler = std::move(handler),
                         eptr
                     ] () mutable {
-                        std::move(handler)(eptr, ResponseResult{});
+                        std::move(handler)(eptr);
                     };
                     asio::post(yield.get_executor(), std::move(h));
                 },
@@ -209,12 +210,12 @@ auto add_pending(
                 [&](ResponseResult& rs) {
                     auto rs_ = std::move(rs);
                     state->pending.erase(entry_i);
-                    std::move(handler)({}, std::move(rs_));
+                    std::move(handler)(std::move(rs_));
                 },
                 [&](std::exception_ptr& eptr) {
                     auto eptr_ = std::move(eptr);
                     state->pending.erase(entry_i);
-                    std::move(handler)(std::move(eptr), {});
+                    std::move(handler)(std::move(eptr));
                 },
                 [&](Handler&) {
                     throw_exception(error::logic, "Handler already set");
@@ -226,19 +227,49 @@ auto add_pending(
 }
 
 Response Client::invoke(const Request& request, asio::yield_context yield) {
+    auto work_guard = asio::make_work_guard(yield.get_executor());
     auto rq_id = _state->next_request_id++;
 
     auto responded = add_pending(_state, rq_id, asio::deferred);
     send(_state->socket, rq_id, request, yield);
-    ResponseResult result = responded(yield);
 
-    // Handle service error
-    if (auto failure = std::get_if<ResponseResult::Failure>(&result.value)) {
-        boost::system::system_error e(failure->code, failure->message);
-        throw e;
+    HandlerResult handler_result;
+
+    try {
+        handler_result = responded(yield);
+    } catch (...) {
+        // Likely this is boost::context::detail::forced_unwind which could
+        // happen if the handler was destroyed before it's executed. If unsure,
+        // use this
+        // https://stackoverflow.com/a/47164539/273348
+        throw std::logic_error("unknown exception");
     }
 
-    return std::move(std::get<Response>(result.value));
+    return std::visit(overloaded {
+            // Handle errors from the client
+            [&](std::exception_ptr& eptr) -> Response {
+                if (eptr) std::rethrow_exception(std::move(eptr));
+                throw std::logic_error("unexpected null eptr");
+            },
+            [&](ResponseResult& response_result) {
+                return std::visit(overloaded {
+                        // Handle errors from the service
+                        [&](ResponseResult::Failure& failure) -> Response {
+                            throw boost::system::system_error(
+                                failure.code,
+                                failure.message
+                            );
+                        },
+                        [&](Response& response) -> Response {
+                            return std::move(response.value);
+                        }
+                    },
+                    response_result.value
+                );
+            }
+        },
+        handler_result
+    );
 }
 
 /**
