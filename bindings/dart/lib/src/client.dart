@@ -19,55 +19,34 @@ import 'length_delimited_codec.dart';
 import 'message_codec.dart';
 
 class Client {
-  final Socket _socket;
-  final Stream<Uint8List> _stream;
+  final _Connector _connector;
+
+  Socket? _socket;
   StreamSubscription<Uint8List>? _streamSubscription;
+
   int _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
   final _notifications = <int, StreamSink<Object?>>{};
   bool _closed = false;
 
-  Client._(this._socket, this._stream) {
-    _streamSubscription =
-        _stream.transform(LengthDelimitedCodec()).listen(_receive, onDone: () {
-      if (!_closed) {
-        throw RemoteClosedConnectionClientException();
-      }
-    });
-  }
+  Client._(this._connector);
 
   static Future<Client> connect({
     required String configPath,
-    Duration? timeout,
-    Duration minWait = const Duration(milliseconds: 50),
-    Duration maxWait = const Duration(seconds: 1),
+    Duration minReconnectDelay = const Duration(milliseconds: 50),
+    Duration maxReconnectDelay = const Duration(seconds: 1),
   }) async {
-    DateTime start = DateTime.now();
-    Duration wait = minWait;
-    Exception? lastException;
-
     final (port, authKey) =
         await _readLocalEndpoint('$configPath/local_endpoint.conf');
 
-    while (true) {
-      if (timeout != null) {
-        if (DateTime.now().difference(start) >= timeout) {
-          throw lastException ?? ConnectTimeoutClientException();
-        }
-      }
+    final connector = _Connector(
+      port: port,
+      authKey: authKey,
+      minDelay: minReconnectDelay,
+      maxDelay: maxReconnectDelay,
+    );
 
-      try {
-        final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
-        final stream = socket.asBroadcastStream();
-        await _authenticate(stream, socket, authKey);
-
-        return Client._(socket, stream);
-      } on SocketException catch (e) {
-        lastException = e;
-        wait = _minDuration(wait * 2, maxWait);
-        await Future.delayed(wait);
-      }
-    }
+    return Client._(connector);
   }
 
   Future<Response> invoke(Request request) async {
@@ -89,20 +68,61 @@ class Client {
 
   Future<void> close() async {
     _closed = true;
+
     await _streamSubscription?.cancel();
-    await _socket.close();
+    _streamSubscription = null;
+
+    await _socket?.close();
+    _socket = null;
   }
 
   Future<Response> _invokeWithMessageId(int id, Request request) async {
-    final completer = Completer();
-    final response = completer.future;
-
-    _responses[id] = completer;
-
     final bytes = encodeLengthDelimited(encodeMessage(id, request));
-    _socket.add(bytes);
 
-    return await response;
+    while (true) {
+      final completer = Completer();
+      final response = completer.future;
+      _responses[id] = completer;
+
+      final socket = await _ensureConnected();
+
+      try {
+        socket.add(bytes);
+        return await response;
+      } on SocketException {
+        await _disconnect();
+      }
+    }
+  }
+
+  Future<Socket> _ensureConnected() async {
+    var socket = _socket;
+
+    if (socket == null) {
+      if (_closed) {
+        throw StateError('client closed');
+      }
+
+      // TODO: ensure this is not called more than once at the same time
+      Stream<Uint8List> stream;
+      (socket, stream) = await _connector.connect();
+
+      _socket = socket;
+
+      _streamSubscription = stream.transform(LengthDelimitedCodec()).listen(
+            _receive,
+            onError: _receiveError,
+            onDone: _receiveDone,
+          );
+    }
+
+    return socket;
+  }
+
+  Future<void> _disconnect() async {
+    await _streamSubscription?.cancel();
+    _streamSubscription = null;
+    _socket = null;
   }
 
   void _receive(Uint8List bytes) {
@@ -116,25 +136,61 @@ class Client {
           return;
         }
 
-        final controller = _notifications[message.id];
-        if (controller != null) {
-          controller.add(message.payload);
+        final sink = _notifications[message.id];
+        if (sink != null) {
+          sink.add(message.payload);
         }
 
       case MessageFailure():
         final completer = _responses.remove(message.id);
         if (completer != null) {
           completer.completeError(message.exception);
+          return;
+        }
+
+        final sink = _notifications[message.id];
+        if (sink != null) {
+          sink.addError(message.exception);
         }
 
       case MalformedPayload():
         final completer = _responses.remove(message.id);
+        final exception = InvalidData('invalid response');
+
         if (completer != null) {
-          completer.completeError(InvalidData('invalid response'));
+          completer.completeError(exception);
+          return;
+        }
+
+        final sink = _notifications[message.id];
+        if (sink != null) {
+          sink.addError(exception);
         }
 
       case MalformedMessage():
     }
+  }
+
+  void _receiveError(Object error, StackTrace st) {
+    for (final completer in _responses.takeValues()) {
+      completer.completeError(error, st);
+    }
+
+    for (final sink in _notifications.takeValues()) {
+      sink.addError(error, st);
+    }
+  }
+
+  void _receiveDone() {
+    for (final completer in _responses.takeValues()) {
+      completer.completeError(SocketException.closed());
+    }
+
+    for (final sink in _notifications.takeValues()) {
+      unawaited(sink.close());
+    }
+
+    _socket = null;
   }
 
   Future<void> _onSubscriptionListen(
@@ -172,34 +228,65 @@ Future<(int, List<int>)> _readLocalEndpoint(String path) async {
   return (port, authKey);
 }
 
-Future<void> _authenticate(
-  Stream<Uint8List> stream,
-  IOSink sink,
-  List<int> authKey,
-) async {
-  const challengeSize = 256;
-  const proofSize = 32;
+class _Connector {
+  final int port;
+  final List<int> authKey;
+  final Duration minDelay;
+  final Duration maxDelay;
 
-  final random = Random.secure();
-  final hmac = Hmac(sha256, authKey);
-  final reader = _Reader(stream);
+  const _Connector({
+    required this.port,
+    required this.authKey,
+    this.minDelay = const Duration(milliseconds: 50),
+    this.maxDelay = const Duration(seconds: 1),
+  });
 
-  final clientChallenge = List<int>.generate(
-    challengeSize,
-    (_) => random.nextInt(256),
-  );
+  Future<(Socket, Stream<Uint8List>)> connect() async {
+    var delay = minDelay;
 
-  sink.add(clientChallenge);
+    while (true) {
+      try {
+        final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
+        final stream = socket.asBroadcastStream();
 
-  final serverProof = Digest(await reader.read(proofSize));
-  if (serverProof != hmac.convert(clientChallenge)) {
-    throw PermissionDenied('server authentication failed');
+        await _authenticate(stream, socket);
+
+        return (socket, stream);
+      } on SocketException {
+        delay = _minDuration(delay * 2, maxDelay);
+        await Future.delayed(delay);
+      }
+    }
   }
 
-  final serverChallenge = await reader.read(challengeSize);
-  final clientProof = hmac.convert(serverChallenge);
+  Future<void> _authenticate(
+    Stream<Uint8List> stream,
+    IOSink sink,
+  ) async {
+    const challengeSize = 256;
+    const proofSize = 32;
 
-  sink.add(clientProof.bytes);
+    final random = Random.secure();
+    final hmac = Hmac(sha256, authKey);
+    final reader = _Reader(stream);
+
+    final clientChallenge = List<int>.generate(
+      challengeSize,
+      (_) => random.nextInt(256),
+    );
+
+    sink.add(clientChallenge);
+
+    final serverProof = Digest(await reader.read(proofSize));
+    if (serverProof != hmac.convert(clientChallenge)) {
+      throw PermissionDenied('server authentication failed');
+    }
+
+    final serverChallenge = await reader.read(challengeSize);
+    final clientProof = hmac.convert(serverChallenge);
+
+    sink.add(clientProof.bytes);
+  }
 }
 
 class _Reader {
@@ -227,17 +314,10 @@ class _Reader {
   }
 }
 
-sealed class ClientException {
-  @override
-  String toString();
-}
-
-class ConnectTimeoutClientException {
-  @override
-  String toString() => 'Timeout connecting to the service';
-}
-
-class RemoteClosedConnectionClientException {
-  @override
-  String toString() => 'Remote closed connection';
+extension<K, V> on Map<K, V> {
+  List<V> takeValues() {
+    final values = this.values.toList();
+    clear();
+    return values;
+  }
 }
