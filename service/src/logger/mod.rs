@@ -49,7 +49,7 @@ fn create_log_filter() -> EnvFilter {
         // time (via a command-line option or so)
         .parse_lossy(
             env::var(EnvFilter::DEFAULT_ENV)
-                .unwrap_or_else(|_| "ouisync=debug,deadlock=warn".to_string()),
+                .unwrap_or_else(|_| "ouisync=debug,state_monitor=warn,deadlock=warn".to_string()),
         )
 }
 

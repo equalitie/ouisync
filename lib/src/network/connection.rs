@@ -1,7 +1,7 @@
 use super::{
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
-    peer_source::PeerSource,
+    peer_source::{ConnectionDirection, PeerSource},
     peer_state::PeerState,
     runtime_id::PublicRuntimeId,
     stats::{ByteCounters, StatsTracker},
@@ -10,7 +10,6 @@ use crate::{
     collections::{hash_map::Entry, HashMap},
     sync::{AwaitDrop, DropAwaitable, WatchSenderExt},
 };
-use serde::Serialize;
 use std::{
     fmt,
     sync::{
@@ -40,7 +39,7 @@ impl ConnectionSet {
     pub fn reserve(&self, addr: PeerAddr, source: PeerSource) -> ReserveResult {
         let key = ConnectionKey {
             addr,
-            dir: ConnectionDirection::from_source(source),
+            dir: source.direction(),
         };
 
         self.connections
@@ -142,24 +141,6 @@ impl PeerInfoCollector {
             .iter()
             .map(|(key, data)| data.peer_info(key.addr))
             .collect()
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
-pub(super) enum ConnectionDirection {
-    Incoming,
-    Outgoing,
-}
-
-impl ConnectionDirection {
-    pub fn from_source(source: PeerSource) -> Self {
-        match source {
-            PeerSource::Listener => Self::Incoming,
-            PeerSource::UserProvided
-            | PeerSource::LocalDiscovery
-            | PeerSource::Dht
-            | PeerSource::PeerExchange => Self::Outgoing,
-        }
     }
 }
 

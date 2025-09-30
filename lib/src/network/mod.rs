@@ -41,29 +41,29 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
-use choke::Choker;
-use constants::REQUEST_TIMEOUT;
-use event::ProtocolVersions;
 pub use net::stun::NatBehavior;
-use request_tracker::RequestTracker;
 
 use self::{
+    choke::Choker,
     connection::{ConnectionPermit, ConnectionSet, ReserveResult},
     connection_monitor::ConnectionMonitor,
+    constants::REQUEST_TIMEOUT,
     dht_discovery::DhtDiscovery,
+    event::ProtocolVersions,
     gateway::{Connectivity, Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::PeerPort,
     peer_exchange::{PexDiscovery, PexRepository},
+    peer_source::ConnectionDirection,
     protocol::{Version, MAGIC, VERSION},
+    request_tracker::RequestTracker,
     seen_peers::{SeenPeer, SeenPeers},
     stats::{ByteCounters, StatsTracker},
     stun::StunClients,
 };
 use crate::{
     collections::HashSet,
-    network::connection::ConnectionDirection,
     protocol::RepositoryId,
     repository::{RepositoryHandle, Vault},
 };
@@ -831,7 +831,7 @@ impl Inner {
             &connection,
             VERSION,
             &self.this_runtime_id,
-            ConnectionDirection::from_source(permit.source()),
+            permit.source().direction(),
         )
         .await;
 
@@ -883,8 +883,11 @@ impl Inner {
                     that_runtime_id,
                     connection,
                     pex_peer,
-                    self.peers_monitor
-                        .make_child(format!("{:?}", that_runtime_id.as_public_key())),
+                    self.peers_monitor.make_child(format!(
+                        "{} {}",
+                        permit.source().direction().glyph(),
+                        permit.addr()
+                    )),
                     self.stats_tracker.bytes.clone(),
                     permit.byte_counters(),
                 )

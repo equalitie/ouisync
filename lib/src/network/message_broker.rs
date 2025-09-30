@@ -10,12 +10,17 @@ use super::{
     server::Server,
     stats::ByteCounters,
 };
-use crate::{collections::HashMap, crypto::Hashable, protocol::RepositoryId, repository::Vault};
+use crate::{
+    collections::HashMap,
+    crypto::{sign::PublicKey, Hashable},
+    protocol::RepositoryId,
+    repository::Vault,
+};
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use bytes::{BufMut, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use net::{bus::TopicId, unified::Connection};
-use state_monitor::StateMonitor;
+use state_monitor::{MonitoredValue, StateMonitor};
 use std::{collections::hash_map::Entry, sync::Arc, time::Instant};
 use tokio::{
     select,
@@ -36,6 +41,7 @@ pub(super) struct MessageBroker {
     links: HashMap<RepositoryId, oneshot::Sender<()>>,
     pex_peer: PexPeer,
     monitor: StateMonitor,
+    _monitor_runtime_id: MonitoredValue<PublicKey>,
     span: SpanGuard,
 }
 
@@ -51,6 +57,8 @@ impl MessageBroker {
     ) -> Self {
         let span = SpanGuard::new(Span::current());
 
+        let monitor_runtime_id = monitor.make_value("runtime id", *that_runtime_id.as_public_key());
+
         Self {
             this_runtime_id,
             that_runtime_id,
@@ -61,6 +69,7 @@ impl MessageBroker {
             links: HashMap::default(),
             pex_peer,
             monitor,
+            _monitor_runtime_id: monitor_runtime_id,
             span,
         }
     }

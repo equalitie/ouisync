@@ -2,10 +2,10 @@
 //! other in order to discover new peers.
 
 use super::{
-    connection::ConnectionDirection,
     ip,
     message::Message,
     peer_addr::PeerAddr,
+    peer_source::ConnectionDirection,
     seen_peers::{SeenPeer, SeenPeers},
     PeerSource,
 };
@@ -159,9 +159,7 @@ impl PexPeer {
     /// Call this whenever new connection to this peer has been established. The `closed` should
     /// trigger when the connection gets closed.
     pub fn handle_connection(&self, addr: PeerAddr, source: PeerSource, closed: AwaitDrop) {
-        if addr.is_tcp()
-            && ConnectionDirection::from_source(source) == ConnectionDirection::Incoming
-        {
+        if addr.is_tcp() && source.direction() == ConnectionDirection::Incoming {
             // Incomming TCP address can't be connected to (it has different port than the listener)
             // so there is no point exchanging it.
             return;
