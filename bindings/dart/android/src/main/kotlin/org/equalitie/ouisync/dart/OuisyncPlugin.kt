@@ -45,7 +45,7 @@ class OuisyncPlugin :
     private val mainHandler = Handler(Looper.getMainLooper())
     private var activity: Activity? = null
     private var activityLifecycle: Lifecycle? = null
-    private var serviceParams: ServiceParams? = null
+    private val serviceState = ServiceState()
 
     private val activityLifecycleObserver =
         object : DefaultLifecycleObserver {
@@ -73,14 +73,21 @@ class OuisyncPlugin :
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-        activityLifecycle =
-            FlutterLifecycleAdapter.getActivityLifecycle(binding).apply {
-                addObserver(activityLifecycleObserver)
+        val activity = binding.activity
+        val activityLifecycle = FlutterLifecycleAdapter.getActivityLifecycle(binding).apply {
+            addObserver(activityLifecycleObserver)
+        }
+
+        activityLifecycle.coroutineScope.launch {
+            activityLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                startService()
             }
+        }
 
-        requestPermissions(binding.activity)
+        requestPermissions(activity)
 
-        activity = binding.activity
+        this.activity = activity
+        this.activityLifecycle = activityLifecycle
     }
 
     override fun onDetachedFromActivity() {
@@ -181,8 +188,6 @@ class OuisyncPlugin :
         val activity = requireNotNull(activity)
         val activityLifecycle = requireNotNull(activityLifecycle)
 
-        serviceParams = serviceParams ?: ServiceParams(null, null, null)
-
         val receiver =
             object : BroadcastReceiver() {
                 override fun onReceive(
@@ -202,15 +207,14 @@ class OuisyncPlugin :
 
         activityLifecycle.coroutineScope.launch {
             activity.setConfigPath(configPath)
-
-            activityLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                startService()
-            }
         }
+
+        serviceState.started = true
+        startService()
     }
 
     private fun onStop() {
-        serviceParams = null
+        serviceState.started = false
 
         // Send `ACTION_STOP` intent to the service and let it stop itself gracefully.
         activity?.let { activity ->
@@ -225,7 +229,7 @@ class OuisyncPlugin :
         contentTitle: String?,
         contentText: String?,
     ) {
-        serviceParams = ServiceParams(channelName, contentTitle, contentText)
+        serviceState.notification = NotificationParams(channelName, contentTitle, contentText)
         startService()
     }
 
@@ -272,26 +276,37 @@ class OuisyncPlugin :
 
     private fun startService() {
         val activity = requireNotNull(activity)
+        val activityLifecycle = requireNotNull(activityLifecycle)
 
-        val params = serviceParams
-        if (params == null) {
+        if (!serviceState.started) {
             return;
         }
 
-        val intent = Intent(activity, OuisyncService::class.java).apply {
-            putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME,  params.notificationChannelName)
-            putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TITLE, params.notificationContentTitle)
-            putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TEXT,  params.notificationContentText)
+        val intent = Intent(activity, OuisyncService::class.java)
+
+        // If the activity is resumed, configure the notification which starts the service as
+        // foreground service. Otherwise, start it as regular (background) service.
+        if (activityLifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            serviceState.notification.let { n ->
+                intent.putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME,  n.channelName)
+                intent.putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TITLE, n.contentTitle)
+                intent.putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TEXT,  n.contentText)
+            }
         }
 
         activity.startService(intent)
     }
 }
 
-private data class ServiceParams(
-    val notificationChannelName: String?,
-    val notificationContentTitle: String?,
-    val notificationContentText: String?
+private class ServiceState(
+    var started: Boolean = false,
+    var notification: NotificationParams = NotificationParams(),
+)
+
+private data class NotificationParams(
+    val channelName: String? = null,
+    val contentTitle: String? = null,
+    val contentText: String? = null
 )
 
 private fun logPriority(level: LogLevel) =
