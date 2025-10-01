@@ -21,13 +21,11 @@ import 'message_codec.dart';
 class Client {
   final _Connector _connector;
 
-  Socket? _socket;
-  StreamSubscription<Uint8List>? _streamSubscription;
+  _SocketState _state = const _Disconnected();
 
-  int _nextMessageId = 0;
+  var _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
   final _notifications = <int, StreamSink<Object?>>{};
-  bool _closed = false;
 
   Client._(this._connector);
 
@@ -67,13 +65,29 @@ class Client {
   }
 
   Future<void> close() async {
-    _closed = true;
+    while (true) {
+      final state = _state;
 
-    await _streamSubscription?.cancel();
-    _streamSubscription = null;
+      switch (state) {
+        case _Transitioning():
+          await state.future;
+        case _Disconnected():
+          _state = _Closed();
+          return;
+        case _Connected():
+          final completer = Completer();
+          _state = _Transitioning(completer.future);
 
-    await _socket?.close();
-    _socket = null;
+          await state.subscription.cancel();
+          await state.socket.close();
+
+          _state = _Closed();
+          completer.complete();
+          return;
+        case _Closed():
+          return;
+      }
+    }
   }
 
   Future<Response> _invokeWithMessageId(int id, Request request) async {
@@ -96,33 +110,55 @@ class Client {
   }
 
   Future<Socket> _ensureConnected() async {
-    var socket = _socket;
+    while (true) {
+      final state = _state;
 
-    if (socket == null) {
-      if (_closed) {
-        throw StateError('client closed');
+      switch (state) {
+        case _Transitioning():
+          await state.future;
+        case _Disconnected():
+          final completer = Completer();
+          _state = _Transitioning(completer.future);
+
+          final (socket, stream) = await _connector.connect();
+          final subscription = stream.transform(LengthDelimitedCodec()).listen(
+                _receive,
+                onError: _receiveError,
+                onDone: _receiveDone,
+              );
+
+          _state = _Connected(socket, subscription);
+          completer.complete();
+        case _Connected():
+          return state.socket;
+        case _Closed():
+          throw StateError('client closed');
       }
-
-      // TODO: ensure this is not called more than once at the same time
-      Stream<Uint8List> stream;
-      (socket, stream) = await _connector.connect();
-
-      _socket = socket;
-
-      _streamSubscription = stream.transform(LengthDelimitedCodec()).listen(
-            _receive,
-            onError: _receiveError,
-            onDone: _receiveDone,
-          );
     }
-
-    return socket;
   }
 
   Future<void> _disconnect() async {
-    await _streamSubscription?.cancel();
-    _streamSubscription = null;
-    _socket = null;
+    while (true) {
+      final state = _state;
+      switch (state) {
+        case _Transitioning():
+          await state.future;
+        case _Disconnected():
+          return;
+        case _Connected():
+          final completer = Completer();
+          _state = _Transitioning(completer.future);
+
+          await state.subscription.cancel();
+          await state.socket.close();
+
+          _state = _Disconnected();
+          completer.complete();
+          return;
+        case _Closed():
+          return;
+      }
+    }
   }
 
   void _receive(Uint8List bytes) {
@@ -190,7 +226,7 @@ class Client {
       unawaited(sink.close());
     }
 
-    _socket = null;
+    _state = _Disconnected();
   }
 
   Future<void> _onSubscriptionListen(
@@ -210,8 +246,20 @@ class Client {
 
   Future<void> _onSubscriptionCancel(int id) async {
     _notifications.remove(id);
-    if (_closed) return;
-    await invoke(RequestSessionUnsubscribe(id: MessageId(id)));
+
+    while (true) {
+      final state = _state;
+      switch (state) {
+        case _Transitioning():
+          await state.future;
+        case _Connected():
+          await invoke(RequestSessionUnsubscribe(id: MessageId(id)));
+          return;
+        case _Closed():
+        case _Disconnected():
+          return;
+      }
+    }
   }
 }
 
@@ -287,6 +335,31 @@ class _Connector {
 
     sink.add(clientProof.bytes);
   }
+}
+
+sealed class _SocketState {
+  const _SocketState();
+}
+
+class _Transitioning extends _SocketState {
+  final Future<void> future;
+
+  const _Transitioning(this.future);
+}
+
+class _Disconnected extends _SocketState {
+  const _Disconnected();
+}
+
+class _Connected extends _SocketState {
+  final Socket socket;
+  final StreamSubscription<Uint8List> subscription;
+
+  const _Connected(this.socket, this.subscription);
+}
+
+class _Closed extends _SocketState {
+  const _Closed();
 }
 
 class _Reader {
