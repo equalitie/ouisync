@@ -90,11 +90,9 @@ class OuisyncProvider : DocumentsProvider() {
             object : BroadcastReceiver() {
                 override fun onReceive(context: Context, intent: Intent) {
                     val restart =
-                        when {
-                            intent.action == OuisyncService.ACTION_STARTED ||
-                                intent.action == OuisyncService.ACTION_STATUS && resultCode != 0 -> true
-                            else -> false
-                        }
+                        intent.action == OuisyncService.ACTION_STARTED ||
+                            intent.action == OuisyncService.ACTION_STATUS &&
+                            resultCode != 0
 
                     if (restart) {
                         scope.launch {

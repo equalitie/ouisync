@@ -18,6 +18,8 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.coroutineScope
+import androidx.lifecycle.repeatOnLifecycle
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -39,12 +41,11 @@ class OuisyncPlugin :
     FlutterPlugin,
     MethodCallHandler,
     ActivityAware {
-    private val scope = CoroutineScope(Dispatchers.Main)
-
     private var channel: MethodChannel? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var activity: Activity? = null
     private var activityLifecycle: Lifecycle? = null
+    private var serviceParams: ServiceParams? = null
 
     private val activityLifecycleObserver =
         object : DefaultLifecycleObserver {
@@ -178,36 +179,39 @@ class OuisyncPlugin :
         onStarted: () -> Unit,
     ) {
         val activity = requireNotNull(activity)
+        val activityLifecycle = requireNotNull(activityLifecycle)
 
-        scope.launch {
-            activity.setConfigPath(configPath)
+        serviceParams = serviceParams ?: ServiceParams(null, null, null)
 
-            suspendCoroutine<Unit> { cont ->
-                val receiver =
-                    object : BroadcastReceiver() {
-                        override fun onReceive(
-                            context: Context,
-                            intent: Intent,
-                        ) {
-                            context.unregisterReceiver(this)
-                            cont.resume(Unit)
-                        }
-                    }
-
-                activity.registerReceiver(
-                    receiver,
-                    IntentFilter(OuisyncService.ACTION_STARTED),
-                    Context.RECEIVER_NOT_EXPORTED,
-                )
-
-                activity.startService(Intent(activity, OuisyncService::class.java))
+        val receiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(
+                    context: Context,
+                    intent: Intent,
+                ) {
+                    context.unregisterReceiver(this)
+                    onStarted()
+                }
             }
 
-            onStarted()
+        activity.registerReceiver(
+            receiver,
+            IntentFilter(OuisyncService.ACTION_STARTED),
+            Context.RECEIVER_NOT_EXPORTED,
+        )
+
+        activityLifecycle.coroutineScope.launch {
+            activity.setConfigPath(configPath)
+
+            activityLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                startService()
+            }
         }
     }
 
     private fun onStop() {
+        serviceParams = null
+
         // Send `ACTION_STOP` intent to the service and let it stop itself gracefully.
         activity?.let { activity ->
             activity.sendBroadcast(
@@ -221,15 +225,8 @@ class OuisyncPlugin :
         contentTitle: String?,
         contentText: String?,
     ) {
-        val activity = requireNotNull(activity)
-
-        activity.startService(
-            Intent(activity, OuisyncService::class.java).apply {
-                putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME, channelName)
-                putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TITLE, contentTitle)
-                putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TEXT, contentText)
-            },
-        )
+        serviceParams = ServiceParams(channelName, contentTitle, contentText)
+        startService()
     }
 
     private fun onViewFile(uri: Uri): Boolean {
@@ -272,7 +269,30 @@ class OuisyncPlugin :
 
         return true
     }
+
+    private fun startService() {
+        val activity = requireNotNull(activity)
+
+        val params = serviceParams
+        if (params == null) {
+            return;
+        }
+
+        val intent = Intent(activity, OuisyncService::class.java).apply {
+            putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME,  params.notificationChannelName)
+            putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TITLE, params.notificationContentTitle)
+            putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TEXT,  params.notificationContentText)
+        }
+
+        activity.startService(intent)
+    }
 }
+
+private data class ServiceParams(
+    val notificationChannelName: String?,
+    val notificationContentTitle: String?,
+    val notificationContentText: String?
+)
 
 private fun logPriority(level: LogLevel) =
     when (level) {
@@ -282,3 +302,4 @@ private fun logPriority(level: LogLevel) =
         LogLevel.DEBUG -> Log.DEBUG
         LogLevel.TRACE -> Log.VERBOSE
     }
+
