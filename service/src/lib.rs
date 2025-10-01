@@ -82,6 +82,11 @@ impl Service {
 
         local_endpoint_entry.set(local_server.endpoint()).await?;
 
+        tracing::debug!(
+            port = local_server.endpoint().port,
+            "local server listening"
+        );
+
         let state = State::init(config).await?;
         let state = Arc::new(state);
 

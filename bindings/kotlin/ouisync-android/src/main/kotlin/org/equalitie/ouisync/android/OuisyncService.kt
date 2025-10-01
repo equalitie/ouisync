@@ -124,6 +124,7 @@ open class OuisyncService : android.app.Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         Log.v(TAG, "onTimeout($startId, $fgsType)")
         stopForeground(STOP_FOREGROUND_REMOVE)
+        isForeground = false
     }
 
     private suspend fun stopInner() {
