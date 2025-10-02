@@ -37,6 +37,26 @@ import org.equalitie.ouisync.service.initLog
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
+// This plugin is mainly responsible for maintaining [OuisyncService]. The service can be in one of
+// three states:
+//
+// - Not running
+// - Running as a background service
+// - Running as a foreground service
+//
+// To start the service, invoke the `start` channel method. To switch it to a foreground service,
+// set up the notification with a non-null `contentTitle` by invoking the `notify` channel method.
+//
+// There are several restrictions imposed by the Android os:
+//
+// - A foreground service can't be started when the app is in the background (more details:
+//   https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start).
+//   This plugin handles this by delaying the start until the app has been resumed.
+// - There is a limit on how long foreground service can run while the app is in the background
+//   (more details: https://developer.android.com/develop/background-work/services/fgs/timeout).
+//   When the limit is reached, the service demotes itself to a background service and the os
+//   usually terminates it shortly afterwards. When the app is resumed, this plugin makes sure the
+//   service is restarted.
 class OuisyncPlugin :
     FlutterPlugin,
     MethodCallHandler,
@@ -78,9 +98,10 @@ class OuisyncPlugin :
             addObserver(activityLifecycleObserver)
         }
 
+        // Invoke `maintainService` every time the activity is resumed.
         activityLifecycle.coroutineScope.launch {
             activityLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                startService()
+                maintainService()
             }
         }
 
@@ -209,19 +230,13 @@ class OuisyncPlugin :
             activity.setConfigPath(configPath)
         }
 
-        serviceState.started = true
-        startService()
+        serviceState.enabled = true
+        maintainService()
     }
 
     private fun onStop() {
-        serviceState.started = false
-
-        // Send `ACTION_STOP` intent to the service and let it stop itself gracefully.
-        activity?.let { activity ->
-            activity.sendBroadcast(
-                Intent(OuisyncService.ACTION_STOP).setPackage(activity.getPackageName()),
-            )
-        }
+        serviceState.enabled = false
+        stopService()
     }
 
     private fun onNotify(
@@ -230,7 +245,7 @@ class OuisyncPlugin :
         contentText: String?,
     ) {
         serviceState.notification = NotificationParams(channelName, contentTitle, contentText)
-        startService()
+        maintainService()
     }
 
     private fun onViewFile(uri: Uri): Boolean {
@@ -274,18 +289,27 @@ class OuisyncPlugin :
         return true
     }
 
-    private fun startService() {
+    // - If the service has been enabled by invoking the `start` method, starts the service as a
+    //   regualar (background) service.
+    // - If the service hasn't been enabled or if it has been disabled by invoking the `stop`
+    //   method, does nothing.
+    // - If the service has been enabled and the notification has been enabled by invoking the
+    //   `notify` method and the activity is resumed, starts the service as a foreground service.
+    // - If the service was already running as a background service and the notification has been
+    //   enabled and the activity is resumed, switches the service to a foreground service.
+    // - Otherwise, does nothing.
+    private fun maintainService() {
         val activity = requireNotNull(activity)
         val activityLifecycle = requireNotNull(activityLifecycle)
 
-        if (!serviceState.started) {
+        if (!serviceState.enabled) {
             return;
         }
 
         val intent = Intent(activity, OuisyncService::class.java)
 
-        // If the activity is resumed, configure the notification which starts the service as
-        // foreground service. Otherwise, start it as regular (background) service.
+        // If the activity is resumed, configure also the notification which causes the service to
+        // start as foreground service. Otherwise, it's started as regular (background) service.
         if (activityLifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             serviceState.notification.let { n ->
                 intent.putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME,  n.channelName)
@@ -296,10 +320,19 @@ class OuisyncPlugin :
 
         activity.startService(intent)
     }
+
+    private fun stopService() {
+        // Send `ACTION_STOP` intent to the service and let it stop itself gracefully.
+        activity?.let { activity ->
+            activity.sendBroadcast(
+                Intent(OuisyncService.ACTION_STOP).setPackage(activity.getPackageName()),
+            )
+        }
+    }
 }
 
 private class ServiceState(
-    var started: Boolean = false,
+    var enabled: Boolean = false,
     var notification: NotificationParams = NotificationParams(),
 )
 
