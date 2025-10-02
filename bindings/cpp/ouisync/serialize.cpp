@@ -90,10 +90,10 @@ struct UnpackObserver {
     template<class M> void field(M& member_out) {
         if (dsc.type == describe::FieldsType::DIRECT) {
             if (dsc.count == 0) {
-                throw_exception(error::deserialize, "wrong description");
+                throw_error(error::deserialize, "wrong description");
             }
             if (parsed > 0) {
-                throw_exception(error::deserialize, "wrong description");
+                throw_error(error::deserialize, "wrong description");
             }
             member_out = obj.as<M>();
             ++parsed;
@@ -101,14 +101,14 @@ struct UnpackObserver {
         else if (dsc.type == describe::FieldsType::ARRAY) {
             if (!array_checked) {
                 if (obj.via.array.size != dsc.count) {
-                    throw_exception(error::deserialize, "wrong description");
+                    throw_error(error::deserialize, "wrong description");
                 }
                 array_checked = true;
             }
             member_out = obj.via.array.ptr[parsed++].as<M>();
         }
         else {
-            throw_exception(error::logic, "unreachable");
+            throw_error(error::logic, "unreachable");
         }
     }
 };
@@ -159,7 +159,7 @@ struct convert<E> {
         T n = obj.as<T>();
 
         if (!ouisync::describe::Enum<E>::is_valid(n)) {
-            ouisync::throw_exception(ouisync::error::deserialize, "Invalid variant");
+            ouisync::throw_error(ouisync::error::deserialize, "Invalid variant");
         }
 
         out = static_cast<E>(n);
@@ -229,11 +229,11 @@ struct convert<std::variant<Ts...>> {
         }
 
         if (obj.type != msgpack::type::MAP) {
-            ouisync::throw_exception(ouisync::error::deserialize, "variant not packed as map nor str");
+            ouisync::throw_error(ouisync::error::deserialize, "variant not packed as map nor str");
         }
 
         if (obj.via.map.size != 1) {
-            ouisync::throw_exception(ouisync::error::deserialize, "variant map size is not 1");
+            ouisync::throw_error(ouisync::error::deserialize, "variant map size is not 1");
         }
 
         auto kv = obj.via.map.ptr[0];

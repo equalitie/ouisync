@@ -2,6 +2,8 @@
 #include <ouisync/serialize.hpp>
 #include <ouisync/debug.hpp> // debug
 #include <ouisync/error.hpp>
+#include <ouisync/utils.hpp>
+#include <ouisync/subscriptions.hpp>
 
 #include <boost/json.hpp>
 #include <boost/hash2/sha2.hpp>
@@ -22,32 +24,44 @@ namespace asio = boost::asio;
 namespace system = boost::system;
 namespace endian = boost::endian;
 
-using HandlerResult = std::variant<std::exception_ptr, ResponseResult>;
 using Socket = asio::ip::tcp::socket;
-using HandlerSig = void(HandlerResult);
 // If this breaks due to being in the detail namespace, consider using
 // asio::any_completion_handler<HandlerSig>
-using Handler = asio::detail::spawn_handler<asio::any_io_executor, HandlerSig, void>;
+using ResponseHandler = asio::detail::spawn_handler<asio::any_io_executor, HandlerSig, void>;
 using RawMessageId = decltype(MessageId::value);
+using RawRepositoryHandle = decltype(RepositoryHandle::value);
 
-// Utility for using std::variant
-template<class... Ts>
-struct overloaded : Ts... { using Ts::operator()...; };
+// Marker to signify this pending entry correponds to a subscription
+struct Subscription {};
 
-struct Empty {};
-using ResponseEntry = std::variant<Empty, ResponseResult, std::exception_ptr, Handler>;
+using Pending = std::variant<
+    // std::monostate is used when no handler has yet been set and no response has
+    // arrived. This is needed because we get an async handler from
+    // asio::async_initiate only once the operation starts to await, but we
+    // need to "register" an entry beforehand in case that a response arrives
+    // in the mean time.
+    std::monostate,
+    HandlerResult,
+    ResponseHandler,
+    Subscription
+>;
 
-struct Client::State {
+struct Client::State : std::enable_shared_from_this<Client::State> {
     Socket socket;
-    std::unordered_map<RawMessageId, ResponseEntry> pending;
+    std::unordered_map<RawMessageId, Pending> pending;
+    Subscriptions subscriptions;
+
     RawMessageId next_request_id = 0;
+    SubscriberId next_subscriber_id = 0;
+
+    State(Socket socket): socket(std::move(socket)) {}
 };
 
 static
-void send(Socket& socket, RawMessageId rq_id, const Request& rq, asio::yield_context yield) {
+void send(Socket& socket, MessageId rq_id, const Request& rq, asio::yield_context yield) {
     std::stringstream request_buffer = serialize(rq);
 
-    uint64_t rq_id_be = endian::native_to_big(rq_id);
+    uint64_t rq_id_be = endian::native_to_big(rq_id.value);
 
     uint32_t rq_size = sizeof(rq_id_be) + request_buffer.view().size();
     uint32_t rq_size_be = endian::native_to_big(rq_size);
@@ -62,8 +76,20 @@ void send(Socket& socket, RawMessageId rq_id, const Request& rq, asio::yield_con
         yield);
 }
 
+HandlerResult to_handler_result(ResponseResult&& rs) {
+    return std::visit(overloaded {
+        [](ResponseResult::Failure&& failure) -> HandlerResult {
+            return failure.move_to_exception_ptr();
+        },
+        [](Response&& response) -> HandlerResult {
+            return std::move(response);
+        }
+    },
+    std::move(rs.value));
+}
+
 static
-std::tuple<RawMessageId, ResponseResult>
+std::tuple<MessageId, HandlerResult>
 receive(Socket& socket, asio::yield_context yield) {
     uint32_t rs_size_be;
     asio::async_read(socket, asio::buffer(&rs_size_be, sizeof(rs_size_be)), yield);
@@ -72,7 +98,7 @@ receive(Socket& socket, asio::yield_context yield) {
     uint64_t rs_id_be;
 
     if (rs_size < sizeof(rs_id_be)) {
-        throw_exception(error::protocol, "response too small");
+        throw_error(error::protocol, "response too small");
     }
 
     std::vector<char> response_data(rs_size - sizeof(rs_id_be));
@@ -87,8 +113,8 @@ receive(Socket& socket, asio::yield_context yield) {
     ResponseResult response_result = deserialize(response_data);
 
     return {
-        endian::big_to_native(rs_id_be),
-        std::move(response_result)
+        MessageId{endian::big_to_native(rs_id_be)},
+        to_handler_result(std::move(response_result))
     };
 }
 
@@ -97,23 +123,20 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
     try {
         while (state->socket.is_open()) {
             auto [rs_id, rs] = receive(state->socket, yield);
-            auto entry_i = state->pending.find(rs_id);
+            auto entry_i = state->pending.find(rs_id.value);
             if (entry_i == state->pending.end()) {
                 continue;
             }
             auto& entry = entry_i->second;
 
             std::visit(overloaded {
-                [&](Empty) {
-                    entry.emplace<ResponseResult>(std::move(rs));
+                [&](std::monostate) {
+                    entry.emplace<HandlerResult>(std::move(rs));
                 },
-                [&](const ResponseResult&) {
+                [&](const HandlerResult&) {
                     std::cout << "Warning: response received more than once (ignored)\n";
                 },
-                [&](const std::exception_ptr&) {
-                    std::cout << "Warning: response received more than once (ignored)\n";
-                },
-                [&](Handler& handler) {
+                [&](ResponseHandler& handler) {
                     auto h = [
                         handler = std::move(handler),
                         rs = std::move(rs)
@@ -123,26 +146,28 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
                     state->pending.erase(entry_i);
                     asio::post(yield.get_executor(), std::move(h));
                 },
+                [&](Subscription&) {
+                    state->subscriptions.handle(yield.get_executor(), rs_id, rs);
+                }
             },
             entry);
         }
     }
     catch (...) {
         std::exception_ptr eptr = std::current_exception();
+
         auto pending = std::move(state->pending);
+        auto subscriptions = std::move(state->subscriptions);
 
         for (auto& [rq_id, entry] : pending) {
             std::visit(overloaded {
-                [&](Empty) {
+                [&](std::monostate) {
                     entry = eptr;
                 },
-                [&](const ResponseResult&) {
+                [&](const HandlerResult&) {
                     // Ignored, user will receive original response
                 },
-                [&](const std::exception_ptr&) {
-                    // Ignored, user will receive original error
-                },
-                [&](Handler& handler) {
+                [&](ResponseHandler& handler) {
                     auto h = [
                         handler = std::move(handler),
                         eptr
@@ -151,9 +176,14 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
                     };
                     asio::post(yield.get_executor(), std::move(h));
                 },
+                [&](Subscription&) {
+                    // Subscriptions are handled below
+                }
             },
             entry);
         }
+
+        subscriptions.handle_all(yield.get_executor(), eptr);
     }
 }
 
@@ -207,7 +237,7 @@ auto add_pending(
     RawMessageId rq_id,
     CompletionToken&& token
 ) {
-    state->pending.emplace(std::pair(rq_id, Empty{}));
+    state->pending.emplace(std::pair(rq_id, std::monostate()));
 
     return asio::async_initiate<CompletionToken, HandlerSig>(
         // Note that this lambda is executed only once the token is awaited.
@@ -215,21 +245,19 @@ auto add_pending(
             auto entry_i = state->pending.find(rq_id);
             auto& entry = entry_i->second;
             std::visit(overloaded {
-                [&](Empty) {
-                    entry.emplace<Handler>(std::move(handler));
+                [&](std::monostate) {
+                    entry.emplace<ResponseHandler>(std::move(handler));
                 },
-                [&](ResponseResult& rs) {
+                [&](HandlerResult& rs) {
                     auto rs_ = std::move(rs);
                     state->pending.erase(entry_i);
                     std::move(handler)(std::move(rs_));
                 },
-                [&](std::exception_ptr& eptr) {
-                    auto eptr_ = std::move(eptr);
-                    state->pending.erase(entry_i);
-                    std::move(handler)(std::move(eptr));
+                [&](ResponseHandler&) {
+                    throw_error(error::logic, "Handler already set");
                 },
-                [&](Handler&) {
-                    throw_exception(error::logic, "Handler already set");
+                [&](Subscription&) {
+                    throw_error(error::logic, "Response/subscription mismatch");
                 },
             },
             entry);
@@ -242,7 +270,7 @@ Response Client::invoke(const Request& request, asio::yield_context yield) {
     auto rq_id = _state->next_request_id++;
 
     auto responded = add_pending(_state, rq_id, asio::deferred);
-    send(_state->socket, rq_id, request, yield);
+    send(_state->socket, MessageId{rq_id}, request, yield);
 
     HandlerResult handler_result;
 
@@ -253,34 +281,58 @@ Response Client::invoke(const Request& request, asio::yield_context yield) {
         // happen if the handler was destroyed before it's executed. If unsure,
         // use this
         // https://stackoverflow.com/a/47164539/273348
-        throw std::logic_error("unknown exception");
+        throw_error(error::logic, "unknown exception");
     }
 
     return std::visit(overloaded {
-            // Handle errors from the client
-            [&](std::exception_ptr& eptr) -> Response {
+            [](std::exception_ptr eptr) -> Response {
                 if (eptr) std::rethrow_exception(std::move(eptr));
-                throw std::logic_error("unexpected null eptr");
+                throw_error(error::logic, "unexpected null eptr");
             },
-            [&](ResponseResult& response_result) {
-                return std::visit(overloaded {
-                        // Handle errors from the service
-                        [&](ResponseResult::Failure& failure) -> Response {
-                            throw boost::system::system_error(
-                                failure.code,
-                                failure.message
-                            );
-                        },
-                        [&](Response& response) -> Response {
-                            return std::move(response.value);
-                        }
-                    },
-                    response_result.value
-                );
+            [](Response response) -> Response {
+                return std::move(response.value);
             }
         },
-        handler_result
+        std::move(handler_result)
     );
+}
+
+SubscriberId Client::new_subscriber_id() {
+    return _state->next_subscriber_id++;
+}
+
+void Client::subscribe(const RepositoryHandle& repo_handle, SubscriberId subscriber_id, std::function<HandlerSig> handler, asio::yield_context yield) {
+    if (!_state) {
+        throw_error(error::not_connected);
+    }
+
+    auto message_id = _state->subscriptions.subscribe(repo_handle, subscriber_id, std::move(handler), _state->next_request_id);
+
+    if (message_id) {
+        _state->pending.emplace(std::pair(message_id->value, Subscription{}));
+
+        auto request = Request::RepositorySubscribe {
+            repo_handle,
+        };
+
+        send(_state->socket, *message_id, request, yield);
+    }
+}
+
+void Client::unsubscribe(const RepositoryHandle& repo_handle, SubscriberId subscriber_id, asio::yield_context yield) {
+    if (!_state) {
+        throw_error(error::not_connected);
+    }
+
+    auto message_id = _state->subscriptions.unsubscribe(repo_handle, subscriber_id);
+
+    if (message_id) {
+        auto request = Request::SessionUnsubscribe {
+            MessageId{message_id->value}
+        };
+
+        invoke(request, yield);
+    }
 }
 
 /**
@@ -299,7 +351,7 @@ LocalEndpoint read_local_endpoint(const boost::filesystem::path& config_dir_path
     config_file.open(config_path);
 
     if (!config_file.is_open()) {
-        throw_exception(error::connect, "Could not open file " + config_path.string());
+        throw_error(error::connect, "Could not open file " + config_path.string());
     }
 
     std::stringstream buffer;
@@ -312,7 +364,7 @@ LocalEndpoint read_local_endpoint(const boost::filesystem::path& config_dir_path
     int64_t port = obj["port"].as_int64();
 
     if (port <= 0 || port > std::numeric_limits<uint16_t>::max()) {
-        throw_exception(error::connect, "invalid port");
+        throw_error(error::connect, "invalid port");
     }
 
     js::string auth_key_hex = obj["auth_key"].as_string();
@@ -351,7 +403,7 @@ void authenticate(Socket& socket, const std::vector<uint8_t>& auth_key, asio::yi
     hmac.update(client_challenge.data(), client_challenge.size());
 
     if (!std::ranges::equal(hmac.result(), server_proof)) {
-        throw_exception(error::auth, "Server failed to authenticate");
+        throw_error(error::auth, "Server failed to authenticate");
     }
 
     // Authenticate client to the server:

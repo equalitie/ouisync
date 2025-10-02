@@ -423,16 +423,7 @@ fn write_complex_enum(
             let ty = CppType::new(&field.ty);
             let ty = ty.modify(is_request, true);
             let name = AsSnakeCase(name.unwrap_or(DEFAULT_FIELD_NAME));
-            //if is_request {
-            //    writeln!(
-            //        out.hpp,
-            //        "{I}{I}{} {};",
-            //        CppType::ConstRef(&CppType::Namespaced(&ty)),
-            //        name
-            //    )?;
-            //} else {
             writeln!(out.hpp, "{I}{I}{} {};", &ty, name)?;
-            //}
         }
 
         writeln!(out.hpp, "{I}}};")?;
@@ -464,6 +455,10 @@ fn write_complex_enum(
     writeln!(out.hpp)?;
 
     writeln!(out.hpp, "{I}{name}() = default;")?;
+    writeln!(out.hpp, "{I}{name}({name}&&) = default;")?;
+    writeln!(out.hpp, "{I}{name}& operator=({name}&&) = default;")?;
+    // TODO: Implement explicit cloning
+    writeln!(out.hpp, "{I}{name}({name} const&) = default;")?;
     writeln!(out.hpp)?;
     writeln!(out.hpp, "{I}template<class T>")?;
     writeln!(out.hpp, "{I}{name}(T&& v)")?;
@@ -587,7 +582,7 @@ fn write_api_class(
     writeln!(out_hpp, "class {name} {{")?;
     writeln!(out_hpp, "private:")?;
 
-    for friend in ["File", "Repository", "Session"]
+    for friend in ["File", "Repository", "Session", "RepositorySubscription"]
         .into_iter()
         .filter(|friend| *friend != name)
     {
@@ -804,7 +799,7 @@ fn write_api_class(
                         writeln!(out_cpp, "{I}return map;")?;
                     }
                     Some(_) => unreachable!(),
-                    None => writeln!(out_cpp, "{I}return rsp.value;")?,
+                    None => writeln!(out_cpp, "{I}return std::move(rsp.value);")?,
                 }
             }
         }

@@ -569,6 +569,9 @@ struct Request {
     Alternatives value;
 
     Request() = default;
+    Request(Request&&) = default;
+    Request& operator=(Request&&) = default;
+    Request(Request const&) = default;
 
     template<class T>
     Request(T&& v)
@@ -739,6 +742,9 @@ struct Response {
     Alternatives value;
 
     Response() = default;
+    Response(Response&&) = default;
+    Response& operator=(Response&&) = default;
+    Response(Response const&) = default;
 
     template<class T>
     Response(T&& v)

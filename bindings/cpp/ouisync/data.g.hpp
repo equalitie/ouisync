@@ -92,6 +92,9 @@ struct LocalSecret {
     Alternatives value;
 
     LocalSecret() = default;
+    LocalSecret(LocalSecret&&) = default;
+    LocalSecret& operator=(LocalSecret&&) = default;
+    LocalSecret(LocalSecret const&) = default;
 
     template<class T>
     LocalSecret(T&& v)
@@ -136,6 +139,9 @@ struct SetLocalSecret {
     Alternatives value;
 
     SetLocalSecret() = default;
+    SetLocalSecret(SetLocalSecret&&) = default;
+    SetLocalSecret& operator=(SetLocalSecret&&) = default;
+    SetLocalSecret(SetLocalSecret const&) = default;
 
     template<class T>
     SetLocalSecret(T&& v)
@@ -185,6 +191,9 @@ struct AccessChange {
     Alternatives value;
 
     AccessChange() = default;
+    AccessChange(AccessChange&&) = default;
+    AccessChange& operator=(AccessChange&&) = default;
+    AccessChange(AccessChange const&) = default;
 
     template<class T>
     AccessChange(T&& v)
@@ -282,6 +291,9 @@ struct PeerState {
     Alternatives value;
 
     PeerState() = default;
+    PeerState(PeerState&&) = default;
+    PeerState& operator=(PeerState&&) = default;
+    PeerState(PeerState const&) = default;
 
     template<class T>
     PeerState(T&& v)

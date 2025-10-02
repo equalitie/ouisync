@@ -2,11 +2,10 @@
 
 #include <boost/asio/spawn.hpp> // yield_context
 #include <boost/filesystem/path.hpp>
+#include <ouisync/subscriber_id.hpp>
+#include <ouisync/handler.hpp>
 
 namespace ouisync {
-
-class Request;
-class Response;
 
 class Client {
 public:
@@ -34,6 +33,10 @@ public:
     Response invoke(const Request&, boost::asio::yield_context);
 
     ~Client();
+
+    SubscriberId new_subscriber_id();
+    void subscribe(const RepositoryHandle&, SubscriberId, std::function<HandlerSig>, boost::asio::yield_context);
+    void unsubscribe(const RepositoryHandle&, SubscriberId, boost::asio::yield_context yield);
 
 private:
     Client(std::shared_ptr<State>&&);

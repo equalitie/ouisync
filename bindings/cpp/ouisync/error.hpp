@@ -36,9 +36,15 @@ enum Client {
      */
     deserialize,
     /**
+     * Client is not connected to the service
+     */
+    not_connected,
+    /**
      * Bug in the Ouisync client code
      */
     logic,
+    already_subscribed,
+    not_subscribed,
 };
 
 /**
@@ -148,12 +154,15 @@ namespace boost::system {
 // Utils
 namespace ouisync {
 
-inline void throw_exception(error::Client ec, std::string message) {
-    boost::system::system_error e(ec, std::move(message));
-    throw e;
-}
-
-inline void throw_exception(error::Service ec, std::string message) {
+template<typename ErrorCode>
+[[noreturn]]
+inline void throw_error(
+    ErrorCode ec_,
+    std::string message = {},
+    const boost::source_location& loc = BOOST_CURRENT_LOCATION
+) {
+    auto ec = make_error_code(ec_);
+    ec.assign(ec, &loc);
     boost::system::system_error e(ec, std::move(message));
     throw e;
 }

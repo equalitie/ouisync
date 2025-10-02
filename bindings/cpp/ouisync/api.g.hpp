@@ -12,6 +12,7 @@ class File {
 private:
     friend class Repository;
     friend class Session;
+    friend class RepositorySubscription;
 
     std::shared_ptr<Client> client;
     FileHandle handle;
@@ -87,6 +88,7 @@ class Repository {
 private:
     friend class File;
     friend class Session;
+    friend class RepositorySubscription;
 
     std::shared_ptr<Client> client;
     RepositoryHandle handle;
@@ -452,6 +454,7 @@ class Session {
 private:
     friend class File;
     friend class Repository;
+    friend class RepositorySubscription;
 
     std::shared_ptr<Client> client;
 
