@@ -29,7 +29,10 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.android.OuisyncService
 import org.equalitie.ouisync.android.setConfigPath
 import org.equalitie.ouisync.session.LogLevel
@@ -62,10 +65,11 @@ class OuisyncPlugin :
     MethodCallHandler,
     ActivityAware {
     private var channel: MethodChannel? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
+
     private var activity: Activity? = null
     private var activityLifecycle: Lifecycle? = null
-    private val serviceState = ServiceState()
 
     private val activityLifecycleObserver =
         object : DefaultLifecycleObserver {
@@ -87,6 +91,9 @@ class OuisyncPlugin :
             }
         }
 
+    private val serviceState = ServiceState()
+    private var serviceJob: Job? = null
+
     companion object {
         private val TAG = OuisyncPlugin::class.simpleName
         private const val CHANNEL_NAME = "org.equalitie.ouisync.plugin"
@@ -99,7 +106,7 @@ class OuisyncPlugin :
         }
 
         // Invoke `maintainService` every time the activity is resumed.
-        activityLifecycle.coroutineScope.launch {
+        serviceJob = activityLifecycle.coroutineScope.launch {
             activityLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 maintainService()
             }
@@ -112,6 +119,9 @@ class OuisyncPlugin :
     }
 
     override fun onDetachedFromActivity() {
+        serviceJob?.cancel()
+        serviceJob = null
+
         activityLifecycle?.removeObserver(activityLifecycleObserver)
         activityLifecycle = null
 
@@ -226,12 +236,14 @@ class OuisyncPlugin :
             Context.RECEIVER_NOT_EXPORTED,
         )
 
-        activityLifecycle.coroutineScope.launch {
-            activity.setConfigPath(configPath)
-        }
-
         serviceState.enabled = true
         maintainService()
+
+        // Using `runBlocking` because `activityLifecycle.coroutineScope.launch` would sometimes
+        // cause hang when calling `getConfigPath`, for some reason.
+        runBlocking {
+            activity.setConfigPath(configPath)
+        }
     }
 
     private fun onStop() {

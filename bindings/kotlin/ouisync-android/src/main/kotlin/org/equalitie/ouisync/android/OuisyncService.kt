@@ -33,7 +33,6 @@ open class OuisyncService : android.app.Service() {
         Log.e(TAG, "uncaught exception in OuisyncService", e)
     }
     private val scope = CoroutineScope(Dispatchers.Main + exceptionHandler)
-
     private val inner: Deferred<Service> = scope.async { Service.start(getConfigPath()) }
 
     private var isForeground = false
