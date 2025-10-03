@@ -4,8 +4,8 @@ Currently only works with Boost stackful coroutines
 
 # Dependencies
 
-* Boost >= 1.88.0
-* messagepack
+* [Boost](https://www.boost.org/) >= 1.88.0
+* [msgpack](https://github.com/msgpack/msgpack-c) (C++)
 
 # Build & run
 
@@ -16,7 +16,11 @@ CMAKE_OPTIONS=(
     # Boost package version
     -DBOOST_INCLUDEDIR=<WHERE YOU BUILT BOOST>/boost/install/include
     -DBOOST_LIBRARYDIR=<WHERE YOU BUILT BOOST>/boost/install/lib
-    -DBoost_NO_SYSTEM_PATHS=TRUE
+    -DBoost_NO_SYSTEM_PATHS=ON
+    # Fail compilation in presence of warnings (Optional)
+    -DWARNING_IS_ERROR=ON
+    # Show how long it took to build cpp files and link them (Optional)
+    -DMEASURE_BUILD_TIME=ON
 )
 
 cd bindings/cpp

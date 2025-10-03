@@ -8,20 +8,18 @@ include(FetchContent)
 # client will attempt to connect to a Ouisync app already running on this PC
 # (OFF).
 option(EXAMPLE_USE_BUILT_IN_SERVICE "When OFF the example will attempt to connect to an already running Ouisync app" ON)
+option(MEASURE_BUILD_TIME "Print target build duration" OFF)
 
 option(WARNING_IS_ERROR "Fail compilation in presence of warnings" OFF)
 
 # Show compilation times
-#set_property(GLOBAL PROPERTY RULE_MESSAGES OFF)
-set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/custom_output.sh")
-set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_CURRENT_SOURCE_DIR}/custom_output.sh")
+set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
+set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
 
 # Enable compilation warnings for all targets
 if (MSVC)
-    # warning level 4
     add_compile_options(/W4 /WX)
 else()
-    # additional warnings
     add_compile_options(-Wall -Wextra -Wpedantic)
     if (WARNING_IS_ERROR)
         add_compile_options(-Werror)

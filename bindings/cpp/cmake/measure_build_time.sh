@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Utility to measure compile and link durations
+
 set -e
 
 # shell script invoked with the following arguments
