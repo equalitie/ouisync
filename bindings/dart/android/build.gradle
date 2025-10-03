@@ -68,6 +68,8 @@ android {
         debugImplementation   'ie.equalit.ouinet:ouisync-service-debug:+'
         releaseImplementation 'ie.equalit.ouinet:ouisync-service:+'
 
+        implementation        'androidx.lifecycle:lifecycle-runtime-ktx:2.9.4'
+
         testImplementation    'org.jetbrains.kotlin:kotlin-test'
         testImplementation    'org.mockito:mockito-core:5.10.0'
     }
