@@ -1,4 +1,4 @@
 # Doxygen generated documentation
 doc/
-# Example build files
-example/build/
+# Default build folder as suggested in bindings/cpp/README.md
+build/

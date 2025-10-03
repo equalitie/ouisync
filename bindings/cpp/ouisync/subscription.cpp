@@ -129,8 +129,8 @@ void RepositorySubscription::state_changed(boost::asio::yield_context yield) {
                 [&](std::monostate) {
                     impl->state.emplace<Handler>(std::move(handler));
                 },
-                [&](HandlerResult& result) {
-                    auto r = std::move(result);
+                [&](HandlerResult& result_) {
+                    auto result = std::move(result_);
                     impl->state = std::monostate();
 
                     std::visit(overloaded {

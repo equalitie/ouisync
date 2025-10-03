@@ -32,7 +32,12 @@ namespace ouisync {
 //      <=> by_repo_handle[repo_id][subscriber_id] exists
 //
 class Subscriptions {
+#ifdef OUISYNC_TESTING
+public:
+#else
 private:
+#endif // ifdef OUISYNC_TESTING
+
     using RawMessageId = decltype(MessageId::value);
     using RawRepositoryHandle = decltype(RepositoryHandle::value);
 

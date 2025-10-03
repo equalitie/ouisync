@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.5)
+project(Ouisync)
 
 include(FetchContent)
+
+# Based on the value of this constant, this example will either create a new
+# Ouisync service instance to which the client will connect (ON), or the
+# client will attempt to connect to a Ouisync app already running on this PC
+# (OFF).
+option(EXAMPLE_USE_BUILT_IN_SERVICE "When OFF the example will attempt to connect to an already running Ouisync app" ON)
+
+option(WARNING_IS_ERROR "Fail compilation in presence of warnings" OFF)
 
 # Show compilation times
 #set_property(GLOBAL PROPERTY RULE_MESSAGES OFF)
@@ -13,7 +22,10 @@ if (MSVC)
     add_compile_options(/W4 /WX)
 else()
     # additional warnings
-    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+    add_compile_options(-Wall -Wextra -Wpedantic)
+    if (WARNING_IS_ERROR)
+        add_compile_options(-Werror)
+    endif()
 endif()
 
 ############################
@@ -150,3 +162,21 @@ target_link_libraries(cpp_ouisync_client
 )
 
 target_compile_features(cpp_ouisync_client PRIVATE cxx_std_20)
+
+############################
+# Example
+############################
+add_executable(example examples/main.cpp)
+
+if(EXAMPLE_USE_BUILT_IN_SERVICE)
+    target_compile_definitions(example PUBLIC USE_BUILT_IN_SERVICE)
+    target_link_libraries(example PUBLIC cpp_ouisync_client cpp_ouisync_service)
+else()
+    target_link_libraries(example PUBLIC cpp_ouisync_client)
+endif()
+
+############################
+# Tests
+############################
+enable_testing()
+add_subdirectory(tests)

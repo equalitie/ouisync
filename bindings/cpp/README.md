@@ -19,15 +19,17 @@ CMAKE_OPTIONS=(
     -DBoost_NO_SYSTEM_PATHS=TRUE
 )
 
-BUILD_DIR=<WHERE YOU WANT YOUR BUILD TO HAPPEN>
-SRC_DIR=<WHERE THE example/CMakeLists.txt IS>
+cd bindings/cpp
+mkdir -p build
+cd build
 
-mkdir -p $BUILD_DIR
-cd $BUILD_DIR
-
-cmake $SRC_DIR ${CMAKE_OPTIONS[@]}
+cmake .. ${CMAKE_OPTIONS[@]}
 cmake --build . -j`nproc`
 
+# Run tests
+ctest --output-on-failure
+
+# Run example
 ./example
 ```
 
