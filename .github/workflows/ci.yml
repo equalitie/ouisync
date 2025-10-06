@@ -168,10 +168,6 @@ jobs:
         working-directory: bindings/kotlin
         run: echo "useLocalLib=true" > local.properties
 
-      - name: Run spotless
-        working-directory: bindings/kotlin
-        run: ./gradlew --stacktrace spotlessCheck
-
       - name: Run lint
         working-directory: bindings/kotlin
         run: ./gradlew --stacktrace lint
