@@ -2,8 +2,8 @@ plugins {
     id 'com.android.library'
     id 'kotlin-android'
     id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.6'
-
-    id 'dokka-conventions'
+    id 'org.equalitie.ouisync.convention'
+    id 'dokka-convention'
 }
 
 Properties localProperties = new Properties()
@@ -20,7 +20,6 @@ android {
     namespace = 'org.equalitie.ouisync.service'
 
     compileSdk = 35
-    ndkVersion = '27.2.12479018'
 
     defaultConfig {
         minSdk = 23

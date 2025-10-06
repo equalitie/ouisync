@@ -1,8 +1,8 @@
 plugins {
     id 'com.android.library'
     id 'kotlin-android'
-
-    id 'dokka-conventions'
+    id 'org.equalitie.ouisync.convention'
+    id 'dokka-convention'
 }
 
 version = rootProject.version
@@ -12,7 +12,6 @@ android {
     namespace = 'org.equalitie.ouisync.android'
 
     compileSdk = 35
-    ndkVersion = '27.2.12479018'
 
     defaultConfig {
         minSdk = 26

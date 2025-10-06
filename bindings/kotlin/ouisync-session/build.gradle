@@ -3,7 +3,7 @@ plugins {
     id 'java-library'
     id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.21'
 
-    id 'dokka-conventions'
+    id 'dokka-convention'
 }
 
 version = rootProject.version

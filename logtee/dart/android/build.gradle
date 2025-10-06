@@ -13,6 +13,7 @@ buildscript {
 plugins {
     id 'com.android.library'
     id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.6'
+    id 'org.equalitie.ouisync.convention'
 }
 
 group = "org.equalitie.logtee"
@@ -30,7 +31,6 @@ android {
     namespace = "org.equalitie.logtee"
 
     compileSdk = 35
-    ndkVersion = '27.2.12479018'
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
