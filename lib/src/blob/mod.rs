@@ -586,7 +586,7 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
         changeset.link_block(encoded_locator, block_id, block_presence);
 
         // The `+ 1` is there to not hit on the first run.
-        if (locator.number() + 1) as usize % BATCH_SIZE == 0 {
+        if ((locator.number() + 1) as usize).is_multiple_of(BATCH_SIZE) {
             if let Some(batch) = batch.take() {
                 batch.apply(dst_branch.id(), write_keys).await?;
             }
