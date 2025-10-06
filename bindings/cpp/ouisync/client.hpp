@@ -38,6 +38,8 @@ public:
     void subscribe(const RepositoryHandle&, SubscriberId, std::function<HandlerSig>, boost::asio::yield_context);
     void unsubscribe(const RepositoryHandle&, SubscriberId, boost::asio::yield_context yield);
 
+    bool is_connected() const noexcept;
+
 private:
     Client(std::shared_ptr<State>&&);
 

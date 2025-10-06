@@ -53,6 +53,7 @@ struct Client::State : std::enable_shared_from_this<Client::State> {
 
     RawMessageId next_request_id = 0;
     SubscriberId next_subscriber_id = 0;
+    bool disconnected = false;
 
     State(Socket socket): socket(std::move(socket)) {}
 };
@@ -185,6 +186,8 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
 
         subscriptions.handle_all(yield.get_executor(), eptr);
     }
+
+    state->disconnected = true;
 }
 
 Client::Client(std::shared_ptr<State>&& state)
@@ -215,8 +218,7 @@ Client::Client(std::shared_ptr<State>&& state)
 }
 
 Client::~Client() {
-    if (!_state) {
-        // This client instance has been moved from
+    if (!is_connected()) {
         return;
     }
 
@@ -297,12 +299,16 @@ Response Client::invoke(const Request& request, asio::yield_context yield) {
     );
 }
 
+bool Client::is_connected() const noexcept {
+    return _state && !_state->disconnected;
+}
+
 SubscriberId Client::new_subscriber_id() {
     return _state->next_subscriber_id++;
 }
 
 void Client::subscribe(const RepositoryHandle& repo_handle, SubscriberId subscriber_id, std::function<HandlerSig> handler, asio::yield_context yield) {
-    if (!_state) {
+    if (!is_connected()) {
         throw_error(error::not_connected);
     }
 
@@ -320,7 +326,7 @@ void Client::subscribe(const RepositoryHandle& repo_handle, SubscriberId subscri
 }
 
 void Client::unsubscribe(const RepositoryHandle& repo_handle, SubscriberId subscriber_id, asio::yield_context yield) {
-    if (!_state) {
+    if (!is_connected()) {
         throw_error(error::not_connected);
     }
 

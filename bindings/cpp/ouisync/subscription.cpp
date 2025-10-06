@@ -28,7 +28,9 @@ struct RepositorySubscription::Impl {
 
     void unsubscribe(asio::yield_context yield) {
         cancel();
-        client->unsubscribe(repository_handle, subscriber_id, yield);
+        if (client->is_connected()) {
+            client->unsubscribe(repository_handle, subscriber_id, yield);
+        }
     }
 
     void cancel() {
