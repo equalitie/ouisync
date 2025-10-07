@@ -10,9 +10,12 @@ import kotlin.text.lineSequence
 
 class ConventionPlugin : Plugin<Project> {
     override fun apply(target: Project) {
-        val file = findFile(target.projectDir, "ndk-version.txt")
+        val name = "ndk-version.txt"
+        val file = findFile(target.projectDir, name)
         if (file == null) {
-            target.logger.info("${target.name}: Not setting NDK version because the NDK version file is missing")
+            target.logger.warn(
+                "${target.name}: Not setting NDK version because the NDK version file '$name' is missing in '${target.projectDir}' or any of its ancestors",
+            )
             return
         }
 
@@ -21,7 +24,9 @@ class ConventionPlugin : Plugin<Project> {
             error("NDK version file is invalid: '$file'")
         }
 
-        target.logger.info("${target.name}: Setting NDK version to $commonNdkVersion according to the NDK version file '$file'")
+        target.logger.info(
+            "${target.name}: Setting NDK version to $commonNdkVersion according to the NDK version file '$file'",
+        )
 
         with(target) {
             with(pluginManager) {

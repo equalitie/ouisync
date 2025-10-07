@@ -5,6 +5,7 @@ on: [push]
 env:
   PROPTEST_CASES: 32
   RUST_BACKTRACE: 1
+  NDK_VERSION: "28.2.13676358"
 
 jobs:
   check_rust_crates:
@@ -139,7 +140,9 @@ jobs:
         run: sudo apt-get install libfuse-dev
 
       - name: Install NDK
-        run: $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.2.12479018"
+        run: |
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;$NDK_VERSION"
+          echo "$NDK_VERSION" > ndk-version.txt
 
       - name: Cache cargo artifacts
         uses: actions/cache@v3
@@ -164,9 +167,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Create local.properties
-        working-directory: bindings/kotlin
-        run: echo "useLocalLib=true" > local.properties
+      # - name: Create local.properties
+      #   working-directory: bindings/kotlin
+      #   run: echo "useLocalLib=true" > local.properties
 
       - name: Run lint
         working-directory: bindings/kotlin

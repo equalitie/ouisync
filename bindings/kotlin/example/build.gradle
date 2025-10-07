@@ -5,15 +5,6 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.21'
 }
 
-Properties localProperties = new Properties()
-
-def localPropertiesFile = rootProject.file('local.properties')
-if (localPropertiesFile.exists()) {
-    localProperties.load(localPropertiesFile.newDataInputStream())
-}
-
-def useLocalLib = localProperties.getProperty("useLocalLib", "false").toBoolean()
-
 android {
     compileSdkVersion 35
     namespace = 'org.equalitie.ouisync.kotlin.example'
@@ -53,11 +44,6 @@ dependencies {
     implementation "androidx.navigation:navigation-compose:2.9.0"
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0'
 
-    if (useLocalLib) {
-        implementation project(':ouisync-session')
-        implementation project(':ouisync-service')
-    } else {
-        implementation 'ie.equalit.ouinet:ouisync-session:+'
-        implementation 'ie.equalit.ouinet:ouisync-service:+'
-    }
+    implementation project(':ouisync-session')
+    implementation project(':ouisync-service')
 }
