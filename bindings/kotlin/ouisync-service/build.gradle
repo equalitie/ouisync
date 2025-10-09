@@ -6,13 +6,6 @@ plugins {
     id 'dokka-convention'
 }
 
-Properties localProperties = new Properties()
-
-def localPropertiesFile = rootProject.file('local.properties')
-if (localPropertiesFile.exists()) {
-    localProperties.load(localPropertiesFile.newDataInputStream())
-}
-
 version = rootProject.version
 group   = rootProject.group
 
@@ -72,23 +65,11 @@ cargo {
 
     extraCargoBuildArguments = ['--package', 'ouisync-service']
 
-    def relTargetDir = localProperties.getProperty('rust.cargoTargetDir')
-    def absTargetDir = null
-
-    if (relTargetDir != null) {
-        if ((new File(relTargetDir)).isAbsolute()) {
-            absTargetDir = relTargetDir
-        } else {
-            absTargetDir = "$projectDir/$relTargetDir"
-        }
-    }
-
     exec = { spec, toolchain ->
-        // HACK: rust.cargoTargetDir local property is not passed to cargo for some reason
-        // (https://github.com/mozilla/rust-android-gradle?tab=readme-ov-file#targetdirectory).
-        // Force it:
-        if (absTargetDir != null) {
-            spec.environment('CARGO_TARGET_DIR', absTargetDir)
+        def targetDir = project.findProperty('rust.cargoTargetDir')
+        if (targetDir != null) {
+            println("FOOOO $targetDir")
+            spec.environment('CARGO_TARGET_DIR', targetDir)
         }
     }
 }
