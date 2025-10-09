@@ -163,10 +163,8 @@ afterEvaluate {
 
 signing {
     // Only sign when publishing to sonatype, not local
-    required {
-        android.libraryVariants.any { variant ->
-            gradle.taskGraph.hasTask("publish${variant}ServicePublicationToSonatypeRepository")
-        }
+    required = android.libraryVariants.any { variant ->
+        gradle.taskGraph.hasTask("publish${variant}ServicePublicationToSonatypeRepository")
     }
 
     if (signingKey) {
