@@ -1,7 +1,8 @@
 package org.equalitie.ouisync
 
-import com.android.build.api.dsl.ApplicationExtension
-import com.android.build.api.dsl.LibraryExtension
+import com.android.build.gradle.BaseExtension
+import com.android.build.gradle.BasePlugin
+import com.android.build.gradle.LibraryPlugin
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.findByType
@@ -9,12 +10,18 @@ import java.io.File
 import kotlin.text.lineSequence
 
 class ConventionPlugin : Plugin<Project> {
-    override fun apply(target: Project) {
-        val name = "ndk-version.txt"
-        val file = findFile(target.projectDir, name)
+    override fun apply(target: Project): Unit = with(target) {
+        plugins.withType(BasePlugin::class.java) {
+            configure(extensions.getByType(BaseExtension::class.java))
+        }
+    }
+
+    private fun Project.configure(extension: BaseExtension) {
+        val fileName = "ndk-version.txt"
+        val file = findFile(projectDir, fileName)
         if (file == null) {
-            target.logger.warn(
-                "${target.name}: Not setting NDK version because the NDK version file '$name' is missing in '${target.projectDir}' or any of its ancestors",
+            logger.warn(
+                "$name: Not setting NDK version because the NDK version file '$file' is missing in '$projectDir' or any of its ancestors",
             )
             return
         }
@@ -24,16 +31,11 @@ class ConventionPlugin : Plugin<Project> {
             error("NDK version file is invalid: '$file'")
         }
 
-        target.logger.info(
-            "${target.name}: Setting NDK version to $commonNdkVersion according to the NDK version file '$file'",
+        logger.info(
+            "$name: Setting NDK version to $commonNdkVersion according to the NDK version file '$file'",
         )
 
-        with(target) {
-            with(pluginManager) {
-                extensions.findByType<ApplicationExtension>()?.apply { ndkVersion = commonNdkVersion }
-                extensions.findByType<LibraryExtension>()?.apply { ndkVersion = commonNdkVersion }
-            }
-        }
+        extension.ndkVersion = commonNdkVersion
     }
 }
 
