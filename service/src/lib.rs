@@ -5,6 +5,7 @@ pub mod transport;
 
 mod config_keys;
 mod config_store;
+mod conflict;
 mod connection;
 mod device_id;
 mod dht_contacts;
@@ -13,8 +14,11 @@ mod file;
 mod metrics;
 mod network;
 mod repository;
+mod share;
+mod share_config;
 mod state;
 mod subscription;
+mod sync_bridge;
 mod tls;
 
 #[cfg(test)]

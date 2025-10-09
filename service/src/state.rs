@@ -1,4 +1,6 @@
 mod move_repository;
+mod share_api;
+mod share_persistence;
 #[cfg(test)]
 mod tests;
 
@@ -16,6 +18,7 @@ use crate::{
     network::{self, PexConfig},
     protocol::{DirectoryEntry, MessageId, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{self, RepositoryHandle, RepositoryHolder, RepositorySet},
+    share::ShareSet,
     tls::TlsConfig,
     transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
 };
@@ -65,9 +68,10 @@ pub(crate) struct State {
     store: Store,
     mounter: Mutex<Option<Arc<MultiRepoVFS>>>,
     repos: RepositorySet,
+    shares: ShareSet,
     files: FileSet,
     root_monitor: StateMonitor,
-    repos_monitor: StateMonitor,
+    pub(crate) repos_monitor: StateMonitor,
     remote_server: Mutex<Option<Arc<RemoteServer>>>,
     metrics_server: MetricsServer,
 }
@@ -136,12 +140,14 @@ impl State {
             root_monitor,
             repos_monitor,
             repos: RepositorySet::new(),
+            shares: ShareSet::new(),
             files: FileSet::new(),
             remote_server: Mutex::new(remote_server.map(Arc::new)),
             metrics_server,
         };
 
         state.load_repositories().await;
+        state.load_shares().await;
 
         Ok(state)
     }

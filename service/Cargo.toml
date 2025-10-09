@@ -15,6 +15,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 [dependencies]
 async-trait                 = { workspace = true }
 bytes                       = { workspace = true }
+chrono                      = { workspace = true }
 clap                        = { workspace = true }
 fs_util                     = { path = "../fs_util" }
 futures-util                = { workspace = true }
@@ -27,6 +28,7 @@ interprocess                = { version = "2.2.2", features = ["tokio"] }
 maxminddb                   = "0.24.0"
 metrics                     = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+notify                      = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 num_enum                    = { workspace = true }
 ouisync                     = { path = "../lib" }
 ouisync-macros              = { path = "../macros"}
@@ -50,6 +52,7 @@ tokio-tungstenite           = { version = "0.24.0", features = ["rustls-tls-webp
 tokio-util                  = { workspace = true, features = ["codec"] }
 tracing                     = { workspace = true }
 tracing-subscriber          = { workspace = true, features = ["env-filter", "json"] }
+uuid                        = { version = "1.11", features = ["v4", "serde"] }
 webpki-roots                = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
