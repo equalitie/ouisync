@@ -64,14 +64,6 @@ cargo {
     targets = rustTargets ?: ['arm', 'arm64', 'x86_64']
 
     extraCargoBuildArguments = ['--package', 'ouisync-service']
-
-    exec = { spec, toolchain ->
-        def targetDir = project.findProperty('rust.cargoTargetDir')
-        if (targetDir != null) {
-            println("FOOOO $targetDir")
-            spec.environment('CARGO_TARGET_DIR', targetDir)
-        }
-    }
 }
 
 afterEvaluate {
