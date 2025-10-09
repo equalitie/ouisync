@@ -139,10 +139,10 @@ jobs:
         # and the linux version does currently unconditionally depend on fuse.
         run: sudo apt-get install libfuse-dev
 
-      - name: Install NDK
-        run: |
-          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;$NDK_VERSION"
-          echo "$NDK_VERSION" > ndk-version.txt
+      # - name: Install NDK
+      #   run: |
+      #     $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;$NDK_VERSION"
+      #     echo "$NDK_VERSION" > ndk-version.txt
 
       - name: Cache cargo artifacts
         uses: actions/cache@v3
@@ -166,10 +166,6 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('bindings/kotlin/**/*.gradle*', 'bindings/kotlin/**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
-
-      # - name: Create local.properties
-      #   working-directory: bindings/kotlin
-      #   run: echo "useLocalLib=true" > local.properties
 
       - name: Run lint
         working-directory: bindings/kotlin
