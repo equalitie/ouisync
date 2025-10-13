@@ -177,7 +177,7 @@ jobs:
           api-level: 35
           target: google_apis
           working-directory: bindings/kotlin
-          script: ./gradlew ouisync-android:connectedDebugAndroidTest -Ptarget-platform=android-x64
+          script: ./gradlew --info ouisync-android:connectedDebugAndroidTest -Ptarget-platform=android-x64
 
       - name: Build the example app
         working-directory: bindings/kotlin
