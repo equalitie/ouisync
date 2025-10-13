@@ -63,6 +63,8 @@ cargo {
     //Example: `gradle assemble -Ptarget-platform=android-x64`
     targets = rustTargets ?: ['arm', 'arm64', 'x86_64']
 
+    profiles = ['debug', 'release']
+
     extraCargoBuildArguments = ['--package', 'ouisync-service']
 }
 
@@ -72,23 +74,7 @@ afterEvaluate {
 
         // Build the native library for the target android platforms.
         tasks.named("merge${variant}JniLibFolders") {
-            dependsOn 'cargoBuild'
-        }
-
-        // Set cargo profile according to build type.
-        //
-        // FIXME: This doesn't work when multiple build types are built in the same gradle
-        // invocation. Only one profile is build and then reused for all build types.
-        // See also: https://github.com/mozilla/rust-android-gradle/pull/68
-        def cargoProfile = it.name
-        tasks.named("pre${variant}Build") {
-            doLast {
-                cargo.profile = cargoProfile
-            }
-        }
-
-        tasks.named('cargoBuild') {
-            mustRunAfter "pre${variant}Build"
+            dependsOn "cargoBuild${variant}"
         }
     }
 

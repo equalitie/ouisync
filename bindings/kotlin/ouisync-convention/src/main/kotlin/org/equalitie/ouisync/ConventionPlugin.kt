@@ -21,7 +21,7 @@ class ConventionPlugin : Plugin<Project> {
         val file = findFile(projectDir, fileName)
         if (file == null) {
             logger.warn(
-                "$name: Not setting NDK version because the NDK version file '$file' is missing in '$projectDir' or any of its ancestors",
+                "$name: Not setting NDK version because the NDK version file '$fileName' is missing in '$projectDir' or any of its ancestors",
             )
             return
         }
