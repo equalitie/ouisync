@@ -28,7 +28,7 @@ import kotlinx.serialization.UseSerializers
 import kotlinx.serialization.json.Json
 import java.io.EOFException
 import java.io.File
-import java.net.ConnectException
+import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketAddress
@@ -83,17 +83,20 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 try {
                     val socket =
                         withContext(Dispatchers.IO) {
-                            AsynchronousSocket.connect(addr).also { socket -> authenticate(socket, authKey) }
+                            AsynchronousSocket.connect(addr).also { socket ->
+                                authenticate(socket, authKey)
+                            }
                         }
 
                     return Client(socket)
-                } catch (e: ConnectException) {
+                } catch (e: IOException) {
                     error = e
-                    wait = wait * 2
-                    wait = if (wait < maxWait) wait else maxWait
-
-                    delay(wait)
                 }
+
+                wait = wait * 2
+                wait = if (wait < maxWait) wait else maxWait
+
+                delay(wait)
             }
         }
     }
