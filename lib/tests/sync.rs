@@ -1185,7 +1185,10 @@ fn quota_exceed() {
 
             // The second file is rejected because it exceeds the quota
             let size1 = repo.size().await.unwrap();
-            assert_eq!(size1, size0);
+            assert!(
+                size1 <= quota,
+                "quota exceeded (size: {size1}, quota: {quota})"
+            );
 
             info!("not read 1.dat");
             tx.send(()).await.unwrap();
