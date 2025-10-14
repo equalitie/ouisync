@@ -179,6 +179,16 @@ jobs:
           working-directory: bindings/kotlin
           script: ./gradlew --info ouisync-android:connectedDebugAndroidTest -Ptarget-platform=android-x64
 
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            bindings/kotlin/build/ouisync-android/outputs/androidTest-results
+            bindings/kotlin/build/ouisync-android/reports
+            bindings/kotlin/build/ouisync-android/test-results
+        if: always()
+
       - name: Build the example app
         working-directory: bindings/kotlin
         run: ./gradlew --stacktrace example:assembleDebug
