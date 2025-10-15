@@ -8,8 +8,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.io.EOFException
 import java.io.File
+import java.io.IOException
 import kotlin.io.path.createTempDirectory
 
 class ClientTest {
@@ -40,6 +40,6 @@ class ClientTest {
         try {
             client.invoke(Request.SessionGetStoreDir)
             fail("unexpected success")
-        } catch (e: EOFException) {}
+        } catch (e: IOException) {}
     }
 }

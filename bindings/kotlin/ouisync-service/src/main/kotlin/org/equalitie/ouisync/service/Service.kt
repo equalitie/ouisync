@@ -33,12 +33,17 @@ class Service private constructor(private var handle: Pointer?) {
         ): Service {
             var handle: Pointer? = null
 
+            // Store the handler in a variable to ensure it's not garbage collected prematurely.
+            var handler: CoroutineHandler? = null
+
             suspendCancellableCoroutine<Unit> { cont ->
+                handler = CoroutineHandler(cont)
+
                 handle =
                     bindings.start_service(
                         configPath,
                         debugLabel,
-                        CoroutineHandler(cont),
+                        handler,
                         null,
                     )
 
@@ -58,12 +63,21 @@ class Service private constructor(private var handle: Pointer?) {
 
         this.handle = null
 
-        suspendCoroutine<Unit> { cont -> bindings.stop_service(handle, CoroutineHandler(cont), null) }
+        suspendCoroutine<Unit> { cont ->
+            handler = CoroutineHandler(cont)
+            bindings.stop_service(handle, handler!!, null)
+        }
+
+        handler = null
     }
+
+    // Store the handler in a member variable to ensure it's not garbage collected prematurely. Note
+    // that storing it in a local variable in the `stop` method was not enough for some reason.
+    private var handler: CoroutineHandler? = null
 }
 
 private class CoroutineHandler(val cont: Continuation<Unit>) : StatusCallback {
-    override fun invoke(context: Pointer?, error_code: Short) {
+    override fun callback(context: Pointer?, error_code: Short) {
         val errorCode = ErrorCode.fromValue(error_code)
 
         if (errorCode == ErrorCode.OK) {
@@ -75,7 +89,7 @@ private class CoroutineHandler(val cont: Continuation<Unit>) : StatusCallback {
 }
 
 private object NoopHandler : StatusCallback {
-    override fun invoke(context: Pointer?, error_code: Short) = Unit
+    override fun callback(context: Pointer?, error_code: Short) = Unit
 }
 
 /**

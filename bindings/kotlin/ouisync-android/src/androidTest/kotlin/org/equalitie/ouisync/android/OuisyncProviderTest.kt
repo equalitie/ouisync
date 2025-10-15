@@ -31,9 +31,13 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
+import kotlin.time.Clock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 @RunWith(AndroidJUnit4::class)
 class OuisyncProviderTest {
@@ -379,9 +383,13 @@ class OuisyncProviderTest {
             stream.flush()
         }
 
-        contentResolver.openInputStream(newUri)!!.use { stream ->
-            val content = readAllBytes(stream).decodeToString()
-            assertEquals("hello world", content)
+        // HACK: There doesn't seem to be any way to wait until the previous write has completed.
+        // Using `repeatUntilSuccess` to work around that.
+        repeatUntilSuccess {
+            contentResolver.openInputStream(newUri)!!.use { stream ->
+                val content = readAllBytes(stream).decodeToString()
+                assertEquals("hello world", content)
+            }
         }
     }
 
@@ -724,7 +732,7 @@ class OuisyncProviderTest {
 
         try {
             context.startService(Intent(context, OuisyncService::class.java))
-            latch.await()
+            latch.await(30, TimeUnit.SECONDS)
         } finally {
             context.unregisterReceiver(receiver)
         }
@@ -733,12 +741,11 @@ class OuisyncProviderTest {
     // Stops the OuisyncService and wait until it's fully stopped. If the service wasn't running,
     // returns immediately.
     private fun stopService() {
-        val latch = CountDownLatch(1)
+        val resultCodeFuture = CompletableFuture<Int>()
         val receiver =
             object : BroadcastReceiver() {
                 override fun onReceive(context: Context, intent: Intent) {
-                    assertEquals(1, resultCode)
-                    latch.countDown()
+                    resultCodeFuture.complete(resultCode)
                 }
             }
 
@@ -752,7 +759,7 @@ class OuisyncProviderTest {
             null,
         )
 
-        latch.await()
+        assertEquals(resultCodeFuture.get(30, TimeUnit.SECONDS), 1)
     }
 
     // Execute the given block and wait until notifications of changes in the data of all the
@@ -836,3 +843,23 @@ private fun transferTo(src: InputStream, dst: OutputStream): Long {
 
 // Shim for InputStream#readAllBytes
 private fun readAllBytes(src: InputStream): ByteArray = ByteArrayOutputStream().also { transferTo(src, it) }.toByteArray()
+
+// Keep invoking `block` until it succeeds (does not throw) or until the timeout passes. If the
+// block succeeds, returns whatever the block returned. If the timeout is reached, throws the last
+// exception that the block threw.
+@OptIn(kotlin.time.ExperimentalTime::class)
+private inline fun <R> repeatUntilSuccess(timeout: Duration = 30.seconds, block: () -> R): R {
+    val start = Clock.System.now()
+
+    while (true) {
+        try {
+            return block()
+        } catch (e: Throwable) {
+            if (Clock.System.now() - start > timeout) {
+                throw e
+            } else {
+                Thread.sleep(100)
+            }
+        }
+    }
+}

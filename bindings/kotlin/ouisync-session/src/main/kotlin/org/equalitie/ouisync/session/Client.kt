@@ -83,9 +83,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 try {
                     val socket =
                         withContext(Dispatchers.IO) {
-                            AsynchronousSocket.connect(addr).also { socket ->
-                                authenticate(socket, authKey)
-                            }
+                            AsynchronousSocket.connect(addr).also { socket -> authenticate(socket, authKey) }
                         }
 
                     return Client(socket)
@@ -169,57 +167,60 @@ internal class Client private constructor(private val socket: AsynchronousSocket
     }
 
     private suspend fun receive() {
-        var buffer = ByteBuffer.allocate(HEADER_SIZE)
-        buffer.order(ByteOrder.BIG_ENDIAN)
+        try {
+            var buffer = ByteBuffer.allocate(HEADER_SIZE)
+            buffer.order(ByteOrder.BIG_ENDIAN)
 
-        while (true) {
-            buffer.limit(HEADER_SIZE)
-            buffer.rewind()
-            socket.readExact(buffer)
-            buffer.flip()
+            while (true) {
+                buffer.limit(HEADER_SIZE)
+                buffer.rewind()
+                socket.readExact(buffer)
+                buffer.flip()
 
-            if (buffer.remaining() < HEADER_SIZE) {
-                break
+                if (buffer.remaining() < HEADER_SIZE) {
+                    throw EOFException()
+                }
+
+                val size = buffer.getInt() - Long.SIZE_BYTES
+                val id = buffer.getLong()
+
+                if (size > buffer.capacity()) {
+                    buffer = ByteBuffer.allocate(max(2 * buffer.capacity(), size))
+                    buffer.order(ByteOrder.BIG_ENDIAN)
+                }
+
+                buffer.limit(size)
+                buffer.rewind()
+                socket.readExact(buffer)
+                buffer.flip()
+
+                if (buffer.remaining() < size) {
+                    throw EOFException()
+                }
+
+                val completer = messageMatcher.completer(id)
+
+                if (completer == null) {
+                    // unsolicited response
+                    continue
+                }
+
+                try {
+                    val response: ResponseResult = decode(buffer.array())
+
+                    completer.complete(response)
+                } catch (e: OuisyncException) {
+                    completer.complete(ResponseResult.Failure(e))
+                } catch (e: Exception) {
+                    completer.complete(
+                        ResponseResult.Failure(OuisyncException.InvalidData("invalid response: $e")),
+                    )
+                }
             }
-
-            val size = buffer.getInt() - Long.SIZE_BYTES
-            val id = buffer.getLong()
-
-            if (size > buffer.capacity()) {
-                buffer = ByteBuffer.allocate(max(2 * buffer.capacity(), size))
-                buffer.order(ByteOrder.BIG_ENDIAN)
-            }
-
-            buffer.limit(size)
-            buffer.rewind()
-            socket.readExact(buffer)
-            buffer.flip()
-
-            if (buffer.remaining() < size) {
-                break
-            }
-
-            val completer = messageMatcher.completer(id)
-
-            if (completer == null) {
-                // unsolicited response
-                continue
-            }
-
-            try {
-                val response: ResponseResult = decode(buffer.array())
-
-                completer.complete(response)
-            } catch (e: OuisyncException) {
-                completer.complete(ResponseResult.Failure(e))
-            } catch (e: Exception) {
-                completer.complete(
-                    ResponseResult.Failure(OuisyncException.InvalidData("invalid response: $e")),
-                )
-            }
+        } catch (e: Exception) {
+            socket.close()
+            messageMatcher.close(e)
         }
-
-        messageMatcher.close()
     }
 }
 
@@ -284,16 +285,20 @@ private class MessageMatcher {
     }
 
     @Synchronized
-    fun close() {
+    fun close(cause: Exception? = null) {
         closed = true
 
         for (deferred in oneshots.values) {
-            deferred.completeExceptionally(EOFException())
+            if (cause != null) {
+                deferred.completeExceptionally(cause)
+            } else {
+                deferred.cancel()
+            }
         }
         oneshots.clear()
 
         for (channel in channels.values) {
-            channel.close(EOFException())
+            channel.close(cause)
         }
         channels.clear()
     }

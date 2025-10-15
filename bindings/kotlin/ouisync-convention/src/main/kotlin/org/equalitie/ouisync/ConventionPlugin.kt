@@ -2,10 +2,8 @@ package org.equalitie.ouisync
 
 import com.android.build.gradle.BaseExtension
 import com.android.build.gradle.BasePlugin
-import com.android.build.gradle.LibraryPlugin
 import org.gradle.api.Plugin
 import org.gradle.api.Project
-import org.gradle.kotlin.dsl.findByType
 import java.io.File
 import kotlin.text.lineSequence
 
