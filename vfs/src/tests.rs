@@ -367,6 +367,7 @@ async fn get_permissions_read_access() {
     get_permissions_case(AccessMode::Read, true, 0o444, 0o555).await;
 }
 
+#[cfg_attr(not(unix), expect(unused_variables))]
 async fn get_permissions_case(
     access_mode: AccessMode,
     expected_readonly: bool,
@@ -650,6 +651,7 @@ async fn wait_mounted(mount_dir: &Path) {
 #[cfg(not(target_os = "windows"))]
 async fn wait_mounted(_mount_dir: &Path) {}
 
+#[cfg_attr(not(unix), expect(dead_code))]
 #[track_caller]
 fn assert_io_error<T>(result: Result<T, io::Error>, expected_kind: io::ErrorKind) {
     match result {
