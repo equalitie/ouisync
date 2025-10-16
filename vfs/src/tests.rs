@@ -484,7 +484,7 @@ fn run<F: Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-#[expect(dead_code)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), expect(dead_code))]
 enum MountGuardType {
     Single(MountGuard),
     Multi(MultiRepoVFS),
