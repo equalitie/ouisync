@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use ouisync::{DeviceId, PeerAddr};
 
-use crate::{config_list::ConfigList, config_store::ConfigKey, network::PexConfig};
+use crate::{config_store::ConfigKey, network::PexConfig};
 
 pub(crate) const BIND_KEY: ConfigKey<Vec<PeerAddr>> =
     ConfigKey::new("bind", "Addresses to bind the network listeners to");
@@ -77,10 +77,8 @@ pub(crate) const PEX_KEY: ConfigKey<PexConfig> =
 pub(crate) const PORT_FORWARDING_ENABLED_KEY: ConfigKey<bool> =
     ConfigKey::new("port_forwarding_enabled", "Enable port forwarding / UPnP");
 
-// Note: This used to be just single path which is why it's called `store_dir` and not `store_dirs`.
-// Keeping the original name for backwards compatibility. compatibility.
-pub(crate) const STORE_DIRS_KEY: ConfigKey<ConfigList<PathBuf>> =
-    ConfigKey::new("store_dir", "Repository storage directories");
+pub(crate) const STORE_DIRS_KEY: ConfigKey<Vec<PathBuf>> =
+    ConfigKey::new("store_dirs", "Repository storage directories");
 
 pub(crate) const DEFAULT_REPOSITORY_EXPIRATION_KEY: ConfigKey<u64> = ConfigKey::new(
     "default_repository_expiration",

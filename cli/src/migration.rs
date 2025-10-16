@@ -59,8 +59,8 @@ pub(crate) async fn check_store_dir(new: &[PathBuf]) {
          Ouisync. The new directory is '{1}' but the old one at '{0}' still exists. \
          No repositories from the old directory will be loaded. To silence this warning move all \
          files from the old directory to the new one and delete the old one. Alternatively, to \
-         keep using the old directory, change the current store directory by running the command \
-         '{2} store-dir {0}'",
+         keep using the old directory, add it to the current store directories by running the command \
+         '{2} store-dirs insert {0}'",
         old.display(),
         new.display(),
         exe_name,

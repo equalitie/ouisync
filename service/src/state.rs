@@ -84,7 +84,7 @@ impl State {
         );
 
         let store_dirs = match config.entry(STORE_DIRS_KEY).get().await {
-            Ok(dirs) => dirs.into(),
+            Ok(dirs) => dirs,
             Err(ConfigError::NotFound) => Vec::new(),
             Err(error) => return Err(error.into()),
         };

@@ -4,7 +4,7 @@ pub mod protocol;
 pub mod transport;
 
 mod config_keys;
-mod config_list;
+mod config_migration;
 mod config_store;
 mod connection;
 mod device_id;
@@ -62,7 +62,7 @@ impl Service {
     pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
 
-        migrate_config(&config).await;
+        config_migration::run(&config).await;
 
         let local_endpoint_entry = config.entry(LOCAL_ENDPOINT_KEY);
         let local_endpoint = match local_endpoint_entry.get().await {
@@ -209,20 +209,6 @@ pub async fn local_endpoint(config_path: &Path) -> Result<LocalEndpoint, ClientE
         .get()
         .await
         .map_err(ClientError::InvalidEndpoint)
-}
-
-async fn migrate_config(config: &ConfigStore) {
-    // Delete obsolete entries
-    config
-        .entry(ConfigKey::<()>::new("local_control_port", ""))
-        .remove()
-        .await
-        .ok();
-    config
-        .entry(ConfigKey::<()>::new("local_control_auth_key", ""))
-        .remove()
-        .await
-        .ok();
 }
 
 #[cfg(test)]
