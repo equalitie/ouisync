@@ -26,13 +26,13 @@ impl EntryMap {
         self.get(handle)?.as_directory()
     }
 
-    fn get(&self, handle: FileHandle) -> Result<&JointEntry> {
+    pub fn get(&self, handle: FileHandle) -> Result<&JointEntry> {
         self.0
             .get(handle_to_index(handle))
             .ok_or(Error::EntryNotFound)
     }
 
-    fn get_mut(&mut self, handle: FileHandle) -> Result<&mut JointEntry> {
+    pub fn get_mut(&mut self, handle: FileHandle) -> Result<&mut JointEntry> {
         self.0
             .get_mut(handle_to_index(handle))
             .ok_or(Error::EntryNotFound)
