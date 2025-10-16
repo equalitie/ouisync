@@ -1,5 +1,5 @@
 use super::*;
-use ouisync_lib::{Access, Repository, RepositoryParams, WriteSecrets};
+use ouisync_lib::{Access, AccessMode, Repository, RepositoryParams, WriteSecrets};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{
@@ -357,6 +357,122 @@ async fn move_file(setup: Setup) {
 
 // -----------------------------------------------------------------------------
 
+#[tokio::test(flavor = "multi_thread")]
+async fn get_permissions_write_access() {
+    get_permissions_case(AccessMode::Write, false, 0o664, 0o775).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_permissions_read_access() {
+    get_permissions_case(AccessMode::Read, true, 0o444, 0o555).await;
+}
+
+async fn get_permissions_case(
+    access_mode: AccessMode,
+    expected_readonly: bool,
+    expected_file_mode: u32,
+    expected_dir_mode: u32,
+) {
+    let setup = Setup::new_single("").await;
+
+    fs::File::create(setup.mount_dir_path().join("file.txt"))
+        .await
+        .unwrap();
+    fs::create_dir(setup.mount_dir_path().join("dir"))
+        .await
+        .unwrap();
+
+    setup
+        .repo()
+        .set_access_mode(access_mode, None)
+        .await
+        .unwrap();
+
+    let file_metadata = fs::metadata(setup.mount_dir_path().join("file.txt"))
+        .await
+        .unwrap();
+    let dir_metadata = fs::metadata(setup.mount_dir_path().join("dir"))
+        .await
+        .unwrap();
+
+    assert_eq!(file_metadata.permissions().readonly(), expected_readonly);
+    assert_eq!(dir_metadata.permissions().readonly(), expected_readonly);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        assert_eq!(file_metadata.mode() & 0o777, expected_file_mode);
+        assert_eq!(dir_metadata.mode() & 0o777, expected_dir_mode);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn set_permissions() {
+    use std::{
+        fs::Permissions,
+        os::unix::fs::{MetadataExt, PermissionsExt},
+    };
+
+    let setup = Setup::new_single("").await;
+    let path = setup.mount_dir_path().join("file.txt");
+
+    fs::File::create(&path).await.unwrap();
+    assert_eq!(fs::metadata(&path).await.unwrap().mode() & 0o777, 0o664);
+
+    // Changing permissions is not supported...
+    assert_io_error(
+        fs::set_permissions(&path, Permissions::from_mode(0o640)).await,
+        io::ErrorKind::Unsupported,
+    );
+
+    // ...but not changing them is.
+    fs::set_permissions(&path, Permissions::from_mode(0o664))
+        .await
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn ownership() {
+    use std::os::unix::{self, fs::MetadataExt};
+
+    let setup = Setup::new_single("").await;
+    let path = setup.mount_dir_path().join("file.txt");
+
+    // SAFETY: These functions are actually safe
+    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+
+    fs::File::create(&path).await.unwrap();
+
+    let metadata = fs::metadata(&path).await.unwrap();
+    assert_eq!(metadata.uid(), uid);
+    assert_eq!(metadata.gid(), gid);
+
+    // Changing user/group is not supported...
+    let other_uid = uid + 1;
+    let other_gid = gid + 1;
+
+    assert_io_error(
+        unix::fs::chown(&path, Some(other_uid), None),
+        io::ErrorKind::Unsupported,
+    );
+
+    assert_io_error(
+        unix::fs::chown(&path, None, Some(other_gid)),
+        io::ErrorKind::Unsupported,
+    );
+
+    // ...but not changing them is.
+    unix::fs::chown(&path, Some(uid), None).unwrap();
+    unix::fs::chown(&path, None, Some(gid)).unwrap();
+    unix::fs::chown(&path, Some(uid), Some(gid)).unwrap();
+    unix::fs::chown(&path, None, None).unwrap();
+}
+
+// -----------------------------------------------------------------------------
+
 // proptest doesn't work with the `#[tokio::test]` macro yet
 // (see https://github.com/AltSysrq/proptest/issues/179). As a workaround, create the runtime
 // manually.
@@ -368,13 +484,17 @@ fn run<F: Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
+#[expect(dead_code)]
 enum MountGuardType {
-    Single { _guard: MountGuard },
-    Multi { _guard: MultiRepoVFS },
+    Single(MountGuard),
+    Multi(MultiRepoVFS),
 }
+
+const REPO_NAME: &str = "repo";
 
 struct Setup {
     base_dir: TempDir,
+    repo: Arc<Repository>,
     // NOTE: there is an issue on Windows where all output from FileSystemHandler seems
     // to be redirected to stderr, because of that the log lines are not captured by
     // `cargo test` and therefore log lines from all the tests appear interleaved. Until
@@ -382,7 +502,7 @@ struct Setup {
     // output.
     // https://github.com/dokan-dev/dokan-rust/issues/9
     _span_guard: tracing::span::EnteredSpan,
-    mount_guard: MountGuardType,
+    _mount_guard: MountGuardType,
 }
 
 impl Setup {
@@ -391,24 +511,27 @@ impl Setup {
 
         let span = Self::create_span(span_params);
         let base_dir = TempDir::new().unwrap();
-        let store_path = base_dir.path().join("repo.db");
+        let store_path = base_dir.path().join(format!("{REPO_NAME}.db"));
         let repo = Self::create_repo(&store_path, span.clone()).await;
-        let mount_dir = base_dir.path().join("mnt");
+        let mount_dir = base_dir.path().join("mnt").join(REPO_NAME);
 
-        fs::create_dir(&mount_dir).await.unwrap();
+        fs::create_dir_all(&mount_dir).await.unwrap();
 
         let span_guard = span.entered();
-        let mount_guard =
-            super::mount(tokio::runtime::Handle::current(), repo, mount_dir.clone()).unwrap();
+        let mount_guard = super::mount(
+            tokio::runtime::Handle::current(),
+            repo.clone(),
+            mount_dir.clone(),
+        )
+        .unwrap();
 
         wait_mounted(&mount_dir).await;
 
         Self {
             base_dir,
+            repo,
             _span_guard: span_guard,
-            mount_guard: MountGuardType::Single {
-                _guard: mount_guard,
-            },
+            _mount_guard: MountGuardType::Single(mount_guard),
         }
     }
 
@@ -417,7 +540,7 @@ impl Setup {
 
         let span = Self::create_span(span_params);
         let base_dir = TempDir::new().unwrap();
-        let store_path = base_dir.path().join("repo.db");
+        let store_path = base_dir.path().join(format!("{REPO_NAME}.db"));
         let repo = Self::create_repo(&store_path, span.clone()).await;
         let mount_dir = base_dir.path().join("mnt");
 
@@ -425,14 +548,15 @@ impl Setup {
 
         let vfs = MultiRepoVFS::create(mount_dir.clone()).await.unwrap();
 
-        vfs.insert("repo".to_owned(), repo).unwrap();
+        vfs.insert(REPO_NAME.to_owned(), repo.clone()).unwrap();
 
         wait_mounted(&mount_dir).await;
 
         Self {
             base_dir,
+            repo,
             _span_guard: span.entered(),
-            mount_guard: MountGuardType::Multi { _guard: vfs },
+            _mount_guard: MountGuardType::Multi(vfs),
         }
     }
 
@@ -461,10 +585,11 @@ impl Setup {
     }
 
     fn mount_dir_path(&self) -> PathBuf {
-        match self.mount_guard {
-            MountGuardType::Single { .. } => self.base_dir.path().join("mnt"),
-            MountGuardType::Multi { .. } => self.base_dir.path().join("mnt").join("repo"),
-        }
+        self.base_dir.path().join("mnt").join(REPO_NAME)
+    }
+
+    fn repo(&self) -> &Repository {
+        &self.repo
     }
 }
 
@@ -524,3 +649,12 @@ async fn wait_mounted(mount_dir: &Path) {
 
 #[cfg(not(target_os = "windows"))]
 async fn wait_mounted(_mount_dir: &Path) {}
+
+#[track_caller]
+fn assert_io_error<T>(result: Result<T, io::Error>, expected_kind: io::ErrorKind) {
+    match result {
+        Err(error) if error.kind() == expected_kind => (),
+        Err(error) => panic!("unexpected error {error:?} (expecting {expected_kind:?}"),
+        Ok(_) => panic!("unexpected success (expecting {expected_kind:?}"),
+    }
+}

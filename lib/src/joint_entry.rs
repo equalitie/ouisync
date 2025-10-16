@@ -20,6 +20,20 @@ impl JointEntry {
         }
     }
 
+    pub fn into_file(self) -> Result<File> {
+        match self {
+            Self::File(file) => Ok(file),
+            Self::Directory(_) => Err(Error::EntryIsDirectory),
+        }
+    }
+
+    pub fn into_directory(self) -> Result<JointDirectory> {
+        match self {
+            Self::File(_) => Err(Error::EntryIsFile),
+            Self::Directory(dirs) => Ok(dirs),
+        }
+    }
+
     pub fn as_file_mut(&mut self) -> Result<&mut File> {
         match self {
             Self::File(file) => Ok(file),
