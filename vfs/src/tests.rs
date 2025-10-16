@@ -433,7 +433,7 @@ async fn set_permissions() {
         .unwrap();
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn ownership() {
     use std::os::unix::{self, fs::MetadataExt};
