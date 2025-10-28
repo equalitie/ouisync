@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.3...master)
 
 - Improve support for file ownership and permissions on mounted repositories on linux
+- Support multiple store directories
 
 ## [v0.9.3](https://github.com/equalitie/ouisync/compare/v0.9.2...v0.9.3) - 2025-10-14
 

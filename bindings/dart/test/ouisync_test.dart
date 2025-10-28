@@ -25,7 +25,7 @@ void main() {
 
     final storeDir = '${temp.path}/store';
     await io.Directory(storeDir).create(recursive: true);
-    await session.setStoreDir(storeDir);
+    await session.setStoreDirs([storeDir]);
   });
 
   tearDown(() async {
@@ -121,7 +121,7 @@ void main() {
       final cred = await repo.getCredentials();
       await repo.close();
 
-      final base = await session.getStoreDir();
+      final base = await session.getStoreDirs().then((dirs) => dirs.first);
 
       final dstName = 'repo-new';
       final ext = 'ouisyncdb';

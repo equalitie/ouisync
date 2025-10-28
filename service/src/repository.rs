@@ -167,15 +167,21 @@ impl RepositorySet {
             .collect()
     }
 
-    /// Removes and collects all entries.
-    pub fn drain<C>(&self) -> C
+    /// Removes and collects all entries whose path matches the given prefix (empty prefix matches
+    /// all paths and thus removes all entries).
+    pub fn drain<C>(&self, prefix: &Path) -> C
     where
         C: FromIterator<RepositoryHolder>,
     {
         let mut inner = self.inner.write().unwrap();
+        let inner = &mut *inner;
 
-        inner.index.clear();
-        inner.repos.drain().collect()
+        #[expect(unstable_name_collisions)]
+        inner
+            .index
+            .extract_if(|path, _| path.starts_with(prefix))
+            .filter_map(|key| inner.repos.try_remove(key))
+            .collect()
     }
 }
 
@@ -303,6 +309,37 @@ where
         Ok(item)
     } else {
         Err(FindError::Ambiguous)
+    }
+}
+
+// Poor's man `BTreeMap::extract_if`. Remove when stabilized (should be on 2025-10-30:
+// https://releases.rs/docs/1.91.0/)
+trait BTreeMapShim<K, V> {
+    fn extract_if<F>(&mut self, pred: F) -> impl Iterator<Item = V>
+    where
+        K: Ord,
+        V: Copy,
+        F: FnMut(&K, &mut V) -> bool;
+}
+
+impl<K, V> BTreeMapShim<K, V> for BTreeMap<K, V> {
+    fn extract_if<F>(&mut self, mut pred: F) -> impl Iterator<Item = V>
+    where
+        K: Ord,
+        V: Copy,
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        let mut removed = Vec::with_capacity(self.len());
+        self.retain(|key, value| {
+            if pred(key, value) {
+                removed.push(*value);
+                true
+            } else {
+                false
+            }
+        });
+
+        removed.into_iter()
     }
 }
 

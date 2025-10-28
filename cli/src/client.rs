@@ -1,6 +1,6 @@
 use crate::{
     format::{OptionSecondsDisplay, PeerAddrDisplay, PeerInfoDisplay, QuotaInfoDisplay},
-    options::{ClientCommand, MirrorCommand},
+    options::{ClientCommand, MirrorCommand, StoreDirsCommand},
 };
 use futures_util::SinkExt;
 use ouisync::{crypto::Password, LocalSecret, PeerAddr, PeerInfo, SetLocalSecret, ShareToken};
@@ -464,17 +464,30 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
 
             println!("{value}");
         }
-        ClientCommand::StoreDir { path } => {
-            if let Some(path) = path {
-                let () = client.invoke(Request::SessionSetStoreDir { path }).await?;
-            } else {
-                let path: Option<PathBuf> = client.invoke(Request::SessionGetStoreDir).await?;
+        ClientCommand::StoreDirs { command } => match command {
+            StoreDirsCommand::Insert { paths } => {
+                let () = client
+                    .invoke(Request::SessionInsertStoreDirs { paths })
+                    .await?;
+            }
+            StoreDirsCommand::Remove { paths } => {
+                let () = client
+                    .invoke(Request::SessionRemoveStoreDirs { paths })
+                    .await?;
+            }
+            StoreDirsCommand::Set { paths } => {
+                let () = client
+                    .invoke(Request::SessionSetStoreDirs { paths })
+                    .await?;
+            }
+            StoreDirsCommand::List => {
+                let paths: Vec<PathBuf> = client.invoke(Request::SessionGetStoreDirs).await?;
 
-                if let Some(path) = path {
+                for path in paths {
                     println!("{}", path.display());
                 }
             }
-        }
+        },
         ClientCommand::Unmount { name } => {
             if let Some(name) = name {
                 let repo = client.find_repository(name).await?;

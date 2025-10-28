@@ -110,7 +110,7 @@ class OuisyncProviderTest {
     @Test
     fun testQueryRepos() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo")
             createRepository("bar")
         }
@@ -179,7 +179,7 @@ class OuisyncProviderTest {
     @Test
     fun testQueryEmptyDirectory() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo")
         }
 
@@ -197,7 +197,7 @@ class OuisyncProviderTest {
     @Test
     fun testQueryNonEmptyDirectory() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo").apply {
                 createDirectory("a")
                 createFile("b.txt").apply {
@@ -236,7 +236,7 @@ class OuisyncProviderTest {
     @Test
     fun testQueryBlindRepo() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo").setAccessMode(AccessMode.BLIND)
         }
 
@@ -260,7 +260,7 @@ class OuisyncProviderTest {
     @Test
     fun testReadFile() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo").apply {
                 createFile("a.txt").apply {
                     write(0, "hello world".toByteArray())
@@ -279,7 +279,7 @@ class OuisyncProviderTest {
     @Test
     fun testCreateDirectory() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo")
         }
 
@@ -349,7 +349,7 @@ class OuisyncProviderTest {
     @Test
     fun testCreateAndWriteFile() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo")
         }
 
@@ -396,7 +396,7 @@ class OuisyncProviderTest {
     @Test
     fun testDeleteFile() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo").apply {
                 createFile("a.txt").apply {
                     write(0, "this is a".toByteArray())
@@ -445,7 +445,7 @@ class OuisyncProviderTest {
     @Test
     fun testCopyFile() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo").apply {
                 createDirectory("a")
                 createDirectory("b")
@@ -508,7 +508,7 @@ class OuisyncProviderTest {
     @Test
     fun testRenameFile() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo").apply { createFile("bar.txt").close() }
         }
 
@@ -550,7 +550,7 @@ class OuisyncProviderTest {
     @Test
     fun testMoveFile() {
         withSession {
-            setStoreDir(storeDir)
+            setStoreDirs(listOf(storeDir))
             createRepository("foo").apply {
                 createDirectory("src")
                 createDirectory("dst")
@@ -618,7 +618,7 @@ class OuisyncProviderTest {
         // Create repo and bind the network listener
         val (addr, token) =
             withSession {
-                setStoreDir(storeDir)
+                setStoreDirs(listOf(storeDir))
                 bindNetwork(listOf("quic/127.0.0.1:0"))
                 val addr = getLocalListenerAddrs().first()
 
@@ -812,7 +812,7 @@ private class RemotePeer(private val tempDir: File, val service: Service, val se
             val service = Service.start(configDir)
 
             val session = Session.create(configDir)
-            session.setStoreDir(storeDir)
+            session.setStoreDirs(listOf(storeDir))
 
             return RemotePeer(tempDir, service, session)
         }

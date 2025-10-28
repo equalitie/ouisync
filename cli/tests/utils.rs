@@ -79,7 +79,8 @@ impl Bin {
             &bin.id,
             "",
             bin.client_command()
-                .arg("store-dir")
+                .arg("store-dirs")
+                .arg("set")
                 .arg(store_dir)
                 .output()
                 .unwrap(),

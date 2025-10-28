@@ -5,7 +5,6 @@ on: [push]
 env:
   PROPTEST_CASES: 32
   RUST_BACKTRACE: 1
-  NDK_VERSION: "28.2.13676358"
 
 jobs:
   check_rust_crates:

@@ -38,7 +38,7 @@ void main() {
     session = await Session.create(
       configPath: configPath,
     );
-    await session.setStoreDir('${temp.path}/store');
+    await session.setStoreDirs(['${temp.path}/store']);
 
     repository = await session.createRepository(
       path: 'foo',

@@ -22,8 +22,8 @@ void main() {
     final client = await Client.connect(configPath: configPath);
 
     expect(
-      await client.invoke(RequestSessionGetStoreDir()),
-      isA<ResponseNone>(),
+      await client.invoke(RequestSessionGetStoreDirs()),
+      isA<ResponsePaths>(),
     );
 
     await client.close();
@@ -46,8 +46,8 @@ void main() {
 
     try {
       expect(
-        await client.invoke(RequestSessionGetStoreDir()),
-        isA<ResponseNone>(),
+        await client.invoke(RequestSessionGetStoreDirs()),
+        isA<ResponsePaths>(),
       );
     } finally {
       await client.close();
