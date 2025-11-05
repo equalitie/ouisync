@@ -183,6 +183,11 @@ impl RepositorySet {
             .filter_map(|key| inner.repos.try_remove(key))
             .collect()
     }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.inner.read().unwrap().repos.len()
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
@@ -333,9 +338,9 @@ impl<K, V> BTreeMapShim<K, V> for BTreeMap<K, V> {
         self.retain(|key, value| {
             if pred(key, value) {
                 removed.push(*value);
-                true
-            } else {
                 false
+            } else {
+                true
             }
         });
 
@@ -343,7 +348,71 @@ impl<K, V> BTreeMapShim<K, V> for BTreeMap<K, V> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-// }
+#[cfg(test)]
+mod tests {
+    use ouisync::{Access, RepositoryParams, WriteSecrets};
+    use tempfile::TempDir;
+    use tokio::fs;
+
+    use crate::test_utils;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn drain() {
+        test_utils::init_log();
+
+        let temp_dir = TempDir::new().unwrap();
+        let repos = RepositorySet::new();
+
+        for prefix in ["a", "b"] {
+            let store_dir = temp_dir.path().join(prefix);
+            fs::create_dir_all(&store_dir).await.unwrap();
+
+            let path = store_dir.join("repo");
+
+            let repo = Repository::create(
+                &RepositoryParams::new(&path),
+                Access::WriteUnlocked {
+                    secrets: WriteSecrets::random(),
+                },
+            )
+            .await
+            .unwrap();
+
+            let holder = RepositoryHolder::new(path, repo);
+
+            repos.try_insert(holder).ok().unwrap();
+        }
+
+        let store_path_a = temp_dir.path().join("a");
+        let store_path_b = temp_dir.path().join("b");
+        let store_path_c = temp_dir.path().join("c");
+
+        let repo_path_a = store_path_a.join("repo");
+        let repo_path_b = store_path_b.join("repo");
+
+        assert_eq!(repos.len(), 2);
+        assert!(repos.find_by_path(&repo_path_a).is_some());
+        assert!(repos.find_by_path(&repo_path_b).is_some());
+
+        // Drain non-existing prefix has no effect
+        let drained: Vec<_> = repos.drain(&store_path_c);
+        assert!(drained.is_empty());
+        assert_eq!(repos.len(), 2);
+        assert!(repos.find_by_path(&repo_path_a).is_some());
+        assert!(repos.find_by_path(&repo_path_b).is_some());
+
+        // Drain one prefix
+        let drained: Vec<_> = repos.drain(&store_path_a);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(repos.len(), 1);
+        assert!(repos.find_by_path(&repo_path_a).is_none());
+        assert!(repos.find_by_path(&repo_path_b).is_some());
+
+        // Drain other prefix
+        let drained: Vec<_> = repos.drain(&store_path_b);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(repos.len(), 0);
+    }
+}

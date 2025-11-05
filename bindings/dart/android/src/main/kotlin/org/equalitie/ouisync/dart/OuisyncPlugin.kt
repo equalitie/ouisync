@@ -27,18 +27,14 @@ import io.flutter.embedding.engine.plugins.lifecycle.FlutterLifecycleAdapter
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.equalitie.ouisync.android.OuisyncService
 import org.equalitie.ouisync.android.setConfigPath
-import org.equalitie.ouisync.session.LogLevel
 import org.equalitie.ouisync.service.initLog
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
+import org.equalitie.ouisync.session.LogLevel
 
 // This plugin is mainly responsible for maintaining [OuisyncService]. The service can be in one of
 // three states:
@@ -101,16 +97,16 @@ class OuisyncPlugin :
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         val activity = binding.activity
-        val activityLifecycle = FlutterLifecycleAdapter.getActivityLifecycle(binding).apply {
-            addObserver(activityLifecycleObserver)
-        }
+        val activityLifecycle =
+            FlutterLifecycleAdapter.getActivityLifecycle(binding).apply {
+                addObserver(activityLifecycleObserver)
+            }
 
         // Invoke `maintainService` every time the activity is resumed.
-        serviceJob = activityLifecycle.coroutineScope.launch {
-            activityLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                maintainService()
+        serviceJob =
+            activityLifecycle.coroutineScope.launch {
+                activityLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { maintainService() }
             }
-        }
 
         requestPermissions(activity)
 
@@ -241,9 +237,7 @@ class OuisyncPlugin :
 
         // Using `runBlocking` because `activityLifecycle.coroutineScope.launch` would sometimes
         // cause hang when calling `getConfigPath`, for some reason.
-        runBlocking {
-            activity.setConfigPath(configPath)
-        }
+        runBlocking { activity.setConfigPath(configPath) }
     }
 
     private fun onStop() {
@@ -315,7 +309,7 @@ class OuisyncPlugin :
         val activityLifecycle = requireNotNull(activityLifecycle)
 
         if (!serviceState.enabled) {
-            return;
+            return
         }
 
         val intent = Intent(activity, OuisyncService::class.java)
@@ -324,9 +318,9 @@ class OuisyncPlugin :
         // start as foreground service. Otherwise, it's started as regular (background) service.
         if (activityLifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             serviceState.notification.let { n ->
-                intent.putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME,  n.channelName)
+                intent.putExtra(OuisyncService.EXTRA_NOTIFICATION_CHANNEL_NAME, n.channelName)
                 intent.putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TITLE, n.contentTitle)
-                intent.putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TEXT,  n.contentText)
+                intent.putExtra(OuisyncService.EXTRA_NOTIFICATION_CONTENT_TEXT, n.contentText)
             }
         }
 
@@ -351,7 +345,7 @@ private class ServiceState(
 private data class NotificationParams(
     val channelName: String? = null,
     val contentTitle: String? = null,
-    val contentText: String? = null
+    val contentText: String? = null,
 )
 
 private fun logPriority(level: LogLevel) =
@@ -362,4 +356,3 @@ private fun logPriority(level: LogLevel) =
         LogLevel.DEBUG -> Log.DEBUG
         LogLevel.TRACE -> Log.VERBOSE
     }
-
