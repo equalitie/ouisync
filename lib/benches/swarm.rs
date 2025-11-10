@@ -9,10 +9,10 @@ mod common;
 mod summary;
 
 use clap::Parser;
-use common::{actor, progress::ProgressReporter, sync_watch, Env, Proto, DEFAULT_REPO};
+use common::{DEFAULT_REPO, Env, Proto, actor, progress::ProgressReporter, sync_watch};
 use metrics::{Counter, Gauge, Recorder};
 use ouisync::{Access, AccessMode, File, Network, Repository, Stats};
-use rand::{distributions::Standard, rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, distributions::Standard, rngs::StdRng};
 use std::{
     fmt,
     fs::OpenOptions,
@@ -129,11 +129,11 @@ fn main() -> ExitCode {
             let _reg = network.register(repo.handle());
 
             // Create the file
-            if actor.access_mode == AccessMode::Write {
-                if let Some(file_params) = files.get(actor.index) {
-                    let mut file = repo.create_file(file_params.name()).await.unwrap();
-                    write_random_file(&mut file, file_params.seed, file_params.size).await;
-                }
+            if actor.access_mode == AccessMode::Write
+                && let Some(file_params) = files.get(actor.index)
+            {
+                let mut file = repo.create_file(file_params.name()).await.unwrap();
+                write_random_file(&mut file, file_params.seed, file_params.size).await;
             }
 
             // Connect to the other peers

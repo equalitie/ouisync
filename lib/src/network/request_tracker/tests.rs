@@ -2,16 +2,16 @@ use super::{simulation::Simulation, *};
 use crate::{
     network::debug_payload::DebugRequest,
     protocol::{
-        test_utils::{BlockState, Snapshot},
         Block,
+        test_utils::{BlockState, Snapshot},
     },
 };
 use metrics::NoopRecorder;
 use rand::{
+    Rng, SeedableRng,
     distributions::{Bernoulli, Distribution, Standard},
     rngs::StdRng,
     seq::SliceRandom,
-    Rng, SeedableRng,
 };
 use std::time::Duration;
 use tokio::time;

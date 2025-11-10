@@ -300,7 +300,10 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
 
     writeln!(out)?;
     writeln!(out, "{I}override fun toString() =")?;
-    writeln!(out, "{I}{I}\"${{this::class.simpleName}}: ${{(sequenceOf(message) + sources.asSequence()).joinToString(\" → \")}}\"")?;
+    writeln!(
+        out,
+        "{I}{I}\"${{this::class.simpleName}}: ${{(sequenceOf(message) + sources.asSequence()).joinToString(\" → \")}}\""
+    )?;
 
     writeln!(out, "}}")?;
     writeln!(out)?;
@@ -374,10 +377,8 @@ fn write_api_class(
                 ty
             )?;
 
-            if use_default_args {
-                if let Some(default) = ty.default() {
-                    write!(out, " = {default}")?;
-                }
+            if use_default_args && let Some(default) = ty.default() {
+                write!(out, " = {default}")?;
             }
 
             writeln!(out, ",")?;
@@ -414,11 +415,11 @@ fn write_api_class(
             for (index, (arg_name, _)) in variant.fields.iter().enumerate() {
                 let arg_name = AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
 
-                if index == 0 {
-                    if let Some(inner_name) = &inner_name {
-                        writeln!(out, "{I}{I}{I}{inner_name},")?;
-                        continue;
-                    }
+                if index == 0
+                    && let Some(inner_name) = &inner_name
+                {
+                    writeln!(out, "{I}{I}{I}{inner_name},")?;
+                    continue;
                 }
 
                 writeln!(out, "{I}{I}{I}{arg_name},")?;

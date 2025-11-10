@@ -9,7 +9,7 @@ use self::graph::{Graph, Key as GraphKey};
 use super::{constants::RESPONSE_BUFFER_SIZE, message::Request};
 use crate::{
     collections::{HashMap, HashSet},
-    crypto::{sign::PublicKey, Hash},
+    crypto::{Hash, sign::PublicKey},
     protocol::{BlockId, MultiBlockPresence},
     repository::monitor::TrafficMonitor,
 };
@@ -17,19 +17,19 @@ use std::{
     collections::hash_map::Entry,
     fmt, iter, mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 use tokio::{
     select,
-    sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
     task,
 };
 use tokio_stream::StreamExt;
-use tokio_util::time::{delay_queue, DelayQueue};
-use tracing::{instrument, Instrument, Span};
+use tokio_util::time::{DelayQueue, delay_queue};
+use tracing::{Instrument, Span, instrument};
 use xxhash_rust::xxh3::Xxh3Default;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -200,7 +200,7 @@ impl RequestTrackerReceiver {
                         Ok(event) => event,
                         Err(mpsc::error::TryRecvError::Empty) => return Err(TryRecvError::Empty),
                         Err(mpsc::error::TryRecvError::Disconnected) => {
-                            return Err(TryRecvError::Closed)
+                            return Err(TryRecvError::Closed);
                         }
                     };
 
@@ -699,10 +699,8 @@ impl Worker {
             }
         }
 
-        if decrement_pending {
-            if let Some(client_state) = self.clients.get_mut(&client_id) {
-                client_state.decrement_pending();
-            }
+        if decrement_pending && let Some(client_state) = self.clients.get_mut(&client_id) {
+            client_state.decrement_pending();
         }
     }
 

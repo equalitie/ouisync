@@ -61,10 +61,8 @@ async fn store_dirs(config: &ConfigStore) {
         true
     };
 
-    if remove_old {
-        if let Err(error) = old.remove().await {
-            tracing::error!(?error, entry = ?old.path(), "{ERROR_REMOVE}");
-        }
+    if remove_old && let Err(error) = old.remove().await {
+        tracing::error!(?error, entry = ?old.path(), "{ERROR_REMOVE}");
     }
 }
 

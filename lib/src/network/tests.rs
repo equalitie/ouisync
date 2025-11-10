@@ -10,14 +10,14 @@ use crate::{
     db,
     event::{Event, EventSender, Payload},
     protocol::{
-        test_utils::Snapshot, Block, BlockId, Bump, RepositoryId, RootNode, SingleBlockPresence,
+        Block, BlockId, Bump, RepositoryId, RootNode, SingleBlockPresence, test_utils::Snapshot,
     },
-    repository::{monitor::RepositoryMonitor, Vault},
+    repository::{Vault, monitor::RepositoryMonitor},
     store::{Changeset, SnapshotWriter},
     test_utils,
     version_vector::VersionVector,
 };
-use futures_util::{future, TryStreamExt};
+use futures_util::{TryStreamExt, future};
 use metrics::NoopRecorder;
 use rand::prelude::*;
 use state_monitor::StateMonitor;
@@ -475,17 +475,16 @@ async fn wait_until_snapshots_in_sync(
     }
 
     loop {
-        if let Some(client_root) = load_latest_root_node(client_vault, &server_id).await {
-            if client_root.summary.state.is_approved()
-                && client_root.proof.hash == server_root.proof.hash
-            {
-                // client has now fully downloaded server's latest snapshot.
-                assert_eq!(
-                    client_root.proof.version_vector,
-                    server_root.proof.version_vector
-                );
-                break;
-            }
+        if let Some(client_root) = load_latest_root_node(client_vault, &server_id).await
+            && client_root.summary.state.is_approved()
+            && client_root.proof.hash == server_root.proof.hash
+        {
+            // client has now fully downloaded server's latest snapshot.
+            assert_eq!(
+                client_root.proof.version_vector,
+                server_root.proof.version_vector
+            );
+            break;
         }
 
         recv_any(&mut rx).await

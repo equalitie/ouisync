@@ -5,16 +5,16 @@ use std::{
 };
 
 use crate::{
+    Error,
     protocol::RepositoryHandle,
     repository::{self, RepositorySet},
-    Error,
 };
 use ouisync::{Credentials, Network, Repository};
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use state_monitor::StateMonitor;
 use tokio::fs;
 
-use super::{load_repository, ConfigStore, RepositoryHolder, State, Store};
+use super::{ConfigStore, RepositoryHolder, State, Store, load_repository};
 
 /// Move or rename a repository. Makes "best effort" to do it atomically, that is, if any step of
 /// this operation fails, tries to revert all previous steps before returning.

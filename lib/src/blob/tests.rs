@@ -6,7 +6,7 @@ use crate::{
     db,
     error::Error,
     event::EventSender,
-    protocol::{Bump, BLOCK_SIZE},
+    protocol::{BLOCK_SIZE, Bump},
     store::Store,
     test_utils,
 };

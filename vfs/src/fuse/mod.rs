@@ -31,7 +31,7 @@ use std::{
     time::SystemTime,
 };
 use tokio::time::Duration;
-use tracing::{instrument, Span};
+use tracing::{Span, instrument};
 
 // Name of the filesystem.
 const FS_NAME: &str = "ouisync";
@@ -534,22 +534,22 @@ impl Inner {
         // Setting file mode, user or group is not currently supported but if they are set to the
         // same value as what the file already has we accept it.
 
-        if let Some(mode) = mode {
-            if mode & MODE_MASK != default_mode(&self.repository, entry.entry_type()) as u32 {
-                return Err(Error::OperationNotSupported);
-            }
+        if let Some(mode) = mode
+            && mode & MODE_MASK != default_mode(&self.repository, entry.entry_type()) as u32
+        {
+            return Err(Error::OperationNotSupported);
         }
 
-        if let Some(uid) = uid {
-            if uid != default_uid() {
-                return Err(Error::OperationNotSupported);
-            }
+        if let Some(uid) = uid
+            && uid != default_uid()
+        {
+            return Err(Error::OperationNotSupported);
         }
 
-        if let Some(gid) = gid {
-            if gid != default_gid() {
-                return Err(Error::OperationNotSupported);
-            }
+        if let Some(gid) = gid
+            && gid != default_gid()
+        {
+            return Err(Error::OperationNotSupported);
         }
 
         if let Some(size) = size {

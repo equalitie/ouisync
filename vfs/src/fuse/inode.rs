@@ -3,7 +3,7 @@ use fuser::FUSE_ROOT_ID;
 use ouisync_lib::crypto::sign::PublicKey;
 use slab::Slab;
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     convert::TryInto,
     fmt,
 };

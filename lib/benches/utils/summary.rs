@@ -1,6 +1,6 @@
-use hdrhistogram::{sync::Recorder, Histogram, SyncHistogram};
+use hdrhistogram::{Histogram, SyncHistogram, sync::Recorder};
 use ouisync::{Network, Stats};
-use serde::{ser::SerializeMap, Serialize};
+use serde::{Serialize, ser::SerializeMap};
 use std::{
     mem,
     time::{Duration, Instant},

@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::{MessageKey, PendingRequest, RequestVariant};
 use crate::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     network::message::Request,
 };
 use slab::Slab;
@@ -55,10 +55,10 @@ impl<T> Graph<T> {
             }
         };
 
-        if let Some(parent_key) = parent_key {
-            if let Some(parent_node) = self.nodes.get_mut(parent_key.0) {
-                parent_node.children.insert(node_key);
-            }
+        if let Some(parent_key) = parent_key
+            && let Some(parent_node) = self.nodes.get_mut(parent_key.0)
+        {
+            parent_node.children.insert(node_key);
         }
 
         node_key

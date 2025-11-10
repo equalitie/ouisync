@@ -20,14 +20,14 @@ use crate::{
     transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
 };
 use ouisync::{
-    crypto::{cipher::SecretKey, Password, PasswordSalt},
     Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
     NatBehavior, Network, NetworkEventReceiver, PeerAddr, PeerInfo, Progress, PublicRuntimeId,
     Registration, Repository, RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize,
+    crypto::{Password, PasswordSalt, cipher::SecretKey},
 };
 use ouisync_macros::api;
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
-use rand::{rngs::OsRng, Rng};
+use rand::{Rng, rngs::OsRng};
 use state_monitor::{MonitorId, StateMonitor};
 use std::{
     borrow::Cow,
@@ -640,10 +640,10 @@ impl State {
             Err(Error::AlreadyExists)?;
         }
 
-        if let Some(token) = &token {
-            if self.repos.find_by_id(token.id()).is_some() {
-                Err(Error::AlreadyExists)?;
-            }
+        if let Some(token) = &token
+            && self.repos.find_by_id(token.id()).is_some()
+        {
+            Err(Error::AlreadyExists)?;
         }
 
         // Create the repo
@@ -778,14 +778,14 @@ impl State {
             return Ok(());
         };
 
-        if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
-            if let Err(error) = mounter.remove(holder.short_name()) {
-                tracing::error!(
-                    ?error,
-                    name = holder.short_name(),
-                    "failed to unmount repository"
-                );
-            }
+        if let Some(mounter) = self.mounter.lock().unwrap().as_ref()
+            && let Err(error) = mounter.remove(holder.short_name())
+        {
+            tracing::error!(
+                ?error,
+                name = holder.short_name(),
+                "failed to unmount repository"
+            );
         }
 
         holder.close().await?;
@@ -810,14 +810,14 @@ impl State {
     pub async fn repository_close(&self, repo: RepositoryHandle) -> Result<(), Error> {
         let holder = self.repos.remove(repo).ok_or(Error::InvalidArgument)?;
 
-        if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
-            if let Err(error) = mounter.remove(holder.short_name()) {
-                tracing::error!(
-                    ?error,
-                    name = holder.short_name(),
-                    "failed to unmount repository"
-                );
-            }
+        if let Some(mounter) = self.mounter.lock().unwrap().as_ref()
+            && let Err(error) = mounter.remove(holder.short_name())
+        {
+            tracing::error!(
+                ?error,
+                name = holder.short_name(),
+                "failed to unmount repository"
+            );
         }
 
         holder.close().await
@@ -2146,16 +2146,15 @@ async fn load_repository(
         holder.enable_sync(register(network, holder.repository()).await?);
     }
 
-    if let Some(mounter) = mounter {
-        if holder
+    if let Some(mounter) = mounter
+        && holder
             .repository()
             .metadata()
             .get(AUTOMOUNT_KEY)
             .await?
             .unwrap_or(false)
-        {
-            mounter.insert(holder.short_name().to_owned(), holder.repository().clone())?;
-        }
+    {
+        mounter.insert(holder.short_name().to_owned(), holder.repository().clone())?;
     }
 
     Ok(holder)

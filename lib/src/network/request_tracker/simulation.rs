@@ -6,18 +6,18 @@ use super::{
 use crate::{
     collections::{HashMap, HashSet},
     crypto::{
-        sign::{Keypair, PublicKey},
         Hashable,
+        sign::{Keypair, PublicKey},
     },
     network::debug_payload::DebugResponse,
     protocol::{
-        test_utils::{assert_snapshots_equal, Snapshot},
         Block, MultiBlockPresence, Proof, UntrustedProof,
+        test_utils::{Snapshot, assert_snapshots_equal},
     },
     version_vector::VersionVector,
 };
-use rand::{seq::SliceRandom, CryptoRng, Rng};
-use std::collections::{hash_map::Entry, VecDeque};
+use rand::{CryptoRng, Rng, seq::SliceRandom};
+use std::collections::{VecDeque, hash_map::Entry};
 
 /// Simple network simulation for testing `RequestTracker`.
 pub(super) struct Simulation {
@@ -140,10 +140,10 @@ impl Simulation {
                             | Response::Unchoke => None,
                         };
 
-                        if let Some(key) = key {
-                            if let Some(variant) = peer.requests.get(&key) {
-                                cancel_request(&mut self.requests, key, *variant);
-                            }
+                        if let Some(key) = key
+                            && let Some(variant) = peer.requests.get(&key)
+                        {
+                            cancel_request(&mut self.requests, key, *variant);
                         }
 
                         peer.client.handle_response(response, &mut self.snapshot);

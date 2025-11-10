@@ -48,10 +48,10 @@ impl BlockIds {
     }
 
     pub async fn try_next(&mut self) -> Result<Option<(BlockId, SingleBlockPresence)>> {
-        if let Some(upper_bound) = self.upper_bound {
-            if self.locator.number() >= upper_bound {
-                return Ok(None);
-            }
+        if let Some(upper_bound) = self.upper_bound
+            && self.locator.number() >= upper_bound
+        {
+            return Ok(None);
         }
 
         let encoded = self.locator.encode(self.branch.keys().read());
