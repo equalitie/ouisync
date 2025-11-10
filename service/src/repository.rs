@@ -176,11 +176,10 @@ impl RepositorySet {
         let mut inner = self.inner.write().unwrap();
         let inner = &mut *inner;
 
-        #[expect(unstable_name_collisions)]
         inner
             .index
-            .extract_if(|path, _| path.starts_with(prefix))
-            .filter_map(|key| inner.repos.try_remove(key))
+            .extract_if(.., |path, _| path.starts_with(prefix))
+            .filter_map(|(_, key)| inner.repos.try_remove(key))
             .collect()
     }
 
@@ -314,37 +313,6 @@ where
         Ok(item)
     } else {
         Err(FindError::Ambiguous)
-    }
-}
-
-// Poor's man `BTreeMap::extract_if`. Remove when stabilized (should be on 2025-10-30:
-// https://releases.rs/docs/1.91.0/)
-trait BTreeMapShim<K, V> {
-    fn extract_if<F>(&mut self, pred: F) -> impl Iterator<Item = V>
-    where
-        K: Ord,
-        V: Copy,
-        F: FnMut(&K, &mut V) -> bool;
-}
-
-impl<K, V> BTreeMapShim<K, V> for BTreeMap<K, V> {
-    fn extract_if<F>(&mut self, mut pred: F) -> impl Iterator<Item = V>
-    where
-        K: Ord,
-        V: Copy,
-        F: FnMut(&K, &mut V) -> bool,
-    {
-        let mut removed = Vec::with_capacity(self.len());
-        self.retain(|key, value| {
-            if pred(key, value) {
-                removed.push(*value);
-                false
-            } else {
-                true
-            }
-        });
-
-        removed.into_iter()
     }
 }
 

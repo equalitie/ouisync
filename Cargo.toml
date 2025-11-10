@@ -34,7 +34,7 @@ authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie
 repository = "https://github.com/equalitie/ouisync"
 license = "MPL-2.0"
 edition = "2024"
-rust-version = "1.87.0"
+rust-version = "1.91.0"
 
 [workspace.dependencies]
 anyhow = "1.0.90"
