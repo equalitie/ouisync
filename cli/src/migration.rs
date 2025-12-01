@@ -25,14 +25,18 @@ pub(crate) async fn migrate_config_dir() {
 }
 
 /// Check whether the old store directory still exists and if so, print a warning.
-pub(crate) async fn check_store_dir(new: &Path) {
+pub(crate) async fn check_store_dir(new: &[PathBuf]) {
     let Some(old) = dirs::data_dir().map(|base| base.join(OLD_APP_ID)) else {
         return;
     };
 
-    if old == new {
+    if new.contains(&old) {
         return;
     }
+
+    let Some(new) = new.first() else {
+        return;
+    };
 
     if !fs::metadata(&old)
         .await
@@ -55,8 +59,8 @@ pub(crate) async fn check_store_dir(new: &Path) {
          Ouisync. The new directory is '{1}' but the old one at '{0}' still exists. \
          No repositories from the old directory will be loaded. To silence this warning move all \
          files from the old directory to the new one and delete the old one. Alternatively, to \
-         keep using the old directory, change the current store directory by running the command \
-         '{2} store-dir {0}'",
+         keep using the old directory, add it to the current store directories by running the command \
+         '{2} store-dirs insert {0}'",
         old.display(),
         new.display(),
         exe_name,

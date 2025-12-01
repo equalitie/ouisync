@@ -3,7 +3,7 @@ plugins {
     id 'java-library'
     id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.21'
 
-    id 'dokka-conventions'
+    id 'dokka-convention'
 }
 
 version = rootProject.version
@@ -97,9 +97,7 @@ publishing {
 
 signing {
     // Only sign when publishing to sonatype, not local
-    required {
-        gradle.taskGraph.hasTask("publishSessionPublicationToSonatypeRepository")
-    }
+    required = gradle.taskGraph.hasTask("publishSessionPublicationToSonatypeRepository")
 
     if (signingKey) {
         useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
@@ -122,7 +120,7 @@ tasks.register('generateApi', Exec) {
 }
 
 tasks.register('cargoBuildUnitTest', Exec) {
-    description 'Build the native library for unit tests'
+    description = 'Build the native library for unit tests'
     workingDir "$rootDir/../.."
     commandLine 'cargo', 'build', '--package', 'ouisync-service', '--lib'
 }

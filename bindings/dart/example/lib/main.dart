@@ -47,7 +47,7 @@ class _MyAppState extends State<MyApp> {
     await server.notify(contentTitle: 'Ouisync example is running');
 
     final session = await Session.create(configPath: configDir);
-    await session.setStoreDir(join(dataDir, 'repos'));
+    await session.setStoreDirs([join(dataDir, 'repos')]);
     await session.initNetwork(NetworkDefaults(
       bind: ["quic/0.0.0.0:0"],
       portForwardingEnabled: false,

@@ -14,14 +14,14 @@ use crate::{
     branch::Branch,
     collections::HashMap,
     crypto::{
+        Hashable,
         cipher::{self, Nonce, SecretKey},
         sign::{Keypair, PublicKey},
-        Hashable,
     },
     error::{Error, Result},
     protocol::{
-        Block, BlockContent, BlockId, BlockNonce, Locator, RootNode, RootNodeFilter,
-        SingleBlockPresence, BLOCK_SIZE,
+        BLOCK_SIZE, Block, BlockContent, BlockId, BlockNonce, Locator, RootNode, RootNodeFilter,
+        SingleBlockPresence,
     },
     store::{self, Changeset, ReadTransaction},
 };
@@ -586,10 +586,10 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
         changeset.link_block(encoded_locator, block_id, block_presence);
 
         // The `+ 1` is there to not hit on the first run.
-        if (locator.number() + 1) as usize % BATCH_SIZE == 0 {
-            if let Some(batch) = batch.take() {
-                batch.apply(dst_branch.id(), write_keys).await?;
-            }
+        if ((locator.number() + 1) as usize).is_multiple_of(BATCH_SIZE)
+            && let Some(batch) = batch.take()
+        {
+            batch.apply(dst_branch.id(), write_keys).await?;
         }
 
         tracing::trace!(

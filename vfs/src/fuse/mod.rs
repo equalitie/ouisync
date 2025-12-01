@@ -9,7 +9,7 @@ pub use multi_repo_vfs::MultiRepoVFS;
 use self::{
     entry_map::{EntryMap, FileHandle},
     flags::{OpenFlags, RenameFlags},
-    inode::{Inode, InodeMap, InodeView, Representation},
+    inode::{Inode, InodeMap, Representation},
     utils::{FormatOptionScope, MaybeOwnedMut},
 };
 use fuser::{
@@ -17,8 +17,8 @@ use fuser::{
     ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync_lib::{
-    DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef, Repository,
-    Result,
+    AccessMode, DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
+    Repository, Result,
 };
 use std::{
     convert::TryInto,
@@ -31,7 +31,7 @@ use std::{
     time::SystemTime,
 };
 use tokio::time::Duration;
-use tracing::{instrument, Span};
+use tracing::{Span, instrument};
 
 // Name of the filesystem.
 const FS_NAME: &str = "ouisync";
@@ -445,8 +445,7 @@ impl Inner {
 
         let inode = self.inodes.lookup(parent, entry.name(), name, repr);
 
-        // TODO: uid, gid
-        Ok(make_file_attr(inode, entry.entry_type(), len, 0, 0))
+        Ok(self.make_file_attr(inode, entry.entry_type(), len))
     }
 
     #[instrument(skip(self, inode), fields(path))]
@@ -459,10 +458,9 @@ impl Inner {
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
         self.record_path(inode, None);
 
-        let entry = self.open_entry_by_inode(self.inodes.get(inode)).await?;
+        let entry = self.open_entry_by_inode(inode).await?;
 
-        // TODO: uid, gid
-        Ok(make_file_attr_for_entry(&entry, inode, 0, 0).await)
+        Ok(self.make_file_attr_for_entry(&entry, inode))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -520,38 +518,62 @@ impl Inner {
             }
         }
 
-        check_unsupported(mode)?;
-        check_unsupported(uid)?;
-        check_unsupported(gid)?;
+        #[track_caller]
+        fn warn_no_effect<T>(name: &str, value: Option<T>) {
+            if value.is_some() {
+                tracing::warn!("setting {name} has no effect");
+            }
+        }
+
+        let mut entry = if let Some(handle) = handle {
+            MaybeOwnedMut::Borrowed(self.entries.get_mut(handle)?)
+        } else {
+            MaybeOwnedMut::Owned(self.open_entry_by_inode(inode).await?)
+        };
+
+        // Setting file mode, user or group is not currently supported but if they are set to the
+        // same value as what the file already has we accept it.
+
+        if let Some(mode) = mode
+            && mode & MODE_MASK != default_mode(&self.repository, entry.entry_type()) as u32
+        {
+            return Err(Error::OperationNotSupported);
+        }
+
+        if let Some(uid) = uid
+            && uid != default_uid()
+        {
+            return Err(Error::OperationNotSupported);
+        }
+
+        if let Some(gid) = gid
+            && gid != default_gid()
+        {
+            return Err(Error::OperationNotSupported);
+        }
+
+        if let Some(size) = size {
+            let file = entry.as_file_mut()?;
+
+            file.fork(local_branch).await?;
+            file.truncate(size)?;
+            file.flush().await?;
+        }
+
         check_unsupported(ctime)?;
         check_unsupported(crtime)?;
         check_unsupported(chgtime)?;
         check_unsupported(bkuptime)?;
         check_unsupported(flags)?;
 
-        // NOTE: ignoring these for now to make `touch` work
-        // check_unsupported(atime)?;
-        // check_unsupported(mtime)?;
+        // Ignore these so `touch` still works.
+        warn_no_effect("atime", atime);
+        warn_no_effect("mtime", mtime);
 
-        let mut file = if let Some(handle) = handle {
-            MaybeOwnedMut::Borrowed(self.entries.get_file_mut(handle)?)
-        } else {
-            MaybeOwnedMut::Owned(self.open_file_by_inode(inode).await?)
-        };
+        let entry_type = entry.entry_type();
+        let entry_len = entry.len();
 
-        if let Some(size) = size {
-            file.fork(local_branch).await?;
-            file.truncate(size)?;
-            file.flush().await?;
-        }
-
-        Ok(make_file_attr(
-            inode,
-            EntryType::File,
-            file.len(),
-            uid.unwrap_or(0),
-            gid.unwrap_or(0),
-        ))
+        Ok(self.make_file_attr(inode, entry_type, entry_len))
     }
 
     #[instrument(skip(self, inode, flags), fields(path, ?flags), err(Debug))]
@@ -662,8 +684,7 @@ impl Inner {
             .lookup(parent, name, name, Representation::Directory);
         let len = dir.len();
 
-        // TODO: uid, gid
-        Ok(make_file_attr(inode, EntryType::Directory, len, 0, 0))
+        Ok(self.make_file_attr(inode, EntryType::Directory, len))
     }
 
     #[instrument(skip(self, parent, name), fields(path), err(Debug))]
@@ -696,6 +717,8 @@ impl Inner {
     ) -> Result<(FileAttr, FileHandle, u32)> {
         record_fmt!("mode", "{:#o}", mode);
         record_fmt!("umask", "{:#o}", umask);
+        record_fmt!("uid", "{}", req.uid());
+        record_fmt!("gid", "{}", req.gid());
 
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
         self.record_path(parent, Some(name));
@@ -709,7 +732,7 @@ impl Inner {
         let inode = self
             .inodes
             .lookup(parent, name, name, Representation::File(branch_id));
-        let attr = make_file_attr_for_entry(&entry, inode, req.uid(), req.gid()).await;
+        let attr = self.make_file_attr_for_entry(&entry, inode);
         let handle = self.entries.insert(entry);
 
         Ok((attr, handle, 0))
@@ -894,19 +917,15 @@ impl Inner {
     }
 
     async fn open_file_by_inode(&self, inode: Inode) -> Result<File> {
-        let inode = self.inodes.get(inode);
-        let branch_id = inode.representation().file_version()?;
-        let path = inode.calculate_path();
-
-        self.repository.open_file_version(path, branch_id).await
+        self.open_entry_by_inode(inode).await?.into_file()
     }
 
     async fn open_directory_by_inode(&self, inode: Inode) -> Result<JointDirectory> {
-        let path = self.inodes.get(inode).calculate_path();
-        self.repository.open_directory(path).await
+        self.open_entry_by_inode(inode).await?.into_directory()
     }
 
-    async fn open_entry_by_inode(&self, inode: InodeView<'_>) -> Result<JointEntry> {
+    async fn open_entry_by_inode(&self, inode: Inode) -> Result<JointEntry> {
+        let inode = self.inodes.get(inode);
         let path = inode.calculate_path();
 
         match inode.representation() {
@@ -931,58 +950,82 @@ impl Inner {
     fn record_path(&self, inode: Inode, last: Option<&str>) {
         record_fmt!("path", "{}", self.inodes.path_display(inode, last))
     }
-}
 
-async fn make_file_attr_for_entry(
-    entry: &JointEntry,
-    inode: Inode,
-    uid: u32,
-    gid: u32,
-) -> FileAttr {
-    make_file_attr(inode, entry.entry_type(), entry.len(), uid, gid)
-}
-
-fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64, uid: u32, gid: u32) -> FileAttr {
-    // From POSIX <sys/stat.h> reference:
-    // https://pubs.opengroup.org/onlinepubs/009696699/basedefs/sys/stat.h.html
-    //
-    // > The unit for the st_blocks member of the stat structure is not defined within
-    // > POSIX.1-2017. In some implementations it is 512 bytes. It may differ on a file system
-    // > basis.
-    //
-    // TODO: Attempt to get the actual value of the system.
-    const S_BLKSIZE: u64 = 512;
-    use ouisync_lib::protocol::BLOCK_RECORD_SIZE;
-
-    FileAttr {
-        ino: inode,
-        size: len,
-        blocks: len.next_multiple_of(BLOCK_RECORD_SIZE).div_ceil(S_BLKSIZE),
-        atime: SystemTime::UNIX_EPOCH,  // TODO
-        mtime: SystemTime::UNIX_EPOCH,  // TODO
-        ctime: SystemTime::UNIX_EPOCH,  // TODO
-        crtime: SystemTime::UNIX_EPOCH, // TODO
-        kind: to_file_type(entry_type),
-        perm: match entry_type {
-            EntryType::File => 0o444,      // TODO
-            EntryType::Directory => 0o555, // TODO
-        },
-        nlink: 1,
-        uid,
-        gid,
-        rdev: 0,
+    fn make_file_attr(&self, inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
         // From POSIX <sys/stat.h> reference:
+        // https://pubs.opengroup.org/onlinepubs/009696699/basedefs/sys/stat.h.html
         //
-        // > A file system-specific preferred I/O block size for this object.
-        // ...
-        // > There is no correlation between values of the st_blocks and st_blksize, and the
-        // > f_bsize (from <sys/statvfs.h>) structure members.
+        // > The unit for the st_blocks member of the stat structure is not defined within
+        // > POSIX.1-2017. In some implementations it is 512 bytes. It may differ on a file system
+        // > basis.
         //
-        // TODO: Ouisync's BLOCK_SIZE might be a good guess, but shold be benchmarked.
-        blksize: 0, // ?
-        flags: 0,
+        // TODO: Attempt to get the actual value of the system.
+        const S_BLKSIZE: u64 = 512;
+        use ouisync_lib::protocol::BLOCK_RECORD_SIZE;
+
+        FileAttr {
+            ino: inode,
+            size: len,
+            blocks: len.next_multiple_of(BLOCK_RECORD_SIZE).div_ceil(S_BLKSIZE),
+            atime: SystemTime::UNIX_EPOCH,  // TODO
+            mtime: SystemTime::UNIX_EPOCH,  // TODO
+            ctime: SystemTime::UNIX_EPOCH,  // TODO
+            crtime: SystemTime::UNIX_EPOCH, // TODO
+            kind: to_file_type(entry_type),
+            perm: default_mode(&self.repository, entry_type),
+            nlink: 1,
+            uid: default_uid(),
+            gid: default_gid(),
+            rdev: 0,
+            // From POSIX <sys/stat.h> reference:
+            //
+            // > A file system-specific preferred I/O block size for this object.
+            // ...
+            // > There is no correlation between values of the st_blocks and st_blksize, and the
+            // > f_bsize (from <sys/statvfs.h>) structure members.
+            //
+            // TODO: Ouisync's BLOCK_SIZE might be a good guess, but shold be benchmarked.
+            blksize: 0, // ?
+            flags: 0,
+        }
+    }
+
+    fn make_file_attr_for_entry(&self, entry: &JointEntry, inode: Inode) -> FileAttr {
+        self.make_file_attr(inode, entry.entry_type(), entry.len())
     }
 }
+
+// Returns the unix file mode used for all entries of the given type in the given repository
+// (setting the mode on a per file/directory basis is currently not supported and the mode is
+// determined only by the repo access mode).
+fn default_mode(repo: &Repository, entry_type: EntryType) -> u16 {
+    match (repo.access_mode(), entry_type) {
+        (AccessMode::Write, EntryType::File) => 0o664,
+        (AccessMode::Write, EntryType::Directory) => 0o775,
+        (AccessMode::Read, EntryType::File) => 0o444,
+        (AccessMode::Read, EntryType::Directory) => 0o555,
+        (AccessMode::Blind, EntryType::File | EntryType::Directory) => 0o000,
+    }
+}
+
+// Returns the user id of any entry is a repository (changing it is currently not supported).
+fn default_uid() -> u32 {
+    // SAFETY: all functions in the `libc` crate are marked as unsafe but many of them
+    // (including this one) are actually safe to call without any preconditions.
+    unsafe { libc::getuid() }
+}
+
+// Returns the group id of any entry in a repository (changing it is currently not supported).
+fn default_gid() -> u32 {
+    // SAFETY: all functions in the `libc` crate are marked as unsafe but many of them
+    // (including this one) are actually safe to call without any preconditions.
+    unsafe { libc::getgid() }
+}
+
+// When `setattr` is invoked, sometimes the `mode` argument has other bits set than the usual ones
+// (user, group, other, setuid/segid). Use this mask to filter those bits out.
+// TODO: find out what those extra bits are.
+const MODE_MASK: u32 = 0o7777;
 
 // TODO: consider moving this to `impl Error`
 fn to_error_code(error: &Error) -> libc::c_int {

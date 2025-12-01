@@ -1,13 +1,13 @@
 use super::ip;
 use crate::collections::HashMap;
-use chrono::{offset::Local, DateTime};
+use chrono::{DateTime, offset::Local};
 use deadlock::BlockingMutex;
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
 use rupnp::{
+    Device, Service,
     http::Uri,
     ssdp::{SearchTarget, URN},
-    Device, Service,
 };
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
@@ -19,7 +19,7 @@ use std::{
 };
 use tokio::{
     sync::watch,
-    time::{sleep, Duration, Instant},
+    time::{Duration, Instant, sleep},
 };
 use tracing::{Instrument, Span};
 
@@ -248,16 +248,14 @@ impl PortForwarder {
             scoped_task::spawn(async move {
                 let result = job().await;
 
-                if first_attempt {
-                    if let Err(e) = result {
-                        tracing::warn!("UPnP port forwarding on IGD {:?} ended: {}", device_url, e);
-                    }
+                if first_attempt && let Err(e) = result {
+                    tracing::warn!("UPnP port forwarding on IGD {:?} ended: {}", device_url, e);
                 }
 
-                if let Some(handles) = weak_handles.upgrade() {
-                    if let Some(dev) = handles.lock().unwrap().get_mut(&device_url) {
-                        dev.job = None;
-                    }
+                if let Some(handles) = weak_handles.upgrade()
+                    && let Some(dev) = handles.lock().unwrap().get_mut(&device_url)
+                {
+                    dev.job = None;
                 }
             })
         };

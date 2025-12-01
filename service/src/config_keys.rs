@@ -20,7 +20,7 @@ pub(crate) const DEFAULT_BLOCK_EXPIRATION_MILLIS: ConfigKey<u64> = ConfigKey::ne
 
 pub(crate) const DEVICE_ID_KEY: ConfigKey<DeviceId> = ConfigKey::new(
     "device_id",
-    "The value stored in this file is the device ID. It is uniquelly generated for each device\n\
+    "The value stored in this file is the device ID. It is uniquely generated for each device\n\
      and its only purpose is to detect when a database has been migrated from one device to\n\
      another.\n\
      \n\
@@ -77,8 +77,8 @@ pub(crate) const PEX_KEY: ConfigKey<PexConfig> =
 pub(crate) const PORT_FORWARDING_ENABLED_KEY: ConfigKey<bool> =
     ConfigKey::new("port_forwarding_enabled", "Enable port forwarding / UPnP");
 
-pub(crate) const STORE_DIR_KEY: ConfigKey<PathBuf> =
-    ConfigKey::new("store_dir", "Repository storage directory");
+pub(crate) const STORE_DIRS_KEY: ConfigKey<Vec<PathBuf>> =
+    ConfigKey::new("store_dirs", "Repository storage directories");
 
 pub(crate) const DEFAULT_REPOSITORY_EXPIRATION_KEY: ConfigKey<u64> = ConfigKey::new(
     "default_repository_expiration",

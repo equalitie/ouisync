@@ -8,6 +8,7 @@ pluginManagement {
     }()
 
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
+    includeBuild('../../../kotlin/ouisync-convention')
 
     repositories {
         google()

@@ -5,12 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.2...master)
+## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.3...master)
+
+- Improve support for file ownership and permissions on mounted repositories on linux
+- Support multiple store directories
+
+## [v0.9.3](https://github.com/equalitie/ouisync/compare/v0.9.2...v0.9.3) - 2025-10-14
 
 - Implement [DocumentsProvider](https://developer.android.com/reference/android/provider/DocumentsProvider) to expose Ouisync repositories to the [Storage Access Framework](https://developer.android.com/guide/topics/providers/document-provider) on Android.
 - Fix infinite busy loop when connection fails while establishing topic streams
 - Fix crash in `shareFile` in the dart bindings
-- Restart the foreground service when the activity is resumed on Android
+- Restart the Android foreground service when the app is resumed
 
 ## [v0.9.2](https://github.com/equalitie/ouisync/compare/v0.9.1...v0.9.2) - 2025-08-05
 

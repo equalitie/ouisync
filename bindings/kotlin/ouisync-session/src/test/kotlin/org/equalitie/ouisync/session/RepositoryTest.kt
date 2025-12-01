@@ -29,7 +29,7 @@ class RepositoryTest {
         service = Service.start(configDir)
 
         session = Session.create(configDir)
-        session.setStoreDir("$tempDir/store")
+        session.setStoreDirs(listOf("$tempDir/store"))
     }
 
     @AfterEach
@@ -60,7 +60,7 @@ class RepositoryTest {
     @Test
     fun list() = runTest {
         val ext = "ouisyncdb"
-        val storeDir = session.getStoreDir()
+        val storeDir = session.getStoreDirs().first()
 
         val repoA = createRepo(name = "a")
         assertEquals(mapOf("$storeDir/a.$ext" to repoA), session.listRepositories())

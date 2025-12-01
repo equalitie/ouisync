@@ -1,4 +1,4 @@
-use anyhow::{bail, Context as _, Error, Result};
+use anyhow::{Context as _, Error, Result, bail};
 use heck::{AsLowerCamelCase, AsPascalCase, ToLowerCamelCase, ToSnakeCase};
 use ouisync_api_parser::{
     ComplexEnum, Context, Docs, Field, Fields, Item, RequestVariant, SimpleEnum, Struct,
@@ -642,11 +642,11 @@ fn write_api_class(
         for (index, (arg_name, _)) in variant.fields.iter().enumerate() {
             let arg_name = AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
 
-            if index == 0 {
-                if let Some(inner_name) = &inner_name {
-                    writeln!(out, "{I}{I}{I}{arg_name}: {inner_name},",)?;
-                    continue;
-                }
+            if index == 0
+                && let Some(inner_name) = &inner_name
+            {
+                writeln!(out, "{I}{I}{I}{arg_name}: {inner_name},",)?;
+                continue;
             }
 
             writeln!(out, "{I}{I}{I}{arg_name}: {arg_name},")?;

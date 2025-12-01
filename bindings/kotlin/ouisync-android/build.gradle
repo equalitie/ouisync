@@ -1,8 +1,7 @@
 plugins {
     id 'com.android.library'
     id 'kotlin-android'
-
-    id 'dokka-conventions'
+    id 'dokka-convention'
 }
 
 version = rootProject.version
@@ -12,7 +11,6 @@ android {
     namespace = 'org.equalitie.ouisync.android'
 
     compileSdk = 35
-    ndkVersion = '27.2.12479018'
 
     defaultConfig {
         minSdk = 26
@@ -101,10 +99,8 @@ afterEvaluate {
 
 signing {
     // Only sign when publishing to sonatype, not local
-    required {
-        android.libraryVariants.any { variant ->
-            gradle.taskGraph.hasTask("publish${variant}AndroidPublicationToSonatypeRepository")
-        }
+    required = android.libraryVariants.any { variant ->
+        gradle.taskGraph.hasTask("publish${variant}AndroidPublicationToSonatypeRepository")
     }
 
     if (signingKey) {

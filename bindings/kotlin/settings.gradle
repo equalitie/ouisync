@@ -1,11 +1,14 @@
+pluginManagement {
+    includeBuild('ouisync-convention')
+}
+
+plugins {
+    id 'me.champeau.includegit' version '0.3.0'
+}
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        // maven {
-        //     // Sonatype staging repo. Note this url changes on every publish.
-        //     url "https://s01.oss.sonatype.org/service/local/repositories/ieequalitouinet-1287/content/"
-        // }
-        // mavenLocal()
         mavenCentral()
         google()
     }
@@ -17,3 +20,10 @@ include 'ouisync-android'
 include 'ouisync-service'
 include 'ouisync-session'
 include 'example'
+
+gitRepositories {
+    include('rust-android-gradle') {
+        uri = 'https://github.com/madadam/rust-android-gradle.git'
+        branch = 'improvements'
+    }
+}

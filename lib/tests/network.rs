@@ -6,7 +6,7 @@
 #[macro_use]
 mod common;
 
-use self::common::{actor, Env, Proto, DEFAULT_REPO, TEST_TIMEOUT};
+use self::common::{DEFAULT_REPO, Env, Proto, TEST_TIMEOUT, actor};
 use ouisync::{Network, PeerState};
 use std::sync::Arc;
 use tokio::{sync::Barrier, time};
@@ -256,10 +256,10 @@ where
         let peer_addr = actor::lookup_addr(peer_name).await;
 
         loop {
-            if let Some(info) = network.peer_info(peer_addr) {
-                if expected_state_fn(&info.state) {
-                    break;
-                }
+            if let Some(info) = network.peer_info(peer_addr)
+                && expected_state_fn(&info.state)
+            {
+                break;
             }
 
             rx.recv().await.unwrap();

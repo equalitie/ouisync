@@ -14,8 +14,8 @@ use self::wait_map::WaitMap;
 use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
 use ouisync::{
-    crypto::sign::PublicKey, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File,
-    Network, Payload, PeerAddr, Registration, Repository, Result, StoreError,
+    Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Network, Payload, PeerAddr,
+    Registration, Repository, Result, StoreError, crypto::sign::PublicKey,
 };
 use ouisync_tracing_fmt::Formatter;
 use rand::Rng;
@@ -35,12 +35,12 @@ use tokio::{
     time::{self, Duration},
 };
 use tracing::metadata::LevelFilter;
-use tracing::{instrument, Instrument, Span};
+use tracing::{Instrument, Span, instrument};
 use tracing_subscriber::{
-    fmt::{time::SystemTime, MakeWriter, TestWriter},
+    EnvFilter, Layer,
+    fmt::{MakeWriter, TestWriter, time::SystemTime},
     layer::SubscriberExt,
     util::SubscriberInitExt,
-    EnvFilter, Layer,
 };
 
 pub(crate) const DEFAULT_REPO: &str = "default";
@@ -177,8 +177,8 @@ pub(crate) mod actor {
     use metrics::Key;
     use metrics_ext::Pair;
     use ouisync::{
-        crypto::{sign::Keypair, Hash, Hashable},
         AccessMode, RepositoryParams,
+        crypto::{Hash, Hashable, sign::Keypair},
     };
     use state_monitor::StateMonitor;
     use tokio::sync::watch;

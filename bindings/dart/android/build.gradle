@@ -12,7 +12,8 @@ buildscript {
 }
 
 plugins {
-    id "com.diffplug.spotless" version "7.0.3"
+    id 'com.diffplug.spotless' version '7.0.3'
+    id 'org.equalitie.ouisync.convention'
 }
 
 allprojects {
@@ -35,7 +36,6 @@ android {
     }
 
     compileSdk = 35
-    ndkVersion = '27.2.12479018'
 
     sourceSets {
         main.java.srcDirs += "src/main/kotlin"

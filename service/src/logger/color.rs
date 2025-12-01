@@ -3,20 +3,15 @@ use std::{fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
 
 /// How to color log messages
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 pub enum LogColor {
     /// Awlays color
     Always,
     /// Never color
     Never,
     /// Color only when printing to a terminal but not when redirected to a file or a pipe.
+    #[default]
     Auto,
-}
-
-impl Default for LogColor {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl fmt::Display for LogColor {

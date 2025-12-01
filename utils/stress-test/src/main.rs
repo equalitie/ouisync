@@ -183,18 +183,43 @@ fn build(options: &Options) -> Vec<String> {
     let stdout = BufReader::new(&output.stdout[..]);
     stdout
         .lines()
-        .filter_map(|line| {
-            let line = line.unwrap();
-            let message: BuildMessage = serde_json::from_str(&line).unwrap();
-
-            message.executable.map(|exe| exe.into_owned())
+        .map(|line| serde_json::from_str::<BuildMessage>(&line.unwrap()).unwrap())
+        .filter(|message| {
+            message
+                .target
+                .as_ref()
+                .map(|target| {
+                    target.kind.contains(&BuildMessageTargetKind::Lib)
+                        || target.kind.contains(&BuildMessageTargetKind::Test)
+                })
+                .unwrap_or(false)
         })
+        .filter_map(|message| message.executable.map(|exe| exe.into_owned()))
         .collect()
 }
 
 #[derive(Deserialize)]
 struct BuildMessage<'a> {
     executable: Option<Cow<'a, str>>,
+    target: Option<BuildMessageTarget>,
+}
+
+#[derive(Deserialize)]
+struct BuildMessageTarget {
+    kind: Vec<BuildMessageTargetKind>,
+}
+
+#[derive(Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum BuildMessageTargetKind {
+    Bin,
+    Cdylib,
+    CustomBuild,
+    Lib,
+    Rlib,
+    Staticlib,
+    Test,
+    ProcMacro,
 }
 
 fn run(process: u64, exes: Vec<String>, args: Vec<String>, tx: mpsc::SyncSender<Status>) {

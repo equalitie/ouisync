@@ -5,16 +5,16 @@ use crate::test_utils;
 use super::*;
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
-use ouisync::{Access, AccessSecrets, Repository, RepositoryParams, WriteSecrets};
+use ouisync::{Access, AccessSecrets, File, Repository, RepositoryParams, WriteSecrets};
 use tempfile::TempDir;
-use tokio::time;
+use tokio::{sync::broadcast::error::RecvError, time};
 use tokio_stream::wrappers::ReadDirStream;
 use tracing::Instrument;
 
 #[tokio::test]
 async fn normalize_repository_path() {
     let store_dir = PathBuf::from("/home/alice/ouisync");
-    let store = Store::new(Some(store_dir.clone()));
+    let store = Store::new(vec![store_dir.clone()]);
 
     assert_eq!(
         store.normalize_repository_path(Path::new("foo")).unwrap(),
@@ -120,7 +120,8 @@ async fn open_already_opened_repository() {
     let handle1 = state
         .session_open_repository(
             state
-                .store_dir()
+                .store_dirs()
+                .first()
                 .unwrap()
                 .join(name)
                 .with_extension(REPOSITORY_FILE_EXTENSION),
@@ -182,7 +183,7 @@ async fn expire_empty_repository() {
         Err(Error::NotFound)
     );
     assert_eq!(
-        read_dir(state.store_dir().unwrap(), "").await,
+        read_dir(state.store_dirs().first().unwrap(), "").await,
         Vec::<PathBuf>::new()
     );
 }
@@ -193,43 +194,19 @@ async fn expire_synced_repository() {
 
     let temp_dir = TempDir::new().unwrap();
 
-    let secrets = WriteSecrets::random();
-
-    let (remote_network, _remote_repo, _remote_reg) = async {
-        let monitor = StateMonitor::make_root();
-
-        let repo = Repository::create(
-            &RepositoryParams::new(temp_dir.path().join("remote/repo.ouisyncdb"))
-                .with_monitor(monitor.make_child("repo")),
-            Access::WriteUnlocked {
-                secrets: secrets.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut file = repo.create_file("test.txt").await.unwrap();
-        file.write_all(b"hello world").await.unwrap();
-        file.flush().await.unwrap();
-        drop(file);
-
-        let network = Network::new(monitor, None, None);
-        network
-            .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+    let (remote_network, remote_repo, _remote_reg) =
+        create_remote_repository(&temp_dir.path().join("remote"))
+            .instrument(tracing::info_span!("remote"))
             .await;
 
-        let reg = network.register(repo.handle());
-
-        (network, repo, reg)
-    }
-    .instrument(tracing::info_span!("remote"))
-    .await;
+    create_file(&remote_repo, "test.txt", "hello world").await;
 
     let remote_addr = remote_network
         .listener_local_addrs()
         .into_iter()
         .next()
         .unwrap();
+    let secrets = remote_repo.secrets();
 
     let local_state = State::init(ConfigStore::new(temp_dir.path().join("local/config")))
         .instrument(tracing::info_span!("local"))
@@ -237,7 +214,7 @@ async fn expire_synced_repository() {
         .unwrap();
 
     local_state
-        .session_set_store_dir(temp_dir.path().join("local/store"))
+        .session_insert_store_dirs(vec![temp_dir.path().join("local/store")])
         .await
         .unwrap();
     local_state
@@ -251,7 +228,7 @@ async fn expire_synced_repository() {
             PathBuf::from(name),
             None,
             None,
-            Some(ShareToken::from(AccessSecrets::Blind { id: secrets.id })),
+            Some(ShareToken::from(AccessSecrets::Blind { id: *secrets.id() })),
             true,
             false,
             false,
@@ -261,21 +238,11 @@ async fn expire_synced_repository() {
     let local_repo = local_state.repos.get_repository(handle).unwrap();
 
     // Wait until synced
-    let mut rx = local_repo.subscribe();
-
-    time::timeout(Duration::from_secs(30), async {
-        loop {
-            let progress = local_repo.sync_progress().await.unwrap();
-
-            if progress.total > 0 && progress.value == progress.total {
-                break;
-            }
-
-            rx.recv().await.unwrap();
-        }
+    wait_until(&local_repo, async || {
+        let progress = local_repo.sync_progress().await.unwrap();
+        progress.total > 0 && progress.value == progress.total
     })
-    .await
-    .unwrap();
+    .await;
 
     // Enable expiration
     local_state
@@ -296,7 +263,7 @@ async fn expire_synced_repository() {
         Err(Error::NotFound)
     );
     assert_eq!(
-        read_dir(local_state.store_dir().unwrap(), "").await,
+        read_dir(local_state.store_dirs().first().unwrap(), "").await,
         Vec::<PathBuf>::new(),
     );
 }
@@ -414,7 +381,8 @@ async fn attempt_to_move_repository_over_existing_file() {
     // would overwrite the file.
     fs::File::create(
         state
-            .session_get_store_dir()
+            .session_get_store_dirs()
+            .first()
             .unwrap()
             .join(dst)
             .with_extension(REPOSITORY_FILE_EXTENSION),
@@ -448,6 +416,103 @@ async fn attempt_to_move_repository_over_existing_file() {
 }
 
 #[tokio::test]
+async fn move_repository_during_sync() {
+    test_utils::init_log();
+
+    let temp_dir = TempDir::new().unwrap();
+
+    let secrets = WriteSecrets::random();
+
+    let (remote_network, remote_repo, _remote_reg) = async {
+        let monitor = StateMonitor::make_root();
+
+        let repo = Repository::create(
+            &RepositoryParams::new(temp_dir.path().join("remote/repo.ouisyncdb"))
+                .with_monitor(monitor.make_child("repo")),
+            Access::WriteUnlocked {
+                secrets: secrets.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let network = Network::new(monitor, None, None);
+        network
+            .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+            .await;
+
+        let reg = network.register(repo.handle());
+
+        (network, repo, reg)
+    }
+    .instrument(tracing::info_span!("remote"))
+    .await;
+
+    let remote_addr = remote_network
+        .listener_local_addrs()
+        .into_iter()
+        .next()
+        .unwrap();
+    let secrets = remote_repo.secrets();
+
+    let local_state = State::init(ConfigStore::new(temp_dir.path().join("local/config")))
+        .instrument(tracing::info_span!("local"))
+        .await
+        .unwrap();
+
+    local_state
+        .session_insert_store_dirs(vec![temp_dir.path().join("local/store")])
+        .await
+        .unwrap();
+    local_state
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+    local_state.network.add_user_provided_peer(&remote_addr);
+
+    let old_name = "foo";
+    let new_name = "bar";
+    let local_repo_handle = local_state
+        .session_create_repository(
+            PathBuf::from(old_name),
+            None,
+            None,
+            Some(ShareToken::from(secrets)),
+            true,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+    {
+        let local_repo = local_state.repos.get_repository(local_repo_handle).unwrap();
+        let file_a = "a.txt";
+        let content_a = "aaa";
+        create_file(&remote_repo, file_a, content_a).await;
+        wait_until(&local_repo, async || {
+            check_file_content(&local_repo, file_a, content_a).await
+        })
+        .await;
+    }
+
+    local_state
+        .repository_move(local_repo_handle, new_name.into())
+        .await
+        .unwrap();
+
+    {
+        let local_repo = local_state.repos.get_repository(local_repo_handle).unwrap();
+        let file_b = "b.txt";
+        let content_b = "bbb";
+        create_file(&remote_repo, file_b, content_b).await;
+        wait_until(&local_repo, async || {
+            check_file_content(&local_repo, file_b, content_b).await
+        })
+        .await;
+    }
+}
+
+#[tokio::test]
 async fn delete_repository_with_simple_name() {
     let (_temp_dir, state) = setup().await;
 
@@ -468,10 +533,12 @@ async fn delete_repository_with_simple_name() {
     state.repository_delete(repo0).await.unwrap();
 
     // Check none of the repo0's files (including the aux files) exist anymore
-    assert_eq!(
-        read_dir(state.store_dir().unwrap(), path0.to_str().unwrap()).await,
-        Vec::<PathBuf>::new()
-    );
+    for store_dir in state.store_dirs() {
+        assert_eq!(
+            read_dir(store_dir, path0.to_str().unwrap()).await,
+            Vec::<PathBuf>::new()
+        );
+    }
 
     // Check the other repo still exists
     assert!(fs::try_exists(path1).await.unwrap());
@@ -493,7 +560,7 @@ async fn delete_repository_in_subdir_of_store_dir() {
     assert!(!fs::try_exists(&path).await.unwrap());
 
     for path in path.ancestors() {
-        if path == state.store_dir().unwrap() {
+        if path == state.store_dirs().first().unwrap() {
             break;
         }
 
@@ -503,7 +570,9 @@ async fn delete_repository_in_subdir_of_store_dir() {
         );
     }
 
-    assert!(fs::try_exists(state.store_dir().unwrap()).await.unwrap());
+    for store_dir in state.store_dirs() {
+        assert!(fs::try_exists(store_dir).await.unwrap());
+    }
 }
 
 #[tokio::test]
@@ -563,7 +632,7 @@ async fn setup() -> (TempDir, State) {
         .await
         .unwrap();
     state
-        .session_set_store_dir(temp_dir.path().join("store"))
+        .session_insert_store_dirs(vec![temp_dir.path().join("store")])
         .await
         .unwrap();
 
@@ -579,4 +648,79 @@ async fn read_dir(path: impl AsRef<Path>, prefix: &str) -> Vec<PathBuf> {
         .try_collect::<Vec<_>>()
         .await
         .unwrap()
+}
+
+async fn create_remote_repository(root_dir: &Path) -> (Network, Repository, Registration) {
+    let secrets = WriteSecrets::random();
+    let monitor = StateMonitor::make_root();
+
+    let repo = Repository::create(
+        &RepositoryParams::new(root_dir.join("repo.ouisyncdb"))
+            .with_monitor(monitor.make_child("repo")),
+        Access::WriteUnlocked { secrets },
+    )
+    .await
+    .unwrap();
+
+    let network = Network::new(monitor, None, None);
+    network
+        .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+
+    let registration = network.register(repo.handle());
+
+    (network, repo, registration)
+}
+
+async fn create_file(repo: &Repository, path: &str, content: &str) -> File {
+    let mut file = repo.create_file(path).await.unwrap();
+    file.write_all(content.as_bytes()).await.unwrap();
+    file.flush().await.unwrap();
+    file
+}
+
+async fn check_file_content(repo: &Repository, path: &str, expected_content: &str) -> bool {
+    use ouisync::{Error, StoreError};
+
+    let mut file = match repo.open_file(path).await {
+        Ok(file) => file,
+        Err(
+            Error::EntryNotFound
+            | Error::Store(StoreError::BlockNotFound)
+            | Error::Store(StoreError::LocatorNotFound),
+        ) => return false,
+        Err(error) => panic!("unexpected error when opening file: {error:?}"),
+    };
+
+    let content = match file.read_to_end().await {
+        Ok(content) => content,
+        Err(
+            Error::Store(StoreError::BlockNotFound) | Error::Store(StoreError::LocatorNotFound),
+        ) => return false,
+        Err(error) => panic!("unexpected error when reading file: {error:?}"),
+    };
+
+    content == expected_content.as_bytes()
+}
+
+async fn wait_until<F>(repo: &Repository, mut f: F)
+where
+    F: AsyncFnMut() -> bool,
+{
+    let mut rx = repo.subscribe();
+
+    time::timeout(Duration::from_secs(30), async {
+        loop {
+            if f().await {
+                break;
+            }
+
+            match rx.recv().await {
+                Ok(_) | Err(RecvError::Lagged(_)) => (),
+                Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
+            }
+        }
+    })
+    .await
+    .expect("timeout waiting for notification");
 }

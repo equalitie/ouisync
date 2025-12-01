@@ -138,9 +138,6 @@ jobs:
         # and the linux version does currently unconditionally depend on fuse.
         run: sudo apt-get install libfuse-dev
 
-      - name: Install NDK
-        run: $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.2.12479018"
-
       - name: Cache cargo artifacts
         uses: actions/cache@v3
         with:
@@ -164,14 +161,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Create local.properties
-        working-directory: bindings/kotlin
-        run: echo "useLocalLib=true" > local.properties
-
-      - name: Run spotless
-        working-directory: bindings/kotlin
-        run: ./gradlew --stacktrace spotlessCheck
-
       - name: Run lint
         working-directory: bindings/kotlin
         run: ./gradlew --stacktrace lint
@@ -188,6 +177,16 @@ jobs:
           target: google_apis
           working-directory: bindings/kotlin
           script: ./gradlew ouisync-android:connectedDebugAndroidTest -Ptarget-platform=android-x64
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            bindings/kotlin/build/ouisync-android/outputs/androidTest-results
+            bindings/kotlin/build/ouisync-android/reports
+            bindings/kotlin/build/ouisync-android/test-results
+        if: always()
 
       - name: Build the example app
         working-directory: bindings/kotlin

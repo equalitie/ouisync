@@ -5,16 +5,16 @@ use std::{
 };
 
 use crate::{
+    Error,
     protocol::RepositoryHandle,
     repository::{self, RepositorySet},
-    Error,
 };
-use ouisync::{Credentials, Network, Repository};
+use ouisync::{Credentials, Network};
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use state_monitor::StateMonitor;
 use tokio::fs;
 
-use super::{load_repository, ConfigStore, RepositoryHolder, State, Store};
+use super::{ConfigStore, RepositoryHolder, State, Store, load_repository};
 
 /// Move or rename a repository. Makes "best effort" to do it atomically, that is, if any step of
 /// this operation fails, tries to revert all previous steps before returning.
@@ -103,11 +103,19 @@ impl<'a> Context<'a> {
         });
 
         // 3. Close the repo
-        let repo = self.get_repository();
+        let repo = self
+            .repos
+            .with(self.handle, |holder| {
+                holder.disable_sync();
+                holder.repository().clone()
+            })
+            .ok_or(Error::InvalidArgument)?;
         let credentials = repo.credentials();
         let sync_enabled = self.sync_enabled;
 
         repo.close().await?;
+        drop(repo);
+
         undo_stack.push(Action::CloseRepository {
             credentials: credentials.clone(),
             sync_enabled,
@@ -155,11 +163,6 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn get_repository(&self) -> Arc<Repository> {
-        // unwrap is ok because the handle validity is checked at construction.
-        self.repos.get_repository(self.handle).unwrap()
-    }
-
     async fn load_repository(
         &self,
         path: &Path,
@@ -183,11 +186,10 @@ impl<'a> Context<'a> {
     }
 
     fn mount_repository(&self, path: &Path) -> Result<(), Error> {
-        if let Some(mounter) = &self.mounter {
-            mounter.insert(
-                repository::short_name(path).to_owned(),
-                self.get_repository(),
-            )?;
+        if let Some(mounter) = &self.mounter
+            && let Some(repo) = self.repos.get_repository(self.handle)
+        {
+            mounter.insert(repository::short_name(path).to_owned(), repo)?;
         }
 
         Ok(())
@@ -237,7 +239,9 @@ impl Action {
                 fs::create_dir_all(path).await?;
             }
             Self::Open => {
-                context.get_repository().close().await?;
+                if let Some(repo) = context.repos.get_repository(context.handle) {
+                    repo.close().await?;
+                }
             }
         }
 

@@ -1,7 +1,7 @@
 use crate::crypto::{Digest, Hashable};
 use rand::{
-    distributions::{Distribution, Standard},
     Rng,
+    distributions::{Distribution, Standard},
 };
 use serde::{Deserialize, Serialize};
 

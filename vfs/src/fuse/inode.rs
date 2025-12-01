@@ -1,9 +1,9 @@
 use camino::Utf8PathBuf;
 use fuser::FUSE_ROOT_ID;
-use ouisync_lib::{crypto::sign::PublicKey, Error, Result};
+use ouisync_lib::crypto::sign::PublicKey;
 use slab::Slab;
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     convert::TryInto,
     fmt,
 };
@@ -164,15 +164,6 @@ pub enum Representation {
     // corresponding to the path is requested, it'll be determined dynamically.
     Directory,
     File(PublicKey),
-}
-
-impl Representation {
-    pub fn file_version(&self) -> Result<&PublicKey> {
-        match self {
-            Self::Directory => Err(Error::EntryIsDirectory),
-            Self::File(branch_id) => Ok(branch_id),
-        }
-    }
 }
 
 struct InodeData {

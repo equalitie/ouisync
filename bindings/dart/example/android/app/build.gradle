@@ -3,12 +3,12 @@ plugins {
     id "kotlin-android"
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id "dev.flutter.flutter-gradle-plugin"
+    id 'org.equalitie.ouisync.convention'
 }
 
 android {
     namespace = "org.equalitie.ouisync.dart.example"
     compileSdk = 35
-    ndkVersion = '27.2.12479018'
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

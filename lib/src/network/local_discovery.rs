@@ -5,10 +5,10 @@ use super::{
 use crate::collections::HashMap;
 use deadlock::AsyncMutex;
 use futures_util::StreamExt;
-use if_watch::{tokio::IfWatcher, IfEvent};
-use net::udp::{DatagramSocket, UdpSocket, MULTICAST_ADDR, MULTICAST_PORT};
-use rand::rngs::OsRng;
+use if_watch::{IfEvent, tokio::IfWatcher};
+use net::udp::{DatagramSocket, MULTICAST_ADDR, MULTICAST_PORT, UdpSocket};
 use rand::Rng;
+use rand::rngs::OsRng;
 use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
 use state_monitor::StateMonitor;
@@ -19,7 +19,7 @@ use std::{
 };
 use tokio::{
     sync::mpsc,
-    time::{sleep, Duration},
+    time::{Duration, sleep},
 };
 use tracing::{Instrument, Span};
 
@@ -258,7 +258,7 @@ impl PerInterfaceLocalDiscovery {
 
             let (socket, port, is_request, addr) = match versioned_message.message {
                 Message::ImHereYouAll { id, .. } | Message::Reply { id, .. } if id == self_id => {
-                    continue
+                    continue;
                 }
                 Message::ImHereYouAll { port, .. } => (socket, port, true, addr),
                 Message::Reply { port, .. } => (socket, port, false, addr),
@@ -286,12 +286,12 @@ impl PerInterfaceLocalDiscovery {
                 PeerPort::Quic(port) => PeerAddr::Quic(SocketAddr::new(addr.ip(), port)),
             };
 
-            if let Some(peer) = seen_peers.insert(addr) {
-                if peer_tx.send(peer).await.is_err() {
-                    // The interface watcher removed the interface corresponding to this discovery
-                    // instance.
-                    break;
-                }
+            if let Some(peer) = seen_peers.insert(addr)
+                && peer_tx.send(peer).await.is_err()
+            {
+                // The interface watcher removed the interface corresponding to this discovery
+                // instance.
+                break;
             }
         }
     }
@@ -422,10 +422,10 @@ impl SocketProvider {
     async fn mark_bad(&self, bad_socket: Arc<UdpSocket>) {
         let mut guard = self.socket.lock().await;
 
-        if let Some(stored_socket) = &*guard {
-            if Arc::ptr_eq(stored_socket, &bad_socket) {
-                *guard = None;
-            }
+        if let Some(stored_socket) = &*guard
+            && Arc::ptr_eq(stored_socket, &bad_socket)
+        {
+            *guard = None;
         }
     }
 }

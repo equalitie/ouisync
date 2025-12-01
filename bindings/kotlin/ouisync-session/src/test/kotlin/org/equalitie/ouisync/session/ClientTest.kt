@@ -8,8 +8,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.io.EOFException
 import java.io.File
+import java.io.IOException
 import kotlin.io.path.createTempDirectory
 
 class ClientTest {
@@ -32,14 +32,14 @@ class ClientTest {
         val service = Service.start(configDir)
         val client = Client.connect(configDir)
 
-        val response = client.invoke(Request.SessionGetStoreDir)
-        assertEquals(Response.None, response)
+        val response = client.invoke(Request.SessionGetStoreDirs)
+        assertEquals(Response.Paths(emptyList()), response)
 
         service.stop()
 
         try {
-            client.invoke(Request.SessionGetStoreDir)
+            client.invoke(Request.SessionGetStoreDirs)
             fail("unexpected success")
-        } catch (e: EOFException) {}
+        } catch (e: IOException) {}
     }
 }
