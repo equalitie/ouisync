@@ -96,6 +96,8 @@ target_include_directories(cpp_ouisync_service
         ${Boost_INCLUDE_DIRS}
 )
 
+target_compile_definitions(cpp_ouisync_service PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
+
 ############################
 # C++ API code generation
 ############################
@@ -160,6 +162,7 @@ target_link_libraries(cpp_ouisync_client
 )
 
 target_compile_features(cpp_ouisync_client PRIVATE cxx_std_20)
+target_compile_definitions(cpp_ouisync_client PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
 
 ############################
 # Example
