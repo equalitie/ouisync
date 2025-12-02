@@ -701,7 +701,7 @@ public:
         boost::asio::yield_context yield
     );
 
-    std::optional<std::string> get_store_dir(
+    std::vector<std::string> get_store_dirs(
         boost::asio::yield_context yield
     );
 
@@ -715,6 +715,11 @@ public:
      */
     void init_network(
         const NetworkDefaults& defaults,
+        boost::asio::yield_context yield
+    );
+
+    void insert_store_dirs(
+        const std::vector<std::string>& paths,
         boost::asio::yield_context yield
     );
 
@@ -768,6 +773,11 @@ public:
         const std::string& path,
         boost::asio::yield_context yield,
         const std::optional<LocalSecret>& local_secret = {}
+    );
+
+    void remove_store_dirs(
+        const std::vector<std::string>& paths,
+        boost::asio::yield_context yield
     );
 
     /**
@@ -824,8 +834,8 @@ public:
         boost::asio::yield_context yield
     );
 
-    void set_store_dir(
-        const std::string& path,
+    void set_store_dirs(
+        const std::vector<std::string>& paths,
         boost::asio::yield_context yield
     );
 

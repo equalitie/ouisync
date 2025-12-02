@@ -697,10 +697,10 @@ template<> struct describe::Struct<Request::SessionGetStateMonitor> : std::true_
     }
 };
 
-template<> struct describe::Struct<Request::SessionGetStoreDir> : std::true_type {
+template<> struct describe::Struct<Request::SessionGetStoreDirs> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
-    static void describe(Observer&, Request::SessionGetStoreDir&) {
+    static void describe(Observer&, Request::SessionGetStoreDirs&) {
     }
 };
 
@@ -716,6 +716,14 @@ template<> struct describe::Struct<Request::SessionInitNetwork> : std::true_type
     template<class Observer>
     static void describe(Observer& o, Request::SessionInitNetwork& v) {
         o.field(v.defaults);
+    }
+};
+
+template<> struct describe::Struct<Request::SessionInsertStoreDirs> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::SessionInsertStoreDirs& v) {
+        o.field(v.paths);
     }
 };
 
@@ -769,6 +777,14 @@ template<> struct describe::Struct<Request::SessionOpenRepository> : std::true_t
     static void describe(Observer& o, Request::SessionOpenRepository& v) {
         o.field(v.path);
         o.field(v.local_secret);
+    }
+};
+
+template<> struct describe::Struct<Request::SessionRemoveStoreDirs> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::SessionRemoveStoreDirs& v) {
+        o.field(v.paths);
     }
 };
 
@@ -844,11 +860,11 @@ template<> struct describe::Struct<Request::SessionSetPortForwardingEnabled> : s
     }
 };
 
-template<> struct describe::Struct<Request::SessionSetStoreDir> : std::true_type {
+template<> struct describe::Struct<Request::SessionSetStoreDirs> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
-    static void describe(Observer& o, Request::SessionSetStoreDir& v) {
-        o.field(v.path);
+    static void describe(Observer& o, Request::SessionSetStoreDirs& v) {
+        o.field(v.paths);
     }
 };
 
@@ -1143,14 +1159,17 @@ template<> struct VariantBuilder<Request::Alternatives> {
         if (name == "SessionGetStateMonitor") {
             return builder.template build<Request::SessionGetStateMonitor>();
         }
-        if (name == "SessionGetStoreDir") {
-            return builder.template build<Request::SessionGetStoreDir>();
+        if (name == "SessionGetStoreDirs") {
+            return builder.template build<Request::SessionGetStoreDirs>();
         }
         if (name == "SessionGetUserProvidedPeers") {
             return builder.template build<Request::SessionGetUserProvidedPeers>();
         }
         if (name == "SessionInitNetwork") {
             return builder.template build<Request::SessionInitNetwork>();
+        }
+        if (name == "SessionInsertStoreDirs") {
+            return builder.template build<Request::SessionInsertStoreDirs>();
         }
         if (name == "SessionIsLocalDiscoveryEnabled") {
             return builder.template build<Request::SessionIsLocalDiscoveryEnabled>();
@@ -1172,6 +1191,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "SessionOpenRepository") {
             return builder.template build<Request::SessionOpenRepository>();
+        }
+        if (name == "SessionRemoveStoreDirs") {
+            return builder.template build<Request::SessionRemoveStoreDirs>();
         }
         if (name == "SessionRemoveUserProvidedPeers") {
             return builder.template build<Request::SessionRemoveUserProvidedPeers>();
@@ -1200,8 +1222,8 @@ template<> struct VariantBuilder<Request::Alternatives> {
         if (name == "SessionSetPortForwardingEnabled") {
             return builder.template build<Request::SessionSetPortForwardingEnabled>();
         }
-        if (name == "SessionSetStoreDir") {
-            return builder.template build<Request::SessionSetStoreDir>();
+        if (name == "SessionSetStoreDirs") {
+            return builder.template build<Request::SessionSetStoreDirs>();
         }
         if (name == "SessionSubscribeToNetwork") {
             return builder.template build<Request::SessionSubscribeToNetwork>();
@@ -1313,6 +1335,14 @@ template<> struct describe::Struct<Response::Path> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
     static void describe(Observer& o, Response::Path& v) {
+        o.field(v.value);
+    }
+};
+
+template<> struct describe::Struct<Response::Paths> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer& o, Response::Paths& v) {
         o.field(v.value);
     }
 };
@@ -1505,6 +1535,9 @@ template<> struct VariantBuilder<Response::Alternatives> {
         }
         if (name == "Path") {
             return builder.template build<Response::Path>();
+        }
+        if (name == "Paths") {
+            return builder.template build<Response::Paths>();
         }
         if (name == "PeerAddrs") {
             return builder.template build<Response::PeerAddrs>();

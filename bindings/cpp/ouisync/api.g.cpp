@@ -1037,14 +1037,14 @@ std::optional<StateMonitorNode> Session::get_state_monitor(
     return std::move(response.get<Response::StateMonitor>()).value;
 }
 
-std::optional<std::string> Session::get_store_dir(
+std::vector<std::string> Session::get_store_dirs(
     boost::asio::yield_context yield
 ) {
-    auto request = Request::SessionGetStoreDir();
+    auto request = Request::SessionGetStoreDirs();
     // TODO: This won't throw if yield has ec assigned
     auto response = client->invoke(request, yield);
-    if (response.get_if<Response::Path>() == nullptr) return {};
-    return std::move(response.get<Response::Path>()).value;
+    Response::Paths rsp = std::move(response.get<Response::Paths>());
+    return std::move(rsp.value);
 }
 
 std::vector<std::string> Session::get_user_provided_peers(
@@ -1063,6 +1063,18 @@ void Session::init_network(
 ) {
     auto request = Request::SessionInitNetwork{
         defaults,
+    };
+    // TODO: This won't throw if yield has ec assigned
+    auto response = client->invoke(request, yield);
+    response.get<Response::None>();
+}
+
+void Session::insert_store_dirs(
+    const std::vector<std::string>& paths,
+    boost::asio::yield_context yield
+) {
+    auto request = Request::SessionInsertStoreDirs{
+        paths,
     };
     // TODO: This won't throw if yield has ec assigned
     auto response = client->invoke(request, yield);
@@ -1151,6 +1163,18 @@ Repository Session::open_repository(
     auto response = client->invoke(request, yield);
     Response::Repository rsp = std::move(response.get<Response::Repository>());
     return Repository(client, std::move(rsp.value));
+}
+
+void Session::remove_store_dirs(
+    const std::vector<std::string>& paths,
+    boost::asio::yield_context yield
+) {
+    auto request = Request::SessionRemoveStoreDirs{
+        paths,
+    };
+    // TODO: This won't throw if yield has ec assigned
+    auto response = client->invoke(request, yield);
+    response.get<Response::None>();
 }
 
 void Session::remove_user_provided_peers(
@@ -1261,12 +1285,12 @@ void Session::set_port_forwarding_enabled(
     response.get<Response::None>();
 }
 
-void Session::set_store_dir(
-    const std::string& path,
+void Session::set_store_dirs(
+    const std::vector<std::string>& paths,
     boost::asio::yield_context yield
 ) {
-    auto request = Request::SessionSetStoreDir{
-        path,
+    auto request = Request::SessionSetStoreDirs{
+        paths,
     };
     // TODO: This won't throw if yield has ec assigned
     auto response = client->invoke(request, yield);

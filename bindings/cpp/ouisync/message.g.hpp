@@ -366,7 +366,7 @@ struct Request {
         const std::vector<ouisync::MonitorId>& path;
     };
 
-    struct SessionGetStoreDir {
+    struct SessionGetStoreDirs {
     };
 
     struct SessionGetUserProvidedPeers {
@@ -374,6 +374,10 @@ struct Request {
 
     struct SessionInitNetwork {
         const ouisync::NetworkDefaults& defaults;
+    };
+
+    struct SessionInsertStoreDirs {
+        const std::vector<std::string>& paths;
     };
 
     struct SessionIsLocalDiscoveryEnabled {
@@ -399,6 +403,10 @@ struct Request {
     struct SessionOpenRepository {
         const std::string& path;
         const std::optional<ouisync::LocalSecret>& local_secret;
+    };
+
+    struct SessionRemoveStoreDirs {
+        const std::vector<std::string>& paths;
     };
 
     struct SessionRemoveUserProvidedPeers {
@@ -437,8 +445,8 @@ struct Request {
         bool enabled;
     };
 
-    struct SessionSetStoreDir {
-        const std::string& path;
+    struct SessionSetStoreDirs {
+        const std::vector<std::string>& paths;
     };
 
     struct SessionSubscribeToNetwork {
@@ -540,9 +548,10 @@ struct Request {
         SessionGetShareTokenInfoHash,
         SessionGetShareTokenSuggestedName,
         SessionGetStateMonitor,
-        SessionGetStoreDir,
+        SessionGetStoreDirs,
         SessionGetUserProvidedPeers,
         SessionInitNetwork,
+        SessionInsertStoreDirs,
         SessionIsLocalDiscoveryEnabled,
         SessionIsPexRecvEnabled,
         SessionIsPexSendEnabled,
@@ -550,6 +559,7 @@ struct Request {
         SessionListRepositories,
         SessionMirrorExists,
         SessionOpenRepository,
+        SessionRemoveStoreDirs,
         SessionRemoveUserProvidedPeers,
         SessionSetDefaultBlockExpiration,
         SessionSetDefaultQuota,
@@ -559,7 +569,7 @@ struct Request {
         SessionSetPexRecvEnabled,
         SessionSetPexSendEnabled,
         SessionSetPortForwardingEnabled,
-        SessionSetStoreDir,
+        SessionSetStoreDirs,
         SessionSubscribeToNetwork,
         SessionSubscribeToStateMonitor,
         SessionUnsubscribe,
@@ -634,6 +644,10 @@ struct Response {
 
     struct Path {
         std::string value;
+    };
+
+    struct Paths {
+        std::vector<std::string> value;
     };
 
     struct PeerAddrs {
@@ -719,6 +733,7 @@ struct Response {
         None,
         PasswordSalt,
         Path,
+        Paths,
         PeerAddrs,
         PeerInfos,
         Progress,

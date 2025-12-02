@@ -255,14 +255,17 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionGetStateMonitor>(&variant) != nullptr) {
         return std::string_view("SessionGetStateMonitor");
     }
-    if (std::get_if<Request::SessionGetStoreDir>(&variant) != nullptr) {
-        return std::string_view("SessionGetStoreDir");
+    if (std::get_if<Request::SessionGetStoreDirs>(&variant) != nullptr) {
+        return std::string_view("SessionGetStoreDirs");
     }
     if (std::get_if<Request::SessionGetUserProvidedPeers>(&variant) != nullptr) {
         return std::string_view("SessionGetUserProvidedPeers");
     }
     if (std::get_if<Request::SessionInitNetwork>(&variant) != nullptr) {
         return std::string_view("SessionInitNetwork");
+    }
+    if (std::get_if<Request::SessionInsertStoreDirs>(&variant) != nullptr) {
+        return std::string_view("SessionInsertStoreDirs");
     }
     if (std::get_if<Request::SessionIsLocalDiscoveryEnabled>(&variant) != nullptr) {
         return std::string_view("SessionIsLocalDiscoveryEnabled");
@@ -284,6 +287,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     }
     if (std::get_if<Request::SessionOpenRepository>(&variant) != nullptr) {
         return std::string_view("SessionOpenRepository");
+    }
+    if (std::get_if<Request::SessionRemoveStoreDirs>(&variant) != nullptr) {
+        return std::string_view("SessionRemoveStoreDirs");
     }
     if (std::get_if<Request::SessionRemoveUserProvidedPeers>(&variant) != nullptr) {
         return std::string_view("SessionRemoveUserProvidedPeers");
@@ -312,8 +318,8 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionSetPortForwardingEnabled>(&variant) != nullptr) {
         return std::string_view("SessionSetPortForwardingEnabled");
     }
-    if (std::get_if<Request::SessionSetStoreDir>(&variant) != nullptr) {
-        return std::string_view("SessionSetStoreDir");
+    if (std::get_if<Request::SessionSetStoreDirs>(&variant) != nullptr) {
+        return std::string_view("SessionSetStoreDirs");
     }
     if (std::get_if<Request::SessionSubscribeToNetwork>(&variant) != nullptr) {
         return std::string_view("SessionSubscribeToNetwork");
@@ -366,6 +372,9 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     }
     if (std::get_if<Response::Path>(&variant) != nullptr) {
         return std::string_view("Path");
+    }
+    if (std::get_if<Response::Paths>(&variant) != nullptr) {
+        return std::string_view("Paths");
     }
     if (std::get_if<Response::PeerAddrs>(&variant) != nullptr) {
         return std::string_view("PeerAddrs");
