@@ -170,22 +170,22 @@ if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
     target_compile_definitions(cpp_ouisync_client PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
 endif()
 
-############################
-# Example
-############################
-add_executable(example examples/main.cpp)
-
-if(EXAMPLE_USE_BUILT_IN_SERVICE)
-    target_compile_definitions(example PUBLIC USE_BUILT_IN_SERVICE)
-    target_link_libraries(example PUBLIC cpp_ouisync_client cpp_ouisync_service)
-else()
-    target_link_libraries(example PUBLIC cpp_ouisync_client)
-endif()
-
-############################
-# Tests
-############################
 if (NOT OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
+    ############################
+    # Example
+    ############################
+    add_executable(example examples/main.cpp)
+
+    if(EXAMPLE_USE_BUILT_IN_SERVICE)
+        target_compile_definitions(example PUBLIC USE_BUILT_IN_SERVICE)
+        target_link_libraries(example PUBLIC cpp_ouisync_client cpp_ouisync_service)
+    else()
+        target_link_libraries(example PUBLIC cpp_ouisync_client)
+    endif()
+
+    ############################
+    # Tests
+    ############################
     enable_testing()
     add_subdirectory(tests)
 endif()
