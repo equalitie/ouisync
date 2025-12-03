@@ -11,6 +11,7 @@ option(EXAMPLE_USE_BUILT_IN_SERVICE "When OFF the example will attempt to connec
 option(MEASURE_BUILD_TIME "Print target build duration" OFF)
 
 option(WARNING_IS_ERROR "Fail compilation in presence of warnings" OFF)
+option(OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION OFF)
 
 # Show compilation times
 set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
@@ -96,7 +97,9 @@ target_include_directories(cpp_ouisync_service
         ${Boost_INCLUDE_DIRS}
 )
 
-target_compile_definitions(cpp_ouisync_service PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
+if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
+    target_compile_definitions(cpp_ouisync_service PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
+endif()
 
 ############################
 # C++ API code generation
@@ -162,7 +165,10 @@ target_link_libraries(cpp_ouisync_client
 )
 
 target_compile_features(cpp_ouisync_client PRIVATE cxx_std_20)
-target_compile_definitions(cpp_ouisync_client PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
+
+if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
+    target_compile_definitions(cpp_ouisync_client PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
+endif()
 
 ############################
 # Example
@@ -179,5 +185,7 @@ endif()
 ############################
 # Tests
 ############################
-enable_testing()
-add_subdirectory(tests)
+if (NOT OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
