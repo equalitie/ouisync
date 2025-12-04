@@ -27,6 +27,99 @@ dependencies {
 Replace `$ouisync_version` with the version of Ouisync you want to use (all three packages always
 use the same version).
 
+## Getting started
+
+🗈 Note that almost all functions in these bindings are `suspend` and so need to be invoked in appropriate
+coroutine scope.
+
+First, create and start a `Service`. This is the main component of Ouisync which is responsible for
+maintaining the repositories and running the sync protocol. It requires a directory in which to
+store its configuration files:
+
+```kotlin
+val configDir = context.getDir("ouisync-config").getPath()
+val service = Service.start(configDir)
+```
+
+On app shutdown, stop the service to allow it to close all repositories and peer connections:
+
+```kotlin
+service.stop()
+```
+
+In order to perform any actions, we need to create a `Session`, which is the entry point to Ouisync.
+Pass it the same configuration directory as the Service:
+
+```kotlin
+val session = Session.create(configDir)
+```
+
+🗈 Note there can be multiple `Session`s per `Service`. This is useful for example when the app
+consist of multiple components that all need to access the same set of Ouisync repositories. In
+this example we keep things simple and use only once `Session`.
+
+
+Then we can configure the networking. Start by setting up the network listeners. We use the QUIC protocol here. Ouisync supports both QUIC and TCP but QUIC generally works better. You can also enable both. Binding to `0.0.0.0` makes it listen on all interfaces and port `0` means bind to a random available port.
+
+```kotlin
+session.bindNetwork(listOf("quic:0.0.0.0:0"))
+```
+
+Then we can set up local discovery to find peers on the local network (Later we'll show how to
+discover peers on the internet as well):
+
+```kotlin
+session.setLocalDiscoveryEnabled(true)
+```
+
+To create repositories, we first need to specify the directory (or directories) in which the
+repository data will be stored:
+
+```kotlin
+session.setStorDirs(listOf(context.getDir("ouisync-repos").getPath()))
+```
+
+Then we can actually create the repository:
+
+```kotlin
+val repo = session.createRepository("my-repo")
+```
+
+By default the repository will not sync so we need to enable it. We'll also enable more peer
+discovery options: DHT and Peer Exchange. Note that these configurations only need to be done once
+as they will be persisted in the repository.
+
+```kotlin
+repo.setSyncEnabled(true)
+repo.setDhtEnabled(true)
+repo.setPexEnabled(true)
+```
+
+We can also retrieve the list of existing repositories. This returns a `Map` where the keys are the
+repository names and the values are the corresponding `Repository` objects
+
+```kotlin
+val repos = session.listRepositories()
+```
+
+Finally we'll show how to access repository content. For more info refer to the API documentation.
+
+```kotlin
+// Create a file and write into it
+val file = repo.createFile("hello.txt")
+file.write(0, "Hello world\n".toByteArray())
+file.flush()
+file.close()
+
+// Create a directory
+repo.createDirectory("docs")
+
+// Move the file to the directory
+repo.moveEntry("hello.txt", "docs/hello.txt")
+
+// And so on...
+```
+
 ## API documentation
 
 Documentation is available at [docs.ouisync.net](https://docs.ouisync.net/kotlin).
