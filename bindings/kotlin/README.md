@@ -56,10 +56,12 @@ val session = Session.create(configDir)
 
 🗈 Note there can be multiple `Session`s per `Service`. This is useful for example when the app
 consist of multiple components that all need to access the same set of Ouisync repositories. In
-this example we keep things simple and use only once `Session`.
+this example we keep things simple and use only one `Session`.
 
-
-Then we can configure the networking. Start by setting up the network listeners. We use the QUIC protocol here. Ouisync supports both QUIC and TCP but QUIC generally works better. You can also enable both. Binding to `0.0.0.0` makes it listen on all interfaces and port `0` means bind to a random available port.
+Then we can configure the networking. Start by setting up the network listeners. We use the QUIC
+protocol here. Ouisync supports both QUIC and TCP but QUIC generally works better. You can also
+enable both. Binding to `0.0.0.0` makes it listen on all interfaces and port `0` means bind to a
+random available port.
 
 ```kotlin
 session.bindNetwork(listOf("quic:0.0.0.0:0"))
@@ -76,7 +78,7 @@ To create repositories, we first need to specify the directory (or directories) 
 repository data will be stored:
 
 ```kotlin
-session.setStorDirs(listOf(context.getDir("ouisync-repos").getPath()))
+session.setStoreDirs(listOf(context.getDir("ouisync-repos").getPath()))
 ```
 
 Then we can actually create the repository:
