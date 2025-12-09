@@ -5,8 +5,8 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use file_rotate::{suffix::AppendCount, FileRotate};
-use implementation::{clone_stdout, Redirect};
+use file_rotate::{FileRotate, suffix::AppendCount};
+use implementation::{Redirect, clone_stdout};
 
 pub(super) struct Inner {
     redirect: Redirect,

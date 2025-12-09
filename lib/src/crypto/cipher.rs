@@ -2,14 +2,14 @@
 
 use super::{hash::Digest, password::PasswordSalt};
 use chacha20::{
-    cipher::{KeyIvInit, StreamCipher},
     ChaCha20,
+    cipher::{KeyIvInit, StreamCipher},
 };
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
 use ouisync_macros::api;
-use rand::{rngs::OsRng, CryptoRng, Rng};
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+use rand::{CryptoRng, Rng, rngs::OsRng};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use std::{fmt, sync::Arc};
 use subtle::ConstantTimeEq;
 use thiserror::Error;

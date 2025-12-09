@@ -1,14 +1,14 @@
 use super::{EntryHandle, EntryIdGenerator, VirtualFilesystem};
 use dokan::{
-    init, shutdown, unmount, CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler,
-    FileSystemMounter, FileTimeOperation, FillDataResult, FindData, MountOptions, OperationInfo,
-    OperationResult, VolumeInfo, IO_SECURITY_CONTEXT,
+    CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, FileSystemMounter,
+    FileTimeOperation, FillDataResult, FindData, IO_SECURITY_CONTEXT, MountOptions, OperationInfo,
+    OperationResult, VolumeInfo, init, shutdown, unmount,
 };
 use ouisync_lib::Repository;
 use std::io;
 use std::{
     path::Path,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
     thread,
 };
 use tracing::Span;

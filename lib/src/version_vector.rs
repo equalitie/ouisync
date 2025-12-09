@@ -1,10 +1,10 @@
-use crate::crypto::{sign::PublicKey, Digest, Hashable};
+use crate::crypto::{Digest, Hashable, sign::PublicKey};
 use serde::{Deserialize, Serialize};
 use sqlx::{
+    Decode, Encode, Sqlite, Type,
     encode::IsNull,
     error::BoxDynError,
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
-    Decode, Encode, Sqlite, Type,
 };
 use std::{
     cmp::Ordering,

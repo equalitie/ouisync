@@ -3,7 +3,7 @@
 mod fuse;
 
 #[cfg(target_os = "linux")]
-pub use fuse::{mount, MountGuard, MultiRepoVFS};
+pub use fuse::{MountGuard, MultiRepoVFS, mount};
 
 // --- Windows ---------------------------------------------------------------------
 #[cfg(target_os = "windows")]
@@ -12,7 +12,7 @@ mod dokan;
 #[cfg(target_os = "windows")]
 pub use crate::dokan::{
     multi_repo_mount::MultiRepoVFS,
-    single_repo_mount::{mount, MountGuard},
+    single_repo_mount::{MountGuard, mount},
 };
 
 // --- Dummy -----------------------------------------------------------------------
@@ -20,7 +20,7 @@ pub use crate::dokan::{
 mod dummy;
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-pub use dummy::{mount, MountGuard, MultiRepoVFS};
+pub use dummy::{MountGuard, MultiRepoVFS, mount};
 
 // ---------------------------------------------------------------------------------
 

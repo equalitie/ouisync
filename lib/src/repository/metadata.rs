@@ -1,15 +1,16 @@
 use crate::{
     access_control::{Access, AccessSecrets, LocalSecret, SetLocalSecret, WriteSecrets},
     crypto::{
+        Hash, Password, PasswordSalt,
         cipher::{self, Nonce},
-        sign, Hash, Password, PasswordSalt,
+        sign,
     },
     db::{self, DatabaseId},
     device_id::DeviceId,
     protocol::RepositoryId,
     store::Error as StoreError,
 };
-use rand::{rngs::OsRng, Rng};
+use rand::{Rng, rngs::OsRng};
 use sqlx::Row;
 use std::{borrow::Cow, fmt, time::Duration};
 use tracing::instrument;
@@ -837,8 +838,8 @@ impl<'a, T> MetadataSet<'a> for T where T: detail::Set<'a> {}
 mod detail {
     use crate::db;
     use sqlx::{
-        sqlite::{SqliteArguments, SqliteRow},
         Row, Sqlite,
+        sqlite::{SqliteArguments, SqliteRow},
     };
 
     type Query<'q> = sqlx::query::Query<'q, Sqlite, SqliteArguments<'q>>;

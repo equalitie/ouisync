@@ -11,11 +11,11 @@ use std::{
     io::Cursor,
     marker::PhantomData,
     pin::Pin,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use tokio_rustls::rustls::ConnectionCommon;
 use tokio_tungstenite::tungstenite as ws;
 
@@ -131,8 +131,8 @@ mod tests {
     use tokio_rustls::rustls::{self, ClientConfig};
 
     use crate::{
-        test_utils::{self, ServiceRunner},
         Service,
+        test_utils::{self, ServiceRunner},
     };
 
     #[tokio::test]

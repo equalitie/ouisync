@@ -1,12 +1,12 @@
-use super::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary, EMPTY_INNER_HASH};
+use super::{EMPTY_INNER_HASH, MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 use crate::{
     crypto::{Hash, Hashable},
-    protocol::{Block, BlockId, InnerNode, InnerNodes, LeafNode, LeafNodes, INNER_LAYER_COUNT},
+    protocol::{Block, BlockId, INNER_LAYER_COUNT, InnerNode, InnerNodes, LeafNode, LeafNodes},
 };
-use rand::{distributions::Standard, Rng};
+use rand::{Rng, distributions::Standard};
 use std::{
     borrow::Cow,
-    collections::{btree_map::Entry, BTreeMap, VecDeque},
+    collections::{BTreeMap, VecDeque, btree_map::Entry},
     fmt, mem,
 };
 
@@ -425,7 +425,7 @@ impl BucketPath {
 mod tests {
     use super::*;
     use crate::{collections::HashSet, protocol::EMPTY_INNER_HASH};
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
     fn empty_snapshot() {

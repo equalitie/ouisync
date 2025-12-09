@@ -1,7 +1,7 @@
 use super::*;
 use ouisync_lib::{Access, AccessMode, Repository, RepositoryParams, WriteSecrets};
 use proptest::prelude::*;
-use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
+use rand::{self, Rng, SeedableRng, distributions::Standard, rngs::StdRng};
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
@@ -172,12 +172,16 @@ async fn attempt_to_remove_non_empty_directory(setup: Setup) {
         .await
         .unwrap();
 
-    assert!(fs::remove_dir(setup.mount_dir_path().join("dir"))
-        .await
-        .is_err());
-    assert!(read_dir(setup.mount_dir_path())
-        .await
-        .contains_key(OsStr::new("dir")));
+    assert!(
+        fs::remove_dir(setup.mount_dir_path().join("dir"))
+            .await
+            .is_err()
+    );
+    assert!(
+        read_dir(setup.mount_dir_path())
+            .await
+            .contains_key(OsStr::new("dir"))
+    );
 }
 
 // -----------------------------------------------------------------------------

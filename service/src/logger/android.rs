@@ -1,7 +1,7 @@
 use ouisync_tracing_fmt::Formatter;
 use paranoid_android::{AndroidLogMakeWriter, Buffer};
 use tracing::Subscriber;
-use tracing_subscriber::{fmt, registry::LookupSpan, Layer};
+use tracing_subscriber::{Layer, fmt, registry::LookupSpan};
 
 use super::{LogColor, LogFormat};
 

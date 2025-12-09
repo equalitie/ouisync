@@ -1,12 +1,12 @@
 pub use self::implementation::*;
 
 pub mod prelude {
-    pub use super::{distributions::Distribution, rngs::StdRng, CryptoRng, Rng, SeedableRng};
+    pub use super::{CryptoRng, Rng, SeedableRng, distributions::Distribution, rngs::StdRng};
 }
 
 #[cfg(not(feature = "simulation"))]
 mod implementation {
-    pub use rand::{distributions, random, seq, thread_rng, CryptoRng, Rng, SeedableRng};
+    pub use rand::{CryptoRng, Rng, SeedableRng, distributions, random, seq, thread_rng};
     pub use std::collections::hash_map::{DefaultHasher, RandomState};
 
     pub mod rngs {
@@ -17,7 +17,7 @@ mod implementation {
 #[cfg(feature = "simulation")]
 mod implementation {
     pub use self::rngs::thread::thread_rng;
-    pub use rand::{distributions, seq, CryptoRng, Rng, SeedableRng};
+    pub use rand::{CryptoRng, Rng, SeedableRng, distributions, seq};
 
     use self::distributions::{Distribution, Standard};
     use siphasher::sip::SipHasher13;
@@ -29,7 +29,7 @@ mod implementation {
 
         /// ThreadRng
         pub(super) mod thread {
-            use rand::{rngs::StdRng, CryptoRng, Error, Rng, RngCore, SeedableRng};
+            use rand::{CryptoRng, Error, Rng, RngCore, SeedableRng, rngs::StdRng};
             use std::{
                 cell::RefCell,
                 env::{self, VarError},

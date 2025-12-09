@@ -1,8 +1,8 @@
-use super::{connection::ConnectionId, peer_addr::PeerAddr, PeerSource, PublicRuntimeId};
+use super::{PeerSource, PublicRuntimeId, connection::ConnectionId, peer_addr::PeerAddr};
 use crate::crypto::sign::PublicKey;
 use state_monitor::{MonitoredValue, StateMonitor};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{field, Span};
+use tracing::{Span, field};
 
 /// State monitor node for monitoring a network connection.
 pub(super) struct ConnectionMonitor {

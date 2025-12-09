@@ -1,8 +1,8 @@
-use super::{block, error::Error, patch::Patch, WriteTransaction};
+use super::{WriteTransaction, block, error::Error, patch::Patch};
 use crate::{
     crypto::{
-        sign::{Keypair, PublicKey},
         Hash,
+        sign::{Keypair, PublicKey},
     },
     protocol::{Block, BlockId, Bump, SingleBlockPresence},
 };

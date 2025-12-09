@@ -27,8 +27,8 @@ pub use self::{
 pub(crate) use self::{
     block::{Block, BlockContent, BlockId, BlockNonce},
     bump::Bump,
-    inner_node::{get_bucket, InnerNode, InnerNodes, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
-    leaf_node::{LeafNode, LeafNodes, EMPTY_LEAF_HASH},
+    inner_node::{EMPTY_INNER_HASH, INNER_LAYER_COUNT, InnerNode, InnerNodes, get_bucket},
+    leaf_node::{EMPTY_LEAF_HASH, LeafNode, LeafNodes},
     locator::Locator,
     proof::ProofError,
     root_node::{RootNodeFilter, RootNodeKind},

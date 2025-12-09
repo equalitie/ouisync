@@ -19,7 +19,7 @@ pub enum PeerState {
 }
 
 mod system_time {
-    use serde::{ser, Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, ser};
 
     use crate::time::{from_millis_since_epoch, to_millis_since_epoch};
     use std::time::SystemTime;

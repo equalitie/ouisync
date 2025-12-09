@@ -46,15 +46,13 @@ pub(crate) const LAST_USED_UDP_V4_PORT_KEY: ConfigKey<u16> =
 pub(crate) const LAST_USED_UDP_V6_PORT_KEY: ConfigKey<u16> =
     ConfigKey::new("last_used_udp_port_v6", LAST_USED_UDP_PORT_COMMENT);
 
-const LAST_USED_TCP_PORT_COMMENT: &str =
-    "The value stored in this file is the last used TCP port for listening on incoming\n\
+const LAST_USED_TCP_PORT_COMMENT: &str = "The value stored in this file is the last used TCP port for listening on incoming\n\
      connections. It is used to avoid binding to a random port every time the application starts.\n\
      This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
      default to manually setting up port forwarding on their routers.";
 
 // Intentionally not being explicity about DHT as eventually this port shall be shared with QUIC.
-const LAST_USED_UDP_PORT_COMMENT: &str =
-    "The value stored in this file is the last used UDP port for listening on incoming\n\
+const LAST_USED_UDP_PORT_COMMENT: &str = "The value stored in this file is the last used UDP port for listening on incoming\n\
      connections. It is used to avoid binding to a random port every time the application starts.\n\
      This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
      default to manually setting up port forwarding on their routers.";

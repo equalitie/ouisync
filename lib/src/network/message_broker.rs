@@ -12,11 +12,11 @@ use super::{
 };
 use crate::{
     collections::HashMap,
-    crypto::{sign::PublicKey, Hashable},
+    crypto::{Hashable, sign::PublicKey},
     protocol::RepositoryId,
     repository::Vault,
 };
-use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use bytes::{BufMut, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use net::{bus::TopicId, unified::Connection};
@@ -31,7 +31,7 @@ use tokio::{
     task,
     time::Duration,
 };
-use tracing::{instrument::Instrument, Span};
+use tracing::{Span, instrument::Instrument};
 
 /// Handler for communication with one peer.
 pub(super) struct MessageBroker {

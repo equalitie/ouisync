@@ -1,5 +1,5 @@
-use super::{get_pragma, set_pragma, Connection, Error, Pool};
-use include_dir::{include_dir, Dir, File};
+use super::{Connection, Error, Pool, get_pragma, set_pragma};
+use include_dir::{Dir, File, include_dir};
 use std::sync::LazyLock;
 
 /// Latest schema version

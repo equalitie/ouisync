@@ -4,17 +4,17 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     fmt, io, mem,
     net::SocketAddr,
     sync::Mutex,
     time::Duration,
 };
 use stun_codec::{
+    Message, MessageClass, MessageDecoder, MessageEncoder, Method, TransactionId,
     convert::TryAsRef,
     rfc5389::{attributes::XorMappedAddress, methods::BINDING},
     rfc5780::attributes::{ChangeRequest, OtherAddress},
-    Message, MessageClass, MessageDecoder, MessageEncoder, Method, TransactionId,
 };
 use tokio::{select, sync::Notify, time};
 

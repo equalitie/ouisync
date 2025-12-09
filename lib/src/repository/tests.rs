@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
-    blob, db,
-    protocol::{BlockId, BLOCK_NONCE_SIZE, BLOCK_SIZE},
-    test_utils, LocalSecret, SetLocalSecret, WriteSecrets,
+    LocalSecret, SetLocalSecret, WriteSecrets, blob, db,
+    protocol::{BLOCK_NONCE_SIZE, BLOCK_SIZE, BlockId},
+    test_utils,
 };
 use assert_matches::assert_matches;
 use rand::Rng;
@@ -11,7 +11,7 @@ use tempfile::TempDir;
 use tokio::{
     fs,
     sync::broadcast::Receiver,
-    time::{self, timeout, Duration},
+    time::{self, Duration, timeout},
 };
 use tracing::instrument;
 

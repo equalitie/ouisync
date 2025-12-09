@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_char, c_void, CStr, CString},
+    ffi::{CStr, CString, c_char, c_void},
     pin::pin,
     thread,
 };
@@ -9,9 +9,9 @@ use tracing::{Instrument, Span};
 
 use self::callback::Callback;
 use crate::{
+    Error, Service,
     logger::{self, LogColor, LogFormat},
     protocol::{ErrorCode, ToErrorCode},
-    Error, Service,
 };
 
 /// Start Ouisync service in a new thread and bind it to the specified local socket.

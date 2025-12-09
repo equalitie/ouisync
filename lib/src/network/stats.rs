@@ -5,10 +5,10 @@ use std::{
     io::{self, IoSlice},
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
     time::Instant,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};

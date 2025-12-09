@@ -1,14 +1,14 @@
 use std::{borrow::Cow, io, sync::Arc};
 
-use ouisync::{crypto::sign::Signature, PeerAddr, RepositoryId, WriteSecrets};
+use ouisync::{PeerAddr, RepositoryId, WriteSecrets, crypto::sign::Signature};
 
 use futures_util::{
-    stream::{SplitSink, SplitStream},
     SinkExt, StreamExt, TryStreamExt,
+    stream::{SplitSink, SplitStream},
 };
 use tokio::net::TcpStream;
 use tokio_rustls::rustls;
-use tokio_tungstenite::{tungstenite as ws, Connector, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream, tungstenite as ws};
 
 use crate::{
     protocol::{
@@ -18,7 +18,7 @@ use crate::{
     transport::ClientError,
 };
 
-use super::{extract_session_cookie, protocol, RemoteSocket};
+use super::{RemoteSocket, extract_session_cookie, protocol};
 
 pub struct RemoteClient {
     reader: RemoteSocket<ResponseResult, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>,

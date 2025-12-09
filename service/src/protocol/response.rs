@@ -1,8 +1,8 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{
-    crypto::{cipher::SecretKey, PasswordSalt},
     AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress,
     PublicRuntimeId, ShareToken, Stats, StorageSize,
+    crypto::{PasswordSalt, cipher::SecretKey},
 };
 use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
@@ -16,8 +16,8 @@ use std::{
 use thiserror::Error;
 
 use super::{
-    helpers::{self, Bytes},
     ProtocolError,
+    helpers::{self, Bytes},
 };
 
 // The `Response` enum is auto-generated in `build.rs` from the `#[api]` annotated methods in `impl
@@ -130,7 +130,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use ouisync::{AccessSecrets, PeerSource, PeerState, Stats, WriteSecrets};
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
 

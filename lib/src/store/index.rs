@@ -55,19 +55,19 @@ mod tests {
     use crate::store::block;
     use crate::{
         crypto::{
-            sign::{Keypair, PublicKey},
             Hashable,
+            sign::{Keypair, PublicKey},
         },
         protocol::{
-            test_utils::Snapshot, InnerNode, InnerNodes, LeafNode, LeafNodes, MultiBlockPresence,
-            Proof, RootNode, RootNodeFilter, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH,
+            EMPTY_INNER_HASH, EMPTY_LEAF_HASH, InnerNode, InnerNodes, LeafNode, LeafNodes,
+            MultiBlockPresence, Proof, RootNode, RootNodeFilter, Summary, test_utils::Snapshot,
         },
         test_utils,
         version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
     use futures_util::TryStreamExt;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
     use std::iter;
     use tempfile::TempDir;
     use test_strategy::proptest;

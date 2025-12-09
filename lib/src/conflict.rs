@@ -49,7 +49,7 @@ pub fn parse_unique_name(unique_name: &str) -> (&str, Option<[u8; SUFFIX_LEN / 2
 mod tests {
     use super::*;
     use crate::test_utils;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
     use test_strategy::proptest;
 
     #[test]

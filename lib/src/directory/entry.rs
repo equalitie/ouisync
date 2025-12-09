@@ -1,8 +1,8 @@
 use super::{
+    Directory, DirectoryFallback, DirectoryLocking,
     content::Content,
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
     parent_context::ParentContext,
-    Directory, DirectoryFallback, DirectoryLocking,
 };
 use crate::{
     blob::BlobId,

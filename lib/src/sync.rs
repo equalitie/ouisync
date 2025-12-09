@@ -3,7 +3,7 @@
 use futures_util::StreamExt;
 use std::{
     pin::Pin,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
@@ -112,8 +112,8 @@ pub(crate) mod broadcast_hash_set {
         collections::{HashMap, HashSet},
         hash::Hash,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
         },
     };
 
@@ -214,14 +214,14 @@ pub(crate) mod broadcast_hash_set {
 }
 
 pub(crate) mod stream {
-    use futures_util::{stream::Fuse, Stream, StreamExt};
+    use futures_util::{Stream, StreamExt, stream::Fuse};
     use pin_project_lite::pin_project;
     use std::{
-        collections::{hash_map, BTreeMap, HashMap},
+        collections::{BTreeMap, HashMap, hash_map},
         fmt::Debug,
         hash::Hash,
         pin::Pin,
-        task::{ready, Context, Poll},
+        task::{Context, Poll, ready},
     };
     use tokio::time::{self, Duration, Instant, Sleep};
 
@@ -373,7 +373,7 @@ pub(crate) mod stream {
                             Poll::Ready(None)
                         } else {
                             Poll::Pending
-                        }
+                        };
                     }
                 };
 
@@ -397,7 +397,7 @@ pub(crate) mod stream {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use futures_util::{future, stream, StreamExt};
+        use futures_util::{StreamExt, future, stream};
         use std::fmt::Debug;
         use tokio::{sync::mpsc, time::Instant};
 

@@ -12,7 +12,7 @@ pub(super) mod v0 {
 
 pub(super) mod v1 {
     use super::*;
-    use ouisync::{crypto::sign::Signature, RepositoryId};
+    use ouisync::{RepositoryId, crypto::sign::Signature};
 
     #[derive(Debug, Serialize, Deserialize)]
     pub enum Request {

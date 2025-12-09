@@ -1,6 +1,6 @@
 use crate::{
     blob::BlobId,
-    crypto::{cipher::SecretKey, Digest, Hash, Hashable},
+    crypto::{Digest, Hash, Hashable, cipher::SecretKey},
 };
 
 /// A type of block identifier similar to `BlockId` but serving a different purpose. While

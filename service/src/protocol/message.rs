@@ -1,6 +1,6 @@
 use bytes::{Buf, BufMut};
 use ouisync_macros::api;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     mem,
     sync::atomic::{AtomicU64, Ordering},

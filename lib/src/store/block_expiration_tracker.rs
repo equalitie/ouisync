@@ -13,7 +13,7 @@ use futures_util::TryStreamExt;
 use scoped_task::{self, ScopedJoinHandle};
 use sqlx::Row;
 use std::{
-    collections::{btree_map, hash_map::Entry, BTreeMap},
+    collections::{BTreeMap, btree_map, hash_map::Entry},
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -215,18 +215,20 @@ impl Shared {
                     entry.remove();
                 }
 
-                assert!(self
-                    .blocks_by_expiration
-                    .entry(ts)
-                    .or_default()
-                    .insert(*block));
+                assert!(
+                    self.blocks_by_expiration
+                        .entry(ts)
+                        .or_default()
+                        .insert(*block)
+                );
             }
             Entry::Vacant(entry) => {
-                assert!(self
-                    .blocks_by_expiration
-                    .entry(ts)
-                    .or_default()
-                    .insert(*block));
+                assert!(
+                    self.blocks_by_expiration
+                        .entry(ts)
+                        .or_default()
+                        .insert(*block)
+                );
 
                 entry.insert(ts);
 
@@ -447,9 +449,9 @@ mod test {
     use crate::crypto::sign::Keypair;
     use crate::protocol::Block;
     use futures_util::future;
+    use rand::Rng;
     use rand::distributions::Standard;
     use rand::seq::SliceRandom;
-    use rand::Rng;
     use tempfile::TempDir;
     use tokio::task;
 

@@ -13,11 +13,11 @@ use tracing::Span;
 use deadlock::ExpectShortLifetime;
 use ref_cast::RefCast;
 use sqlx::{
+    Row, SqlitePool, TransactionManager,
     sqlite::{
         Sqlite, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
         SqliteTransactionManager,
     },
-    Row, SqlitePool, TransactionManager,
 };
 use std::{
     fmt, io,

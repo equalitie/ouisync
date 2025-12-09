@@ -9,7 +9,7 @@ use super::{
 use crate::{
     block_tracker::BlockTrackerClient,
     collections::HashSet,
-    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
+    crypto::{CacheHash, Hash, Hashable, sign::PublicKey},
     error::Result,
     event::Payload,
     network::{
@@ -20,12 +20,12 @@ use crate::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, ProofError, RootNodeFilter,
         UntrustedProof,
     },
-    repository::{monitor::TrafficMonitor, Vault},
+    repository::{Vault, monitor::TrafficMonitor},
     store::{ClientReaderMut, ClientWriter},
 };
 use std::{iter, time::Instant};
 use tokio::{select, sync::mpsc};
-use tracing::{instrument, Level};
+use tracing::{Level, instrument};
 
 mod future {
     pub(super) use futures_util::future::try_join;
@@ -791,19 +791,19 @@ mod tests {
     use crate::{
         access_control::WriteSecrets,
         block_tracker::BlockRequestMode,
-        crypto::{sign::Keypair, Hash},
+        crypto::{Hash, sign::Keypair},
         db,
         event::EventSender,
         protocol::{
+            EMPTY_INNER_HASH, Proof, RepositoryId,
             test_utils::{BlockState, Snapshot},
-            Proof, RepositoryId, EMPTY_INNER_HASH,
         },
         repository::monitor::RepositoryMonitor,
         version_vector::VersionVector,
     };
     use futures_util::TryStreamExt;
     use metrics::NoopRecorder;
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use state_monitor::StateMonitor;
     use tempfile::TempDir;
     use tokio::time;
@@ -815,33 +815,37 @@ mod tests {
 
         // Receive invalid root node from the remote replica.
         let invalid_write_keys = Keypair::generate(&mut rng);
-        let (_, response_rx) = make_response_channel(vec![Response::RootNode {
-            proof: Proof::new(
-                remote_id,
-                VersionVector::first(remote_id),
-                *EMPTY_INNER_HASH,
-                &invalid_write_keys,
-            )
+        let (_, response_rx) = make_response_channel(vec![
+            Response::RootNode {
+                proof: Proof::new(
+                    remote_id,
+                    VersionVector::first(remote_id),
+                    *EMPTY_INNER_HASH,
+                    &invalid_write_keys,
+                )
+                .into(),
+                block_presence: MultiBlockPresence::None,
+                cookie: 0,
+                debug: DebugResponse::unsolicited(),
+            }
             .into(),
-            block_presence: MultiBlockPresence::None,
-            cookie: 0,
-            debug: DebugResponse::unsolicited(),
-        }
-        .into()]);
+        ]);
         inner.handle_responses(response_rx).await.unwrap();
 
         // The invalid root was not written to the db.
-        assert!(inner
-            .vault
-            .store()
-            .acquire_read()
-            .await
-            .unwrap()
-            .load_root_nodes_by_writer(&remote_id)
-            .try_next()
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            inner
+                .vault
+                .store()
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_root_nodes_by_writer(&remote_id)
+                .try_next()
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -849,32 +853,36 @@ mod tests {
         let (_base_dir, mut rng, inner, _, secrets) = setup(None).await;
         let remote_id = PublicKey::generate(&mut rng);
 
-        let (_, response_rx) = make_response_channel(vec![Response::RootNode {
-            proof: Proof::new(
-                remote_id,
-                VersionVector::new(),
-                *EMPTY_INNER_HASH,
-                &secrets.write_keys,
-            )
+        let (_, response_rx) = make_response_channel(vec![
+            Response::RootNode {
+                proof: Proof::new(
+                    remote_id,
+                    VersionVector::new(),
+                    *EMPTY_INNER_HASH,
+                    &secrets.write_keys,
+                )
+                .into(),
+                block_presence: MultiBlockPresence::None,
+                cookie: 0,
+                debug: DebugResponse::unsolicited(),
+            }
             .into(),
-            block_presence: MultiBlockPresence::None,
-            cookie: 0,
-            debug: DebugResponse::unsolicited(),
-        }
-        .into()]);
+        ]);
         inner.handle_responses(response_rx).await.unwrap();
 
-        assert!(inner
-            .vault
-            .store()
-            .acquire_read()
-            .await
-            .unwrap()
-            .load_root_nodes_by_writer(&remote_id)
-            .try_next()
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            inner
+                .vault
+                .store()
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_root_nodes_by_writer(&remote_id)
+                .try_next()
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     // `BlockOffer` messages can be processed independently from other types of messages because

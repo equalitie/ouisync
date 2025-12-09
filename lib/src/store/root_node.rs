@@ -1,6 +1,6 @@
 use super::error::Error;
 use crate::{
-    crypto::{sign::PublicKey, Hash},
+    crypto::{Hash, sign::PublicKey},
     db,
     debug::DebugPrinter,
     protocol::{
@@ -10,7 +10,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
-use sqlx::{sqlite::SqliteRow, FromRow, Row};
+use sqlx::{FromRow, Row, sqlite::SqliteRow};
 use std::{cmp::Ordering, fmt, future};
 
 /// Status of receiving a root node
@@ -921,8 +921,8 @@ mod tests {
             pool.close().await.unwrap();
         }
 
-        fn root_node_params_strategy(
-        ) -> impl Strategy<Value = Vec<(SnapshotId, PublicKey, Hash, NodeState)>> {
+        fn root_node_params_strategy()
+        -> impl Strategy<Value = Vec<(SnapshotId, PublicKey, Hash, NodeState)>> {
             vec(any::<PublicKey>(), 1..=3)
                 .prop_flat_map(|writer_ids| {
                     vec(

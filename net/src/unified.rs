@@ -277,9 +277,9 @@ pub enum ConnectionError {
 mod tests {
     use super::Connection;
     use crate::test_utils::{
-        create_connected_connections, create_connected_peers, init_log, Proto,
+        Proto, create_connected_connections, create_connected_peers, init_log,
     };
-    use futures_util::{future, stream::FuturesUnordered, StreamExt};
+    use futures_util::{StreamExt, future, stream::FuturesUnordered};
     use itertools::Itertools;
     use proptest::{arbitrary::any, collection::vec};
     use test_strategy::proptest;

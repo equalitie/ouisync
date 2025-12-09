@@ -124,7 +124,7 @@ impl Branch {
                     curr = next;
                 }
                 Utf8Component::Prefix(_) | Utf8Component::ParentDir => {
-                    return Err(Error::OperationNotSupported)
+                    return Err(Error::OperationNotSupported);
                 }
             }
         }
@@ -168,9 +168,7 @@ impl Branch {
             .await
         {
             Ok(root) => root.debug_print(print).await,
-            Err(error) => {
-                print.display(&format_args!("failed to open root directory: {error:?}"))
-            }
+            Err(error) => print.display(&format_args!("failed to open root directory: {error:?}")),
         }
     }
 

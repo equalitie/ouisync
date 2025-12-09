@@ -199,12 +199,12 @@ mod tests {
     use std::iter;
 
     use super::{
-        super::{test_utils::SnapshotWriter, Store},
+        super::{Store, test_utils::SnapshotWriter},
         *,
     };
     use crate::{
         crypto::sign::{Keypair, PublicKey},
-        protocol::{test_utils::Snapshot, RootNodeFilter},
+        protocol::{RootNodeFilter, test_utils::Snapshot},
         version_vector::VersionVector,
     };
     use rand::Rng;

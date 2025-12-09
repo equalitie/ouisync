@@ -5,7 +5,7 @@ use pin_project_lite::pin_project;
 use std::{
     iter,
     pin::Pin,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 
 /// Additional combinators for `TryStream`.

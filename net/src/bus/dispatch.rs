@@ -150,7 +150,7 @@ impl Drop for CancelGuard<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{create_connected_connections, create_connected_peers, Proto};
+    use crate::test_utils::{Proto, create_connected_connections, create_connected_peers};
     use assert_matches::assert_matches;
     use futures_util::future;
 

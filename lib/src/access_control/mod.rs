@@ -9,13 +9,13 @@ pub use self::{
 };
 
 use crate::{
+    Result,
     crypto::{cipher, sign},
     error::Error,
     protocol::RepositoryId,
-    Result,
 };
 use ouisync_macros::api;
-use rand::{rngs::OsRng, CryptoRng, Rng};
+use rand::{CryptoRng, Rng, rngs::OsRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::Utf8Error, string::FromUtf8Error, sync::Arc};
 use thiserror::Error;

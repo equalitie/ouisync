@@ -1,6 +1,6 @@
 pub use blake3::traits::digest::Digest;
 
-use generic_array::{typenum::U32, GenericArray};
+use generic_array::{GenericArray, typenum::U32};
 use serde::{Deserialize, Serialize};
 use std::{
     array::TryFromSliceError,
@@ -12,8 +12,8 @@ use std::{
 
 #[cfg(test)]
 use rand::{
-    distributions::{Distribution, Standard},
     Rng,
+    distributions::{Distribution, Standard},
 };
 
 /// Wrapper for a 256-bit hash digest. Also implements friendly formatting.
@@ -308,7 +308,7 @@ impl<T: fmt::Debug> fmt::Debug for CacheHash<T> {
 mod test_utils {
     use super::Hash;
     use proptest::{
-        arbitrary::{any, Arbitrary},
+        arbitrary::{Arbitrary, any},
         array::UniformArrayStrategy,
         num,
         strategy::{Map, NoShrink, Strategy},

@@ -8,7 +8,7 @@ use std::{
 };
 
 use tempfile::TempDir;
-use tracing::{subscriber::DefaultGuard, Level};
+use tracing::{Level, subscriber::DefaultGuard};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use super::*;

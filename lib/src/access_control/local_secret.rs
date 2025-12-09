@@ -1,4 +1,4 @@
-use crate::crypto::{cipher::SecretKey, Password, PasswordSalt};
+use crate::crypto::{Password, PasswordSalt, cipher::SecretKey};
 use ouisync_macros::api;
 #[cfg(test)]
 use rand::{CryptoRng, Rng};

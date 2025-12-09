@@ -4,30 +4,30 @@ use super::{
 };
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
-use chrono::{offset::Local, DateTime};
+use chrono::{DateTime, offset::Local};
 use deadlock::{AsyncMutex, BlockingMutex};
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use net::{quic, udp::DatagramSocket};
 use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
 use std::{
-    collections::{hash_map, HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map},
     future::pending,
     io,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, OnceLock, Weak,
+        atomic::{AtomicU64, Ordering},
     },
     time::SystemTime,
 };
 use tokio::{
     select,
     sync::{mpsc, watch},
-    time::{self, timeout, Duration},
+    time::{self, Duration, timeout},
 };
-use tracing::{instrument::Instrument, Span};
+use tracing::{Span, instrument::Instrument};
 
 // Hardcoded DHT routers to bootstrap the DHT against.
 // TODO: add this to `NetworkOptions` so it can be overriden by the user.

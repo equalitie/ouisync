@@ -2,9 +2,9 @@ use super::{error::Error, leaf_node};
 use crate::{
     crypto::Hash,
     db,
-    protocol::{InnerNode, InnerNodes, LeafNodes, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
+    protocol::{EMPTY_INNER_HASH, EMPTY_LEAF_HASH, InnerNode, InnerNodes, LeafNodes, Summary},
 };
-use futures_util::{future, Stream, TryStreamExt};
+use futures_util::{Stream, TryStreamExt, future};
 use sqlx::Row;
 use std::convert::TryInto;
 

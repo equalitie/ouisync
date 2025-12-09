@@ -1,4 +1,4 @@
-use self::utils::{unlock, Command, Counter};
+use self::utils::{Command, Counter, unlock};
 use super::Shared;
 use crate::{
     blob::{BlobId, BlockIds},
@@ -10,7 +10,7 @@ use crate::{
     store, versioned,
 };
 use async_recursion::async_recursion;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use std::{future, sync::Arc};
 use tokio::select;
 
@@ -190,7 +190,7 @@ mod scan {
                 Err(Error::Store(store::Error::BranchNotFound | store::Error::LocatorNotFound))
                     if prune_counter.get() != prune_count_before =>
                 {
-                    continue
+                    continue;
                 }
                 Err(error) => return Err(error),
             }
@@ -813,7 +813,7 @@ mod utils {
     /// Register and await unlock notifications.
     pub(super) mod unlock {
         use crate::sync::AwaitDrop;
-        use futures_util::{stream::FuturesUnordered, StreamExt};
+        use futures_util::{StreamExt, stream::FuturesUnordered};
         use tokio::{select, sync::mpsc};
 
         pub(crate) struct Sender(mpsc::Sender<AwaitDrop>);

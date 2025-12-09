@@ -1,17 +1,17 @@
 use std::time::Instant;
 
-use futures_util::{stream::FuturesUnordered, SinkExt};
+use futures_util::{SinkExt, stream::FuturesUnordered};
 use ouisync::NetworkEventReceiver;
 use tokio::select;
 use tokio_stream::{StreamExt, StreamMap};
-use tracing::{field, Span};
+use tracing::{Span, field};
 
 use crate::{
+    State,
     protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response, ResponseResult},
     state::{RepositorySubscription, StateMonitorSubscription, Unsubscribe},
     subscription::SubscriptionStream,
     transport::{ReadError, ServerReader, ServerWriter},
-    State,
 };
 
 /// Connection to a client.

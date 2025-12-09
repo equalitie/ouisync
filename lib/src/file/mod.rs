@@ -1,9 +1,9 @@
 use crate::{
-    blob::{lock::UpgradableLock, Blob, BlockIds, ReadWriteError},
+    blob::{Blob, BlockIds, ReadWriteError, lock::UpgradableLock},
     branch::Branch,
     directory::{Directory, ParentContext},
     error::{Error, Result},
-    protocol::{Bump, Locator, SingleBlockPresence, BLOCK_SIZE},
+    protocol::{BLOCK_SIZE, Bump, Locator, SingleBlockPresence},
     store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };

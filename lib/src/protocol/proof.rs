@@ -1,8 +1,8 @@
 use super::repository::RepositoryId;
 use crate::{
     crypto::{
-        sign::{Keypair, PublicKey, Signature},
         Hash, Hashable,
+        sign::{Keypair, PublicKey, Signature},
     },
     version_vector::VersionVector,
 };

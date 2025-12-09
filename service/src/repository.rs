@@ -4,7 +4,7 @@ use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use slab::Slab;
 use std::{
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{BTreeMap, btree_map::Entry},
     fmt, mem,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},

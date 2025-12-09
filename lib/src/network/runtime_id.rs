@@ -3,11 +3,11 @@
 //! claim to be another one.
 
 use crate::crypto::{
-    sign::{Keypair, PublicKey, Signature},
     Digest, Hashable,
+    sign::{Keypair, PublicKey, Signature},
 };
 use ouisync_macros::api;
-use rand::{rngs::OsRng, CryptoRng, Rng};
+use rand::{CryptoRng, Rng, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};

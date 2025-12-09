@@ -7,7 +7,7 @@ use crate::{
     tls::TlsConfig,
 };
 use geo_ip::{CountryCode, GeoIp};
-use hyper::{server::conn::http1, service::service_fn, Response};
+use hyper::{Response, server::conn::http1, service::service_fn};
 use hyper_util::rt::TokioIo;
 use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};

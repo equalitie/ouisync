@@ -2,7 +2,7 @@ mod parse;
 
 use std::{collections::HashSet, fmt, path::Path, slice, str::FromStr};
 
-use anyhow::{format_err, Error, Result};
+use anyhow::{Error, Result, format_err};
 use heck::ToPascalCase;
 
 /// Items extracted from the rust codebase used as the source for codegen.

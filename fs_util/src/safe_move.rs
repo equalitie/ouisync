@@ -68,7 +68,7 @@ async fn rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn blocking_rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
     use std::{
-        ffi::{c_char, c_int, c_uint, CString},
+        ffi::{CString, c_char, c_int, c_uint},
         path::{self, PathBuf},
     };
 

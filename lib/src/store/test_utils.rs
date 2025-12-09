@@ -1,7 +1,7 @@
-use super::{client::CommitStatus, ClientWriter, Store};
+use super::{ClientWriter, Store, client::CommitStatus};
 use crate::{
     crypto::sign::{Keypair, PublicKey},
-    protocol::{test_utils::Snapshot, MultiBlockPresence, Proof},
+    protocol::{MultiBlockPresence, Proof, test_utils::Snapshot},
     version_vector::VersionVector,
 };
 

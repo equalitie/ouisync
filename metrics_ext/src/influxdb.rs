@@ -4,8 +4,8 @@ use metrics::{
 };
 use metrics_util::storage::Summary;
 use reqwest::{
-    header::{self, HeaderMap, HeaderValue},
     Client, ClientBuilder, StatusCode,
+    header::{self, HeaderMap, HeaderValue},
 };
 use std::{
     collections::HashMap,

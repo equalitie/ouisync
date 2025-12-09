@@ -3,24 +3,24 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     sync::Arc,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 
 use futures_util::{
-    stream::{SplitSink, SplitStream},
     Sink, SinkExt, Stream, StreamExt,
+    stream::{SplitSink, SplitStream},
 };
-use ouisync::{crypto::sign::Signature, AccessSecrets, RepositoryId, ShareToken};
+use ouisync::{AccessSecrets, RepositoryId, ShareToken, crypto::sign::Signature};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::{rustls, server::TlsStream, TlsAcceptor};
-use tokio_tungstenite::{tungstenite as ws, WebSocketStream};
+use tokio_rustls::{TlsAcceptor, rustls, server::TlsStream};
+use tokio_tungstenite::{WebSocketStream, tungstenite as ws};
 
 use crate::{
     protocol::{Message, MessageId, Request, ResponseResult},
     transport::{ReadError, ValidateError, WriteError},
 };
 
-use super::{extract_session_cookie, protocol, RemoteSocket};
+use super::{RemoteSocket, extract_session_cookie, protocol};
 
 pub(crate) struct RemoteServer {
     tcp_listener: TcpListener,

@@ -21,7 +21,7 @@ use crate::{
     access_control::{Access, AccessChange, AccessKeys, AccessMode, AccessSecrets, LocalSecret},
     block_tracker::BlockRequestMode,
     branch::{Branch, BranchShared},
-    crypto::{sign::PublicKey, PasswordSalt},
+    crypto::{PasswordSalt, sign::PublicKey},
     db::{self, DatabaseId},
     debug::DebugPrinter,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef, EntryType},
@@ -31,15 +31,15 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
-    protocol::{RootNodeFilter, StorageSize, BLOCK_SIZE},
+    protocol::{BLOCK_SIZE, RootNodeFilter, StorageSize},
     store,
     sync::stream::Throttle,
     version_vector::VersionVector,
 };
 use camino::Utf8Path;
 use deadlock::{BlockingMutex, BlockingRwLock};
-use futures_util::{future, TryStreamExt};
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
+use futures_util::{TryStreamExt, future};
 use metrics::{NoopRecorder, Recorder};
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
