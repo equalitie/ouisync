@@ -24,14 +24,19 @@ use std::{
 use tokio::{
     net::TcpListener,
     task::{self, JoinSet},
+    time,
 };
 use tokio_rustls::TlsAcceptor;
+use tracing::{Instrument, Span, instrument};
 
 // Path to the geo ip database, relative to the config store root.
 const GEO_IP_PATH: &str = "GeoLite2-Country.mmdb";
 
 // Rate limit for metrics collection (at most once per this interval)
 const COLLECT_INTERVAL: Duration = Duration::from_secs(10);
+
+// Max time to wait for completion of TLS handshake
+const TLS_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) struct MetricsServer {
     inner: Mutex<Option<Inner>>,
@@ -101,6 +106,7 @@ impl MetricsServer {
     }
 }
 
+#[instrument(name = "metrics", skip_all)]
 async fn start(
     config: &ConfigStore,
     network: &Network,
@@ -116,81 +122,91 @@ async fn start(
 
     let listener_addr = match tcp_listener.local_addr() {
         Ok(addr) => {
-            tracing::info!("Metrics server listening on {addr}");
+            tracing::info!("listening on {addr}");
             addr
         }
         Err(error) => {
-            tracing::error!(
-                ?error,
-                "Metrics server failed to retrieve the listening address"
-            );
+            tracing::error!(?error, "failed to retrieve the listening address");
             addr
         }
     };
 
     let tls_acceptor = TlsAcceptor::from(tls_config.server().await?);
 
-    task::spawn(collect(
-        collect_acceptor,
-        recorder,
-        network.peer_info_collector(),
-        config.dir().join(GEO_IP_PATH),
-    ));
+    task::spawn(
+        collect(
+            collect_acceptor,
+            recorder,
+            network.peer_info_collector(),
+            config.dir().join(GEO_IP_PATH),
+        )
+        .instrument(Span::current()),
+    );
 
-    let handle = task::spawn(async move {
-        let mut tasks = JoinSet::new();
+    let handle = task::spawn(
+        async move {
+            let mut tasks = JoinSet::new();
 
-        loop {
-            let (stream, addr) = match tcp_listener.accept().await {
-                Ok(conn) => conn,
-                Err(error) => {
-                    tracing::error!(?error, "Metrics server failed to accept new connection");
-                    break;
-                }
-            };
-
-            let stream = match tls_acceptor.accept(stream).await {
-                Ok(stream) => stream,
-                Err(error) => {
-                    tracing::warn!(
-                        ?error,
-                        %addr,
-                        "Metrics server failed to perform TLS handshake"
-                    );
-                    continue;
-                }
-            };
-
-            let recorder_handle = recorder_handle.clone();
-            let collect_requester = collect_requester.clone();
-
-            tasks.spawn(async move {
-                let service = move |_req| {
-                    let recorder_handle = recorder_handle.clone();
-                    let collect_requester = collect_requester.clone();
-
-                    async move {
-                        collect_requester.request().await;
-                        tracing::trace!("Serving metrics");
-
-                        let content = recorder_handle.render();
-
-                        Ok::<_, Infallible>(Response::new(content))
+            loop {
+                let (stream, addr) = match tcp_listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(error) => {
+                        tracing::error!(?error, "failed to accept new connection");
+                        break;
                     }
                 };
 
-                match http1::Builder::new()
-                    .serve_connection(TokioIo::new(stream), service_fn(service))
-                    .await
-                {
-                    Ok(()) => (),
-                    Err(error) => {
-                        tracing::error!(?error, %addr, "Metrics server connection failed")
+                let tls_acceptor = tls_acceptor.clone();
+                let recorder_handle = recorder_handle.clone();
+                let collect_requester = collect_requester.clone();
+
+                tasks.spawn(
+                    async move {
+                        let stream =
+                            match time::timeout(TLS_ACCEPT_TIMEOUT, tls_acceptor.accept(stream))
+                                .await
+                            {
+                                Ok(Ok(stream)) => stream,
+                                Ok(Err(error)) => {
+                                    tracing::debug!(?error, "TLS handshake failed");
+                                    return;
+                                }
+                                Err(_) => {
+                                    tracing::debug!("TLS handshake timeout");
+                                    return;
+                                }
+                            };
+
+                        let service = move |_req| {
+                            let recorder_handle = recorder_handle.clone();
+                            let collect_requester = collect_requester.clone();
+
+                            async move {
+                                collect_requester.request().await;
+                                tracing::debug!("serving metrics");
+
+                                let content = recorder_handle.render();
+
+                                Ok::<_, Infallible>(Response::new(content))
+                            }
+                        };
+
+                        match http1::Builder::new()
+                            .serve_connection(TokioIo::new(stream), service_fn(service))
+                            .await
+                        {
+                            Ok(()) => (),
+                            Err(error) => {
+                                tracing::debug!(?error, "connection failed")
+                            }
+                        }
                     }
-                }
-            });
+                    .instrument(tracing::info_span!("client", %addr)),
+                );
+            }
         }
-    })
+        .instrument(Span::current()),
+    )
     .abort_handle()
     .into();
 
