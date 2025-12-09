@@ -37,7 +37,10 @@ impl ConfigStore {
 pub(crate) struct ConfigKey<T: 'static> {
     name: &'static str,
     comment: &'static str,
+
+    #[cfg_attr(not(unix), expect(dead_code))]
     private: bool,
+
     _type: PhantomData<&'static T>,
 }
 

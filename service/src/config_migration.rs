@@ -3,7 +3,6 @@ use std::{path::PathBuf, slice};
 use tracing::instrument;
 
 use crate::{
-    LOCAL_ENDPOINT_KEY,
     config_keys::STORE_DIRS_KEY,
     config_store::{ConfigError, ConfigKey, ConfigStore},
 };
@@ -71,6 +70,7 @@ async fn store_dirs(config: &ConfigStore) {
 #[cfg(unix)]
 #[instrument(skip(config))]
 async fn apply_private(config: &ConfigStore) {
+    use crate::LOCAL_ENDPOINT_KEY;
     use std::{fs::Permissions, io, os::unix::fs::PermissionsExt};
     use tokio::fs::File;
 
