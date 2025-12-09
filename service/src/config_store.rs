@@ -1,4 +1,4 @@
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::{
     borrow::Borrow,
     fmt,
@@ -37,6 +37,7 @@ impl ConfigStore {
 pub(crate) struct ConfigKey<T: 'static> {
     name: &'static str,
     comment: &'static str,
+    private: bool,
     _type: PhantomData<&'static T>,
 }
 
@@ -45,7 +46,21 @@ impl<T> ConfigKey<T> {
         Self {
             name,
             comment,
+            private: false,
             _type: PhantomData,
+        }
+    }
+
+    /// Marks this config entry as private.
+    ///
+    /// - On unix platforms, this make the entry readable or writable only by the user or group that
+    ///   created it. Non `private` entries are additionally readable (but not writable) by others
+    ///   as well.
+    /// - On windows, this has currently no effect but this can change in the future.
+    pub const fn private(self) -> Self {
+        Self {
+            private: true,
+            ..self
         }
     }
 }
@@ -73,12 +88,21 @@ impl<T> ConfigEntry<'_, T> {
 
         // TODO: Consider doing this atomically by first writing to a .tmp file and then rename
         // once writing is done.
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)
-            .await?;
+        let mut file = {
+            let mut o = OpenOptions::new();
+            o.write(true).create(true).truncate(true);
+
+            #[cfg(unix)]
+            if self.key.private {
+                o.mode(0o660);
+            } else {
+                o.mode(0o664);
+            }
+
+            // TODO: apply `private` also on windows
+
+            o.open(path).await?
+        };
 
         if !self.key.comment.is_empty() {
             for line in self.key.comment.lines() {
