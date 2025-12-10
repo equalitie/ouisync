@@ -228,7 +228,7 @@ tokens**. These sections describes both in detail.
 The access secrets are computed as follows:
 
 1. First a 256-bit number (called "Seed") is generated with a cryptographically secure RNG.
-2. This number is then interpreted as a ED25519 signing private key which is called the **Write key**.
+2. This number is then used to derive a ED25519 signing private key which is called the **Write key**.
 3. The corresponding public key is called the **Repository ID**.
 4. Finally the salted hash of the seed, interpreted as a symmetric secret key is called the **Read key**.
 
