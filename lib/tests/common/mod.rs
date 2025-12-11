@@ -379,7 +379,7 @@ impl Drop for TempDir {
         // Preserve the dir in case of panic, so it can be inspected to help debug test
         // failures.
         if thread::panicking() {
-            let path = self.0.take().unwrap().into_path();
+            let path = self.0.take().unwrap().keep();
             warn!("preserving temp dir in '{}'", path.display());
         }
     }

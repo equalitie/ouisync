@@ -640,7 +640,7 @@ impl Worker {
             | RequestState::InFlight { .. }
             | RequestState::Received { .. }
             | RequestState::Complete { .. }
-            | RequestState::Suspended { .. } => return,
+            | RequestState::Suspended { .. } => (),
             RequestState::Cancelled | RequestState::Committed => unreachable!(),
         };
     }

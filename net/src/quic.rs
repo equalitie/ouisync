@@ -290,7 +290,7 @@ fn make_server_config() -> Result<quinn::ServerConfig, Error> {
     // Generate a self signed certificate.
     let cert = rcgen::generate_simple_self_signed(vec![CERT_DOMAIN.into()]).unwrap();
     let cert_der = CertificateDer::from(cert.cert);
-    let priv_key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
+    let priv_key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
 
     let mut server_config =
         quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], priv_key.into())?;

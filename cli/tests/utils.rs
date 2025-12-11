@@ -1,4 +1,4 @@
-use anyhow::{format_err, Error};
+use anyhow::{Error, format_err};
 use backoff::{self, ExponentialBackoffBuilder};
 use rand::Rng;
 use std::{
@@ -27,7 +27,7 @@ const MOUNT_DIR: &str = "mnt";
 const CONFIG_DIR: &str = "config";
 const DEFAULT_REPO: &str = "test";
 
-static CERT: LazyLock<rcgen::CertifiedKey> =
+static CERT: LazyLock<rcgen::CertifiedKey<rcgen::KeyPair>> =
     LazyLock::new(|| rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap());
 
 impl Bin {
@@ -47,7 +47,7 @@ impl Bin {
 
         // For server:
         fs::write(config_dir.join("cert.pem"), &cert).unwrap();
-        fs::write(config_dir.join("key.pem"), CERT.key_pair.serialize_pem()).unwrap();
+        fs::write(config_dir.join("key.pem"), CERT.signing_key.serialize_pem()).unwrap();
 
         // For client:
         fs::write(config_dir.join("root_certs").join("localhost.pem"), &cert).unwrap();
@@ -210,13 +210,14 @@ impl Bin {
     pub fn metrics_set(&self, addr: Option<SocketAddr>) {
         let addr = addr.map(|addr| addr.to_string());
 
-        assert!(self
-            .client_command()
-            .arg("metrics")
-            .arg(addr.as_deref().unwrap_or("--disable"))
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            self.client_command()
+                .arg("metrics")
+                .arg(addr.as_deref().unwrap_or("--disable"))
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 
     #[track_caller]
@@ -326,15 +327,17 @@ where
     let id = id.clone();
     let mut line = String::new();
 
-    thread::spawn(move || loop {
-        line.clear();
-        if reader.read_line(&mut line).unwrap() > 0 {
-            match output {
-                OutputStream::Stdout => print!("[{id}] {line}"),
-                OutputStream::Stderr => eprint!("[{id}] {line}"),
+    thread::spawn(move || {
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() > 0 {
+                match output {
+                    OutputStream::Stdout => print!("[{id}] {line}"),
+                    OutputStream::Stderr => eprint!("[{id}] {line}"),
+                }
+            } else {
+                break;
             }
-        } else {
-            break;
         }
     });
 }

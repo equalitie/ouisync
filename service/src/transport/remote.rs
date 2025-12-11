@@ -276,7 +276,7 @@ mod tests {
             .unwrap();
         fs::write(
             config_dir.join("key.pem"),
-            cert_key.key_pair.serialize_pem(),
+            cert_key.signing_key.serialize_pem(),
         )
         .await
         .unwrap();
