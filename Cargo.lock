@@ -487,7 +487,7 @@ dependencies = [
 [[package]]
 name = "btdht"
 version = "1.0.1"
-source = "git+https://github.com/equalitie/btdht.git?rev=549c62015dffade6e6080f3a746ce551c28f837f#549c62015dffade6e6080f3a746ce551c28f837f"
+source = "git+https://github.com/equalitie/btdht.git?rev=f8a141ded45e4a44eed89b5ab67d03816c43559d#f8a141ded45e4a44eed89b5ab67d03816c43559d"
 dependencies = [
  "async-trait",
  "crc32c",
@@ -4028,10 +4028,11 @@ checksum = "836fa6a3e1e547f9a2c4040802ec865b5d85f4014efe00555d7090a3dcaa1090"
 
 [[package]]
 name = "serde"
-version = "1.0.180"
+version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ea67f183f058fe88a4e3ec6e2788e003840893b91bac4559cabedd00863b3ed"
+checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
+ "serde_core",
  "serde_derive",
 ]
 
@@ -4045,10 +4046,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_derive"
-version = "1.0.180"
+name = "serde_core"
+version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24e744d7782b686ab3b73267ef05697159cc0e5abbed3f47f9933165e5219036"
+checksum = "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
+dependencies = [
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.228"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",

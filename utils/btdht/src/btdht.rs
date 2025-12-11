@@ -1,6 +1,6 @@
 use btdht::{InfoHash, MainlineDht};
 use futures_util::StreamExt;
-use ouisync_lib::{self, ShareToken, DHT_ROUTERS};
+use ouisync_lib::{self, DHT_ROUTERS, ShareToken};
 use std::{
     collections::HashSet,
     io,
@@ -157,7 +157,7 @@ async fn run_single_action(info_hash: InfoHash, command: &Single) {
 
     println!("Sending GetPeers request to {node_addr:?}");
     socket
-        .send_to(&get_peers.encode(), node_addr)
+        .send_to(&get_peers.encode().unwrap(), node_addr)
         .await
         .unwrap();
 
@@ -199,7 +199,10 @@ async fn run_single_action(info_hash: InfoHash, command: &Single) {
             })),
         };
 
-        socket.send_to(&announce.encode(), node_addr).await.unwrap();
+        socket
+            .send_to(&announce.encode().unwrap(), node_addr)
+            .await
+            .unwrap();
     }
 }
 

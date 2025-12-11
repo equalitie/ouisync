@@ -40,7 +40,7 @@ rust-version = "1.91.0"
 anyhow = "1.0.90"
 assert_matches = "1.5"
 async-trait = "0.1.83"
-btdht = { git = "https://github.com/equalitie/btdht.git", rev = "549c62015dffade6e6080f3a746ce551c28f837f" }
+btdht = { git = "https://github.com/equalitie/btdht.git", rev = "f8a141ded45e4a44eed89b5ab67d03816c43559d" }
 bytes = "1.8.0"
 camino = "1.1.6"
 chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
