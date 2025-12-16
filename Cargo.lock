@@ -426,7 +426,7 @@ dependencies = [
 [[package]]
 name = "btdht"
 version = "1.0.1"
-source = "git+https://github.com/equalitie/btdht.git?rev=f8a141ded45e4a44eed89b5ab67d03816c43559d#f8a141ded45e4a44eed89b5ab67d03816c43559d"
+source = "git+https://github.com/equalitie/btdht.git?rev=14d03cd95a409aad69704bdedffc6ece3857a946#14d03cd95a409aad69704bdedffc6ece3857a946"
 dependencies = [
  "async-trait",
  "crc32c",
