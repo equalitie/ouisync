@@ -936,14 +936,17 @@ impl Inner {
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.tasks
-            .upgrade()
-            // TODO: this `unwrap` is sketchy. Maybe we should simply not spawn if `tasks` can't be
-            // upgraded?
-            .unwrap()
-            .lock()
-            .unwrap()
-            .spawn(f)
+        // TODO: this `unwrap` is sketchy. Maybe we should simply not spawn if `tasks` can't be
+        // upgraded?
+        let tasks = self.tasks.upgrade().unwrap();
+        let mut tasks = tasks.lock().unwrap();
+
+        // IMPORTANT: Drain completed tasks. This is necessary because `JoinSet` doesn't
+        // automatically remove completed tasks (presumably to not lose their results), and so not
+        // doing it would cause memory leak.
+        while tasks.try_join_next().is_some() {}
+
+        tasks.spawn(f)
     }
 }
 

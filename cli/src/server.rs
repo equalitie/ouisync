@@ -1,5 +1,5 @@
 use crate::{defaults, migration, options::ServerCommand};
-use ouisync_service::{logger, Error, Service};
+use ouisync_service::{Error, Service, logger};
 use std::{io, path::PathBuf};
 use tokio::select;
 
@@ -48,7 +48,7 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
 async fn terminated() -> io::Result<()> {
     use tokio::{
         select,
-        signal::unix::{signal, SignalKind},
+        signal::unix::{SignalKind, signal},
     };
 
     // Wait for SIGINT or SIGTERM

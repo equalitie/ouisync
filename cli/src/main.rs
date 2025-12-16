@@ -7,7 +7,7 @@ mod server;
 
 use clap::Parser;
 use options::{Command, Options};
-use ouisync_service::{protocol::ErrorCode, transport::ClientError, Error as ServerError};
+use ouisync_service::{Error as ServerError, protocol::ErrorCode, transport::ClientError};
 use std::{env, fmt, process::ExitCode};
 use thiserror::Error;
 

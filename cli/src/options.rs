@@ -1,7 +1,7 @@
 use crate::defaults;
 use clap::{
-    builder::{ArgPredicate, BoolishValueParser},
     Parser, Subcommand, ValueEnum,
+    builder::{ArgPredicate, BoolishValueParser},
 };
 use ouisync::{AccessMode, PeerAddr, StorageSize};
 use ouisync_service::logger::{LogColor, LogFormat};

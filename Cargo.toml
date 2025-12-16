@@ -91,6 +91,11 @@ winapi = { version = "0.3.9" }
 # Enable debug info so we can profile the benches
 debug = 1
 
+# Profile for performance profiling
+[profile.perf]
+inherits = "release"
+debug = 1
+
 # Build dependencies with optimizations even in dev mode
 [profile.dev.package."*"]
 opt-level = 3
