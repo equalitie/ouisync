@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Improve support for file ownership and permissions on mounted repositories on linux
 - Support multiple store directories
+- Fix repository not syncing after being moved or renamed
+- Improve API docs
+- Allow access to local_endpoint.conf only for the current user or group
+- Fix memory leak in the networking code
 
 ## [v0.9.3](https://github.com/equalitie/ouisync/compare/v0.9.2...v0.9.3) - 2025-10-14
 
