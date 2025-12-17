@@ -15,6 +15,7 @@ use state_monitor::StateMonitor;
 use std::{
     future, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    ops::Range,
     sync::Arc,
 };
 use tokio::{
@@ -28,6 +29,8 @@ const ERROR_DELAY: Duration = Duration::from_secs(3);
 
 const PROTOCOL_MAGIC: &[u8; 17] = b"OUISYNC_DISCOVERY";
 const PROTOCOL_VERSION: u8 = 0;
+
+const BEACON_INTERVAL: Range<Duration> = Duration::from_secs(2)..Duration::from_secs(8);
 
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS or DNS-SD, but so far all libraries I tried had some issues.
@@ -50,6 +53,7 @@ impl LocalDiscovery {
                     listener_port,
                     peer_tx,
                     per_interface_discovery: HashMap::default(),
+                    id: OsRng.r#gen(),
                 };
 
                 let mut interface_watcher = match IfWatcher::new() {
@@ -104,6 +108,8 @@ struct LocalDiscoveryInner {
     listener_port: PeerPort,
     peer_tx: mpsc::Sender<SeenPeer>,
     per_interface_discovery: HashMap<Ipv4Addr, PerInterfaceLocalDiscovery>,
+    // Only used to filter out multicast packets from self.
+    id: InsecureRuntimeId,
 }
 
 impl LocalDiscoveryInner {
@@ -126,6 +132,7 @@ impl LocalDiscoveryInner {
                     self.listener_port,
                     interface,
                     parent_monitor,
+                    self.id,
                 );
 
                 match discovery {
@@ -163,9 +170,8 @@ impl PerInterfaceLocalDiscovery {
         listener_port: PeerPort,
         interface: Ipv4Addr,
         parent_monitor: &StateMonitor,
+        id: InsecureRuntimeId,
     ) -> io::Result<Self> {
-        // Only used to filter out multicast packets from self.
-        let id = OsRng.r#gen();
         let socket_provider = Arc::new(SocketProvider::new(interface));
 
         let monitor = parent_monitor.make_child(format!("{interface}"));
@@ -342,8 +348,8 @@ async fn run_beacon(
             }
         }
 
-        let delay = rand::thread_rng().gen_range(2..8);
-        sleep(Duration::from_secs(delay)).await;
+        let delay = rand::thread_rng().gen_range(BEACON_INTERVAL);
+        sleep(delay).await;
     }
 }
 
