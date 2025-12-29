@@ -20,7 +20,7 @@ strip-ansi-escapes = "0.2.1"
 filedescriptor     = "0.8.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winapi             = { version = "0.3.9", features = ["consoleapi", "processenv", "winbase", "wincon", "winuser"] }
+winapi             = { workspace = true, features = ["consoleapi", "processenv", "winbase", "wincon", "winuser"] }
 libc               = "0.2.178"
 
 [target.'cfg(target_os = "android")'.dependencies]
