@@ -118,7 +118,7 @@ fn into_io_error(error: Error) -> io::Error {
 // Idea taken from https://stackoverflow.com/a/51825980/170073
 #[cfg(windows)]
 fn create_console() -> bool {
-    use std::{ffi::CStr, ptr};
+    use std::ptr;
     use winapi::um::{
         consoleapi::AllocConsole,
         processenv::GetStdHandle,
@@ -127,7 +127,7 @@ fn create_console() -> bool {
     };
 
     unsafe {
-        if GetStdHandle(STD_OUTPUT_HANDLE) != ptr::null_mut() {
+        if !GetStdHandle(STD_OUTPUT_HANDLE).is_null() {
             // stdout exists, not need to create the dummy console
             return false;
         }
@@ -136,15 +136,7 @@ fn create_console() -> bool {
             return false;
         }
 
-        ShowWindow(
-            FindWindowA(
-                CStr::from_bytes_with_nul(b"ConsoleWindowClass\0")
-                    .unwrap()
-                    .as_ptr(),
-                ptr::null(),
-            ),
-            0,
-        );
+        ShowWindow(FindWindowA(c"ConsoleWindowClass".as_ptr(), ptr::null()), 0);
 
         true
     }
