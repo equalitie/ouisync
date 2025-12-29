@@ -306,7 +306,7 @@ checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 
 [[package]]
 name = "benchtool"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "clap 4.5.53",
@@ -961,7 +961,7 @@ checksum = "e8566979429cf69b49a5c740c60791108e86440e8be149bbea4fe54d2c32d6e2"
 
 [[package]]
 name = "deadlock"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "tokio",
  "tracing",
@@ -2406,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "metrics_ext"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "metrics",
  "metrics-util",
@@ -2675,7 +2675,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "argon2",
  "assert_matches",
@@ -2746,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-api-parser"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -2757,7 +2757,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-bindgen"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "clap 4.5.53",
@@ -2769,7 +2769,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-cli"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -2811,11 +2811,11 @@ dependencies = [
 
 [[package]]
 name = "ouisync-macros"
-version = "0.9.3"
+version = "0.10.0"
 
 [[package]]
 name = "ouisync-net"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -2849,7 +2849,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-protocol-analyzer"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2861,7 +2861,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-rand"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "rand 0.8.5",
  "siphasher",
@@ -2870,7 +2870,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-repo-tool"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "futures-util",
  "ouisync",
@@ -2880,14 +2880,14 @@ dependencies = [
 
 [[package]]
 name = "ouisync-repogen"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "ouisync",
 ]
 
 [[package]]
 name = "ouisync-service"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -2940,7 +2940,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-stress-test"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "clap 4.5.53",
  "serde",
@@ -2950,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-swarm"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "clap 4.5.53",
@@ -2961,7 +2961,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-tracing-fmt"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "ansi_term",
  "tracing",
@@ -2970,7 +2970,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-utilities"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "btdht",
@@ -2985,7 +2985,7 @@ dependencies = [
 
 [[package]]
 name = "ouisync-vfs"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "bitflags 2.9.1",
  "camino",
@@ -3862,7 +3862,7 @@ checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
 name = "scoped_task"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "tokio",
 ]
@@ -4240,7 +4240,7 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
 name = "state_monitor"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "deadlock",
  "indexmap",
@@ -4347,7 +4347,7 @@ dependencies = [
 
 [[package]]
 name = "stun-server-list"
-version = "0.9.3"
+version = "0.10.0"
 dependencies = [
  "reqwest",
  "tokio",
