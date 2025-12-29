@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improve API docs
 - Allow access to local_endpoint.conf only for the current user or group
 - Fix memory leak in the networking code
+- Fix log messages not captured on windows when app started without console
+- Potential fix for the metrics endpoint sometimes stopping to accept new connections
 
 ## [v0.9.3](https://github.com/equalitie/ouisync/compare/v0.9.2...v0.9.3) - 2025-10-14
 
