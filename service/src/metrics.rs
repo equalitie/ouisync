@@ -16,15 +16,17 @@ use scoped_task::ScopedAbortHandle;
 use std::{
     collections::HashMap,
     convert::Infallible,
+    io,
     net::SocketAddr,
     path::PathBuf,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
+    select,
+    sync::Semaphore,
     task::{self, JoinSet},
-    time,
 };
 use tokio_rustls::TlsAcceptor;
 use tracing::{Instrument, Span, instrument};
@@ -35,8 +37,11 @@ const GEO_IP_PATH: &str = "GeoLite2-Country.mmdb";
 // Rate limit for metrics collection (at most once per this interval)
 const COLLECT_INTERVAL: Duration = Duration::from_secs(10);
 
-// Max time to wait for completion of TLS handshake
-const TLS_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
+// Max number of concurrent connections
+const MAX_CONNECTIONS: usize = 256;
+
+// Connection read and write timeout
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) struct MetricsServer {
     inner: Mutex<Option<Inner>>,
@@ -146,9 +151,26 @@ async fn start(
     let handle = task::spawn(
         async move {
             let mut tasks = JoinSet::new();
+            let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
 
             loop {
-                let (stream, addr) = match tcp_listener.accept().await {
+                let accept = async {
+                    // unwrap is ok because we don't `close` the semaphore.
+                    let permit = semaphore.clone().acquire_owned().await.unwrap();
+                    let result = tcp_listener.accept().await;
+
+                    match result {
+                        Ok((stream, addr)) => Ok((stream, addr, permit)),
+                        Err(error) => Err(error),
+                    }
+                };
+
+                let result = select! {
+                    result = accept => result,
+                    _ = tasks.join_next(), if !tasks.is_empty() => continue,
+                };
+
+                let (stream, addr, permit) = match result {
                     Ok(conn) => conn,
                     Err(error) => {
                         tracing::error!(?error, "failed to accept new connection");
@@ -156,53 +178,56 @@ async fn start(
                     }
                 };
 
+                let stream = match set_timeout(stream) {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        tracing::warn!(?error, "failed to set TCP read/write timeout");
+                        continue;
+                    }
+                };
+
                 let tls_acceptor = tls_acceptor.clone();
                 let recorder_handle = recorder_handle.clone();
                 let collect_requester = collect_requester.clone();
 
-                tasks.spawn(
-                    async move {
-                        let stream =
-                            match time::timeout(TLS_ACCEPT_TIMEOUT, tls_acceptor.accept(stream))
-                                .await
-                            {
-                                Ok(Ok(stream)) => stream,
-                                Ok(Err(error)) => {
-                                    tracing::debug!(?error, "TLS handshake failed");
-                                    return;
-                                }
-                                Err(_) => {
-                                    tracing::debug!("TLS handshake timeout");
-                                    return;
-                                }
-                            };
+                let task = async move {
+                    let _permit = permit;
 
-                        let service = move |_req| {
-                            let recorder_handle = recorder_handle.clone();
-                            let collect_requester = collect_requester.clone();
-
-                            async move {
-                                collect_requester.request().await;
-                                tracing::debug!("serving metrics");
-
-                                let content = recorder_handle.render();
-
-                                Ok::<_, Infallible>(Response::new(content))
-                            }
-                        };
-
-                        match http1::Builder::new()
-                            .serve_connection(TokioIo::new(stream), service_fn(service))
-                            .await
-                        {
-                            Ok(()) => (),
-                            Err(error) => {
-                                tracing::debug!(?error, "connection failed")
-                            }
+                    let stream = match tls_acceptor.accept(stream).await {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            tracing::debug!(?error, "TLS handshake failed");
+                            return;
                         }
+                    };
+
+                    let service = move |_req| {
+                        let recorder_handle = recorder_handle.clone();
+                        let collect_requester = collect_requester.clone();
+
+                        async move {
+                            collect_requester.request().await;
+                            tracing::debug!("serving metrics");
+
+                            let content = recorder_handle.render();
+
+                            Ok::<_, Infallible>(Response::new(content))
+                        }
+                    };
+
+                    tracing::debug!("connection opened");
+
+                    match http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service_fn(service))
+                        .await
+                    {
+                        Ok(()) => tracing::debug!("connection closed"),
+                        Err(error) => tracing::debug!(?error, "connection failed"),
                     }
-                    .instrument(tracing::info_span!("client", %addr)),
-                );
+                }
+                .instrument(tracing::info_span!("client", %addr));
+
+                tasks.spawn(task);
             }
         }
         .instrument(Span::current()),
@@ -214,6 +239,13 @@ async fn start(
         _handle: handle,
         listener_addr,
     })
+}
+
+fn set_timeout(stream: TcpStream) -> io::Result<TcpStream> {
+    let stream = stream.into_std()?;
+    stream.set_read_timeout(Some(CONNECTION_TIMEOUT))?;
+    stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;
+    stream.try_into()
 }
 
 async fn collect(
