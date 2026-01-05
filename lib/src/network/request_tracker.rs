@@ -979,12 +979,12 @@ impl Worker {
                             send(&self.clients, iter::once(&client_id), request_key);
 
                             *node.value_mut() = RequestState::Ready {
-                                waiters: [client_id].into(),
+                                waiters: [client_id].into_iter().collect(),
                             };
                         }
                         InitialRequestState::Suspended => {
                             *node.value_mut() = RequestState::Suspended {
-                                waiters: [client_id].into(),
+                                waiters: [client_id].into_iter().collect(),
                             };
                         }
                     }

@@ -121,22 +121,32 @@ pub(crate) mod env {
 #[cfg(feature = "simulation")]
 pub(crate) mod env {
     use super::*;
+    use tokio::runtime::{self, Runtime};
 
     /// Test environment that uses simulated network
     pub(crate) struct Env<'a> {
         context: Arc<Context>,
+        runtime: Runtime,
         runner: turmoil::Sim<'a>,
     }
 
     impl Env<'_> {
         pub fn new() -> Self {
-            let context = Context::new(&Handle::current());
+            // This runtime is used only to spawn metrics recorder tasks. It's not used to run the
+            // simulation itself.
+            let runtime = runtime::Builder::new_multi_thread().build().unwrap();
+
+            let context = Context::new(runtime.handle());
             let runner = turmoil::Builder::new()
                 .simulation_duration(Duration::from_secs(90))
-                .build_with_rng(Box::new(rand::thread_rng()));
+                .rng_seed(rand::random())
+                // .simulation_duration(Duration::from_secs(60))
+                .enable_tokio_io()
+                .build();
 
             Self {
                 context: Arc::new(context),
+                runtime,
                 runner,
             }
         }
