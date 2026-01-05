@@ -82,7 +82,8 @@ pub(crate) mod env {
                 .build()
                 .unwrap();
 
-            let context = Context::new(runtime.handle());
+            let _enter = runtime.enter();
+            let context = Context::new();
 
             Self {
                 context: Arc::new(context),
@@ -126,17 +127,12 @@ pub(crate) mod env {
     /// Test environment that uses simulated network
     pub(crate) struct Env<'a> {
         context: Arc<Context>,
-        runtime: Runtime,
         runner: turmoil::Sim<'a>,
     }
 
     impl Env<'_> {
         pub fn new() -> Self {
-            // This runtime is used only to spawn metrics recorder tasks. It's not used to run the
-            // simulation itself.
-            let runtime = runtime::Builder::new_multi_thread().build().unwrap();
-
-            let context = Context::new(runtime.handle());
+            let context = Context::new();
             let runner = turmoil::Builder::new()
                 .simulation_duration(Duration::from_secs(90))
                 .rng_seed(rand::random())
@@ -146,7 +142,6 @@ pub(crate) mod env {
 
             Self {
                 context: Arc::new(context),
-                runtime,
                 runner,
             }
         }
@@ -329,10 +324,14 @@ struct Context {
 }
 
 impl Context {
-    fn new(runtime: &Handle) -> Self {
+    fn new() -> Self {
         init_log();
 
-        let recorder = init_recorder(runtime);
+        let recorder = if let Ok(handle) = Handle::try_current() {
+            init_recorder(&handle)
+        } else {
+            metrics_ext::Shared::new(NoopRecorder)
+        };
 
         Self {
             base_dir: TempDir::new(),
