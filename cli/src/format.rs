@@ -132,7 +132,7 @@ mod tests {
     use super::*;
     use chrono::DateTime;
     use ouisync::{PeerSource, PeerState, SecretRuntimeId, Stats};
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::{file::FileHandle, repository::RepositoryHandle};
 use ouisync::{
-    crypto::{Password, PasswordSalt},
     AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
+    crypto::{Password, PasswordSalt},
 };
 use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
@@ -9,8 +9,8 @@ use state_monitor::MonitorId;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use super::{
-    helpers::{self, Bytes},
     MessageId, MetadataEdit,
+    helpers::{self, Bytes},
 };
 
 // The `Request` enum is auto-generated in `build.rs` from the `#[api]` annotated methods in `impl
@@ -34,7 +34,7 @@ pub struct NetworkDefaults {
 mod tests {
     use super::*;
     use ouisync::{AccessSecrets, WriteSecrets};
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
     fn serialize_deserialize_msgpack() {

@@ -9,7 +9,7 @@ use crate::unified::{Connection, RecvStream, SendStream};
 use std::{
     io,
     pin::Pin,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -161,7 +161,7 @@ where
 mod tests {
     use super::*;
     use crate::test_utils::{
-        create_connected_connections, create_connected_peers, init_log, Proto,
+        Proto, create_connected_connections, create_connected_peers, init_log,
     };
     use assert_matches::assert_matches;
     use futures_util::future;

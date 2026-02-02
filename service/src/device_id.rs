@@ -1,5 +1,5 @@
 use ouisync::DeviceId;
-use rand::{rngs::OsRng, Rng};
+use rand::{Rng, rngs::OsRng};
 
 use crate::{
     config_keys::DEVICE_ID_KEY,

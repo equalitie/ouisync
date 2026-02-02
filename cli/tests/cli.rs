@@ -1,8 +1,8 @@
 mod utils;
 
-use self::utils::{check_eq, eventually, Bin, CountWrite, RngRead};
-use anyhow::{format_err, Result};
-use rand::{distributions::Standard, Rng};
+use self::utils::{Bin, CountWrite, RngRead, check_eq, eventually};
+use anyhow::{Result, format_err};
+use rand::{Rng, distributions::Standard};
 use std::{
     collections::HashSet,
     fs::{self, File},

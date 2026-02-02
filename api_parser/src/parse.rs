@@ -1,11 +1,11 @@
 use std::{fs, io, path::Path};
 
-use anyhow::{bail, format_err, Context as _, Error, Result};
+use anyhow::{Context as _, Error, Result, bail, format_err};
 use heck::AsPascalCase;
 use syn::{
-    parenthesized, punctuated::Punctuated, Attribute, BinOp, Expr, ExprBinary, FnArg,
-    GenericArgument, ImplItem, ItemEnum, ItemMod, ItemStruct, Lit, Meta, Pat, PathArguments,
-    ReturnType, Signature, Token,
+    Attribute, BinOp, Expr, ExprBinary, FnArg, GenericArgument, ImplItem, ItemEnum, ItemMod,
+    ItemStruct, Lit, Meta, Pat, PathArguments, ReturnType, Signature, Token, parenthesized,
+    punctuated::Punctuated,
 };
 
 use crate::{
@@ -26,7 +26,7 @@ pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool
         }
         Err(error) => {
             return Err(Error::from(error))
-                .with_context(|| format!("failed to read '{}'", path.display()))
+                .with_context(|| format!("failed to read '{}'", path.display()));
         }
     };
     let file = syn::parse_file(&content)
@@ -591,7 +591,10 @@ fn parse_type(ty: &syn::Type) -> Result<Type> {
                         (ok, err)
                     }
                     _ => {
-                        bail!("unexpected number of type arguments for Result (expected 1 or 2, actual: {})", args.args.len())
+                        bail!(
+                            "unexpected number of type arguments for Result (expected 1 or 2, actual: {})",
+                            args.args.len()
+                        )
                     }
                 };
 

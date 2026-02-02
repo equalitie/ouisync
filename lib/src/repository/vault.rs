@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests;
 
-use super::{monitor::RepositoryMonitor, quota, Metadata};
+use super::{Metadata, monitor::RepositoryMonitor, quota};
 use crate::{
     block_tracker::BlockTracker,
     db,

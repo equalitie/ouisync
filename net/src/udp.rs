@@ -29,7 +29,7 @@ pub trait DatagramSocket {
 #[cfg(not(feature = "simulation"))]
 mod implementation {
     use super::*;
-    use crate::{socket, SocketOptions};
+    use crate::{SocketOptions, socket};
     use socket2::{Domain, Socket, Type};
 
     pub struct UdpSocket(tokio::net::UdpSocket);

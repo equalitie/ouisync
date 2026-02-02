@@ -1,7 +1,6 @@
 use crate::{
-    quic, tcp,
+    SocketOptions, quic, tcp,
     unified::{Acceptor, Connection, Connector},
-    SocketOptions,
 };
 use futures_util::future;
 use std::net::Ipv4Addr;

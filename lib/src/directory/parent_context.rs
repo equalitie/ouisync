@@ -6,13 +6,13 @@ use crate::{
         lock::{LockKind, ReadLock},
     },
     branch::Branch,
-    directory::{content::EntryExists, Directory},
+    directory::{Directory, content::EntryExists},
     error::Result,
     protocol::Bump,
     store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
-use tracing::{field, instrument, Span};
+use tracing::{Span, field, instrument};
 
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]

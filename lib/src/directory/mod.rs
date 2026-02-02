@@ -18,7 +18,7 @@ pub(crate) use self::{
 
 use self::content::Content;
 use crate::{
-    blob::{lock::ReadLock, Blob, BlobId},
+    blob::{Blob, BlobId, lock::ReadLock},
     branch::Branch,
     crypto::sign::PublicKey,
     debug::DebugPrinter,
@@ -544,7 +544,7 @@ impl Directory {
                     continue;
                 }
                 (Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound), None) => {
-                    return Ok((tx, None, VersionVector::new()))
+                    return Ok((tx, None, VersionVector::new()));
                 }
                 (Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound), Some(_)) => {
                     old_blob_id = None;

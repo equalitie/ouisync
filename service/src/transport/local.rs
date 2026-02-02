@@ -6,17 +6,17 @@ use super::{ClientError, ReadError, WriteError};
 use crate::protocol::{Message, Request, ResponseResult};
 use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io,
     marker::PhantomData,
     net::Ipv4Addr,
     pin::Pin,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 use tokio::net::{
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
     TcpListener, TcpStream,
+    tcp::{OwnedReadHalf, OwnedWriteHalf},
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
@@ -198,14 +198,14 @@ mod tests {
     use tracing::Instrument;
 
     use crate::{
+        Service,
         file::FileHandle,
         protocol::{
             Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ResponseResult,
             ToErrorCode,
         },
         test_utils::{self, ServiceRunner},
-        transport::{self, local::AuthKey, ClientError},
-        Service,
+        transport::{self, ClientError, local::AuthKey},
     };
 
     use super::{LocalClientReader, LocalClientWriter, LocalEndpoint};

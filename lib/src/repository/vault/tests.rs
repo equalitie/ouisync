@@ -4,23 +4,23 @@ use crate::{
     block_tracker::BlockRequestMode,
     collections::HashSet,
     crypto::{
-        sign::{Keypair, PublicKey},
         Hash,
+        sign::{Keypair, PublicKey},
     },
     db,
     event::EventSender,
     progress::Progress,
     protocol::{
-        test_utils::Snapshot, Block, Locator, MultiBlockPresence, Proof, RootNodeFilter,
-        SingleBlockPresence,
+        Block, Locator, MultiBlockPresence, Proof, RootNodeFilter, SingleBlockPresence,
+        test_utils::Snapshot,
     },
     store::{self, Changeset, ReadTransaction, SnapshotWriter},
     test_utils,
     version_vector::VersionVector,
 };
-use futures_util::{future, TryStreamExt};
+use futures_util::{TryStreamExt, future};
 use metrics::NoopRecorder;
-use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, distributions::Standard, rngs::StdRng, seq::SliceRandom};
 use state_monitor::StateMonitor;
 use tempfile::TempDir;
 use test_strategy::proptest;

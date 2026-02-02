@@ -2,12 +2,11 @@
 //! other in order to discover new peers.
 
 use super::{
-    ip,
+    PeerSource, ip,
     message::Message,
     peer_addr::PeerAddr,
     peer_source::ConnectionDirection,
     seen_peers::{SeenPeer, SeenPeers},
-    PeerSource,
 };
 use crate::{
     collections::HashSet,

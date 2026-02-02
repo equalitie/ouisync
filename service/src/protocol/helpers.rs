@@ -61,7 +61,7 @@ pub(super) mod str {
 
 /// Serialize / deserialize vec by converting its elements to/from strings.
 pub(super) mod strs {
-    use serde::{de, ser::SerializeSeq, Deserializer, Serializer};
+    use serde::{Deserializer, Serializer, de, ser::SerializeSeq};
     use std::{fmt, marker::PhantomData, str::FromStr};
 
     pub fn deserialize<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
@@ -123,7 +123,7 @@ pub(super) mod strs {
 pub(super) mod millis {
     use std::time::Duration;
 
-    use serde::{ser, Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer, ser};
 
     pub fn deserialize<'de, D>(d: D) -> Result<Duration, D::Error>
     where

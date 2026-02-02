@@ -1,10 +1,10 @@
 //! Simple blocking timer
 
 use std::{
-    collections::{btree_map, BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, btree_map},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Condvar, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };

@@ -6,20 +6,21 @@ use super::{
     message::{Message, Request, Response},
 };
 use crate::{
-    crypto::{sign::PublicKey, Hash},
+    crypto::{Hash, sign::PublicKey},
     error::{Error, Result},
     event::{Event, Payload},
     network::constants::{MAX_CONCURRENT_REQUESTS, UNCHOKED_IDLE_TIMEOUT},
     protocol::{BlockContent, BlockId, RootNode, RootNodeFilter},
-    repository::{monitor::TrafficMonitor, Vault},
+    repository::{Vault, monitor::TrafficMonitor},
     store,
 };
-use futures_util::{stream::FuturesOrdered, TryStreamExt};
+use futures_util::{TryStreamExt, stream::FuturesOrdered};
 use tokio::{
     select,
     sync::{
+        Semaphore, SemaphorePermit,
         broadcast::{self, error::RecvError},
-        mpsc, Semaphore, SemaphorePermit,
+        mpsc,
     },
     time,
 };

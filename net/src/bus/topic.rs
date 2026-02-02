@@ -198,7 +198,7 @@ mod tests {
 
     use super::*;
     use proptest::{
-        arbitrary::{any, Arbitrary},
+        arbitrary::{Arbitrary, any},
         collection::vec,
         num,
         prelude::Strategy,
@@ -360,7 +360,9 @@ mod tests {
                         return;
                     }
                     _ => {
-                        panic!("no progress made (incoming = {incoming_task:?}, outgoing = {outgoing_task:?})");
+                        panic!(
+                            "no progress made (incoming = {incoming_task:?}, outgoing = {outgoing_task:?})"
+                        );
                     }
                 }
             }

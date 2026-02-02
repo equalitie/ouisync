@@ -38,8 +38,8 @@ use self::{
 use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
     crypto::{
-        sign::{Keypair, PublicKey},
         Hash,
+        sign::{Keypair, PublicKey},
     },
     db,
     debug::DebugPrinter,

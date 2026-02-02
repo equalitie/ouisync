@@ -1,7 +1,7 @@
 //! STUN protocol handling
 
 use super::stun_server_list::STUN_SERVERS;
-use futures_util::{future, StreamExt};
+use futures_util::{StreamExt, future};
 use net::{
     quic::SideChannel,
     stun::{NatBehavior, StunClient},

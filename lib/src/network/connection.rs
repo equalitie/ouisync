@@ -7,14 +7,14 @@ use super::{
     stats::{ByteCounters, StatsTracker},
 };
 use crate::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     sync::{AwaitDrop, DropAwaitable, WatchSenderExt},
 };
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::SystemTime,
 };

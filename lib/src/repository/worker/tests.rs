@@ -10,7 +10,7 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
 use metrics::NoopRecorder;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use state_monitor::StateMonitor;
 use tempfile::TempDir;
 

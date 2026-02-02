@@ -1,4 +1,4 @@
-use super::{error::Error, Store, WriteTransaction};
+use super::{Store, WriteTransaction, error::Error};
 use crate::{
     crypto::sign::{Keypair, PublicKey},
     repository::data_version,
@@ -47,11 +47,11 @@ async fn begin(store: &Store, dst_version: u64) -> Result<Option<WriteTransactio
 /// opposed from only the ciphertext), to protect against nonce tampering.
 mod v1 {
     use super::{
-        super::{root_node, Changeset, Reader},
+        super::{Changeset, Reader, root_node},
         *,
     };
     use crate::{
-        crypto::{sign::Keypair, Hash},
+        crypto::{Hash, sign::Keypair},
         protocol::{BlockContent, BlockId, BlockNonce, LeafNode, Proof, RootNode, RootNodeFilter},
     };
     use futures_util::TryStreamExt;

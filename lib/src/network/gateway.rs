@@ -1,10 +1,9 @@
 use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, seen_peers::SeenPeer};
-use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use futures_util::future::Either;
 use net::{
-    quic, tcp,
+    SocketOptions, quic, tcp,
     unified::{Acceptor, Connection},
-    SocketOptions,
 };
 use scoped_task::ScopedJoinHandle;
 use std::net::{IpAddr, SocketAddr};
@@ -15,7 +14,7 @@ use tokio::{
     task::JoinSet,
     time::{self, Duration},
 };
-use tracing::{field, Instrument, Span};
+use tracing::{Instrument, Span, field};
 
 /// Established incoming and outgoing connections.
 pub(super) struct Gateway {
@@ -770,11 +769,7 @@ impl Connectivity {
             .map(|addr| addr.ip())
             .any(|ip| ip.is_unspecified() || ip::is_global(&ip));
 
-        if global {
-            Self::Full
-        } else {
-            Self::LocalOnly
-        }
+        if global { Self::Full } else { Self::LocalOnly }
     }
 
     pub fn allows_connection_to(&self, addr: IpAddr) -> bool {

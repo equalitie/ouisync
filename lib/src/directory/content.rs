@@ -11,8 +11,8 @@ use serde::Deserialize;
 use std::{
     cmp::Ordering,
     collections::{
-        btree_map::{self, Entry},
         BTreeMap,
+        btree_map::{self, Entry},
     },
 };
 

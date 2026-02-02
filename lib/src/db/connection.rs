@@ -2,8 +2,8 @@ use either::Either;
 use futures_util::{future::BoxFuture, stream::BoxStream};
 use ref_cast::RefCast;
 use sqlx::{
-    sqlite::{SqliteConnection, SqliteQueryResult, SqliteRow, SqliteStatement, SqliteTypeInfo},
     Describe, Error, Execute, Executor, Sqlite,
+    sqlite::{SqliteConnection, SqliteQueryResult, SqliteRow, SqliteStatement, SqliteTypeInfo},
 };
 
 /// Database connection

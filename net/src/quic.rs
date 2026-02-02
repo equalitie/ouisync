@@ -1,15 +1,14 @@
-use crate::{SocketOptions, KEEP_ALIVE_INTERVAL};
+use crate::{KEEP_ALIVE_INTERVAL, SocketOptions};
 use bytes::BytesMut;
 use pin_project_lite::pin_project;
 use quinn::{
+    UdpPoller,
     crypto::rustls::QuicClientConfig,
     rustls::{
-        self,
+        self, DigitallySignedStruct, SignatureScheme,
         client::danger::{HandshakeSignatureValid, ServerCertVerified},
         pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
-        DigitallySignedStruct, SignatureScheme,
     },
-    UdpPoller,
 };
 use std::{
     fmt,
@@ -21,8 +20,8 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::sync::{
-    broadcast::{self, error::RecvError},
     Mutex as AsyncMutex,
+    broadcast::{self, error::RecvError},
 };
 
 const CERT_DOMAIN: &str = "ouisync.net";
@@ -291,7 +290,7 @@ fn make_server_config() -> Result<quinn::ServerConfig, Error> {
     // Generate a self signed certificate.
     let cert = rcgen::generate_simple_self_signed(vec![CERT_DOMAIN.into()]).unwrap();
     let cert_der = CertificateDer::from(cert.cert);
-    let priv_key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
+    let priv_key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
 
     let mut server_config =
         quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], priv_key.into())?;
@@ -530,7 +529,7 @@ impl DatagramSocket for SideChannel {
                     return Err(io::Error::new(
                         io::ErrorKind::BrokenPipe,
                         "side channel closed",
-                    ))
+                    ));
                 }
             }
         };

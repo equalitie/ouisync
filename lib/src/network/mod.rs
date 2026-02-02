@@ -32,7 +32,7 @@ mod upnp;
 
 pub use self::{
     connection::PeerInfoCollector,
-    dht_discovery::{DhtContactsStoreTrait, DHT_ROUTERS},
+    dht_discovery::{DHT_ROUTERS, DhtContactsStoreTrait},
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
@@ -56,7 +56,7 @@ use self::{
     peer_addr::PeerPort,
     peer_exchange::{PexDiscovery, PexRepository},
     peer_source::ConnectionDirection,
-    protocol::{Version, MAGIC, VERSION},
+    protocol::{MAGIC, VERSION, Version},
     request_tracker::RequestTracker,
     seen_peers::{SeenPeer, SeenPeers},
     stats::{ByteCounters, StatsTracker},
@@ -67,8 +67,8 @@ use crate::{
     protocol::RepositoryId,
     repository::{RepositoryHandle, Vault},
 };
-use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
-use btdht::{self, InfoHash, INFO_HASH_LEN};
+use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
+use btdht::{self, INFO_HASH_LEN, InfoHash};
 use deadlock::BlockingMutex;
 use futures_util::future;
 use net::unified::{Connection, ConnectionError};
@@ -936,14 +936,17 @@ impl Inner {
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.tasks
-            .upgrade()
-            // TODO: this `unwrap` is sketchy. Maybe we should simply not spawn if `tasks` can't be
-            // upgraded?
-            .unwrap()
-            .lock()
-            .unwrap()
-            .spawn(f)
+        // TODO: this `unwrap` is sketchy. Maybe we should simply not spawn if `tasks` can't be
+        // upgraded?
+        let tasks = self.tasks.upgrade().unwrap();
+        let mut tasks = tasks.lock().unwrap();
+
+        // IMPORTANT: Drain completed tasks. This is necessary because `JoinSet` doesn't
+        // automatically remove completed tasks (presumably to not lose their results), and so not
+        // doing it would cause memory leak.
+        while tasks.try_join_next().is_some() {}
+
+        tasks.spawn(f)
     }
 }
 

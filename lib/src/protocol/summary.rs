@@ -1,10 +1,10 @@
 use super::{InnerNodes, LeafNodes};
 use serde::{Deserialize, Serialize};
 use sqlx::{
+    Decode, Encode, Sqlite, Type,
     encode::IsNull,
     error::BoxDynError,
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
-    Decode, Encode, Sqlite, Type,
 };
 use std::fmt;
 use xxhash_rust::xxh3::Xxh3Default;

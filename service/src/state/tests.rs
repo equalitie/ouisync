@@ -604,9 +604,12 @@ async fn metrics() {
     fs::write(config_dir.join("cert.pem"), &certs.cert.pem())
         .await
         .unwrap();
-    fs::write(config_dir.join("key.pem"), certs.key_pair.serialize_pem())
-        .await
-        .unwrap();
+    fs::write(
+        config_dir.join("key.pem"),
+        certs.signing_key.serialize_pem(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(state.session_get_metrics_listener_addr(), None);
     state

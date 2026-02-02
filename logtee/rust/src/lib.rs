@@ -12,13 +12,13 @@ mod inner;
 mod tests;
 
 use std::{
-    ffi::{c_char, c_void, CStr},
+    ffi::{CStr, c_char, c_void},
     io,
     path::Path,
     ptr,
 };
 
-use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
+use file_rotate::{ContentLimit, FileRotate, compression::Compression, suffix::AppendCount};
 use inner::Inner;
 
 /// Utility to capture the log messages produced by the running program and write them to the

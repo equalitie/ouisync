@@ -1,36 +1,69 @@
 // Implementation based on redirecting stdout to the log file.
 
 use std::{
-    io, panic,
+    io::{self, PipeWriter},
+    panic,
     thread::{self, JoinHandle},
 };
 
-use file_rotate::{suffix::AppendCount, FileRotate};
-use implementation::{clone_stdout, Redirect};
+use file_rotate::{FileRotate, suffix::AppendCount};
+use filedescriptor::{Error, FileDescriptor, StdioDescriptor};
 
 pub(super) struct Inner {
-    redirect: Redirect,
+    orig_stdout: FileDescriptor,
+    pipe_writer: PipeWriter,
     handle: JoinHandle<io::Result<()>>,
+
+    #[cfg(windows)]
+    dummy_console: bool,
 }
 
 impl Inner {
     pub fn new(file: FileRotate<AppendCount>) -> io::Result<Self> {
         let mut file = strip_ansi_escapes::Writer::new(file);
-        let mut orig_stdout = clone_stdout()?;
         let (mut pipe_reader, pipe_writer) = io::pipe()?;
 
-        let redirect = Redirect::start(pipe_writer)?;
+        #[cfg(windows)]
+        let dummy_console = create_console();
+
+        let orig_stdout = FileDescriptor::redirect_stdio(&pipe_writer, StdioDescriptor::Stdout)
+            .map_err(into_io_error)?;
 
         // Read from the pipe reader and write to the original stdout and the file.
-        let handle = thread::spawn(move || tee(&mut pipe_reader, &mut orig_stdout, &mut file));
+        let handle = thread::spawn({
+            let mut orig_stdout = orig_stdout.as_file().map_err(into_io_error)?;
+            move || tee(&mut pipe_reader, &mut orig_stdout, &mut file)
+        });
 
-        Ok(Self { redirect, handle })
+        Ok(Self {
+            orig_stdout,
+            pipe_writer,
+            handle,
+            #[cfg(windows)]
+            dummy_console,
+        })
     }
 
     pub fn close(self) -> io::Result<()> {
-        self.redirect.stop().ok();
+        let Self {
+            orig_stdout,
+            pipe_writer,
+            handle,
+            #[cfg(windows)]
+            dummy_console,
+        } = self;
 
-        match self.handle.join() {
+        FileDescriptor::redirect_stdio(&orig_stdout, StdioDescriptor::Stdout)
+            .map_err(into_io_error)?;
+
+        drop(pipe_writer);
+
+        #[cfg(windows)]
+        if dummy_console {
+            destroy_console();
+        }
+
+        match handle.join() {
             Ok(result) => result,
             Err(payload) => panic::resume_unwind(payload),
         }
@@ -57,120 +90,63 @@ pub(crate) fn tee(
     }
 }
 
-#[cfg(target_os = "linux")]
-mod implementation {
-    use std::{
-        fs::File,
-        io::{self, PipeWriter},
-        os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
-    };
-
-    pub(super) struct Redirect {
-        orig: OwnedFd,
-    }
-
-    impl Redirect {
-        pub fn start(pipe_writer: PipeWriter) -> io::Result<Self> {
-            let orig = io::stdout().as_fd().try_clone_to_owned()?;
-
-            dup2(pipe_writer.as_fd(), io::stdout().as_fd())?;
-            drop(pipe_writer);
-
-            Ok(Self { orig })
-        }
-
-        pub fn stop(self) -> io::Result<()> {
-            dup2(self.orig.as_fd(), io::stdout().as_fd())
-        }
-    }
-
-    pub(super) fn clone_stdout() -> io::Result<impl io::Write> {
-        Ok(File::from(io::stdout().as_fd().try_clone_to_owned()?))
-    }
-
-    // Safe wrappper over libc::dup2
-    fn dup2(dst: BorrowedFd<'_>, src: BorrowedFd<'_>) -> io::Result<()> {
-        // SAFETY: Both file descriptors are valid because they are obtained using `as_raw_fd`
-        // from valid io objects.
-        unsafe {
-            if libc::dup2(dst.as_raw_fd(), src.as_raw_fd()) >= 0 {
-                Ok(())
-            } else {
-                Err(io::Error::last_os_error())
-            }
-        }
+fn into_io_error(error: Error) -> io::Error {
+    match error {
+        Error::Pipe(error)
+        | Error::Socketpair(error)
+        | Error::Bind(error)
+        | Error::Getsockname(error)
+        | Error::Listen(error)
+        | Error::Connect(error)
+        | Error::Accept(error)
+        | Error::Fcntl(error)
+        | Error::Cloexec(error)
+        | Error::FionBio(error)
+        | Error::Poll(error)
+        | Error::Dup { source: error, .. }
+        | Error::Dup2 { source: error, .. }
+        | Error::SetStdHandle(error)
+        | Error::Io(error) => error,
+        _ => io::Error::other(error),
     }
 }
 
-#[cfg(target_os = "windows")]
-mod implementation {
-    use std::{
-        fs::File,
-        io::{self, PipeWriter},
-        os::windows::io::{AsHandle, AsRawHandle, RawHandle},
-    };
-
+// HACK: If the app doesn't have a console attached, it doesn't seem to be possible to redirect
+// stdout. So as a workaround, we create a dummy console and immediately hide its window. If the
+// app already has a console, we do nothing.
+//
+// Idea taken from https://stackoverflow.com/a/51825980/170073
+#[cfg(windows)]
+fn create_console() -> bool {
+    use std::ptr;
     use winapi::um::{
-        handleapi::INVALID_HANDLE_VALUE,
-        processenv::{GetStdHandle, SetStdHandle},
+        consoleapi::AllocConsole,
+        processenv::GetStdHandle,
         winbase::STD_OUTPUT_HANDLE,
+        winuser::{FindWindowA, ShowWindow},
     };
 
-    pub(super) struct Redirect {
-        orig_stdout: RawHandle,
-        #[expect(dead_code)]
-        pipe_writer: PipeWriter,
-    }
-
-    impl Redirect {
-        pub fn start(pipe_writer: PipeWriter) -> io::Result<Self> {
-            let orig_stdout = get_stdout()?;
-
-            // SAFETY: the argument is a valid handle obtained from the pipe writer.
-            unsafe {
-                set_stdout(pipe_writer.as_raw_handle())?;
-            }
-
-            Ok(Self {
-                orig_stdout,
-                pipe_writer,
-            })
+    unsafe {
+        if !GetStdHandle(STD_OUTPUT_HANDLE).is_null() {
+            // stdout exists, not need to create the dummy console
+            return false;
         }
 
-        pub fn stop(self) -> io::Result<()> {
-            // SAFETY: the argument is a valid handle (or `null`[^1]) obtained by calling
-            // `get_stdout`.
-            //
-            // [^1]: The documentation
-            // (https://learn.microsoft.com/en-us/windows/console/setstdhandle) doesn't say
-            // anything about passing `null` handles so I'm assuming it is safe.
-            unsafe { set_stdout(self.orig_stdout) }
+        if AllocConsole() == 0 {
+            return false;
         }
+
+        ShowWindow(FindWindowA(c"ConsoleWindowClass".as_ptr(), ptr::null()), 0);
+
+        true
     }
+}
 
-    pub(super) fn clone_stdout() -> io::Result<impl io::Write> {
-        Ok(File::from(io::stdout().as_handle().try_clone_to_owned()?))
-    }
+#[cfg(windows)]
+fn destroy_console() {
+    use winapi::um::wincon::FreeConsole;
 
-    // SAFETY: `dst` must be a valid handle
-    unsafe fn set_stdout(dst: RawHandle) -> io::Result<()> {
-        let result = unsafe { SetStdHandle(STD_OUTPUT_HANDLE, dst as _) };
-
-        if result != 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    }
-
-    fn get_stdout() -> io::Result<RawHandle> {
-        // SAFETY: There doesn't seem to be anything potentially unsound here.
-        let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-
-        if handle != INVALID_HANDLE_VALUE {
-            Ok(handle as _)
-        } else {
-            Err(io::Error::last_os_error())
-        }
+    unsafe {
+        FreeConsole();
     }
 }

@@ -5,7 +5,7 @@ use crate::{
     protocol::{BlockId, LeafNode, LeafNodes, SingleBlockPresence},
 };
 use futures_util::{Stream, TryStreamExt};
-use sqlx::{sqlite::SqliteRow, FromRow, Row};
+use sqlx::{FromRow, Row, sqlite::SqliteRow};
 
 #[cfg(test)]
 use {super::inner_node, crate::protocol::INNER_LAYER_COUNT, async_recursion::async_recursion};

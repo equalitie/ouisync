@@ -3,7 +3,7 @@ use std::fmt::Result as FmtResult;
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::{
     fmt::{
-        format::Writer, time::FormatTime, FmtContext, FormatEvent, FormatFields, FormattedFields,
+        FmtContext, FormatEvent, FormatFields, FormattedFields, format::Writer, time::FormatTime,
     },
     registry::LookupSpan,
 };

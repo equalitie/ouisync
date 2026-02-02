@@ -24,7 +24,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fmt, iter, mem,
 };
-use tracing::{instrument, Instrument};
+use tracing::{Instrument, instrument};
 
 /// Unified view over multiple concurrent versions of a directory.
 #[derive(Clone)]
@@ -187,7 +187,7 @@ impl JointDirectory {
                     curr = Cow::Owned(next);
                 }
                 Utf8Component::ParentDir | Utf8Component::Prefix(_) => {
-                    return Err(Error::OperationNotSupported)
+                    return Err(Error::OperationNotSupported);
                 }
             }
         }
@@ -574,7 +574,7 @@ impl<'a> JointDirectoryRef<'a> {
                         .map(|local_branch| version.branch().id() == local_branch.id())
                         .unwrap_or(false) =>
                 {
-                    return Err(e)
+                    return Err(e);
                 }
                 Err(Error::Store(store::Error::BlockNotFound))
                     if matches!(missing_version_strategy, MissingVersionStrategy::Skip) =>

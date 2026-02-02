@@ -2,18 +2,19 @@ use super::{EntryHandle, EntryIdGenerator, VirtualFilesystem};
 use crate::{MountError, MultiRepoMount};
 use deadlock::BlockingRwLock;
 use dokan::{
-    init, shutdown, unmount, CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler,
-    FileSystemMountError, FileSystemMounter, FileTimeOperation, FillDataResult, FindData,
-    MountOptions, OperationInfo, OperationResult, VolumeInfo, IO_SECURITY_CONTEXT,
+    CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, FileSystemMountError,
+    FileSystemMounter, FileTimeOperation, FillDataResult, FindData, IO_SECURITY_CONTEXT,
+    MountOptions, OperationInfo, OperationResult, VolumeInfo, init, shutdown, unmount,
 };
 use ouisync_lib::Repository;
 use std::io;
 use std::{
-    collections::{hash_map, HashMap},
+    collections::{HashMap, hash_map},
     path::{Path, PathBuf},
     sync::{
+        Arc,
         atomic::{AtomicU64, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     thread,
     time::UNIX_EPOCH,

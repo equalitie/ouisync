@@ -2,11 +2,11 @@ use core::str;
 use std::{fmt, io};
 
 use hmac::{
-    digest::{typenum::Unsigned, OutputSizeUser},
     Hmac, Mac,
+    digest::{OutputSizeUser, typenum::Unsigned},
 };
-use rand::{rngs::OsRng, CryptoRng, Rng};
-use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+use rand::{CryptoRng, Rng, rngs::OsRng};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use sha2::Sha256;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

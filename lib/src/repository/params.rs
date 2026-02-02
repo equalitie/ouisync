@@ -1,7 +1,7 @@
 use super::monitor::RepositoryMonitor;
 use crate::{db, device_id::DeviceId, error::Result};
 use metrics::{NoopRecorder, Recorder};
-use state_monitor::{metrics::MetricsRecorder, StateMonitor};
+use state_monitor::{StateMonitor, metrics::MetricsRecorder};
 use std::path::{Path, PathBuf};
 
 pub struct RepositoryParams<R> {

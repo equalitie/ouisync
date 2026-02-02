@@ -3,7 +3,7 @@ use super::{
     topic::{Input, Output, TopicId, TopicNonce, TopicState},
 };
 use crate::unified::{Connection, RecvStream, SendStream};
-use futures_util::{future, stream::FuturesUnordered, StreamExt};
+use futures_util::{StreamExt, future, stream::FuturesUnordered};
 use std::io;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

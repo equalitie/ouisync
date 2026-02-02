@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     access_control::WriteSecrets,
     branch::{Branch, BranchShared},
-    crypto::{sign::PublicKey, Hash},
+    crypto::{Hash, sign::PublicKey},
     db,
     directory::{DirectoryFallback, DirectoryLocking},
     event::EventSender,
@@ -14,7 +14,7 @@ use crate::{
 use assert_matches::assert_matches;
 use camino::Utf8PathBuf;
 use futures_util::future;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use tempfile::TempDir;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -93,12 +93,16 @@ async fn conflict_independent_files() {
 
     let entries: Vec<_> = root.lookup("file.txt").collect();
     assert_eq!(entries.len(), 2);
-    assert!(entries
-        .iter()
-        .any(|entry| entry.first_branch().id() == branch0.id()),);
-    assert!(entries
-        .iter()
-        .any(|entry| entry.first_branch().id() == branch1.id()));
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.first_branch().id() == branch0.id()),
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.first_branch().id() == branch1.id())
+    );
 
     assert_matches!(root.lookup_unique("file.txt"), Err(Error::AmbiguousEntry));
 

@@ -1,6 +1,6 @@
 use super::{AccessMode, AccessSecrets, DecodeError};
 use crate::protocol::RepositoryId;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as BASE64};
 use bincode::Options;
 use ouisync_macros::api;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -311,7 +311,7 @@ mod tests {
                 "https://ouisync.net/r#AwEgkbc-pQLI2oVLZBF1vUKwCCzqyryexuRJZTfrjLHdG1gg0t9r4gtj7SZuBi63NtCDd-y3nTUp6VkvtErsHgs3af8",
                 "https://ouisync.net/r#AwAgkbc-pQLI2oVLZBF1vUKwCCzqyryexuRJZTfrjLHdG1g",
             ),
-                        (
+            (
                 "87cb50b2635ce54aa15782cd2b9c6ca22b2501eabdf3c808fa1ab8ea93176615",
                 "https://ouisync.net/r#AwIgh8tQsmNc5UqhV4LNK5xsoislAeq988gI-hq46pMXZhU",
                 "https://ouisync.net/r#AwEgXw0gkijsdg0BggUw3N89-tQFzIp3a8nAOp4Gq8z2a3QgJI7N12DueZ4ev7WiJiWUDc20Ugffci3PqG6MJxey0WE",

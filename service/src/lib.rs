@@ -25,7 +25,7 @@ pub use error::Error;
 
 use config_store::{ConfigError, ConfigKey, ConfigStore};
 use connection::Connection;
-use futures_util::{future, stream::FuturesUnordered, StreamExt};
+use futures_util::{StreamExt, future, stream::FuturesUnordered};
 use protocol::NetworkDefaults;
 use state::State;
 use std::{
@@ -42,14 +42,14 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 use transport::{
-    local::{AuthKey, LocalEndpoint, LocalServer},
     AcceptedConnection, ClientError,
+    local::{AuthKey, LocalEndpoint, LocalServer},
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 // Don't use comments here so the file can be parsed as json.
-const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpoint", "");
+const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpoint", "").private();
 
 pub struct Service {
     state: Arc<State>,

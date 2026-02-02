@@ -1,6 +1,6 @@
 use super::{peer_addr::PeerAddr, peer_source::PeerSource, peer_state::PeerState, stats::Stats};
 use ouisync_macros::api;
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 /// Information about a peer.
 #[derive(Eq, PartialEq, Serialize, Deserialize, Debug)]

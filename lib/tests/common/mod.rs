@@ -82,7 +82,8 @@ pub(crate) mod env {
                 .build()
                 .unwrap();
 
-            let context = Context::new(runtime.handle());
+            let _enter = runtime.enter();
+            let context = Context::new();
 
             Self {
                 context: Arc::new(context),
@@ -121,6 +122,7 @@ pub(crate) mod env {
 #[cfg(feature = "simulation")]
 pub(crate) mod env {
     use super::*;
+    use tokio::runtime::{self, Runtime};
 
     /// Test environment that uses simulated network
     pub(crate) struct Env<'a> {
@@ -130,10 +132,13 @@ pub(crate) mod env {
 
     impl Env<'_> {
         pub fn new() -> Self {
-            let context = Context::new(&Handle::current());
+            let context = Context::new();
             let runner = turmoil::Builder::new()
                 .simulation_duration(Duration::from_secs(90))
-                .build_with_rng(Box::new(rand::thread_rng()));
+                .rng_seed(rand::random())
+                // .simulation_duration(Duration::from_secs(60))
+                .enable_tokio_io()
+                .build();
 
             Self {
                 context: Arc::new(context),
@@ -319,10 +324,14 @@ struct Context {
 }
 
 impl Context {
-    fn new(runtime: &Handle) -> Self {
+    fn new() -> Self {
         init_log();
 
-        let recorder = init_recorder(runtime);
+        let recorder = if let Ok(handle) = Handle::try_current() {
+            init_recorder(&handle)
+        } else {
+            metrics_ext::Shared::new(NoopRecorder)
+        };
 
         Self {
             base_dir: TempDir::new(),
@@ -379,7 +388,7 @@ impl Drop for TempDir {
         // Preserve the dir in case of panic, so it can be inspected to help debug test
         // failures.
         if thread::panicking() {
-            let path = self.0.take().unwrap().into_path();
+            let path = self.0.take().unwrap().keep();
             warn!("preserving temp dir in '{}'", path.display());
         }
     }

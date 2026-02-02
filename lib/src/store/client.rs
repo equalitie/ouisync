@@ -1,25 +1,25 @@
 use futures_util::TryStreamExt as _;
 
 use super::{
-    block,
+    Error, block,
     block_expiration_tracker::BlockExpirationTracker,
     block_id_cache::BlockIdCache,
     block_ids, index, inner_node, leaf_node,
     quota::{self, QuotaError},
     root_node::{self, RootNodeStatus},
-    Error,
 };
 use crate::{
+    StorageSize,
     block_tracker::BlockOfferState,
     collections::HashSet,
-    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
+    crypto::{CacheHash, Hash, Hashable, sign::PublicKey},
     db,
     future::TryStreamExt as _,
     protocol::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, Proof,
         RootNodeFilter, SingleBlockPresence, Summary,
     },
-    repository, StorageSize,
+    repository,
 };
 use std::{mem, sync::Arc};
 
@@ -420,14 +420,14 @@ mod tests {
     use crate::{
         access_control::WriteSecrets,
         protocol::{
-            test_utils::Snapshot, BlockContent, MultiBlockPresence, SingleBlockPresence,
-            EMPTY_INNER_HASH,
+            BlockContent, EMPTY_INNER_HASH, MultiBlockPresence, SingleBlockPresence,
+            test_utils::Snapshot,
         },
         store::{SnapshotWriter, Store},
         version_vector::VersionVector,
     };
     use futures_util::{StreamExt, TryStreamExt};
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
 
     mod future {
         pub use futures_util::future::join;
@@ -442,15 +442,17 @@ mod tests {
         let secrets = WriteSecrets::random();
 
         // Initially the remote branch doesn't exist
-        assert!(store
-            .acquire_read()
-            .await
-            .unwrap()
-            .load_root_nodes_by_writer(&remote_id)
-            .try_next()
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            store
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_root_nodes_by_writer(&remote_id)
+                .try_next()
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         // Save root node received from a remote replica.
         let mut writer = store.begin_client_write().await.unwrap();
@@ -473,15 +475,17 @@ mod tests {
         assert!(status.new_blocks.is_empty());
 
         // The remote branch now exist.
-        assert!(store
-            .acquire_read()
-            .await
-            .unwrap()
-            .load_root_nodes_by_writer(&remote_id)
-            .try_next()
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            store
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_root_nodes_by_writer(&remote_id)
+                .try_next()
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -579,16 +583,18 @@ mod tests {
         assert_eq!(status, RootNodeStatus::Outdated);
         writer.commit().await.unwrap();
 
-        assert!(store
-            .acquire_read()
-            .await
-            .unwrap()
-            .load_latest_approved_root_node(&local_id, RootNodeFilter::Any)
-            .await
-            .unwrap()
-            .summary
-            .state
-            .is_approved());
+        assert!(
+            store
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_latest_approved_root_node(&local_id, RootNodeFilter::Any)
+                .await
+                .unwrap()
+                .summary
+                .state
+                .is_approved()
+        );
     }
 
     #[tokio::test]
@@ -833,14 +839,16 @@ mod tests {
                 .unwrap();
             writer.commit().await.unwrap();
 
-            assert!(!store
-                .acquire_read()
-                .await
-                .unwrap()
-                .load_inner_nodes(hash)
-                .await
-                .unwrap()
-                .is_empty());
+            assert!(
+                !store
+                    .acquire_read()
+                    .await
+                    .unwrap()
+                    .load_inner_nodes(hash)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
         }
 
         for (hash, leaf_nodes) in snapshot.leaf_sets() {
@@ -851,14 +859,16 @@ mod tests {
                 .unwrap();
             writer.commit().await.unwrap();
 
-            assert!(!store
-                .acquire_read()
-                .await
-                .unwrap()
-                .load_leaf_nodes(hash)
-                .await
-                .unwrap()
-                .is_empty());
+            assert!(
+                !store
+                    .acquire_read()
+                    .await
+                    .unwrap()
+                    .load_leaf_nodes(hash)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
         }
     }
 

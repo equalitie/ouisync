@@ -14,8 +14,8 @@ pub(crate) mod rendezvous {
     use std::{
         fmt,
         sync::{
-            atomic::{AtomicU8, Ordering},
             Arc, Mutex,
+            atomic::{AtomicU8, Ordering},
         },
     };
     use tokio::sync::Notify;

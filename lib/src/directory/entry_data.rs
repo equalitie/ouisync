@@ -96,8 +96,8 @@ impl EntryTombstoneData {
     }
 
     pub fn merge(&mut self, other: &Self) {
-        use std::cmp::Ordering::*;
         use TombstoneCause::*;
+        use std::cmp::Ordering::*;
 
         self.cause = match self.version_vector.partial_cmp(&other.version_vector) {
             Some(Greater) => self.cause,

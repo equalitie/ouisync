@@ -3,7 +3,7 @@ use super::{
     peer_exchange::PexPayload,
 };
 use crate::{
-    crypto::{sign::PublicKey, Hash},
+    crypto::{Hash, sign::PublicKey},
     protocol::{
         BlockContent, BlockId, BlockNonce, InnerNodes, LeafNodes, MultiBlockPresence,
         UntrustedProof,

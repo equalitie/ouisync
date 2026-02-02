@@ -1,7 +1,7 @@
 use super::error::Error;
 use crate::{
     db,
-    protocol::{Block, BlockContent, BlockId, BlockNonce, BLOCK_SIZE},
+    protocol::{BLOCK_SIZE, Block, BlockContent, BlockId, BlockNonce},
 };
 use sqlx::Row;
 

@@ -1,5 +1,5 @@
 use crate::crypto::{Digest, Hash, Hashable};
-use rand::{distributions::Standard, prelude::Distribution, Rng};
+use rand::{Rng, distributions::Standard, prelude::Distribution};
 use serde::{Deserialize, Serialize};
 use std::{
     array::TryFromSliceError,
@@ -187,10 +187,10 @@ impl fmt::Debug for BlockContent {
 
 #[cfg(test)]
 mod test_utils {
-    use super::{Block, BlockContent, BlockNonce, BLOCK_SIZE};
+    use super::{BLOCK_SIZE, Block, BlockContent, BlockNonce};
     use proptest::{
-        arbitrary::{any, Arbitrary, StrategyFor},
-        collection::{vec, VecStrategy},
+        arbitrary::{Arbitrary, StrategyFor, any},
+        collection::{VecStrategy, vec},
         strategy::{Map, NoShrink, Strategy},
     };
 

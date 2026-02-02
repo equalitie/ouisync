@@ -3,19 +3,19 @@ use crate::{
     options::{ClientCommand, MirrorCommand, StoreDirsCommand},
 };
 use futures_util::SinkExt;
-use ouisync::{crypto::Password, LocalSecret, PeerAddr, PeerInfo, SetLocalSecret, ShareToken};
+use ouisync::{LocalSecret, PeerAddr, PeerInfo, SetLocalSecret, ShareToken, crypto::Password};
 use ouisync_service::{
     protocol::{
         ErrorCode, Message, MessageId, ProtocolError, QuotaInfo, RepositoryHandle, Request,
         Response, ResponseResult, UnexpectedResponse,
     },
     transport::{
-        local::{self, LocalClientReader, LocalClientWriter, LocalEndpoint},
         ClientError,
+        local::{self, LocalClientReader, LocalClientWriter, LocalEndpoint},
     },
 };
 use std::{collections::BTreeMap, env, io, net::SocketAddr, path::PathBuf, time::Duration};
-use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin, stdout};
 use tokio_stream::StreamExt;
 
 pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {

@@ -1,6 +1,6 @@
 //! IP geolocation
 
-use maxminddb::{geoip2, MaxMindDBError, Reader};
+use maxminddb::{MaxMindDBError, Reader, geoip2};
 use std::{
     fmt, io,
     net::IpAddr,

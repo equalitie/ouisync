@@ -1,6 +1,6 @@
 use rand::{
-    distributions::{Distribution, Standard},
     Rng,
+    distributions::{Distribution, Standard},
 };
 
 define_byte_array_wrapper! {

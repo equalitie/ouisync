@@ -19,7 +19,7 @@ use noise_rust_crypto::{Blake2s, ChaCha20Poly1305, X25519};
 use std::{
     io,
     pin::Pin,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 use thiserror::Error;
 
@@ -249,7 +249,7 @@ async fn handshake_recv(
 mod tests {
     use super::*;
     use crate::network::{
-        message_dispatcher::{create_connection_pair, MessageDispatcher},
+        message_dispatcher::{MessageDispatcher, create_connection_pair},
         stats::ByteCounters,
     };
     use futures_util::future;

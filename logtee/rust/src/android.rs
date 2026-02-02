@@ -8,7 +8,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use file_rotate::{suffix::AppendCount, FileRotate};
+use file_rotate::{FileRotate, suffix::AppendCount};
 
 pub(super) struct Inner {
     process: Child,

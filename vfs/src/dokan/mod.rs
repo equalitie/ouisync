@@ -5,21 +5,21 @@ use camino::Utf8PathBuf;
 use deadlock::{AsyncMutex, AsyncMutexGuard};
 use dokan::{
     CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, FileTimeOperation, FillDataError,
-    FillDataResult, FindData, MountFlags, OperationInfo, OperationResult, VolumeInfo,
-    IO_SECURITY_CONTEXT,
+    FillDataResult, FindData, IO_SECURITY_CONTEXT, MountFlags, OperationInfo, OperationResult,
+    VolumeInfo,
 };
 use dokan_sys::win32::{
     FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
     FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_SUPERSEDE,
 };
-use ouisync_lib::{path, File, JointDirectory, JointEntryRef, Repository};
+use ouisync_lib::{File, JointDirectory, JointEntryRef, Repository, path};
 use std::{
-    collections::{hash_map, HashMap},
+    collections::{HashMap, hash_map},
     fmt,
     io::SeekFrom,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::UNIX_EPOCH,
 };

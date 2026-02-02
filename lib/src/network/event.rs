@@ -1,5 +1,5 @@
 use crate::collections::HashMap;
-use futures_util::{stream, Stream, StreamExt};
+use futures_util::{Stream, StreamExt, stream};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use tokio::{select, sync::watch};
 
 use super::{
     connection::{ConnectionData, ConnectionKey},
-    protocol::{Version, VERSION},
+    protocol::{VERSION, Version},
 };
 
 pub(super) struct ProtocolVersions {

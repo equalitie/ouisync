@@ -1,8 +1,8 @@
-use super::{Summary, EMPTY_LEAF_HASH};
+use super::{EMPTY_LEAF_HASH, Summary};
 use crate::crypto::{Digest, Hash, Hashable};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{btree_map, BTreeMap},
+    collections::{BTreeMap, btree_map},
     sync::LazyLock,
 };
 

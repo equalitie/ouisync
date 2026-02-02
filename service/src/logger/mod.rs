@@ -18,7 +18,7 @@ use std::{
     env,
     panic::{self, PanicHookInfo},
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize logging. If the logger hasn't been initialized already, initializes it and returns
 /// `true`. Otherwise does nothing and returns `false`.

@@ -7,7 +7,7 @@ use crate::{
     tls::TlsConfig,
 };
 use geo_ip::{CountryCode, GeoIp};
-use hyper::{server::conn::http1, service::service_fn, Response};
+use hyper::{Response, server::conn::http1, service::service_fn};
 use hyper_util::rt::TokioIo;
 use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
@@ -16,22 +16,32 @@ use scoped_task::ScopedAbortHandle;
 use std::{
     collections::HashMap,
     convert::Infallible,
+    io,
     net::SocketAddr,
     path::PathBuf,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
+    select,
+    sync::Semaphore,
     task::{self, JoinSet},
 };
 use tokio_rustls::TlsAcceptor;
+use tracing::{Instrument, Span, instrument};
 
 // Path to the geo ip database, relative to the config store root.
 const GEO_IP_PATH: &str = "GeoLite2-Country.mmdb";
 
 // Rate limit for metrics collection (at most once per this interval)
 const COLLECT_INTERVAL: Duration = Duration::from_secs(10);
+
+// Max number of concurrent connections
+const MAX_CONNECTIONS: usize = 256;
+
+// Connection read and write timeout
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) struct MetricsServer {
     inner: Mutex<Option<Inner>>,
@@ -101,6 +111,7 @@ impl MetricsServer {
     }
 }
 
+#[instrument(name = "metrics", skip_all)]
 async fn start(
     config: &ConfigStore,
     network: &Network,
@@ -116,81 +127,111 @@ async fn start(
 
     let listener_addr = match tcp_listener.local_addr() {
         Ok(addr) => {
-            tracing::info!("Metrics server listening on {addr}");
+            tracing::info!("listening on {addr}");
             addr
         }
         Err(error) => {
-            tracing::error!(
-                ?error,
-                "Metrics server failed to retrieve the listening address"
-            );
+            tracing::error!(?error, "failed to retrieve the listening address");
             addr
         }
     };
 
     let tls_acceptor = TlsAcceptor::from(tls_config.server().await?);
 
-    task::spawn(collect(
-        collect_acceptor,
-        recorder,
-        network.peer_info_collector(),
-        config.dir().join(GEO_IP_PATH),
-    ));
+    task::spawn(
+        collect(
+            collect_acceptor,
+            recorder,
+            network.peer_info_collector(),
+            config.dir().join(GEO_IP_PATH),
+        )
+        .instrument(Span::current()),
+    );
 
-    let handle = task::spawn(async move {
-        let mut tasks = JoinSet::new();
+    let handle = task::spawn(
+        async move {
+            let mut tasks = JoinSet::new();
+            let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
 
-        loop {
-            let (stream, addr) = match tcp_listener.accept().await {
-                Ok(conn) => conn,
-                Err(error) => {
-                    tracing::error!(?error, "Metrics server failed to accept new connection");
-                    break;
-                }
-            };
+            loop {
+                let accept = async {
+                    // unwrap is ok because we don't `close` the semaphore.
+                    let permit = semaphore.clone().acquire_owned().await.unwrap();
+                    let result = tcp_listener.accept().await;
 
-            let stream = match tls_acceptor.accept(stream).await {
-                Ok(stream) => stream,
-                Err(error) => {
-                    tracing::warn!(
-                        ?error,
-                        %addr,
-                        "Metrics server failed to perform TLS handshake"
-                    );
-                    continue;
-                }
-            };
-
-            let recorder_handle = recorder_handle.clone();
-            let collect_requester = collect_requester.clone();
-
-            tasks.spawn(async move {
-                let service = move |_req| {
-                    let recorder_handle = recorder_handle.clone();
-                    let collect_requester = collect_requester.clone();
-
-                    async move {
-                        collect_requester.request().await;
-                        tracing::trace!("Serving metrics");
-
-                        let content = recorder_handle.render();
-
-                        Ok::<_, Infallible>(Response::new(content))
+                    match result {
+                        Ok((stream, addr)) => Ok((stream, addr, permit)),
+                        Err(error) => Err(error),
                     }
                 };
 
-                match http1::Builder::new()
-                    .serve_connection(TokioIo::new(stream), service_fn(service))
-                    .await
-                {
-                    Ok(()) => (),
+                let result = select! {
+                    result = accept => result,
+                    _ = tasks.join_next(), if !tasks.is_empty() => continue,
+                };
+
+                let (stream, addr, permit) = match result {
+                    Ok(conn) => conn,
                     Err(error) => {
-                        tracing::error!(?error, %addr, "Metrics server connection failed")
+                        tracing::error!(?error, "failed to accept new connection");
+                        break;
+                    }
+                };
+
+                let stream = match set_timeout(stream) {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        tracing::warn!(?error, "failed to set TCP read/write timeout");
+                        continue;
+                    }
+                };
+
+                let tls_acceptor = tls_acceptor.clone();
+                let recorder_handle = recorder_handle.clone();
+                let collect_requester = collect_requester.clone();
+
+                let task = async move {
+                    let _permit = permit;
+
+                    let stream = match tls_acceptor.accept(stream).await {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            tracing::debug!(?error, "TLS handshake failed");
+                            return;
+                        }
+                    };
+
+                    let service = move |_req| {
+                        let recorder_handle = recorder_handle.clone();
+                        let collect_requester = collect_requester.clone();
+
+                        async move {
+                            collect_requester.request().await;
+                            tracing::debug!("serving metrics");
+
+                            let content = recorder_handle.render();
+
+                            Ok::<_, Infallible>(Response::new(content))
+                        }
+                    };
+
+                    tracing::debug!("connection opened");
+
+                    match http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service_fn(service))
+                        .await
+                    {
+                        Ok(()) => tracing::debug!("connection closed"),
+                        Err(error) => tracing::debug!(?error, "connection failed"),
                     }
                 }
-            });
+                .instrument(tracing::info_span!("client", %addr));
+
+                tasks.spawn(task);
+            }
         }
-    })
+        .instrument(Span::current()),
+    )
     .abort_handle()
     .into();
 
@@ -198,6 +239,13 @@ async fn start(
         _handle: handle,
         listener_addr,
     })
+}
+
+fn set_timeout(stream: TcpStream) -> io::Result<TcpStream> {
+    let stream = stream.into_std()?;
+    stream.set_read_timeout(Some(CONNECTION_TIMEOUT))?;
+    stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;
+    stream.try_into()
 }
 
 async fn collect(

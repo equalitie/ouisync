@@ -1,10 +1,10 @@
 use crate::crypto::{Digest, Hashable};
 use ed25519_dalek::{self as ext, Signer, Verifier};
-use rand::{rngs::OsRng, CryptoRng, Rng};
+use rand::{CryptoRng, Rng, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sqlx::{
-    sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Sqlite,
+    sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
 };
 use std::{cmp::Ordering, fmt, str::FromStr};
 use thiserror::Error;
@@ -163,7 +163,7 @@ derive_sqlx_traits_for_byte_array_wrapper!(PublicKey);
 mod test_utils {
     use super::{Keypair, PublicKey};
     use proptest::{
-        arbitrary::{any, Arbitrary},
+        arbitrary::{Arbitrary, any},
         array::UniformArrayStrategy,
         num,
         strategy::{Map, NoShrink, Strategy},
@@ -254,7 +254,7 @@ pub type SignatureError = ext::SignatureError;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     // This test asserts that signatures from the same keys and input are identical between
     // different versions.

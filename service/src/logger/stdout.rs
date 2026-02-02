@@ -2,15 +2,15 @@ use std::io::{self, IsTerminal};
 
 use ouisync_tracing_fmt::Formatter;
 use tracing::{
+    Event, Metadata, Subscriber,
     level_filters::LevelFilter,
     span::{Attributes, Id, Record},
-    Event, Metadata, Subscriber,
 };
 use tracing_subscriber::{
+    Layer,
     fmt::{self, time::SystemTime},
     layer::Context,
     registry::LookupSpan,
-    Layer,
 };
 
 use super::{LogColor, LogFormat};

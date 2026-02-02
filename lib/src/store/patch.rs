@@ -1,18 +1,18 @@
-use super::{error::Error, inner_node, leaf_node, root_node, ReadTransaction, WriteTransaction};
+use super::{ReadTransaction, WriteTransaction, error::Error, inner_node, leaf_node, root_node};
 use crate::{
     crypto::{
-        sign::{Keypair, PublicKey},
         Hash, Hashable,
+        sign::{Keypair, PublicKey},
     },
     protocol::{
-        get_bucket, BlockId, Bump, InnerNode, InnerNodes, LeafNodes, NodeState, Proof,
-        RootNodeFilter, RootNodeKind, SingleBlockPresence, Summary, EMPTY_INNER_HASH,
-        EMPTY_LEAF_HASH, INNER_LAYER_COUNT,
+        BlockId, Bump, EMPTY_INNER_HASH, EMPTY_LEAF_HASH, INNER_LAYER_COUNT, InnerNode, InnerNodes,
+        LeafNodes, NodeState, Proof, RootNodeFilter, RootNodeKind, SingleBlockPresence, Summary,
+        get_bucket,
     },
     version_vector::VersionVector,
 };
 use std::{
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{BTreeMap, btree_map::Entry},
     fmt,
     ops::Range,
 };

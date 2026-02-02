@@ -3,11 +3,11 @@ pub mod metrics;
 mod tests;
 
 use deadlock::{BlockingMutex, BlockingMutexGuard};
-use indexmap::{map::Entry, IndexMap};
+use indexmap::{IndexMap, map::Entry};
 use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
     de::Error as _,
     ser::{SerializeMap, SerializeSeq, SerializeStruct},
-    Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::{
     any::Any,

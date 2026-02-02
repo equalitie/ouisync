@@ -1,7 +1,7 @@
 use argon2::password_hash;
 use ouisync_macros::api;
-use rand::{rngs::OsRng, Rng};
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+use rand::{Rng, rngs::OsRng};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use std::{array::TryFromSliceError, fmt, sync::Arc};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;

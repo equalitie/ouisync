@@ -1,19 +1,19 @@
 use super::*;
 use crate::{
     crypto::{cipher::SecretKey, sign::Keypair},
-    protocol::{Block, Bump, Locator, SingleBlockPresence, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
+    protocol::{Block, Bump, EMPTY_INNER_HASH, INNER_LAYER_COUNT, Locator, SingleBlockPresence},
     test_utils,
 };
 use proptest::{arbitrary::any, collection::vec};
 use rand::{
+    Rng, SeedableRng,
     rngs::StdRng,
     seq::{IteratorRandom, SliceRandom},
-    Rng, SeedableRng,
 };
 use sqlx::Row;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
-use test_strategy::{proptest, Arbitrary};
+use test_strategy::{Arbitrary, proptest};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn link_and_find_block() {
@@ -297,11 +297,12 @@ async fn fallback() {
     assert!(tx.block_exists(&id1).await.unwrap());
 
     // All the further snapshots were pruned as well
-    assert!(tx
-        .load_prev_approved_root_node(&root_node)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        tx.load_prev_approved_root_node(&root_node)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[proptest(async = "tokio")]

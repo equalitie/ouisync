@@ -1,5 +1,5 @@
 use self::implementation::{TcpListener, TcpStream};
-use crate::{sync::rendezvous, SocketOptions};
+use crate::{SocketOptions, sync::rendezvous};
 use std::{
     future::{self, Future},
     io,
@@ -287,7 +287,7 @@ fn connection_config() -> yamux::Config {
 // Real
 #[cfg(not(feature = "simulation"))]
 mod implementation {
-    use crate::{socket, SocketOptions, KEEP_ALIVE_INTERVAL};
+    use crate::{KEEP_ALIVE_INTERVAL, SocketOptions, socket};
     use socket2::{Domain, Socket, TcpKeepalive, Type};
     use std::{
         fmt, io,

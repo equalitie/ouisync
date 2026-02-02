@@ -5,10 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.9.3...master)
+<!-- ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.10.0...master) -->
+
+## [v0.10.0](https://github.com/equalitie/ouisync/compare/v0.9.3...v0.10.0) - 2025-12-29
 
 - Improve support for file ownership and permissions on mounted repositories on linux
 - Support multiple store directories
+- Fix repository not syncing after being moved or renamed
+- Improve API docs
+- Allow access to local_endpoint.conf only for the current user or group
+- Fix memory leak in the networking code
+- Fix log messages not captured on windows when app started without console
+- Potential fix for the metrics endpoint sometimes stopping to accept new connections
 
 ## [v0.9.3](https://github.com/equalitie/ouisync/compare/v0.9.2...v0.9.3) - 2025-10-14
 

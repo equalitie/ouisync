@@ -6,7 +6,7 @@ use net::{
     unified::Connection,
 };
 use std::sync::Arc;
-use tokio_util::codec::{length_delimited, FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec, length_delimited};
 
 /// Reads/writes messages from/to the underlying TCP or QUIC connection and dispatches them to
 /// individual streams/sinks based on their topic ids (in the MessageDispatcher's and
@@ -113,8 +113,8 @@ pub(super) type MessageSink =
 pub(super) async fn create_connection_pair() -> (Connection, Connection) {
     use futures_util::future;
     use net::{
-        unified::{Acceptor, Connector},
         SocketOptions,
+        unified::{Acceptor, Connector},
     };
     use std::net::Ipv4Addr;
 

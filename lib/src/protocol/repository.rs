@@ -1,6 +1,6 @@
 use crate::crypto::{
-    sign::{self, PublicKey},
     Digest, Hash, Hashable,
+    sign::{self, PublicKey},
 };
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
