@@ -144,6 +144,15 @@ pub(crate) enum ClientCommand {
     /// port, protocol, source, state, runtime id, active since, bytes sent, bytes received, last
     /// received at.
     ListPeers,
+    #[command(visible_alias = "cp")]
+    Copy {
+        #[arg(long)]
+        src_repo: Option<String>,
+        src_path: PathBuf,
+        #[arg(long)]
+        dst_repo: Option<String>,
+        dst_path: PathBuf,
+    },
     /// List all repositories
     #[command(visible_alias = "ls", alias = "list-repos")]
     ListRepositories,

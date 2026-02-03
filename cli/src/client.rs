@@ -223,6 +223,21 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 println!("{}", PeerInfoDisplay(&info));
             }
         }
+        ClientCommand::Copy {
+            src_repo,
+            src_path,
+            dst_repo,
+            dst_path,
+        } => {
+            let () = client
+                .invoke(Request::SessionCopy {
+                    src_repo,
+                    src_path,
+                    dst_repo,
+                    dst_path,
+                })
+                .await?;
+        }
         ClientCommand::ListRepositories => {
             let repos: BTreeMap<PathBuf, RepositoryHandle> =
                 client.invoke(Request::SessionListRepositories).await?;
