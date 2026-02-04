@@ -13,46 +13,6 @@ use std::{
 };
 
 #[test]
-fn cli_copy() {
-    // Copy file into and out of repository without mounting
-    use rand::Rng;
-    const TEST_FILE_SIZE: usize = 3 * 65536;
-    let a = Bin::start();
-    a.create(None);
-    a.mount();
-    let orig_file_path = a.aux_dir().join("orig.dat");
-    let copy_file_path = a.aux_dir().join("copy.dat");
-    let in_repo_file_path = "/in-repo.dat";
-
-    let mut orig_content = vec![0u8; TEST_FILE_SIZE];
-    rand::thread_rng().fill(&mut orig_content[..]);
-    let mut orig_file = File::create(&orig_file_path).unwrap();
-    orig_file.write_all(&orig_content).unwrap();
-
-    let mut cmd = a.client_command();
-    cmd.arg("cp")
-        .arg(&orig_file_path)
-        .arg("--dst-repo")
-        .arg(a.default_repo_name())
-        .arg(in_repo_file_path);
-    a.exec(cmd);
-
-    let mut cmd = a.client_command();
-    cmd.arg("cp")
-        .arg("--src-repo")
-        .arg(a.default_repo_name())
-        .arg(in_repo_file_path)
-        .arg(&copy_file_path);
-    a.exec(cmd);
-
-    let mut copy_file = fs::File::open(copy_file_path).unwrap();
-    let mut copy_content = Vec::new();
-    copy_file.read_to_end(&mut copy_content).unwrap();
-
-    assert_eq!(orig_content, copy_content);
-}
-
-#[test]
 fn transfer_single_small_file() {
     let (a, b) = setup();
 

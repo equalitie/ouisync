@@ -3,6 +3,7 @@ mod move_repository;
 mod tests;
 
 use crate::{
+    any_entry::{self, AnyEntry},
     config_keys::{
         BIND_KEY, DEFAULT_BLOCK_EXPIRATION_MILLIS, DEFAULT_QUOTA_KEY,
         DEFAULT_REPOSITORY_EXPIRATION_KEY, LOCAL_DISCOVERY_ENABLED_KEY, MOUNT_DIR_KEY, PEERS_KEY,
@@ -43,7 +44,6 @@ use std::{
 };
 use tokio::{
     fs,
-    io::{AsyncReadExt, AsyncWriteExt},
     sync::{broadcast, watch},
 };
 use tokio_stream::StreamExt;
@@ -623,42 +623,89 @@ impl State {
         dst_repo: Option<String>,
         dst_path: PathBuf,
     ) -> Result<(), Error> {
-        let (mut src_file, mut dst_file) = match (src_repo, dst_repo) {
-            (Some(src_repo), Some(dst_repo)) => (
-                AnyFile::open_repo_file(&self, &src_repo, src_path).await?,
-                AnyFile::create_repo_file(&self, &dst_repo, dst_path).await?,
-            ),
-            (Some(src_repo), None) => (
-                AnyFile::open_repo_file(&self, &src_repo, src_path).await?,
-                AnyFile::create_fs_file(dst_path).await?,
-            ),
-            (None, Some(dst_repo)) => (
-                AnyFile::open_fs_file(&src_path).await?,
-                AnyFile::create_repo_file(&self, &dst_repo, dst_path).await?,
-            ),
-            (None, None) => {
-                tracing::error!(
-                    "At least one of the source or destination files must be inside a repository"
-                );
+        if src_repo.is_none() && dst_repo.is_none() {
+            tracing::error!("One or both of source and destination repositories must be set");
+            return Err(Error::InvalidArgument);
+        }
+
+        // TODO: Check destination is not descendant of source
+
+        fn is_not_found_error(error: &Error) -> bool {
+            match error {
+                Error::Repository(ouisync::Error::EntryNotFound) => true,
+                Error::Io(error) => error.kind() == io::ErrorKind::NotFound,
+                _ => false,
+            }
+        }
+
+        let src_file_name = match src_path.file_name() {
+            Some(file_name) => file_name,
+            None => {
+                // TODO: Not sure how to handle this one
+                tracing::error!("Source must have a file name");
                 return Err(Error::InvalidArgument);
             }
         };
 
-        let mut buffer = [0; 65536];
+        let src_repo = match src_repo {
+            Some(src_repo) => Some(any_entry::find_repo_by_name(&self.repos, &src_repo)?),
+            None => None,
+        };
 
-        loop {
-            let n = src_file.read(&mut buffer).await?;
+        let dst_repo = match dst_repo {
+            Some(dst_repo) => Some(any_entry::find_repo_by_name(&self.repos, &dst_repo)?),
+            None => None,
+        };
 
-            if n == 0 {
-                break;
+        let mut src = any_entry::open(&src_repo, &src_path).await?;
+
+        let mut dst = match (
+            src.entry_type(),
+            any_entry::is_directory(&dst_repo, &dst_path).await,
+        ) {
+            (EntryType::File, Ok(true)) => {
+                any_entry::create(&dst_repo, &dst_path.join(&src_file_name), EntryType::File)
+                    .await?
             }
+            (EntryType::File, Ok(false)) => {
+                any_entry::create(&dst_repo, &dst_path, EntryType::File).await?
+            }
+            (EntryType::Directory, Ok(true)) => {
+                any_entry::create(
+                    &dst_repo,
+                    &dst_path.join(&src_file_name),
+                    EntryType::Directory,
+                )
+                .await?
+            }
+            (EntryType::Directory, Ok(false)) => {
+                tracing::error!("Can not copy directory to a file");
+                return Err(Error::InvalidArgument);
+            }
+            (src_entry_type, Err(error)) => {
+                if is_not_found_error(&error) {
+                    any_entry::create(&dst_repo, &dst_path, src_entry_type).await?
+                } else {
+                    return Err(error);
+                }
+            }
+        };
 
-            dst_file.write_all(&buffer[0..n]).await?;
+
+        match (&mut src, &mut dst) {
+            (AnyEntry::File(src), AnyEntry::File(dst)) => src.copy_to(dst).await,
+            (AnyEntry::File(src), AnyEntry::Dir(dst)) => {
+                todo!()
+            }
+            (AnyEntry::Dir(src), AnyEntry::Dir(dst)) => {
+                // Create file inside `dst` and copy `src` into it.
+                todo!()
+            }
+            (AnyEntry::Dir(_src), AnyEntry::File(_dst)) => {
+                // Sanitized above
+                unreachable!()
+            }
         }
-
-        dst_file.flush().await?;
-
-        Ok(())
     }
 
     /// Creates a new repository.
@@ -2028,23 +2075,6 @@ impl State {
     async fn connect_remote_client(&self, host: &str) -> Result<RemoteClient, Error> {
         Ok(RemoteClient::connect(host, self.tls_config.client().await?).await?)
     }
-
-    fn find_repo_by_name(&self, name: &str) -> Result<Arc<Repository>, Error> {
-        let handle = match self.repos.find_by_subpath(&name) {
-            Ok(handle) => handle,
-            Err(error) => {
-                tracing::error!("Cannot open repository {name:?}: {error:?}");
-                return Err(error.into());
-            }
-        };
-        match self.repos.get_repository(handle) {
-            Some(repo) => Ok(repo),
-            None => {
-                tracing::error!("Failed to convert repo handle for: {name:?}");
-                return Err(Error::InvalidArgument);
-            }
-        }
-    }
 }
 
 // These definitions are only needed to make the api parser's job easier:
@@ -2301,111 +2331,5 @@ async fn default_block_expiration(config: &ConfigStore) -> Result<Option<Duratio
         Ok(millis) => Ok(Some(Duration::from_millis(millis))),
         Err(ConfigError::NotFound) => Ok(None),
         Err(error) => Err(error),
-    }
-}
-
-enum AnyFile {
-    FsFile(fs::File),
-    RepoFile(ouisync::File),
-}
-
-impl AnyFile {
-    fn to_utf8_path(path: &PathBuf) -> Result<&camino::Utf8Path, Error> {
-        match camino::Utf8Path::from_path(path) {
-            Some(path) => Ok(path),
-            None => {
-                tracing::error!("Invalid repository path {path:?}");
-                return Err(Error::InvalidArgument);
-            }
-        }
-    }
-
-    async fn open_fs_file(path: &PathBuf) -> io::Result<AnyFile> {
-        match fs::File::open(path).await {
-            Ok(file) => Ok(AnyFile::FsFile(file)),
-            Err(error) => {
-                tracing::error!("Cannot open file {path:?}: {:?}", error);
-                return Err(error);
-            }
-        }
-    }
-
-    async fn create_fs_file(path: PathBuf) -> io::Result<AnyFile> {
-        match fs::File::create(&path).await {
-            Ok(file) => Ok(AnyFile::FsFile(file)),
-            Err(error) => {
-                tracing::error!("Cannot open file {path:?}: {:?}", error);
-                return Err(error);
-            }
-        }
-    }
-
-    async fn open_repo_file(
-        state: &State,
-        repo_name: &str,
-        path: PathBuf,
-    ) -> Result<AnyFile, Error> {
-        match state
-            .find_repo_by_name(repo_name)?
-            .open_file(Self::to_utf8_path(&path)?)
-            .await
-        {
-            Ok(file) => Ok(AnyFile::RepoFile(file)),
-            Err(error) => {
-                tracing::error!("Failed to create destination file: {:?}", error);
-                return Err(error.into());
-            }
-        }
-    }
-
-    async fn create_repo_file(
-        state: &State,
-        repo_name: &str,
-        path: PathBuf,
-    ) -> Result<AnyFile, Error> {
-        match state
-            .find_repo_by_name(repo_name)?
-            .create_file(Self::to_utf8_path(&path)?)
-            .await
-        {
-            Ok(file) => Ok(AnyFile::RepoFile(file)),
-            Err(error) => {
-                tracing::error!("Failed to create destination file: {:?}", error);
-                return Err(error.into());
-            }
-        }
-    }
-
-    async fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
-        match self {
-            AnyFile::FsFile(file) => {
-                return Ok(file.read(buffer).await?);
-            }
-            AnyFile::RepoFile(file) => {
-                return Ok(file.read(buffer).await?);
-            }
-        }
-    }
-
-    async fn write_all(&mut self, buffer: &[u8]) -> Result<(), Error> {
-        match self {
-            AnyFile::FsFile(file) => {
-                return Ok(file.write_all(buffer).await?);
-            }
-            AnyFile::RepoFile(file) => {
-                return Ok(file.write_all(buffer).await?);
-            }
-        }
-    }
-
-    async fn flush(&mut self) -> Result<(), Error> {
-        match self {
-            AnyFile::FsFile(file) => {
-                return Ok(file.flush().await?);
-            }
-            AnyFile::RepoFile(file) => {
-                return Ok(file.flush().await?);
-            }
-        }
     }
 }
