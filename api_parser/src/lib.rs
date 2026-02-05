@@ -331,7 +331,7 @@ impl<'a> Iterator for DefaultNamedFieldsIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Named(i) => i.next().map(|(name, field)| (name.as_str(), field)),
-            Self::DefaultNamed(i) => i.take().map(|(default_name, field)| (default_name, field)),
+            Self::DefaultNamed(i) => i.take(),
         }
     }
 }

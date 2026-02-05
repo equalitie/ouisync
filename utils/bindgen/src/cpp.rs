@@ -245,7 +245,7 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
 }
 
 // Reorder items such that if item A uses item B, then B will be before A.
-fn reorder(items: &mut Vec<impl DependentItem>) {
+fn reorder(items: &mut [impl DependentItem]) {
     let mut seen: HashSet<String> = HashSet::new();
 
     let relevant: HashSet<_> = items.iter().map(|item| item.name().to_string()).collect();
@@ -298,7 +298,7 @@ fn write_simple_enum(out: &mut OutFiles<'_>, name: &str, item: &SimpleEnum) -> R
     writeln!(out.hpp, "enum {name} : {repr} {{")?;
 
     for (variant_name, variant) in &item.variants {
-        write_docs(out.hpp, &format!("{I}"), &variant.docs)?;
+        write_docs(out.hpp, "{I}", &variant.docs)?;
         writeln!(
             out.hpp,
             "{I}{} = {},",
@@ -478,7 +478,7 @@ fn write_complex_enum(
 
     describe_struct(
         out.dsc,
-        &format!("{name}"),
+        "{name}",
         None,
         FieldsParseType::Direct,
         ["value"].into_iter(),
@@ -490,7 +490,7 @@ fn write_complex_enum(
         writeln!(out.dsc, "template<> struct VariantBuilder<{name}::{ALTERNATIVES_SUFFIX}> {{")?;
         writeln!(out.dsc, "{I}template<class AltBuilder>")?;
         writeln!(out.dsc, "{I}static {name}::Alternatives build(std::string_view name, const AltBuilder& builder) {{")?;
-        for (_i, (variant_name, _variant)) in item.variants.iter().enumerate() {
+        for (variant_name, _variant) in &item.variants {
             writeln!(out.dsc, "{I}{I}if (name == \"{variant_name}\") {{")?;
             writeln!(out.dsc, "{I}{I}{I}return builder.template build<{name}::{variant_name}>();")?;
             writeln!(out.dsc, "{I}{I}}}")?;
@@ -508,7 +508,7 @@ fn write_complex_enum(
         writeln!(out.dsc)?;
 
         writeln!(out.cpp, "std::string_view variant_name(const {name}::{ALTERNATIVES_SUFFIX}& variant) {{")?;
-        for (_i, (variant_name, _variant)) in item.variants.iter().enumerate() {
+        for (variant_name, _variant) in &item.variants {
             writeln!(out.cpp, "{I}if (std::get_if<{name}::{variant_name}>(&variant) != nullptr) {{")?;
             writeln!(out.cpp, "{I}{I}return std::string_view(\"{variant_name}\");")?;
             writeln!(out.cpp, "{I}}}")?;
@@ -532,7 +532,7 @@ fn write_struct(out: &mut OutFiles<'_>, name: &str, item: &Struct) -> Result<()>
 
     describe_struct(
         out.dsc,
-        &format!("{name}"),
+        "{name}",
         None,
         FieldsParseType::new(&item.fields),
         item.fields.default_named(DEFAULT_FIELD_NAME).names(),
@@ -725,11 +725,11 @@ fn write_api_class(
             for (index, (arg_name, _)) in variant.fields.iter().enumerate() {
                 let arg_name = AsSnakeCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
 
-                if index == 0 {
-                    if let Some(inner_name) = &inner_name {
-                        writeln!(out_cpp, "{I}{I}{inner_name},")?;
-                        continue;
-                    }
+                if index == 0
+                    && let Some(inner_name) = &inner_name
+                {
+                    writeln!(out_cpp, "{I}{I}{inner_name},")?;
+                    continue;
                 }
 
                 writeln!(out_cpp, "{I}{I}{arg_name},")?;
@@ -894,16 +894,17 @@ fn declare_function(
             AsSnakeCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME)),
         )?;
 
-        if use_default_args && class_prefix.is_none() {
-            if let Some(default) = ty.default() {
-                write!(out, " = {default}")?;
-            }
+        if use_default_args
+            && class_prefix.is_none()
+            && let Some(default) = ty.default()
+        {
+            write!(out, " = {default}")?;
         }
 
         if !is_last || !added_yield {
             writeln!(out, ",")?;
         } else {
-            writeln!(out, "")?;
+            writeln!(out)?;
         }
     }
 
@@ -1018,21 +1019,18 @@ impl<'a> DependentItem for NamedItem<'a> {
             Self::ComplexEnum { item, .. } => item
                 .variants
                 .iter()
-                .map(|(_name, variant)| {
+                .flat_map(|(_name, variant)| {
                     variant
                         .fields
                         .iter()
                         .map(|(_name, field)| &field.ty)
-                        .map(|ty| decompose(ty))
-                        .flatten()
+                        .flat_map(decompose)
                 })
-                .flatten()
                 .collect(),
             Self::Struct { item, .. } => item
                 .fields
                 .iter()
-                .map(|(_name, field)| decompose(&field.ty))
-                .flatten()
+                .flat_map(|(_name, field)| decompose(&field.ty))
                 .collect(),
         }
     }
@@ -1048,8 +1046,7 @@ impl<'a> DependentItem for ApiClass<'a> {
         self.variants
             .iter()
             .filter(|(name, _variant)| name.strip_prefix(&prefix).is_some())
-            .map(|(_name, variant)| decompose(&variant.ret))
-            .flatten()
+            .flat_map(|(_name, variant)| decompose(&variant.ret))
             .map(|ret_type| ret_type.strip_suffix("Handle").unwrap_or(&ret_type).into())
             .filter(|ty_name: &String| !ty_name.contains("subscribe"))
             .collect()
@@ -1206,7 +1203,7 @@ impl<'a> CppScalar<'a> {
             "SystemTime" => Self::SystemTime,
             "PathBuf" | "PeerAddr" | "SocketAddr" | "String" => Self::String,
             "StateMonitor" => Self::Local("StateMonitorNode"),
-            _ => Self::Local(&ty),
+            _ => Self::Local(ty),
         }
     }
 
@@ -1286,7 +1283,7 @@ fn decompose(ty: &Type) -> HashSet<String> {
         Type::Unit => Default::default(),
         Type::Scalar(ty_str) => [ty_str.clone()].into_iter().collect(),
         Type::Option(ty_str) => [ty_str.clone()].into_iter().collect(),
-        Type::Result(ty, ty_str) => decompose(&*ty).iter().chain([ty_str]).cloned().collect(),
+        Type::Result(ty, ty_str) => decompose(ty).iter().chain([ty_str]).cloned().collect(),
         Type::Vec(ty_str) => [ty_str.clone()].into_iter().collect(),
         Type::Map(ty1_str, ty2_str) => [ty1_str.clone(), ty2_str.clone()].into_iter().collect(),
         Type::Bytes => Default::default(),
