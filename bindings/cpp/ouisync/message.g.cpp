@@ -177,6 +177,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionBindRemoteControl>(&variant) != nullptr) {
         return std::string_view("SessionBindRemoteControl");
     }
+    if (std::get_if<Request::SessionCopy>(&variant) != nullptr) {
+        return std::string_view("SessionCopy");
+    }
     if (std::get_if<Request::SessionCreateRepository>(&variant) != nullptr) {
         return std::string_view("SessionCreateRepository");
     }

@@ -737,6 +737,22 @@ uint16_t Session::bind_remote_control(
     return std::move(rsp.value);
 }
 
+void Session::copy(
+    const std::string& src_path,
+    const std::string& dst_repo_name,
+    const std::string& dst_path,
+    boost::asio::yield_context yield
+) {
+    auto request = Request::SessionCopy{
+        src_path,
+        dst_repo_name,
+        dst_path,
+    };
+    // TODO: This won't throw if yield has ec assigned
+    auto response = client->invoke(request, yield);
+    response.get<Response::None>();
+}
+
 Repository Session::create_repository(
     const std::string& path,
     boost::asio::yield_context yield,

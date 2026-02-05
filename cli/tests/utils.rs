@@ -1,3 +1,4 @@
+#![allow(unused)]
 use anyhow::{Error, format_err};
 use backoff::{self, ExponentialBackoffBuilder};
 use rand::Rng;

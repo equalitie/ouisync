@@ -272,6 +272,12 @@ struct Request {
         const std::optional<std::string>& addr;
     };
 
+    struct SessionCopy {
+        const std::string& src_path;
+        const std::string& dst_repo_name;
+        const std::string& dst_path;
+    };
+
     struct SessionCreateRepository {
         const std::string& path;
         const std::optional<ouisync::SetLocalSecret>& read_secret;
@@ -522,6 +528,7 @@ struct Request {
         SessionBindMetrics,
         SessionBindNetwork,
         SessionBindRemoteControl,
+        SessionCopy,
         SessionCreateRepository,
         SessionDeleteRepositoryByName,
         SessionDeriveSecretKey,

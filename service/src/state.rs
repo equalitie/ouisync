@@ -691,15 +691,11 @@ impl State {
             }
         };
 
-
         match (&mut src, &mut dst) {
             (AnyEntry::File(src), AnyEntry::File(dst)) => src.copy_to(dst).await,
-            (AnyEntry::File(src), AnyEntry::Dir(dst)) => {
-                todo!()
-            }
-            (AnyEntry::Dir(src), AnyEntry::Dir(dst)) => {
-                // Create file inside `dst` and copy `src` into it.
-                todo!()
+            (AnyEntry::Dir(src), AnyEntry::Dir(dst)) => src.copy_to(dst).await,
+            (AnyEntry::File(_src), AnyEntry::Dir(_dst)) => {
+                unreachable!()
             }
             (AnyEntry::Dir(_src), AnyEntry::File(_dst)) => {
                 // Sanitized above

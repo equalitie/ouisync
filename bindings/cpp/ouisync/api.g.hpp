@@ -514,6 +514,13 @@ public:
         boost::asio::yield_context yield
     );
 
+    void copy(
+        const std::string& src_path,
+        const std::string& dst_repo_name,
+        const std::string& dst_path,
+        boost::asio::yield_context yield
+    );
+
     /**
      * Creates a new repository.
      *
