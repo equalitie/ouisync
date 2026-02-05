@@ -19,6 +19,7 @@ use crate::{
     tls::TlsConfig,
     transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
 };
+use futures_util::stream::FuturesUnordered;
 use ouisync::{
     Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
     NatBehavior, Network, NetworkEventReceiver, PeerAddr, PeerInfo, Progress, PublicRuntimeId,
@@ -38,6 +39,7 @@ use std::{
     net::SocketAddr,
     panic,
     path::{Path, PathBuf},
+    slice,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -505,13 +507,8 @@ impl State {
             .set(&status.snapshot)
             .await?;
 
-        for path in &status.remove {
-            self.close_repositories(path).await;
-        }
-
-        for path in &status.insert {
-            self.load_repositories(path).await;
-        }
+        self.close_repositories(&status.remove).await;
+        self.load_repositories(&status.insert).await;
 
         Ok(())
     }
@@ -1861,7 +1858,8 @@ impl State {
     pub async fn close(&self) {
         self.metrics_server.close();
         self.network.shutdown().await;
-        self.close_repositories(Path::new("")).await;
+        self.close_repositories(slice::from_ref(&PathBuf::new()))
+            .await;
     }
 
     // Find all repositories in all store dirs and open them.
@@ -1873,40 +1871,51 @@ impl State {
             return;
         };
 
-        for store_dir in &store_dirs {
-            self.load_repositories(store_dir).await;
-        }
+        self.load_repositories(&store_dirs).await;
     }
 
     // Find all repositories in the given store directory (recursively) and open them.
-    async fn load_repositories(&self, store_dir: &Path) {
-        if !fs::try_exists(store_dir).await.unwrap_or(false) {
-            tracing::debug!("store dir doesn't exist: {}", store_dir.display());
-            return;
-        }
+    async fn load_repositories(&self, store_dirs: &[PathBuf]) {
+        let mut tasks = FuturesUnordered::new();
 
-        let mut walkdir = fs_util::WalkDir::new(store_dir).into_stream();
+        for store_dir in store_dirs {
+            if !fs::try_exists(store_dir).await.unwrap_or(false) {
+                tracing::debug!("store dir doesn't exist: {}", store_dir.display());
+                return;
+            }
 
-        while let Some(entry) = walkdir.next().await {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    tracing::error!(?error, "failed to read directory entry");
+            let mut walkdir = fs_util::WalkDir::new(store_dir).into_stream();
+
+            while let Some(entry) = walkdir.next().await {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        tracing::error!(?error, "failed to read directory entry");
+                        continue;
+                    }
+                };
+
+                if !entry.file_type().is_file() {
                     continue;
                 }
-            };
 
-            if !entry.file_type().is_file() {
-                continue;
+                let path = entry.path();
+
+                if path.extension() != Some(OsStr::new(REPOSITORY_FILE_EXTENSION)) {
+                    continue;
+                }
+
+                let path = path.to_owned();
+
+                tasks.push(async {
+                    let result = self.load_repository(&path, None, false).await;
+                    (path, result)
+                });
             }
+        }
 
-            let path = entry.path();
-
-            if path.extension() != Some(OsStr::new(REPOSITORY_FILE_EXTENSION)) {
-                continue;
-            }
-
-            let holder = match self.load_repository(path, None, false).await {
+        while let Some((path, result)) = tasks.next().await {
+            let holder = match result {
                 Ok(holder) => holder,
                 Err(error) => {
                     tracing::error!(?error, ?path, "failed to open repository");
@@ -1923,29 +1932,31 @@ impl State {
 
     // Close all repositories that are inside the `prefix` directory or any of its subdirectories,
     // recursively.
-    async fn close_repositories(&self, prefix: &Path) {
-        let repos: Vec<_> = self.repos.drain(prefix);
+    async fn close_repositories(&self, prefixes: &[PathBuf]) {
+        for prefix in prefixes {
+            let repos: Vec<_> = self.repos.drain(prefix);
 
-        // Unmount all repos
-        if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
-            for holder in &repos {
-                if let Err(error) = mounter.remove(holder.short_name()) {
+            // Unmount all repos
+            if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
+                for holder in &repos {
+                    if let Err(error) = mounter.remove(holder.short_name()) {
+                        tracing::warn!(
+                            ?error,
+                            repo = holder.short_name(),
+                            "failed to unmount repository",
+                        );
+                    }
+                }
+            }
+
+            for holder in repos {
+                if let Err(error) = holder.close().await {
                     tracing::warn!(
                         ?error,
                         repo = holder.short_name(),
-                        "failed to unmount repository",
+                        "failed to close repository"
                     );
                 }
-            }
-        }
-
-        for holder in repos {
-            if let Err(error) = holder.close().await {
-                tracing::warn!(
-                    ?error,
-                    repo = holder.short_name(),
-                    "failed to close repository"
-                );
             }
         }
     }
