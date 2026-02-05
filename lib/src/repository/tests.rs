@@ -1256,7 +1256,6 @@ async fn export() {
 }
 
 #[tokio::test]
-#[ignore = "vacuum/auto-vacuum not yet implemented"]
 async fn repository_size_decreases_after_delete() {
     let (_base_dir, repo_path) = {
         let (base_dir, repo) = setup().await;
