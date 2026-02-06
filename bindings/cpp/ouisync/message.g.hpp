@@ -273,8 +273,9 @@ struct Request {
     };
 
     struct SessionCopy {
+        const std::optional<std::string>& src_repo;
         const std::string& src_path;
-        const std::string& dst_repo_name;
+        const std::optional<std::string>& dst_repo;
         const std::string& dst_path;
     };
 

@@ -479,8 +479,8 @@ std::vector<DirectoryEntry> Repository::read_directory(
 
 void Repository::remove_directory(
     const std::string& path,
-    boost::asio::yield_context yield,
-    bool recursive
+    bool recursive,
+    boost::asio::yield_context yield
 ) {
     auto request = Request::RepositoryRemoveDirectory{
         handle,
@@ -535,8 +535,8 @@ void Repository::set_access(
 
 void Repository::set_access_mode(
     const AccessMode& access_mode,
-    boost::asio::yield_context yield,
-    const std::optional<LocalSecret>& local_secret
+    const std::optional<LocalSecret>& local_secret,
+    boost::asio::yield_context yield
 ) {
     auto request = Request::RepositorySetAccessMode{
         handle,
@@ -655,8 +655,8 @@ void Repository::set_sync_enabled(
 
 ShareToken Repository::share(
     const AccessMode& access_mode,
-    boost::asio::yield_context yield,
-    const std::optional<LocalSecret>& local_secret
+    const std::optional<LocalSecret>& local_secret,
+    boost::asio::yield_context yield
 ) {
     auto request = Request::RepositoryShare{
         handle,
@@ -738,14 +738,16 @@ uint16_t Session::bind_remote_control(
 }
 
 void Session::copy(
+    const std::optional<std::string>& src_repo,
     const std::string& src_path,
-    const std::string& dst_repo_name,
+    const std::optional<std::string>& dst_repo,
     const std::string& dst_path,
     boost::asio::yield_context yield
 ) {
     auto request = Request::SessionCopy{
+        src_repo,
         src_path,
-        dst_repo_name,
+        dst_repo,
         dst_path,
     };
     // TODO: This won't throw if yield has ec assigned
@@ -755,13 +757,13 @@ void Session::copy(
 
 Repository Session::create_repository(
     const std::string& path,
-    boost::asio::yield_context yield,
     const std::optional<SetLocalSecret>& read_secret,
     const std::optional<SetLocalSecret>& write_secret,
     const std::optional<ShareToken>& token,
     bool sync_enabled,
     bool dht_enabled,
-    bool pex_enabled
+    bool pex_enabled,
+    boost::asio::yield_context yield
 ) {
     auto request = Request::SessionCreateRepository{
         path,
@@ -1168,8 +1170,8 @@ bool Session::mirror_exists(
 
 Repository Session::open_repository(
     const std::string& path,
-    boost::asio::yield_context yield,
-    const std::optional<LocalSecret>& local_secret
+    const std::optional<LocalSecret>& local_secret,
+    boost::asio::yield_context yield
 ) {
     auto request = Request::SessionOpenRepository{
         path,

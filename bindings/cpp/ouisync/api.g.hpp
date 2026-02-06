@@ -309,8 +309,8 @@ public:
      */
     void remove_directory(
         const std::string& path,
-        boost::asio::yield_context yield,
-        bool recursive = false
+        bool recursive,
+        boost::asio::yield_context yield
     );
 
     /**
@@ -367,8 +367,8 @@ public:
      */
     void set_access_mode(
         const AccessMode& access_mode,
-        boost::asio::yield_context yield,
-        const std::optional<LocalSecret>& local_secret = {}
+        const std::optional<LocalSecret>& local_secret,
+        boost::asio::yield_context yield
     );
 
     void set_block_expiration(
@@ -440,8 +440,8 @@ public:
      */
     ShareToken share(
         const AccessMode& access_mode,
-        boost::asio::yield_context yield,
-        const std::optional<LocalSecret>& local_secret = {}
+        const std::optional<LocalSecret>& local_secret,
+        boost::asio::yield_context yield
     );
 
     void unmount(
@@ -514,9 +514,20 @@ public:
         boost::asio::yield_context yield
     );
 
+    /**
+     * Copy file into, from or between repositories
+     *
+     * - `src_repo`: Name of the repository from which file will be copied.
+     * - `src_path`: Path of to the file to be copied. If `src_repo` is set, the `src_path` is
+     *   relative to the corresponding repository root. If `src_repo` is null, `src_path` is
+     *   interpreted as path on the local file system.
+     * - `dst_repo`: Name of the repository into which file will be copied.
+     * - `dst_path`:
+     */
     void copy(
+        const std::optional<std::string>& src_repo,
         const std::string& src_path,
-        const std::string& dst_repo_name,
+        const std::optional<std::string>& dst_repo,
         const std::string& dst_path,
         boost::asio::yield_context yield
     );
@@ -541,13 +552,13 @@ public:
      */
     Repository create_repository(
         const std::string& path,
-        boost::asio::yield_context yield,
-        const std::optional<SetLocalSecret>& read_secret = {},
-        const std::optional<SetLocalSecret>& write_secret = {},
-        const std::optional<ShareToken>& token = {},
-        bool sync_enabled = false,
-        bool dht_enabled = false,
-        bool pex_enabled = false
+        const std::optional<SetLocalSecret>& read_secret,
+        const std::optional<SetLocalSecret>& write_secret,
+        const std::optional<ShareToken>& token,
+        bool sync_enabled,
+        bool dht_enabled,
+        bool pex_enabled,
+        boost::asio::yield_context yield
     );
 
     /**
@@ -778,8 +789,8 @@ public:
      */
     Repository open_repository(
         const std::string& path,
-        boost::asio::yield_context yield,
-        const std::optional<LocalSecret>& local_secret = {}
+        const std::optional<LocalSecret>& local_secret,
+        boost::asio::yield_context yield
     );
 
     void remove_store_dirs(

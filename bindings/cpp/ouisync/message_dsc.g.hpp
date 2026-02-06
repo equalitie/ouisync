@@ -503,8 +503,9 @@ template<> struct describe::Struct<Request::SessionCopy> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
     static void describe(Observer& o, Request::SessionCopy& v) {
+        o.field(v.src_repo);
         o.field(v.src_path);
-        o.field(v.dst_repo_name);
+        o.field(v.dst_repo);
         o.field(v.dst_path);
     }
 };

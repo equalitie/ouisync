@@ -39,7 +39,6 @@ impl ItemType {
     }
 }
 
-//#pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
 pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
     const DO_NOT_EDIT_MESSAGE: &str = "// This file is auto generated. Do not edit.";
 
@@ -726,10 +725,11 @@ fn write_api_class(
                 let arg_name = AsSnakeCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
 
                 if index == 0
-                    && let Some(inner_name) = &inner_name {
-                        writeln!(out_cpp, "{I}{I}{inner_name},")?;
-                        continue;
-                    }
+                    && let Some(inner_name) = &inner_name
+                {
+                    writeln!(out_cpp, "{I}{I}{inner_name},")?;
+                    continue;
+                }
 
                 writeln!(out_cpp, "{I}{I}{arg_name},")?;
             }
@@ -835,6 +835,20 @@ fn write_api_class(
     Ok(())
 }
 
+fn function_params(skip_first: bool, fields: &Fields) -> Vec<(String, CppType)> {
+    fields
+        .iter()
+        .skip(if skip_first { 1 } else { 0 })
+        .map(|(opt_name, field)| {
+            (
+                format!("{}", AsSnakeCase(opt_name.unwrap_or(DEFAULT_FIELD_NAME))),
+                CppType::new(&field.ty),
+            )
+        })
+        .chain([("yield".into(), CppType::Scalar(CppScalar::Yield))].into_iter())
+        .collect()
+}
+
 fn declare_function(
     out: &mut dyn Write,
     indent: Indent,
@@ -852,61 +866,24 @@ fn declare_function(
     .into_iter()
     .collect();
 
-    // Use default argument only if there is at least one other non-default argument.
-    let use_default_args = fields
-        .iter()
-        .skip(if has_inner { 1 } else { 0 })
-        .any(|(_, field)| CppType::new(&field.ty).default().is_none());
+    let op_name = AsSnakeCase(*op_rename.get(&op_name).unwrap_or(&op_name));
 
-    writeln!(
-        out,
-        "{indent}{} {}{}(",
-        ret_type,
-        if let Some(class) = class_prefix {
-            format!("{class}::")
-        } else {
-            "".into()
-        },
-        AsSnakeCase(*op_rename.get(&op_name).unwrap_or(&op_name))
-    )?;
-
-    let mut added_yield = false;
-
-    for (index, (arg_name, field)) in fields.iter().enumerate() {
-        if index == 0 && has_inner {
-            continue;
-        }
-
-        let is_last = index == fields.len() - 1;
-
-        let ty = CppType::new(&field.ty);
-
-        if use_default_args && ty.default().is_some() && !added_yield {
-            writeln!(out, "{indent}{I}boost::asio::yield_context yield,")?;
-            added_yield = true;
-        }
-
-        write!(
-            out,
-            "{indent}{I}{} {}",
-            &ty.modify(true, false),
-            AsSnakeCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME)),
-        )?;
-
-        if use_default_args && class_prefix.is_none()
-            && let Some(default) = ty.default() {
-                write!(out, " = {default}")?;
-            }
-
-        if !is_last || !added_yield {
-            writeln!(out, ",")?;
-        } else {
-            writeln!(out)?;
-        }
+    if let Some(class) = class_prefix {
+        writeln!(out, "{indent}{ret_type} {class}::{op_name}(")?;
+    } else {
+        writeln!(out, "{indent}{ret_type} {op_name}(")?;
     }
 
-    if !added_yield {
-        writeln!(out, "{indent}{I}boost::asio::yield_context yield")?;
+    let fields = function_params(has_inner, fields);
+
+    for (i, (name, field)) in fields.iter().enumerate() {
+        write!(out, "{indent}{I}{} {}", &field.modify(true, false), name,)?;
+
+        if i == fields.len() - 1 {
+            writeln!(out)?;
+        } else {
+            writeln!(out, ",")?;
+        }
     }
 
     write!(out, "{indent})")
@@ -1050,21 +1027,21 @@ impl<'a> DependentItem for ApiClass<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum CppType<'a> {
-    Scalar(CppScalar<'a>),
-    Option(CppScalar<'a>),
-    Vec(CppScalar<'a>),
-    Map(CppScalar<'a>, CppScalar<'a>),
+#[derive(Clone)]
+enum CppType {
+    Scalar(CppScalar),
+    Option(CppScalar),
+    Vec(CppScalar),
+    Map(CppScalar, CppScalar),
     Modified {
         const_ref: bool,
         namespaced: bool,
-        inner: &'a CppType<'a>,
+        inner: Box<CppType>,
     },
 }
 
-impl<'a> CppType<'a> {
-    fn new(ty: &'a Type) -> Self {
+impl CppType {
+    fn new(ty: &Type) -> Self {
         match ty {
             Type::Unit => CppType::Scalar(CppScalar::Unit),
             Type::Scalar(ty_str) => CppType::Scalar(CppScalar::new(ty_str)),
@@ -1078,31 +1055,23 @@ impl<'a> CppType<'a> {
         }
     }
 
-    fn default(&self) -> Option<&str> {
-        match self {
-            Self::Option(_) => Some("{}"),
-            Self::Scalar(CppScalar::Bool) => Some("false"),
-            _ => None,
-        }
-    }
-
-    fn modify(&'a self, const_ref: bool, namespaced: bool) -> CppType<'a> {
+    fn modify(&self, const_ref: bool, namespaced: bool) -> CppType {
         match self {
             Self::Modified { inner, .. } => Self::Modified {
                 const_ref,
                 namespaced,
-                inner,
+                inner: inner.clone(),
             },
             _ => Self::Modified {
                 const_ref,
                 namespaced,
-                inner: self,
+                inner: Box::new(self.clone()),
             },
         }
     }
 }
 
-impl fmt::Display for CppType<'_> {
+impl fmt::Display for CppType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Scalar(s) => write!(f, "{}", s),
@@ -1113,7 +1082,7 @@ impl fmt::Display for CppType<'_> {
                 const_ref,
                 namespaced,
                 inner,
-            } => match *inner {
+            } => match &**inner {
                 Self::Scalar(s) => {
                     if *const_ref && s.is_copy_expensive() {
                         write!(f, "const {}&", s.modify(*namespaced))
@@ -1158,8 +1127,8 @@ impl fmt::Display for CppType<'_> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum CppScalar<'a> {
+#[derive(Clone)]
+enum CppScalar {
     Unit,
     U8,
     I8,
@@ -1175,15 +1144,16 @@ enum CppScalar<'a> {
     SystemTime,
     String,
     Bytes,
-    Local(&'a str),
+    Local(String),
     Modified {
         namespaced: bool,
-        inner: &'a CppScalar<'a>,
+        inner: Box<CppScalar>,
     },
+    Yield,
 }
 
-impl<'a> CppScalar<'a> {
-    fn new(ty: &'a str) -> Self {
+impl CppScalar {
+    fn new(ty: &str) -> Self {
         match ty {
             "u8" => Self::U8,
             "i8" => Self::I8,
@@ -1199,17 +1169,20 @@ impl<'a> CppScalar<'a> {
             "Duration" => Self::Duration,
             "SystemTime" => Self::SystemTime,
             "PathBuf" | "PeerAddr" | "SocketAddr" | "String" => Self::String,
-            "StateMonitor" => Self::Local("StateMonitorNode"),
-            _ => Self::Local(ty),
+            "StateMonitor" => Self::Local("StateMonitorNode".into()),
+            _ => Self::Local(ty.into()),
         }
     }
 
-    fn modify(&'a self, namespaced: bool) -> CppScalar<'a> {
+    fn modify(&self, namespaced: bool) -> CppScalar {
         match self {
-            Self::Modified { inner, .. } => Self::Modified { namespaced, inner },
+            Self::Modified { inner, .. } => Self::Modified {
+                namespaced,
+                inner: inner.clone(),
+            },
             _ => Self::Modified {
                 namespaced,
-                inner: self,
+                inner: Box::new(self.clone()),
             },
         }
     }
@@ -1233,11 +1206,12 @@ impl<'a> CppScalar<'a> {
             Self::Bytes => true,
             Self::Local(_) => true,
             Self::Modified { inner, .. } => inner.is_copy_expensive(),
+            Self::Yield => false,
         }
     }
 }
 
-impl fmt::Display for CppScalar<'_> {
+impl fmt::Display for CppScalar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unit => write!(f, "void"),
@@ -1260,12 +1234,13 @@ impl fmt::Display for CppScalar<'_> {
                 if !namespaced {
                     write!(f, "{inner}")
                 } else {
-                    match inner {
+                    match &**inner {
                         Self::Local(v) => write!(f, "ouisync::{v}"),
                         _ => write!(f, "{inner}"),
                     }
                 }
             }
+            Self::Yield => write!(f, "boost::asio::yield_context"),
         }
     }
 }
