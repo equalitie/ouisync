@@ -664,7 +664,7 @@ impl State {
             any_entry::is_directory(&dst_repo, &dst_path).await,
         ) {
             (EntryType::File, Ok(true)) => {
-                any_entry::create(&dst_repo, &dst_path.join(&src_file_name), EntryType::File)
+                any_entry::create(&dst_repo, &dst_path.join(src_file_name), EntryType::File)
                     .await?
             }
             (EntryType::File, Ok(false)) => {
@@ -673,7 +673,7 @@ impl State {
             (EntryType::Directory, Ok(true)) => {
                 any_entry::create(
                     &dst_repo,
-                    &dst_path.join(&src_file_name),
+                    &dst_path.join(src_file_name),
                     EntryType::Directory,
                 )
                 .await?

@@ -20,7 +20,7 @@ pub(crate) async fn open(repo: &Option<Arc<Repository>>, path: &Path) -> Result<
     if let Some(repo) = repo {
         let path = to_utf8_path(path)?;
         let entry = match repo.lookup_type(&path).await? {
-            EntryType::File => AnyEntry::File(AnyFile::open_in_repo(&repo, path).await?),
+            EntryType::File => AnyEntry::File(AnyFile::open_in_repo(repo, path).await?),
             EntryType::Directory => {
                 AnyEntry::Dir(AnyDir::RepoRead(repo.open_directory(path).await?))
             }
@@ -58,7 +58,7 @@ pub(crate) async fn create(
             }
         }
         match entry_type {
-            EntryType::File => AnyEntry::File(AnyFile::create_in_repo(&repo, path).await?),
+            EntryType::File => AnyEntry::File(AnyFile::create_in_repo(repo, path).await?),
             EntryType::Directory => {
                 let dir = repo.create_directory(path).await?;
                 AnyEntry::Dir(AnyDir::RepoWrite(repo.clone(), dir, path.into()))
@@ -226,7 +226,7 @@ impl<'a> EntryInfo<'a> {
                 if meta.is_file() {
                     AnyEntry::File(AnyFile::open_in_fs(&entry.path()).await?)
                 } else if meta.is_dir() {
-                    AnyEntry::Dir(AnyDir::Fs(entry.path().into()))
+                    AnyEntry::Dir(AnyDir::Fs(entry.path()))
                 } else {
                     return Err(ouisync::Error::OperationNotSupported.into());
                 }
@@ -261,9 +261,9 @@ impl<'a> AnyDirIter<'a> {
                 }
                 None => None,
             },
-            Self::RepoRead(iter) => iter.next().map(|entry| EntryInfo::RepoRead(entry)),
+            Self::RepoRead(iter) => iter.next().map(EntryInfo::RepoRead),
             Self::RepoWrite(iter) => {
-                while let Some(entry) = iter.next() {
+                for entry in iter.by_ref() {
                     match entry {
                         EntryRef::File(_) => {
                             return Ok(Some(EntryInfo::RepoWrite(entry)));
@@ -292,7 +292,7 @@ impl AnyFile {
             Ok(file) => Ok(AnyFile::FsFile(file)),
             Err(error) => {
                 tracing::error!("Cannot open file {path:?}: {:?}", error);
-                return Err(error.into());
+                Err(error.into())
             }
         }
     }
@@ -302,7 +302,7 @@ impl AnyFile {
             Ok(file) => Ok(AnyFile::FsFile(file)),
             Err(error) => {
                 tracing::error!("Cannot open file {path:?}: {:?}", error);
-                return Err(error.into());
+                Err(error.into())
             }
         }
     }
@@ -312,7 +312,7 @@ impl AnyFile {
             Ok(file) => Ok(AnyFile::RepoFile(file)),
             Err(error) => {
                 tracing::error!("Failed to create destination file: {:?}", error);
-                return Err(error.into());
+                Err(error.into())
             }
         }
     }
@@ -325,7 +325,7 @@ impl AnyFile {
             Ok(file) => Ok(AnyFile::RepoFile(file)),
             Err(error) => {
                 tracing::error!("Failed to create destination file: {:?}", error);
-                return Err(error.into());
+                Err(error.into())
             }
         }
     }
@@ -333,7 +333,7 @@ impl AnyFile {
     pub(crate) async fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
         match self {
             AnyFile::FsFile(file) => {
-                return Ok(file.read(buffer).await?);
+                Ok(file.read(buffer).await?)
             }
             AnyFile::RepoFile(file) => {
                 return Ok(file.read(buffer).await?);
@@ -344,7 +344,7 @@ impl AnyFile {
     pub(crate) async fn write_all(&mut self, buffer: &[u8]) -> Result<(), Error> {
         match self {
             AnyFile::FsFile(file) => {
-                return Ok(file.write_all(buffer).await?);
+                Ok(file.write_all(buffer).await?)
             }
             AnyFile::RepoFile(file) => {
                 return Ok(file.write_all(buffer).await?);
@@ -355,7 +355,7 @@ impl AnyFile {
     pub(crate) async fn flush(&mut self) -> Result<(), Error> {
         match self {
             AnyFile::FsFile(file) => {
-                return Ok(file.flush().await?);
+                Ok(file.flush().await?)
             }
             AnyFile::RepoFile(file) => {
                 return Ok(file.flush().await?);
@@ -384,7 +384,7 @@ pub(crate) fn find_repo_by_name(
     repos: &RepositorySet,
     name: &str,
 ) -> Result<Arc<Repository>, Error> {
-    let handle = match repos.find_by_subpath(&name) {
+    let handle = match repos.find_by_subpath(name) {
         Ok(handle) => handle,
         Err(error) => {
             tracing::error!("Cannot open repository {name:?}: {error:?}");
@@ -395,7 +395,7 @@ pub(crate) fn find_repo_by_name(
         Some(repo) => Ok(repo),
         None => {
             tracing::error!("Failed to convert repo handle for: {name:?}");
-            return Err(Error::InvalidArgument);
+            Err(Error::InvalidArgument)
         }
     }
 }
@@ -405,7 +405,7 @@ fn to_utf8_path(path: &Path) -> Result<&camino::Utf8Path, Error> {
         Some(path) => Ok(path),
         None => {
             tracing::error!("Invalid repository path {path:?}");
-            return Err(Error::InvalidArgument);
+            Err(Error::InvalidArgument)
         }
     }
 }
