@@ -13,6 +13,7 @@ use tokio::{
     sync::broadcast::Receiver,
     time::{self, Duration, timeout},
 };
+use tokio_stream::wrappers::ReadDirStream;
 use tracing::instrument;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1190,16 +1191,13 @@ async fn aux_db_files_are_deleted_on_close() {
     test_utils::init_log();
 
     let (temp_dir, repo) = setup().await;
-
     repo.close().await.unwrap();
 
-    let mut read_dir = fs::read_dir(temp_dir.path()).await.unwrap();
-    let mut entries = Vec::new();
-
-    while let Some(entry) = read_dir.next_entry().await.unwrap() {
-        entries.push(entry.path());
-    }
-
+    let entries: Vec<_> = ReadDirStream::new(fs::read_dir(temp_dir.path()).await.unwrap())
+        .map_ok(|entry| entry.path())
+        .try_collect()
+        .await
+        .unwrap();
     assert_eq!(entries, [temp_dir.path().join(DEFAULT_REPO_NAME)]);
 }
 
@@ -1278,6 +1276,8 @@ async fn repository_size_decreases_after_delete() {
         repo.close().await.unwrap();
     }
 
+    ensure_aux_db_files_are_deleted(&repo_path).await;
+
     let repo_size_after_create = fs::metadata(&repo_path).await.unwrap().len();
     tracing::info!(?repo_size_after_create);
     assert!(
@@ -1297,6 +1297,8 @@ async fn repository_size_decreases_after_delete() {
 
         repo.close().await.unwrap();
     }
+
+    ensure_aux_db_files_are_deleted(&repo_path).await;
 
     let repo_size_after_delete = fs::metadata(&repo_path).await.unwrap().len();
     tracing::info!(?repo_size_after_delete);
@@ -1406,4 +1408,32 @@ where
     })
     .await
     .expect("timeout waiting for condition")
+}
+
+// HACK: Due to a [bug in sqlx][1], the db aux files are not always deleted after a repository is
+// closed. As a workaround, this function reopens and closes the repository until the aux files are
+// gone.
+//
+// [1]: https://github.com/launchbadge/sqlx/issues/3217
+async fn ensure_aux_db_files_are_deleted(repo_path: &Path) {
+    let expected_files = [repo_path.to_owned()];
+
+    loop {
+        if ReadDirStream::new(fs::read_dir(repo_path.parent().unwrap()).await.unwrap())
+            .map_ok(|entry| entry.path())
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            == expected_files
+        {
+            break;
+        }
+
+        Repository::open(&RepositoryParams::new(&repo_path), None, AccessMode::Blind)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+    }
 }
