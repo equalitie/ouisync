@@ -1,4 +1,5 @@
 use btdht::{InfoHash, MainlineDht};
+use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use ouisync_lib::{self, DHT_ROUTERS, ShareToken};
 use std::{
@@ -6,40 +7,40 @@ use std::{
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
 };
-use structopt::StructOpt;
 use tokio::{net::UdpSocket, task};
 
-#[derive(StructOpt, Debug)]
+#[derive(Subcommand, Debug)]
 enum Single {
     Lookup { peer: SocketAddr },
     Announce { peer: SocketAddr },
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Subcommand, Debug)]
 enum Action {
     Lookup,
     Announce,
     // Just send a request to a single node, no need to bootstrap
+    #[command(subcommand)]
     Single(Single),
 }
 
 /// Command line options.
-#[derive(StructOpt, Debug)]
+#[derive(Parser, Debug)]
 struct Options {
     /// Accept a share token.
-    #[structopt(long, value_name = "TOKEN")]
+    #[arg(long, value_name = "TOKEN")]
     pub token: Option<ShareToken>,
     /// Unhashed swarm name, we hash it to get the info-hash.
-    #[structopt(long)]
+    #[arg(long)]
     pub swarm_name: Option<String>,
     /// Action to perform.
-    #[structopt(subcommand)]
+    #[command(subcommand)]
     pub action: Action,
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let options = Options::from_args();
+    let options = Options::parse();
 
     env_logger::init();
 
