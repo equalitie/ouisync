@@ -15,37 +15,18 @@ name = "ouisync"
 path = "src/main.rs"
 
 [dependencies]
-async-trait = { workspace = true }
-bytes = "1.4.0"
-camino = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 dirs = "5.0.1"
 fs_util = { path = "../fs_util" }
 futures-util = { workspace = true }
-hyper = { version = "1.4.1", features = ["server", "http1"] }
-interprocess = { version = "2.2.3", features = ["tokio"] }
-metrics = { workspace = true }
-metrics-exporter-prometheus = { workspace = true }
 ouisync = { path = "../lib" }
 ouisync-service = { path = "../service" }
-ouisync-vfs = { path = "../vfs" }
 rand = { workspace = true }
-scoped_task = { path = "../scoped_task" }
-serde = { workspace = true }
-state_monitor = { path = "../state_monitor" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["signal", "io-std"] }
-tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
-tokio-util = { workspace = true, features = ["codec", "compat"] }
 tracing = { workspace = true }
-walkdir = "2.5.0"
-
-# HACK: This is only a transitive dependency of `interprocess` but the version they depend on has a
-# bug. Forcing the fixed version here.
-# TODO: Remove this when we bump `interprocess`.
-async-channel = "2.3.1"
 
 [dev-dependencies]
 anyhow = { workspace = true }

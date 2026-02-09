@@ -164,18 +164,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
 
 [[package]]
-name = "async-channel"
-version = "2.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89b47800b0be77592da0afd425cc03468052844aff33b84e33cc696f64e77b6a"
-dependencies = [
- "concurrent-queue",
- "event-listener-strategy",
- "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
 name = "async-io"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2203,9 +2191,9 @@ checksum = "8355be11b20d696c8f18f6cc018c4e372165b1fa8126cef092399c9951984ffa"
 
 [[package]]
 name = "libredox"
-version = "0.1.3"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0ff37bd590ca25063e35af745c343cb7a0271906fb7b37e4813e8f79f00268d"
+checksum = "3d0b95e02c851351f877147b7deea7b1afb1df71b63aa5f8270716e0c5720616"
 dependencies = [
  "bitflags 2.9.1",
  "libc",
@@ -2735,39 +2723,24 @@ version = "0.10.0"
 dependencies = [
  "anyhow",
  "assert_matches",
- "async-channel",
- "async-trait",
  "backoff",
- "bytes",
- "camino",
  "chrono",
  "clap",
  "dirs",
  "fs_util",
  "futures-util",
  "hex",
- "hyper 1.8.1",
- "interprocess",
  "libc",
- "metrics",
- "metrics-exporter-prometheus",
  "ouisync",
  "ouisync-rand",
  "ouisync-service",
- "ouisync-vfs",
  "rcgen",
- "scoped_task",
- "serde",
- "state_monitor",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
- "walkdir",
 ]
 
 [[package]]
