@@ -1255,6 +1255,60 @@ async fn export() {
     assert_eq!(dst_repo.access_mode(), AccessMode::Read);
 }
 
+#[tokio::test]
+#[ignore = "vacuum/auto-vacuum not yet implemented"]
+async fn repository_size_decreases_after_delete() {
+    let (_base_dir, repo_path) = {
+        let (base_dir, repo) = setup().await;
+        let repo_path = base_dir.path().join(DEFAULT_REPO_NAME);
+        repo.close().await.unwrap();
+        (base_dir, repo_path)
+    };
+    let file_size: u64 = 1024 * 1024;
+
+    let repo_size_initial = fs::metadata(&repo_path).await.unwrap().len();
+    tracing::info!(?repo_size_initial);
+
+    {
+        let repo = Repository::open(&RepositoryParams::new(&repo_path), None, AccessMode::Write)
+            .await
+            .unwrap();
+        let mut file = repo.create_file("data").await.unwrap();
+        write_random_data(&mut file, file_size as usize).await;
+        file.flush().await.unwrap();
+        repo.close().await.unwrap();
+    }
+
+    let repo_size_after_create = fs::metadata(&repo_path).await.unwrap().len();
+    tracing::info!(?repo_size_after_create);
+    assert!(
+        repo_size_after_create >= repo_size_initial + file_size,
+        "actual size: {}, expected min size: {}",
+        repo_size_after_create,
+        repo_size_initial + file_size
+    );
+
+    {
+        let repo = Repository::open(&RepositoryParams::new(&repo_path), None, AccessMode::Write)
+            .await
+            .unwrap();
+        repo.remove_entry("data").await.unwrap();
+
+        wait_for(&repo, async || repo.count_blocks().await.unwrap() <= 1).await;
+
+        repo.close().await.unwrap();
+    }
+
+    let repo_size_after_delete = fs::metadata(&repo_path).await.unwrap().len();
+    tracing::info!(?repo_size_after_delete);
+    assert!(
+        repo_size_after_delete <= repo_size_after_create - file_size,
+        "actual size: {}, expected max size: {}",
+        repo_size_after_delete,
+        repo_size_after_create - file_size
+    );
+}
+
 const DEFAULT_REPO_NAME: &str = "repo.db";
 
 async fn setup() -> (TempDir, Repository) {
@@ -1309,6 +1363,19 @@ fn random_bytes(size: usize) -> Vec<u8> {
     let mut buffer = vec![0; size];
     rand::thread_rng().fill(&mut buffer[..]);
     buffer
+}
+
+async fn write_random_data(file: &mut File, size: usize) {
+    let mut buffer = [0u8; 4 * 1024];
+    let mut remaining = size;
+    let mut rng = rand::thread_rng();
+
+    while remaining > 0 {
+        let chunk_size = buffer.len().min(remaining);
+        rng.fill(&mut buffer[..chunk_size]);
+        file.write_all(&buffer).await.unwrap();
+        remaining -= chunk_size;
+    }
 }
 
 async fn wait_for_notification(rx: &mut Receiver<Event>) {
