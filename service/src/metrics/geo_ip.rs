@@ -1,6 +1,6 @@
 //! IP geolocation
 
-use maxminddb::{MaxMindDBError, Reader, geoip2};
+use maxminddb::{Reader, geoip2};
 use std::{
     fmt, io,
     net::IpAddr,
@@ -41,21 +41,15 @@ impl GeoIp {
         Ok(())
     }
 
-    pub fn lookup(&self, addr: IpAddr) -> Result<CountryCode, LookupError> {
-        let reader = if let Some((reader, _)) = &self.reader {
-            reader
-        } else {
-            return Err(LookupError::NotFound);
+    pub fn lookup(&self, addr: IpAddr) -> Option<CountryCode> {
+        let Some((reader, _)) = &self.reader else {
+            return None;
         };
 
-        let country: geoip2::Country = reader.lookup(addr)?;
+        let result = reader.lookup(addr).ok()?;
+        let country: geoip2::Country = result.decode().ok().flatten()?;
 
-        Ok(country
-            .country
-            .ok_or(LookupError::NotFound)?
-            .iso_code
-            .ok_or(LookupError::NotFound)?
-            .into())
+        Some(country.country.iso_code?.into())
     }
 
     pub fn path(&self) -> &Path {
@@ -83,20 +77,6 @@ impl<'a> From<&'a str> for CountryCode {
 impl fmt::Display for CountryCode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.as_str())
-    }
-}
-
-pub(crate) enum LookupError {
-    NotFound,
-    Io(#[allow(dead_code)] io::Error),
-}
-
-impl From<MaxMindDBError> for LookupError {
-    fn from(src: MaxMindDBError) -> Self {
-        match src {
-            MaxMindDBError::AddressNotFoundError(_) => Self::NotFound,
-            _ => Self::Io(io::Error::other(src)),
-        }
     }
 }
 

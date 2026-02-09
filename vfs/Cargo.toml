@@ -22,7 +22,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(any(target_os = "linux"))'.dependencies]
-fuser = "0.15.0"
+fuser = "0.16.0"
 libc = { workspace = true }
 bitflags = "2.6.0"
 

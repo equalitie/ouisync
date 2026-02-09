@@ -99,7 +99,7 @@ impl Drop for MountGuard {
 const TTL: Duration = Duration::from_secs(0);
 
 // https://libfuse.github.io/doxygen/fuse__common_8h.html#a4c81f2838716f43fe493a61c87a62816
-const FUSE_CAP_ATOMIC_O_TRUNC: u32 = 8; // 0b0001
+const FUSE_CAP_ATOMIC_O_TRUNC: u64 = 1 << 3;
 
 // Convenience macro that unwraps the result or reports its error in the given reply and
 // returns.

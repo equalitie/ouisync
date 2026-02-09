@@ -25,7 +25,6 @@ fs_util = { path = "../fs_util" }
 futures-util = { workspace = true }
 hyper = { version = "1.4.1", features = ["server", "http1"] }
 interprocess = { version = "2.2.3", features = ["tokio"] }
-maxminddb = "0.24.0"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 ouisync = { path = "../lib" }
