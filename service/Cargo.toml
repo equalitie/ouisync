@@ -33,7 +33,7 @@ num_enum                    = { workspace = true }
 ouisync                     = { path = "../lib" }
 ouisync-macros              = { path = "../macros"}
 ouisync-tracing-fmt         = { path = "../tracing_fmt" }
-ouisync-vfs                 = { path = "../vfs" }
+ouisync-vfs                 = { path = "../vfs", optional = true }
 pem                         = { workspace = true }
 rand                        = { workspace = true }
 rmp-serde                   = { workspace = true }
@@ -71,3 +71,6 @@ ouisync-api-parser          = { path = "../api_parser" }
 
 [lints]
 workspace = true
+
+[features]
+vfs = ["dep:ouisync-vfs"]

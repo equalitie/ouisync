@@ -90,6 +90,7 @@ impl Bin {
                 .unwrap(),
         );
 
+        #[cfg(feature = "vfs")]
         expect_output(
             &bin.id,
             "",
@@ -172,6 +173,7 @@ impl Bin {
         )
     }
 
+    #[cfg(feature = "vfs")]
     #[track_caller]
     pub fn mount(&self) {
         expect_output(

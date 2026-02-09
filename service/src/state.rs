@@ -2,12 +2,14 @@ mod move_repository;
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "vfs")]
+use crate::config_keys::MOUNT_DIR_KEY;
 use crate::{
     any_entry::{self, AnyEntry},
     config_keys::{
         BIND_KEY, DEFAULT_BLOCK_EXPIRATION_MILLIS, DEFAULT_QUOTA_KEY,
-        DEFAULT_REPOSITORY_EXPIRATION_KEY, LOCAL_DISCOVERY_ENABLED_KEY, MOUNT_DIR_KEY, PEERS_KEY,
-        PEX_KEY, PORT_FORWARDING_ENABLED_KEY, STORE_DIRS_KEY,
+        DEFAULT_REPOSITORY_EXPIRATION_KEY, LOCAL_DISCOVERY_ENABLED_KEY, PEERS_KEY, PEX_KEY,
+        PORT_FORWARDING_ENABLED_KEY, STORE_DIRS_KEY,
     },
     config_store::{ConfigError, ConfigKey, ConfigStore},
     device_id, dht_contacts,
@@ -27,6 +29,7 @@ use ouisync::{
     crypto::{Password, PasswordSalt, cipher::SecretKey},
 };
 use ouisync_macros::api;
+#[cfg(feature = "vfs")]
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use rand::{Rng, rngs::OsRng};
 use state_monitor::{MonitorId, StateMonitor};
@@ -53,6 +56,7 @@ const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("remote_control", "Remote control endpoint address");
 
 // Repo metadata keys
+#[cfg(feature = "vfs")]
 const AUTOMOUNT_KEY: &str = "automount";
 const DHT_ENABLED_KEY: &str = "dht_enabled";
 const PEX_ENABLED_KEY: &str = "pex_enabled";
@@ -64,6 +68,7 @@ pub(crate) struct State {
     pub network: Network,
     pub tls_config: TlsConfig,
     store: Store,
+    #[cfg(feature = "vfs")]
     mounter: Mutex<Option<Arc<MultiRepoVFS>>>,
     repos: RepositorySet,
     files: FileSet,
@@ -92,24 +97,27 @@ impl State {
 
         let store = Store::new(store_dirs);
 
-        let mount_dir = match config.entry(MOUNT_DIR_KEY).get().await {
-            Ok(dir) => Some(dir),
-            Err(ConfigError::NotFound) => None,
-            Err(error) => return Err(error.into()),
-        };
+        #[cfg(feature = "vfs")]
+        let mounter = {
+            let mount_dir = match config.entry(MOUNT_DIR_KEY).get().await {
+                Ok(dir) => Some(dir),
+                Err(ConfigError::NotFound) => None,
+                Err(error) => return Err(error.into()),
+            };
 
-        let mounter = if let Some(mount_dir) = mount_dir {
-            match MultiRepoVFS::create(&mount_dir).await {
-                Ok(mounter) => Some(mounter),
-                Err(error) => {
-                    tracing::warn!(
-                        "Failed to create MultiRepoVFS for dir {mount_dir:?}: {error:?}"
-                    );
-                    None
+            if let Some(mount_dir) = mount_dir {
+                match MultiRepoVFS::create(&mount_dir).await {
+                    Ok(mounter) => Some(mounter),
+                    Err(error) => {
+                        tracing::warn!(
+                            "Failed to create MultiRepoVFS for dir {mount_dir:?}: {error:?}"
+                        );
+                        None
+                    }
                 }
+            } else {
+                None
             }
-        } else {
-            None
         };
 
         let repos_monitor = root_monitor.make_child("Repositories");
@@ -133,6 +141,7 @@ impl State {
             network,
             tls_config,
             store,
+            #[cfg(feature = "vfs")]
             mounter: Mutex::new(mounter.map(Arc::new)),
             root_monitor,
             repos_monitor,
@@ -519,40 +528,55 @@ impl State {
 
     #[api]
     pub fn session_get_mount_root(&self) -> Option<PathBuf> {
-        self.mount_root().map(|path| path.to_owned())
+        #[cfg(feature = "vfs")]
+        {
+            self.mount_root().map(|path| path.to_owned())
+        }
+
+        #[cfg(not(feature = "vfs"))]
+        None
     }
 
     #[api]
-    pub async fn session_set_mount_root(&self, path: Option<PathBuf>) -> Result<(), Error> {
-        if path == self.mount_root() {
-            return Ok(());
-        }
-
-        let config_entry = self.config.entry(MOUNT_DIR_KEY);
-
-        if let Some(path) = path {
-            config_entry.set(&path).await?;
-
-            let mounter = MultiRepoVFS::create(path).await?;
-            let mounter = Arc::new(mounter);
-            let mounter = self.mounter.lock().unwrap().insert(mounter).clone();
-
-            // Remount all mounted repos
-            let repos: Vec<_> = self
-                .repos
-                .map(|_, holder| (holder.short_name().to_owned(), holder.repository().clone()));
-
-            for (name, repo) in repos {
-                if repo.metadata().get(AUTOMOUNT_KEY).await?.unwrap_or(false) {
-                    mounter.insert(name, repo)?;
-                }
+    pub async fn session_set_mount_root(
+        &self,
+        #[cfg_attr(not(feature = "vfs"), allow(unused))] path: Option<PathBuf>,
+    ) -> Result<(), Error> {
+        #[cfg(feature = "vfs")]
+        {
+            if path == self.mount_root() {
+                return Ok(());
             }
-        } else {
-            config_entry.remove().await?;
-            *self.mounter.lock().unwrap() = None;
+
+            let config_entry = self.config.entry(MOUNT_DIR_KEY);
+
+            if let Some(path) = path {
+                config_entry.set(&path).await?;
+
+                let mounter = MultiRepoVFS::create(path).await?;
+                let mounter = Arc::new(mounter);
+                let mounter = self.mounter.lock().unwrap().insert(mounter).clone();
+
+                // Remount all mounted repos
+                let repos: Vec<_> = self
+                    .repos
+                    .map(|_, holder| (holder.short_name().to_owned(), holder.repository().clone()));
+
+                for (name, repo) in repos {
+                    if repo.metadata().get(AUTOMOUNT_KEY).await?.unwrap_or(false) {
+                        mounter.insert(name, repo)?;
+                    }
+                }
+            } else {
+                config_entry.remove().await?;
+                *self.mounter.lock().unwrap() = None;
+            }
+
+            Ok(())
         }
 
-        Ok(())
+        #[cfg(not(feature = "vfs"))]
+        Err(Error::NoVFS)
     }
 
     /// Checks whether the given string is a valid share token.
@@ -664,8 +688,7 @@ impl State {
             any_entry::is_directory(&dst_repo, &dst_path).await,
         ) {
             (EntryType::File, Ok(true)) => {
-                any_entry::create(&dst_repo, &dst_path.join(src_file_name), EntryType::File)
-                    .await?
+                any_entry::create(&dst_repo, &dst_path.join(src_file_name), EntryType::File).await?
             }
             (EntryType::File, Ok(false)) => {
                 any_entry::create(&dst_repo, &dst_path, EntryType::File).await?
@@ -876,6 +899,7 @@ impl State {
             return Ok(());
         };
 
+        #[cfg(feature = "vfs")]
         if let Some(mounter) = self.mounter.lock().unwrap().as_ref()
             && let Err(error) = mounter.remove(holder.short_name())
         {
@@ -908,6 +932,7 @@ impl State {
     pub async fn repository_close(&self, repo: RepositoryHandle) -> Result<(), Error> {
         let holder = self.repos.remove(repo).ok_or(Error::InvalidArgument)?;
 
+        #[cfg(feature = "vfs")]
         if let Some(mounter) = self.mounter.lock().unwrap().as_ref()
             && let Err(error) = mounter.remove(holder.short_name())
         {
@@ -1123,57 +1148,81 @@ impl State {
     }
 
     #[api]
-    pub async fn repository_mount(&self, repo: RepositoryHandle) -> Result<PathBuf, Error> {
-        let (repo, short_name) = self
-            .repos
-            .get_repository_and_short_name(repo)
-            .ok_or(Error::InvalidArgument)?;
+    pub async fn repository_mount(
+        &self,
+        #[cfg_attr(not(feature = "vfs"), allow(unused))] repo: RepositoryHandle,
+    ) -> Result<PathBuf, Error> {
+        #[cfg(feature = "vfs")]
+        {
+            let (repo, short_name) = self
+                .repos
+                .get_repository_and_short_name(repo)
+                .ok_or(Error::InvalidArgument)?;
 
-        repo.metadata().set(AUTOMOUNT_KEY, true).await?;
+            repo.metadata().set(AUTOMOUNT_KEY, true).await?;
 
-        let mounter = self.mounter.lock().unwrap();
-        let mounter = mounter.as_ref().ok_or(Error::MountDirUnspecified)?;
+            let mounter = self.mounter.lock().unwrap();
+            let mounter = mounter.as_ref().ok_or(Error::MountDirUnspecified)?;
 
-        if let Some(mount_point) = mounter.mount_point(&short_name) {
-            // Already mounted
-            Ok(mount_point)
-        } else {
-            Ok(mounter.insert(short_name, repo)?)
+            if let Some(mount_point) = mounter.mount_point(&short_name) {
+                // Already mounted
+                Ok(mount_point)
+            } else {
+                Ok(mounter.insert(short_name, repo)?)
+            }
         }
+
+        #[cfg(not(feature = "vfs"))]
+        Err(Error::NoVFS)
     }
 
     #[api]
-    pub async fn repository_unmount(&self, repo: RepositoryHandle) -> Result<(), Error> {
-        let (repo, short_name) = self
-            .repos
-            .get_repository_and_short_name(repo)
-            .ok_or(Error::InvalidArgument)?;
+    pub async fn repository_unmount(
+        &self,
+        #[cfg_attr(not(feature = "vfs"), allow(unused))] repo: RepositoryHandle,
+    ) -> Result<(), Error> {
+        #[cfg(feature = "vfs")]
+        {
+            let (repo, short_name) = self
+                .repos
+                .get_repository_and_short_name(repo)
+                .ok_or(Error::InvalidArgument)?;
 
-        repo.metadata().remove(AUTOMOUNT_KEY).await?;
+            repo.metadata().remove(AUTOMOUNT_KEY).await?;
 
-        if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
-            mounter.remove(&short_name)?;
+            if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
+                mounter.remove(&short_name)?;
+            }
+
+            Ok(())
         }
 
-        Ok(())
+        #[cfg(not(feature = "vfs"))]
+        Err(Error::NoVFS)
     }
 
     #[api]
     pub fn repository_get_mount_point(
         &self,
-        repo: RepositoryHandle,
+        _repo: RepositoryHandle,
     ) -> Result<Option<PathBuf>, Error> {
-        let short_name = self
-            .repos
-            .with(repo, |holder| holder.short_name().to_owned())
-            .ok_or(Error::InvalidArgument)?;
+        #[cfg(feature = "vfs")]
+        {
+            let short_name = self
+                .repos
+                .with(_repo, |holder| holder.short_name().to_owned())
+                .ok_or(Error::InvalidArgument)?;
 
-        Ok(self
-            .mounter
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|m| m.mount_point(&short_name)))
+            Ok(self
+                .mounter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|m| m.mount_point(&short_name)))
+        }
+
+        #[cfg(not(feature = "vfs"))]
+        Err(Error::NoVFS)
     }
 
     #[api]
@@ -1899,6 +1948,7 @@ impl State {
         self.store.get()
     }
 
+    #[cfg(feature = "vfs")]
     pub fn mount_root(&self) -> Option<PathBuf> {
         self.mounter
             .lock()
@@ -2025,6 +2075,7 @@ impl State {
         let repos: Vec<_> = self.repos.drain(prefix);
 
         // Unmount all repos
+        #[cfg(feature = "vfs")]
         if let Some(mounter) = self.mounter.lock().unwrap().as_ref() {
             for holder in &repos {
                 if let Err(error) = mounter.remove(holder.short_name()) {
@@ -2054,6 +2105,7 @@ impl State {
         local_secret: Option<LocalSecret>,
         sync_enabled: bool,
     ) -> Result<RepositoryHolder, Error> {
+        #[cfg(feature = "vfs")]
         let mounter = self.mounter.lock().unwrap().as_ref().cloned();
 
         load_repository(
@@ -2063,6 +2115,7 @@ impl State {
             &self.config,
             &self.network,
             &self.repos_monitor,
+            #[cfg(feature = "vfs")]
             mounter.as_deref(),
         )
         .await
@@ -2232,7 +2285,7 @@ async fn load_repository(
     config: &ConfigStore,
     network: &Network,
     repos_monitor: &StateMonitor,
-    mounter: Option<&MultiRepoVFS>,
+    #[cfg(feature = "vfs")] mounter: Option<&MultiRepoVFS>,
 ) -> Result<RepositoryHolder, Error> {
     let params = RepositoryParams::new(path)
         .with_device_id(device_id::get_or_create(config).await?)
@@ -2244,6 +2297,7 @@ async fn load_repository(
         holder.enable_sync(register(network, holder.repository()).await?);
     }
 
+    #[cfg(feature = "vfs")]
     if let Some(mounter) = mounter
         && holder
             .repository()

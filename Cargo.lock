@@ -2793,7 +2793,6 @@ dependencies = [
  "ouisync",
  "ouisync-rand",
  "ouisync-service",
- "ouisync-vfs",
  "rcgen",
  "scoped_task",
  "serde",

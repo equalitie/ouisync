@@ -30,7 +30,6 @@ metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 ouisync = { path = "../lib" }
 ouisync-service = { path = "../service" }
-ouisync-vfs = { path = "../vfs" }
 rand = { workspace = true }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
@@ -61,3 +60,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]
 libc = { workspace = true }
+
+[features]
+default = ["vfs"]
+vfs = ["ouisync-service/vfs"]
