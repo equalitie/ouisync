@@ -13,10 +13,10 @@ use tracing::Span;
 use deadlock::ExpectShortLifetime;
 use ref_cast::RefCast;
 use sqlx::{
-    Row, SqlitePool, TransactionManager,
+    ConnectOptions, Row, SqlitePool, TransactionManager,
     sqlite::{
-        Sqlite, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-        SqliteTransactionManager,
+        Sqlite, SqliteAutoVacuum, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions,
+        SqliteSynchronous, SqliteTransactionManager,
     },
 };
 use std::{
@@ -48,6 +48,20 @@ pub struct Pool {
 
 impl Pool {
     async fn create(conn_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
+        if fs::try_exists(conn_options.get_filename())
+            .await
+            .unwrap_or(false)
+        {
+            // Try to enable auto-vacuum, but if it fails [^1] it's not a critical failure as we can
+            // keep using the db without auto-vacuum [^2]. Just log the error and keep going.
+            //
+            // [^1]: for example, because of low disk space
+            // [^2]: with the downside that disk space won't be reclaimed after data deletion
+            if let Err(error) = enable_auto_vacuum(conn_options.get_filename()).await {
+                tracing::warn!(?error, "failed to enable auto vacuum");
+            }
+        }
+
         let conn_options = conn_options
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
@@ -63,7 +77,12 @@ impl Pool {
         let write = pool_options
             .clone()
             .max_connections(1)
-            .connect_with(conn_options.clone().optimize_on_close(true, Some(1000)))
+            .connect_with(
+                conn_options
+                    .clone()
+                    .auto_vacuum(SqliteAutoVacuum::Full)
+                    .optimize_on_close(true, Some(1000)),
+            )
             .await?;
 
         let reads = pool_options
@@ -316,6 +335,18 @@ impl std::fmt::Debug for WriteTransaction {
 
 impl_executor_by_deref!(WriteTransaction);
 
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("failed to create database directory")]
+    CreateDirectory(#[source] io::Error),
+    #[error("database already exists")]
+    Exists,
+    #[error("failed to open database")]
+    Open(#[source] sqlx::Error),
+    #[error("failed to execute database query")]
+    Query(#[from] sqlx::Error),
+}
+
 /// Creates a new database and opens a connection to it.
 pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
     let path = path.as_ref();
@@ -386,16 +417,30 @@ pub(crate) const fn encode_u64(u: u64) -> i64 {
     u as i64
 }
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("failed to create database directory")]
-    CreateDirectory(#[source] io::Error),
-    #[error("database already exists")]
-    Exists,
-    #[error("failed to open database")]
-    Open(#[source] sqlx::Error),
-    #[error("failed to execute database query")]
-    Query(#[from] sqlx::Error),
+// Enable auto-vacuum on the given database unless already enabled
+async fn enable_auto_vacuum(db_path: &Path) -> Result<(), Error> {
+    let mut conn = SqliteConnectOptions::new()
+        .filename(db_path)
+        .connect()
+        .await?;
+
+    let auto_vacuum: u32 = sqlx::query("PRAGMA auto_vacuum")
+        .fetch_one(&mut conn)
+        .await?
+        .get(0);
+
+    if auto_vacuum != 0 {
+        return Ok(());
+    }
+
+    sqlx::query("PRAGMA auto_vacuum=FULL")
+        .execute(&mut conn)
+        .await?;
+
+    // Execute `VACUUM` command for the `auto_vacuum` pragma to take effect.
+    sqlx::query("VACUUM").execute(&mut conn).await?;
+
+    Ok(())
 }
 
 async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {

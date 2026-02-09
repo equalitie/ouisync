@@ -13,6 +13,7 @@ use tokio::{
     sync::broadcast::Receiver,
     time::{self, Duration, timeout},
 };
+use tokio_stream::wrappers::ReadDirStream;
 use tracing::instrument;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1190,16 +1191,13 @@ async fn aux_db_files_are_deleted_on_close() {
     test_utils::init_log();
 
     let (temp_dir, repo) = setup().await;
-
     repo.close().await.unwrap();
 
-    let mut read_dir = fs::read_dir(temp_dir.path()).await.unwrap();
-    let mut entries = Vec::new();
-
-    while let Some(entry) = read_dir.next_entry().await.unwrap() {
-        entries.push(entry.path());
-    }
-
+    let entries: Vec<_> = ReadDirStream::new(fs::read_dir(temp_dir.path()).await.unwrap())
+        .map_ok(|entry| entry.path())
+        .try_collect()
+        .await
+        .unwrap();
     assert_eq!(entries, [temp_dir.path().join(DEFAULT_REPO_NAME)]);
 }
 
@@ -1253,6 +1251,63 @@ async fn export() {
         .await
         .unwrap();
     assert_eq!(dst_repo.access_mode(), AccessMode::Read);
+}
+
+#[tokio::test]
+async fn repository_size_decreases_after_delete() {
+    let (_base_dir, repo_path) = {
+        let (base_dir, repo) = setup().await;
+        let repo_path = base_dir.path().join(DEFAULT_REPO_NAME);
+        repo.close().await.unwrap();
+        (base_dir, repo_path)
+    };
+    let file_size: u64 = 1024 * 1024;
+
+    let repo_size_initial = fs::metadata(&repo_path).await.unwrap().len();
+    tracing::info!(?repo_size_initial);
+
+    {
+        let repo = Repository::open(&RepositoryParams::new(&repo_path), None, AccessMode::Write)
+            .await
+            .unwrap();
+        let mut file = repo.create_file("data").await.unwrap();
+        write_random_data(&mut file, file_size as usize).await;
+        file.flush().await.unwrap();
+        repo.close().await.unwrap();
+    }
+
+    ensure_aux_db_files_are_deleted(&repo_path).await;
+
+    let repo_size_after_create = fs::metadata(&repo_path).await.unwrap().len();
+    tracing::info!(?repo_size_after_create);
+    assert!(
+        repo_size_after_create >= repo_size_initial + file_size,
+        "actual size: {}, expected min size: {}",
+        repo_size_after_create,
+        repo_size_initial + file_size
+    );
+
+    {
+        let repo = Repository::open(&RepositoryParams::new(&repo_path), None, AccessMode::Write)
+            .await
+            .unwrap();
+        repo.remove_entry("data").await.unwrap();
+
+        wait_for(&repo, async || repo.count_blocks().await.unwrap() <= 1).await;
+
+        repo.close().await.unwrap();
+    }
+
+    ensure_aux_db_files_are_deleted(&repo_path).await;
+
+    let repo_size_after_delete = fs::metadata(&repo_path).await.unwrap().len();
+    tracing::info!(?repo_size_after_delete);
+    assert!(
+        repo_size_after_delete <= repo_size_after_create - file_size,
+        "actual size: {}, expected max size: {}",
+        repo_size_after_delete,
+        repo_size_after_create - file_size
+    );
 }
 
 const DEFAULT_REPO_NAME: &str = "repo.db";
@@ -1311,6 +1366,19 @@ fn random_bytes(size: usize) -> Vec<u8> {
     buffer
 }
 
+async fn write_random_data(file: &mut File, size: usize) {
+    let mut buffer = [0u8; 4 * 1024];
+    let mut remaining = size;
+    let mut rng = rand::thread_rng();
+
+    while remaining > 0 {
+        let chunk_size = buffer.len().min(remaining);
+        rng.fill(&mut buffer[..chunk_size]);
+        file.write_all(&buffer).await.unwrap();
+        remaining -= chunk_size;
+    }
+}
+
 async fn wait_for_notification(rx: &mut Receiver<Event>) {
     match timeout(Duration::from_secs(5), rx.recv()).await {
         Ok(Ok(_)) => (),
@@ -1340,4 +1408,32 @@ where
     })
     .await
     .expect("timeout waiting for condition")
+}
+
+// HACK: Due to a [bug in sqlx][1], the db aux files are not always deleted after a repository is
+// closed. As a workaround, this function reopens and closes the repository until the aux files are
+// gone.
+//
+// [1]: https://github.com/launchbadge/sqlx/issues/3217
+async fn ensure_aux_db_files_are_deleted(repo_path: &Path) {
+    let expected_files = [repo_path.to_owned()];
+
+    loop {
+        if ReadDirStream::new(fs::read_dir(repo_path.parent().unwrap()).await.unwrap())
+            .map_ok(|entry| entry.path())
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            == expected_files
+        {
+            break;
+        }
+
+        Repository::open(&RepositoryParams::new(repo_path), None, AccessMode::Blind)
+            .await
+            .unwrap()
+            .close()
+            .await
+            .unwrap();
+    }
 }
