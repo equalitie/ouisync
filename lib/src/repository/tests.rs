@@ -1429,7 +1429,7 @@ async fn ensure_aux_db_files_are_deleted(repo_path: &Path) {
             break;
         }
 
-        Repository::open(&RepositoryParams::new(&repo_path), None, AccessMode::Blind)
+        Repository::open(&RepositoryParams::new(repo_path), None, AccessMode::Blind)
             .await
             .unwrap()
             .close()

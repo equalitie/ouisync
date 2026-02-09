@@ -48,13 +48,18 @@ pub struct Pool {
 
 impl Pool {
     async fn create(conn_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
-        // Try to enable auto-vacuum, but if it fails [^1] it's not a critical failure as we can
-        // keep using the db without auto-vacuum [^2]. Just log the error and keep going.
-        //
-        // [^1]: for example, because of low disk space
-        // [^2]: with the downside that disk space won't be reclaimed after data deletion
-        if let Err(error) = enable_auto_vacuum(conn_options.get_filename()).await {
-            tracing::warn!(?error, "failed to enable auto vacuum");
+        if fs::try_exists(conn_options.get_filename())
+            .await
+            .unwrap_or(false)
+        {
+            // Try to enable auto-vacuum, but if it fails [^1] it's not a critical failure as we can
+            // keep using the db without auto-vacuum [^2]. Just log the error and keep going.
+            //
+            // [^1]: for example, because of low disk space
+            // [^2]: with the downside that disk space won't be reclaimed after data deletion
+            if let Err(error) = enable_auto_vacuum(conn_options.get_filename()).await {
+                tracing::warn!(?error, "failed to enable auto vacuum");
+            }
         }
 
         let conn_options = conn_options
@@ -412,12 +417,8 @@ pub(crate) const fn encode_u64(u: u64) -> i64 {
     u as i64
 }
 
-// If the db already exists, enable auto-vacuum on it unless already enabled
+// Enable auto-vacuum on the given database unless already enabled
 async fn enable_auto_vacuum(db_path: &Path) -> Result<(), Error> {
-    if !fs::try_exists(db_path).await.unwrap_or(false) {
-        return Ok(());
-    }
-
     let mut conn = SqliteConnectOptions::new()
         .filename(db_path)
         .connect()
