@@ -29,7 +29,7 @@ use std::{
 #[cfg(test)]
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::{fs, task};
+use tokio::{fs, sync::Semaphore, task};
 
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -432,6 +432,13 @@ async fn enable_auto_vacuum(db_path: &Path) -> Result<(), Error> {
     if auto_vacuum != 0 {
         return Ok(());
     }
+
+    // VACUUM requires up to twice the size of the original database of free disk space. To prevent
+    // exhausting available disk space when opening multiple databases in parallel, we limit the
+    // number of dbs being vacuumed at the same time to one. Dbs that don't need to be vacuumed are
+    // not affected by this limit.
+    static SEMAPHORE: Semaphore = Semaphore::const_new(1);
+    let _permit = SEMAPHORE.acquire().await.unwrap();
 
     sqlx::query("PRAGMA auto_vacuum=FULL")
         .execute(&mut conn)
