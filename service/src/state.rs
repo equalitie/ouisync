@@ -735,7 +735,7 @@ impl State {
 
         match join_handle.await {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => Err(error.into()),
+            Ok(Err(error)) => Err(error),
             Err(_join_error) => panic!(),
         }
     }
