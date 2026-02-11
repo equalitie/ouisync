@@ -631,14 +631,14 @@ impl State {
             .map(|handle, holder| (holder.path().to_owned(), handle))
     }
 
-    /// Copy file into, from or between repositories
+    /// Copy file or directory into, from or between repositories
     ///
     /// - `src_repo`: Name of the repository from which file will be copied.
-    /// - `src_path`: Path of to the file to be copied. If `src_repo` is set, the `src_path` is
+    /// - `src_path`: Path of to the entry to be copied. If `src_repo` is set, the `src_path` is
     ///   relative to the corresponding repository root. If `src_repo` is null, `src_path` is
     ///   interpreted as path on the local file system.
-    /// - `dst_repo`: Name of the repository into which file will be copied.
-    /// - `dst_path`:
+    /// - `dst_repo`: Name of the repository into which the entry will be copied.
+    /// - `dst_path`: Destination entry
     #[api]
     pub async fn session_copy(
         &self,
@@ -647,30 +647,6 @@ impl State {
         dst_repo: Option<String>,
         dst_path: PathBuf,
     ) -> Result<(), Error> {
-        if src_repo.is_none() && dst_repo.is_none() {
-            tracing::error!("One or both of source and destination repositories must be set");
-            return Err(Error::InvalidArgument);
-        }
-
-        // TODO: Check destination is not descendant of source
-
-        fn is_not_found_error(error: &Error) -> bool {
-            match error {
-                Error::Repository(ouisync::Error::EntryNotFound) => true,
-                Error::Io(error) => error.kind() == io::ErrorKind::NotFound,
-                _ => false,
-            }
-        }
-
-        let src_file_name = match src_path.file_name() {
-            Some(file_name) => file_name,
-            None => {
-                // TODO: Not sure how to handle this one
-                tracing::error!("Source must have a file name");
-                return Err(Error::InvalidArgument);
-            }
-        };
-
         let src_repo = match src_repo {
             Some(src_repo) => Some(any_entry::find_repo_by_name(&self.repos, &src_repo)?),
             None => None,
@@ -681,49 +657,86 @@ impl State {
             None => None,
         };
 
-        let mut src = any_entry::open(&src_repo, &src_path).await?;
-
-        let mut dst = match (
-            src.entry_type(),
-            any_entry::is_directory(&dst_repo, &dst_path).await,
-        ) {
-            (EntryType::File, Ok(true)) => {
-                any_entry::create(&dst_repo, &dst_path.join(src_file_name), EntryType::File).await?
-            }
-            (EntryType::File, Ok(false)) => {
-                any_entry::create(&dst_repo, &dst_path, EntryType::File).await?
-            }
-            (EntryType::Directory, Ok(true)) => {
-                any_entry::create(
-                    &dst_repo,
-                    &dst_path.join(src_file_name),
-                    EntryType::Directory,
-                )
-                .await?
-            }
-            (EntryType::Directory, Ok(false)) => {
-                tracing::error!("Can not copy directory to a file");
+        // HACK: Spawning here because with C++ bindings the stack size allocated by `asio::spawn`
+        // is too small to handle these calls, resulting in a stack-overflow crash. The
+        // `tokio::spawn` allocates new heap which Rust can manage better.
+        let join_handle = tokio::spawn(async move {
+            if src_repo.is_none() && dst_repo.is_none() {
+                tracing::error!("One or both of source and destination repositories must be set");
                 return Err(Error::InvalidArgument);
             }
-            (src_entry_type, Err(error)) => {
-                if is_not_found_error(&error) {
-                    any_entry::create(&dst_repo, &dst_path, src_entry_type).await?
-                } else {
-                    return Err(error);
+
+            // TODO: Check destination is not descendant of source
+
+            fn is_not_found_error(error: &Error) -> bool {
+                match error {
+                    Error::Repository(ouisync::Error::EntryNotFound) => true,
+                    Error::Io(error) => error.kind() == io::ErrorKind::NotFound,
+                    _ => false,
                 }
             }
-        };
 
-        match (&mut src, &mut dst) {
-            (AnyEntry::File(src), AnyEntry::File(dst)) => src.copy_to(dst).await,
-            (AnyEntry::Dir(src), AnyEntry::Dir(dst)) => src.copy_to(dst).await,
-            (AnyEntry::File(_src), AnyEntry::Dir(_dst)) => {
-                unreachable!()
+            let src_file_name = match src_path.file_name() {
+                Some(file_name) => file_name,
+                None => {
+                    // TODO: Not sure how to handle this one
+                    tracing::error!("Source must have a file name");
+                    return Err(Error::InvalidArgument);
+                }
+            };
+
+            let mut src = any_entry::open(&src_repo, &src_path).await?;
+
+            let mut dst = match (
+                src.entry_type(),
+                any_entry::is_directory(&dst_repo, &dst_path).await,
+            ) {
+                (EntryType::File, Ok(true)) => {
+                    any_entry::create(&dst_repo, &dst_path.join(src_file_name), EntryType::File)
+                        .await?
+                }
+                (EntryType::File, Ok(false)) => {
+                    any_entry::create(&dst_repo, &dst_path, EntryType::File).await?
+                }
+                (EntryType::Directory, Ok(true)) => {
+                    any_entry::create(
+                        &dst_repo,
+                        &dst_path.join(src_file_name),
+                        EntryType::Directory,
+                    )
+                    .await?
+                }
+                (EntryType::Directory, Ok(false)) => {
+                    tracing::error!("Can not copy directory to a file");
+                    return Err(Error::InvalidArgument);
+                }
+                (src_entry_type, Err(error)) => {
+                    if is_not_found_error(&error) {
+                        any_entry::create(&dst_repo, &dst_path, src_entry_type).await?
+                    } else {
+                        return Err(error);
+                    }
+                }
+            };
+
+            match (&mut src, &mut dst) {
+                (AnyEntry::File(src), AnyEntry::File(dst)) => src.copy_to(dst).await,
+                (AnyEntry::Dir(src), AnyEntry::Dir(dst)) => src.copy_to(dst).await,
+                (AnyEntry::File(_src), AnyEntry::Dir(_dst)) => {
+                    // Sanitized above
+                    unreachable!()
+                }
+                (AnyEntry::Dir(_src), AnyEntry::File(_dst)) => {
+                    // Sanitized above
+                    unreachable!()
+                }
             }
-            (AnyEntry::Dir(_src), AnyEntry::File(_dst)) => {
-                // Sanitized above
-                unreachable!()
-            }
+        });
+
+        match join_handle.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(error.into()),
+            Err(_join_error) => panic!(),
         }
     }
 

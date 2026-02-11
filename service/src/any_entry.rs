@@ -332,9 +332,7 @@ impl AnyFile {
 
     pub(crate) async fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
         match self {
-            AnyFile::FsFile(file) => {
-                Ok(file.read(buffer).await?)
-            }
+            AnyFile::FsFile(file) => Ok(file.read(buffer).await?),
             AnyFile::RepoFile(file) => {
                 return Ok(file.read(buffer).await?);
             }
@@ -343,9 +341,7 @@ impl AnyFile {
 
     pub(crate) async fn write_all(&mut self, buffer: &[u8]) -> Result<(), Error> {
         match self {
-            AnyFile::FsFile(file) => {
-                Ok(file.write_all(buffer).await?)
-            }
+            AnyFile::FsFile(file) => Ok(file.write_all(buffer).await?),
             AnyFile::RepoFile(file) => {
                 return Ok(file.write_all(buffer).await?);
             }
@@ -354,9 +350,7 @@ impl AnyFile {
 
     pub(crate) async fn flush(&mut self) -> Result<(), Error> {
         match self {
-            AnyFile::FsFile(file) => {
-                Ok(file.flush().await?)
-            }
+            AnyFile::FsFile(file) => Ok(file.flush().await?),
             AnyFile::RepoFile(file) => {
                 return Ok(file.flush().await?);
             }
