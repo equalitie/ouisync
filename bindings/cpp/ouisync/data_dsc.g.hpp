@@ -369,9 +369,10 @@ template<> struct describe::Enum<error::Service> : std::true_type {
             error::SERVICE_ALREADY_RUNNING,
             error::STORE_DIR_UNSPECIFIED,
             error::MOUNT_DIR_UNSPECIFIED,
+            error::NO_VFS,
             error::OTHER,
         };
-        for (size_t i = 0; i != 31; ++i) {
+        for (size_t i = 0; i != 32; ++i) {
             if (v == values[i]) return true;
         }
         return false;

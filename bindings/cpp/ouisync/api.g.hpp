@@ -515,14 +515,14 @@ public:
     );
 
     /**
-     * Copy file into, from or between repositories
+     * Copy file or directory into, from or between repositories
      *
      * - `src_repo`: Name of the repository from which file will be copied.
-     * - `src_path`: Path of to the file to be copied. If `src_repo` is set, the `src_path` is
+     * - `src_path`: Path of to the entry to be copied. If `src_repo` is set, the `src_path` is
      *   relative to the corresponding repository root. If `src_repo` is null, `src_path` is
      *   interpreted as path on the local file system.
-     * - `dst_repo`: Name of the repository into which file will be copied.
-     * - `dst_path`:
+     * - `dst_repo`: Name of the repository into which the entry will be copied.
+     * - `dst_path`: Destination entry
      */
     void copy(
         const std::optional<std::string>& src_repo,

@@ -468,6 +468,10 @@ enum Service : uint16_t {
      */
     MOUNT_DIR_UNSPECIFIED = 4108,
     /**
+     * Ouisync compiled without VFS
+     */
+    NO_VFS = 4109,
+    /**
      * Unspecified error
      */
     OTHER = 65535,

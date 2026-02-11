@@ -27,6 +27,10 @@ else()
     endif()
 endif()
 
+
+add_compile_options("-fsanitize=address" "-fno-omit-frame-pointer")
+link_libraries(-fsanitize=address)
+
 ############################
 # Boost
 ############################
@@ -66,6 +70,7 @@ corrosion_import_crate(
     # Can also create a dynamic library if crate type is set to `cdylib`.
     CRATE_TYPES staticlib
     CRATES ouisync-service
+    FEATURES vfs
 )
 
 # TODO: This doesn't seem to do anything apart from preventing

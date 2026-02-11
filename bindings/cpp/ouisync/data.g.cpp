@@ -82,6 +82,7 @@ const char* error_message(error::Service ec) noexcept {
         case error::SERVICE_ALREADY_RUNNING: return "ServiceAlreadyRunning";
         case error::STORE_DIR_UNSPECIFIED: return "StoreDirUnspecified";
         case error::MOUNT_DIR_UNSPECIFIED: return "MountDirUnspecified";
+        case error::NO_VFS: return "NoVFS";
         case error::OTHER: return "Other";
         default: return "UnknownError";
     }
