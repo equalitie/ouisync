@@ -12,6 +12,8 @@ option(MEASURE_BUILD_TIME "Print target build duration" OFF)
 
 option(WARNING_IS_ERROR "Fail compilation in presence of warnings" OFF)
 option(OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION OFF)
+# Enable mounting on Linux and Windows, requires FUSE and Dokan respectively.
+option(OUISYNC_WITH_VFS "Compile with Virtual File System support" OFF)
 
 # Show compilation times
 set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
@@ -26,10 +28,6 @@ else()
         add_compile_options(-Werror)
     endif()
 endif()
-
-
-add_compile_options("-fsanitize=address" "-fno-omit-frame-pointer")
-link_libraries(-fsanitize=address)
 
 ############################
 # Boost
@@ -64,13 +62,18 @@ FetchContent_MakeAvailable(Corrosion)
 # CMAKE_CURRENT_SOURCE_DIR points to the dir path of this CMakeLists.txt file
 set(OUISYNC_SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../)
 
+set(OUISYNC_FEATURES)
+if (OUISYNC_WITH_VFS)
+    set(OUISYNC_FEATURES "vfs")
+endif()
+
 # This creates the 'ouisync_service' library target whose sources are written in Rust
 corrosion_import_crate(
     MANIFEST_PATH ${OUISYNC_SRC_ROOT}/Cargo.toml
     # Can also create a dynamic library if crate type is set to `cdylib`.
     CRATE_TYPES staticlib
     CRATES ouisync-service
-    FEATURES vfs
+    FEATURES ${OUISYNC_FEATURES}
 )
 
 # TODO: This doesn't seem to do anything apart from preventing
