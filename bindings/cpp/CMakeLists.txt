@@ -102,9 +102,10 @@ FetchContent_MakeAvailable(Corrosion)
 # CMAKE_CURRENT_SOURCE_DIR points to the dir path of this CMakeLists.txt file
 set(OUISYNC_SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../)
 
-set(OUISYNC_FEATURES)
+set(OUISYNC_SERVICE_PRIVATE_LIBS)
 if (OUISYNC_WITH_VFS)
-    set(OUISYNC_FEATURES "vfs")
+    set(OUISYNC_CARGO_FEATURES "vfs")
+    list(APPEND OUISYNC_SERVICE_PRIVATE_LIBS fuse3) # TODO: Windows uses Dokan
 endif()
 
 # This creates the 'ouisync_service' library target whose sources are written in Rust
@@ -113,7 +114,7 @@ corrosion_import_crate(
     # Can also create a dynamic library if crate type is set to `cdylib`.
     CRATE_TYPES staticlib
     CRATES ouisync-service
-    FEATURES ${OUISYNC_FEATURES}
+    FEATURES ${OUISYNC_CARGO_FEATURES}
 )
 
 # TODO: This doesn't seem to do anything apart from preventing
@@ -133,10 +134,9 @@ target_link_libraries(cpp_ouisync_service
         Boost::context
         # For reading ouisync config files
         Boost::filesystem
-        # TODO: This should not be necessary when mounting repositories is not
-        # required
-        fuse3
         msgpack-cxx
+    PRIVATE
+        ${OUISYNC_SERVICE_PRIVATE_LIBS}
 )
 
 target_include_directories(cpp_ouisync_service
