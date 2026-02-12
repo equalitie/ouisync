@@ -42,9 +42,9 @@ template<> struct describe::Struct<StorageSize> : std::true_type {
 template<> struct describe::Enum<AccessMode> : std::true_type {
     static bool is_valid(uint8_t v) {
         static const uint8_t values[] = {
-            BLIND,
-            READ,
-            WRITE,
+            static_cast<uint8_t>(AccessMode::blind),
+            static_cast<uint8_t>(AccessMode::read),
+            static_cast<uint8_t>(AccessMode::write),
         };
         for (size_t i = 0; i != 3; ++i) {
             if (v == values[i]) return true;
@@ -184,8 +184,8 @@ std::string_view variant_name(const AccessChange::Alternatives& variant);
 template<> struct describe::Enum<EntryType> : std::true_type {
     static bool is_valid(uint8_t v) {
         static const uint8_t values[] = {
-            FILE,
-            DIRECTORY,
+            static_cast<uint8_t>(EntryType::file),
+            static_cast<uint8_t>(EntryType::directory),
         };
         for (size_t i = 0; i != 2; ++i) {
             if (v == values[i]) return true;
@@ -197,8 +197,8 @@ template<> struct describe::Enum<EntryType> : std::true_type {
 template<> struct describe::Enum<NetworkEvent> : std::true_type {
     static bool is_valid(uint8_t v) {
         static const uint8_t values[] = {
-            PROTOCOL_VERSION_MISMATCH,
-            PEER_SET_CHANGE,
+            static_cast<uint8_t>(NetworkEvent::protocol_version_mismatch),
+            static_cast<uint8_t>(NetworkEvent::peer_set_change),
         };
         for (size_t i = 0; i != 2; ++i) {
             if (v == values[i]) return true;
@@ -210,11 +210,11 @@ template<> struct describe::Enum<NetworkEvent> : std::true_type {
 template<> struct describe::Enum<PeerSource> : std::true_type {
     static bool is_valid(uint8_t v) {
         static const uint8_t values[] = {
-            USER_PROVIDED,
-            LISTENER,
-            LOCAL_DISCOVERY,
-            DHT,
-            PEER_EXCHANGE,
+            static_cast<uint8_t>(PeerSource::user_provided),
+            static_cast<uint8_t>(PeerSource::listener),
+            static_cast<uint8_t>(PeerSource::local_discovery),
+            static_cast<uint8_t>(PeerSource::dht),
+            static_cast<uint8_t>(PeerSource::peer_exchange),
         };
         for (size_t i = 0; i != 5; ++i) {
             if (v == values[i]) return true;
@@ -325,9 +325,9 @@ template<> struct describe::Struct<Progress> : std::true_type {
 template<> struct describe::Enum<NatBehavior> : std::true_type {
     static bool is_valid(uint8_t v) {
         static const uint8_t values[] = {
-            ENDPOINT_INDEPENDENT,
-            ADDRESS_DEPENDENT,
-            ADDRESS_AND_PORT_DEPENDENT,
+            static_cast<uint8_t>(NatBehavior::endpoint_independent),
+            static_cast<uint8_t>(NatBehavior::address_dependent),
+            static_cast<uint8_t>(NatBehavior::address_and_port_dependent),
         };
         for (size_t i = 0; i != 3; ++i) {
             if (v == values[i]) return true;
@@ -339,38 +339,38 @@ template<> struct describe::Enum<NatBehavior> : std::true_type {
 template<> struct describe::Enum<error::Service> : std::true_type {
     static bool is_valid(uint16_t v) {
         static const uint16_t values[] = {
-            error::OK,
-            error::PERMISSION_DENIED,
-            error::INVALID_INPUT,
-            error::INVALID_DATA,
-            error::ALREADY_EXISTS,
-            error::NOT_FOUND,
-            error::AMBIGUOUS,
-            error::UNSUPPORTED,
-            error::INTERRUPTED,
-            error::CONNECTION_REFUSED,
-            error::CONNECTION_ABORTED,
-            error::TRANSPORT_ERROR,
-            error::LISTENER_BIND_ERROR,
-            error::LISTENER_ACCEPT_ERROR,
-            error::STORE_ERROR,
-            error::IS_DIRECTORY,
-            error::NOT_DIRECTORY,
-            error::DIRECTORY_NOT_EMPTY,
-            error::RESOURCE_BUSY,
-            error::RUNTIME_INITIALIZE_ERROR,
-            error::CONFIG_ERROR,
-            error::TLS_CERTIFICATES_NOT_FOUND,
-            error::TLS_CERTIFICATES_INVALID,
-            error::TLS_KEYS_NOT_FOUND,
-            error::TLS_CONFIG_ERROR,
-            error::VFS_DRIVER_INSTALL_ERROR,
-            error::VFS_OTHER_ERROR,
-            error::SERVICE_ALREADY_RUNNING,
-            error::STORE_DIR_UNSPECIFIED,
-            error::MOUNT_DIR_UNSPECIFIED,
-            error::NO_VFS,
-            error::OTHER,
+            static_cast<uint16_t>(error::Service::ok),
+            static_cast<uint16_t>(error::Service::permission_denied),
+            static_cast<uint16_t>(error::Service::invalid_input),
+            static_cast<uint16_t>(error::Service::invalid_data),
+            static_cast<uint16_t>(error::Service::already_exists),
+            static_cast<uint16_t>(error::Service::not_found),
+            static_cast<uint16_t>(error::Service::ambiguous),
+            static_cast<uint16_t>(error::Service::unsupported),
+            static_cast<uint16_t>(error::Service::interrupted),
+            static_cast<uint16_t>(error::Service::connection_refused),
+            static_cast<uint16_t>(error::Service::connection_aborted),
+            static_cast<uint16_t>(error::Service::transport_error),
+            static_cast<uint16_t>(error::Service::listener_bind_error),
+            static_cast<uint16_t>(error::Service::listener_accept_error),
+            static_cast<uint16_t>(error::Service::store_error),
+            static_cast<uint16_t>(error::Service::is_directory),
+            static_cast<uint16_t>(error::Service::not_directory),
+            static_cast<uint16_t>(error::Service::directory_not_empty),
+            static_cast<uint16_t>(error::Service::resource_busy),
+            static_cast<uint16_t>(error::Service::runtime_initialize_error),
+            static_cast<uint16_t>(error::Service::config_error),
+            static_cast<uint16_t>(error::Service::tls_certificates_not_found),
+            static_cast<uint16_t>(error::Service::tls_certificates_invalid),
+            static_cast<uint16_t>(error::Service::tls_keys_not_found),
+            static_cast<uint16_t>(error::Service::tls_config_error),
+            static_cast<uint16_t>(error::Service::vfs_driver_install_error),
+            static_cast<uint16_t>(error::Service::vfs_other_error),
+            static_cast<uint16_t>(error::Service::service_already_running),
+            static_cast<uint16_t>(error::Service::store_dir_unspecified),
+            static_cast<uint16_t>(error::Service::mount_dir_unspecified),
+            static_cast<uint16_t>(error::Service::no_vfs),
+            static_cast<uint16_t>(error::Service::other),
         };
         for (size_t i = 0; i != 32; ++i) {
             if (v == values[i]) return true;
@@ -382,11 +382,11 @@ template<> struct describe::Enum<error::Service> : std::true_type {
 template<> struct describe::Enum<LogLevel> : std::true_type {
     static bool is_valid(uint8_t v) {
         static const uint8_t values[] = {
-            ERROR,
-            WARN,
-            INFO,
-            DEBUG,
-            TRACE,
+            static_cast<uint8_t>(LogLevel::error),
+            static_cast<uint8_t>(LogLevel::warn),
+            static_cast<uint8_t>(LogLevel::info),
+            static_cast<uint8_t>(LogLevel::debug),
+            static_cast<uint8_t>(LogLevel::trace),
         };
         for (size_t i = 0; i != 5; ++i) {
             if (v == values[i]) return true;

@@ -50,19 +50,19 @@ struct StorageSize {
 /**
  * Access mode of a repository.
  */
-enum AccessMode : uint8_t {
+enum class AccessMode : uint8_t {
     /**
      * Repository is neither readable not writtable (but can still be synced).
      */
-    BLIND = 0,
+    blind = 0,
     /**
      * Repository is readable but not writtable.
      */
-    READ = 1,
+    read = 1,
     /**
      * Repository is both readable and writable.
      */
-    WRITE = 2,
+    write = 2,
 };
 
 
@@ -213,52 +213,52 @@ struct AccessChange {
 /**
  * Type of filesystem entry.
  */
-enum EntryType : uint8_t {
-    FILE = 1,
-    DIRECTORY = 2,
+enum class EntryType : uint8_t {
+    file = 1,
+    directory = 2,
 };
 
 
 /**
  * Network notification event.
  */
-enum NetworkEvent : uint8_t {
+enum class NetworkEvent : uint8_t {
     /**
      * A peer has appeared with higher protocol version than us. Probably means we are using
      * outdated library. This event can be used to notify the user that they should update the app.
      */
-    PROTOCOL_VERSION_MISMATCH = 0,
+    protocol_version_mismatch = 0,
     /**
      * The set of known peers has changed (e.g., a new peer has been discovered)
      */
-    PEER_SET_CHANGE = 1,
+    peer_set_change = 1,
 };
 
 
 /**
  * How was the peer discovered.
  */
-enum PeerSource : uint8_t {
+enum class PeerSource : uint8_t {
     /**
      * Explicitly added by the user.
      */
-    USER_PROVIDED = 0,
+    user_provided = 0,
     /**
      * Peer connected to us.
      */
-    LISTENER = 1,
+    listener = 1,
     /**
      * Discovered on the Local Discovery.
      */
-    LOCAL_DISCOVERY = 2,
+    local_discovery = 2,
     /**
      * Discovered on the DHT.
      */
-    DHT = 3,
+    dht = 3,
     /**
      * Discovered on the Peer Exchange.
      */
-    PEER_EXCHANGE = 4,
+    peer_exchange = 4,
 };
 
 
@@ -338,155 +338,155 @@ struct Progress {
     uint64_t total;
 };
 
-enum NatBehavior : uint8_t {
-    ENDPOINT_INDEPENDENT = 0,
-    ADDRESS_DEPENDENT = 1,
-    ADDRESS_AND_PORT_DEPENDENT = 2,
+enum class NatBehavior : uint8_t {
+    endpoint_independent = 0,
+    address_dependent = 1,
+    address_and_port_dependent = 2,
 };
 
 
 namespace error {
-enum Service : uint16_t {
+enum class Service : uint16_t {
     /**
      * No error
      */
-    OK = 0,
+    ok = 0,
     /**
      * Insuficient permission to perform the intended operation
      */
-    PERMISSION_DENIED = 1,
+    permission_denied = 1,
     /**
      * Invalid input parameter
      */
-    INVALID_INPUT = 2,
+    invalid_input = 2,
     /**
      * Invalid data (e.g., malformed incoming message, config file, etc...)
      */
-    INVALID_DATA = 3,
+    invalid_data = 3,
     /**
      * Entry already exists
      */
-    ALREADY_EXISTS = 4,
+    already_exists = 4,
     /**
      * Entry not found
      */
-    NOT_FOUND = 5,
+    not_found = 5,
     /**
      * Multiple matching entries found
      */
-    AMBIGUOUS = 6,
+    ambiguous = 6,
     /**
      * The indended operation is not supported
      */
-    UNSUPPORTED = 8,
+    unsupported = 8,
     /**
      * The operation was interrupted
      */
-    INTERRUPTED = 9,
+    interrupted = 9,
     /**
      * Failed to establish connection to the server
      */
-    CONNECTION_REFUSED = 1025,
+    connection_refused = 1025,
     /**
      * Connection aborted by the server
      */
-    CONNECTION_ABORTED = 1026,
+    connection_aborted = 1026,
     /**
      * Failed to send or receive message
      */
-    TRANSPORT_ERROR = 1027,
+    transport_error = 1027,
     /**
      * Listener failed to bind to the specified address
      */
-    LISTENER_BIND_ERROR = 1028,
+    listener_bind_error = 1028,
     /**
      * Listener failed to accept client connection
      */
-    LISTENER_ACCEPT_ERROR = 1029,
+    listener_accept_error = 1029,
     /**
      * Operation on the internal repository store failed
      */
-    STORE_ERROR = 2049,
+    store_error = 2049,
     /**
      * Entry was expected to not be a directory but it is
      */
-    IS_DIRECTORY = 2050,
+    is_directory = 2050,
     /**
      * Entry was expected to be a directory but it isn't
      */
-    NOT_DIRECTORY = 2051,
+    not_directory = 2051,
     /**
      * Directory was expected to be empty but it isn't
      */
-    DIRECTORY_NOT_EMPTY = 2052,
+    directory_not_empty = 2052,
     /**
      * File or directory is busy
      */
-    RESOURCE_BUSY = 2053,
+    resource_busy = 2053,
     /**
      * Failed to initialize runtime
      */
-    RUNTIME_INITIALIZE_ERROR = 4097,
+    runtime_initialize_error = 4097,
     /**
      * Failed to read from or write into the config file
      */
-    CONFIG_ERROR = 4099,
+    config_error = 4099,
     /**
      * TLS certificated not found
      */
-    TLS_CERTIFICATES_NOT_FOUND = 4100,
+    tls_certificates_not_found = 4100,
     /**
      * TLS certificates failed to load
      */
-    TLS_CERTIFICATES_INVALID = 4101,
+    tls_certificates_invalid = 4101,
     /**
      * TLS keys not found
      */
-    TLS_KEYS_NOT_FOUND = 4102,
+    tls_keys_not_found = 4102,
     /**
      * Failed to create TLS config
      */
-    TLS_CONFIG_ERROR = 4103,
+    tls_config_error = 4103,
     /**
      * Failed to install virtual filesystem driver
      */
-    VFS_DRIVER_INSTALL_ERROR = 4104,
+    vfs_driver_install_error = 4104,
     /**
      * Unspecified virtual filesystem error
      */
-    VFS_OTHER_ERROR = 4105,
+    vfs_other_error = 4105,
     /**
      * Another instance of the service is already running
      */
-    SERVICE_ALREADY_RUNNING = 4106,
+    service_already_running = 4106,
     /**
      * Store directory is not specified
      */
-    STORE_DIR_UNSPECIFIED = 4107,
+    store_dir_unspecified = 4107,
     /**
      * Mount directory is not specified
      */
-    MOUNT_DIR_UNSPECIFIED = 4108,
+    mount_dir_unspecified = 4108,
     /**
      * Ouisync compiled without VFS
      */
-    NO_VFS = 4109,
+    no_vfs = 4109,
     /**
      * Unspecified error
      */
-    OTHER = 65535,
+    other = 65535,
 };
 } // namespace error
 
 const char* error_message(error::Service ec) noexcept;
 
 
-enum LogLevel : uint8_t {
-    ERROR = 1,
-    WARN = 2,
-    INFO = 3,
-    DEBUG = 4,
-    TRACE = 5,
+enum class LogLevel : uint8_t {
+    error = 1,
+    warn = 2,
+    info = 3,
+    debug = 4,
+    trace = 5,
 };
 
 

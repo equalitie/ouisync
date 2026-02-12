@@ -1,5 +1,5 @@
 use anyhow::Result;
-use heck::{AsPascalCase, AsShoutySnakeCase, AsSnakeCase};
+use heck::{AsPascalCase, AsSnakeCase};
 use ouisync_api_parser::{
     ComplexEnum, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
     ToResponseVariantName, Type,
@@ -294,14 +294,14 @@ fn write_simple_enum(out: &mut OutFiles<'_>, name: &str, item: &SimpleEnum) -> R
     }
 
     write_docs(out.hpp, "", &item.docs)?;
-    writeln!(out.hpp, "enum {name} : {repr} {{")?;
+    writeln!(out.hpp, "enum class {name} : {repr} {{")?;
 
     for (variant_name, variant) in &item.variants {
         write_docs(out.hpp, I, &variant.docs)?;
         writeln!(
             out.hpp,
             "{I}{} = {},",
-            AsShoutySnakeCase(variant_name),
+            AsSnakeCase(variant_name),
             variant.value
         )?;
     }
@@ -332,7 +332,7 @@ fn write_simple_enum(out: &mut OutFiles<'_>, name: &str, item: &SimpleEnum) -> R
         writeln!(out.dsc, "{I}static bool is_valid({repr} v) {{")?;
         writeln!(out.dsc, "{I}{I}static const {repr} values[] = {{")?;
         for (variant_name, _variant) in &item.variants {
-            writeln!(out.dsc, "{I}{I}{I}{namespace_prefix}{},", AsShoutySnakeCase(variant_name),)?;
+            writeln!(out.dsc, "{I}{I}{I}static_cast<{repr}>({namespace_prefix}{name}::{}),", AsSnakeCase(variant_name),)?;
         }
         writeln!(out.dsc, "{I}{I}}};")?;
         writeln!(out.dsc, "{I}{I}for (size_t i = 0; i != {}; ++i) {{", item.variants.len())?;
@@ -559,8 +559,8 @@ fn write_service_error_code(
     for (variant_name, _variant) in &item.variants {
         writeln!(
             cpp,
-            "{I}{I}case error::{}: return \"{variant_name}\";",
-            AsShoutySnakeCase(variant_name)
+            "{I}{I}case error::{name}::{}: return \"{variant_name}\";",
+            AsSnakeCase(variant_name)
         )?;
     }
     writeln!(cpp, "{I}{I}default: return \"UnknownError\";")?;
