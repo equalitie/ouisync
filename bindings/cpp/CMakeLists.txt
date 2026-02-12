@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 project(Ouisync)
 
 include(FetchContent)
@@ -29,9 +29,9 @@ else()
     endif()
 endif()
 
-############################
+###########################################################
 # Boost
-############################
+###########################################################
 
 # TODO: Get rid of this
 # https://stackoverflow.com/a/71864590/273348
@@ -53,9 +53,47 @@ FetchContent_Declare(
     GIT_TAG v0.5.2
 )
 
-############################
+###########################################################
+# msgpack - for serializing messages between C++ and Rust
+###########################################################
+
+file(WRITE ${CMAKE_BINARY_DIR}/msgpack/download/CMakeLists.txt
+    "cmake_minimum_required(VERSION 2.8.2)\n"
+    "project(msgpack-download NONE)\n"
+    ""
+    "include(ExternalProject)\n"
+    "externalproject_add(msgpack\n"
+    "  GIT_REPOSITORY    https://github.com/msgpack/msgpack-c\n"
+    "  GIT_TAG           cpp_master\n"
+    "  GIT_SHALLOW       true\n"
+    "  SOURCE_DIR        ${CMAKE_BINARY_DIR}/msgpack/src\n"
+    "  BINARY_DIR        ${CMAKE_BINARY_DIR}/msgpack/build\n"
+    "  # No building, that's done outside of this externalproject_add\n"
+    "  CONFIGURE_COMMAND \"\"\n"
+    "  BUILD_COMMAND     \"\"\n"
+    "  INSTALL_COMMAND   \"\"\n"
+    "  TEST_COMMAND      \"\"\n"
+    ")"
+)
+
+# Configure
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -G "${CMAKE_GENERATOR}" .
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/msgpack/download"
+)
+
+# Build
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" --build .
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/msgpack/download"
+)
+
+# Import targets
+add_subdirectory("${CMAKE_BINARY_DIR}/msgpack/src" "msgpack" EXCLUDE_FROM_ALL)
+
+###########################################################
 # Ouisync Rust code
-############################
+###########################################################
 
 FetchContent_MakeAvailable(Corrosion)
 
@@ -96,6 +134,7 @@ target_link_libraries(cpp_ouisync_service
         # TODO: This should not be necessary when mounting repositories is not
         # required
         fuse3
+        msgpack-cxx
 )
 
 target_include_directories(cpp_ouisync_service
@@ -109,9 +148,9 @@ if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
     target_compile_definitions(cpp_ouisync_service PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
 endif()
 
-############################
+###########################################################
 # C++ API code generation
-############################
+###########################################################
 
 set(OUISYNC_GENERATED_BINDING_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ouisync)
 # To avoid re-building every time, the generated files are first written into a
@@ -170,6 +209,7 @@ target_link_libraries(cpp_ouisync_client
         Boost::context
         # For reading ouisync config files
         Boost::filesystem
+        msgpack-cxx
 )
 
 target_compile_features(cpp_ouisync_client PRIVATE cxx_std_20)
