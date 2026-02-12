@@ -103,6 +103,11 @@ FetchContent_MakeAvailable(Corrosion)
 set(OUISYNC_SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../)
 
 set(OUISYNC_SERVICE_PRIVATE_LIBS)
+
+if (WIN32)
+    list(APPEND OUISYNC_SERVICE_PRIVATE_LIBS netio iphlpapi propsys mincore)
+endif()
+
 if (OUISYNC_WITH_VFS)
     set(OUISYNC_CARGO_FEATURES "vfs")
     list(APPEND OUISYNC_SERVICE_PRIVATE_LIBS fuse3) # TODO: Windows uses Dokan
