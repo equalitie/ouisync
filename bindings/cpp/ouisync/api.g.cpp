@@ -13,7 +13,7 @@ void File::close(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -24,7 +24,7 @@ void File::flush(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -35,7 +35,7 @@ uint64_t File::get_length(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::U64 rsp = std::move(response.get<Response::U64>());
     return std::move(rsp.value);
 }
@@ -47,7 +47,7 @@ uint64_t File::get_progress(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::U64 rsp = std::move(response.get<Response::U64>());
     return std::move(rsp.value);
 }
@@ -63,7 +63,7 @@ std::vector<uint8_t> File::read(
         size,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bytes rsp = std::move(response.get<Response::Bytes>());
     return std::move(rsp.value);
 }
@@ -77,7 +77,7 @@ void File::truncate(
         len,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -92,7 +92,7 @@ void File::write(
         data,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -103,7 +103,7 @@ void Repository::close(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -116,7 +116,7 @@ void Repository::create_directory(
         path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -129,7 +129,7 @@ File Repository::create_file(
         path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::File rsp = std::move(response.get<Response::File>());
     return File(client, std::move(rsp.value));
 }
@@ -143,7 +143,7 @@ void Repository::create_mirror(
         host,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -154,7 +154,7 @@ void Repository::delete_repository(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -167,7 +167,7 @@ void Repository::delete_mirror(
         host,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -180,7 +180,7 @@ std::string Repository::export_repository(
         output_path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Path rsp = std::move(response.get<Response::Path>());
     return std::move(rsp.value);
 }
@@ -194,7 +194,7 @@ bool Repository::file_exists(
         path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -206,7 +206,7 @@ AccessMode Repository::get_access_mode(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::AccessMode rsp = std::move(response.get<Response::AccessMode>());
     return std::move(rsp.value);
 }
@@ -218,7 +218,7 @@ std::optional<std::chrono::milliseconds> Repository::get_block_expiration(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::Duration>() == nullptr) return {};
     return std::move(response.get<Response::Duration>()).value;
 }
@@ -230,7 +230,7 @@ std::vector<uint8_t> Repository::get_credentials(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bytes rsp = std::move(response.get<Response::Bytes>());
     return std::move(rsp.value);
 }
@@ -244,7 +244,7 @@ std::optional<EntryType> Repository::get_entry_type(
         path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::EntryType>() == nullptr) return {};
     return std::move(response.get<Response::EntryType>()).value;
 }
@@ -256,7 +256,7 @@ std::optional<std::chrono::milliseconds> Repository::get_expiration(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::Duration>() == nullptr) return {};
     return std::move(response.get<Response::Duration>()).value;
 }
@@ -268,7 +268,7 @@ std::string Repository::get_info_hash(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::String rsp = std::move(response.get<Response::String>());
     return std::move(rsp.value);
 }
@@ -282,7 +282,7 @@ std::optional<std::string> Repository::get_metadata(
         key,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::String>() == nullptr) return {};
     return std::move(response.get<Response::String>()).value;
 }
@@ -294,7 +294,7 @@ std::optional<std::string> Repository::get_mount_point(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::Path>() == nullptr) return {};
     return std::move(response.get<Response::Path>()).value;
 }
@@ -306,7 +306,7 @@ std::string Repository::get_path(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Path rsp = std::move(response.get<Response::Path>());
     return std::move(rsp.value);
 }
@@ -318,7 +318,7 @@ QuotaInfo Repository::get_quota(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::QuotaInfo rsp = std::move(response.get<Response::QuotaInfo>());
     return std::move(rsp.value);
 }
@@ -330,7 +330,7 @@ std::string Repository::get_short_name(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::String rsp = std::move(response.get<Response::String>());
     return std::move(rsp.value);
 }
@@ -342,7 +342,7 @@ Stats Repository::get_stats(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Stats rsp = std::move(response.get<Response::Stats>());
     return std::move(rsp.value);
 }
@@ -354,7 +354,7 @@ Progress Repository::get_sync_progress(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Progress rsp = std::move(response.get<Response::Progress>());
     return std::move(rsp.value);
 }
@@ -366,7 +366,7 @@ bool Repository::is_dht_enabled(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -378,7 +378,7 @@ bool Repository::is_pex_enabled(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -390,7 +390,7 @@ bool Repository::is_sync_enabled(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -404,7 +404,7 @@ bool Repository::mirror_exists(
         host,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -416,7 +416,7 @@ std::string Repository::mount(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Path rsp = std::move(response.get<Response::Path>());
     return std::move(rsp.value);
 }
@@ -430,7 +430,7 @@ void Repository::move(
         dst,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -445,7 +445,7 @@ void Repository::move_entry(
         dst,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -458,7 +458,7 @@ File Repository::open_file(
         path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::File rsp = std::move(response.get<Response::File>());
     return File(client, std::move(rsp.value));
 }
@@ -472,7 +472,7 @@ std::vector<DirectoryEntry> Repository::read_directory(
         path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::DirectoryEntries rsp = std::move(response.get<Response::DirectoryEntries>());
     return std::move(rsp.value);
 }
@@ -488,7 +488,7 @@ void Repository::remove_directory(
         recursive,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -501,7 +501,7 @@ void Repository::remove_file(
         path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -514,7 +514,7 @@ void Repository::reset_access(
         token,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -529,7 +529,7 @@ void Repository::set_access(
         write,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -544,7 +544,7 @@ void Repository::set_access_mode(
         local_secret,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -557,7 +557,7 @@ void Repository::set_block_expiration(
         value,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -570,7 +570,7 @@ void Repository::set_credentials(
         credentials,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -583,7 +583,7 @@ void Repository::set_dht_enabled(
         enabled,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -596,7 +596,7 @@ void Repository::set_expiration(
         value,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -609,7 +609,7 @@ bool Repository::set_metadata(
         edits,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -623,7 +623,7 @@ void Repository::set_pex_enabled(
         enabled,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -636,7 +636,7 @@ void Repository::set_quota(
         value,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -649,7 +649,7 @@ void Repository::set_sync_enabled(
         enabled,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -664,7 +664,7 @@ ShareToken Repository::share(
         local_secret,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::ShareToken rsp = std::move(response.get<Response::ShareToken>());
     return std::move(rsp.value);
 }
@@ -676,7 +676,7 @@ void Repository::unmount(
         handle,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -696,7 +696,7 @@ void Session::add_user_provided_peers(
         addrs,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -708,7 +708,7 @@ void Session::bind_metrics(
         addr,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -720,7 +720,7 @@ void Session::bind_network(
         addrs,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -732,7 +732,7 @@ uint16_t Session::bind_remote_control(
         addr,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::U16 rsp = std::move(response.get<Response::U16>());
     return std::move(rsp.value);
 }
@@ -751,7 +751,7 @@ void Session::copy(
         dst_path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -775,7 +775,7 @@ Repository Session::create_repository(
         pex_enabled,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Repository rsp = std::move(response.get<Response::Repository>());
     return Repository(client, std::move(rsp.value));
 }
@@ -788,7 +788,7 @@ void Session::delete_repository_by_name(
         name,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -802,7 +802,7 @@ SecretKey Session::derive_secret_key(
         salt,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::SecretKey rsp = std::move(response.get<Response::SecretKey>());
     return std::move(rsp.value);
 }
@@ -815,7 +815,7 @@ Repository Session::find_repository(
         name,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Repository rsp = std::move(response.get<Response::Repository>());
     return Repository(client, std::move(rsp.value));
 }
@@ -825,7 +825,7 @@ PasswordSalt Session::generate_password_salt(
 ) {
     auto request = Request::SessionGeneratePasswordSalt();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::PasswordSalt rsp = std::move(response.get<Response::PasswordSalt>());
     return std::move(rsp.value);
 }
@@ -835,7 +835,7 @@ SecretKey Session::generate_secret_key(
 ) {
     auto request = Request::SessionGenerateSecretKey();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::SecretKey rsp = std::move(response.get<Response::SecretKey>());
     return std::move(rsp.value);
 }
@@ -845,7 +845,7 @@ uint64_t Session::get_current_protocol_version(
 ) {
     auto request = Request::SessionGetCurrentProtocolVersion();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::U64 rsp = std::move(response.get<Response::U64>());
     return std::move(rsp.value);
 }
@@ -855,7 +855,7 @@ std::optional<std::chrono::milliseconds> Session::get_default_block_expiration(
 ) {
     auto request = Request::SessionGetDefaultBlockExpiration();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::Duration>() == nullptr) return {};
     return std::move(response.get<Response::Duration>()).value;
 }
@@ -865,7 +865,7 @@ std::optional<StorageSize> Session::get_default_quota(
 ) {
     auto request = Request::SessionGetDefaultQuota();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::StorageSize>() == nullptr) return {};
     return std::move(response.get<Response::StorageSize>()).value;
 }
@@ -875,7 +875,7 @@ std::optional<std::chrono::milliseconds> Session::get_default_repository_expirat
 ) {
     auto request = Request::SessionGetDefaultRepositoryExpiration();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::Duration>() == nullptr) return {};
     return std::move(response.get<Response::Duration>()).value;
 }
@@ -885,7 +885,7 @@ std::optional<std::string> Session::get_external_addr_v4(
 ) {
     auto request = Request::SessionGetExternalAddrV4();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::SocketAddr>() == nullptr) return {};
     return std::move(response.get<Response::SocketAddr>()).value;
 }
@@ -895,7 +895,7 @@ std::optional<std::string> Session::get_external_addr_v6(
 ) {
     auto request = Request::SessionGetExternalAddrV6();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::SocketAddr>() == nullptr) return {};
     return std::move(response.get<Response::SocketAddr>()).value;
 }
@@ -905,7 +905,7 @@ uint64_t Session::get_highest_seen_protocol_version(
 ) {
     auto request = Request::SessionGetHighestSeenProtocolVersion();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::U64 rsp = std::move(response.get<Response::U64>());
     return std::move(rsp.value);
 }
@@ -915,7 +915,7 @@ std::vector<std::string> Session::get_local_listener_addrs(
 ) {
     auto request = Request::SessionGetLocalListenerAddrs();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::PeerAddrs rsp = std::move(response.get<Response::PeerAddrs>());
     return std::move(rsp.value);
 }
@@ -925,7 +925,7 @@ std::optional<std::string> Session::get_metrics_listener_addr(
 ) {
     auto request = Request::SessionGetMetricsListenerAddr();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::SocketAddr>() == nullptr) return {};
     return std::move(response.get<Response::SocketAddr>()).value;
 }
@@ -935,7 +935,7 @@ std::optional<std::string> Session::get_mount_root(
 ) {
     auto request = Request::SessionGetMountRoot();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::Path>() == nullptr) return {};
     return std::move(response.get<Response::Path>()).value;
 }
@@ -945,7 +945,7 @@ std::optional<NatBehavior> Session::get_nat_behavior(
 ) {
     auto request = Request::SessionGetNatBehavior();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::NatBehavior>() == nullptr) return {};
     return std::move(response.get<Response::NatBehavior>()).value;
 }
@@ -955,7 +955,7 @@ Stats Session::get_network_stats(
 ) {
     auto request = Request::SessionGetNetworkStats();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Stats rsp = std::move(response.get<Response::Stats>());
     return std::move(rsp.value);
 }
@@ -965,7 +965,7 @@ std::vector<PeerInfo> Session::get_peers(
 ) {
     auto request = Request::SessionGetPeers();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::PeerInfos rsp = std::move(response.get<Response::PeerInfos>());
     return std::move(rsp.value);
 }
@@ -975,7 +975,7 @@ std::optional<std::string> Session::get_remote_control_listener_addr(
 ) {
     auto request = Request::SessionGetRemoteControlListenerAddr();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::SocketAddr>() == nullptr) return {};
     return std::move(response.get<Response::SocketAddr>()).value;
 }
@@ -988,7 +988,7 @@ std::vector<std::string> Session::get_remote_listener_addrs(
         host,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::PeerAddrs rsp = std::move(response.get<Response::PeerAddrs>());
     return std::move(rsp.value);
 }
@@ -998,7 +998,7 @@ PublicRuntimeId Session::get_runtime_id(
 ) {
     auto request = Request::SessionGetRuntimeId();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::PublicRuntimeId rsp = std::move(response.get<Response::PublicRuntimeId>());
     return std::move(rsp.value);
 }
@@ -1011,7 +1011,7 @@ AccessMode Session::get_share_token_access_mode(
         token,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::AccessMode rsp = std::move(response.get<Response::AccessMode>());
     return std::move(rsp.value);
 }
@@ -1024,7 +1024,7 @@ std::string Session::get_share_token_info_hash(
         token,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::String rsp = std::move(response.get<Response::String>());
     return std::move(rsp.value);
 }
@@ -1037,7 +1037,7 @@ std::string Session::get_share_token_suggested_name(
         token,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::String rsp = std::move(response.get<Response::String>());
     return std::move(rsp.value);
 }
@@ -1050,7 +1050,7 @@ std::optional<StateMonitorNode> Session::get_state_monitor(
         path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     if (response.get_if<Response::StateMonitor>() == nullptr) return {};
     return std::move(response.get<Response::StateMonitor>()).value;
 }
@@ -1060,7 +1060,7 @@ std::vector<std::string> Session::get_store_dirs(
 ) {
     auto request = Request::SessionGetStoreDirs();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Paths rsp = std::move(response.get<Response::Paths>());
     return std::move(rsp.value);
 }
@@ -1070,7 +1070,7 @@ std::vector<std::string> Session::get_user_provided_peers(
 ) {
     auto request = Request::SessionGetUserProvidedPeers();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::PeerAddrs rsp = std::move(response.get<Response::PeerAddrs>());
     return std::move(rsp.value);
 }
@@ -1083,7 +1083,7 @@ void Session::init_network(
         defaults,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1095,7 +1095,7 @@ void Session::insert_store_dirs(
         paths,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1104,7 +1104,7 @@ bool Session::is_local_discovery_enabled(
 ) {
     auto request = Request::SessionIsLocalDiscoveryEnabled();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -1114,7 +1114,7 @@ bool Session::is_pex_recv_enabled(
 ) {
     auto request = Request::SessionIsPexRecvEnabled();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -1124,7 +1124,7 @@ bool Session::is_pex_send_enabled(
 ) {
     auto request = Request::SessionIsPexSendEnabled();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -1134,7 +1134,7 @@ bool Session::is_port_forwarding_enabled(
 ) {
     auto request = Request::SessionIsPortForwardingEnabled();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -1144,7 +1144,7 @@ std::map<std::string, Repository> Session::list_repositories(
 ) {
     auto request = Request::SessionListRepositories();
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Repositories rsp = std::move(response.get<Response::Repositories>());
     std::map<std::string, Repository> map;
     for (auto [k, v] : rsp.value) {
@@ -1163,7 +1163,7 @@ bool Session::mirror_exists(
         host,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Bool rsp = std::move(response.get<Response::Bool>());
     return std::move(rsp.value);
 }
@@ -1178,7 +1178,7 @@ Repository Session::open_repository(
         local_secret,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::Repository rsp = std::move(response.get<Response::Repository>());
     return Repository(client, std::move(rsp.value));
 }
@@ -1191,7 +1191,7 @@ void Session::remove_store_dirs(
         paths,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1203,7 +1203,7 @@ void Session::remove_user_provided_peers(
         addrs,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1215,7 +1215,7 @@ void Session::set_default_block_expiration(
         value,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1227,7 +1227,7 @@ void Session::set_default_quota(
         value,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1239,7 +1239,7 @@ void Session::set_default_repository_expiration(
         value,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1251,7 +1251,7 @@ void Session::set_local_discovery_enabled(
         enabled,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1263,7 +1263,7 @@ void Session::set_mount_root(
         path,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1275,7 +1275,7 @@ void Session::set_pex_recv_enabled(
         enabled,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1287,7 +1287,7 @@ void Session::set_pex_send_enabled(
         enabled,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1299,7 +1299,7 @@ void Session::set_port_forwarding_enabled(
         enabled,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1311,7 +1311,7 @@ void Session::set_store_dirs(
         paths,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     response.get<Response::None>();
 }
 
@@ -1323,7 +1323,7 @@ ShareToken Session::validate_share_token(
         token,
     };
     // TODO: This won't throw if yield has ec assigned
-    auto response = client->invoke(request, yield);
+    auto response = client->invoke(std::move(request), yield);
     Response::ShareToken rsp = std::move(response.get<Response::ShareToken>());
     return std::move(rsp.value);
 }

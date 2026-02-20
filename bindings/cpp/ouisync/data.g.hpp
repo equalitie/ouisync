@@ -97,6 +97,7 @@ struct LocalSecret {
     LocalSecret(LocalSecret const&) = default;
 
     template<class T>
+    requires(!std::same_as<std::remove_cvref_t<T>, LocalSecret>)
     LocalSecret(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -144,6 +145,7 @@ struct SetLocalSecret {
     SetLocalSecret(SetLocalSecret const&) = default;
 
     template<class T>
+    requires(!std::same_as<std::remove_cvref_t<T>, SetLocalSecret>)
     SetLocalSecret(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -196,6 +198,7 @@ struct AccessChange {
     AccessChange(AccessChange const&) = default;
 
     template<class T>
+    requires(!std::same_as<std::remove_cvref_t<T>, AccessChange>)
     AccessChange(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -296,6 +299,7 @@ struct PeerState {
     PeerState(PeerState const&) = default;
 
     template<class T>
+    requires(!std::same_as<std::remove_cvref_t<T>, PeerState>)
     PeerState(T&& v)
         : value(std::forward<T>(v)) {}
 

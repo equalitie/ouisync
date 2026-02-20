@@ -154,6 +154,15 @@ namespace boost::system {
 // Utils
 namespace ouisync {
 
+inline boost::system::error_code with_location(
+    boost::system::error_code const& ec_,
+    const boost::source_location& loc = BOOST_CURRENT_LOCATION
+) {
+    boost::system::error_code ec;
+    ec.assign(ec_, &loc);  
+    return ec;
+}
+
 template<typename ErrorCode>
 [[noreturn]]
 inline void throw_error(
@@ -161,10 +170,23 @@ inline void throw_error(
     std::string message = {},
     const boost::source_location& loc = BOOST_CURRENT_LOCATION
 ) {
-    auto ec = make_error_code(ec_);
-    ec.assign(ec, &loc);
+    auto ec = with_location(make_error_code(ec_), loc);
     boost::system::system_error e(ec, std::move(message));
     throw e;
+}
+
+template<typename ErrorCode>
+inline std::exception_ptr to_exception_ptr(
+    ErrorCode ec_,
+    std::string message = {},
+    const boost::source_location& loc = BOOST_CURRENT_LOCATION
+) {
+    try {
+        auto ec = with_location(make_error_code(ec_), loc);
+        throw boost::system::system_error(ec, std::move(message));
+    } catch (...) {
+        return std::current_exception();
+    }
 }
 
 } // ouisync namespace

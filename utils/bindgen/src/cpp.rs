@@ -460,6 +460,10 @@ fn write_complex_enum(
     writeln!(out.hpp, "{I}{name}({name} const&) = default;")?;
     writeln!(out.hpp)?;
     writeln!(out.hpp, "{I}template<class T>")?;
+    writeln!(
+        out.hpp,
+        "{I}requires(!std::same_as<std::remove_cvref_t<T>, {name}>)"
+    )?;
     writeln!(out.hpp, "{I}{name}(T&& v)")?;
     writeln!(out.hpp, "{I}{I}: value(std::forward<T>(v)) {{}}")?;
     writeln!(out.hpp)?;
@@ -746,7 +750,7 @@ fn write_api_class(
         )?;
         writeln!(
             out_cpp,
-            "{I}auto response = client->invoke(request, yield);"
+            "{I}auto response = client->invoke(std::move(request), yield);"
         )?;
 
         match ret {

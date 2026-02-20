@@ -592,6 +592,7 @@ struct Request {
     Request(Request const&) = default;
 
     template<class T>
+    requires(!std::same_as<std::remove_cvref_t<T>, Request>)
     Request(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -770,6 +771,7 @@ struct Response {
     Response(Response const&) = default;
 
     template<class T>
+    requires(!std::same_as<std::remove_cvref_t<T>, Response>)
     Response(T&& v)
         : value(std::forward<T>(v)) {}
 

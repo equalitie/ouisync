@@ -219,7 +219,8 @@ target_link_libraries(cpp_ouisync_client
         msgpack-cxx
 )
 
-target_compile_features(cpp_ouisync_client PRIVATE cxx_std_20)
+target_compile_features(cpp_ouisync_client PUBLIC cxx_std_20)
+target_compile_features(cpp_ouisync_service PUBLIC cxx_std_20)
 
 if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
     target_compile_definitions(cpp_ouisync_client PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
