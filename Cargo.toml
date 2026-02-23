@@ -20,6 +20,7 @@ members = [
     "utils/protocol-analyzer",
     "utils/repogen",
     "utils/repo-tool",
+    "utils/shadow-runner",
     "utils/stress-test",
     "utils/stun-server-list",
     "utils/swarm",

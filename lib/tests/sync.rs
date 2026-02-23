@@ -3,20 +3,20 @@
 #[macro_use]
 mod common;
 
-use self::common::{actor, dump, sync_watch, Env, Proto, DEFAULT_REPO};
+use self::common::{DEFAULT_REPO, Env, Proto, actor, dump, sync_watch};
 use assert_matches::assert_matches;
-use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Payload, Repository, StorageSize, StoreError,
-    VersionVector, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    Access, AccessMode, BLOB_HEADER_SIZE, BLOCK_SIZE, EntryType, Error, Payload, Repository,
+    StorageSize, StoreError, VersionVector,
 };
 use rand::Rng;
 use std::{cmp::Ordering, collections::HashSet, io::SeekFrom, sync::Arc, time::Duration};
 use tokio::{
-    sync::{broadcast, mpsc, Barrier},
+    sync::{Barrier, broadcast, mpsc},
     time::sleep,
 };
-use tracing::{instrument, Instrument};
+use tracing::{Instrument, instrument};
 
 const SMALL_SIZE: usize = 1024;
 const LARGE_SIZE: usize = 2 * 1024 * 1024;
