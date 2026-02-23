@@ -717,7 +717,7 @@ fn write_api_class(
         writedoc!(
             out_hpp,
             "
-            {I}{I}return client->invoke<{response_variant_name}, {ret_cpp_type}>(std::move(request), completion_token);
+            {I}{I}return client->invoke<{response_variant_name}, {ret_cpp_type}>(std::move(request), std::move(completion_token));
             {I}}}
             "
         )?;
