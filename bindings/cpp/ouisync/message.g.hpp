@@ -605,8 +605,8 @@ struct Request {
     T* get_if() {
         return std::get_if<T>(&value);
     }
-
 };
+
 struct Response {
     struct AccessMode {
         ouisync::AccessMode value;
@@ -784,6 +784,6 @@ struct Response {
     T* get_if() {
         return std::get_if<T>(&value);
     }
-
 };
+
 } // namespace ouisync

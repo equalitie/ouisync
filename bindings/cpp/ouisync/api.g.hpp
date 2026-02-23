@@ -823,6 +823,12 @@ public:
     Session() {}
 
 public:
+    /**
+     * Connect to the Ouisync service and return Session on success. Throws on failure.
+     *
+     * config_dir_path: Path to a directory created by Ouisync service
+     *                  containing local_endpoint.conf file.
+     */
     static Session connect(
         const boost::filesystem::path& config_dir,
         boost::asio::yield_context yield

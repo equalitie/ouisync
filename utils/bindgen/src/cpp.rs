@@ -435,36 +435,36 @@ fn write_complex_enum(
         }
     }
     writeln!(out.hpp, "{I}>;")?;
-
-    writeln!(out.hpp)?;
-    writeln!(out.hpp, "{I}{ALTERNATIVES_SUFFIX} value;")?;
     writeln!(out.hpp)?;
 
-    writeln!(out.hpp, "{I}{name}() = default;")?;
-    writeln!(out.hpp, "{I}{name}({name}&&) = default;")?;
-    writeln!(out.hpp, "{I}{name}& operator=({name}&&) = default;")?;
-    // TODO: Implement explicit cloning
-    writeln!(out.hpp, "{I}{name}({name} const&) = default;")?;
-    writeln!(out.hpp)?;
-    writeln!(out.hpp, "{I}template<class T>")?;
-    writeln!(
+    writedoc!(
         out.hpp,
-        "{I}requires(!std::same_as<std::remove_cvref_t<T>, {name}>)"
+        "
+        {I}{ALTERNATIVES_SUFFIX} value;
+
+        {I}{name}() = default;
+        {I}{name}({name}&&) = default;
+        {I}{name}& operator=({name}&&) = default;
+        {I}{name}({name} const&) = default;
+        
+        {I}template<class T>
+        {I}requires(!std::same_as<std::remove_cvref_t<T>, {name}>)
+        {I}{name}(T&& v)
+        {I}{I}: value(std::forward<T>(v)) {{}}
+        
+        {I}template<class T>
+        {I}T& get() {{
+        {I}{I}return std::get<T>(value);
+        {I}}}
+        
+        {I}template<class T>
+        {I}T* get_if() {{
+        {I}{I}return std::get_if<T>(&value);
+        {I}}}
+        }};
+        "
     )?;
-    writeln!(out.hpp, "{I}{name}(T&& v)")?;
-    writeln!(out.hpp, "{I}{I}: value(std::forward<T>(v)) {{}}")?;
     writeln!(out.hpp)?;
-    writeln!(out.hpp, "{I}template<class T>")?;
-    writeln!(out.hpp, "{I}T& get() {{")?;
-    writeln!(out.hpp, "{I}{I}return std::get<T>(value);")?;
-    writeln!(out.hpp, "{I}}}")?;
-    writeln!(out.hpp)?;
-    writeln!(out.hpp, "{I}template<class T>")?;
-    writeln!(out.hpp, "{I}T* get_if() {{")?;
-    writeln!(out.hpp, "{I}{I}return std::get_if<T>(&value);")?;
-    writeln!(out.hpp, "{I}}}")?;
-    writeln!(out.hpp)?;
-    writeln!(out.hpp, "}};")?;
 
     describe_struct(
         out.dsc,
@@ -618,30 +618,29 @@ fn write_api_class(
 
     if name == "Session" {
         let docs_lines = [
-            "Connect to the Ouisync service and return Session on success. Throws on failure.",
+            " Connect to the Ouisync service and return Session on success. Throws on failure.",
             "",
-            "config_dir_path: Path to a directory created by Ouisync service",
-            "                 containing local_endpoint.conf file.",
+            " config_dir_path: Path to a directory created by Ouisync service",
+            "                  containing local_endpoint.conf file.",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
 
-        writeln!(out_hpp, "{I}static Session connect(")?;
-        #[rustfmt::skip]
-        writeln!(out_hpp, "{I}{I}const boost::filesystem::path& config_dir,")?;
-        writeln!(out_hpp, "{I}{I}boost::asio::yield_context yield")?;
-        writeln!(out_hpp, "{I}) {{")?;
-        writeln!(
+        write_docs(out_hpp, I, &Docs { lines: docs_lines })?;
+        writedoc!(
             out_hpp,
-            "{I}{I}auto client = ouisync::Client::connect(config_dir, yield);"
+            "
+            {I}static Session connect(
+            {I}{I}const boost::filesystem::path& config_dir,
+            {I}{I}boost::asio::yield_context yield
+            {I}) {{
+            {I}{I}auto client = ouisync::Client::connect(config_dir, yield);
+            {I}{I}return Session(std::make_shared<Client>(std::move(client)));
+            {I}}}
+
+            "
         )?;
-        writeln!(
-            out_hpp,
-            "{I}{I}return Session(std::make_shared<Client>(std::move(client)));"
-        )?;
-        writeln!(out_hpp, "{I}}}")?;
-        writeln!(out_hpp)?;
     }
 
     let prefix = format!("{}_", AsSnakeCase(name));
@@ -713,11 +712,6 @@ fn write_api_class(
         } else {
             writeln!(out_hpp, "();")?;
         }
-
-        let handler_signature = match ret_cpp_type {
-            CppType::Scalar(CppScalar::Unit) => format!("void(boost::system::error_code)"),
-            _ => format!("void(boost::system::error_code, {ret_cpp_type})"),
-        };
 
         // response
         writedoc!(

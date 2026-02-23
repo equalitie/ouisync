@@ -110,8 +110,8 @@ struct LocalSecret {
     T* get_if() {
         return std::get_if<T>(&value);
     }
-
 };
+
 /**
  * Used to set or change the read or write local secret of a repository.
  */
@@ -158,8 +158,8 @@ struct SetLocalSecret {
     T* get_if() {
         return std::get_if<T>(&value);
     }
-
 };
+
 /**
  * Token to share a repository. It can be encoded as a URL-formatted string and transmitted to
  * other replicas.
@@ -211,8 +211,8 @@ struct AccessChange {
     T* get_if() {
         return std::get_if<T>(&value);
     }
-
 };
+
 /**
  * Type of filesystem entry.
  */
@@ -312,8 +312,8 @@ struct PeerState {
     T* get_if() {
         return std::get_if<T>(&value);
     }
-
 };
+
 /**
  * Network traffic statistics.
  */
