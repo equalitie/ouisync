@@ -144,11 +144,13 @@ public:
                       work_guard = boost::asio::make_work_guard(std::move(exec))
                     ]
                     (boost::system::error_code ec, Response response) mutable {
+                        using Convert = detail::ConvertResponse<Variant, RetType>;
+
                         if constexpr (detail::IsApiClass<RetType>::value) {
-                            detail::ConvertResponse<Variant, RetType>::apply(std::move(handler), ec, std::move(response), client);
+                            Convert::apply(std::move(handler), ec, std::move(response), std::move(client));
                         }
                         else {
-                            detail::ConvertResponse<Variant, RetType>::apply(std::move(handler), ec, std::move(response));
+                            Convert::apply(std::move(handler), ec, std::move(response));
                         }
                     });
             },

@@ -776,7 +776,7 @@ fn function_params(skip_first: bool, fields: &Fields) -> Vec<(String, CppType)> 
 fn declare_function(
     out: &mut dyn Write,
     indent: Indent,
-    _ret_type: &CppType,
+    ret_type: &CppType,
     op_name: &str,
     fields: &Fields,
     has_inner: bool,
@@ -794,7 +794,9 @@ fn declare_function(
     writedoc!(
         out,
         "
-        {indent}template<typename CompletionToken>
+        {indent}template<
+        {indent}    boost::asio::completion_token_for<typename detail::InvokeSig<{ret_type}>::type> CompletionToken
+        {indent}>
         {indent}auto {op_name}(
     "
     )?;
