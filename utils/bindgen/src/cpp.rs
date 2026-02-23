@@ -1,5 +1,6 @@
 use anyhow::Result;
 use heck::{AsPascalCase, AsSnakeCase};
+use indoc::writedoc;
 use ouisync_api_parser::{
     ComplexEnum, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
     ToResponseVariantName, Type,
@@ -211,35 +212,21 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
     let mut hpp_file = File::create(out_dir.join("api.g.hpp"))?;
     let out_hpp = &mut hpp_file;
 
-    let mut cpp_file = File::create(out_dir.join("api.g.cpp"))?;
-    let out_cpp = &mut cpp_file;
-
     writeln!(out_hpp, "{}", DO_NOT_EDIT_MESSAGE)?;
     writeln!(out_hpp)?;
     writeln!(out_hpp, "#include <ouisync/data.hpp>")?;
+    writeln!(out_hpp, "#include <ouisync/client.hpp>")?;
     writeln!(out_hpp, "#include <boost/asio/spawn.hpp>")?;
     writeln!(out_hpp, "#include <boost/filesystem/path.hpp>")?;
     writeln!(out_hpp)?;
     writeln!(out_hpp, "namespace {NAMESPACE} {{")?;
     writeln!(out_hpp)?;
-    writeln!(out_hpp, "class Client;")?;
-    writeln!(out_hpp)?;
-
-    writeln!(out_cpp, "{}", DO_NOT_EDIT_MESSAGE)?;
-    writeln!(out_cpp)?;
-    writeln!(out_cpp, "#include <ouisync/client.hpp>")?;
-    writeln!(out_cpp, "#include <ouisync/api.g.hpp>")?;
-    writeln!(out_cpp, "#include <ouisync/message.g.hpp>")?;
-    writeln!(out_cpp)?;
-    writeln!(out_cpp, "namespace {NAMESPACE} {{")?;
-    writeln!(out_cpp)?;
 
     for item in &api_items {
-        write_api_class(out_hpp, out_cpp, item.name, item.inner, item.variants)?;
+        write_api_class(out_hpp, item.name, item.inner, item.variants)?;
     }
 
     writeln!(out_hpp, "}} // namespace {NAMESPACE}")?;
-    writeln!(out_cpp, "}} // namespace {NAMESPACE}")?;
     Ok(())
 }
 
@@ -577,7 +564,6 @@ fn write_service_error_code(
 
 fn write_api_class(
     out_hpp: &mut dyn Write,
-    out_cpp: &mut dyn Write,
     name: &str,
     inner: Option<(&str, &str)>,
     request_variants: &[(String, RequestVariant)],
@@ -621,6 +607,8 @@ fn write_api_class(
     writeln!(out_hpp, "{I}{{}}")?;
 
     writeln!(out_hpp)?;
+    writeln!(out_hpp, "{I}{name}() {{}}")?;
+    writeln!(out_hpp)?;
     writeln!(out_hpp, "public:")?;
 
     if name == "Session" {
@@ -634,29 +622,21 @@ fn write_api_class(
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
 
-        write_docs(out_hpp, I, &Docs { lines: docs_lines })?;
         writeln!(out_hpp, "{I}static Session connect(")?;
         #[rustfmt::skip]
-        writeln!(out_hpp, "{I}{I}const boost::filesystem::path& config_dir_path,")?;
-        writeln!(out_hpp, "{I}{I}boost::asio::yield_context")?;
-        writeln!(out_hpp, "{I});")?;
+        writeln!(out_hpp, "{I}{I}const boost::filesystem::path& config_dir,")?;
+        writeln!(out_hpp, "{I}{I}boost::asio::yield_context yield")?;
+        writeln!(out_hpp, "{I}) {{")?;
+        writeln!(
+            out_hpp,
+            "{I}{I}auto client = ouisync::Client::connect(config_dir, yield);"
+        )?;
+        writeln!(
+            out_hpp,
+            "{I}{I}return Session(std::make_shared<Client>(std::move(client)));"
+        )?;
+        writeln!(out_hpp, "{I}}}")?;
         writeln!(out_hpp)?;
-
-        writeln!(out_cpp, "Session Session::connect(")?;
-        #[rustfmt::skip]
-        writeln!(out_cpp, "{I}const boost::filesystem::path& config_dir,")?;
-        writeln!(out_cpp, "{I}boost::asio::yield_context yield")?;
-        writeln!(out_cpp, ") {{")?;
-        writeln!(
-            out_cpp,
-            "{I}auto client = ouisync::Client::connect(config_dir, yield);"
-        )?;
-        writeln!(
-            out_cpp,
-            "{I}return Session(std::make_shared<Client>(std::move(client)));"
-        )?;
-        writeln!(out_cpp, "}}")?;
-        writeln!(out_cpp)?;
     }
 
     let prefix = format!("{}_", AsSnakeCase(name));
@@ -692,36 +672,22 @@ fn write_api_class(
             out_hpp,
             Indent(1),
             &ret_cpp_type,
-            None,
             op_name,
             &variant.fields,
             inner.is_some(),
         )?;
 
-        writeln!(out_hpp, ";")?;
-        writeln!(out_hpp)?;
-
-        declare_function(
-            out_cpp,
-            Indent(0),
-            &ret_cpp_type,
-            Some(name),
-            op_name,
-            &variant.fields,
-            inner.is_some(),
-        )?;
-
-        writeln!(out_cpp, " {{")?;
+        writeln!(out_hpp, " {{")?;
 
         // request
         write!(
-            out_cpp,
-            "{I}auto request = Request::{}",
+            out_hpp,
+            "{I}{I}auto request = Request::{}",
             AsPascalCase(variant_name)
         )?;
 
         if !variant.fields.is_empty() {
-            writeln!(out_cpp, "{{")?;
+            writeln!(out_hpp, "{{")?;
 
             let inner_name = inner.map(|(name, _)| AsSnakeCase(name));
 
@@ -731,84 +697,146 @@ fn write_api_class(
                 if index == 0
                     && let Some(inner_name) = &inner_name
                 {
-                    writeln!(out_cpp, "{I}{I}{inner_name},")?;
+                    writeln!(out_hpp, "{I}{I}{I}{inner_name},")?;
                     continue;
                 }
 
-                writeln!(out_cpp, "{I}{I}{arg_name},")?;
+                writeln!(out_hpp, "{I}{I}{I}{arg_name},")?;
             }
 
-            writeln!(out_cpp, "{I}}};")?;
+            writeln!(out_hpp, "{I}{I}}};")?;
         } else {
-            writeln!(out_cpp, "();")?;
+            writeln!(out_hpp, "();")?;
         }
 
+        let handler_signature = match ret_cpp_type {
+            CppType::Scalar(CppScalar::Unit) => format!("void(boost::system::error_code)"),
+            _ => format!("void(boost::system::error_code, {ret_cpp_type})"),
+        };
+
         // response
-        writeln!(
-            out_cpp,
-            "{I}// TODO: This won't throw if yield has ec assigned"
+        writedoc!(
+            out_hpp,
+            "
+            {I}{I}return boost::asio::async_initiate<CompletionToken, {handler_signature}>(
+            {I}{I}    [ client = client,
+            {I}{I}      request = std::move(request)
+            {I}{I}    ] (auto handler) {{
+            "
         )?;
-        writeln!(
-            out_cpp,
-            "{I}auto response = client->invoke(std::move(request), yield);"
-        )?;
+
+        let indent = Indent(2 + 2);
 
         match ret {
-            Type::Unit => writeln!(out_cpp, "{I}response.get<Response::None>();")?,
-            Type::Option(_) => {
-                writeln!(
-                    out_cpp,
-                    "{I}if (response.get_if<{response_variant_name}>() == nullptr) return {{}};",
+            Type::Unit => {
+                writedoc!(
+                    out_hpp,
+                    "
+                    {indent}// Unit
+                    {indent}client->invoke(std::move(request), [
+                    {indent}      handler = std::move(handler)
+                    {indent}    ] (boost::system::error_code ec, Response response) mutable {{
+                    {indent}        if (ec) {{
+                    {indent}            handler(ec);
+                    {indent}            return;
+                    {indent}        }}
+                    {indent}        if (response.template get_if<Response::None>() == nullptr) {{
+                    {indent}            ec = error::protocol;
+                    {indent}        }}
+                    {indent}        handler(ec);
+                    {indent}    }});
+                "
                 )?;
-
-                writeln!(
-                    out_cpp,
-                    "{I}return std::move(response.get<{response_variant_name}>()).value;"
+            }
+            Type::Option(_) => {
+                writedoc!(
+                    out_hpp,
+                    "
+                    {indent}// Option<{response_variant_name}>
+                    {indent}client->invoke(std::move(request), [
+                    {indent}      handler = std::move(handler)
+                    {indent}    ] (boost::system::error_code ec, Response response) mutable {{
+                    {indent}        if (ec) {{
+                    {indent}            handler(ec, {{}});
+                    {indent}            return;
+                    {indent}        }}
+                    {indent}        if (response.template get_if<Response::None>() == nullptr) {{
+                    {indent}            handler(ec, {{}});
+                    {indent}            return;
+                    {indent}        }}
+                    {indent}        auto rsp = response.template get_if<{response_variant_name}>();
+                    {indent}        if (rsp == nullptr) {{
+                    {indent}            handler(error::protocol, {{}});
+                    {indent}            return;
+                    {indent}        }}
+                    {indent}        handler(ec, std::move(rsp->value));
+                    {indent}    }});
+                "
                 )?;
             }
             _ => {
-                writeln!(
-                    out_cpp,
-                    "{I}{response_variant_name} rsp = std::move(response.get<{response_variant_name}>());"
+                writedoc!(out_hpp, "
+                    {indent}client->invoke(std::move(request), [
+                    {indent}      handler = std::move(handler),
+                    {indent}      client
+                    {indent}    ] (boost::system::error_code ec, Response response) mutable {{
+                    {indent}        if (ec) {{
+                    {indent}            handler(ec, {{}});
+                    {indent}            return;
+                    {indent}        }}
+                    {indent}        {response_variant_name}* rsp = response.template get_if<{response_variant_name}>();
+                    {indent}        if (rsp == nullptr) {{
+                    {indent}            handler(error::protocol, {{}});
+                    {indent}            return;
+                    {indent}        }}
+                    "
                 )?;
                 match ret_stripped {
                     Some(Type::Scalar(w)) => {
-                        writeln!(out_cpp, "{I}return {w}(client, std::move(rsp.value));")?;
+                        writedoc!(out_hpp, "
+                            {indent}        handler(ec, {w}(client, std::move(rsp->value)));
+                        ")?;
                     }
-                    //Some(Type::Vec(w)) => write!(out_cpp, "response.value.map {{ {w}(client, it) }}")?,
-                    Some(Type::Vec(ty)) => {
-                        writeln!(out_cpp, "{I}std::vector<{}> vec;", CppScalar::new(&ty))?;
-                        writeln!(out_cpp, "{I}vec.reserve(rsp.value.size());")?;
-                        writeln!(out_cpp, "{I}for (auto v : rsp.value) {{")?;
-                        writeln!(
-                            out_cpp,
-                            "{I}{I}vec.emplace_back({ty}(client, std::move(v)))"
-                        )?;
-                        writeln!(out_cpp, "{I}}}")?;
-                        writeln!(out_cpp, "{I}return vec;")?;
-                    }
-                    Some(Type::Map(k_ty, v_ty)) => {
-                        writeln!(
-                            out_cpp,
-                            "{I}std::map<{}, {v_ty}> map;",
-                            CppScalar::new(&k_ty)
-                        )?;
-                        writeln!(out_cpp, "{I}for (auto [k, v] : rsp.value) {{")?;
-                        writeln!(
-                            out_cpp,
-                            "{I}{I}map.emplace(std::make_pair(std::move(k), {v_ty}(client, std::move(v))));"
-                        )?;
-                        writeln!(out_cpp, "{I}}}")?;
-                        writeln!(out_cpp, "{I}return map;")?;
-                    }
+                    Some(Type::Vec(ty)) => writedoc!(
+                        out_hpp,
+                        "
+                            {indent}        std::vector<{}> vec;
+                            {indent}        vec.reserve(rsp.value.size());
+                            {indent}        for (auto v : rsp->value) {{
+                            {indent}            vec.emplace_back({ty}(client, std::move(v)))
+                            {indent}        }}
+                            {indent}        handler(ec, std::move(vec));
+                        ",
+                        CppScalar::new(&ty)
+                    )?,
+                    Some(Type::Map(k_ty, v_ty)) =>
+                        writedoc!(out_hpp, "
+                            {indent}        std::map<{}, {v_ty}> map;
+                            {indent}        for (auto [k, v] : rsp->value) {{
+                            {indent}            map.emplace(std::make_pair(std::move(k), {v_ty}(client, std::move(v))));
+                            {indent}        }}
+                            {indent}        handler(ec, std::move(map));
+                        ", CppScalar::new(&k_ty))?,
                     Some(_) => unreachable!(),
-                    None => writeln!(out_cpp, "{I}return std::move(rsp.value);")?,
+                    None => writedoc!(out_hpp, "
+                        {indent}        handler(ec, std::move(rsp->value));
+                        ")?,
                 }
+                writedoc!(out_hpp, "{indent}    }});\n")?;
             }
         }
 
-        writeln!(out_cpp, "}}")?;
-        writeln!(out_cpp)?;
+        writedoc!(
+            out_hpp,
+            "
+            {I}{I}    }},
+            {I}{I}    completion_token
+            {I}{I});
+            {I}}}
+            "
+        )?;
+
+        writeln!(out_hpp)?;
     }
 
     // TODO
@@ -849,15 +877,20 @@ fn function_params(skip_first: bool, fields: &Fields) -> Vec<(String, CppType)> 
                 CppType::new(&field.ty),
             )
         })
-        .chain([("yield".into(), CppType::Scalar(CppScalar::Yield))].into_iter())
+        .chain(
+            [(
+                "completion_token".into(),
+                CppType::Scalar(CppScalar::CompletionToken),
+            )]
+            .into_iter(),
+        )
         .collect()
 }
 
 fn declare_function(
     out: &mut dyn Write,
     indent: Indent,
-    ret_type: &CppType,
-    class_prefix: Option<&str>,
+    _ret_type: &CppType,
     op_name: &str,
     fields: &Fields,
     has_inner: bool,
@@ -872,11 +905,13 @@ fn declare_function(
 
     let op_name = AsSnakeCase(*op_rename.get(&op_name).unwrap_or(&op_name));
 
-    if let Some(class) = class_prefix {
-        writeln!(out, "{indent}{ret_type} {class}::{op_name}(")?;
-    } else {
-        writeln!(out, "{indent}{ret_type} {op_name}(")?;
-    }
+    writedoc!(
+        out,
+        "
+        {indent}template<typename CompletionToken>
+        {indent}auto {op_name}(
+    "
+    )?;
 
     let fields = function_params(has_inner, fields);
 
@@ -1153,7 +1188,7 @@ enum CppScalar {
         namespaced: bool,
         inner: Box<CppScalar>,
     },
-    Yield,
+    CompletionToken,
 }
 
 impl CppScalar {
@@ -1210,7 +1245,7 @@ impl CppScalar {
             Self::Bytes => true,
             Self::Local(_) => true,
             Self::Modified { inner, .. } => inner.is_copy_expensive(),
-            Self::Yield => false,
+            Self::CompletionToken => false,
         }
     }
 }
@@ -1244,7 +1279,7 @@ impl fmt::Display for CppScalar {
                     }
                 }
             }
-            Self::Yield => write!(f, "boost::asio::yield_context"),
+            Self::CompletionToken => write!(f, "CompletionToken"),
         }
     }
 }

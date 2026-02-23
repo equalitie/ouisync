@@ -54,7 +54,6 @@ public:
         );
     }
 
-
     ~Client();
 
     SubscriberId new_subscriber_id();

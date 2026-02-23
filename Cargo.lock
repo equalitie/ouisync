@@ -2090,6 +2090,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "indoc"
+version = "2.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79cf5c93f93228cf8efb3ba362535fb11199ac548a09ce117c9b1adc3030d706"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2762,6 +2771,7 @@ dependencies = [
  "anyhow",
  "clap 4.5.53",
  "heck 0.5.0",
+ "indoc",
  "ouisync-api-parser",
  "syn 2.0.111",
  "thiserror 2.0.17",
