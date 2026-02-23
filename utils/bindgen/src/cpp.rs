@@ -577,6 +577,10 @@ fn write_api_class(
     {
         writeln!(out_hpp, "{I}friend class {friend};")?;
     }
+    writeln!(
+        out_hpp,
+        "{I}template<class, class> friend struct detail::ConvertResponse;"
+    )?;
     writeln!(out_hpp)?;
 
     // Members
@@ -607,6 +611,7 @@ fn write_api_class(
     writeln!(out_hpp, "{I}{{}}")?;
 
     writeln!(out_hpp)?;
+    writeln!(out_hpp, "public:")?;
     writeln!(out_hpp, "{I}{name}() {{}}")?;
     writeln!(out_hpp)?;
     writeln!(out_hpp, "public:")?;
@@ -718,120 +723,7 @@ fn write_api_class(
         writedoc!(
             out_hpp,
             "
-            {I}{I}return boost::asio::async_initiate<CompletionToken, {handler_signature}>(
-            {I}{I}    [ client = client,
-            {I}{I}      request = std::move(request)
-            {I}{I}    ] (auto handler) {{
-            "
-        )?;
-
-        let indent = Indent(2 + 2);
-
-        match ret {
-            Type::Unit => {
-                writedoc!(
-                    out_hpp,
-                    "
-                    {indent}// Unit
-                    {indent}client->invoke(std::move(request), [
-                    {indent}      handler = std::move(handler)
-                    {indent}    ] (boost::system::error_code ec, Response response) mutable {{
-                    {indent}        if (ec) {{
-                    {indent}            handler(ec);
-                    {indent}            return;
-                    {indent}        }}
-                    {indent}        if (response.template get_if<Response::None>() == nullptr) {{
-                    {indent}            ec = error::protocol;
-                    {indent}        }}
-                    {indent}        handler(ec);
-                    {indent}    }});
-                "
-                )?;
-            }
-            Type::Option(_) => {
-                writedoc!(
-                    out_hpp,
-                    "
-                    {indent}// Option<{response_variant_name}>
-                    {indent}client->invoke(std::move(request), [
-                    {indent}      handler = std::move(handler)
-                    {indent}    ] (boost::system::error_code ec, Response response) mutable {{
-                    {indent}        if (ec) {{
-                    {indent}            handler(ec, {{}});
-                    {indent}            return;
-                    {indent}        }}
-                    {indent}        if (response.template get_if<Response::None>() == nullptr) {{
-                    {indent}            handler(ec, {{}});
-                    {indent}            return;
-                    {indent}        }}
-                    {indent}        auto rsp = response.template get_if<{response_variant_name}>();
-                    {indent}        if (rsp == nullptr) {{
-                    {indent}            handler(error::protocol, {{}});
-                    {indent}            return;
-                    {indent}        }}
-                    {indent}        handler(ec, std::move(rsp->value));
-                    {indent}    }});
-                "
-                )?;
-            }
-            _ => {
-                writedoc!(out_hpp, "
-                    {indent}client->invoke(std::move(request), [
-                    {indent}      handler = std::move(handler),
-                    {indent}      client
-                    {indent}    ] (boost::system::error_code ec, Response response) mutable {{
-                    {indent}        if (ec) {{
-                    {indent}            handler(ec, {{}});
-                    {indent}            return;
-                    {indent}        }}
-                    {indent}        {response_variant_name}* rsp = response.template get_if<{response_variant_name}>();
-                    {indent}        if (rsp == nullptr) {{
-                    {indent}            handler(error::protocol, {{}});
-                    {indent}            return;
-                    {indent}        }}
-                    "
-                )?;
-                match ret_stripped {
-                    Some(Type::Scalar(w)) => {
-                        writedoc!(out_hpp, "
-                            {indent}        handler(ec, {w}(client, std::move(rsp->value)));
-                        ")?;
-                    }
-                    Some(Type::Vec(ty)) => writedoc!(
-                        out_hpp,
-                        "
-                            {indent}        std::vector<{}> vec;
-                            {indent}        vec.reserve(rsp.value.size());
-                            {indent}        for (auto v : rsp->value) {{
-                            {indent}            vec.emplace_back({ty}(client, std::move(v)))
-                            {indent}        }}
-                            {indent}        handler(ec, std::move(vec));
-                        ",
-                        CppScalar::new(&ty)
-                    )?,
-                    Some(Type::Map(k_ty, v_ty)) =>
-                        writedoc!(out_hpp, "
-                            {indent}        std::map<{}, {v_ty}> map;
-                            {indent}        for (auto [k, v] : rsp->value) {{
-                            {indent}            map.emplace(std::make_pair(std::move(k), {v_ty}(client, std::move(v))));
-                            {indent}        }}
-                            {indent}        handler(ec, std::move(map));
-                        ", CppScalar::new(&k_ty))?,
-                    Some(_) => unreachable!(),
-                    None => writedoc!(out_hpp, "
-                        {indent}        handler(ec, std::move(rsp->value));
-                        ")?,
-                }
-                writedoc!(out_hpp, "{indent}    }});\n")?;
-            }
-        }
-
-        writedoc!(
-            out_hpp,
-            "
-            {I}{I}    }},
-            {I}{I}    completion_token
-            {I}{I});
+            {I}{I}return client->invoke<{response_variant_name}, {ret_cpp_type}>(std::move(request), completion_token);
             {I}}}
             "
         )?;

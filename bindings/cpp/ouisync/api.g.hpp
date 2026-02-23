@@ -12,6 +12,7 @@ private:
     friend class Repository;
     friend class Session;
     friend class RepositorySubscription;
+    template<class, class> friend struct detail::ConvertResponse;
 
     std::shared_ptr<Client> client;
     FileHandle handle;
@@ -21,6 +22,7 @@ private:
         handle(std::move(handle))
     {}
 
+public:
     File() {}
 
 public:
@@ -34,26 +36,7 @@ public:
         auto request = Request::FileClose{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -66,26 +49,7 @@ public:
         auto request = Request::FileFlush{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -98,28 +62,7 @@ public:
         auto request = Request::FileGetLength{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, uint64_t)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::U64* rsp = response.template get_if<Response::U64>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::U64, uint64_t>(std::move(request), completion_token);
     }
 
     /**
@@ -137,28 +80,7 @@ public:
         auto request = Request::FileGetProgress{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, uint64_t)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::U64* rsp = response.template get_if<Response::U64>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::U64, uint64_t>(std::move(request), completion_token);
     }
 
     /**
@@ -175,28 +97,7 @@ public:
             offset,
             size,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::vector<uint8_t>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bytes* rsp = response.template get_if<Response::Bytes>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bytes, std::vector<uint8_t>>(std::move(request), completion_token);
     }
 
     /**
@@ -211,26 +112,7 @@ public:
             handle,
             len,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -247,26 +129,7 @@ public:
             offset,
             data,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
 };
@@ -276,6 +139,7 @@ private:
     friend class File;
     friend class Session;
     friend class RepositorySubscription;
+    template<class, class> friend struct detail::ConvertResponse;
 
     std::shared_ptr<Client> client;
     RepositoryHandle handle;
@@ -285,6 +149,7 @@ private:
         handle(std::move(handle))
     {}
 
+public:
     Repository() {}
 
 public:
@@ -298,26 +163,7 @@ public:
         auto request = Request::RepositoryClose{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -332,26 +178,7 @@ public:
             handle,
             path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -366,28 +193,7 @@ public:
             handle,
             path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, File)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::File* rsp = response.template get_if<Response::File>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, File(client, std::move(rsp->value)));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::File, File>(std::move(request), completion_token);
     }
 
     /**
@@ -409,26 +215,7 @@ public:
             handle,
             host,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -441,26 +228,7 @@ public:
         auto request = Request::RepositoryDelete{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -477,26 +245,7 @@ public:
             handle,
             host,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -511,28 +260,7 @@ public:
             handle,
             output_path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::string)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Path* rsp = response.template get_if<Response::Path>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Path, std::string>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -544,28 +272,7 @@ public:
             handle,
             path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     /**
@@ -578,28 +285,7 @@ public:
         auto request = Request::RepositoryGetAccessMode{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, AccessMode)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::AccessMode* rsp = response.template get_if<Response::AccessMode>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::AccessMode, AccessMode>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -609,32 +295,7 @@ public:
         auto request = Request::RepositoryGetBlockExpiration{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::chrono::milliseconds>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::Duration>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::Duration>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Duration, std::optional<std::chrono::milliseconds>>(std::move(request), completion_token);
     }
 
     /**
@@ -648,28 +309,7 @@ public:
         auto request = Request::RepositoryGetCredentials{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::vector<uint8_t>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bytes* rsp = response.template get_if<Response::Bytes>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bytes, std::vector<uint8_t>>(std::move(request), completion_token);
     }
 
     /**
@@ -685,32 +325,7 @@ public:
             handle,
             path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<EntryType>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::EntryType>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::EntryType>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::EntryType, std::optional<EntryType>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -720,32 +335,7 @@ public:
         auto request = Request::RepositoryGetExpiration{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::chrono::milliseconds>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::Duration>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::Duration>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Duration, std::optional<std::chrono::milliseconds>>(std::move(request), completion_token);
     }
 
     /**
@@ -759,28 +349,7 @@ public:
         auto request = Request::RepositoryGetInfoHash{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::string)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::String* rsp = response.template get_if<Response::String>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::String, std::string>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -792,32 +361,7 @@ public:
             handle,
             key,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::String>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::String>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::String, std::optional<std::string>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -827,32 +371,7 @@ public:
         auto request = Request::RepositoryGetMountPoint{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::Path>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::Path>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Path, std::optional<std::string>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -862,28 +381,7 @@ public:
         auto request = Request::RepositoryGetPath{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::string)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Path* rsp = response.template get_if<Response::Path>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Path, std::string>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -893,28 +391,7 @@ public:
         auto request = Request::RepositoryGetQuota{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, QuotaInfo)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::QuotaInfo* rsp = response.template get_if<Response::QuotaInfo>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::QuotaInfo, QuotaInfo>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -924,28 +401,7 @@ public:
         auto request = Request::RepositoryGetShortName{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::string)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::String* rsp = response.template get_if<Response::String>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::String, std::string>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -955,28 +411,7 @@ public:
         auto request = Request::RepositoryGetStats{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, Stats)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Stats* rsp = response.template get_if<Response::Stats>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Stats, Stats>(std::move(request), completion_token);
     }
 
     /**
@@ -990,28 +425,7 @@ public:
         auto request = Request::RepositoryGetSyncProgress{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, Progress)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Progress* rsp = response.template get_if<Response::Progress>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Progress, Progress>(std::move(request), completion_token);
     }
 
     /**
@@ -1024,28 +438,7 @@ public:
         auto request = Request::RepositoryIsDhtEnabled{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     /**
@@ -1058,28 +451,7 @@ public:
         auto request = Request::RepositoryIsPexEnabled{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     /**
@@ -1092,28 +464,7 @@ public:
         auto request = Request::RepositoryIsSyncEnabled{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     /**
@@ -1128,28 +479,7 @@ public:
             handle,
             host,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -1159,28 +489,7 @@ public:
         auto request = Request::RepositoryMount{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::string)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Path* rsp = response.template get_if<Response::Path>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Path, std::string>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -1192,26 +501,7 @@ public:
             handle,
             dst,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1228,26 +518,7 @@ public:
             src,
             dst,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1262,28 +533,7 @@ public:
             handle,
             path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, File)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::File* rsp = response.template get_if<Response::File>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, File(client, std::move(rsp->value)));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::File, File>(std::move(request), completion_token);
     }
 
     /**
@@ -1298,28 +548,7 @@ public:
             handle,
             path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::vector<DirectoryEntry>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::DirectoryEntries* rsp = response.template get_if<Response::DirectoryEntries>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::DirectoryEntries, std::vector<DirectoryEntry>>(std::move(request), completion_token);
     }
 
     /**
@@ -1337,26 +566,7 @@ public:
             path,
             recursive,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1371,26 +581,7 @@ public:
             handle,
             path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -1402,26 +593,7 @@ public:
             handle,
             token,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1461,26 +633,7 @@ public:
             read,
             write,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1501,26 +654,7 @@ public:
             access_mode,
             local_secret,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -1532,26 +666,7 @@ public:
             handle,
             value,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1566,26 +681,7 @@ public:
             handle,
             credentials,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1600,26 +696,7 @@ public:
             handle,
             enabled,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -1631,26 +708,7 @@ public:
             handle,
             value,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -1662,28 +720,7 @@ public:
             handle,
             edits,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     /**
@@ -1698,26 +735,7 @@ public:
             handle,
             enabled,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -1729,26 +747,7 @@ public:
             handle,
             value,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1765,26 +764,7 @@ public:
             handle,
             enabled,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1811,28 +791,7 @@ public:
             access_mode,
             local_secret,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, ShareToken)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::ShareToken* rsp = response.template get_if<Response::ShareToken>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::ShareToken, ShareToken>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -1842,26 +801,7 @@ public:
         auto request = Request::RepositoryUnmount{
             handle,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
 };
@@ -1871,6 +811,7 @@ private:
     friend class File;
     friend class Repository;
     friend class RepositorySubscription;
+    template<class, class> friend struct detail::ConvertResponse;
 
     std::shared_ptr<Client> client;
 
@@ -1878,6 +819,7 @@ private:
         client(std::move(client))
     {}
 
+public:
     Session() {}
 
 public:
@@ -1907,26 +849,7 @@ public:
         auto request = Request::SessionAddUserProvidedPeers{
             addrs,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -1937,26 +860,7 @@ public:
         auto request = Request::SessionBindMetrics{
             addr,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -1977,26 +881,7 @@ public:
         auto request = Request::SessionBindNetwork{
             addrs,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2007,28 +892,7 @@ public:
         auto request = Request::SessionBindRemoteControl{
             addr,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, uint16_t)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::U16* rsp = response.template get_if<Response::U16>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::U16, uint16_t>(std::move(request), completion_token);
     }
 
     /**
@@ -2055,26 +919,7 @@ public:
             dst_repo,
             dst_path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -2115,28 +960,7 @@ public:
             dht_enabled,
             pex_enabled,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, Repository)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Repository* rsp = response.template get_if<Response::Repository>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, Repository(client, std::move(rsp->value)));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Repository, Repository>(std::move(request), completion_token);
     }
 
     /**
@@ -2150,26 +974,7 @@ public:
         auto request = Request::SessionDeleteRepositoryByName{
             name,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2182,28 +987,7 @@ public:
             password,
             salt,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, SecretKey)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::SecretKey* rsp = response.template get_if<Response::SecretKey>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::SecretKey, SecretKey>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2214,28 +998,7 @@ public:
         auto request = Request::SessionFindRepository{
             name,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, Repository)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Repository* rsp = response.template get_if<Response::Repository>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, Repository(client, std::move(rsp->value)));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Repository, Repository>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2243,28 +1006,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGeneratePasswordSalt();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, PasswordSalt)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::PasswordSalt* rsp = response.template get_if<Response::PasswordSalt>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::PasswordSalt, PasswordSalt>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2272,28 +1014,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGenerateSecretKey();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, SecretKey)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::SecretKey* rsp = response.template get_if<Response::SecretKey>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::SecretKey, SecretKey>(std::move(request), completion_token);
     }
 
     /**
@@ -2309,28 +1030,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetCurrentProtocolVersion();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, uint64_t)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::U64* rsp = response.template get_if<Response::U64>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::U64, uint64_t>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2338,32 +1038,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetDefaultBlockExpiration();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::chrono::milliseconds>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::Duration>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::Duration>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Duration, std::optional<std::chrono::milliseconds>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2371,32 +1046,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetDefaultQuota();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<StorageSize>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::StorageSize>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::StorageSize>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::StorageSize, std::optional<StorageSize>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2404,32 +1054,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetDefaultRepositoryExpiration();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::chrono::milliseconds>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::Duration>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::Duration>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Duration, std::optional<std::chrono::milliseconds>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2437,32 +1062,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetExternalAddrV4();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::SocketAddr>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::SocketAddr>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::SocketAddr, std::optional<std::string>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2470,32 +1070,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetExternalAddrV6();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::SocketAddr>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::SocketAddr>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::SocketAddr, std::optional<std::string>>(std::move(request), completion_token);
     }
 
     /**
@@ -2510,28 +1085,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetHighestSeenProtocolVersion();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, uint64_t)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::U64* rsp = response.template get_if<Response::U64>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::U64, uint64_t>(std::move(request), completion_token);
     }
 
     /**
@@ -2542,28 +1096,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetLocalListenerAddrs();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::vector<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::PeerAddrs* rsp = response.template get_if<Response::PeerAddrs>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::PeerAddrs, std::vector<std::string>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2571,32 +1104,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetMetricsListenerAddr();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::SocketAddr>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::SocketAddr>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::SocketAddr, std::optional<std::string>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2604,32 +1112,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetMountRoot();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::Path>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::Path>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Path, std::optional<std::string>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2637,32 +1120,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetNatBehavior();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<NatBehavior>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::NatBehavior>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::NatBehavior>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::NatBehavior, std::optional<NatBehavior>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2670,28 +1128,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetNetworkStats();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, Stats)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Stats* rsp = response.template get_if<Response::Stats>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Stats, Stats>(std::move(request), completion_token);
     }
 
     /**
@@ -2705,28 +1142,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetPeers();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::vector<PeerInfo>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::PeerInfos* rsp = response.template get_if<Response::PeerInfos>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::PeerInfos, std::vector<PeerInfo>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2734,32 +1150,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetRemoteControlListenerAddr();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::SocketAddr>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::SocketAddr>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::SocketAddr, std::optional<std::string>>(std::move(request), completion_token);
     }
 
     /**
@@ -2774,28 +1165,7 @@ public:
         auto request = Request::SessionGetRemoteListenerAddrs{
             host,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::vector<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::PeerAddrs* rsp = response.template get_if<Response::PeerAddrs>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::PeerAddrs, std::vector<std::string>>(std::move(request), completion_token);
     }
 
     /**
@@ -2809,28 +1179,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetRuntimeId();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, PublicRuntimeId)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::PublicRuntimeId* rsp = response.template get_if<Response::PublicRuntimeId>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::PublicRuntimeId, PublicRuntimeId>(std::move(request), completion_token);
     }
 
     /**
@@ -2844,28 +1193,7 @@ public:
         auto request = Request::SessionGetShareTokenAccessMode{
             token,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, AccessMode)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::AccessMode* rsp = response.template get_if<Response::AccessMode>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::AccessMode, AccessMode>(std::move(request), completion_token);
     }
 
     /**
@@ -2882,28 +1210,7 @@ public:
         auto request = Request::SessionGetShareTokenInfoHash{
             token,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::string)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::String* rsp = response.template get_if<Response::String>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::String, std::string>(std::move(request), completion_token);
     }
 
     /**
@@ -2917,28 +1224,7 @@ public:
         auto request = Request::SessionGetShareTokenSuggestedName{
             token,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::string)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::String* rsp = response.template get_if<Response::String>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::String, std::string>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2949,32 +1235,7 @@ public:
         auto request = Request::SessionGetStateMonitor{
             path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::optional<StateMonitorNode>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Option<Response::StateMonitor>
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            handler(ec, {});
-                            return;
-                        }
-                        auto rsp = response.template get_if<Response::StateMonitor>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::StateMonitor, std::optional<StateMonitorNode>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -2982,28 +1243,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetStoreDirs();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::vector<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Paths* rsp = response.template get_if<Response::Paths>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Paths, std::vector<std::string>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3011,28 +1251,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetUserProvidedPeers();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::vector<std::string>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::PeerAddrs* rsp = response.template get_if<Response::PeerAddrs>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::PeerAddrs, std::vector<std::string>>(std::move(request), completion_token);
     }
 
     /**
@@ -3047,26 +1266,7 @@ public:
         auto request = Request::SessionInitNetwork{
             defaults,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3077,26 +1277,7 @@ public:
         auto request = Request::SessionInsertStoreDirs{
             paths,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -3107,28 +1288,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionIsLocalDiscoveryEnabled();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     /**
@@ -3139,28 +1299,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionIsPexRecvEnabled();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3168,28 +1307,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionIsPexSendEnabled();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     /**
@@ -3200,28 +1318,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionIsPortForwardingEnabled();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3229,32 +1326,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionListRepositories();
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, std::map<std::string, Repository>)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Repositories* rsp = response.template get_if<Response::Repositories>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        std::map<std::string, Repository> map;
-                        for (auto [k, v] : rsp->value) {
-                            map.emplace(std::make_pair(std::move(k), Repository(client, std::move(v))));
-                        }
-                        handler(ec, std::move(map));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Repositories, std::map<std::string, Repository>>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3267,28 +1339,7 @@ public:
             token,
             host,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, bool)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Bool* rsp = response.template get_if<Response::Bool>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Bool, bool>(std::move(request), completion_token);
     }
 
     /**
@@ -3312,28 +1363,7 @@ public:
             path,
             local_secret,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, Repository)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::Repository* rsp = response.template get_if<Response::Repository>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, Repository(client, std::move(rsp->value)));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::Repository, Repository>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3344,26 +1374,7 @@ public:
         auto request = Request::SessionRemoveStoreDirs{
             paths,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -3377,26 +1388,7 @@ public:
         auto request = Request::SessionRemoveUserProvidedPeers{
             addrs,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3407,26 +1399,7 @@ public:
         auto request = Request::SessionSetDefaultBlockExpiration{
             value,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3437,26 +1410,7 @@ public:
         auto request = Request::SessionSetDefaultQuota{
             value,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3467,26 +1421,7 @@ public:
         auto request = Request::SessionSetDefaultRepositoryExpiration{
             value,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -3500,26 +1435,7 @@ public:
         auto request = Request::SessionSetLocalDiscoveryEnabled{
             enabled,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3530,26 +1446,7 @@ public:
         auto request = Request::SessionSetMountRoot{
             path,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3560,26 +1457,7 @@ public:
         auto request = Request::SessionSetPexRecvEnabled{
             enabled,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3590,26 +1468,7 @@ public:
         auto request = Request::SessionSetPexSendEnabled{
             enabled,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -3623,26 +1482,7 @@ public:
         auto request = Request::SessionSetPortForwardingEnabled{
             enabled,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     template<typename CompletionToken>
@@ -3653,26 +1493,7 @@ public:
         auto request = Request::SessionSetStoreDirs{
             paths,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                // Unit
-                client->invoke(std::move(request), [
-                      handler = std::move(handler)
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec);
-                            return;
-                        }
-                        if (response.template get_if<Response::None>() == nullptr) {
-                            ec = error::protocol;
-                        }
-                        handler(ec);
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::None, void>(std::move(request), completion_token);
     }
 
     /**
@@ -3686,28 +1507,7 @@ public:
         auto request = Request::SessionValidateShareToken{
             token,
         };
-        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, ShareToken)>(
-            [ client = client,
-              request = std::move(request)
-            ] (auto handler) {
-                client->invoke(std::move(request), [
-                      handler = std::move(handler),
-                      client
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, {});
-                            return;
-                        }
-                        Response::ShareToken* rsp = response.template get_if<Response::ShareToken>();
-                        if (rsp == nullptr) {
-                            handler(error::protocol, {});
-                            return;
-                        }
-                        handler(ec, std::move(rsp->value));
-                    });
-            },
-            completion_token
-        );
+        return client->invoke<Response::ShareToken, ShareToken>(std::move(request), completion_token);
     }
 
 };

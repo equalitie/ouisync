@@ -372,7 +372,7 @@ void Client::unsubscribe(const RepositoryHandle& repo_handle, SubscriberId subsc
             MessageId{message_id->value}
         };
 
-        invoke(request, yield);
+        invoke<Response::None, void>(request, yield);
     }
 }
 
