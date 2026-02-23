@@ -4,6 +4,8 @@ use std::{
     future::{self, Future},
     io,
     net::SocketAddr,
+    path::Path,
+    sync::OnceLock,
 };
 use tokio::{
     io::{ReadHalf, WriteHalf},
@@ -297,6 +299,8 @@ mod implementation {
     };
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+    use super::is_running_in_shadow;
+
     /// TCP listener
     pub(super) struct TcpListener(tokio::net::TcpListener);
 
@@ -360,6 +364,12 @@ mod implementation {
     }
 
     fn set_keep_alive(socket: &Socket) -> io::Result<()> {
+        // Some TCP keep alive options are not supported in shadow. In the types of tests we have,
+        // keep-alive isn't actually needed so we can safelly disable it.
+        if is_running_in_shadow() {
+            return Ok(());
+        }
+
         let options = TcpKeepalive::new()
             .with_time(KEEP_ALIVE_INTERVAL)
             .with_interval(KEEP_ALIVE_INTERVAL);
@@ -421,4 +431,24 @@ mod implementation {
 #[cfg(feature = "simulation")]
 mod implementation {
     pub(super) use turmoil::net::{TcpListener, TcpStream};
+}
+
+// HACK: check whether we are running in the [shadow](https://github.com/shadow/shadow) simulator.
+// Normally this shouldn't be necessary as from the program's point of view it should make no
+// difference whether it's running normaly or inside shadow. However, there are some features that
+// shadow doesn't support yet (for example, some TCP keep alive options) so we can use this
+// function to conditionaly disable them.
+//
+// TODO: report the missing features to shadow's issue tracker
+fn is_running_in_shadow() -> bool {
+    // Detect shadow by checking whether the shadow shim libs are preloaded.
+    static RESULT: OnceLock<bool> = OnceLock::new();
+
+    *RESULT.get_or_init(|| {
+        std::env::var("LD_PRELOAD")
+            .unwrap_or_default()
+            .split(":")
+            .filter_map(|lib| Path::new(lib).file_name())
+            .any(|lib| lib == "libshadow_injector.so" || lib == "libshadow_libc.so")
+    })
 }
