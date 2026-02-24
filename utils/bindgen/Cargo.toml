@@ -19,5 +19,4 @@ clap               = { workspace = true }
 heck               = { workspace = true }
 ouisync-api-parser = { path = "../../api_parser" }
 syn                = { workspace = true, features = ["parsing", "full", "extra-traits"] }
-thiserror          = { workspace = true }
 indoc = "2"

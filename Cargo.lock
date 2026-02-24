@@ -1069,12 +1069,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "doctest-file"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aac81fa3e28d21450aa4d2ac065992ba96a1d7303efbce51a95f4fd175b67562"
-
-[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2097,21 +2091,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "interprocess"
-version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6be5e5c847dbdb44564bd85294740d031f4f8aeb3464e5375ef7141f7538db69"
-dependencies = [
- "doctest-file",
- "futures-core",
- "libc",
- "recvmsg",
- "tokio",
- "widestring",
- "windows-sys 0.52.0",
-]
-
-[[package]]
 name = "iovec"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2846,7 +2825,6 @@ dependencies = [
  "indoc",
  "ouisync-api-parser",
  "syn 2.0.117",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2854,7 +2832,6 @@ name = "ouisync-cli"
 version = "0.10.0"
 dependencies = [
  "anyhow",
- "assert_matches",
  "backoff",
  "chrono",
  "clap",
@@ -2920,8 +2897,6 @@ dependencies = [
  "chrono",
  "clap",
  "tokio",
- "tokio-stream",
- "tokio-util",
 ]
 
 [[package]]
@@ -2951,7 +2926,6 @@ dependencies = [
  "async-trait",
  "bytes",
  "camino",
- "clap",
  "fs_util",
  "futures-util",
  "heck",
@@ -2960,7 +2934,6 @@ dependencies = [
  "hyper 1.8.1",
  "hyper-util",
  "indexmap",
- "interprocess",
  "maxminddb",
  "metrics",
  "metrics-exporter-prometheus",
@@ -3552,12 +3525,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "recvmsg"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3edd4d5d42c92f0a659926464d4cce56b562761267ecf0f469d85b7de384175"
-
-[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4040,7 +4007,6 @@ version = "0.10.0"
 dependencies = [
  "anyhow",
  "rand 0.8.5",
- "serde",
  "serde_json",
  "tempfile",
 ]
