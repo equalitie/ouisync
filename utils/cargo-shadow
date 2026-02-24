@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+# Drop-in replacement for cargo which runs the resulting binaries with
+# [shadow](https://github.com/shadow/shadow).
+
+set -euo pipefail
+
+arg=${1:-}
+if [ "$arg" = "-h" -o "$arg" = "--help" -o "$arg" = "help" -o -z "$arg" ]; then
+    echo "Wrapper around cargo which runs the resulting binaries, tests or benches with the shadow simulator"
+    echo
+fi
+
+cargo --quiet build --package shadow-runner --release
+
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER=target/release/shadow-runner cargo $@
