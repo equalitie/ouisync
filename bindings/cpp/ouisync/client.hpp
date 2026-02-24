@@ -61,16 +61,16 @@ namespace detail {
         template<class Handler>
         static void apply(Handler&& handler, boost::system::error_code ec, Response&& response) {
             if (ec) {
-                handler(ec, RetType{});
+                handler(ec, {});
                 return;
             }
             if (response.template get_if<Response::None>() == nullptr) {
-                handler(ec, RetType{});
+                handler(ec, {});
                 return;
             }
             auto rsp = response.template get_if<Variant>();
             if (rsp == nullptr) {
-                handler(error::protocol, RetType{});
+                handler(error::protocol, {});
                 return;
             }
             handler(ec, std::move(rsp->value));
