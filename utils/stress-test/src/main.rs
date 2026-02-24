@@ -25,7 +25,11 @@ fn main() {
     }
 
     // Build the test binaries
-    let exes = build(&options);
+    let exes = if let Some(exe) = options.exe {
+        vec![exe]
+    } else {
+        build(&options)
+    };
 
     let args: Vec<_> = options
         .exact
@@ -53,7 +57,7 @@ fn main() {
     let exe_prefix = if let Some(runner) = &runner {
         format!("{runner} ")
     } else {
-        format!("")
+        String::new()
     };
 
     for exe in &exes {
@@ -132,6 +136,10 @@ struct Options {
     #[arg(long, value_name = "NAME")]
     test: Vec<String>,
 
+    /// Test the given executable instead of building it from source
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["package", "features", "release", "lib", "test"])]
+    exe: Option<String>,
+
     /// Skip tests whose names contain FILTER
     #[arg(long, value_name = "FILTER")]
     skip: Vec<String>,
@@ -142,7 +150,7 @@ struct Options {
 
     /// If provided, test executables are executed using this runner with the test executable passed
     /// as an argument.
-    #[arg(long)]
+    #[arg(long, value_name = "PATH")]
     runner: Option<String>,
 
     /// Run only tests whose names contain FILTER
