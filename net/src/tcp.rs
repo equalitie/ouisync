@@ -1,14 +1,17 @@
-use self::implementation::{TcpListener, TcpStream};
-use crate::{SocketOptions, sync::rendezvous};
+use crate::{KEEP_ALIVE_INTERVAL, SocketOptions, socket, sync::rendezvous};
+use socket2::{Domain, Socket, TcpKeepalive, Type};
 use std::{
+    fmt,
     future::{self, Future},
     io,
     net::SocketAddr,
     path::Path,
+    pin::Pin,
     sync::OnceLock,
+    task::{Context, Poll},
 };
 use tokio::{
-    io::{ReadHalf, WriteHalf},
+    io::{AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf},
     select,
     sync::{mpsc, oneshot},
     task,
@@ -286,151 +289,129 @@ fn connection_config() -> yamux::Config {
     yamux::Config::default()
 }
 
-// Real
-#[cfg(not(feature = "simulation"))]
-mod implementation {
-    use crate::{KEEP_ALIVE_INTERVAL, SocketOptions, socket};
-    use socket2::{Domain, Socket, TcpKeepalive, Type};
-    use std::{
-        fmt, io,
-        net::SocketAddr,
-        pin::Pin,
-        task::{Context, Poll},
-    };
-    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+/// TCP listener
+pub(super) struct TcpListener(tokio::net::TcpListener);
 
-    use super::is_running_in_shadow;
+impl TcpListener {
+    /// Configures a TCP socket with the given options and binds it to the given address. If the
+    /// port is taken, uses a random one,
+    pub fn bind(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
+        let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
+        socket.set_nonblocking(true)?;
 
-    /// TCP listener
-    pub(super) struct TcpListener(tokio::net::TcpListener);
-
-    impl TcpListener {
-        /// Configures a TCP socket with the given options and binds it to the given address. If the
-        /// port is taken, uses a random one,
-        pub fn bind(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
-            let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
-            socket.set_nonblocking(true)?;
-
-            if options.reuse_addr {
-                // Ignore errors - reuse address is nice to have but not required.
-                socket.set_reuse_address(true).ok();
-            }
-
-            set_keep_alive(&socket)?;
-            socket::bind_with_fallback(&socket, addr)?;
-
-            // Marks the socket as ready for accepting incoming connections. This needs to be set
-            // for TCP listeners otherwise we get "Invalid argument" error when calling `accept`.
-            //
-            // See https://stackoverflow.com/a/10002936/170073 for explanation of the parameter.
-            socket.listen(128)?;
-
-            Ok(Self(tokio::net::TcpListener::from_std(socket.into())?))
+        if options.reuse_addr {
+            // Ignore errors - reuse address is nice to have but not required.
+            socket.set_reuse_address(true).ok();
         }
 
-        pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
-            self.0
-                .accept()
-                .await
-                .map(|(stream, addr)| (TcpStream(stream), addr))
-        }
+        set_keep_alive(&socket)?;
+        socket::bind_with_fallback(&socket, addr)?;
 
-        pub fn local_addr(&self) -> io::Result<SocketAddr> {
-            self.0.local_addr()
-        }
+        // Marks the socket as ready for accepting incoming connections. This needs to be set
+        // for TCP listeners otherwise we get "Invalid argument" error when calling `accept`.
+        //
+        // See https://stackoverflow.com/a/10002936/170073 for explanation of the parameter.
+        socket.listen(128)?;
+
+        Ok(Self(tokio::net::TcpListener::from_std(socket.into())?))
     }
 
-    /// TCP stream
-    pub(super) struct TcpStream(tokio::net::TcpStream);
-
-    impl TcpStream {
-        pub async fn connect(addr: SocketAddr) -> io::Result<Self> {
-            let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
-            socket.set_nonblocking(true)?;
-            set_keep_alive(&socket)?;
-
-            Ok(Self(
-                tokio::net::TcpSocket::from_std_stream(socket.into())
-                    .connect(addr)
-                    .await?,
-            ))
-        }
+    pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
+        self.0
+            .accept()
+            .await
+            .map(|(stream, addr)| (TcpStream(stream), addr))
     }
 
-    impl fmt::Debug for TcpStream {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{:?}", self.0)
-        }
-    }
-
-    fn set_keep_alive(socket: &Socket) -> io::Result<()> {
-        // Some TCP keep alive options are not supported in shadow. In the types of tests we have,
-        // keep-alive isn't actually needed so we can safelly disable it.
-        if is_running_in_shadow() {
-            return Ok(());
-        }
-
-        let options = TcpKeepalive::new()
-            .with_time(KEEP_ALIVE_INTERVAL)
-            .with_interval(KEEP_ALIVE_INTERVAL);
-
-        // this options is not supported on windows
-        #[cfg(any(
-            target_os = "android",
-            target_os = "ios",
-            target_os = "linux",
-            target_os = "macos",
-        ))]
-        let options = options.with_retries(1);
-
-        socket.set_tcp_keepalive(&options)
-    }
-
-    impl AsyncRead for TcpStream {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &mut ReadBuf<'_>,
-        ) -> Poll<io::Result<()>> {
-            Pin::new(&mut self.0).poll_read(cx, buf)
-        }
-    }
-
-    impl AsyncWrite for TcpStream {
-        fn poll_write(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            Pin::new(&mut self.0).poll_write(cx, buf)
-        }
-
-        fn poll_write_vectored(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            bufs: &[io::IoSlice<'_>],
-        ) -> Poll<io::Result<usize>> {
-            Pin::new(&mut self.0).poll_write_vectored(cx, bufs)
-        }
-
-        fn is_write_vectored(&self) -> bool {
-            self.0.is_write_vectored()
-        }
-
-        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Pin::new(&mut self.0).poll_flush(cx)
-        }
-
-        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Pin::new(&mut self.0).poll_shutdown(cx)
-        }
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.0.local_addr()
     }
 }
 
-// Simulation
-#[cfg(feature = "simulation")]
-mod implementation {
-    pub(super) use turmoil::net::{TcpListener, TcpStream};
+/// TCP stream
+pub(super) struct TcpStream(tokio::net::TcpStream);
+
+impl TcpStream {
+    pub async fn connect(addr: SocketAddr) -> io::Result<Self> {
+        let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
+        socket.set_nonblocking(true)?;
+        set_keep_alive(&socket)?;
+
+        Ok(Self(
+            tokio::net::TcpSocket::from_std_stream(socket.into())
+                .connect(addr)
+                .await?,
+        ))
+    }
+}
+
+impl fmt::Debug for TcpStream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+
+fn set_keep_alive(socket: &Socket) -> io::Result<()> {
+    // Some TCP keep alive options are not supported in shadow. In the types of tests we have,
+    // keep-alive isn't actually needed so we can safelly disable it.
+    if is_running_in_shadow() {
+        return Ok(());
+    }
+
+    let options = TcpKeepalive::new()
+        .with_time(KEEP_ALIVE_INTERVAL)
+        .with_interval(KEEP_ALIVE_INTERVAL);
+
+    // this options is not supported on windows
+    #[cfg(any(
+        target_os = "android",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+    ))]
+    let options = options.with_retries(1);
+
+    socket.set_tcp_keepalive(&options)
+}
+
+impl AsyncRead for TcpStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for TcpStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.0.is_write_vectored()
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
+    }
 }
 
 // HACK: check whether we are running in the [shadow](https://github.com/shadow/shadow) simulator.

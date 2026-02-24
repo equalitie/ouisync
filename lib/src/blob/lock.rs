@@ -2,12 +2,14 @@
 
 use crate::{
     blob::BlobId,
-    collections::HashMap,
     crypto::sign::PublicKey,
     sync::{AwaitDrop, DropAwaitable},
 };
 use deadlock::BlockingMutex;
-use std::{collections::hash_map::Entry, sync::Arc};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    sync::Arc,
+};
 
 /// Container for blob locks in all branches.
 #[derive(Default, Clone)]

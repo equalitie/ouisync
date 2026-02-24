@@ -11,7 +11,6 @@ use super::{
     stats::ByteCounters,
 };
 use crate::{
-    collections::HashMap,
     crypto::{Hashable, sign::PublicKey},
     protocol::RepositoryId,
     repository::Vault,
@@ -21,7 +20,11 @@ use bytes::{BufMut, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use net::{bus::TopicId, unified::Connection};
 use state_monitor::{MonitoredValue, StateMonitor};
-use std::{collections::hash_map::Entry, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    sync::Arc,
+    time::Instant,
+};
 use tokio::{
     select,
     sync::{

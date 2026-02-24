@@ -8,15 +8,12 @@ use super::{
     peer_source::ConnectionDirection,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::{
-    collections::HashSet,
-    sync::{AwaitDrop, WatchSenderExt},
-};
+use crate::sync::{AwaitDrop, WatchSenderExt};
 use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
 use slab::Slab;
-use std::{ops::Range, time::Duration};
+use std::{collections::HashSet, ops::Range, time::Duration};
 use tokio::{
     sync::{mpsc, watch},
     task, time,

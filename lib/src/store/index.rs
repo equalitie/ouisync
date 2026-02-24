@@ -1,7 +1,9 @@
 //! Operations on the whole index (or its subset) as opposed to individual nodes.
 
+use std::collections::HashMap;
+
 use super::{error::Error, inner_node, root_node};
-use crate::{collections::HashMap, crypto::Hash, db, future::TryStreamExt, protocol::NodeState};
+use crate::{crypto::Hash, db, future::TryStreamExt, protocol::NodeState};
 use sqlx::Row;
 
 /// Does a parent node (root or inner) with the given hash exist?

@@ -1,9 +1,6 @@
-use crate::{
-    collections::{HashMap, HashSet},
-    protocol::BlockId,
-};
+use crate::protocol::BlockId;
 use std::{
-    collections::hash_map::Entry,
+    collections::{HashMap, HashSet, hash_map::Entry},
     sync::atomic::{AtomicUsize, Ordering},
 };
 use tokio::{sync::mpsc, task};

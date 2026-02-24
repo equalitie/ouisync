@@ -1,7 +1,6 @@
 use super::{block, error::Error, index, leaf_node, root_node};
 use crate::{
     block_tracker::BlockTracker as BlockDownloadTracker,
-    collections::{HashMap, HashSet},
     crypto::sign::PublicKey,
     db,
     future::TryStreamExt as _,
@@ -13,7 +12,7 @@ use futures_util::TryStreamExt;
 use scoped_task::{self, ScopedJoinHandle};
 use sqlx::Row;
 use std::{
-    collections::{BTreeMap, btree_map, hash_map::Entry},
+    collections::{BTreeMap, HashMap, HashSet, btree_map, hash_map::Entry},
     sync::Arc,
     time::{Duration, SystemTime},
 };

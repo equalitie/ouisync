@@ -1,6 +1,5 @@
 use super::Error;
 use crate::{
-    collections::HashMap,
     crypto::Hash,
     db,
     protocol::{BlockId, RootNode, SingleBlockPresence},
@@ -10,7 +9,7 @@ use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{
     cmp::Ordering,
-    collections::hash_map::Entry,
+    collections::{HashMap, hash_map::Entry},
     sync::{Arc, Mutex},
 };
 use tokio::sync::Notify;
