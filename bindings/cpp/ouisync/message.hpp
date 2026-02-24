@@ -24,20 +24,6 @@ struct ResponseResult {
             message(std::move(message)),
             sources(std::move(sources))
         {}
-
-        void move_throw() const {
-            throw_error(code, std::move(message));
-        }
-
-        std::exception_ptr move_to_exception_ptr() {
-            try {
-                move_throw();
-            }
-            catch (...) {
-                return std::current_exception();
-            }
-            throw_error(error::logic, "unreachable");
-        }
     };
 
     using Alternatives = std::variant<

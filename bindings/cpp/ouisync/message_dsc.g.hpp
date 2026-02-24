@@ -499,6 +499,17 @@ template<> struct describe::Struct<Request::SessionBindRemoteControl> : std::tru
     }
 };
 
+template<> struct describe::Struct<Request::SessionCopy> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::SessionCopy& v) {
+        o.field(v.src_repo);
+        o.field(v.src_path);
+        o.field(v.dst_repo);
+        o.field(v.dst_path);
+    }
+};
+
 template<> struct describe::Struct<Request::SessionCreateRepository> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
@@ -1080,6 +1091,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "SessionBindRemoteControl") {
             return builder.template build<Request::SessionBindRemoteControl>();
+        }
+        if (name == "SessionCopy") {
+            return builder.template build<Request::SessionCopy>();
         }
         if (name == "SessionCreateRepository") {
             return builder.template build<Request::SessionCreateRepository>();

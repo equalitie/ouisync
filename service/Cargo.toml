@@ -13,8 +13,10 @@ version.workspace = true
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
+async-recursion             = { workspace = true }
 async-trait                 = { workspace = true }
 bytes                       = { workspace = true }
+camino                      = { workspace = true }
 clap                        = { workspace = true }
 fs_util                     = { path = "../fs_util" }
 futures-util                = { workspace = true }
@@ -31,7 +33,7 @@ num_enum                    = { workspace = true }
 ouisync                     = { path = "../lib" }
 ouisync-macros              = { path = "../macros"}
 ouisync-tracing-fmt         = { path = "../tracing_fmt" }
-ouisync-vfs                 = { path = "../vfs" }
+ouisync-vfs                 = { path = "../vfs", optional = true }
 pem                         = { workspace = true }
 rand                        = { workspace = true }
 rmp-serde                   = { workspace = true }
@@ -69,3 +71,6 @@ ouisync-api-parser          = { path = "../api_parser" }
 
 [lints]
 workspace = true
+
+[features]
+vfs = ["dep:ouisync-vfs"]

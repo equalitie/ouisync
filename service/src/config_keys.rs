@@ -60,6 +60,7 @@ const LAST_USED_UDP_PORT_COMMENT: &str = "The value stored in this file is the l
 pub(crate) const LOCAL_DISCOVERY_ENABLED_KEY: ConfigKey<bool> =
     ConfigKey::new("local_discovery_enabled", "Enable local discovery");
 
+#[cfg(feature = "vfs")]
 pub(crate) const MOUNT_DIR_KEY: ConfigKey<PathBuf> =
     ConfigKey::new("mount_dir", "Repository mount directory");
 

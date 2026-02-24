@@ -268,6 +268,7 @@ async fn expire_synced_repository() {
     );
 }
 
+#[cfg(feature = "vfs")]
 #[tokio::test]
 async fn move_repository() {
     test_utils::init_log();
@@ -343,6 +344,7 @@ async fn move_repository() {
     assert_eq!(content, b"hello");
 }
 
+#[cfg(feature = "vfs")]
 #[tokio::test]
 async fn attempt_to_move_repository_over_existing_file() {
     test_utils::init_log();

@@ -4,6 +4,7 @@
 #include <ouisync/error.hpp>
 #include <ouisync/utils.hpp>
 #include <ouisync/subscriptions.hpp>
+#include <ouisync/semaphore.hpp>
 
 #include <boost/json.hpp>
 #include <boost/hash2/sha2.hpp>
@@ -25,9 +26,7 @@ namespace system = boost::system;
 namespace endian = boost::endian;
 
 using Socket = asio::ip::tcp::socket;
-// If this breaks due to being in the detail namespace, consider using
-// asio::any_completion_handler<HandlerSig>
-using ResponseHandler = asio::detail::spawn_handler<asio::any_io_executor, HandlerSig, void>;
+using ResponseHandler = asio::any_completion_handler<HandlerSig>;
 using RawMessageId = decltype(MessageId::value);
 using RawRepositoryHandle = decltype(RepositoryHandle::value);
 
@@ -46,6 +45,30 @@ using Pending = std::variant<
     Subscription
 >;
 
+// Data whose lifetime needs to be preserved while sending operation takes
+// place.
+struct SendBufferData {
+    uint32_t rq_size_be;
+    uint64_t rq_id_be;
+    std::stringstream serialized_rq;
+
+    void prepare(MessageId rq_id, const Request& rq) {
+        serialized_rq = serialize(rq);
+
+        rq_id_be = endian::native_to_big(rq_id.value);
+        uint32_t rq_size = sizeof(rq_id_be) + serialized_rq.view().size();
+        rq_size_be = endian::native_to_big(rq_size);
+    }
+
+    std::array<asio::const_buffer, 3> to_buffers() const {
+        return std::array<asio::const_buffer, 3>{
+            asio::buffer(&rq_size_be, sizeof(rq_size_be)),
+            asio::buffer(&rq_id_be, sizeof(rq_id_be)),
+            asio::buffer(serialized_rq.view())
+        };
+    }
+};
+
 struct Client::State : std::enable_shared_from_this<Client::State> {
     Socket socket;
     std::unordered_map<RawMessageId, Pending> pending;
@@ -55,32 +78,49 @@ struct Client::State : std::enable_shared_from_this<Client::State> {
     SubscriberId next_subscriber_id = 0;
     bool disconnected = false;
 
-    State(Socket socket): socket(std::move(socket)) {}
+    // Ensures only one socket write happens at a time
+    Semaphore send_semaphore;
+    SendBufferData send_buffer_data;
+
+    State(Socket socket) :
+        socket(std::move(socket)),
+        send_semaphore(this->socket.get_executor())
+    {}
+
+    template<
+        asio::completion_token_for<void(system::error_code)> CompletionToken
+    >
+    auto send(MessageId rq_id, Request rq, CompletionToken&& token) {
+        return boost::asio::async_initiate<CompletionToken, void(system::error_code)>(
+            [ state = shared_from_this(), rq_id, rq = std::move(rq)](auto handler) {
+                state->send_semaphore.get_permit(
+                    [ state, rq_id, rq = std::move(rq), handler = std::move(handler) ]
+                    (system::error_code ec, Semaphore::Permit permit) mutable {
+                        if (ec) {
+                            handler(ec);
+                            return;
+                        }
+                        state->send_buffer_data.prepare(rq_id, rq);
+                        asio::async_write(state->socket, state->send_buffer_data.to_buffers(),
+                            [ permit = std::move(permit),
+                              handler = std::move(handler)
+                            ] (system::error_code ec, size_t) mutable {
+                                handler(ec);
+                            });
+                    }
+                );
+            },
+            token
+        );
+    }
 };
-
-static
-void send(Socket& socket, MessageId rq_id, const Request& rq, asio::yield_context yield) {
-    std::stringstream request_buffer = serialize(rq);
-
-    uint64_t rq_id_be = endian::native_to_big(rq_id.value);
-
-    uint32_t rq_size = sizeof(rq_id_be) + request_buffer.view().size();
-    uint32_t rq_size_be = endian::native_to_big(rq_size);
-
-    asio::async_write(
-        socket,
-        std::array<asio::const_buffer, 3>{
-            asio::buffer(&rq_size_be, sizeof(rq_size_be)),
-            asio::buffer(&rq_id_be, sizeof(rq_id_be)),
-            asio::buffer(request_buffer.view())
-        },
-        yield);
-}
 
 HandlerResult to_handler_result(ResponseResult&& rs) {
     return std::visit(overloaded {
         [](ResponseResult::Failure&& failure) -> HandlerResult {
-            return failure.move_to_exception_ptr();
+            // TODO: We're losing useful `message` and `sources` debug
+            // information.
+            return HandlerResult(make_error_code(failure.code));
         },
         [](Response&& response) -> HandlerResult {
             return std::move(response);
@@ -121,9 +161,12 @@ receive(Socket& socket, asio::yield_context yield) {
 
 /* static */
 void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_context yield) {
+    boost::system::error_code ec;
+
     try {
         while (state->socket.is_open()) {
             auto [rs_id, rs] = receive(state->socket, yield);
+
             auto entry_i = state->pending.find(rs_id.value);
             if (entry_i == state->pending.end()) {
                 continue;
@@ -142,7 +185,7 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
                         handler = std::move(handler),
                         rs = std::move(rs)
                     ] () mutable {
-                        std::move(handler)(std::move(rs));
+                        apply_result(std::move(handler), std::move(rs));
                     };
                     state->pending.erase(entry_i);
                     asio::post(yield.get_executor(), std::move(h));
@@ -154,38 +197,41 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
             entry);
         }
     }
-    catch (...) {
-        std::exception_ptr eptr = std::current_exception();
-
-        auto pending = std::move(state->pending);
-        auto subscriptions = std::move(state->subscriptions);
-
-        for (auto& [rq_id, entry] : pending) {
-            std::visit(overloaded {
-                [&](std::monostate) {
-                    entry = eptr;
-                },
-                [&](const HandlerResult&) {
-                    // Ignored, user will receive original response
-                },
-                [&](ResponseHandler& handler) {
-                    auto h = [
-                        handler = std::move(handler),
-                        eptr
-                    ] () mutable {
-                        std::move(handler)(eptr);
-                    };
-                    asio::post(yield.get_executor(), std::move(h));
-                },
-                [&](Subscription&) {
-                    // Subscriptions are handled below
-                }
-            },
-            entry);
-        }
-
-        subscriptions.handle_all(yield.get_executor(), eptr);
+    catch (boost::system::system_error const& e) {
+        ec = e.code();
     }
+    catch (...) {
+        ec = with_location(error::logic);
+    }
+
+    auto pending = std::move(state->pending);
+    auto subscriptions = std::move(state->subscriptions);
+
+    for (auto& [rq_id, entry] : pending) {
+        std::visit(overloaded {
+            [&](std::monostate) {
+                entry = HandlerResult{ec};
+            },
+            [&](const HandlerResult&) {
+                // Ignored, user will receive original response
+            },
+            [&](ResponseHandler& handler) {
+                auto h = [
+                    handler = std::move(handler),
+                    ec
+                ] () mutable {
+                    apply_result(std::move(handler), ec);
+                };
+                asio::post(yield.get_executor(), std::move(h));
+            },
+            [&](Subscription&) {
+                // Subscriptions are handled below
+            }
+        },
+        entry);
+    }
+
+    subscriptions.handle_all(yield.get_executor(), ec);
 
     state->disconnected = true;
 }
@@ -229,22 +275,30 @@ Client::~Client() {
     }
 }
 
-/**
- * Create an entry in `state->pending` with a handler that gets executed when a
- * response with `rq_id` arrives
- */
-template<asio::completion_token_for<HandlerSig> CompletionToken>
-auto add_pending(
-    std::shared_ptr<Client::State> state,
-    RawMessageId rq_id,
-    CompletionToken&& token
-) {
+/* static */
+void Client::invoke_impl(
+        std::shared_ptr<State> state,
+        Request request,
+        asio::any_completion_handler<HandlerSig> handler)
+{
+    auto rq_id = state->next_request_id++;
+
+    // Set up pending request *before* we send the request.
     state->pending.emplace(std::pair(rq_id, std::monostate()));
 
-    return asio::async_initiate<CompletionToken, HandlerSig>(
-        // Note that this lambda is executed only once the token is awaited.
-        [state = std::move(state), rq_id](auto handler) {
+    state->send(MessageId{rq_id}, std::move(request),
+        [ handler = std::move(handler),
+          state,
+          rq_id
+        ](system::error_code ec) mutable {
+            if (ec) {
+                handler(ec, Response{});
+                return;
+            }
+
             auto entry_i = state->pending.find(rq_id);
+            assert(entry_i != state->pending.end());
+
             auto& entry = entry_i->second;
             std::visit(overloaded {
                 [&](std::monostate) {
@@ -253,61 +307,42 @@ auto add_pending(
                 [&](HandlerResult& rs) {
                     auto rs_ = std::move(rs);
                     state->pending.erase(entry_i);
-                    std::move(handler)(std::move(rs_));
+                    apply_result(std::move(handler), std::move(rs_));
                 },
                 [&](ResponseHandler&) {
-                    throw_error(error::logic, "Handler already set");
+                    // Handler already set
+                    apply_result(std::move(handler), HandlerResult{with_location(error::logic)});
                 },
                 [&](Subscription&) {
-                    throw_error(error::logic, "Response/subscription mismatch");
+                    // Response/subscription mismatch
+                    apply_result(std::move(handler), HandlerResult{with_location(error::logic)});
                 },
             },
             entry);
-        },
-        token);
-}
-
-Response Client::invoke(const Request& request, asio::yield_context yield) {
-    auto work_guard = asio::make_work_guard(yield.get_executor());
-    auto rq_id = _state->next_request_id++;
-
-    auto responded = add_pending(_state, rq_id, asio::deferred);
-    send(_state->socket, MessageId{rq_id}, request, yield);
-
-    HandlerResult handler_result;
-
-    try {
-        handler_result = responded(yield);
-    } catch (...) {
-        // Likely this is boost::context::detail::forced_unwind which could
-        // happen if the handler was destroyed before it's executed. If unsure,
-        // use this
-        // https://stackoverflow.com/a/47164539/273348
-        throw_error(error::logic, "unknown exception");
-    }
-
-    return std::visit(overloaded {
-            [](std::exception_ptr eptr) -> Response {
-                if (eptr) std::rethrow_exception(std::move(eptr));
-                throw_error(error::logic, "unexpected null eptr");
-            },
-            [](Response response) -> Response {
-                return std::move(response.value);
-            }
-        },
-        std::move(handler_result)
-    );
+        });
 }
 
 bool Client::is_connected() const noexcept {
     return _state && !_state->disconnected;
 }
 
+asio::any_io_executor Client::get_executor() const {
+    if (!_state) {
+        throw_error(error::logic, "client has no state");
+    }
+    return _state->socket.get_executor();
+}
+
 SubscriberId Client::new_subscriber_id() {
     return _state->next_subscriber_id++;
 }
 
-void Client::subscribe(const RepositoryHandle& repo_handle, SubscriberId subscriber_id, std::function<HandlerSig> handler, asio::yield_context yield) {
+void Client::subscribe(
+    const RepositoryHandle& repo_handle,
+    SubscriberId subscriber_id,
+    std::function<InnerHandlerSig> handler,
+    asio::yield_context yield)
+{
     if (!is_connected()) {
         throw_error(error::not_connected);
     }
@@ -321,7 +356,7 @@ void Client::subscribe(const RepositoryHandle& repo_handle, SubscriberId subscri
             repo_handle,
         };
 
-        send(_state->socket, *message_id, request, yield);
+        _state->send(*message_id, request, yield);
     }
 }
 
@@ -337,7 +372,7 @@ void Client::unsubscribe(const RepositoryHandle& repo_handle, SubscriberId subsc
             MessageId{message_id->value}
         };
 
-        invoke(request, yield);
+        invoke<Response::None, void>(request, yield);
     }
 }
 

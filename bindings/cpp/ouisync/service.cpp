@@ -74,6 +74,19 @@ void start_callback(const void* context, ouisync::error::Service ec) {
     );
 }
 
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32__) || defined(__MINGW32__) || defined(__CYGWIN__)
+#  define OUISYNC_WINDOWS
+#endif
+
+#ifdef OUISYNC_WINDOWS
+static std::string convert_wstring_to_string(std::wstring const& src) {
+    size_t len = std::wcstombs(nullptr, src.c_str(), 0) + 1;
+    std::string dst(len, '\0');
+    std::wcstombs(&dst[0], src.c_str(), len);
+    return dst;
+}
+#endif
+
 void Service::start(
     const fs::path& config_dir,
     const char* debug_label,
@@ -93,7 +106,11 @@ void Service::start(
             stop_handle_mutex->lock();
 
             _state->stop_handle = start_service(
-                config_dir.c_str(),
+                #if !defined(OUISYNC_WINDOWS)
+                    config_dir.c_str(),
+                #else
+                    convert_wstring_to_string(config_dir.native()).c_str(),
+                #endif
                 debug_label,
                 start_callback,
                 start_context

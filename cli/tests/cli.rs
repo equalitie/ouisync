@@ -12,6 +12,7 @@ use std::{
     thread,
 };
 
+#[cfg(feature = "vfs")]
 #[test]
 fn transfer_single_small_file() {
     let (a, b) = setup();
@@ -27,6 +28,7 @@ fn transfer_single_small_file() {
     })
 }
 
+#[cfg(feature = "vfs")]
 #[test]
 fn transfer_single_large_file() {
     let (a, b) = setup();
@@ -51,6 +53,7 @@ fn transfer_single_large_file() {
     });
 }
 
+#[cfg(feature = "vfs")]
 #[test]
 fn sequential_write_to_the_same_file() {
     let (a, b) = setup();
@@ -78,6 +81,7 @@ fn sequential_write_to_the_same_file() {
     });
 }
 
+#[cfg(feature = "vfs")]
 #[test]
 fn fast_sequential_writes() {
     // There used to be a deadlock which would manifest whenever one of the connected replicas
@@ -97,16 +101,19 @@ fn fast_sequential_writes() {
     }
 }
 
+#[cfg(feature = "vfs")]
 #[test]
 fn concurrent_read_and_write_small_file() {
     concurrent_read_and_write_file(32);
 }
 
+#[cfg(feature = "vfs")]
 #[test]
 fn concurrent_read_and_write_large_file() {
     concurrent_read_and_write_file(1024 * 1024);
 }
 
+#[cfg(feature = "vfs")]
 fn concurrent_read_and_write_file(size: usize) {
     let (a, b) = setup();
     let file_name = "test.txt";
@@ -140,6 +147,7 @@ fn concurrent_read_and_write_file(size: usize) {
 // This used to cause deadlock. For the deadlock to be triggered, the file to be deleted must be
 // large enough so that the number of blocks it consists of is greater than the capacity of the
 // notification channel.
+#[cfg(feature = "vfs")]
 #[test]
 fn concurrent_read_and_delete_file() {
     let (a, b) = setup();
@@ -182,6 +190,7 @@ fn concurrent_read_and_delete_file() {
     let _b = b_handle.join().unwrap();
 }
 
+#[cfg(feature = "vfs")]
 #[test]
 fn relay() {
     // Create three nodes: A, B and R where A and B are connected only to R but not to each other.
@@ -226,6 +235,7 @@ fn relay() {
     });
 }
 
+#[cfg(feature = "vfs")]
 #[test]
 fn concurrent_update() {
     let (a, b) = setup();
@@ -343,6 +353,7 @@ fn check_concurrent_versions(file_path: &Path, expected_contents: &[&[u8]]) -> R
 
 // This test is similar to the `relay` test but using a "cache server" for the relay node instead
 // of a regular peer.
+#[cfg(feature = "vfs")]
 #[test]
 fn mirror() {
     // the cache server
@@ -398,6 +409,7 @@ fn metrics() {
     assert_ne!(addr.port(), 0);
 }
 
+#[cfg(feature = "vfs")]
 fn setup() -> (Bin, Bin) {
     let a = Bin::start();
     let a_port = a.bind();

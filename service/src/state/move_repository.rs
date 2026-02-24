@@ -1,15 +1,15 @@
+#[cfg(feature = "vfs")]
+use std::sync::Arc;
 use std::{
     fmt,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
-use crate::{
-    Error,
-    protocol::RepositoryHandle,
-    repository::{self, RepositorySet},
-};
+#[cfg(feature = "vfs")]
+use crate::repository;
+use crate::{Error, protocol::RepositoryHandle, repository::RepositorySet};
 use ouisync::{Credentials, Network};
+#[cfg(feature = "vfs")]
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use state_monitor::StateMonitor;
 use tokio::fs;
@@ -40,6 +40,7 @@ struct Context<'a> {
     network: &'a Network,
     store: &'a Store,
     repos: &'a RepositorySet,
+    #[cfg(feature = "vfs")]
     mounter: Option<Arc<MultiRepoVFS>>,
     repos_monitor: &'a StateMonitor,
     handle: RepositoryHandle,
@@ -64,6 +65,7 @@ impl<'a> Context<'a> {
             .ok_or(Error::InvalidArgument)?;
 
         // Grab mounter only if mounting is supported, enabled and the repo is currently mounted.
+        #[cfg(feature = "vfs")]
         let mounter = state
             .mounter
             .lock()
@@ -77,6 +79,7 @@ impl<'a> Context<'a> {
             network: &state.network,
             store: &state.store,
             repos: &state.repos,
+            #[cfg(feature = "vfs")]
             mounter,
             repos_monitor: &state.repos_monitor,
             handle,
@@ -90,6 +93,7 @@ impl<'a> Context<'a> {
         // TODO: close all open files of this repo
 
         // 1. Unmount the repo (if mounted)
+        #[cfg(feature = "vfs")]
         if let Some(mounter) = &self.mounter {
             mounter.remove(repository::short_name(&self.src))?;
             undo_stack.push(Action::Unmount);
@@ -146,6 +150,7 @@ impl<'a> Context<'a> {
         self.repos.replace(self.handle, holder);
         undo_stack.push(Action::Open);
 
+        #[cfg(feature = "vfs")]
         // 7. Remount the repository
         self.mount_repository(&self.dst)?;
 
@@ -176,6 +181,7 @@ impl<'a> Context<'a> {
             self.config,
             self.network,
             self.repos_monitor,
+            #[cfg(feature = "vfs")]
             None,
         )
         .await?;
@@ -185,6 +191,7 @@ impl<'a> Context<'a> {
         Ok(holder)
     }
 
+    #[cfg(feature = "vfs")]
     fn mount_repository(&self, path: &Path) -> Result<(), Error> {
         if let Some(mounter) = &self.mounter
             && let Some(repo) = self.repos.get_repository(self.handle)
@@ -198,6 +205,7 @@ impl<'a> Context<'a> {
 
 #[expect(clippy::large_enum_variant)]
 enum Action {
+    #[cfg(feature = "vfs")]
     Unmount,
     CreateDir {
         path: PathBuf,
@@ -219,6 +227,7 @@ enum Action {
 impl Action {
     async fn undo(self, context: &Context<'_>) -> Result<(), Error> {
         match self {
+            #[cfg(feature = "vfs")]
             Self::Unmount => context.mount_repository(&context.src)?,
             Self::CreateDir { path } => {
                 context.store.remove_empty_ancestor_dirs(&path).await?;
@@ -252,6 +261,7 @@ impl Action {
 impl fmt::Debug for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "vfs")]
             Self::Unmount => f.debug_tuple("Unmount").finish(),
             Self::CreateDir { path } => f.debug_struct("CreateDir").field("path", path).finish(),
             Self::CloseRepository { sync_enabled, .. } => f

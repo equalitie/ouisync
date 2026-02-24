@@ -18,8 +18,8 @@ struct I /* indent */ {
 namespace std {
     ostream& operator<<(ostream& os, ouisync::EntryType type) {
         switch (type) {
-            case ouisync::FILE: return os << "📄";
-            case ouisync::DIRECTORY: return os << "📁";
+            case ouisync::EntryType::file: return os << "📄";
+            case ouisync::EntryType::directory: return os << "📁";
             default: return os;
         }
     }

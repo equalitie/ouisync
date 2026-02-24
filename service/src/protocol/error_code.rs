@@ -1,5 +1,6 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_macros::api;
+#[cfg(feature = "vfs")]
 use ouisync_vfs::MountError;
 use serde::{Deserialize, Serialize};
 
@@ -77,8 +78,10 @@ pub enum ErrorCode {
     TlsKeysNotFound = 4096 + 6,
     /// Failed to create TLS config
     TlsConfigError = 4096 + 7,
+    #[cfg(feature = "vfs")]
     /// Failed to install virtual filesystem driver
     VfsDriverInstallError = 4096 + 8,
+    #[cfg(feature = "vfs")]
     /// Unspecified virtual filesystem error
     VfsOtherError = 4096 + 9,
     /// Another instance of the service is already running
@@ -87,6 +90,9 @@ pub enum ErrorCode {
     StoreDirUnspecified = 4096 + 11,
     /// Mount directory is not specified
     MountDirUnspecified = 4096 + 12,
+    #[cfg(not(feature = "vfs"))]
+    /// Ouisync compiled without VFS
+    NoVFS = 4096 + 13,
 
     /// Unspecified error
     Other = 65535,
@@ -101,7 +107,10 @@ impl ToErrorCode for Error {
         match self {
             Self::AlreadyExists => ErrorCode::AlreadyExists,
             Self::Config(_) => ErrorCode::ConfigError,
+            #[cfg(feature = "vfs")]
             Self::CreateMounter(error) => error.to_error_code(),
+            #[cfg(not(feature = "vfs"))]
+            Self::NoVFS => ErrorCode::NoVFS,
             Self::InitializeRuntime(_) => ErrorCode::RuntimeInitializeError,
             Self::InvalidArgument => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,
@@ -177,6 +186,7 @@ impl ToErrorCode for UnexpectedResponse {
     }
 }
 
+#[cfg(feature = "vfs")]
 impl ToErrorCode for MountError {
     fn to_error_code(&self) -> ErrorCode {
         match self {

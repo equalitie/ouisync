@@ -272,6 +272,13 @@ struct Request {
         const std::optional<std::string>& addr;
     };
 
+    struct SessionCopy {
+        const std::optional<std::string>& src_repo;
+        const std::string& src_path;
+        const std::optional<std::string>& dst_repo;
+        const std::string& dst_path;
+    };
+
     struct SessionCreateRepository {
         const std::string& path;
         const std::optional<ouisync::SetLocalSecret>& read_secret;
@@ -522,6 +529,7 @@ struct Request {
         SessionBindMetrics,
         SessionBindNetwork,
         SessionBindRemoteControl,
+        SessionCopy,
         SessionCreateRepository,
         SessionDeleteRepositoryByName,
         SessionDeriveSecretKey,
@@ -584,6 +592,7 @@ struct Request {
     Request(Request const&) = default;
 
     template<class T>
+    requires(!std::same_as<std::remove_cvref_t<T>, Request>)
     Request(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -596,8 +605,8 @@ struct Request {
     T* get_if() {
         return std::get_if<T>(&value);
     }
-
 };
+
 struct Response {
     struct AccessMode {
         ouisync::AccessMode value;
@@ -762,6 +771,7 @@ struct Response {
     Response(Response const&) = default;
 
     template<class T>
+    requires(!std::same_as<std::remove_cvref_t<T>, Response>)
     Response(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -774,6 +784,6 @@ struct Response {
     T* get_if() {
         return std::get_if<T>(&value);
     }
-
 };
+
 } // namespace ouisync

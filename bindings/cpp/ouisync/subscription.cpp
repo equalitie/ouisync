@@ -11,7 +11,7 @@
 namespace ouisync {
 
 namespace asio = boost::asio;
-using Handler = asio::any_completion_handler<void(std::exception_ptr)>;
+using Handler = asio::any_completion_handler<void(boost::system::error_code)>;
 
 using State = std::variant<
     std::monostate,
@@ -46,11 +46,7 @@ struct RepositorySubscription::Impl {
                 asio::post(exec, [
                     h = std::move(h)
                 ]() mutable {
-                    try {
-                        throw_error(asio::error::operation_aborted);
-                    } catch (...) {
-                        h(std::current_exception());
-                    }
+                    h(asio::error::operation_aborted);
                 });
             }
         },
@@ -60,7 +56,7 @@ struct RepositorySubscription::Impl {
 
 static bool is_error(const HandlerResult& result) {
     return std::visit(overloaded {
-        [](const std::exception_ptr&) { return true; },
+        [](const boost::system::error_code&) { return true; },
         [](const Response&) { return false; }
     }, result);
 }
@@ -102,8 +98,8 @@ void RepositorySubscription::subscribe(Repository& repo, asio::yield_context yie
                     result = std::move(result)
                 ]() mutable {
                     std::visit(overloaded {
-                        [&](std::exception_ptr& eptr) { h(eptr); },
-                        [&](const Response&) { h(nullptr); }
+                        [&](boost::system::error_code& ec) { h(ec); },
+                        [&](const Response&) { h(boost::system::error_code()); }
                     },
                     result);
                 });
@@ -121,12 +117,13 @@ void RepositorySubscription::subscribe(Repository& repo, asio::yield_context yie
 }
 
 void RepositorySubscription::state_changed(boost::asio::yield_context yield) {
-    if (!_impl) {
-        throw_error(error::not_subscribed);
-    }
-
-    asio::async_initiate<decltype(yield), void(std::exception_ptr)>(
+    asio::async_initiate<decltype(yield), void(boost::system::error_code)>(
         [impl = _impl](auto handler) {
+            if (!impl) {
+                handler(with_location(error::not_subscribed));
+                return;
+            }
+
             std::visit(overloaded {
                 [&](std::monostate) {
                     impl->state.emplace<Handler>(std::move(handler));
@@ -136,21 +133,17 @@ void RepositorySubscription::state_changed(boost::asio::yield_context yield) {
                     impl->state = std::monostate();
 
                     std::visit(overloaded {
-                        [&](std::exception_ptr eptr) {
-                            handler(eptr);
+                        [&](boost::system::error_code ec) {
+                            handler(ec);
                         },
                         [&](Response) {
-                            handler(nullptr);
+                            handler(boost::system::error_code());
                         }
                     },
                     std::move(result));
                 },
                 [&](Handler&) {
-                    try {
-                        throw std::runtime_error("already awaiting");
-                    } catch (...) {
-                        handler(std::current_exception());
-                    }
+                    handler(with_location(error::Client::already_subscribed));
                 }
             },
             impl->state);

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 project(Ouisync)
 
 include(FetchContent)
@@ -8,14 +8,18 @@ include(FetchContent)
 # client will attempt to connect to a Ouisync app already running on this PC
 # (OFF).
 option(EXAMPLE_USE_BUILT_IN_SERVICE "When OFF the example will attempt to connect to an already running Ouisync app" ON)
-option(MEASURE_BUILD_TIME "Print target build duration" OFF)
+option(OUISYNC_MEASURE_BUILD_TIME "Print target build duration" OFF)
 
 option(WARNING_IS_ERROR "Fail compilation in presence of warnings" OFF)
 option(OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION OFF)
+# Enable mounting on Linux and Windows, requires FUSE and Dokan respectively.
+option(OUISYNC_WITH_VFS "Compile with Virtual File System support" OFF)
 
 # Show compilation times
-set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
-set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
+if (OUISYNC_MEASURE_BUILD_TIME)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
+endif()
 
 # Enable compilation warnings for all targets
 if (MSVC)
@@ -27,9 +31,9 @@ else()
     endif()
 endif()
 
-############################
+###########################################################
 # Boost
-############################
+###########################################################
 
 # TODO: Get rid of this
 # https://stackoverflow.com/a/71864590/273348
@@ -51,14 +55,63 @@ FetchContent_Declare(
     GIT_TAG v0.5.2
 )
 
-############################
+###########################################################
+# msgpack - for serializing messages between C++ and Rust
+###########################################################
+
+file(WRITE ${CMAKE_BINARY_DIR}/msgpack/download/CMakeLists.txt
+    "cmake_minimum_required(VERSION 2.8.2)\n"
+    "project(msgpack-download NONE)\n"
+    ""
+    "include(ExternalProject)\n"
+    "externalproject_add(msgpack\n"
+    "  GIT_REPOSITORY    https://github.com/msgpack/msgpack-c\n"
+    "  # Use commit from the `cpp_master` which contains the msgpack-cxx C++ version\n"
+    "  GIT_TAG           092bc69b6e815980bce7808595c914dd3a29f905\n"
+    "  SOURCE_DIR        ${CMAKE_BINARY_DIR}/msgpack/src\n"
+    "  BINARY_DIR        ${CMAKE_BINARY_DIR}/msgpack/build\n"
+    "  # No building, that's done outside of this externalproject_add\n"
+    "  CONFIGURE_COMMAND \"\"\n"
+    "  BUILD_COMMAND     \"\"\n"
+    "  INSTALL_COMMAND   \"\"\n"
+    "  TEST_COMMAND      \"\"\n"
+    ")"
+)
+
+# Configure
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -G "${CMAKE_GENERATOR}" .
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/msgpack/download"
+)
+
+# Build
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" --build .
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/msgpack/download"
+)
+
+# Import targets
+add_subdirectory("${CMAKE_BINARY_DIR}/msgpack/src" "msgpack" EXCLUDE_FROM_ALL)
+
+###########################################################
 # Ouisync Rust code
-############################
+###########################################################
 
 FetchContent_MakeAvailable(Corrosion)
 
 # CMAKE_CURRENT_SOURCE_DIR points to the dir path of this CMakeLists.txt file
 set(OUISYNC_SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../)
+
+set(OUISYNC_SERVICE_PRIVATE_LIBS)
+
+if (WIN32)
+    list(APPEND OUISYNC_SERVICE_PRIVATE_LIBS netio iphlpapi propsys mincore)
+endif()
+
+if (OUISYNC_WITH_VFS)
+    set(OUISYNC_CARGO_FEATURES "vfs")
+    list(APPEND OUISYNC_SERVICE_PRIVATE_LIBS fuse3) # TODO: Windows uses Dokan
+endif()
 
 # This creates the 'ouisync_service' library target whose sources are written in Rust
 corrosion_import_crate(
@@ -66,6 +119,7 @@ corrosion_import_crate(
     # Can also create a dynamic library if crate type is set to `cdylib`.
     CRATE_TYPES staticlib
     CRATES ouisync-service
+    FEATURES ${OUISYNC_CARGO_FEATURES}
 )
 
 # TODO: This doesn't seem to do anything apart from preventing
@@ -85,9 +139,9 @@ target_link_libraries(cpp_ouisync_service
         Boost::context
         # For reading ouisync config files
         Boost::filesystem
-        # TODO: This should not be necessary when mounting repositories is not
-        # required
-        fuse3
+        msgpack-cxx
+    PRIVATE
+        ${OUISYNC_SERVICE_PRIVATE_LIBS}
 )
 
 target_include_directories(cpp_ouisync_service
@@ -101,9 +155,9 @@ if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
     target_compile_definitions(cpp_ouisync_service PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
 endif()
 
-############################
+###########################################################
 # C++ API code generation
-############################
+###########################################################
 
 set(OUISYNC_GENERATED_BINDING_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ouisync)
 # To avoid re-building every time, the generated files are first written into a
@@ -112,7 +166,6 @@ set(OUISYNC_GENERATED_BINDING_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ouisync)
 set(OUISYNC_GENERATED_BINDING_TMP_DIR ${CMAKE_CURRENT_BINARY_DIR}/ouisync/generated.tmp)
 
 set(GENERATED_CPP_FILES
-    ${OUISYNC_GENERATED_BINDING_DIR}/api.g.cpp
     ${OUISYNC_GENERATED_BINDING_DIR}/data.g.cpp
     ${OUISYNC_GENERATED_BINDING_DIR}/message.g.cpp
 )
@@ -162,9 +215,11 @@ target_link_libraries(cpp_ouisync_client
         Boost::context
         # For reading ouisync config files
         Boost::filesystem
+        msgpack-cxx
 )
 
-target_compile_features(cpp_ouisync_client PRIVATE cxx_std_20)
+target_compile_features(cpp_ouisync_client PUBLIC cxx_std_20)
+target_compile_features(cpp_ouisync_service PUBLIC cxx_std_20)
 
 if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
     target_compile_definitions(cpp_ouisync_client PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)

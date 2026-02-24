@@ -1,5 +1,6 @@
 use anyhow::Result;
-use heck::{AsPascalCase, AsShoutySnakeCase, AsSnakeCase};
+use heck::{AsPascalCase, AsSnakeCase};
+use indoc::writedoc;
 use ouisync_api_parser::{
     ComplexEnum, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
     ToResponseVariantName, Type,
@@ -39,7 +40,6 @@ impl ItemType {
     }
 }
 
-//#pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
 pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
     const DO_NOT_EDIT_MESSAGE: &str = "// This file is auto generated. Do not edit.";
 
@@ -212,35 +212,21 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
     let mut hpp_file = File::create(out_dir.join("api.g.hpp"))?;
     let out_hpp = &mut hpp_file;
 
-    let mut cpp_file = File::create(out_dir.join("api.g.cpp"))?;
-    let out_cpp = &mut cpp_file;
-
     writeln!(out_hpp, "{}", DO_NOT_EDIT_MESSAGE)?;
     writeln!(out_hpp)?;
     writeln!(out_hpp, "#include <ouisync/data.hpp>")?;
+    writeln!(out_hpp, "#include <ouisync/client.hpp>")?;
     writeln!(out_hpp, "#include <boost/asio/spawn.hpp>")?;
     writeln!(out_hpp, "#include <boost/filesystem/path.hpp>")?;
     writeln!(out_hpp)?;
     writeln!(out_hpp, "namespace {NAMESPACE} {{")?;
     writeln!(out_hpp)?;
-    writeln!(out_hpp, "class Client;")?;
-    writeln!(out_hpp)?;
-
-    writeln!(out_cpp, "{}", DO_NOT_EDIT_MESSAGE)?;
-    writeln!(out_cpp)?;
-    writeln!(out_cpp, "#include <ouisync/client.hpp>")?;
-    writeln!(out_cpp, "#include <ouisync/api.g.hpp>")?;
-    writeln!(out_cpp, "#include <ouisync/message.g.hpp>")?;
-    writeln!(out_cpp)?;
-    writeln!(out_cpp, "namespace {NAMESPACE} {{")?;
-    writeln!(out_cpp)?;
 
     for item in &api_items {
-        write_api_class(out_hpp, out_cpp, item.name, item.inner, item.variants)?;
+        write_api_class(out_hpp, item.name, item.inner, item.variants)?;
     }
 
     writeln!(out_hpp, "}} // namespace {NAMESPACE}")?;
-    writeln!(out_cpp, "}} // namespace {NAMESPACE}")?;
     Ok(())
 }
 
@@ -295,14 +281,14 @@ fn write_simple_enum(out: &mut OutFiles<'_>, name: &str, item: &SimpleEnum) -> R
     }
 
     write_docs(out.hpp, "", &item.docs)?;
-    writeln!(out.hpp, "enum {name} : {repr} {{")?;
+    writeln!(out.hpp, "enum class {name} : {repr} {{")?;
 
     for (variant_name, variant) in &item.variants {
-        write_docs(out.hpp, "{I}", &variant.docs)?;
+        write_docs(out.hpp, I, &variant.docs)?;
         writeln!(
             out.hpp,
             "{I}{} = {},",
-            AsShoutySnakeCase(variant_name),
+            AsSnakeCase(variant_name),
             variant.value
         )?;
     }
@@ -333,7 +319,7 @@ fn write_simple_enum(out: &mut OutFiles<'_>, name: &str, item: &SimpleEnum) -> R
         writeln!(out.dsc, "{I}static bool is_valid({repr} v) {{")?;
         writeln!(out.dsc, "{I}{I}static const {repr} values[] = {{")?;
         for (variant_name, _variant) in &item.variants {
-            writeln!(out.dsc, "{I}{I}{I}{namespace_prefix}{},", AsShoutySnakeCase(variant_name),)?;
+            writeln!(out.dsc, "{I}{I}{I}static_cast<{repr}>({namespace_prefix}{name}::{}),", AsSnakeCase(variant_name),)?;
         }
         writeln!(out.dsc, "{I}{I}}};")?;
         writeln!(out.dsc, "{I}{I}for (size_t i = 0; i != {}; ++i) {{", item.variants.len())?;
@@ -449,36 +435,40 @@ fn write_complex_enum(
         }
     }
     writeln!(out.hpp, "{I}>;")?;
-
-    writeln!(out.hpp)?;
-    writeln!(out.hpp, "{I}{ALTERNATIVES_SUFFIX} value;")?;
     writeln!(out.hpp)?;
 
-    writeln!(out.hpp, "{I}{name}() = default;")?;
-    writeln!(out.hpp, "{I}{name}({name}&&) = default;")?;
-    writeln!(out.hpp, "{I}{name}& operator=({name}&&) = default;")?;
-    // TODO: Implement explicit cloning
-    writeln!(out.hpp, "{I}{name}({name} const&) = default;")?;
+    writedoc!(
+        out.hpp,
+        "
+        {I}{ALTERNATIVES_SUFFIX} value;
+
+        {I}{name}() = default;
+        {I}{name}({name}&&) = default;
+        {I}{name}& operator=({name}&&) = default;
+        {I}{name}({name} const&) = default;
+        
+        {I}template<class T>
+        {I}requires(!std::same_as<std::remove_cvref_t<T>, {name}>)
+        {I}{name}(T&& v)
+        {I}{I}: value(std::forward<T>(v)) {{}}
+        
+        {I}template<class T>
+        {I}T& get() {{
+        {I}{I}return std::get<T>(value);
+        {I}}}
+        
+        {I}template<class T>
+        {I}T* get_if() {{
+        {I}{I}return std::get_if<T>(&value);
+        {I}}}
+        }};
+        "
+    )?;
     writeln!(out.hpp)?;
-    writeln!(out.hpp, "{I}template<class T>")?;
-    writeln!(out.hpp, "{I}{name}(T&& v)")?;
-    writeln!(out.hpp, "{I}{I}: value(std::forward<T>(v)) {{}}")?;
-    writeln!(out.hpp)?;
-    writeln!(out.hpp, "{I}template<class T>")?;
-    writeln!(out.hpp, "{I}T& get() {{")?;
-    writeln!(out.hpp, "{I}{I}return std::get<T>(value);")?;
-    writeln!(out.hpp, "{I}}}")?;
-    writeln!(out.hpp)?;
-    writeln!(out.hpp, "{I}template<class T>")?;
-    writeln!(out.hpp, "{I}T* get_if() {{")?;
-    writeln!(out.hpp, "{I}{I}return std::get_if<T>(&value);")?;
-    writeln!(out.hpp, "{I}}}")?;
-    writeln!(out.hpp)?;
-    writeln!(out.hpp, "}};")?;
 
     describe_struct(
         out.dsc,
-        "{name}",
+        name,
         None,
         FieldsParseType::Direct,
         ["value"].into_iter(),
@@ -532,7 +522,7 @@ fn write_struct(out: &mut OutFiles<'_>, name: &str, item: &Struct) -> Result<()>
 
     describe_struct(
         out.dsc,
-        "{name}",
+        name,
         None,
         FieldsParseType::new(&item.fields),
         item.fields.default_named(DEFAULT_FIELD_NAME).names(),
@@ -560,8 +550,8 @@ fn write_service_error_code(
     for (variant_name, _variant) in &item.variants {
         writeln!(
             cpp,
-            "{I}{I}case error::{}: return \"{variant_name}\";",
-            AsShoutySnakeCase(variant_name)
+            "{I}{I}case error::{name}::{}: return \"{variant_name}\";",
+            AsSnakeCase(variant_name)
         )?;
     }
     writeln!(cpp, "{I}{I}default: return \"UnknownError\";")?;
@@ -574,7 +564,6 @@ fn write_service_error_code(
 
 fn write_api_class(
     out_hpp: &mut dyn Write,
-    out_cpp: &mut dyn Write,
     name: &str,
     inner: Option<(&str, &str)>,
     request_variants: &[(String, RequestVariant)],
@@ -588,6 +577,10 @@ fn write_api_class(
     {
         writeln!(out_hpp, "{I}friend class {friend};")?;
     }
+    writeln!(
+        out_hpp,
+        "{I}template<class, class> friend struct detail::ConvertResponse;"
+    )?;
     writeln!(out_hpp)?;
 
     // Members
@@ -619,41 +612,35 @@ fn write_api_class(
 
     writeln!(out_hpp)?;
     writeln!(out_hpp, "public:")?;
+    writeln!(out_hpp, "{I}{name}() {{}}")?;
+    writeln!(out_hpp)?;
+    writeln!(out_hpp, "public:")?;
 
     if name == "Session" {
         let docs_lines = [
-            "Connect to the Ouisync service and return Session on success. Throws on failure.",
+            " Connect to the Ouisync service and return Session on success. Throws on failure.",
             "",
-            "config_dir_path: Path to a directory created by Ouisync service",
-            "                 containing local_endpoint.conf file.",
+            " config_dir_path: Path to a directory created by Ouisync service",
+            "                  containing local_endpoint.conf file.",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
 
         write_docs(out_hpp, I, &Docs { lines: docs_lines })?;
-        writeln!(out_hpp, "{I}static Session connect(")?;
-        #[rustfmt::skip]
-        writeln!(out_hpp, "{I}{I}const boost::filesystem::path& config_dir_path,")?;
-        writeln!(out_hpp, "{I}{I}boost::asio::yield_context")?;
-        writeln!(out_hpp, "{I});")?;
-        writeln!(out_hpp)?;
+        writedoc!(
+            out_hpp,
+            "
+            {I}static Session connect(
+            {I}{I}const boost::filesystem::path& config_dir,
+            {I}{I}boost::asio::yield_context yield
+            {I}) {{
+            {I}{I}auto client = ouisync::Client::connect(config_dir, yield);
+            {I}{I}return Session(std::make_shared<Client>(std::move(client)));
+            {I}}}
 
-        writeln!(out_cpp, "Session Session::connect(")?;
-        #[rustfmt::skip]
-        writeln!(out_cpp, "{I}const boost::filesystem::path& config_dir,")?;
-        writeln!(out_cpp, "{I}boost::asio::yield_context yield")?;
-        writeln!(out_cpp, ") {{")?;
-        writeln!(
-            out_cpp,
-            "{I}auto client = ouisync::Client::connect(config_dir, yield);"
+            "
         )?;
-        writeln!(
-            out_cpp,
-            "{I}return Session(std::make_shared<Client>(std::move(client)));"
-        )?;
-        writeln!(out_cpp, "}}")?;
-        writeln!(out_cpp)?;
     }
 
     let prefix = format!("{}_", AsSnakeCase(name));
@@ -689,36 +676,22 @@ fn write_api_class(
             out_hpp,
             Indent(1),
             &ret_cpp_type,
-            None,
             op_name,
             &variant.fields,
             inner.is_some(),
         )?;
 
-        writeln!(out_hpp, ";")?;
-        writeln!(out_hpp)?;
-
-        declare_function(
-            out_cpp,
-            Indent(0),
-            &ret_cpp_type,
-            Some(name),
-            op_name,
-            &variant.fields,
-            inner.is_some(),
-        )?;
-
-        writeln!(out_cpp, " {{")?;
+        writeln!(out_hpp, " {{")?;
 
         // request
         write!(
-            out_cpp,
-            "{I}auto request = Request::{}",
+            out_hpp,
+            "{I}{I}auto request = Request::{}",
             AsPascalCase(variant_name)
         )?;
 
         if !variant.fields.is_empty() {
-            writeln!(out_cpp, "{{")?;
+            writeln!(out_hpp, "{{")?;
 
             let inner_name = inner.map(|(name, _)| AsSnakeCase(name));
 
@@ -728,84 +701,28 @@ fn write_api_class(
                 if index == 0
                     && let Some(inner_name) = &inner_name
                 {
-                    writeln!(out_cpp, "{I}{I}{inner_name},")?;
+                    writeln!(out_hpp, "{I}{I}{I}{inner_name},")?;
                     continue;
                 }
 
-                writeln!(out_cpp, "{I}{I}{arg_name},")?;
+                writeln!(out_hpp, "{I}{I}{I}{arg_name},")?;
             }
 
-            writeln!(out_cpp, "{I}}};")?;
+            writeln!(out_hpp, "{I}{I}}};")?;
         } else {
-            writeln!(out_cpp, "();")?;
+            writeln!(out_hpp, "();")?;
         }
 
         // response
-        writeln!(
-            out_cpp,
-            "{I}// TODO: This won't throw if yield has ec assigned"
+        writedoc!(
+            out_hpp,
+            "
+            {I}{I}return client->invoke<{response_variant_name}, {ret_cpp_type}>(std::move(request), std::move(completion_token));
+            {I}}}
+            "
         )?;
-        writeln!(
-            out_cpp,
-            "{I}auto response = client->invoke(request, yield);"
-        )?;
 
-        match ret {
-            Type::Unit => writeln!(out_cpp, "{I}response.get<Response::None>();")?,
-            Type::Option(_) => {
-                writeln!(
-                    out_cpp,
-                    "{I}if (response.get_if<{response_variant_name}>() == nullptr) return {{}};",
-                )?;
-
-                writeln!(
-                    out_cpp,
-                    "{I}return std::move(response.get<{response_variant_name}>()).value;"
-                )?;
-            }
-            _ => {
-                writeln!(
-                    out_cpp,
-                    "{I}{response_variant_name} rsp = std::move(response.get<{response_variant_name}>());"
-                )?;
-                match ret_stripped {
-                    Some(Type::Scalar(w)) => {
-                        writeln!(out_cpp, "{I}return {w}(client, std::move(rsp.value));")?;
-                    }
-                    //Some(Type::Vec(w)) => write!(out_cpp, "response.value.map {{ {w}(client, it) }}")?,
-                    Some(Type::Vec(ty)) => {
-                        writeln!(out_cpp, "{I}std::vector<{}> vec;", CppScalar::new(&ty))?;
-                        writeln!(out_cpp, "{I}vec.reserve(rsp.value.size());")?;
-                        writeln!(out_cpp, "{I}for (auto v : rsp.value) {{")?;
-                        writeln!(
-                            out_cpp,
-                            "{I}{I}vec.emplace_back({ty}(client, std::move(v)))"
-                        )?;
-                        writeln!(out_cpp, "{I}}}")?;
-                        writeln!(out_cpp, "{I}return vec;")?;
-                    }
-                    Some(Type::Map(k_ty, v_ty)) => {
-                        writeln!(
-                            out_cpp,
-                            "{I}std::map<{}, {v_ty}> map;",
-                            CppScalar::new(&k_ty)
-                        )?;
-                        writeln!(out_cpp, "{I}for (auto [k, v] : rsp.value) {{")?;
-                        writeln!(
-                            out_cpp,
-                            "{I}{I}map.emplace(std::make_pair(std::move(k), {v_ty}(client, std::move(v))));"
-                        )?;
-                        writeln!(out_cpp, "{I}}}")?;
-                        writeln!(out_cpp, "{I}return map;")?;
-                    }
-                    Some(_) => unreachable!(),
-                    None => writeln!(out_cpp, "{I}return std::move(rsp.value);")?,
-                }
-            }
-        }
-
-        writeln!(out_cpp, "}}")?;
-        writeln!(out_cpp)?;
+        writeln!(out_hpp)?;
     }
 
     // TODO
@@ -836,11 +753,30 @@ fn write_api_class(
     Ok(())
 }
 
+fn function_params(skip_first: bool, fields: &Fields) -> Vec<(String, CppType)> {
+    fields
+        .iter()
+        .skip(if skip_first { 1 } else { 0 })
+        .map(|(opt_name, field)| {
+            (
+                format!("{}", AsSnakeCase(opt_name.unwrap_or(DEFAULT_FIELD_NAME))),
+                CppType::new(&field.ty),
+            )
+        })
+        .chain(
+            [(
+                "completion_token".into(),
+                CppType::Scalar(CppScalar::CompletionToken),
+            )]
+            .into_iter(),
+        )
+        .collect()
+}
+
 fn declare_function(
     out: &mut dyn Write,
     indent: Indent,
     ret_type: &CppType,
-    class_prefix: Option<&str>,
     op_name: &str,
     fields: &Fields,
     has_inner: bool,
@@ -853,63 +789,28 @@ fn declare_function(
     .into_iter()
     .collect();
 
-    // Use default argument only if there is at least one other non-default argument.
-    let use_default_args = fields
-        .iter()
-        .skip(if has_inner { 1 } else { 0 })
-        .any(|(_, field)| CppType::new(&field.ty).default().is_none());
+    let op_name = AsSnakeCase(*op_rename.get(&op_name).unwrap_or(&op_name));
 
-    writeln!(
+    writedoc!(
         out,
-        "{indent}{} {}{}(",
-        ret_type,
-        if let Some(class) = class_prefix {
-            format!("{class}::")
-        } else {
-            "".into()
-        },
-        AsSnakeCase(*op_rename.get(&op_name).unwrap_or(&op_name))
+        "
+        {indent}template<
+        {indent}    boost::asio::completion_token_for<typename detail::InvokeSig<{ret_type}>::type> CompletionToken
+        {indent}>
+        {indent}auto {op_name}(
+    "
     )?;
 
-    let mut added_yield = false;
+    let fields = function_params(has_inner, fields);
 
-    for (index, (arg_name, field)) in fields.iter().enumerate() {
-        if index == 0 && has_inner {
-            continue;
-        }
+    for (i, (name, field)) in fields.iter().enumerate() {
+        write!(out, "{indent}{I}{} {}", &field.modify(true, false), name,)?;
 
-        let is_last = index == fields.len() - 1;
-
-        let ty = CppType::new(&field.ty);
-
-        if use_default_args && ty.default().is_some() && !added_yield {
-            writeln!(out, "{indent}{I}boost::asio::yield_context yield,")?;
-            added_yield = true;
-        }
-
-        write!(
-            out,
-            "{indent}{I}{} {}",
-            &ty.modify(true, false),
-            AsSnakeCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME)),
-        )?;
-
-        if use_default_args
-            && class_prefix.is_none()
-            && let Some(default) = ty.default()
-        {
-            write!(out, " = {default}")?;
-        }
-
-        if !is_last || !added_yield {
-            writeln!(out, ",")?;
-        } else {
+        if i == fields.len() - 1 {
             writeln!(out)?;
+        } else {
+            writeln!(out, ",")?;
         }
-    }
-
-    if !added_yield {
-        writeln!(out, "{indent}{I}boost::asio::yield_context yield")?;
     }
 
     write!(out, "{indent})")
@@ -1053,21 +954,21 @@ impl<'a> DependentItem for ApiClass<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum CppType<'a> {
-    Scalar(CppScalar<'a>),
-    Option(CppScalar<'a>),
-    Vec(CppScalar<'a>),
-    Map(CppScalar<'a>, CppScalar<'a>),
+#[derive(Clone)]
+enum CppType {
+    Scalar(CppScalar),
+    Option(CppScalar),
+    Vec(CppScalar),
+    Map(CppScalar, CppScalar),
     Modified {
         const_ref: bool,
         namespaced: bool,
-        inner: &'a CppType<'a>,
+        inner: Box<CppType>,
     },
 }
 
-impl<'a> CppType<'a> {
-    fn new(ty: &'a Type) -> Self {
+impl CppType {
+    fn new(ty: &Type) -> Self {
         match ty {
             Type::Unit => CppType::Scalar(CppScalar::Unit),
             Type::Scalar(ty_str) => CppType::Scalar(CppScalar::new(ty_str)),
@@ -1081,31 +982,23 @@ impl<'a> CppType<'a> {
         }
     }
 
-    fn default(&self) -> Option<&str> {
-        match self {
-            Self::Option(_) => Some("{}"),
-            Self::Scalar(CppScalar::Bool) => Some("false"),
-            _ => None,
-        }
-    }
-
-    fn modify(&'a self, const_ref: bool, namespaced: bool) -> CppType<'a> {
+    fn modify(&self, const_ref: bool, namespaced: bool) -> CppType {
         match self {
             Self::Modified { inner, .. } => Self::Modified {
                 const_ref,
                 namespaced,
-                inner,
+                inner: inner.clone(),
             },
             _ => Self::Modified {
                 const_ref,
                 namespaced,
-                inner: self,
+                inner: Box::new(self.clone()),
             },
         }
     }
 }
 
-impl fmt::Display for CppType<'_> {
+impl fmt::Display for CppType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Scalar(s) => write!(f, "{}", s),
@@ -1116,7 +1009,7 @@ impl fmt::Display for CppType<'_> {
                 const_ref,
                 namespaced,
                 inner,
-            } => match *inner {
+            } => match &**inner {
                 Self::Scalar(s) => {
                     if *const_ref && s.is_copy_expensive() {
                         write!(f, "const {}&", s.modify(*namespaced))
@@ -1161,8 +1054,8 @@ impl fmt::Display for CppType<'_> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum CppScalar<'a> {
+#[derive(Clone)]
+enum CppScalar {
     Unit,
     U8,
     I8,
@@ -1178,15 +1071,16 @@ enum CppScalar<'a> {
     SystemTime,
     String,
     Bytes,
-    Local(&'a str),
+    Local(String),
     Modified {
         namespaced: bool,
-        inner: &'a CppScalar<'a>,
+        inner: Box<CppScalar>,
     },
+    CompletionToken,
 }
 
-impl<'a> CppScalar<'a> {
-    fn new(ty: &'a str) -> Self {
+impl CppScalar {
+    fn new(ty: &str) -> Self {
         match ty {
             "u8" => Self::U8,
             "i8" => Self::I8,
@@ -1202,17 +1096,20 @@ impl<'a> CppScalar<'a> {
             "Duration" => Self::Duration,
             "SystemTime" => Self::SystemTime,
             "PathBuf" | "PeerAddr" | "SocketAddr" | "String" => Self::String,
-            "StateMonitor" => Self::Local("StateMonitorNode"),
-            _ => Self::Local(ty),
+            "StateMonitor" => Self::Local("StateMonitorNode".into()),
+            _ => Self::Local(ty.into()),
         }
     }
 
-    fn modify(&'a self, namespaced: bool) -> CppScalar<'a> {
+    fn modify(&self, namespaced: bool) -> CppScalar {
         match self {
-            Self::Modified { inner, .. } => Self::Modified { namespaced, inner },
+            Self::Modified { inner, .. } => Self::Modified {
+                namespaced,
+                inner: inner.clone(),
+            },
             _ => Self::Modified {
                 namespaced,
-                inner: self,
+                inner: Box::new(self.clone()),
             },
         }
     }
@@ -1236,11 +1133,12 @@ impl<'a> CppScalar<'a> {
             Self::Bytes => true,
             Self::Local(_) => true,
             Self::Modified { inner, .. } => inner.is_copy_expensive(),
+            Self::CompletionToken => false,
         }
     }
 }
 
-impl fmt::Display for CppScalar<'_> {
+impl fmt::Display for CppScalar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unit => write!(f, "void"),
@@ -1263,12 +1161,13 @@ impl fmt::Display for CppScalar<'_> {
                 if !namespaced {
                     write!(f, "{inner}")
                 } else {
-                    match inner {
+                    match &**inner {
                         Self::Local(v) => write!(f, "ouisync::{v}"),
                         _ => write!(f, "{inner}"),
                     }
                 }
             }
+            Self::CompletionToken => write!(f, "CompletionToken"),
         }
     }
 }

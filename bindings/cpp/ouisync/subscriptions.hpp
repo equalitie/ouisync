@@ -42,7 +42,7 @@ private:
     using RawRepositoryHandle = decltype(RepositoryHandle::value);
 
     using ByMessageId = std::unordered_map<RawMessageId, std::unordered_set<SubscriberId>>;
-    using BySubscriberId = std::unordered_map<SubscriberId, std::pair<RawMessageId, std::function<HandlerSig>>>;
+    using BySubscriberId = std::unordered_map<SubscriberId, std::pair<RawMessageId, std::function<InnerHandlerSig>>>;
     using ByRepoHandle = std::unordered_map<RawRepositoryHandle, RawMessageId>;
 
     ByMessageId by_message_id;
@@ -54,7 +54,7 @@ public:
     std::optional<MessageId> subscribe(
         RepositoryHandle,
         SubscriberId,
-        std::function<HandlerSig> handler,
+        std::function<InnerHandlerSig> handler,
         RawMessageId& next_message_id
     );
 
@@ -70,7 +70,7 @@ public:
         const HandlerResult&
     );
 
-    void handle_all(boost::asio::any_io_executor, std::exception_ptr);
+    void handle_all(boost::asio::any_io_executor, boost::system::error_code);
 
     bool is_subscribed(SubscriberId);
 };

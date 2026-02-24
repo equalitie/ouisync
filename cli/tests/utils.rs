@@ -1,3 +1,4 @@
+#![allow(unused)]
 use anyhow::{Error, format_err};
 use backoff::{self, ExponentialBackoffBuilder};
 use rand::Rng;
@@ -25,6 +26,7 @@ pub struct Bin {
 const COMMAND: &str = env!("CARGO_BIN_EXE_ouisync");
 const MOUNT_DIR: &str = "mnt";
 const CONFIG_DIR: &str = "config";
+const AUX_DIR: &str = "aux";
 const DEFAULT_REPO: &str = "test";
 
 static CERT: LazyLock<rcgen::CertifiedKey<rcgen::KeyPair>> =
@@ -38,9 +40,11 @@ impl Bin {
         let config_dir = base_dir.path().join(CONFIG_DIR);
         let store_dir = base_dir.path().join("store");
         let mount_dir = base_dir.path().join(MOUNT_DIR);
+        let aux_dir = base_dir.path().join(AUX_DIR);
 
         fs::create_dir_all(mount_dir.join(DEFAULT_REPO)).unwrap();
         fs::create_dir_all(config_dir.join("root_certs")).unwrap();
+        fs::create_dir_all(aux_dir).unwrap();
 
         // Install the certificate
         let cert = CERT.cert.pem();
@@ -86,6 +90,7 @@ impl Bin {
                 .unwrap(),
         );
 
+        #[cfg(feature = "vfs")]
         expect_output(
             &bin.id,
             "",
@@ -101,6 +106,10 @@ impl Bin {
 
     pub fn root(&self) -> PathBuf {
         self.base_dir.path().join(MOUNT_DIR).join(DEFAULT_REPO)
+    }
+
+    pub fn aux_dir(&self) -> PathBuf {
+        self.base_dir.path().join(AUX_DIR)
     }
 
     #[track_caller]
@@ -127,6 +136,10 @@ impl Bin {
                 .output()
                 .unwrap(),
         )
+    }
+
+    pub fn default_repo_name(&self) -> &str {
+        DEFAULT_REPO
     }
 
     /// Create a repository
@@ -160,6 +173,7 @@ impl Bin {
         )
     }
 
+    #[cfg(feature = "vfs")]
     #[track_caller]
     pub fn mount(&self) {
         expect_output(
@@ -244,12 +258,19 @@ impl Bin {
         }
     }
 
-    fn client_command(&self) -> Command {
+    pub fn client_command(&self) -> Command {
         let mut command = Command::new(COMMAND);
         command
             .arg("--config-dir")
             .arg(self.base_dir.path().join(CONFIG_DIR));
         command
+    }
+
+    pub fn exec(&self, mut command: Command) {
+        let output = command.output().unwrap();
+        if !output.status.success() {
+            fail(&self.id, output);
+        }
     }
 }
 

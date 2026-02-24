@@ -223,6 +223,21 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 println!("{}", PeerInfoDisplay(&info));
             }
         }
+        ClientCommand::Copy {
+            src_repo,
+            src_path,
+            dst_repo,
+            dst_path,
+        } => {
+            let () = client
+                .invoke(Request::SessionCopy {
+                    src_repo,
+                    src_path,
+                    dst_repo,
+                    dst_path,
+                })
+                .await?;
+        }
         ClientCommand::ListRepositories => {
             let repos: BTreeMap<PathBuf, RepositoryHandle> =
                 client.invoke(Request::SessionListRepositories).await?;
@@ -290,6 +305,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 }
             }
         }
+        #[cfg(feature = "vfs")]
         ClientCommand::Mount { name } => {
             if let Some(name) = name {
                 let repo = client.find_repository(name).await?;
@@ -303,6 +319,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 }
             }
         }
+        #[cfg(feature = "vfs")]
         ClientCommand::MountDir { path } => {
             if let Some(path) = path {
                 let () = client
@@ -488,6 +505,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 }
             }
         },
+        #[cfg(feature = "vfs")]
         ClientCommand::Unmount { name } => {
             if let Some(name) = name {
                 let repo = client.find_repository(name).await?;
@@ -544,6 +562,7 @@ impl LocalClient {
         self.invoke(Request::SessionFindRepository { name }).await
     }
 
+    #[cfg(feature = "vfs")]
     async fn list_repositories(&mut self) -> Result<Vec<RepositoryHandle>, ClientError> {
         let repos: BTreeMap<PathBuf, RepositoryHandle> =
             self.invoke(Request::SessionListRepositories).await?;

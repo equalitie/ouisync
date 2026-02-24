@@ -1,15 +1,7 @@
-add_executable(
-    test_subscriptions
-    test_subscriptions.cpp
-)
-target_link_libraries(
-    test_subscriptions
-    PRIVATE
-        cpp_ouisync_client
-)
+add_executable(test_subscriptions test_subscriptions.cpp)
+target_link_libraries(test_subscriptions PRIVATE cpp_ouisync_client)
+add_test(NAME OuisyncTests COMMAND test_subscriptions)
 
-# Register in CTest
-add_test(
-    NAME OuisyncTests
-    COMMAND test_subscriptions
-)
+add_executable(test_copy test_copy.cpp)
+target_link_libraries(test_copy PRIVATE cpp_ouisync_client cpp_ouisync_service)
+add_test(NAME OuisyncCopyTests COMMAND test_copy)

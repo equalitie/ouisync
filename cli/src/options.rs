@@ -144,6 +144,15 @@ pub(crate) enum ClientCommand {
     /// port, protocol, source, state, runtime id, active since, bytes sent, bytes received, last
     /// received at.
     ListPeers,
+    #[command(visible_alias = "cp")]
+    Copy {
+        #[arg(long)]
+        src_repo: Option<String>,
+        src_path: PathBuf,
+        #[arg(long)]
+        dst_repo: Option<String>,
+        dst_path: PathBuf,
+    },
     /// List all repositories
     #[command(visible_alias = "ls", alias = "list-repos")]
     ListRepositories,
@@ -173,11 +182,13 @@ pub(crate) enum ClientCommand {
         /// Domain name or network address of the server hosting the repository mirror.
         host: String,
     },
+    #[cfg(feature = "vfs")]
     /// Mount repository
     Mount {
         /// Name of the repository to mount. If unspecified, mounts all repositories.
         name: Option<String>,
     },
+    #[cfg(feature = "vfs")]
     /// Get or set the mount directory
     MountDir {
         /// Path to the mount directory. Mounted repositories appear as subdirectories of this
@@ -291,6 +302,7 @@ pub(crate) enum ClientCommand {
         #[command(subcommand)]
         command: StoreDirsCommand,
     },
+    #[cfg(feature = "vfs")]
     /// Unmount repository
     #[command(alias = "umount")]
     Unmount {

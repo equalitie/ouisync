@@ -41,3 +41,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]
 libc = { workspace = true }
+
+[features]
+default = ["vfs"]
+vfs = ["ouisync-service/vfs"]

@@ -10,7 +10,7 @@ std::optional<MessageId>
 Subscriptions::subscribe(
         RepositoryHandle repo_handle,
         SubscriberId subscriber_id,
-        std::function<HandlerSig> handler,
+        std::function<InnerHandlerSig> handler,
         RawMessageId& next_message_id
 ) {
     auto by_repo_i = by_repo_handle.find(repo_handle.value);
@@ -96,9 +96,9 @@ Subscriptions::handle(
     }
 }
 
-void Subscriptions::handle_all(asio::any_io_executor exec, std::exception_ptr eptr) {
+void Subscriptions::handle_all(asio::any_io_executor exec, boost::system::error_code ec) {
     for (const auto& [message_id, _] : by_message_id) {
-        handle(exec, MessageId{message_id}, eptr);
+        handle(exec, MessageId{message_id}, ec);
     }
 }
 
