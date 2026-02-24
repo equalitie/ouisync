@@ -29,27 +29,11 @@ use tempfile::TempDir;
 const HOST_NAME: &str = "main";
 
 fn main() -> Result<()> {
-    let Some(command) = env::args().nth(1) else {
-        eprintln!(
-            "Usage: {} COMMAND [ARGS...]",
-            env::current_exe().unwrap().display()
-        );
-        bail!("Missing command");
-    };
-    let args: Vec<_> = env::args().skip(2).collect();
-
+    let options = Options::parse()?;
     let temp_dir = TempDir::new()?;
     let data_dir = temp_dir.path().join("shadow.data");
 
-    let seed: u32 = if let Ok(seed) = env::var("SEED") {
-        match seed.parse() {
-            Ok(seed) => seed,
-            Err(_) => bail!("Invalid SEED: '{}'", seed),
-        }
-    } else {
-        OsRng.r#gen()
-    };
-
+    let seed = options.seed.unwrap_or_else(|| OsRng.r#gen());
     eprintln!("SEED: {seed}");
 
     let (config_reader, mut config_writer) = io::pipe()?;
@@ -64,10 +48,10 @@ fn main() -> Result<()> {
         .stdin(config_reader)
         .spawn()?;
 
-    write_shadow_config(&mut config_writer, &command, &args)?;
+    write_shadow_config(&mut config_writer, &options.command, &options.args)?;
     drop(config_writer);
 
-    let printer = OutputPrinter::new(data_dir.join("hosts").join(HOST_NAME), command);
+    let printer = OutputPrinter::new(data_dir.join("hosts").join(HOST_NAME), options.command);
     let output = child.wait_with_output()?;
     drop(printer);
 
@@ -84,6 +68,63 @@ fn main() -> Result<()> {
         } else {
             Err(format_err!("shadow terminated by signal"))
         }
+    }
+}
+
+struct Options {
+    command: String,
+    args: Vec<String>,
+    seed: Option<u32>,
+}
+
+impl Options {
+    fn parse() -> Result<Self> {
+        let Some(command) = env::args().nth(1) else {
+            eprintln!(
+                "Usage: {} <COMMAND> [--seed <SEED>] [ARGS]...",
+                env::current_exe()
+                    .ok()
+                    .as_deref()
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("???")
+            );
+            bail!("Missing command");
+        };
+
+        let mut seed = None;
+        let mut next_seed = false;
+        let mut args = Vec::new();
+
+        for arg in env::args().skip(2) {
+            if next_seed {
+                seed = Some(arg.parse()?);
+                next_seed = false;
+                continue;
+            }
+
+            if arg == "--seed" {
+                next_seed = true;
+                continue;
+            }
+
+            if let Some(value) = arg.strip_prefix("--seed=") {
+                seed = Some(value.parse()?);
+                continue;
+            }
+
+            args.push(arg);
+        }
+
+        if next_seed {
+            bail!("Missing seed");
+        }
+
+        Ok(Self {
+            command,
+            args,
+            seed,
+        })
     }
 }
 
