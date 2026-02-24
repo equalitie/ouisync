@@ -1,4 +1,4 @@
-use clap::{value_parser, Parser};
+use clap::{Parser, value_parser};
 use serde::Deserialize;
 use std::{
     borrow::Cow,
@@ -38,6 +38,8 @@ fn main() {
 
     let args_display = args.join(" ");
 
+    let runner = options.runner.or_else(get_runner_from_env);
+
     println!(
         "Starting {} {}:",
         options.concurrency,
@@ -48,18 +50,25 @@ fn main() {
         }
     );
 
+    let exe_prefix = if let Some(runner) = &runner {
+        format!("{runner} ")
+    } else {
+        format!("")
+    };
+
     for exe in &exes {
-        println!("    {exe} {args_display}");
+        println!("    {exe_prefix}{exe} {args_display}",);
     }
 
     let (tx, rx) = mpsc::sync_channel(0);
 
     for index in 0..options.concurrency {
         thread::spawn({
+            let runner = runner.clone();
             let exes = exes.clone();
             let args = args.clone();
             let tx = tx.clone();
-            move || run(index, exes, args, tx)
+            move || run(index, runner, exes, args, tx)
         });
     }
 
@@ -130,6 +139,11 @@ struct Options {
     /// Exactly match filters rather than by substring
     #[arg(long)]
     exact: bool,
+
+    /// If provided, test executables are executed using this runner with the test executable passed
+    /// as an argument.
+    #[arg(long)]
+    runner: Option<String>,
 
     /// Run only tests whose names contain FILTER
     filters: Vec<String>,
@@ -222,11 +236,24 @@ enum BuildMessageTargetKind {
     ProcMacro,
 }
 
-fn run(process: u64, exes: Vec<String>, args: Vec<String>, tx: mpsc::SyncSender<Status>) {
+fn run(
+    process: u64,
+    runner: Option<String>,
+    exes: Vec<String>,
+    args: Vec<String>,
+    tx: mpsc::SyncSender<Status>,
+) {
     let mut commands: Vec<_> = exes
         .into_iter()
         .map(|exe| {
-            let mut command = Command::new(exe);
+            let mut command = if let Some(runner) = &runner {
+                let mut command = Command::new(runner);
+                command.arg(exe);
+                command
+            } else {
+                Command::new(exe)
+            };
+
             command.args(&args);
             command
         })
@@ -275,5 +302,23 @@ impl fmt::Display for DisplayDuration {
         let m = m - h * 60;
 
         write!(f, "{h:02}:{m:02}:{s:02}")
+    }
+}
+
+fn get_runner_from_env() -> Option<String> {
+    #[allow(unreachable_patterns)]
+    match true {
+        cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) => env::var("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER").ok(),
+        cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "musl"
+        )) => env::var("CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUNNER").ok(),
+        // TODO: other targets
+        _ => None,
     }
 }
