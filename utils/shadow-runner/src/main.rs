@@ -48,7 +48,7 @@ fn main() -> Result<()> {
         .stdin(config_reader)
         .spawn()?;
 
-    write_shadow_config(&mut config_writer, &options.command, &options.args)?;
+    write_shadow_config(&mut config_writer, &options)?;
     drop(config_writer);
 
     let printer = OutputPrinter::new(data_dir.join("hosts").join(HOST_NAME), options.command);
@@ -128,7 +128,7 @@ impl Options {
     }
 }
 
-fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) -> Result<()> {
+fn write_shadow_config(writer: &mut PipeWriter, options: &Options) -> Result<()> {
     let mut env = Map::new();
 
     if let Ok(value) = env::var("RUST_LOG") {
@@ -141,7 +141,8 @@ fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) 
 
     let config = json!({
         "general": {
-            "stop_time": "10m"
+            "stop_time": "10m",
+            "model_unblocked_syscall_latency": true,
         },
         "experimental": {
             // This config param including its comment taken from shadow-exec:
@@ -161,8 +162,8 @@ fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) 
                 "network_node_id": 0,
                 "processes": [
                     {
-                        "path": command,
-                        "args": args,
+                        "path": &options.command,
+                        "args": &options.args,
                         "environment": env,
                         "expected_final_state": {
                             "exited": 0
