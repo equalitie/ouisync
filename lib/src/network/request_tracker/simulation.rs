@@ -4,7 +4,6 @@ use super::{
     RequestTrackerReceiver, RequestVariant, TryRecvError,
 };
 use crate::{
-    collections::{HashMap, HashSet},
     crypto::{
         Hashable,
         sign::{Keypair, PublicKey},
@@ -17,7 +16,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use rand::{CryptoRng, Rng, seq::SliceRandom};
-use std::collections::{VecDeque, hash_map::Entry};
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 
 /// Simple network simulation for testing `RequestTracker`.
 pub(super) struct Simulation {

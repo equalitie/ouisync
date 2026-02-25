@@ -1,12 +1,15 @@
-use clap::{value_parser, Parser};
+use clap::{Parser, builder::TypedValueParser, value_parser};
 use serde::Deserialize;
 use std::{
     borrow::Cow,
-    env, fmt,
-    io::{self, BufRead, BufReader},
-    process::{self, Command, Output, Stdio},
-    sync::mpsc,
-    thread,
+    env,
+    ffi::OsStr,
+    fmt,
+    io::{self, BufRead, BufReader, Read, Write},
+    mem,
+    process::{self, Child, ChildStderr, ChildStdout, Command, Stdio},
+    sync::mpsc::{self, RecvTimeoutError},
+    thread::{self},
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -25,7 +28,11 @@ fn main() {
     }
 
     // Build the test binaries
-    let exes = build(&options);
+    let exes = if let Some(exe) = options.exe {
+        vec![exe]
+    } else {
+        build(&options)
+    };
 
     let args: Vec<_> = options
         .exact
@@ -38,6 +45,8 @@ fn main() {
 
     let args_display = args.join(" ");
 
+    let runner = options.runner.or_else(get_runner_from_env);
+
     println!(
         "Starting {} {}:",
         options.concurrency,
@@ -48,44 +57,78 @@ fn main() {
         }
     );
 
+    let exe_prefix = if let Some(runner) = &runner {
+        format!("{runner} ")
+    } else {
+        String::new()
+    };
+
     for exe in &exes {
-        println!("    {exe} {args_display}");
+        println!("    {exe_prefix}{exe} {args_display}",);
     }
 
     let (tx, rx) = mpsc::sync_channel(0);
 
     for index in 0..options.concurrency {
         thread::spawn({
+            let runner = runner.clone();
             let exes = exes.clone();
             let args = args.clone();
+            let slow = options.slow;
             let tx = tx.clone();
-            move || run(index, exes, args, tx)
+            move || run(index, runner, exes, args, slow, tx)
         });
     }
 
     let start = Instant::now();
 
-    for (global_iteration, status) in rx.into_iter().enumerate() {
+    for (global_iteration, progress) in rx.into_iter().enumerate() {
         print!(
             "{} #{} ({}/{})",
             DisplayDuration(start.elapsed()),
             global_iteration,
-            status.process,
-            status.iteration,
+            progress.process,
+            progress.iteration,
         );
 
-        match status.result {
-            Ok(()) => println!(),
-            Err(output) => {
-                println!("\tFAILURE ({})", output.status);
+        match progress.status {
+            Status::Success => println!(),
+            Status::Failure {
+                stdout,
+                stderr,
+                code,
+            } => {
+                print!("\tFAILURE (");
+                if let Some(code) = code {
+                    print!("exit code: {code}");
+                } else {
+                    print!("terminated by signal")
+                }
+                println!(")");
 
                 println!("\n\n---- stdout: ----\n\n");
-                io::copy(&mut &output.stdout[..], &mut io::stdout()).unwrap();
+                io::stdout().write_all(&stdout).unwrap();
 
                 println!("\n\n---- stderr: ----\n\n");
-                io::copy(&mut &output.stderr[..], &mut io::stdout()).unwrap();
+                io::stderr().write_all(&stderr).unwrap();
 
                 break;
+            }
+            Status::Slow {
+                elapsed,
+                stdout,
+                stderr,
+            } => {
+                println!("\ttaking too long (so far: {})", DisplayDuration(elapsed));
+                println!("\noutput since last report:");
+
+                println!("\n\n---- stdout: ----\n\n");
+                io::stdout().write_all(&stdout).unwrap();
+
+                println!("\n\n---- stderr: ----\n\n");
+                io::stderr().write_all(&stderr).unwrap();
+
+                println!("\n\n");
             }
         }
     }
@@ -123,6 +166,10 @@ struct Options {
     #[arg(long, value_name = "NAME")]
     test: Vec<String>,
 
+    /// Test the given executable instead of building it from source
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["package", "features", "release", "lib", "test"])]
+    exe: Option<String>,
+
     /// Skip tests whose names contain FILTER
     #[arg(long, value_name = "FILTER")]
     skip: Vec<String>,
@@ -130,6 +177,16 @@ struct Options {
     /// Exactly match filters rather than by substring
     #[arg(long)]
     exact: bool,
+
+    /// If provided, test executables are executed using this runner with the test executable passed
+    /// as an argument.
+    #[arg(long, value_name = "PATH")]
+    runner: Option<String>,
+
+    /// Report tests that take longer than this. The value is interpreted as seconds unless a unit
+    /// suffix is specified. Allowed unit suffixes: h, m, s, ms. Example: "10m"
+    #[arg(long, value_name = "DURATION", default_value = "1m", value_parser = DurationParser)]
+    slow: Duration,
 
     /// Run only tests whose names contain FILTER
     filters: Vec<String>,
@@ -222,45 +279,81 @@ enum BuildMessageTargetKind {
     ProcMacro,
 }
 
-fn run(process: u64, exes: Vec<String>, args: Vec<String>, tx: mpsc::SyncSender<Status>) {
+fn run(
+    process: u64,
+    runner: Option<String>,
+    exes: Vec<String>,
+    args: Vec<String>,
+    slow: Duration,
+    tx: mpsc::SyncSender<Progress>,
+) {
     let mut commands: Vec<_> = exes
         .into_iter()
         .map(|exe| {
-            let mut command = Command::new(exe);
+            let mut command = if let Some(runner) = &runner {
+                let mut command = Command::new(runner);
+                command.arg(exe);
+                command
+            } else {
+                Command::new(exe)
+            };
+
             command.args(&args);
             command
         })
         .collect();
 
+    let runner = CommandRunner::new();
+
     for iteration in 0.. {
-        let result = commands
-            .iter_mut()
-            .map(|command| command.output().unwrap())
-            .find(|output| !output.status.success())
-            .map(Err)
-            .unwrap_or(Ok(()));
-        let is_failure = result.is_err();
+        for command in &mut commands {
+            let mut running = runner.run(command);
 
-        let status = Status {
-            process,
-            iteration,
-            result,
-        };
-
-        if tx.send(status).is_err() {
-            break;
+            loop {
+                match running.next(slow) {
+                    Status::Success => break,
+                    status @ Status::Failure { .. } => {
+                        tx.send(Progress {
+                            process,
+                            iteration,
+                            status,
+                        })
+                        .ok();
+                        return;
+                    }
+                    status @ Status::Slow { .. } => {
+                        if tx
+                            .send(Progress {
+                                process,
+                                iteration,
+                                status,
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
         }
 
-        if is_failure {
+        if tx
+            .send(Progress {
+                process,
+                iteration,
+                status: Status::Success,
+            })
+            .is_err()
+        {
             break;
         }
     }
 }
 
-struct Status {
+struct Progress {
     process: u64,
     iteration: u64,
-    result: Result<(), Output>,
+    status: Status,
 }
 
 struct DisplayDuration(Duration);
@@ -275,5 +368,225 @@ impl fmt::Display for DisplayDuration {
         let m = m - h * 60;
 
         write!(f, "{h:02}:{m:02}:{s:02}")
+    }
+}
+
+fn get_runner_from_env() -> Option<String> {
+    #[allow(unreachable_patterns)]
+    match true {
+        cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) => env::var("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER").ok(),
+        cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "musl"
+        )) => env::var("CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUNNER").ok(),
+        // TODO: other targets
+        _ => None,
+    }
+}
+
+struct CommandRunner {
+    stdout_tx: mpsc::SyncSender<(ChildStdout, mpsc::SyncSender<Chunk>)>,
+    stderr_tx: mpsc::SyncSender<(ChildStderr, mpsc::SyncSender<Chunk>)>,
+}
+
+impl CommandRunner {
+    fn new() -> Self {
+        fn forward_output<R: Read>(
+            buffer: Buffer,
+            rx: mpsc::Receiver<(R, mpsc::SyncSender<Chunk>)>,
+        ) {
+            let mut chunk = [0; 1024];
+            for (mut reader, status_tx) in rx {
+                loop {
+                    match reader.read(&mut chunk) {
+                        Ok(n @ 1..) => {
+                            status_tx.send((buffer, chunk[..n].to_vec())).ok();
+                        }
+                        Ok(0) => break,
+                        Err(error) => {
+                            eprintln!("failed to read from process output: {error:?}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
+        thread::spawn(move || forward_output(Buffer::Stdout, stdout_rx));
+
+        let (stderr_tx, stderr_rx) = mpsc::sync_channel(1);
+        thread::spawn(move || forward_output(Buffer::Stderr, stderr_rx));
+
+        Self {
+            stdout_tx,
+            stderr_tx,
+        }
+    }
+
+    fn run(&self, command: &mut Command) -> Running {
+        let mut child = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        let (output_tx, output_rx) = mpsc::sync_channel(1);
+
+        self.stdout_tx.send((stdout, output_tx.clone())).ok();
+        self.stderr_tx.send((stderr, output_tx)).ok();
+
+        Running {
+            child,
+            output_rx,
+            start: Instant::now(),
+            stdout: Vec::new(),
+            stdout_offset: 0,
+            stderr: Vec::new(),
+            stderr_offset: 0,
+        }
+    }
+}
+
+struct Running {
+    child: Child,
+    output_rx: mpsc::Receiver<Chunk>,
+    start: Instant,
+    stdout: Vec<u8>,
+    stdout_offset: usize,
+    stderr: Vec<u8>,
+    stderr_offset: usize,
+}
+
+impl Running {
+    fn next(&mut self, timeout: Duration) -> Status {
+        loop {
+            match self.output_rx.recv_timeout(timeout) {
+                Ok((buffer, mut chunk)) => match buffer {
+                    Buffer::Stdout => {
+                        self.stdout.append(&mut chunk);
+                    }
+                    Buffer::Stderr => {
+                        self.stderr.append(&mut chunk);
+                    }
+                },
+                Err(RecvTimeoutError::Timeout) => {
+                    let stdout = self.stdout[self.stdout_offset..].to_vec();
+                    self.stdout_offset = self.stdout.len();
+
+                    let stderr = self.stderr[self.stderr_offset..].to_vec();
+                    self.stderr_offset = self.stderr.len();
+
+                    break Status::Slow {
+                        elapsed: self.start.elapsed(),
+                        stdout,
+                        stderr,
+                    };
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    let status = self.child.wait().unwrap();
+
+                    if status.success() {
+                        break Status::Success;
+                    } else {
+                        break Status::Failure {
+                            stdout: mem::take(&mut self.stdout),
+                            stderr: mem::take(&mut self.stderr),
+                            code: status.code(),
+                        };
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Buffer {
+    Stdout,
+    Stderr,
+}
+
+type Chunk = (Buffer, Vec<u8>);
+
+enum Status {
+    Success,
+    Failure {
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        code: Option<i32>,
+    },
+    Slow {
+        elapsed: Duration,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
+}
+
+#[derive(Clone)]
+struct DurationParser;
+
+impl TypedValueParser for DurationParser {
+    type Value = Duration;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        use clap::error::{ContextKind, ContextValue, ErrorKind};
+
+        let make_error = |kind: ErrorKind| {
+            let mut error = clap::Error::new(kind).with_cmd(cmd);
+
+            if let Some(arg) = arg {
+                error.insert(
+                    ContextKind::InvalidArg,
+                    ContextValue::String(arg.to_string()),
+                );
+            }
+
+            if let Some(value) = value.to_str() {
+                error.insert(
+                    ContextKind::InvalidValue,
+                    ContextValue::String(value.to_string()),
+                );
+            }
+
+            error
+        };
+
+        let parse_value = |input: &str| {
+            input
+                .trim()
+                .parse()
+                .map_err(|_| make_error(ErrorKind::InvalidValue))
+        };
+
+        let value = value
+            .to_str()
+            .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8).with_cmd(cmd))?
+            .trim();
+
+        for (suffix, map) in [
+            ("ms", Duration::from_millis as fn(u64) -> Duration),
+            ("s", Duration::from_secs),
+            ("m", Duration::from_mins),
+            ("h", Duration::from_hours),
+        ] {
+            if let Some(value) = value.strip_suffix(suffix) {
+                return Ok(map(parse_value(value)?));
+            }
+        }
+
+        Ok(Duration::from_secs(parse_value(value)?))
     }
 }

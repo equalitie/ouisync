@@ -8,7 +8,6 @@ use super::{
 };
 use crate::{
     block_tracker::BlockTrackerClient,
-    collections::HashSet,
     crypto::{CacheHash, Hash, Hashable, sign::PublicKey},
     error::Result,
     event::Payload,
@@ -23,7 +22,7 @@ use crate::{
     repository::{Vault, monitor::TrafficMonitor},
     store::{ClientReaderMut, ClientWriter},
 };
-use std::{iter, time::Instant};
+use std::{collections::HashSet, iter, time::Instant};
 use tokio::{select, sync::mpsc};
 use tracing::{Level, instrument};
 

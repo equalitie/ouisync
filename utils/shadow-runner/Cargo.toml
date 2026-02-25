@@ -1,0 +1,17 @@
+[package]
+name = "shadow-runner"
+edition = "2024"
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow      = { workspace = true }
+rand        = { workspace = true }
+serde_json  = { workspace = true }
+tempfile    = { workspace = true }
+
+[lints]
+workspace = true

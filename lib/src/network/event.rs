@@ -1,9 +1,9 @@
-use crate::collections::HashMap;
 use futures_util::{Stream, StreamExt, stream};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     pin::Pin,
     task::{Context, Poll},
 };

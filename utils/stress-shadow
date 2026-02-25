@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+# Build and run the stress-test utility.
+
+set -euo pipefail
+
+cargo --quiet build --package shadow-runner --release
+cargo --quiet build --package ouisync-stress-test --release
+
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER=target/release/shadow-runner target/release/stress-test $@

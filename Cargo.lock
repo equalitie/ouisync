@@ -317,7 +317,7 @@ dependencies = [
  "clap",
  "comfy-table",
  "indicatif",
- "ouisync-rand",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "tempfile",
@@ -1067,12 +1067,6 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[package]]
-name = "doctest-file"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aac81fa3e28d21450aa4d2ac065992ba96a1d7303efbce51a95f4fd175b67562"
 
 [[package]]
 name = "document-features"
@@ -2097,21 +2091,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "interprocess"
-version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6be5e5c847dbdb44564bd85294740d031f4f8aeb3464e5375ef7141f7538db69"
-dependencies = [
- "doctest-file",
- "futures-core",
- "libc",
- "recvmsg",
- "tokio",
- "widestring",
- "windows-sys 0.52.0",
-]
-
-[[package]]
 name = "iovec"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2646,7 +2625,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
- "libm",
 ]
 
 [[package]]
@@ -2793,11 +2771,11 @@ dependencies = [
  "num_enum",
  "ouisync-macros",
  "ouisync-net",
- "ouisync-rand",
  "ouisync-tracing-fmt",
  "parse-size",
  "pin-project-lite",
  "proptest",
+ "rand 0.8.5",
  "ref-cast",
  "rmp",
  "rmp-serde",
@@ -2820,7 +2798,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "turmoil",
  "urlencoding",
  "vint64",
  "xxhash-rust",
@@ -2848,7 +2825,6 @@ dependencies = [
  "indoc",
  "ouisync-api-parser",
  "syn 2.0.117",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2856,7 +2832,6 @@ name = "ouisync-cli"
 version = "0.10.0"
 dependencies = [
  "anyhow",
- "assert_matches",
  "backoff",
  "chrono",
  "clap",
@@ -2866,8 +2841,8 @@ dependencies = [
  "hex",
  "libc",
  "ouisync",
- "ouisync-rand",
  "ouisync-service",
+ "rand 0.8.5",
  "rcgen",
  "tempfile",
  "thiserror 2.0.18",
@@ -2895,10 +2870,10 @@ dependencies = [
  "itertools",
  "num_enum",
  "ouisync-macros",
- "ouisync-rand",
  "pin-project-lite",
  "proptest",
  "quinn",
+ "rand 0.8.5",
  "rcgen",
  "serde",
  "similar-asserts",
@@ -2911,7 +2886,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "turmoil",
  "yamux",
 ]
 
@@ -2923,17 +2897,6 @@ dependencies = [
  "chrono",
  "clap",
  "tokio",
- "tokio-stream",
- "tokio-util",
-]
-
-[[package]]
-name = "ouisync-rand"
-version = "0.10.0"
-dependencies = [
- "rand 0.8.5",
- "siphasher",
- "tracing",
 ]
 
 [[package]]
@@ -2963,7 +2926,6 @@ dependencies = [
  "async-trait",
  "bytes",
  "camino",
- "clap",
  "fs_util",
  "futures-util",
  "heck",
@@ -2972,7 +2934,6 @@ dependencies = [
  "hyper 1.8.1",
  "hyper-util",
  "indexmap",
- "interprocess",
  "maxminddb",
  "metrics",
  "metrics-exporter-prometheus",
@@ -2980,11 +2941,11 @@ dependencies = [
  "ouisync",
  "ouisync-api-parser",
  "ouisync-macros",
- "ouisync-rand",
  "ouisync-tracing-fmt",
  "ouisync-vfs",
  "paranoid-android",
  "pem",
+ "rand 0.8.5",
  "rcgen",
  "reqwest",
  "rmp",
@@ -3049,7 +3010,7 @@ dependencies = [
  "futures-util",
  "log",
  "ouisync",
- "ouisync-rand",
+ "rand 0.8.5",
  "tokio",
 ]
 
@@ -3066,8 +3027,8 @@ dependencies = [
  "fuser",
  "libc",
  "ouisync",
- "ouisync-rand",
  "proptest",
+ "rand 0.8.5",
  "slab",
  "tempfile",
  "test-strategy",
@@ -3503,16 +3464,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rand_distr"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
-dependencies = [
- "num-traits",
- "rand 0.9.2",
-]
-
-[[package]]
 name = "rand_xorshift"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3572,12 +3523,6 @@ dependencies = [
  "x509-parser",
  "yasna",
 ]
-
-[[package]]
-name = "recvmsg"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3edd4d5d42c92f0a659926464d4cce56b562761267ecf0f469d85b7de384175"
 
 [[package]]
 name = "redox_syscall"
@@ -3917,12 +3862,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scoped-tls"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
-
-[[package]]
 name = "scoped_task"
 version = "0.10.0"
 dependencies = [
@@ -4060,6 +3999,16 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
+]
+
+[[package]]
+name = "shadow-runner"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "rand 0.8.5",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -4607,7 +4556,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2 0.6.2",
@@ -4862,21 +4810,6 @@ dependencies = [
  "sha1",
  "thiserror 1.0.69",
  "utf-8",
-]
-
-[[package]]
-name = "turmoil"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5384da930ba6d7e467030c421a7332726755d548ba38058aed30c2c30d991d2"
-dependencies = [
- "bytes",
- "indexmap",
- "rand 0.9.2",
- "rand_distr",
- "scoped-tls",
- "tokio",
- "tracing",
 ]
 
 [[package]]

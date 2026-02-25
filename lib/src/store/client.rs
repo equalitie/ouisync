@@ -11,7 +11,6 @@ use super::{
 use crate::{
     StorageSize,
     block_tracker::BlockOfferState,
-    collections::HashSet,
     crypto::{CacheHash, Hash, Hashable, sign::PublicKey},
     db,
     future::TryStreamExt as _,
@@ -21,7 +20,7 @@ use crate::{
     },
     repository,
 };
-use std::{mem, sync::Arc};
+use std::{collections::HashSet, mem, sync::Arc};
 
 /// Store operations for the client side of the sync protocol.
 pub(crate) struct ClientWriter {

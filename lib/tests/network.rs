@@ -1,8 +1,5 @@
 //! Networking tests
 
-// These test mostly require QUIC / UDP which the simulator doesn't support yet.
-#![cfg(not(feature = "simulation"))]
-
 #[macro_use]
 mod common;
 
@@ -11,7 +8,6 @@ use ouisync::{Network, PeerState};
 use std::sync::Arc;
 use tokio::{sync::Barrier, time};
 
-// This test requires QUIC which is not yet supported in simulation
 #[test]
 fn peer_exchange_basics() {
     let mut env = Env::new();

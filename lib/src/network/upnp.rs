@@ -1,5 +1,4 @@
 use super::ip;
-use crate::collections::HashMap;
 use chrono::{DateTime, offset::Local};
 use deadlock::BlockingMutex;
 use futures_util::TryStreamExt;
@@ -11,6 +10,7 @@ use rupnp::{
 };
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
+use std::collections::HashMap;
 use std::{
     collections::hash_map::Entry,
     fmt, io, net,

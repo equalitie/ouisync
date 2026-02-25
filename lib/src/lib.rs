@@ -10,7 +10,6 @@ mod access_control;
 mod blob;
 mod block_tracker;
 mod branch;
-mod collections;
 mod conflict;
 mod debug;
 mod device_id;

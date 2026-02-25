@@ -17,7 +17,6 @@ async-recursion             = { workspace = true }
 async-trait                 = { workspace = true }
 bytes                       = { workspace = true }
 camino                      = { workspace = true }
-clap                        = { workspace = true }
 fs_util                     = { path = "../fs_util" }
 futures-util                = { workspace = true }
 hex                         = { workspace = true }
@@ -25,7 +24,6 @@ hmac                        = { workspace = true }
 hyper                       = { version = "1.4.1", features = ["server", "http1"] }
 hyper-util                  = { version = "0.1.14", features = [ "tokio"] }
 indexmap                    = { workspace = true }
-interprocess                = { version = "2.2.2", features = ["tokio"] }
 maxminddb                   = "0.27.1"
 metrics                     = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }

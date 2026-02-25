@@ -8,13 +8,12 @@ mod tests;
 use self::graph::{Graph, Key as GraphKey};
 use super::{constants::RESPONSE_BUFFER_SIZE, message::Request};
 use crate::{
-    collections::{HashMap, HashSet},
     crypto::{Hash, sign::PublicKey},
     protocol::{BlockId, MultiBlockPresence},
     repository::monitor::TrafficMonitor,
 };
 use std::{
-    collections::hash_map::Entry,
+    collections::{HashMap, HashSet, hash_map::Entry},
     fmt, iter, mem,
     sync::{
         Arc,

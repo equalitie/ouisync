@@ -63,7 +63,6 @@ use self::{
     stun::StunClients,
 };
 use crate::{
-    collections::HashSet,
     protocol::RepositoryId,
     repository::{RepositoryHandle, Vault},
 };
@@ -76,6 +75,7 @@ use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;
 use std::{
+    collections::HashSet,
     io, mem,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{Arc, Weak},

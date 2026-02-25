@@ -9,9 +9,12 @@
 //! is still available, and to `None` once the mechanism hasn't seen the peer for a while.
 
 use super::PeerAddr;
-use crate::collections::{HashMap, HashSet};
 use deadlock::BlockingRwLock;
-use std::{fmt, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    sync::Arc,
+};
 use tokio::sync::watch;
 
 // When a peer has not been seen after this many rounds, it'll be removed.

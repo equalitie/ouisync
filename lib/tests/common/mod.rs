@@ -58,7 +58,6 @@ pub(crate) static EVENT_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| {
 
 pub(crate) static TEST_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| 4 * *EVENT_TIMEOUT);
 
-#[cfg(not(feature = "simulation"))]
 pub(crate) mod env {
     use super::*;
     use futures_util::future;
@@ -115,62 +114,6 @@ pub(crate) mod env {
             self.runtime
                 .block_on(future::try_join_all(self.tasks.drain(..)))
                 .unwrap();
-        }
-    }
-}
-
-#[cfg(feature = "simulation")]
-pub(crate) mod env {
-    use super::*;
-    use tokio::runtime::{self, Runtime};
-
-    /// Test environment that uses simulated network
-    pub(crate) struct Env<'a> {
-        context: Arc<Context>,
-        runner: turmoil::Sim<'a>,
-    }
-
-    impl Env<'_> {
-        pub fn new() -> Self {
-            let context = Context::new();
-            let runner = turmoil::Builder::new()
-                .simulation_duration(Duration::from_secs(90))
-                .rng_seed(rand::random())
-                // .simulation_duration(Duration::from_secs(60))
-                .enable_tokio_io()
-                .build();
-
-            Self {
-                context: Arc::new(context),
-                runner,
-            }
-        }
-
-        pub fn actor<Fut>(&mut self, name: &str, f: Fut)
-        where
-            Fut: Future<Output = ()> + 'static,
-        {
-            let actor = Actor::new(name.to_owned(), self.context.clone());
-            let span = info_span!("actor", message = name);
-
-            let f = async move {
-                f.await;
-                Ok(())
-            };
-            let f = ACTOR.scope(actor, f);
-            let f = f.instrument(span);
-
-            self.runner.client(name, f);
-        }
-
-        pub fn runtime(&self) -> Handle {
-            unimplemented!("not supported in simulation")
-        }
-    }
-
-    impl Drop for Env<'_> {
-        fn drop(&mut self) {
-            self.runner.run().unwrap()
         }
     }
 }

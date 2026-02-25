@@ -1,8 +1,9 @@
+use std::collections::HashSet;
+
 use super::{RepositoryId, RepositoryMonitor, Vault};
 use crate::{
     access_control::WriteSecrets,
     block_tracker::BlockRequestMode,
-    collections::HashSet,
     crypto::{
         Hash,
         sign::{Keypair, PublicKey},

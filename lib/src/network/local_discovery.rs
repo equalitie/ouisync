@@ -2,7 +2,6 @@ use super::{
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::collections::HashMap;
 use deadlock::AsyncMutex;
 use futures_util::StreamExt;
 use if_watch::{IfEvent, tokio::IfWatcher};
@@ -13,6 +12,7 @@ use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
 use state_monitor::StateMonitor;
 use std::{
+    collections::HashMap,
     future, io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     ops::Range,

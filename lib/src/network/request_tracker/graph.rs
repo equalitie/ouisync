@@ -1,10 +1,10 @@
-use std::fmt;
+use std::{
+    collections::{HashMap, HashSet, hash_map::Entry},
+    fmt,
+};
 
 use super::{MessageKey, PendingRequest, RequestVariant};
-use crate::{
-    collections::{HashMap, HashSet, hash_map::Entry},
-    network::message::Request,
-};
+use crate::network::message::Request;
 use slab::Slab;
 
 /// DAG for storing data for the request tracker.

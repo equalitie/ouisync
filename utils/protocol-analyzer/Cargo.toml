@@ -17,6 +17,4 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 clap = { workspace = true  }
 tokio = { workspace = true, features = ["signal", "io-std", "fs", "macros", "rt-multi-thread", "io-util"] }
-tokio-stream = { workspace = true, features = ["sync"] }
-tokio-util = { workspace = true }
 chrono = "0.4.31"

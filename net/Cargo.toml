@@ -16,7 +16,7 @@ num_enum           = { workspace = true }
 ouisync-macros     = { path = "../macros" }
 pin-project-lite   = { workspace = true }
 quinn              = "0.11.9"
-rand               = { package = "ouisync-rand", path = "../rand" }
+rand               = { workspace = true }
 rcgen              = { workspace = true }
 serde              = { workspace = true }
 slab               = { workspace = true }
@@ -26,7 +26,6 @@ thiserror          = "1.0.31"
 tokio              = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
 tokio-util         = { workspace = true, features = ["compat"] }
 tracing            = { workspace = true }
-turmoil            = { workspace = true, optional = true }
 yamux              = "0.13.3"
 
 [dev-dependencies]
@@ -39,9 +38,6 @@ similar-asserts    = { workspace = true }
 test-strategy      = { workspace = true }
 tokio              = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-
-[features]
-simulation = ["turmoil"]
 
 [lints]
 workspace = true

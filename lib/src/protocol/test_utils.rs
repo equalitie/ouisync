@@ -423,8 +423,10 @@ impl BucketPath {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
-    use crate::{collections::HashSet, protocol::EMPTY_INNER_HASH};
+    use crate::protocol::EMPTY_INNER_HASH;
     use rand::{SeedableRng, rngs::StdRng};
 
     #[test]

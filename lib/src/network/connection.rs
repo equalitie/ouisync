@@ -6,11 +6,9 @@ use super::{
     runtime_id::PublicRuntimeId,
     stats::{ByteCounters, StatsTracker},
 };
-use crate::{
-    collections::{HashMap, hash_map::Entry},
-    sync::{AwaitDrop, DropAwaitable, WatchSenderExt},
-};
+use crate::sync::{AwaitDrop, DropAwaitable, WatchSenderExt};
 use std::{
+    collections::{HashMap, hash_map::Entry},
     fmt,
     sync::{
         Arc,
