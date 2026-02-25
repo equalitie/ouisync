@@ -1,0 +1,19 @@
+services:
+  stress:
+    container_name: 'ouisync-stress'
+    build:
+      context: .
+      additional_contexts:
+        - source=../..
+    image: ouisync/stress
+    pull_policy: never
+    deploy:
+      resources:
+        limits:
+          cpus: 4
+    shm_size: 1024g
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      CONCURRENCY: 4
+
