@@ -1,8 +1,10 @@
-use clap::{Parser, value_parser};
+use clap::{Parser, builder::TypedValueParser, value_parser};
 use serde::Deserialize;
 use std::{
     borrow::Cow,
-    env, fmt,
+    env,
+    ffi::OsStr,
+    fmt,
     io::{self, BufRead, BufReader, Read, Write},
     mem,
     process::{self, Child, ChildStderr, ChildStdout, Command, Stdio},
@@ -72,8 +74,9 @@ fn main() {
             let runner = runner.clone();
             let exes = exes.clone();
             let args = args.clone();
+            let slow = options.slow;
             let tx = tx.clone();
-            move || run(index, runner, exes, args, tx)
+            move || run(index, runner, exes, args, slow, tx)
         });
     }
 
@@ -124,6 +127,8 @@ fn main() {
 
                 println!("\n\n---- stderr: ----\n\n");
                 io::stderr().write_all(&stderr).unwrap();
+
+                println!("\n\n");
             }
         }
     }
@@ -177,6 +182,11 @@ struct Options {
     /// as an argument.
     #[arg(long, value_name = "PATH")]
     runner: Option<String>,
+
+    /// Report tests that take longer than this. The value is interpreted as seconds unless a unit
+    /// suffix is specified. Allowed unit suffixes: h, m, s, ms. Example: "10m"
+    #[arg(long, value_name = "DURATION", default_value = "1m", value_parser = DurationParser)]
+    slow: Duration,
 
     /// Run only tests whose names contain FILTER
     filters: Vec<String>,
@@ -274,6 +284,7 @@ fn run(
     runner: Option<String>,
     exes: Vec<String>,
     args: Vec<String>,
+    slow: Duration,
     tx: mpsc::SyncSender<Progress>,
 ) {
     let mut commands: Vec<_> = exes
@@ -299,7 +310,7 @@ fn run(
             let mut running = runner.run(command);
 
             loop {
-                match running.next(Duration::from_mins(1)) {
+                match running.next(slow) {
                     Status::Success => break,
                     status @ Status::Failure { .. } => {
                         tx.send(Progress {
@@ -517,4 +528,65 @@ enum Status {
         stdout: Vec<u8>,
         stderr: Vec<u8>,
     },
+}
+
+#[derive(Clone)]
+struct DurationParser;
+
+impl TypedValueParser for DurationParser {
+    type Value = Duration;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        use clap::error::{ContextKind, ContextValue, ErrorKind};
+
+        let make_error = |kind: ErrorKind| {
+            let mut error = clap::Error::new(kind).with_cmd(cmd);
+
+            if let Some(arg) = arg {
+                error.insert(
+                    ContextKind::InvalidArg,
+                    ContextValue::String(arg.to_string()),
+                );
+            }
+
+            if let Some(value) = value.to_str() {
+                error.insert(
+                    ContextKind::InvalidValue,
+                    ContextValue::String(value.to_string()),
+                );
+            }
+
+            error
+        };
+
+        let parse_value = |input: &str| {
+            input
+                .trim()
+                .parse()
+                .map_err(|_| make_error(ErrorKind::InvalidValue))
+        };
+
+        let value = value
+            .to_str()
+            .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8).with_cmd(cmd))?
+            .trim();
+
+        for (suffix, map) in [
+            ("ms", Duration::from_millis as fn(u64) -> Duration),
+            ("s", Duration::from_secs),
+            ("m", Duration::from_mins),
+            ("h", Duration::from_hours),
+        ] {
+            if let Some(value) = value.strip_suffix(suffix) {
+                return Ok(map(parse_value(value)?));
+            }
+        }
+
+        Ok(Duration::from_secs(parse_value(value)?))
+    }
 }
