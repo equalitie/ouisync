@@ -210,7 +210,7 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
     for (auto& [rq_id, entry] : pending) {
         std::visit(overloaded {
             [&](std::monostate) {
-                entry = HandlerResult{ec};
+                entry.emplace<HandlerResult>(ec);
             },
             [&](const HandlerResult&) {
                 // Ignored, user will receive original response
