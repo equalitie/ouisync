@@ -50,8 +50,12 @@ COPY --from=builder /usr/src/ouisync/target/release/ouisync-test-sync   /usr/bin
 COPY --from=builder /usr/src/ouisync/target/release/stress-test         /usr/bin/
 COPY --from=builder /usr/src/ouisync/target/release/shadow-runner       /usr/bin/
 
+ENV RUST_LOG=ouisync=trace
+ENV SHADOW_OUTPUT=1
 CMD stress-test \
     --exe ouisync-test-sync \
     --runner shadow-runner \
     --concurrency ${CONCURRENCY:-1} \
-    --slow 10m
+    --slow 10m \
+    -- \
+    --no-capture
