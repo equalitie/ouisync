@@ -115,12 +115,15 @@ fn main() {
                 break;
             }
             Status::Slow {
+                command,
                 elapsed,
                 stdout,
                 stderr,
             } => {
                 println!("\ttaking too long (so far: {})", DisplayDuration(elapsed));
-                println!("\noutput since last report:");
+                println!();
+                println!("command: '{command}'");
+                println!("output since last report:");
 
                 println!("\n\n---- stdout: ----\n\n");
                 io::stdout().write_all(&stdout).unwrap();
@@ -219,14 +222,7 @@ fn build(options: &Options) -> Vec<String> {
         command.arg("--test").arg(test);
     }
 
-    let display_command = command.get_program().to_str().unwrap().to_owned();
-    let display_args = command
-        .get_args()
-        .map(|arg| arg.to_str().unwrap())
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    println!("Running `{display_command} {display_args}`",);
+    println!("Running `{}`", DisplayCommand(&command));
 
     command.stderr(Stdio::inherit());
 
@@ -457,6 +453,20 @@ impl fmt::Display for DisplayDuration {
     }
 }
 
+struct DisplayCommand<'a>(&'a Command);
+
+impl fmt::Display for DisplayCommand<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.get_program().to_string_lossy())?;
+
+        for arg in self.0.get_args() {
+            write!(f, " {}", arg.to_string_lossy())?;
+        }
+
+        Ok(())
+    }
+}
+
 fn get_runner_from_env() -> Option<String> {
     #[allow(unreachable_patterns)]
     match true {
@@ -515,7 +525,7 @@ impl CommandRunner {
         }
     }
 
-    fn run(&self, command: &mut Command) -> Running {
+    fn run<'a>(&'_ self, command: &'a mut Command) -> Running<'a> {
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -530,6 +540,7 @@ impl CommandRunner {
         self.stderr_tx.send((stderr, output_tx)).ok();
 
         Running {
+            command,
             child,
             output_rx,
             start: Instant::now(),
@@ -541,7 +552,8 @@ impl CommandRunner {
     }
 }
 
-struct Running {
+struct Running<'a> {
+    command: &'a Command,
     child: Child,
     output_rx: mpsc::Receiver<Chunk>,
     start: Instant,
@@ -551,7 +563,7 @@ struct Running {
     stderr_offset: usize,
 }
 
-impl Running {
+impl Running<'_> {
     fn next(&mut self, timeout: Duration) -> Status {
         loop {
             match self.output_rx.recv_timeout(timeout) {
@@ -571,6 +583,7 @@ impl Running {
                     self.stderr_offset = self.stderr.len();
 
                     break Status::Slow {
+                        command: DisplayCommand(self.command).to_string(),
                         elapsed: self.start.elapsed(),
                         stdout,
                         stderr,
@@ -610,6 +623,7 @@ enum Status {
         code: Option<i32>,
     },
     Slow {
+        command: String,
         elapsed: Duration,
         stdout: Vec<u8>,
         stderr: Vec<u8>,
