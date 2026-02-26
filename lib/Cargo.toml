@@ -41,7 +41,9 @@ futures-util = { workspace = true }
 generic-array = { version = "0.14.7", features = ["serde"] }
 hex = { workspace = true }
 hex_fmt = { workspace = true }
-if-watch = { version = "3.2.0", features = ["tokio"] }
+# The current latest 3.2.1 is crashing a Ouinet test on Windows in
+# `LocalDiscover::new/IfWatcher::new`
+if-watch = { git = "https://github.com/libp2p/if-watch", rev = "d99b46bf5e0c4f2d4f27b0abdae5bd0284613337", features = ["tokio"] }
 include_dir = "0.7.3"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true, default-features = false, optional = true }
