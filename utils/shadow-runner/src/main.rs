@@ -9,7 +9,7 @@
 
 use std::{
     env,
-    fs::File,
+    fs::{self, File},
     io::{self, PipeWriter, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -29,12 +29,44 @@ use tempfile::TempDir;
 const HOST_NAME: &str = "main";
 
 fn main() -> Result<()> {
-    let options = Options::parse()?;
-    let temp_dir = TempDir::new()?;
-    let data_dir = temp_dir.path().join("shadow.data");
+    let Some(command) = env::args().nth(1) else {
+        eprintln!(
+            "Usage: {} <COMMAND> [ARGS]...",
+            env::current_exe()
+                .ok()
+                .as_deref()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str())
+                .unwrap_or("???")
+        );
+        bail!("Missing command");
+    };
 
-    let seed = options.seed.unwrap_or_else(|| OsRng.r#gen());
+    let args: Vec<_> = env::args().skip(2).collect();
+
+    let seed: u32 = if let Ok(seed) = env::var("SHADOW_SEED") {
+        seed.parse()?
+    } else {
+        OsRng.r#gen()
+    };
     eprintln!("SEED: {seed}");
+
+    let (temp_dir, data_dir) = if let Ok(data_dir) = env::var("SHADOW_DATA") {
+        let data_dir = PathBuf::from(data_dir);
+
+        match fs::remove_dir_all(&data_dir) {
+            Ok(_) => (),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+        }
+
+        (None, data_dir)
+    } else {
+        let temp_dir = TempDir::new()?;
+        let data_dir = temp_dir.path().join("shadow.data");
+
+        (Some(temp_dir), data_dir)
+    };
 
     let (config_reader, mut config_writer) = io::pipe()?;
     let child = Command::new("shadow")
@@ -48,20 +80,24 @@ fn main() -> Result<()> {
         .stdin(config_reader)
         .spawn()?;
 
-    write_shadow_config(&mut config_writer, &options)?;
+    write_shadow_config(&mut config_writer, &command, &args)?;
     drop(config_writer);
 
-    let printer = OutputPrinter::new(data_dir.join("hosts").join(HOST_NAME), options.command);
+    let printer = OutputPrinter::new(data_dir.join("hosts").join(HOST_NAME), command);
     let output = child.wait_with_output()?;
     drop(printer);
+
+    if env::var("SHADOW_OUTPUT").is_ok() {
+        print_shadow_output(&output)?;
+    }
 
     if output.status.success() {
         Ok(())
     } else {
-        print_shadow_output(&output)?;
-
-        let path = temp_dir.keep();
-        eprintln!("work directory persisted in {}", path.display());
+        if let Some(temp_dir) = temp_dir {
+            let path = temp_dir.keep();
+            eprintln!("work directory persisted in {}", path.display());
+        }
 
         if let Some(code) = output.status.code() {
             Err(format_err!("shadow terminated with exit code {code}"))
@@ -71,64 +107,7 @@ fn main() -> Result<()> {
     }
 }
 
-struct Options {
-    command: String,
-    args: Vec<String>,
-    seed: Option<u32>,
-}
-
-impl Options {
-    fn parse() -> Result<Self> {
-        let Some(command) = env::args().nth(1) else {
-            eprintln!(
-                "Usage: {} <COMMAND> [--seed <SEED>] [ARGS]...",
-                env::current_exe()
-                    .ok()
-                    .as_deref()
-                    .and_then(|path| path.file_name())
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("???")
-            );
-            bail!("Missing command");
-        };
-
-        let mut seed = None;
-        let mut next_seed = false;
-        let mut args = Vec::new();
-
-        for arg in env::args().skip(2) {
-            if next_seed {
-                seed = Some(arg.parse()?);
-                next_seed = false;
-                continue;
-            }
-
-            if arg == "--seed" {
-                next_seed = true;
-                continue;
-            }
-
-            if let Some(value) = arg.strip_prefix("--seed=") {
-                seed = Some(value.parse()?);
-                continue;
-            }
-
-            args.push(arg);
-        }
-
-        if next_seed {
-            bail!("Missing seed");
-        }
-
-        Ok(Self {
-            command,
-            args,
-            seed,
-        })
-    }
-}
-
-fn write_shadow_config(writer: &mut PipeWriter, options: &Options) -> Result<()> {
+fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) -> Result<()> {
     let mut env = Map::new();
 
     if let Ok(value) = env::var("RUST_LOG") {
@@ -162,8 +141,8 @@ fn write_shadow_config(writer: &mut PipeWriter, options: &Options) -> Result<()>
                 "network_node_id": 0,
                 "processes": [
                     {
-                        "path": &options.command,
-                        "args": &options.args,
+                        "path": command,
+                        "args": args,
                         "environment": env,
                         "expected_final_state": {
                             "exited": 0
@@ -180,25 +159,23 @@ fn write_shadow_config(writer: &mut PipeWriter, options: &Options) -> Result<()>
 }
 
 fn print_shadow_output(output: &Output) -> Result<()> {
+    const DIVIDER: &str = "-----------------------------------------------------------------";
+
     let mut w = io::stderr();
 
-    writeln!(
-        &mut w,
-        "-----------------------------------------------------------------"
-    )?;
+    writeln!(&mut w, "{DIVIDER}")?;
     writeln!(&mut w, "shadow stdout:")?;
     writeln!(&mut w)?;
     w.write_all(&output.stdout)?;
 
     writeln!(&mut w)?;
 
-    writeln!(
-        &mut w,
-        "-----------------------------------------------------------------"
-    )?;
+    writeln!(&mut w, "{DIVIDER}")?;
     writeln!(&mut w, "shadow stderr:")?;
     writeln!(&mut w)?;
     w.write_all(&output.stderr)?;
+    writeln!(&mut w)?;
+    writeln!(&mut w, "{DIVIDER}")?;
 
     Ok(())
 }
