@@ -287,21 +287,7 @@ fn run(
     slow: Duration,
     tx: mpsc::SyncSender<Progress>,
 ) {
-    let mut commands: Vec<_> = exes
-        .into_iter()
-        .map(|exe| {
-            let mut command = if let Some(runner) = &runner {
-                let mut command = Command::new(runner);
-                command.arg(exe);
-                command
-            } else {
-                Command::new(exe)
-            };
-
-            command.args(&args);
-            command
-        })
-        .collect();
+    let mut commands = make_commands(runner, exes, args);
 
     let runner = CommandRunner::new();
 
@@ -347,6 +333,106 @@ fn run(
         {
             break;
         }
+    }
+}
+
+fn make_commands(runner: Option<String>, exes: Vec<String>, args: Vec<String>) -> Vec<Command> {
+    if let Some(runner) = runner {
+        // If runner is specified, run each test in a separate command. To find what tests to run,
+        // run the executable with `--list` first. This assumes the executables are regular rust
+        // test executables.
+        //
+        // This is useful to prevent tests from affecting the runner state of other tests. For
+        // example, when running the tests with the shadow simulator this allows reproducing
+        // failing tests in isolation.
+        let mut commands = Vec::new();
+
+        let mut test_args = Vec::new();
+        let mut args_iter = args.iter().map(|s| s.as_str());
+
+        loop {
+            let Some(arg) = args_iter.next() else {
+                break;
+            };
+
+            // collect args without values
+            if arg == "--no-capture"
+                || arg == "--nocapture"
+                || arg == "--show-output"
+                || arg == "--quiet"
+                || arg == "-q"
+            {
+                test_args.push(arg);
+                continue;
+            }
+
+            // collect args with values in the "--name value" form
+            if arg == "--test-threads" || arg == "--color" || arg == "--format" {
+                test_args.push(arg);
+                test_args.extend(args_iter.next());
+                continue;
+            }
+
+            // collect args with values in the "--name=value" form
+            if let Some((name, value)) = arg.split_once("=")
+                && (name == "--test-threads" || arg == "--color" || arg == "--format")
+            {
+                test_args.push(name);
+                test_args.push(value);
+            }
+        }
+
+        for exe in exes {
+            let output = match Command::new(&exe).arg("--list").args(&args).output() {
+                Ok(output) => output,
+                Err(error) => panic!("'{exe} --list' failed to run: {error:?}"),
+            };
+
+            if !output.status.success() {
+                if let Some(code) = output.status.code() {
+                    panic!("'{exe} --list' exited with exit code {code}");
+                } else {
+                    panic!("'{exe} --list' terminated by signal");
+                }
+            }
+
+            let content = match String::from_utf8(output.stdout) {
+                Ok(content) => content,
+                Err(error) => {
+                    panic!("'{exe} --list' invalid output: {error:?}")
+                }
+            };
+
+            let mut count = 0;
+
+            for line in content.lines() {
+                let Some(name) = line.trim().strip_suffix(": test") else {
+                    continue;
+                };
+
+                commands.push({
+                    let mut command = Command::new(&runner);
+                    command.arg(&exe).arg("--exact").arg(name).args(&test_args);
+                    command
+                });
+
+                count += 1;
+            }
+
+            if count == 0 {
+                panic!("'{exe} {}' no tests matched", args.join(" "))
+            }
+        }
+
+        commands
+    } else {
+        exes.into_iter()
+            .map(|exe| {
+                let mut command = Command::new(exe);
+                command.args(&args);
+                command
+            })
+            .collect()
     }
 }
 
