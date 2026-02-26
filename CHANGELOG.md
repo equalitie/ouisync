@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix repository size not decreasing after deleting files
 - Implement deterministic simulation testing using [shadow](https://github.com/shadow/shadow)
+- Improve C++ bindings to use `CompletionToken` in most API functions
+- Update if-watch which fixes crash on Windows when local discovery is enabled
 
 ## [v0.10.0](https://github.com/equalitie/ouisync/compare/v0.9.3...v0.10.0) - 2025-12-29
 
