@@ -60,7 +60,7 @@ FetchContent_Declare(
 ###########################################################
 
 file(WRITE ${CMAKE_BINARY_DIR}/msgpack/download/CMakeLists.txt
-    "cmake_minimum_required(VERSION 2.8.2)\n"
+    "cmake_minimum_required(VERSION 3.10)\n"
     "project(msgpack-download NONE)\n"
     ""
     "include(ExternalProject)\n"
