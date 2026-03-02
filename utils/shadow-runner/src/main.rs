@@ -30,7 +30,7 @@ const HOST_NAME: &str = "main";
 
 fn main() -> Result<()> {
     let Some(command) = env::args().nth(1) else {
-        eprintln!(
+        println!(
             "Usage: {} <COMMAND> [ARGS]...",
             env::current_exe()
                 .ok()
@@ -49,7 +49,7 @@ fn main() -> Result<()> {
     } else {
         OsRng.r#gen()
     };
-    eprintln!("SEED: {seed}");
+    println!("SEED: {seed}");
 
     let (temp_dir, data_dir) = if let Ok(data_dir) = env::var("SHADOW_DATA") {
         let data_dir = PathBuf::from(data_dir);
@@ -96,7 +96,7 @@ fn main() -> Result<()> {
     } else {
         if let Some(temp_dir) = temp_dir {
             let path = temp_dir.keep();
-            eprintln!("work directory persisted in {}", path.display());
+            println!("work directory persisted in {}", path.display());
         }
 
         if let Some(code) = output.status.code() {
@@ -130,6 +130,9 @@ fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) 
             // pinning is probably more trouble than its worth. e.g. multiple
             // simulations run at once will pin to the same cpu.
             "use_cpu_pinning": false,
+
+            // https://github.com/shadow/shadow/discussions/3729#discussioncomment-15938874
+            "max_unapplied_cpu_latency": "10ms",
         },
         "network": {
             "graph": {
@@ -221,8 +224,8 @@ fn run(running: Arc<AtomicBool>, dir: &Path, command: &str) {
 
     while running.load(Ordering::Acquire) {
         match copy_file(&stdout_path, pos, &mut stdout) {
-            Ok(n) => pos += n,
-            Err(_) => {
+            Ok(n @ 1..) => pos += n,
+            Ok(0) | Err(_) => {
                 thread::sleep(Duration::from_secs(1));
                 continue;
             }
