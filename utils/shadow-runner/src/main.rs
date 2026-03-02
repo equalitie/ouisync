@@ -118,9 +118,12 @@ fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) 
         env.insert("RUST_BACKTRACE".into(), value.into());
     }
 
+    let stop_time = env::var("SHADOW_STOP_TIME");
+    let stop_time = stop_time.as_deref().ok().unwrap_or("1m");
+
     let config = json!({
         "general": {
-            "stop_time": "10m",
+            "stop_time": stop_time,
             "model_unblocked_syscall_latency": true,
         },
         "experimental": {
@@ -132,7 +135,7 @@ fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) 
             "use_cpu_pinning": false,
 
             // https://github.com/shadow/shadow/discussions/3729#discussioncomment-15938874
-            "max_unapplied_cpu_latency": "10ms",
+            "max_unapplied_cpu_latency": "1ms",
         },
         "network": {
             "graph": {
