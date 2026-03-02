@@ -3,19 +3,12 @@ FROM rust:slim-trixie AS builder
 RUN apt-get update && apt-get upgrade -y && \
     apt-get install -y \
         cmake \
-        # findutils \
         git \
         jq \
         libclang-dev \
-        # libc-dbg \
         libglib2.0-dev \
-        # make \
-        # netbase \
         python3 \
-        # python3-networkx \
         xz-utils \
-        # util-linux \
-        # gcc \
         g++ \
         && \
     apt-get clean
@@ -50,6 +43,9 @@ COPY --from=builder /usr/src/ouisync/target/release/ouisync-test-sync   /usr/bin
 COPY --from=builder /usr/src/ouisync/target/release/stress-test         /usr/bin/
 COPY --from=builder /usr/src/ouisync/target/release/shadow-runner       /usr/bin/
 
+RUN groupadd --gid 1000 tester && useradd --uid 1000 --gid 1000 -m tester
+USER tester
+
 ENV RUST_LOG=ouisync=trace
 ENV SHADOW_OUTPUT=1
 CMD stress-test \
@@ -58,4 +54,4 @@ CMD stress-test \
     --concurrency ${CONCURRENCY:-1} \
     --slow 10m \
     -- \
-    --no-capture
+    --no-capture ${FILTER:-}
