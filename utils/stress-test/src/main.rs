@@ -80,6 +80,8 @@ fn main() {
         });
     }
 
+    drop(tx);
+
     let start = Instant::now();
 
     for (global_iteration, progress) in rx.into_iter().enumerate() {
