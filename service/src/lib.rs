@@ -214,8 +214,20 @@ pub async fn local_endpoint(config_path: &Path) -> Result<LocalEndpoint, ClientE
 
 #[cfg(test)]
 mod tests {
+    use std::{net::Ipv4Addr, time::SystemTime};
+
     use assert_matches::assert_matches;
+    use ouisync::WriteSecrets;
+    use rcgen::{Certificate, CertificateParams, KeyPair};
     use tempfile::TempDir;
+    use tokio::fs;
+    use tokio_rustls::rustls::{self, ClientConfig};
+
+    use crate::{
+        test_utils::{ServiceRunner, init_log},
+        tls,
+        transport::remote::RemoteClient,
+    };
 
     use super::*;
 
@@ -233,5 +245,104 @@ mod tests {
         );
 
         service0.close().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tls_cert_renewal() {
+        async fn gen_cert(expires_in: Duration) -> (Certificate, KeyPair) {
+            let signing_key = KeyPair::generate().unwrap();
+
+            let mut params = CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+            params.not_before = SystemTime::UNIX_EPOCH.into();
+            params.not_after = (tls::test_utils::now() + expires_in).into();
+
+            let cert = params.self_signed(&signing_key).unwrap();
+
+            (cert, signing_key)
+        }
+
+        fn create_client_config(trusted_cert: &Certificate) -> Arc<ClientConfig> {
+            let mut root_cert_store = rustls::RootCertStore::empty();
+            root_cert_store.add(trusted_cert.der().clone()).unwrap();
+
+            let mut config = rustls::ClientConfig::builder()
+                .with_root_certificates(root_cert_store)
+                .with_no_client_auth();
+            config.time_provider = Arc::new(tls::test_utils::TokioTimeProvider);
+
+            Arc::new(config)
+        }
+
+        async fn save_cert(config_dir: &Path, cert: &Certificate, signing_key: &KeyPair) {
+            fs::write(config_dir.join("cert.pem"), &cert.pem())
+                .await
+                .unwrap();
+            fs::write(config_dir.join("key.pem"), signing_key.serialize_pem())
+                .await
+                .unwrap();
+        }
+
+        init_log();
+
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join("config");
+
+        let service = Service::init(config_dir.clone()).await.unwrap();
+
+        let (cert_old, signing_key_old) = gen_cert(Duration::from_hours(1)).await;
+        let (cert_new, signing_key_new) = gen_cert(Duration::from_hours(2)).await;
+
+        // Setup the server to use the first cert
+        save_cert(&config_dir, &cert_old, &signing_key_old).await;
+
+        let port = service
+            .state()
+            .session_bind_remote_control(Some((Ipv4Addr::LOCALHOST, 0).into()))
+            .await
+            .unwrap();
+        let host = format!("localhost:{port}");
+
+        let service_runner = ServiceRunner::start(service);
+
+        let repo_secrets = WriteSecrets::random();
+
+        // This request succeeds because the trusted cert is still valid
+        let mut client = RemoteClient::connect(&host, create_client_config(&cert_old))
+            .await
+            .unwrap();
+        assert_matches!(client.mirror_exists(&repo_secrets.id).await, Ok(false));
+        client.close().await;
+
+        // Advance the time to expire the first cert
+        time::sleep(Duration::from_hours(1) + Duration::from_secs(1)).await;
+
+        // This request fails because the trusted cert expired
+        assert_matches!(
+            RemoteClient::connect(&host, create_client_config(&cert_old)).await,
+            Err(ClientError::Connect(_))
+        );
+
+        // This request fails too because the server is still using the old cert
+        assert_matches!(
+            RemoteClient::connect(&host, create_client_config(&cert_new)).await,
+            Err(ClientError::Connect(_))
+        );
+
+        // Renew the cert
+        save_cert(&config_dir, &cert_new, &signing_key_new).await;
+
+        // time::resume();
+        // time::sleep(Duration::from_millis(100)).await;
+        // time::pause();
+
+        // This request succeeds because the cert has been renewed
+        let mut client = RemoteClient::connect(&host, create_client_config(&cert_new))
+            .await
+            .unwrap();
+        assert_matches!(client.mirror_exists(&repo_secrets.id).await, Ok(false));
+        client.close().await;
+
+        // Cleanup
+        service_runner.stop().await.close().await;
     }
 }
