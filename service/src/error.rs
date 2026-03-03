@@ -51,6 +51,8 @@ pub enum Error {
     TlsKeysNotFound,
     #[error("failed to create TLS config")]
     TlsConfig(#[source] tokio_rustls::rustls::Error),
+    #[error("failed to setup TLS certificate watcher")]
+    TlsWatcher(#[from] notify::Error),
     #[error("service is already running")]
     ServiceAlreadyRunning,
     #[error("failed to bind server")]

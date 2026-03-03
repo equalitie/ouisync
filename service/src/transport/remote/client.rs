@@ -1,4 +1,4 @@
-use std::{borrow::Cow, io, sync::Arc};
+use std::{borrow::Cow, fmt, io, sync::Arc};
 
 use ouisync::{PeerAddr, RepositoryId, WriteSecrets, crypto::sign::Signature};
 
@@ -162,6 +162,12 @@ impl RemoteClient {
         };
 
         Ok(response)
+    }
+}
+
+impl fmt::Debug for RemoteClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RemoteClient").finish_non_exhaustive()
     }
 }
 

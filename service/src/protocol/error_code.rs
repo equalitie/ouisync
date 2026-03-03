@@ -127,6 +127,7 @@ impl ToErrorCode for Error {
             Self::TlsCertificatesInvalid(_) => ErrorCode::TlsCertificatesInvalid,
             Self::TlsConfig(_) => ErrorCode::TlsConfigError,
             Self::TlsKeysNotFound => ErrorCode::TlsKeysNotFound,
+            Self::TlsWatcher(_) => ErrorCode::Other,
             Self::ServiceAlreadyRunning => ErrorCode::ServiceAlreadyRunning,
             Self::Bind(_) => ErrorCode::ListenerBindError,
             Self::Accept(_) => ErrorCode::ListenerAcceptError,

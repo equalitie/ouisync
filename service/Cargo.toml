@@ -27,6 +27,7 @@ indexmap                    = { workspace = true }
 maxminddb                   = "0.27.1"
 metrics                     = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+notify                      = "8.2.0"
 num_enum                    = { workspace = true }
 ouisync                     = { path = "../lib" }
 ouisync-macros              = { path = "../macros"}
@@ -61,6 +62,7 @@ rcgen                       = { workspace = true, features = ["pem"] }
 rmp                         = { workspace = true }
 tempfile                    = { workspace = true }
 reqwest                     = { workspace = true, features = ["rustls-tls"] }
+tokio                       = { workspace = true, features = ["test-util", "time"] }
 
 [build-dependencies]
 anyhow                      = { workspace = true }
