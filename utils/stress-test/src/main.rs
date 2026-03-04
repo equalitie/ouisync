@@ -5,10 +5,13 @@ use std::{
     env,
     ffi::OsStr,
     fmt,
-    io::{self, BufRead, BufReader, Read, Write},
-    mem,
-    process::{self, Child, ChildStderr, ChildStdout, Command, Stdio},
-    sync::mpsc::{self, RecvTimeoutError},
+    fs::{self, File, OpenOptions},
+    io::{self, BufRead, BufReader, Seek, SeekFrom},
+    process::{self, Child, Command, ExitStatus, Stdio},
+    sync::{
+        Arc,
+        mpsc::{self, RecvTimeoutError},
+    },
     thread::{self},
     time::{Duration, Instant},
 };
@@ -68,23 +71,32 @@ fn main() {
     }
 
     let (tx, rx) = mpsc::sync_channel(0);
+    let handles: Vec<_> = (0..options.concurrency)
+        .map(|index| {
+            thread::spawn({
+                let runner = runner.clone();
+                let exes = exes.clone();
+                let args = args.clone();
+                let slow = options.slow;
+                let tx = tx.clone();
+                move || run(index, runner, exes, args, slow, tx)
+            })
+        })
+        .collect();
 
-    for index in 0..options.concurrency {
-        thread::spawn({
-            let runner = runner.clone();
-            let exes = exes.clone();
-            let args = args.clone();
-            let slow = options.slow;
-            let tx = tx.clone();
-            move || run(index, runner, exes, args, slow, tx)
-        });
-    }
-
-    drop(tx);
+    ctrlc::set_handler(move || {
+        tx.send(Event::Terminate).ok();
+    })
+    .unwrap();
 
     let start = Instant::now();
 
-    for (global_iteration, progress) in rx.into_iter().enumerate() {
+    for (global_iteration, event) in rx.into_iter().enumerate() {
+        let progress = match event {
+            Event::Progress(progress) => progress,
+            Event::Terminate => break,
+        };
+
         print!(
             "{} #{} ({}/{})",
             DisplayDuration(start.elapsed()),
@@ -98,21 +110,23 @@ fn main() {
             Status::Failure {
                 stdout,
                 stderr,
-                code,
+                result,
             } => {
                 print!("\tFAILURE (");
-                if let Some(code) = code {
-                    print!("exit code: {code}");
-                } else {
-                    print!("terminated by signal")
+                match result {
+                    Ok(Some(code)) => print!("exit code: {code}"),
+                    Ok(None) => print!("terminated by signal"),
+                    Err(error) => print!("failed to get exit code: {error:?}"),
                 }
                 println!(")");
 
                 println!("\n\n---- stdout: ----\n\n");
-                io::stdout().write_all(&stdout).unwrap();
+                stdout.as_ref().seek(SeekFrom::Start(0)).unwrap();
+                io::copy(&mut stdout.as_ref(), &mut io::stdout()).unwrap();
 
                 println!("\n\n---- stderr: ----\n\n");
-                io::stderr().write_all(&stderr).unwrap();
+                stderr.as_ref().seek(SeekFrom::Start(0)).unwrap();
+                io::copy(&mut stderr.as_ref(), &mut io::stdout()).unwrap();
 
                 break;
             }
@@ -128,14 +142,18 @@ fn main() {
                 println!("output since last report:");
 
                 println!("\n\n---- stdout: ----\n\n");
-                io::stdout().write_all(&stdout).unwrap();
+                io::copy(&mut stdout.as_ref(), &mut io::stdout()).unwrap();
 
                 println!("\n\n---- stderr: ----\n\n");
-                io::stderr().write_all(&stderr).unwrap();
+                io::copy(&mut stderr.as_ref(), &mut io::stdout()).unwrap();
 
                 println!("\n\n");
             }
         }
+    }
+
+    for handle in handles {
+        handle.join().ok();
     }
 }
 
@@ -283,7 +301,7 @@ fn run(
     exes: Vec<String>,
     args: Vec<String>,
     slow: Duration,
-    tx: mpsc::SyncSender<Progress>,
+    tx: mpsc::SyncSender<Event>,
 ) {
     let mut commands = make_commands(runner, exes, args);
 
@@ -297,21 +315,21 @@ fn run(
                 match running.next(slow) {
                     Status::Success => break,
                     status @ Status::Failure { .. } => {
-                        tx.send(Progress {
+                        tx.send(Event::Progress(Progress {
                             process,
                             iteration,
                             status,
-                        })
+                        }))
                         .ok();
                         return;
                     }
                     status @ Status::Slow { .. } => {
                         if tx
-                            .send(Progress {
+                            .send(Event::Progress(Progress {
                                 process,
                                 iteration,
                                 status,
-                            })
+                            }))
                             .is_err()
                         {
                             return;
@@ -322,11 +340,11 @@ fn run(
         }
 
         if tx
-            .send(Progress {
+            .send(Event::Progress(Progress {
                 process,
                 iteration,
                 status: Status::Success,
-            })
+            }))
             .is_err()
         {
             break;
@@ -434,6 +452,11 @@ fn make_commands(runner: Option<String>, exes: Vec<String>, args: Vec<String>) -
     }
 }
 
+enum Event {
+    Progress(Progress),
+    Terminate,
+}
+
 struct Progress {
     process: u64,
     iteration: u64,
@@ -487,148 +510,117 @@ fn get_runner_from_env() -> Option<String> {
     }
 }
 
+type CommandRequest = (Child, mpsc::SyncSender<io::Result<ExitStatus>>);
+
 struct CommandRunner {
-    stdout_tx: mpsc::SyncSender<(ChildStdout, mpsc::SyncSender<Chunk>)>,
-    stderr_tx: mpsc::SyncSender<(ChildStderr, mpsc::SyncSender<Chunk>)>,
+    request_tx: mpsc::SyncSender<CommandRequest>,
+    temp_dir: TempDir,
 }
 
 impl CommandRunner {
     fn new() -> Self {
-        fn forward_output<R: Read>(
-            buffer: Buffer,
-            rx: mpsc::Receiver<(R, mpsc::SyncSender<Chunk>)>,
-        ) {
-            let mut chunk = [0; 1024];
-            for (mut reader, status_tx) in rx {
-                loop {
-                    match reader.read(&mut chunk) {
-                        Ok(n @ 1..) => {
-                            status_tx.send((buffer, chunk[..n].to_vec())).ok();
-                        }
-                        Ok(0) => break,
-                        Err(error) => {
-                            eprintln!("failed to read from process output: {error:?}");
-                            break;
-                        }
-                    }
-                }
+        let (request_tx, request_rx) = mpsc::sync_channel::<CommandRequest>(1);
+        let temp_dir = TempDir::new().unwrap();
+
+        thread::spawn(move || {
+            for (mut child, response_tx) in request_rx {
+                response_tx.send(child.wait()).ok();
             }
-        }
-
-        let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
-        thread::spawn(move || forward_output(Buffer::Stdout, stdout_rx));
-
-        let (stderr_tx, stderr_rx) = mpsc::sync_channel(1);
-        thread::spawn(move || forward_output(Buffer::Stderr, stderr_rx));
+        });
 
         Self {
-            stdout_tx,
-            stderr_tx,
+            request_tx,
+            temp_dir,
         }
     }
 
     fn run<'a>(&'_ self, command: &'a mut Command) -> Running<'a> {
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+        let (stdout_writer, stdout_reader) = self.new_buffer("stdout");
+        let (stderr_writer, stderr_reader) = self.new_buffer("stderr");
+
+        let child = command
+            .stdout(stdout_writer)
+            .stderr(stderr_writer)
             .spawn()
             .unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
 
-        let (output_tx, output_rx) = mpsc::sync_channel(1);
+        let (response_tx, response_rx) = mpsc::sync_channel(1);
 
-        self.stdout_tx.send((stdout, output_tx.clone())).ok();
-        self.stderr_tx.send((stderr, output_tx)).ok();
+        self.request_tx.send((child, response_tx)).unwrap();
 
         Running {
             command,
-            child,
-            output_rx,
+            response_rx,
             start: Instant::now(),
-            stdout: Vec::new(),
-            stdout_offset: 0,
-            stderr: Vec::new(),
-            stderr_offset: 0,
+            stdout: Arc::new(stdout_reader),
+            stderr: Arc::new(stderr_reader),
         }
+    }
+
+    fn new_buffer(&self, name: &str) -> (File, File) {
+        let path = self.temp_dir.path().join(name);
+
+        match fs::remove_file(&path) {
+            Ok(_) => (),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => panic!("failed to remove file at '{}': {:?}", path.display(), error),
+        }
+
+        let writer = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+
+        let reader = OpenOptions::new().read(true).open(&path).unwrap();
+
+        (writer, reader)
     }
 }
 
 struct Running<'a> {
     command: &'a Command,
-    child: Child,
-    output_rx: mpsc::Receiver<Chunk>,
+    response_rx: mpsc::Receiver<io::Result<ExitStatus>>,
     start: Instant,
-    stdout: Vec<u8>,
-    stdout_offset: usize,
-    stderr: Vec<u8>,
-    stderr_offset: usize,
+    stdout: Arc<File>,
+    stderr: Arc<File>,
 }
 
 impl Running<'_> {
     fn next(&mut self, timeout: Duration) -> Status {
-        loop {
-            match self.output_rx.recv_timeout(timeout) {
-                Ok((buffer, mut chunk)) => match buffer {
-                    Buffer::Stdout => {
-                        self.stdout.append(&mut chunk);
-                    }
-                    Buffer::Stderr => {
-                        self.stderr.append(&mut chunk);
-                    }
+        match self.response_rx.recv_timeout(timeout) {
+            Ok(result) => match result {
+                Ok(status) if status.success() => Status::Success,
+                result => Status::Failure {
+                    stdout: self.stdout.clone(),
+                    stderr: self.stderr.clone(),
+                    result: result.map(|status| status.code()),
                 },
-                Err(RecvTimeoutError::Timeout) => {
-                    let stdout = self.stdout[self.stdout_offset..].to_vec();
-                    self.stdout_offset = self.stdout.len();
-
-                    let stderr = self.stderr[self.stderr_offset..].to_vec();
-                    self.stderr_offset = self.stderr.len();
-
-                    break Status::Slow {
-                        command: DisplayCommand(self.command).to_string(),
-                        elapsed: self.start.elapsed(),
-                        stdout,
-                        stderr,
-                    };
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    let status = self.child.wait().unwrap();
-
-                    if status.success() {
-                        break Status::Success;
-                    } else {
-                        break Status::Failure {
-                            stdout: mem::take(&mut self.stdout),
-                            stderr: mem::take(&mut self.stderr),
-                            code: status.code(),
-                        };
-                    }
-                }
-            }
+            },
+            Err(RecvTimeoutError::Timeout) => Status::Slow {
+                command: DisplayCommand(self.command).to_string(),
+                elapsed: self.start.elapsed(),
+                stdout: self.stdout.clone(),
+                stderr: self.stderr.clone(),
+            },
+            Err(RecvTimeoutError::Disconnected) => unreachable!(),
         }
     }
 }
 
-#[derive(Clone, Copy)]
-enum Buffer {
-    Stdout,
-    Stderr,
-}
-
-type Chunk = (Buffer, Vec<u8>);
-
 enum Status {
     Success,
     Failure {
-        stdout: Vec<u8>,
-        stderr: Vec<u8>,
-        code: Option<i32>,
+        stdout: Arc<File>,
+        stderr: Arc<File>,
+        result: io::Result<Option<i32>>,
     },
     Slow {
         command: String,
         elapsed: Duration,
-        stdout: Vec<u8>,
-        stderr: Vec<u8>,
+        stdout: Arc<File>,
+        stderr: Arc<File>,
     },
 }
 
