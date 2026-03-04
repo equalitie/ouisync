@@ -247,7 +247,7 @@ mod tests {
         service0.close().await;
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn tls_cert_renewal() {
         async fn gen_cert(expires_in: Duration) -> (Certificate, KeyPair) {
             let signing_key = KeyPair::generate().unwrap();
@@ -289,8 +289,8 @@ mod tests {
 
         let service = Service::init(config_dir.clone()).await.unwrap();
 
-        let (cert_old, signing_key_old) = gen_cert(Duration::from_hours(1)).await;
-        let (cert_new, signing_key_new) = gen_cert(Duration::from_hours(2)).await;
+        let (cert_old, signing_key_old) = gen_cert(Duration::from_hours(24)).await;
+        let (cert_new, signing_key_new) = gen_cert(Duration::from_hours(48)).await;
 
         // Setup the server to use the first cert
         save_cert(&config_dir, &cert_old, &signing_key_old).await;
@@ -314,7 +314,13 @@ mod tests {
         client.close().await;
 
         // Advance the time to expire the first cert
-        time::sleep(Duration::from_hours(1) + Duration::from_secs(1)).await;
+        //
+        // NOTE: Using paused time so this test doesn't actually take 25 hours. Not pausing time for
+        // the whole test because that was triggering very large time advances which caused the
+        // cert to expire prematurely.
+        time::pause();
+        time::sleep(Duration::from_hours(25)).await;
+        time::resume();
 
         // This request fails because the trusted cert expired
         assert_matches!(
@@ -330,10 +336,6 @@ mod tests {
 
         // Renew the cert
         save_cert(&config_dir, &cert_new, &signing_key_new).await;
-
-        // time::resume();
-        // time::sleep(Duration::from_millis(100)).await;
-        // time::pause();
 
         // This request succeeds because the cert has been renewed
         let mut client = RemoteClient::connect(&host, create_client_config(&cert_new))
