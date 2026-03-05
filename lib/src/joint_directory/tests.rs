@@ -554,7 +554,7 @@ mod attempt_to_merge_concurrent_file {
 
         assert_matches!(
             merge(&[&local_branch, &remote_branch]).await,
-            Err(Error::AmbiguousEntry)
+            Ok(MergeStatus::Conflict)
         );
 
         local_dir.refresh().await.unwrap();
@@ -1286,16 +1286,16 @@ async fn generate(branch: &Branch, content: &[&str]) -> Result<()> {
 }
 
 /// Merge all branches into the first one.
-async fn merge(branches: &[&Branch]) -> Result<()> {
+async fn merge(branches: &[&Branch]) -> Result<MergeStatus> {
     let roots = future::try_join_all(branches.iter().map(|branch| branch.open_or_create_root()))
         .await
         .unwrap();
 
-    JointDirectory::new(Some(branches[0].clone()), roots)
+    let (status, _) = JointDirectory::new(Some(branches[0].clone()), roots)
         .merge()
         .await?;
 
-    Ok(())
+    Ok(status)
 }
 
 async fn remove_branches(store: &Store, ids: &[PublicKey]) -> Result<()> {

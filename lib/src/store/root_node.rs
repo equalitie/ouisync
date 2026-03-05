@@ -407,10 +407,14 @@ pub(super) async fn remove_older(
 
 /// Removes all root nodes that are older than the given node and are on the same branch and are
 /// not complete.
+///
+/// Returns whether any node was removed.
 pub(super) async fn remove_older_incomplete(
     tx: &mut db::WriteTransaction,
     node: &RootNode,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
+    let mut changed = false;
+
     // This uses db triggers to delete the whole snapshot.
     sqlx::query(
         "DELETE FROM snapshot_root_nodes
@@ -424,11 +428,12 @@ pub(super) async fn remove_older_incomplete(
     .fetch(tx)
     .try_for_each(|row| {
         tracing::trace!(hash = ?row.get::<Hash, _>(0), "outdated incomplete snapshot removed");
+        changed = true;
         future::ready(Ok(()))
     })
     .await?;
 
-    Ok(())
+    Ok(changed)
 }
 
 /// Update the summaries of all nodes with the specified hash.

@@ -191,23 +191,22 @@ impl JobMonitor {
     ///
     /// A single `JobMonitor` can monitor multiple concurrent jobs but they are threated as a single
     /// unit - the monitoring starts when the first job starts and stops when the last job stops.
-    pub(crate) async fn run<F, E>(&self, f: F) -> bool
+    pub(crate) async fn run<F>(&self, f: F) -> F::Output
     where
-        F: Future<Output = Result<(), E>>,
-        E: fmt::Debug,
+        F: Future,
+        F::Output: fmt::Debug,
     {
         async move {
             let guard = JobGuard::start(self);
             let start = Instant::now();
 
             let result = f.await;
-            let is_ok = result.is_ok();
 
             self.time.record(start.elapsed());
 
-            guard.complete(result);
+            guard.complete(&result);
 
-            is_ok
+            result
         }
         .instrument(tracing::info_span!(
             "job",
@@ -238,7 +237,7 @@ impl<'a> JobGuard<'a> {
         }
     }
 
-    fn complete<E: fmt::Debug>(mut self, result: Result<(), E>) {
+    fn complete<R: fmt::Debug>(mut self, result: &R) {
         self.completed = true;
         tracing::trace!(parent: &self.span, ?result, "Job completed");
     }
