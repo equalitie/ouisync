@@ -337,14 +337,47 @@ mod tests {
         // Renew the cert
         save_cert(&config_dir, &cert_new, &signing_key_new).await;
 
-        // This request succeeds because the cert has been renewed
-        let mut client = RemoteClient::connect(&host, create_client_config(&cert_new))
+        // The cert reload happens in the background and there is currently no way to tell when it
+        // completes. Let's try a couple of times before giving up.
+        let mut client = retry(|| RemoteClient::connect(&host, create_client_config(&cert_new)))
             .await
             .unwrap();
+
         assert_matches!(client.mirror_exists(&repo_secrets.id).await, Ok(false));
         client.close().await;
 
         // Cleanup
         service_runner.stop().await.close().await;
+    }
+
+    async fn retry<Fun, Fut, T, E>(mut f: Fun) -> Result<T, E>
+    where
+        Fun: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        let mut last_error = None;
+
+        match time::timeout(Duration::from_secs(5), async {
+            loop {
+                match f().await {
+                    Ok(value) => break value,
+                    Err(error) => {
+                        last_error = Some(error);
+                        continue;
+                    }
+                }
+            }
+        })
+        .await
+        {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                if let Some(error) = last_error {
+                    Err(error)
+                } else {
+                    panic!("timeout")
+                }
+            }
+        }
     }
 }
