@@ -253,10 +253,16 @@ impl Store {
     /// This preserves older snapshots that can be used as fallback for the latest snapshot and only
     /// removes those that can't. This also preserves all older snapshots that have the same
     /// version vector as the latest one (that is, when the latest snapshot is a draft).
-    pub async fn remove_outdated_snapshots(&self, root_node: &RootNode) -> Result<(), Error> {
+    ///
+    /// Returns whether any snapshot was removed.
+    pub async fn remove_outdated_snapshots(&self, root_node: &RootNode) -> Result<bool, Error> {
+        let mut changed = false;
+
         // First remove all incomplete snapshots as they can never serve as fallback.
         let mut tx = self.begin_write().await?;
-        root_node::remove_older_incomplete(tx.db(), root_node).await?;
+        if root_node::remove_older_incomplete(tx.db(), root_node).await? {
+            changed = true;
+        }
         tx.commit().await?;
 
         let mut reader = self.acquire_read().await?;
@@ -303,9 +309,11 @@ impl Store {
                 vv = ?old.proof.version_vector,
                 "outdated snapshot removed"
             );
+
+            changed = true;
         }
 
-        Ok(())
+        Ok(changed)
     }
 
     /// Returns all block ids referenced from complete snapshots. The result is paginated (with

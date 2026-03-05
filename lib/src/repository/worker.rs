@@ -37,7 +37,7 @@ pub(super) async fn run(shared: Arc<Shared>) {
         let (unlock_tx, unlock_rx) = unlock::channel();
 
         // - Ignore events from the same scope to prevent infinite loop
-        // - On `BranchChanged` interrupt and restart the current job to avoid unnecessary work on
+        // - On `SnapshotApproved` interrupt and restart the current job to avoid unnecessary work on
         //   potentially outdated branches.
         // - On any other event (including `Lagged`), let the current job run to completion and
         //   then restart it.
@@ -81,9 +81,9 @@ pub(super) async fn run(shared: Arc<Shared>) {
 
     // Scan
     let scan = async {
-        // - On `BranchChanged` from outside of this scope restart the current job to avoid
+        // - On `SnapshotApproved` from outside of this scope restart the current job to avoid
         //   unnecessary traversal of potentially outdated branches.
-        // - On `BranchChanged` from this scope, let the current job run to completion and then
+        // - On `SnapshotApproved` from this scope, let the current job run to completion and then
         //   restart it. This is because such event can only come from `merge` which does not
         //   change the set of missing and required blocks.
         // - On any other event (including `Lagged`), let the current job run to completion and
@@ -123,41 +123,42 @@ async fn maintain(
     unlock_tx: &unlock::Sender,
     prune_counter: &Counter,
 ) {
-    let mut success = true;
+    let mut status = JobStatus::Skipped;
 
     // Merge branches
     if let Some(local_branch) = local_branch {
-        let job_success = shared
+        let result = shared
             .vault
             .monitor
             .merge_job
             .run(merge::run(shared, local_branch))
             .await;
-        success = success && job_success;
+        status.merge(result.unwrap_or_default());
     }
 
     // Prune outdated branches and snapshots
-    let job_success = shared
+    let result = shared
         .vault
         .monitor
         .prune_job
         .run(prune::run(shared, unlock_tx, prune_counter))
         .await;
-    success = success && job_success;
+    status.merge(result.unwrap_or_default());
 
     // Collect unreachable blocks
     if shared.credentials.read().unwrap().secrets.can_read() {
-        let job_success = shared
+        let result = shared
             .vault
             .monitor
             .trash_job
             .run(trash::run(shared, local_branch, unlock_tx))
             .await;
-        success = success && job_success;
+        status.merge(result.unwrap_or_default());
     }
 
-    if success {
-        shared.vault.event_tx.send(Payload::MaintenanceCompleted);
+    match status {
+        JobStatus::Completed => shared.vault.event_tx.send(Payload::MaintenanceCompleted),
+        JobStatus::Skipped | JobStatus::Interrupted => (),
     }
 }
 
@@ -168,7 +169,47 @@ async fn scan(shared: &Shared, prune_counter: &Counter) {
         .monitor
         .scan_job
         .run(scan::run(shared, prune_counter))
-        .await;
+        .await
+        .ok();
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+enum JobStatus {
+    // No work performed because no work needed.
+    #[default]
+    Skipped,
+    // Work interrupted. The job needs to be invoked again to complete the work.
+    Interrupted,
+    // All work completed.
+    Completed,
+}
+
+impl JobStatus {
+    // Indicate that needed work couldn't be completed for some reason.
+    fn interrupt(&mut self) {
+        *self = Self::Interrupted;
+    }
+
+    // Indicate that a chunk of work has been completed.
+    fn progress(&mut self) {
+        *self = match self {
+            Self::Skipped | Self::Completed => Self::Completed,
+            Self::Interrupted => Self::Interrupted,
+        };
+    }
+
+    fn merge(&mut self, other: Self) {
+        *self = match (*self, other) {
+            (Self::Skipped, Self::Skipped) => Self::Skipped,
+            (Self::Skipped, Self::Interrupted) => Self::Interrupted,
+            (Self::Skipped, Self::Completed) => Self::Completed,
+            (Self::Interrupted, Self::Skipped | Self::Interrupted | Self::Completed) => {
+                Self::Interrupted
+            }
+            (Self::Completed, Self::Skipped | Self::Completed) => Self::Completed,
+            (Self::Completed, Self::Interrupted) => Self::Interrupted,
+        };
+    }
 }
 
 /// Find missing blocks and mark them as required.
@@ -296,9 +337,9 @@ mod scan {
 /// Merge remote branches into the local one.
 mod merge {
     use super::*;
-    use crate::store;
+    use crate::{joint_directory::MergeStatus, store};
 
-    pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
+    pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<JobStatus> {
         let branches: Vec<_> = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
 
@@ -324,7 +365,8 @@ mod merge {
             .merge()
             .await
         {
-            Ok(_) | Err(Error::AmbiguousEntry) => Ok(()),
+            Ok((MergeStatus::Completed | MergeStatus::Conflict, _)) => Ok(JobStatus::Completed),
+            Ok((MergeStatus::Unchanged, _)) => Ok(JobStatus::Skipped),
             Err(error) => Err(error),
         }
     }
@@ -340,7 +382,7 @@ mod prune {
         shared: &Shared,
         unlock_tx: &unlock::Sender,
         prune_counter: &Counter,
-    ) -> Result<()> {
+    ) -> Result<JobStatus> {
         let all: Vec<_> = shared
             .vault
             .store()
@@ -371,7 +413,7 @@ mod prune {
             (uptodate.into_iter().chain(outdated).collect(), Vec::new())
         };
 
-        let mut locked = false;
+        let mut status = JobStatus::Skipped;
 
         // Remove outdated branches
         for node in outdated {
@@ -393,7 +435,7 @@ mod prune {
                 Err((notify, _)) => {
                     tracing::trace!(id = ?node.proof.writer_id, "outdated branch not removed - in use");
                     unlock_tx.send(notify).await;
-                    locked = true;
+                    status.interrupt();
                     continue;
                 }
             };
@@ -410,6 +452,8 @@ mod prune {
                 hash = ?node.proof.hash,
                 "outdated branch removed"
             );
+
+            status.progress();
         }
 
         // Remove outdated snapshots.
@@ -421,21 +465,17 @@ mod prune {
                 continue;
             }
 
-            shared
+            if shared
                 .vault
                 .store()
                 .remove_outdated_snapshots(&node)
-                .await?;
+                .await?
+            {
+                status.progress();
+            }
         }
 
-        if locked {
-            // An error is returned here to ensure that this maintenance job is not considered
-            // complete and that the 'MaintenanceComplete' event is not emitted. This is because
-            // the job will start again once the locks are released.
-            Err(Error::Locked)
-        } else {
-            Ok(())
-        }
+        Ok(status)
     }
 }
 
@@ -453,17 +493,18 @@ mod trash {
         iter,
     };
 
+    /// Returns whether there were any unreachable blocks and all of them have been removed.
     pub(super) async fn run(
         shared: &Shared,
         local_branch: Option<&Branch>,
         unlock_tx: &unlock::Sender,
-    ) -> Result<()> {
+    ) -> Result<JobStatus> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
         const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
         let mut unreachable_block_ids_page =
             shared.vault.store().block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
-        let mut locked = false;
+        let mut status = JobStatus::Skipped;
 
         loop {
             let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;
@@ -473,7 +514,7 @@ mod trash {
             }
 
             if exclude_locked_blocks(shared, &mut unreachable_block_ids, unlock_tx).await? {
-                locked = true;
+                status.interrupt();
             }
 
             traverse_root_in_all_branches(shared, local_branch, &mut unreachable_block_ids).await?;
@@ -489,17 +530,12 @@ mod trash {
                 traverse_root_in_local_branch(local_branch, &mut unreachable_block_ids).await?;
             }
 
-            remove_unreachable_blocks(shared, local_branch, unreachable_block_ids).await?;
+            if remove_unreachable_blocks(shared, local_branch, unreachable_block_ids).await? {
+                status.progress();
+            }
         }
 
-        if locked {
-            // An error is returned here to ensure that this maintenance job is not considered
-            // complete and that the 'MaintenanceComplete' event is not emitted. This is because
-            // the job will start again once the locks are released.
-            Err(Error::Locked)
-        } else {
-            Ok(())
-        }
+        Ok(status)
     }
 
     async fn traverse_root_in_all_branches(
@@ -650,11 +686,12 @@ mod trash {
         Ok(locked)
     }
 
+    // Returns whether any blocks have been removed.
     async fn remove_unreachable_blocks(
         shared: &Shared,
         local_branch: Option<&Branch>,
         unreachable_block_ids: BTreeSet<BlockId>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         // We need to delete the blocks and also mark them as missing (so they can be requested in
         // case they become needed again) in their corresponding leaf nodes and then update the
         // summaries of the corresponding ancestor nodes. This is a complex and potentially
@@ -709,7 +746,7 @@ mod trash {
             tracing::debug!("unreachable blocks removed: {}", total_count);
         }
 
-        Ok(())
+        Ok(total_count > 0)
     }
 
     async fn remove_local_nodes(

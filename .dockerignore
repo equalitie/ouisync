@@ -3,4 +3,5 @@ doc
 target
 tmp
 .git
-Cargo.lock
+*.sublime-*
+justfile

@@ -249,13 +249,18 @@ impl JointDirectory {
         self.remove_entries(pattern).await
     }
 
-    /// Merge all versions of this `JointDirectory` into a single `Directory`.
+    /// Merge all versions of this `JointDirectory` into its [Self::local_version].
     ///
-    /// In the presence of conflicts (multiple concurrent versions of the same file) this function
-    /// still proceeds as far as it can, but the conflicting files remain unmerged. It signals this
-    /// by returning `Error::AmbiguousEntry`.
+    /// Returns the status of the merge and the resulting merged directory.
+    ///
+    /// - In the presence of conflicts (multiple concurrent versions of the same file), this
+    ///   function proceeds as far as it can, but the conflicting files remain unmerged. It signals
+    ///   this by returning `MergeStatus::Conflict`.
+    /// - If the local version was already up-to-date, performs no change and returns
+    ///   `MergeStatus::Unchaged`.
+    /// - Otherwise, returns `MergeStatus::Completed`.
     #[async_recursion]
-    pub async fn merge(&mut self) -> Result<Directory> {
+    pub async fn merge<'a>(&'a mut self) -> Result<(MergeStatus, &'a Directory)> {
         let old_version_vector = if let Some(local_version) = self.local_version() {
             local_version.version_vector().await?
         } else {
@@ -269,7 +274,7 @@ impl JointDirectory {
             tracing::trace!(old = ?old_version_vector, "Merge not started - already up to date");
             // unwrap is ok because if old_version_vector is non-empty it means the local version
             // must exist.
-            return Ok(self.local_version().unwrap().clone());
+            return Ok((MergeStatus::Unchanged, self.local_version().unwrap()));
         } else {
             tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "Merge started");
         }
@@ -310,10 +315,10 @@ impl JointDirectory {
                                     .instrument(tracing::info_span!("dir", message = name))
                                     .await
                                 {
-                                    Ok(_) => (),
-                                    Err(Error::AmbiguousEntry) => {
+                                    Ok((MergeStatus::Conflict, _)) => {
                                         conflict = true;
                                     }
+                                    Ok((MergeStatus::Completed | MergeStatus::Unchanged, _)) => (),
                                     Err(error) => return Err(error),
                                 }
                             }
@@ -346,11 +351,14 @@ impl JointDirectory {
             tracing::trace!(?vv, ?conflict, "Merge completed");
         }
 
-        if conflict {
-            Err(Error::AmbiguousEntry)
-        } else {
-            Ok(local_version.clone())
-        }
+        Ok((
+            if conflict {
+                MergeStatus::Conflict
+            } else {
+                MergeStatus::Completed
+            },
+            local_version,
+        ))
     }
 
     // Merge the version vectors of all the versions in this joint directory.
@@ -617,6 +625,17 @@ pub enum MissingVersionStrategy {
     Skip,
     /// Fail the whole open operation
     Fail,
+}
+
+/// Status of the merge operation
+#[derive(Copy, Clone, Debug)]
+pub enum MergeStatus {
+    /// All entries successfully merged
+    Completed,
+    /// Some conflict occured. Only the non-conflicting entries merged
+    Conflict,
+    /// Nothing merged because the local version was already up-to-date
+    Unchanged,
 }
 
 // Iterator adaptor that maps iterator of `EntryRef` to iterator of `JointEntryRef` by filtering

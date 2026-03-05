@@ -704,9 +704,11 @@ impl Repository {
                 let mut dir_to_move = entry
                     .open_with(MissingVersionStrategy::Skip, DirectoryFallback::Disabled)
                     .await?;
-                let dir_to_move = dir_to_move.merge().await?;
 
                 let src_dir = dir_to_move
+                    .merge()
+                    .await?
+                    .1
                     .parent()
                     .await?
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
