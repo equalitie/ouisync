@@ -15,7 +15,15 @@ pub use crate::dokan::{
     single_repo_mount::{MountGuard, mount},
 };
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+// --- Dummy -----------------------------------------------------------------------
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+mod dummy;
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub use dummy::{MountGuard, MultiRepoVFS, mount};
+
+// ---------------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests;
 
@@ -50,6 +58,8 @@ pub trait MultiRepoMount {
 pub enum MountError {
     #[error("Invalid mount point")]
     InvalidMountPoint,
+    #[error("Mounting is not supported on this platform")]
+    Unsupported,
     #[error("Can't install the backend driver")]
     DriverInstall,
     #[error("Backend error")]

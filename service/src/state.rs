@@ -2,6 +2,8 @@ mod move_repository;
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "vfs")]
+use crate::config_keys::MOUNT_DIR_KEY;
 use crate::{
     any_entry::{self, AnyEntry},
     config_keys::{
@@ -28,6 +30,8 @@ use ouisync::{
     crypto::{Password, PasswordSalt, cipher::SecretKey},
 };
 use ouisync_macros::api;
+#[cfg(feature = "vfs")]
+use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use rand::{Rng, rngs::OsRng};
 use state_monitor::{MonitorId, StateMonitor};
 use std::{
@@ -48,12 +52,6 @@ use tokio::{
     sync::{broadcast, watch},
 };
 use tokio_stream::StreamExt;
-
-#[cfg(feature = "vfs")]
-use {
-    crate::config_keys::MOUNT_DIR_KEY,
-    ouisync_vfs::{MultiRepoMount, MultiRepoVFS},
-};
 
 // Config keys
 const REMOTE_CONTROL_KEY: ConfigKey<SocketAddr> =
@@ -575,7 +573,7 @@ impl State {
         }
 
         #[cfg(not(feature = "vfs"))]
-        Err(Error::Unsupported)
+        Err(Error::NoVFS)
     }
 
     /// Checks whether the given string is a valid share token.
@@ -1185,7 +1183,7 @@ impl State {
         }
 
         #[cfg(not(feature = "vfs"))]
-        Err(Error::Unsupported)
+        Err(Error::NoVFS)
     }
 
     #[api]
@@ -1210,7 +1208,7 @@ impl State {
         }
 
         #[cfg(not(feature = "vfs"))]
-        Err(Error::Unsupported)
+        Err(Error::NoVFS)
     }
 
     #[api]
@@ -1234,7 +1232,7 @@ impl State {
         }
 
         #[cfg(not(feature = "vfs"))]
-        Err(Error::Unsupported)
+        Err(Error::NoVFS)
     }
 
     #[api]

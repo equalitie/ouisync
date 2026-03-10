@@ -1,9 +1,8 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_macros::api;
-use serde::{Deserialize, Serialize};
-
 #[cfg(feature = "vfs")]
 use ouisync_vfs::MountError;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     error::Error,
@@ -79,21 +78,21 @@ pub enum ErrorCode {
     TlsKeysNotFound = 4096 + 6,
     /// Failed to create TLS config
     TlsConfigError = 4096 + 7,
-
     #[cfg(feature = "vfs")]
     /// Failed to install virtual filesystem driver
     VfsDriverInstallError = 4096 + 8,
-
     #[cfg(feature = "vfs")]
     /// Unspecified virtual filesystem error
     VfsOtherError = 4096 + 9,
-
     /// Another instance of the service is already running
     ServiceAlreadyRunning = 4096 + 10,
     /// Store directory is not specified
     StoreDirUnspecified = 4096 + 11,
     /// Mount directory is not specified
     MountDirUnspecified = 4096 + 12,
+    #[cfg(not(feature = "vfs"))]
+    /// Ouisync compiled without VFS
+    NoVFS = 4096 + 13,
 
     /// Unspecified error
     Other = 65535,
@@ -110,6 +109,8 @@ impl ToErrorCode for Error {
             Self::Config(_) => ErrorCode::ConfigError,
             #[cfg(feature = "vfs")]
             Self::CreateMounter(error) => error.to_error_code(),
+            #[cfg(not(feature = "vfs"))]
+            Self::NoVFS => ErrorCode::NoVFS,
             Self::InitializeRuntime(_) => ErrorCode::RuntimeInitializeError,
             Self::InvalidArgument => ErrorCode::InvalidInput,
             Self::Io(_) => ErrorCode::Other,
@@ -131,7 +132,6 @@ impl ToErrorCode for Error {
             Self::Bind(_) => ErrorCode::ListenerBindError,
             Self::Accept(_) => ErrorCode::ListenerAcceptError,
             Self::Client(error) => error.to_error_code(),
-            Self::Unsupported => ErrorCode::Unsupported,
         }
     }
 }
@@ -192,7 +192,9 @@ impl ToErrorCode for MountError {
     fn to_error_code(&self) -> ErrorCode {
         match self {
             Self::DriverInstall => ErrorCode::VfsDriverInstallError,
-            Self::InvalidMountPoint | Self::Backend(_) => ErrorCode::VfsOtherError,
+            Self::InvalidMountPoint | Self::Unsupported | Self::Backend(_) => {
+                ErrorCode::VfsOtherError
+            }
         }
     }
 }
