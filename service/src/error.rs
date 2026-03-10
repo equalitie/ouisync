@@ -2,10 +2,11 @@ use crate::{
     config_store::ConfigError, file::FileSetError, repository::FindError, transport::ClientError,
 };
 use ouisync::DecodeError;
-#[cfg(feature = "vfs")]
-use ouisync_vfs::MountError;
 use std::{ffi::IntoStringError, io, str::Utf8Error};
 use thiserror::Error;
+
+#[cfg(feature = "vfs")]
+use ouisync_vfs::MountError;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -13,12 +14,11 @@ pub enum Error {
     AlreadyExists,
     #[error("config error")]
     Config(#[from] ConfigError),
+
     #[cfg(feature = "vfs")]
     #[error("failed to create mounter")]
     CreateMounter(#[from] MountError),
-    #[cfg(not(feature = "vfs"))]
-    #[error("ouisync compiled without VFS support")]
-    NoVFS,
+
     #[error("failed to initialize runtime")]
     InitializeRuntime(#[source] io::Error),
     #[error("argument is invalid")]
@@ -61,6 +61,8 @@ pub enum Error {
     Accept(#[source] io::Error),
     #[error("client request failed")]
     Client(#[from] ClientError),
+    #[error("operation not supported")]
+    Unsupported,
 }
 
 impl From<Utf8Error> for Error {
