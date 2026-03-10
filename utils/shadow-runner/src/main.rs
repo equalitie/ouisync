@@ -118,6 +118,16 @@ fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) 
         env.insert("RUST_BACKTRACE".into(), value.into());
     }
 
+    // Explicitly set the number of rust test threads to prevent this warning in shadow:
+    //
+    //     Opening unsupported proc file. Contents may incorrectly refer to native process instead
+    //     of emulated, and/or have nondeterministic contents: /proc/self/cgroup
+    //
+    // Note this makes the tests run sequentially. Parallellism can be still achieved by running
+    // each test in a separate process (for example, using `cargo nextest` or
+    // `ouisync-stress-test`).
+    env.insert("RUST_TEST_THREADS".into(), "1".into());
+
     let stop_time = env::var("SHADOW_STOP_TIME");
     let stop_time = stop_time.as_deref().ok().unwrap_or("1m");
 
