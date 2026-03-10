@@ -109,14 +109,14 @@ fn main() -> Result<()> {
 
 fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) -> Result<()> {
     let mut env = Map::new();
+    let mut forward_env = |name: &str| {
+        if let Ok(value) = env::var(name) {
+            env.insert(name.into(), value.into());
+        }
+    };
 
-    if let Ok(value) = env::var("RUST_LOG") {
-        env.insert("RUST_LOG".into(), value.into());
-    }
-
-    if let Ok(value) = env::var("RUST_BACKTRACE") {
-        env.insert("RUST_BACKTRACE".into(), value.into());
-    }
+    forward_env("RUST_LOG");
+    forward_env("RUST_BACKTRACE");
 
     // Explicitly set the number of rust test threads to prevent this warning in shadow:
     //
@@ -126,7 +126,9 @@ fn write_shadow_config(writer: &mut PipeWriter, command: &str, args: &[String]) 
     // Note this makes the tests run sequentially. Parallellism can be still achieved by running
     // each test in a separate process (for example, using `cargo nextest` or
     // `ouisync-stress-test`).
-    env.insert("RUST_TEST_THREADS".into(), "1".into());
+    forward_env("RUST_TEST_THREADS");
+
+    forward_env("TMPDIR");
 
     let stop_time = env::var("SHADOW_STOP_TIME");
     let stop_time = stop_time.as_deref().ok().unwrap_or("1m");

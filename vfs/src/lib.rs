@@ -15,6 +15,7 @@ pub use crate::dokan::{
     single_repo_mount::{MountGuard, mount},
 };
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[cfg(test)]
 mod tests;
 

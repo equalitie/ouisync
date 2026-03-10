@@ -1,79 +1,89 @@
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
-use ouisync_lib::{Access, Repository, RepositoryParams, WriteSecrets};
-use ouisync_vfs::MountGuard;
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::path::Path;
-use tempfile::TempDir;
-use tokio::runtime::{Handle, Runtime};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+criterion::criterion_main!(implementation::default);
 
-criterion_group!(default, write_file);
-criterion_main!(default);
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod implementation {
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
+    use ouisync_lib::{Access, Repository, RepositoryParams, WriteSecrets};
+    use ouisync_vfs::MountGuard;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use std::path::Path;
+    use tempfile::TempDir;
+    use tokio::runtime::{Handle, Runtime};
 
-fn write_file(c: &mut Criterion) {
-    let runtime = Runtime::new().unwrap();
+    criterion_group!(default, write_file);
 
-    let file_size = 1024 * 1024;
+    fn write_file(c: &mut Criterion) {
+        let runtime = Runtime::new().unwrap();
 
-    let mut group = c.benchmark_group("vfs/write_file");
-    group.sample_size(50);
-    group.throughput(Throughput::Bytes(file_size));
-    group.bench_function(BenchmarkId::from_parameter(file_size), |b| {
-        b.iter_batched_ref(
-            || runtime.block_on(utils::setup()),
-            |(rng, base_dir, _mount_guard)| {
-                let file_path = base_dir.path().join("mnt").join("file.dat");
-                utils::write_file(rng, &file_path, file_size);
-            },
-            BatchSize::LargeInput,
-        );
-    });
-    group.finish();
-}
+        let file_size = 1024 * 1024;
 
-mod utils {
-    use super::*;
-    use std::{
-        fs::File,
-        io::{self, Read},
-        sync::Arc,
-    };
-
-    pub async fn setup() -> (StdRng, TempDir, MountGuard) {
-        let mut rng = StdRng::from_entropy();
-        let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-        let mount_dir = base_dir.path().join("mnt");
-
-        tokio::fs::create_dir_all(&mount_dir).await.unwrap();
-
-        let params = RepositoryParams::new(base_dir.path().join("repo.db"));
-        let repo = Repository::create(
-            &params,
-            Access::WriteUnlocked {
-                secrets: WriteSecrets::generate(&mut rng),
-            },
-        )
-        .await
-        .unwrap();
-        let repo = Arc::new(repo);
-
-        let mount_guard = ouisync_vfs::mount(Handle::current(), repo, mount_dir).unwrap();
-
-        (rng, base_dir, mount_guard)
+        let mut group = c.benchmark_group("vfs/write_file");
+        group.sample_size(50);
+        group.throughput(Throughput::Bytes(file_size));
+        group.bench_function(BenchmarkId::from_parameter(file_size), |b| {
+            b.iter_batched_ref(
+                || runtime.block_on(utils::setup()),
+                |(rng, base_dir, _mount_guard)| {
+                    let file_path = base_dir.path().join("mnt").join("file.dat");
+                    utils::write_file(rng, &file_path, file_size);
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        group.finish();
     }
 
-    pub fn write_file(rng: &mut StdRng, path: &Path, size: u64) {
-        let mut src = RngRead(rng).take(size);
-        let mut dst = File::create(path).unwrap();
+    mod utils {
+        use super::*;
+        use std::{
+            fs::File,
+            io::{self, Read},
+            sync::Arc,
+        };
 
-        io::copy(&mut src, &mut dst).unwrap();
-    }
+        pub async fn setup() -> (StdRng, TempDir, MountGuard) {
+            let mut rng = StdRng::from_entropy();
+            let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+            let mount_dir = base_dir.path().join("mnt");
 
-    struct RngRead<'a>(&'a mut StdRng);
+            tokio::fs::create_dir_all(&mount_dir).await.unwrap();
 
-    impl Read for RngRead<'_> {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            self.0.fill(buffer);
-            Ok(buffer.len())
+            let params = RepositoryParams::new(base_dir.path().join("repo.db"));
+            let repo = Repository::create(
+                &params,
+                Access::WriteUnlocked {
+                    secrets: WriteSecrets::generate(&mut rng),
+                },
+            )
+            .await
+            .unwrap();
+            let repo = Arc::new(repo);
+
+            let mount_guard = ouisync_vfs::mount(Handle::current(), repo, mount_dir).unwrap();
+
+            (rng, base_dir, mount_guard)
+        }
+
+        pub fn write_file(rng: &mut StdRng, path: &Path, size: u64) {
+            let mut src = RngRead(rng).take(size);
+            let mut dst = File::create(path).unwrap();
+
+            io::copy(&mut src, &mut dst).unwrap();
+        }
+
+        struct RngRead<'a>(&'a mut StdRng);
+
+        impl Read for RngRead<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                self.0.fill(buffer);
+                Ok(buffer.len())
+            }
         }
     }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn main() {
+    unimplemented!("this bench is not implemented for this platform")
 }

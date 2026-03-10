@@ -7,6 +7,7 @@ use std::{
     fmt,
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Seek, SeekFrom},
+    path::PathBuf,
     process::{self, Child, Command, ExitStatus, Stdio},
     sync::{
         Arc,
@@ -20,15 +21,7 @@ use tempfile::TempDir;
 fn main() {
     let options = Options::parse();
 
-    // Override TMPDIR so that all temp files/directories created in the tests are created inside
-    // it, for easier cleanup.
     let temp_root = TempDir::new().unwrap();
-
-    // SAFETY: This is the only thread accessing these env vars at this moment.
-    unsafe {
-        env::set_var("TMPDIR", temp_root.path()); // unix
-        env::set_var("TEMP", temp_root.path()); // windows
-    }
 
     // Build the test binaries
     let exes = if let Some(exe) = options.exe {
@@ -78,8 +71,9 @@ fn main() {
                 let exes = exes.clone();
                 let args = args.clone();
                 let slow = options.slow;
+                let temp_root = temp_root.path().to_owned();
                 let tx = tx.clone();
-                move || run(index, runner, exes, args, slow, tx)
+                move || run(index, runner, exes, args, slow, temp_root, tx)
             })
         })
         .collect();
@@ -301,11 +295,12 @@ fn run(
     exes: Vec<String>,
     args: Vec<String>,
     slow: Duration,
+    temp_root: PathBuf,
     tx: mpsc::SyncSender<Event>,
 ) {
     let mut commands = make_commands(runner, exes, args);
 
-    let runner = CommandRunner::new();
+    let runner = CommandRunner::new(temp_root);
 
     for iteration in 0.. {
         for command in &mut commands {
@@ -514,13 +509,12 @@ type CommandRequest = (Child, mpsc::SyncSender<io::Result<ExitStatus>>);
 
 struct CommandRunner {
     request_tx: mpsc::SyncSender<CommandRequest>,
-    temp_dir: TempDir,
+    temp_dir: PathBuf,
 }
 
 impl CommandRunner {
-    fn new() -> Self {
+    fn new(temp_dir: PathBuf) -> Self {
         let (request_tx, request_rx) = mpsc::sync_channel::<CommandRequest>(1);
-        let temp_dir = TempDir::new().unwrap();
 
         thread::spawn(move || {
             for (mut child, response_tx) in request_rx {
@@ -538,9 +532,13 @@ impl CommandRunner {
         let (stdout_writer, stdout_reader) = self.new_buffer("stdout");
         let (stderr_writer, stderr_reader) = self.new_buffer("stderr");
 
+        let temp_dir = TempDir::new_in(&self.temp_dir).unwrap();
+        let temp_dir_env_name = if cfg!(windows) { "TEMP" } else { "TMPDIR" };
+
         let child = command
             .stdout(stdout_writer)
             .stderr(stderr_writer)
+            .env(temp_dir_env_name, temp_dir.path())
             .spawn()
             .unwrap();
 
@@ -554,11 +552,12 @@ impl CommandRunner {
             start: Instant::now(),
             stdout: Arc::new(stdout_reader),
             stderr: Arc::new(stderr_reader),
+            _temp_dir: temp_dir,
         }
     }
 
     fn new_buffer(&self, name: &str) -> (File, File) {
-        let path = self.temp_dir.path().join(name);
+        let path = self.temp_dir.join(name);
 
         match fs::remove_file(&path) {
             Ok(_) => (),
@@ -571,9 +570,22 @@ impl CommandRunner {
             .write(true)
             .truncate(true)
             .open(&path)
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!(
+                    "failed to open file '{}' for writing: {error:?}",
+                    path.display()
+                )
+            });
 
-        let reader = OpenOptions::new().read(true).open(&path).unwrap();
+        let reader = OpenOptions::new()
+            .read(true)
+            .open(&path)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "failed to open file '{}' for reading: {error:?}",
+                    path.display()
+                )
+            });
 
         (writer, reader)
     }
@@ -585,6 +597,7 @@ struct Running<'a> {
     start: Instant,
     stdout: Arc<File>,
     stderr: Arc<File>,
+    _temp_dir: TempDir,
 }
 
 impl Running<'_> {
