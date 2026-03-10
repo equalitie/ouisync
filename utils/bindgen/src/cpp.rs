@@ -763,13 +763,10 @@ fn function_params(skip_first: bool, fields: &Fields) -> Vec<(String, CppType)> 
                 CppType::new(&field.ty),
             )
         })
-        .chain(
-            [(
-                "completion_token".into(),
-                CppType::Scalar(CppScalar::CompletionToken),
-            )]
-            .into_iter(),
-        )
+        .chain([(
+            "completion_token".into(),
+            CppType::Scalar(CppScalar::CompletionToken),
+        )])
         .collect()
 }
 
