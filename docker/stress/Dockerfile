@@ -1,4 +1,4 @@
-FROM rust:slim-trixie AS builder
+FROM rust:slim-trixie AS base
 
 RUN apt-get update && apt-get upgrade -y && \
     apt-get install -y \
@@ -18,17 +18,39 @@ RUN git clone https://github.com/shadow/shadow.git /usr/src/shadow
 WORKDIR /usr/src/shadow
 RUN ./setup build --clean --test --prefix /opt/shadow && ./setup install
 
-# Build ouisync tests and utilities
+# Install cargo-chef
+RUN cargo install cargo-chef --locked
+
 WORKDIR /usr/src/ouisync
+
+################################################################################
+# Pre-build and cache dependencies using cargo-chef
+FROM base AS planner
+
+COPY --from=source . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+################################################################################
+# Build ouisync tests and utilities
+FROM base AS builder
+
+COPY --from=planner /usr/src/ouisync/recipe.json recipe.json
+RUN cargo chef cook \
+    --package ouisync \
+    --package ouisync-stress-test \
+    --package shadow-runner \
+    --release --tests --recipe-path recipe.json
+
 COPY --from=source . .
 
 RUN cargo build --package ouisync --release --test sync --message-format json \
     | jq --raw-output '.executable | select( . != null)' \
     | xargs -I{} mv {} target/release/ouisync-test-sync
 RUN cargo build --package ouisync-stress-test --release
-RUN cargo build --package shadow-runner       --release
+RUN cargo build --package shadow-runner --release
 
-
+################################################################################
+# Run the tests
 FROM debian:trixie-slim AS runner
 
 RUN apt-get update && apt-get upgrade -y && \
