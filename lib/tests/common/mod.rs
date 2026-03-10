@@ -76,7 +76,7 @@ pub(crate) mod env {
 
     impl Env {
         pub fn new() -> Self {
-            let runtime = runtime::Builder::new_multi_thread()
+            let runtime = runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
