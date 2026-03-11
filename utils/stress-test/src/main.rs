@@ -122,6 +122,9 @@ fn main() {
                 stderr.as_ref().seek(SeekFrom::Start(0)).unwrap();
                 io::copy(&mut stderr.as_ref(), &mut io::stdout()).unwrap();
 
+                let path = temp_root.keep();
+                println!("\n\nwork directory persisted in {}", path.display());
+
                 break;
             }
             Status::Slow {
