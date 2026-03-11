@@ -303,6 +303,9 @@ fn run(
 ) {
     let mut commands = make_commands(runner, exes, args);
 
+    let temp_dir = temp_root.join(process.to_string());
+    fs::create_dir_all(&temp_dir).unwrap();
+
     let runner = CommandRunner::new(temp_root);
 
     for iteration in 0.. {
@@ -535,7 +538,10 @@ impl CommandRunner {
         let (stdout_writer, stdout_reader) = self.new_buffer("stdout");
         let (stderr_writer, stderr_reader) = self.new_buffer("stderr");
 
-        let temp_dir = TempDir::new_in(&self.temp_dir).unwrap();
+        let temp_dir = tempfile::Builder::new()
+            .prefix("tmp") // skip the leading dot to make it non-hidden
+            .tempdir_in(&self.temp_dir)
+            .unwrap();
         let temp_dir_env_name = if cfg!(windows) { "TEMP" } else { "TMPDIR" };
 
         let child = command
