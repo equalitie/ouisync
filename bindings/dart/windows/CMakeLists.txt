@@ -25,6 +25,7 @@ set(OUISYNC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ouisync")
 corrosion_import_crate(
   MANIFEST_PATH "${OUISYNC_DIR}/Cargo.toml"
   CRATES ouisync-service
+  FEATURES vfs
 )
 
 # Not putting it inside Debug or Release subdirectories because they don't

@@ -28,6 +28,7 @@ FetchContent_MakeAvailable(Corrosion)
 corrosion_import_crate(
   MANIFEST_PATH "${ROOT_DIR}/Cargo.toml"
   CRATES ouisync-service
+  FEATURES vfs
 )
 
 # This value is used when generating builds using this plugin, so it must
