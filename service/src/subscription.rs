@@ -14,6 +14,7 @@ pub(crate) enum SubscriptionStream {
     Network(NetworkEventStream),
     Repository(BroadcastStream<Event>),
     StateMonitor(WatchStream<()>),
+    // DhtLookup(DhtLookup),
 }
 
 impl From<broadcast::Receiver<Event>> for SubscriptionStream {
@@ -47,7 +48,9 @@ impl Stream for SubscriptionStream {
             }
             Self::StateMonitor(stream) => {
                 Poll::Ready(ready!(stream.poll_next_unpin(cx)).map(|_| Response::StateMonitorEvent))
-            }
+            } // Self::DhtLookup(stream) => {
+              //     Poll::Ready(ready!(stream.poll_next_unpin(cx)).map(Response::PeerAddr))
+              // }
         }
     }
 }

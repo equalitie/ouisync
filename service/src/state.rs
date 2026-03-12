@@ -19,6 +19,7 @@ use crate::{
     network::{self, PexConfig},
     protocol::{DirectoryEntry, MessageId, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{self, RepositoryHandle, RepositoryHolder, RepositorySet},
+    socket::{SocketHandle, SocketRecv, SocketSet},
     tls::TlsConfig,
     transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
 };
@@ -74,6 +75,7 @@ pub(crate) struct State {
     mounter: Mutex<Option<Arc<MultiRepoVFS>>>,
     repos: RepositorySet,
     files: FileSet,
+    sockets: SocketSet,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
     remote_server: Mutex<Option<Arc<RemoteServer>>>,
@@ -149,6 +151,7 @@ impl State {
             repos_monitor,
             repos: RepositorySet::new(),
             files: FileSet::new(),
+            sockets: SocketSet::new(),
             remote_server: Mutex::new(remote_server.map(Arc::new)),
             metrics_server,
         };
@@ -1943,6 +1946,64 @@ impl State {
     #[api]
     pub async fn session_unsubscribe(&self, id: MessageId) -> Unsubscribe {
         Unsubscribe(id)
+    }
+
+    // TODO:
+    // #[api]
+    // pub fn session_dht_lookup(&self, info_hash: String, announce: bool) -> DhtLookup {
+    //     todo!()
+    //     // let info_hash = InfoHash::
+    //     // self.network.dht_lookup(info_hash, announce)
+    // }
+
+    /// Opens a side channel to the underlying IPv4 UDP socket. The side channel is used to
+    /// send/receive raw UDP datagrams on the same socket that the sync protocol uses. This is
+    /// useful to share the socket between different protocols for hole punching.
+    ///
+    /// Returns `None` if QUIC IPv4 endpoint isn't bound (see [Self::session_bind_network]).
+    #[api]
+    pub fn session_open_socket_v4(&self) -> Option<SocketHandle> {
+        let socket = self.network.udp_side_channel_v4()?;
+        Some(self.sockets.insert(socket))
+    }
+
+    /// Opens a side channel to the underlying IPv6 UDP socket. The side channel is used to
+    /// send/receive raw UDP datagrams on the same socket that the sync protocol uses. This is
+    /// useful to share the socket between different protocols for hole punching.
+    ///
+    /// Returns `None` if QUIC IPv6 endpoint isn't bound (see [Self::session_bind_network]).
+    #[api]
+    pub fn session_open_socket_v6(&self) -> Option<SocketHandle> {
+        let socket = self.network.udp_side_channel_v6()?;
+        Some(self.sockets.insert(socket))
+    }
+
+    #[api]
+    pub async fn socket_send_to(
+        &self,
+        socket: SocketHandle,
+        data: Vec<u8>,
+        addr: SocketAddr,
+    ) -> Result<u64, Error> {
+        Ok(self.sockets.send_to(socket, &data, addr).await? as u64)
+    }
+
+    #[api]
+    pub async fn socket_recv_from(
+        &self,
+        socket: SocketHandle,
+        max_size: u64,
+    ) -> Result<SocketRecv, Error> {
+        let mut data = vec![0; max_size as usize];
+        let (actual_size, addr) = self.sockets.recv_from(socket, &mut data).await?;
+        data.truncate(actual_size);
+
+        Ok(SocketRecv { data, addr })
+    }
+
+    #[api]
+    pub fn socket_close(&self, socket: SocketHandle) {
+        self.sockets.remove(socket);
     }
 
     pub async fn set_all_repositories_sync_enabled(&self, enabled: bool) -> Result<(), Error> {

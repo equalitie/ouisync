@@ -1,4 +1,4 @@
-use crate::{file::FileHandle, repository::RepositoryHandle};
+use crate::{file::FileHandle, repository::RepositoryHandle, socket::SocketHandle};
 use ouisync::{
     AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
     crypto::{Password, PasswordSalt},

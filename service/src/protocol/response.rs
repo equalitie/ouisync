@@ -1,4 +1,8 @@
-use crate::{file::FileHandle, repository::RepositoryHandle};
+use crate::{
+    file::FileHandle,
+    repository::RepositoryHandle,
+    socket::{SocketHandle, SocketRecv},
+};
 use ouisync::{
     AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress,
     PublicRuntimeId, ShareToken, Stats, StorageSize,

@@ -15,6 +15,7 @@ mod file;
 mod metrics;
 mod network;
 mod repository;
+mod socket;
 mod state;
 mod subscription;
 mod tls;
