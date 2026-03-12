@@ -70,7 +70,10 @@ use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use btdht::{self, INFO_HASH_LEN, InfoHash};
 use deadlock::BlockingMutex;
 use futures_util::future;
-use net::unified::{Connection, ConnectionError};
+use net::{
+    quic,
+    unified::{Connection, ConnectionError},
+};
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;
@@ -384,6 +387,32 @@ impl Network {
             holder.request_tracker.set_timeout(timeout);
         }
     }
+
+    /// Returns a side channel for the underlying IPv4 UDP socket, or `None` if IPv4 QUIC stack
+    /// isn't configured.
+    ///
+    /// The side channel is used to send/receive raw UDP datagrams on the same socket that the sync
+    /// protocol uses.
+    pub fn udp_side_channel_v4(&self) -> Option<quic::SideChannel> {
+        self.inner
+            .gateway
+            .udp_side_channel_maker_v4()
+            .as_ref()
+            .map(|m| m.make())
+    }
+
+    /// Returns a side channel for the underlying IPv6 UDP socket, or `None` if IPv6 QUIC stack
+    /// isn't configured.
+    ///
+    /// The side channel is used to send/receive raw UDP datagrams on the same socket that the sync
+    /// protocol uses.
+    pub fn udp_side_channel_v6(&self) -> Option<quic::SideChannel> {
+        self.inner
+            .gateway
+            .udp_side_channel_maker_v4()
+            .as_ref()
+            .map(|m| m.make())
+    }
 }
 
 pub struct Registration {
@@ -534,12 +563,15 @@ impl Inner {
         }
 
         // Gateway
-        let side_channel_makers = self.span.in_scope(|| self.gateway.bind(&bind));
+        self.span.in_scope(|| self.gateway.bind(&bind));
 
         let conn = self.gateway.connectivity();
 
         let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
-            Connectivity::Full => side_channel_makers,
+            Connectivity::Full => (
+                self.gateway.udp_side_channel_maker_v4(),
+                self.gateway.udp_side_channel_maker_v6(),
+            ),
             Connectivity::LocalOnly | Connectivity::Disabled => (None, None),
         };
 

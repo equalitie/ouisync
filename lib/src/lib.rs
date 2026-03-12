@@ -63,3 +63,5 @@ pub use self::{
     store::{DATA_VERSION, Error as StoreError},
     version_vector::VersionVector,
 };
+
+pub use net::{quic::SideChannel as UdpSocket, udp::DatagramSocket};

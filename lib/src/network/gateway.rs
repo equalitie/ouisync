@@ -62,15 +62,8 @@ impl Gateway {
     }
 
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
-    pub fn bind(
-        &self,
-        bind: &StackAddresses,
-    ) -> (
-        Option<quic::SideChannelMaker>,
-        Option<quic::SideChannelMaker>,
-    ) {
-        let (next, side_channel_maker_v4, side_channel_maker_v6) =
-            Stacks::bind(bind, self.incoming_tx.clone());
+    pub fn bind(&self, bind: &StackAddresses) {
+        let next = Stacks::bind(bind, self.incoming_tx.clone());
 
         let prev = self.stacks.send_replace(next);
         let next = self.stacks.borrow();
@@ -103,8 +96,6 @@ impl Gateway {
         }
 
         prev.close();
-
-        (side_channel_maker_v4, side_channel_maker_v6)
     }
 
     pub fn connectivity(&self) -> Connectivity {
@@ -217,6 +208,24 @@ impl Gateway {
     pub fn addresses(&self) -> StackAddresses {
         self.stacks.borrow().addresses()
     }
+
+    pub fn udp_side_channel_maker_v4(&self) -> Option<quic::SideChannelMaker> {
+        self.stacks
+            .borrow()
+            .quic_v4
+            .as_ref()
+            .map(|stack| &stack.side_channel_maker)
+            .cloned()
+    }
+
+    pub fn udp_side_channel_maker_v6(&self) -> Option<quic::SideChannelMaker> {
+        self.stacks
+            .borrow()
+            .quic_v6
+            .as_ref()
+            .map(|stack| &stack.side_channel_maker)
+            .cloned()
+    }
 }
 
 #[derive(Debug, Error)]
@@ -257,29 +266,14 @@ impl Stacks {
         }
     }
 
-    fn bind(
-        bind: &StackAddresses,
-        incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
-    ) -> (
-        Self,
-        Option<quic::SideChannelMaker>,
-        Option<quic::SideChannelMaker>,
-    ) {
-        let (quic_v4, side_channel_maker_v4) = if let Some(addr) = bind.quic_v4 {
-            QuicStack::new(addr, incoming_tx.clone())
-                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
-                .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
+    fn bind(bind: &StackAddresses, incoming_tx: mpsc::Sender<(Connection, PeerAddr)>) -> Self {
+        let quic_v4 = bind
+            .quic_v4
+            .and_then(|addr| QuicStack::new(addr, incoming_tx.clone()));
 
-        let (quic_v6, side_channel_maker_v6) = if let Some(addr) = bind.quic_v6 {
-            QuicStack::new(addr, incoming_tx.clone())
-                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
-                .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
+        let quic_v6 = bind
+            .quic_v6
+            .and_then(|addr| QuicStack::new(addr, incoming_tx.clone()));
 
         let tcp_v4 = if let Some(addr) = bind.tcp_v4 {
             TcpStack::new(addr, incoming_tx.clone())
@@ -293,14 +287,12 @@ impl Stacks {
             None
         };
 
-        let this = Self {
+        Self {
             quic_v4,
             quic_v6,
             tcp_v4,
             tcp_v6,
-        };
-
-        (this, side_channel_maker_v4, side_channel_maker_v6)
+        }
     }
 
     fn addresses(&self) -> StackAddresses {
@@ -394,7 +386,7 @@ impl Stacks {
 
         let stack = self.quic_stack_for(&addr.ip())?;
 
-        let sender = stack.hole_puncher.clone();
+        let sender = stack.side_channel_maker.make().into_sender();
         let task = scoped_task::spawn(
             async move {
                 use rand::Rng;
@@ -465,14 +457,14 @@ struct QuicStack {
     listener_local_addr: SocketAddr,
     listener_task: ScopedJoinHandle<()>,
     connector: quic::Connector,
-    hole_puncher: quic::SideChannelSender,
+    side_channel_maker: quic::SideChannelMaker,
 }
 
 impl QuicStack {
     fn new(
         bind_addr: SocketAddr,
         incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
-    ) -> Option<(Self, quic::SideChannelMaker)> {
+    ) -> Option<Self> {
         let span = tracing::info_span!("quic", addr = field::Empty);
 
         let (connector, acceptor, side_channel_maker) =
@@ -502,16 +494,12 @@ impl QuicStack {
             run_listener(Acceptor::Quic(acceptor), incoming_tx).instrument(span),
         );
 
-        let hole_puncher = side_channel_maker.make().sender();
-
-        let this = Self {
+        Some(Self {
             connector,
             listener_local_addr,
             listener_task,
-            hole_puncher,
-        };
-
-        Some((this, side_channel_maker))
+            side_channel_maker,
+        })
     }
 
     fn close(&self) {
