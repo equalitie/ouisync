@@ -6,6 +6,7 @@ mod constants;
 mod crypto;
 mod debug_payload;
 mod dht_discovery;
+mod dht_lookup;
 mod event;
 mod gateway;
 mod ip;
@@ -33,6 +34,7 @@ mod upnp;
 pub use self::{
     connection::PeerInfoCollector,
     dht_discovery::{DHT_ROUTERS, DhtContactsStoreTrait},
+    dht_lookup::DhtLookup,
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
@@ -413,6 +415,11 @@ impl Network {
             .as_ref()
             .map(|m| m.make())
     }
+
+    /// Performs explicit DHT lookup or announce for the given infohash.
+    pub fn dht_lookup(&self, info_hash: InfoHash, announce: bool) -> DhtLookup {
+        DhtLookup::start(&self.inner.dht_discovery, info_hash, announce)
+    }
 }
 
 pub struct Registration {
@@ -687,7 +694,7 @@ impl Inner {
 
     fn start_dht_lookup(&self, info_hash: InfoHash) -> dht_discovery::LookupRequest {
         self.dht_discovery
-            .start_lookup(info_hash, self.dht_discovery_tx.clone())
+            .start_lookup(info_hash, true, self.dht_discovery_tx.clone())
     }
 
     async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {

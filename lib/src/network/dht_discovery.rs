@@ -125,6 +125,7 @@ impl DhtDiscovery {
     pub fn start_lookup(
         &self,
         info_hash: InfoHash,
+        announce: bool,
         found_peers_tx: mpsc::UnboundedSender<SeenPeer>,
     ) -> LookupRequest {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -157,6 +158,7 @@ impl DhtDiscovery {
                         dht_v4,
                         dht_v6,
                         info_hash,
+                        announce,
                         &self.lookups_monitor,
                         &self.span,
                     ))
@@ -453,6 +455,7 @@ impl Drop for LookupRequest {
 }
 
 struct Lookup {
+    announce: bool,
     seen_peers: Arc<SeenPeers>,
     requests: Arc<BlockingMutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
     wake_up_tx: watch::Sender<()>,
@@ -464,6 +467,7 @@ impl Lookup {
         dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
         dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
+        announce: bool,
         monitor: &StateMonitor,
         span: &Span,
     ) -> Self {
@@ -480,6 +484,7 @@ impl Lookup {
                 dht_v4,
                 dht_v6,
                 info_hash,
+                announce,
                 seen_peers.clone(),
                 requests.clone(),
                 wake_up_rx,
@@ -490,7 +495,8 @@ impl Lookup {
             None
         };
 
-        Lookup {
+        Self {
+            announce,
             seen_peers,
             requests,
             wake_up_tx,
@@ -516,6 +522,7 @@ impl Lookup {
             dht_v4,
             dht_v6,
             info_hash,
+            self.announce,
             self.seen_peers.clone(),
             self.requests.clone(),
             self.wake_up_tx.subscribe(),
@@ -543,6 +550,7 @@ impl Lookup {
         dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
         dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
+        announce: bool,
         seen_peers: Arc<SeenPeers>,
         requests: Arc<BlockingMutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
         mut wake_up: watch::Receiver<()>,
@@ -581,7 +589,7 @@ impl Lookup {
                         timeout(Duration::from_secs(10), dht.dht.bootstrapped())
                             .await
                             .unwrap_or(false);
-                        dht.dht.search(info_hash, true)
+                        dht.dht.search(info_hash, announce)
                     })
                     .flatten()
                 }));

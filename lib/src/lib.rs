@@ -50,7 +50,7 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
     network::{
-        DHT_ROUTERS, DhtContactsStoreTrait, NatBehavior, Network, NetworkEvent,
+        DHT_ROUTERS, DhtContactsStoreTrait, DhtLookup, NatBehavior, Network, NetworkEvent,
         NetworkEventReceiver, NetworkEventStream, PeerAddr, PeerInfo, PeerInfoCollector,
         PeerSource, PeerState, PublicRuntimeId, Registration, SecretRuntimeId, Stats,
         repository_info_hash,
