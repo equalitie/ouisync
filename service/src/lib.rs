@@ -8,6 +8,7 @@ mod config_keys;
 mod config_migration;
 mod config_store;
 mod connection;
+mod coop_rw_lock;
 mod device_id;
 mod dht_contacts;
 mod error;

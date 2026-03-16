@@ -3007,6 +3007,7 @@ dependencies = [
  "ouisync-vfs",
  "paranoid-android",
  "pem",
+ "pin-project-lite",
  "rand 0.8.5",
  "rcgen",
  "reqwest",
