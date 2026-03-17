@@ -32,15 +32,15 @@ impl SocketSet {
         }
     }
 
-    pub fn insert(&self, socket: UdpSocket) -> SocketHandle {
+    pub async fn insert(&self, socket: UdpSocket) -> SocketHandle {
         // Note this isn't actually blocking because any existing readers are immediately
         // interrupted and the writers don't block while holding the write lock.
-        let handle = self.inner.blocking_write().insert(socket);
+        let handle = self.inner.write().await.insert(socket);
         SocketHandle(handle)
     }
 
-    pub fn remove(&self, handle: SocketHandle) {
-        self.inner.blocking_write().try_remove(handle.0);
+    pub async fn remove(&self, handle: SocketHandle) {
+        self.inner.write().await.try_remove(handle.0);
     }
 
     pub async fn send_to(

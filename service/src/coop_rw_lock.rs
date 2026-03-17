@@ -33,18 +33,9 @@ impl<T> CoopRwLock<T> {
     /// Acquires a write (exclusive) access to this lock. If any read locks are currently being
     /// held, they get notified about this write attempt so they can decide to yield the lock to
     /// this task.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub async fn write(&self) -> CoopRwLockWriteGuard<'_, T> {
         let interest = self.write_interests.scoped_increment();
         let inner = self.inner.write().await;
-
-        CoopRwLockWriteGuard { inner, interest }
-    }
-
-    /// Same as [Self::write] but blocks instead of awaits.
-    pub fn blocking_write(&self) -> CoopRwLockWriteGuard<'_, T> {
-        let interest = self.write_interests.scoped_increment();
-        let inner = self.inner.blocking_write();
 
         CoopRwLockWriteGuard { inner, interest }
     }

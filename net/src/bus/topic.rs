@@ -27,7 +27,7 @@ impl TopicId {
         let mut array = [0; Self::SIZE];
         let n = slice.len().min(Self::SIZE);
 
-        array.copy_from_slice(&slice[..n]);
+        array[..n].copy_from_slice(&slice[..n]);
 
         Self(array)
     }

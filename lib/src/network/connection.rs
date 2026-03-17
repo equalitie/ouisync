@@ -63,15 +63,11 @@ impl ConnectionSet {
                     )
                 }
                 Entry::Occupied(entry) => {
-                    let peer_permit = entry.get();
+                    let data = entry.get();
 
                     (
                         false,
-                        ReserveResult::Occupied(
-                            peer_permit.on_release.subscribe(),
-                            peer_permit.source,
-                            peer_permit.id,
-                        ),
+                        ReserveResult::Occupied(data.on_release.subscribe(), data.source, data.id),
                     )
                 }
             })

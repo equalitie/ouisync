@@ -29,10 +29,11 @@ impl StreamSet {
     }
 
     /// Inserts new streams into the set, returning a handle to them.
-    pub fn insert(&self, send_stream: SendStream, recv_stream: RecvStream) -> StreamHandle {
+    pub async fn insert(&self, send_stream: SendStream, recv_stream: RecvStream) -> StreamHandle {
         StreamHandle(
             self.inner
-                .blocking_write()
+                .write()
+                .await
                 .insert((Mutex::new(send_stream), Mutex::new(recv_stream))),
         )
     }
@@ -56,6 +57,23 @@ impl StreamSet {
         }
     }
 
+    /// Reads the exact number of bytes to fill `buf` from the recv stream corresponding to `handle`.
+    pub async fn read_exact(&self, handle: StreamHandle, buf: &mut [u8]) -> io::Result<usize> {
+        let mut offset = 0;
+
+        while offset < buf.len() {
+            let n = self.read(handle, &mut buf[offset..]).await?;
+
+            if n > 0 {
+                offset += n;
+            } else {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+        }
+
+        Ok(offset)
+    }
+
     /// Write bytes from `buf` to the send stream corresponding to `handle`. Returns the number of
     /// bytes actually written.
     pub async fn write(&self, handle: StreamHandle, buf: &[u8]) -> io::Result<usize> {
@@ -75,10 +93,28 @@ impl StreamSet {
         }
     }
 
+    /// Writes the entire `buf` to the send stream corresponding to `handle`.
+    pub async fn write_all(&self, handle: StreamHandle, buf: &[u8]) -> io::Result<()> {
+        let mut offset = 0;
+
+        while offset < buf.len() {
+            let n = self.write(handle, &buf[offset..]).await?;
+
+            if n > 0 {
+                offset += n;
+            } else {
+                return Err(io::ErrorKind::WriteZero.into());
+            }
+        }
+
+        Ok(())
+    }
+
     /// Close the send and recv streams corresponding to `handle`.
     pub async fn close(&self, handle: StreamHandle) -> io::Result<()> {
         self.inner
-            .blocking_write()
+            .write()
+            .await
             .try_remove(handle.0)
             .ok_or_else(stream_not_found)?
             .0

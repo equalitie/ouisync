@@ -4,10 +4,10 @@ use crate::test_utils;
 
 use super::*;
 use assert_matches::assert_matches;
-use futures_util::TryStreamExt;
+use futures_util::{TryStreamExt, future::join};
 use ouisync::{Access, AccessSecrets, File, Repository, RepositoryParams, WriteSecrets};
 use tempfile::TempDir;
-use tokio::{sync::broadcast::error::RecvError, time};
+use tokio::{net::UdpSocket, select, sync::broadcast::error::RecvError, time};
 use tokio_stream::wrappers::ReadDirStream;
 use tracing::Instrument;
 
@@ -629,6 +629,148 @@ async fn metrics() {
     let response = http_client.get(&url).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     assert!(response.content_length().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn sockets() {
+    let (_temp_dir, state) = setup().await;
+
+    let peer_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let peer_addr = peer_socket.local_addr().unwrap();
+
+    state
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+    let our_addr = *state
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap()
+        .socket_addr();
+
+    let socket_handle = state.session_open_socket_v4().await.unwrap();
+
+    // From us to the peer
+    let message = b"ping";
+
+    let writer = async {
+        state
+            .socket_send_to(socket_handle, message.to_vec(), peer_addr)
+            .await
+            .unwrap();
+    };
+
+    let reader = async {
+        let mut buffer = vec![0; message.len()];
+        let (n, sender_addr) = peer_socket.recv_from(&mut buffer).await.unwrap();
+        buffer.truncate(n);
+
+        assert_eq!(buffer, message);
+        assert_eq!(sender_addr, our_addr);
+    };
+
+    select! {
+        _ = reader => (),
+        _ = writer => (),
+    }
+
+    // From the peer to us
+    let message = b"pong";
+
+    let writer = async {
+        peer_socket.send_to(message, our_addr).await.unwrap();
+    };
+
+    let reader = async {
+        let recv = state
+            .socket_recv_from(socket_handle, message.len() as u64)
+            .await
+            .unwrap();
+
+        assert_eq!(recv.data, message);
+        assert_eq!(recv.addr, peer_addr);
+    };
+
+    join(reader, writer).await;
+}
+
+#[tokio::test]
+async fn streams() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let state_a = State::init(ConfigStore::new(temp_dir.path().join("config-a")))
+        .await
+        .unwrap();
+    let state_b = State::init(ConfigStore::new(temp_dir.path().join("config-b")))
+        .await
+        .unwrap();
+
+    state_a
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+    let addr_a = state_a
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    state_b
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+    let addr_b = state_b
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    state_a.session_add_user_provided_peers(vec![addr_b]).await;
+
+    let topic_id = TopicId::from_slice_lossy(b"pingpong");
+
+    async fn open_stream(state: &State, addr: PeerAddr, topic_id: TopicId) -> StreamHandle {
+        let mut events_rx = state.session_subscribe_to_network();
+
+        time::timeout(Duration::from_secs(1), async {
+            loop {
+                match state.session_open_stream(addr, topic_id).await {
+                    Ok(handle) => break handle,
+                    // Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotConnected => (),
+                    Err(Error::NotFound) => (),
+                    Err(error) => panic!("unexpected error: {error:?}"),
+                }
+
+                events_rx.recv().await.unwrap();
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    let stream_a_to_b = open_stream(&state_a, addr_b, topic_id).await;
+    let stream_b_to_a = open_stream(&state_b, addr_a, topic_id).await;
+
+    let ping = async {
+        state_a
+            .stream_write_all(stream_a_to_b, b"ping".to_vec())
+            .await
+            .unwrap();
+        let res = state_a.stream_read_exact(stream_a_to_b, 4).await.unwrap();
+        assert_eq!(res, b"pong");
+    };
+
+    let pong = async {
+        let req = state_b.stream_read_exact(stream_b_to_a, 4).await.unwrap();
+        assert_eq!(req, b"ping");
+        state_b
+            .stream_write_all(stream_b_to_a, b"pong".to_vec())
+            .await
+            .unwrap();
+    };
+
+    join(ping, pong).await;
+
+    state_a.stream_close(stream_a_to_b).await.unwrap();
+    state_b.stream_close(stream_b_to_a).await.unwrap();
 }
 
 async fn setup() -> (TempDir, State) {

@@ -1966,9 +1966,9 @@ impl State {
     ///
     /// Returns `None` if QUIC IPv4 endpoint isn't bound (see [Self::session_bind_network]).
     #[api]
-    pub fn session_open_socket_v4(&self) -> Option<SocketHandle> {
+    pub async fn session_open_socket_v4(&self) -> Option<SocketHandle> {
         let socket = self.network.open_udp_side_channel_v4()?;
-        Some(self.sockets.insert(socket))
+        Some(self.sockets.insert(socket).await)
     }
 
     /// Opens a side channel to the underlying IPv6 UDP socket. The side channel is used to
@@ -1977,9 +1977,9 @@ impl State {
     ///
     /// Returns `None` if QUIC IPv6 endpoint isn't bound (see [Self::session_bind_network]).
     #[api]
-    pub fn session_open_socket_v6(&self) -> Option<SocketHandle> {
+    pub async fn session_open_socket_v6(&self) -> Option<SocketHandle> {
         let socket = self.network.open_udp_side_channel_v6()?;
-        Some(self.sockets.insert(socket))
+        Some(self.sockets.insert(socket).await)
     }
 
     #[api]
@@ -2006,13 +2006,13 @@ impl State {
     }
 
     #[api]
-    pub fn socket_close(&self, socket: SocketHandle) {
-        self.sockets.remove(socket);
+    pub async fn socket_close(&self, socket: SocketHandle) {
+        self.sockets.remove(socket).await;
     }
 
     #[api]
-    /// Opens raw byte streams to the given peer, bound to the given topic.
-    pub fn session_open_stream(
+    /// Opens a raw byte streams to the given peer, bound to the given topic.
+    pub async fn session_open_stream(
         &self,
         addr: PeerAddr,
         topic_id: TopicId,
@@ -2021,26 +2021,32 @@ impl State {
             .network
             .open_stream(addr, topic_id)
             .ok_or(Error::NotFound)?;
-        let handle = self.streams.insert(send_stream, recv_stream);
+        let handle = self.streams.insert(send_stream, recv_stream).await;
 
         Ok(handle)
     }
 
+    /// Reads exactly the given number of bytes from the given raw byte stream.
     #[api]
-    pub async fn stream_read(&self, stream: StreamHandle, len: u64) -> Result<Vec<u8>, Error> {
+    pub async fn stream_read_exact(
+        &self,
+        stream: StreamHandle,
+        len: u64,
+    ) -> Result<Vec<u8>, Error> {
         let mut buf = vec![0; len as usize];
-        let len = self.streams.read(stream, &mut buf).await?;
+        let len = self.streams.read_exact(stream, &mut buf).await?;
         buf.truncate(len);
 
         Ok(buf)
     }
 
+    /// Writes the whole buffer to the given raw byte stream.
     #[api]
-    pub async fn stream_write(&self, stream: StreamHandle, buf: Vec<u8>) -> Result<u64, Error> {
-        let len = self.streams.write(stream, &buf).await?;
-        Ok(len as u64)
+    pub async fn stream_write_all(&self, stream: StreamHandle, buf: Vec<u8>) -> Result<(), Error> {
+        Ok(self.streams.write_all(stream, &buf).await?)
     }
 
+    /// Gracefully closes the given raw byte stream.
     #[api]
     pub async fn stream_close(&self, stream: StreamHandle) -> Result<(), Error> {
         Ok(self.streams.close(stream).await?)
