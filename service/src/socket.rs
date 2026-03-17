@@ -33,6 +33,8 @@ impl SocketSet {
     }
 
     pub fn insert(&self, socket: UdpSocket) -> SocketHandle {
+        // Note this isn't actually blocking because any existing readers are immediately
+        // interrupted and the writers don't block while holding the write lock.
         let handle = self.inner.blocking_write().insert(socket);
         SocketHandle(handle)
     }

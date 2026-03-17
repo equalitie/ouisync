@@ -1,45 +1,41 @@
-use std::{
-    ops::{Deref, DerefMut},
-    pin::Pin,
-    sync::atomic::{AtomicUsize, Ordering},
-    task::{Context, Poll, ready},
-};
+use std::ops::{Deref, DerefMut};
 
-use pin_project_lite::pin_project;
-use tokio::sync::{Notify, RwLock, RwLockReadGuard, RwLockWriteGuard, futures::Notified};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use crate::async_counter::{AsyncCounter, AsyncCounterFuture, AsyncCounterGuard};
 
 /// Async read-write lock which allows readers to be notified about any interested writer so that
 /// they can cooperatively yield the lock to them.
 pub(crate) struct CoopRwLock<T> {
     inner: RwLock<T>,
-    interest: WriteInterest,
+    write_interests: AsyncCounter,
 }
 
 impl<T> CoopRwLock<T> {
     pub fn new(value: T) -> Self {
         Self {
             inner: RwLock::new(value),
-            interest: WriteInterest::new(),
+            write_interests: AsyncCounter::new(),
         }
     }
 
     /// Acquires a read (shared) access to this lock. Returns a RAII guard that releases the lock on
     /// drop and also a future that can be awaited to get notified about any interested writers.
-    pub async fn read(&self) -> (CoopRwLockReadGuard<'_, T>, WriteInterested<'_>) {
-        let interested = self.interest.wait_not_interested().await;
-
+    pub async fn read(&self) -> (CoopRwLockReadGuard<'_, T>, AsyncCounterFuture<'_>) {
         let inner = self.inner.read().await;
         let inner = CoopRwLockReadGuard { inner };
+
+        let interested = self.write_interests.wait_nonzero();
 
         (inner, interested)
     }
 
     /// Acquires a write (exclusive) access to this lock. If any read locks are currently being
-    /// held, they get notified about this write attempt so they can decide to release the lock and
-    /// yield to this task.
+    /// held, they get notified about this write attempt so they can decide to yield the lock to
+    /// this task.
     #[cfg_attr(not(test), expect(dead_code))]
     pub async fn write(&self) -> CoopRwLockWriteGuard<'_, T> {
-        let interest = self.interest.set_interested();
+        let interest = self.write_interests.scoped_increment();
         let inner = self.inner.write().await;
 
         CoopRwLockWriteGuard { inner, interest }
@@ -47,7 +43,7 @@ impl<T> CoopRwLock<T> {
 
     /// Same as [Self::write] but blocks instead of awaits.
     pub fn blocking_write(&self) -> CoopRwLockWriteGuard<'_, T> {
-        let interest = self.interest.set_interested();
+        let interest = self.write_interests.scoped_increment();
         let inner = self.inner.blocking_write();
 
         CoopRwLockWriteGuard { inner, interest }
@@ -69,7 +65,7 @@ impl<'a, T> Deref for CoopRwLockReadGuard<'a, T> {
 pub(crate) struct CoopRwLockWriteGuard<'a, T> {
     inner: RwLockWriteGuard<'a, T>,
     #[expect(dead_code)]
-    interest: WriteInterestGuard<'a>,
+    interest: AsyncCounterGuard<'a>,
 }
 
 impl<'a, T> Deref for CoopRwLockWriteGuard<'a, T> {
@@ -83,85 +79,6 @@ impl<'a, T> Deref for CoopRwLockWriteGuard<'a, T> {
 impl<'a, T> DerefMut for CoopRwLockWriteGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner.deref_mut()
-    }
-}
-
-// Tracks tasks that want write access to the lock, including the one already holding the lock
-// (if any).
-struct WriteInterest {
-    count: AtomicUsize,
-    notify: Notify,
-}
-
-impl WriteInterest {
-    fn new() -> Self {
-        Self {
-            count: AtomicUsize::new(0),
-            notify: Notify::new(),
-        }
-    }
-
-    // Mark this task as being interested in write access to the lock. Returns a RAII guard that
-    // marks the task as no longer interested on drop.
-    fn set_interested(&self) -> WriteInterestGuard<'_> {
-        self.count.fetch_add(1, Ordering::Acquire);
-        self.notify.notify_waiters();
-
-        WriteInterestGuard(self)
-    }
-
-    // Waits until no tasks are interested in write access to the lock. Returns a future that can be
-    // awaited until some task becomes interested in write access again.
-    async fn wait_not_interested(&self) -> WriteInterested<'_> {
-        loop {
-            let notified = self.notify.notified();
-
-            if self.count.load(Ordering::Relaxed) == 0 {
-                break WriteInterested {
-                    count: &self.count,
-                    notify: &self.notify,
-                    notified,
-                };
-            }
-
-            notified.await;
-        }
-    }
-}
-
-struct WriteInterestGuard<'a>(&'a WriteInterest);
-
-impl Drop for WriteInterestGuard<'_> {
-    fn drop(&mut self) {
-        self.0.count.fetch_sub(1, Ordering::Release);
-        self.0.notify.notify_waiters();
-    }
-}
-
-pin_project! {
-    /// Future that resolves when any task becomes interested in write access to the lock.
-    pub(crate) struct WriteInterested<'a> {
-        count: &'a AtomicUsize,
-        notify: &'a Notify,
-        #[pin]
-        notified: Notified<'a>,
-    }
-}
-
-impl Future for WriteInterested<'_> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
-
-        loop {
-            if this.count.load(Ordering::Relaxed) > 0 {
-                break Poll::Ready(());
-            } else {
-                ready!(this.notified.as_mut().poll(cx));
-                this.notified.set(this.notify.notified());
-            }
-        }
     }
 }
 

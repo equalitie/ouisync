@@ -4,6 +4,7 @@ pub mod logger;
 pub mod protocol;
 pub mod transport;
 
+mod async_counter;
 mod config_keys;
 mod config_migration;
 mod config_store;
