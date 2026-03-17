@@ -1,6 +1,9 @@
-use std::io;
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    io,
+};
 
-use ouisync::{RecvStream, SendStream};
+use ouisync::{Network, PeerAddr, RecvStream, SendStream, TopicId};
 use ouisync_macros::api;
 use serde::{Deserialize, Serialize};
 use slab::Slab;
@@ -18,24 +21,49 @@ use crate::coop_rw_lock::CoopRwLock;
 pub struct StreamHandle(usize);
 
 pub(crate) struct StreamSet {
-    inner: CoopRwLock<Slab<(Mutex<SendStream>, Mutex<RecvStream>)>>,
+    inner: CoopRwLock<Inner>,
 }
 
 impl StreamSet {
     pub fn new() -> Self {
         Self {
-            inner: CoopRwLock::new(Slab::new()),
+            inner: CoopRwLock::new(Inner::default()),
         }
     }
 
     /// Inserts new streams into the set, returning a handle to them.
-    pub async fn insert(&self, send_stream: SendStream, recv_stream: RecvStream) -> StreamHandle {
-        StreamHandle(
-            self.inner
-                .write()
-                .await
-                .insert((Mutex::new(send_stream), Mutex::new(recv_stream))),
-        )
+    pub async fn insert(
+        &self,
+        network: &Network,
+        addr: PeerAddr,
+        topic_id: TopicId,
+    ) -> io::Result<StreamHandle> {
+        let mut inner = self.inner.write().await;
+        let inner = &mut *inner;
+
+        let key = StreamKey(addr, topic_id);
+
+        match inner.index.entry(key) {
+            Entry::Occupied(_) => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "stream already exists",
+            )),
+            Entry::Vacant(entry) => {
+                let (send, recv) = network.open_stream(addr, topic_id).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        format!("not connected: {}", addr),
+                    )
+                })?;
+                let send = Mutex::new(send);
+                let recv = Mutex::new(recv);
+
+                let handle = inner.streams.insert(StreamHolder { key, send, recv });
+                entry.insert(handle);
+
+                Ok(StreamHandle(handle))
+            }
+        }
     }
 
     /// Read bytes from the recv stream corresponding to `handle` into `buf`. Returns the number of bytes
@@ -44,9 +72,10 @@ impl StreamSet {
         loop {
             let (inner, wants_write) = self.inner.read().await;
             let mut stream = inner
+                .streams
                 .get(handle.0)
                 .ok_or_else(stream_not_found)?
-                .1
+                .recv
                 .lock()
                 .await;
 
@@ -80,9 +109,10 @@ impl StreamSet {
         loop {
             let (inner, wants_write) = self.inner.read().await;
             let mut stream = inner
+                .streams
                 .get(handle.0)
                 .ok_or_else(stream_not_found)?
-                .0
+                .send
                 .lock()
                 .await;
 
@@ -112,16 +142,36 @@ impl StreamSet {
 
     /// Close the send and recv streams corresponding to `handle`.
     pub async fn close(&self, handle: StreamHandle) -> io::Result<()> {
-        self.inner
-            .write()
-            .await
-            .try_remove(handle.0)
-            .ok_or_else(stream_not_found)?
-            .0
-            .into_inner()
-            .shutdown()
-            .await
+        let stream = {
+            let mut inner = self.inner.write().await;
+
+            let StreamHolder { key, send, .. } = inner
+                .streams
+                .try_remove(handle.0)
+                .ok_or_else(stream_not_found)?;
+
+            inner.index.remove(&key);
+
+            send
+        };
+
+        stream.into_inner().shutdown().await
     }
+}
+
+#[derive(Default)]
+struct Inner {
+    streams: Slab<StreamHolder>,
+    index: HashMap<StreamKey, usize>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+struct StreamKey(PeerAddr, TopicId);
+
+struct StreamHolder {
+    key: StreamKey,
+    send: Mutex<SendStream>,
+    recv: Mutex<RecvStream>,
 }
 
 fn stream_not_found() -> io::Error {

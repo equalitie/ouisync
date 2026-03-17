@@ -2017,13 +2017,7 @@ impl State {
         addr: PeerAddr,
         topic_id: TopicId,
     ) -> Result<StreamHandle, Error> {
-        let (send_stream, recv_stream) = self
-            .network
-            .open_stream(addr, topic_id)
-            .ok_or(Error::NotFound)?;
-        let handle = self.streams.insert(send_stream, recv_stream).await;
-
-        Ok(handle)
+        Ok(self.streams.insert(&self.network, addr, topic_id).await?)
     }
 
     /// Reads exactly the given number of bytes from the given raw byte stream.

@@ -734,8 +734,7 @@ async fn streams() {
             loop {
                 match state.session_open_stream(addr, topic_id).await {
                     Ok(handle) => break handle,
-                    // Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotConnected => (),
-                    Err(Error::NotFound) => (),
+                    Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotConnected => (),
                     Err(error) => panic!("unexpected error: {error:?}"),
                 }
 
