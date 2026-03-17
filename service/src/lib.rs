@@ -19,6 +19,7 @@ mod network;
 mod repository;
 mod socket;
 mod state;
+mod stream;
 mod subscription;
 mod tls;
 

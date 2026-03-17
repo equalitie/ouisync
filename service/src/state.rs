@@ -20,6 +20,7 @@ use crate::{
     protocol::{DirectoryEntry, MessageId, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{self, RepositoryHandle, RepositoryHolder, RepositorySet},
     socket::{SocketHandle, SocketRecv, SocketSet},
+    stream::{StreamHandle, StreamSet},
     tls::TlsConfig,
     transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
 };
@@ -28,6 +29,7 @@ use ouisync::{
     Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
     NatBehavior, Network, NetworkEventReceiver, PeerAddr, PeerInfo, Progress, PublicRuntimeId,
     Registration, Repository, RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize,
+    TopicId,
     crypto::{Password, PasswordSalt, cipher::SecretKey},
 };
 use ouisync_macros::api;
@@ -76,6 +78,7 @@ pub(crate) struct State {
     repos: RepositorySet,
     files: FileSet,
     sockets: SocketSet,
+    streams: StreamSet,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
     remote_server: Mutex<Option<Arc<RemoteServer>>>,
@@ -152,6 +155,7 @@ impl State {
             repos: RepositorySet::new(),
             files: FileSet::new(),
             sockets: SocketSet::new(),
+            streams: StreamSet::new(),
             remote_server: Mutex::new(remote_server.map(Arc::new)),
             metrics_server,
         };
@@ -1963,7 +1967,7 @@ impl State {
     /// Returns `None` if QUIC IPv4 endpoint isn't bound (see [Self::session_bind_network]).
     #[api]
     pub fn session_open_socket_v4(&self) -> Option<SocketHandle> {
-        let socket = self.network.udp_side_channel_v4()?;
+        let socket = self.network.open_udp_side_channel_v4()?;
         Some(self.sockets.insert(socket))
     }
 
@@ -1974,7 +1978,7 @@ impl State {
     /// Returns `None` if QUIC IPv6 endpoint isn't bound (see [Self::session_bind_network]).
     #[api]
     pub fn session_open_socket_v6(&self) -> Option<SocketHandle> {
-        let socket = self.network.udp_side_channel_v6()?;
+        let socket = self.network.open_udp_side_channel_v6()?;
         Some(self.sockets.insert(socket))
     }
 
@@ -1992,11 +1996,11 @@ impl State {
     pub async fn socket_recv_from(
         &self,
         socket: SocketHandle,
-        max_size: u64,
+        len: u64,
     ) -> Result<SocketRecv, Error> {
-        let mut data = vec![0; max_size as usize];
-        let (actual_size, addr) = self.sockets.recv_from(socket, &mut data).await?;
-        data.truncate(actual_size);
+        let mut data = vec![0; len as usize];
+        let (len, addr) = self.sockets.recv_from(socket, &mut data).await?;
+        data.truncate(len);
 
         Ok(SocketRecv { data, addr })
     }
@@ -2004,6 +2008,42 @@ impl State {
     #[api]
     pub fn socket_close(&self, socket: SocketHandle) {
         self.sockets.remove(socket);
+    }
+
+    #[api]
+    /// Opens raw byte streams to the given peer, bound to the given topic.
+    pub fn session_open_stream(
+        &self,
+        addr: PeerAddr,
+        topic_id: TopicId,
+    ) -> Result<StreamHandle, Error> {
+        let (send_stream, recv_stream) = self
+            .network
+            .open_stream(addr, topic_id)
+            .ok_or(Error::NotFound)?;
+        let handle = self.streams.insert(send_stream, recv_stream);
+
+        Ok(handle)
+    }
+
+    #[api]
+    pub async fn stream_read(&self, stream: StreamHandle, len: u64) -> Result<Vec<u8>, Error> {
+        let mut buf = vec![0; len as usize];
+        let len = self.streams.read(stream, &mut buf).await?;
+        buf.truncate(len);
+
+        Ok(buf)
+    }
+
+    #[api]
+    pub async fn stream_write(&self, stream: StreamHandle, buf: Vec<u8>) -> Result<u64, Error> {
+        let len = self.streams.write(stream, &buf).await?;
+        Ok(len as u64)
+    }
+
+    #[api]
+    pub async fn stream_close(&self, stream: StreamHandle) -> Result<(), Error> {
+        Ok(self.streams.close(stream).await?)
     }
 
     pub async fn set_all_repositories_sync_enabled(&self, enabled: bool) -> Result<(), Error> {

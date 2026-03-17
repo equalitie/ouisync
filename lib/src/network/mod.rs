@@ -43,7 +43,10 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
-pub use net::stun::NatBehavior;
+pub use net::{
+    bus::{BusRecvStream as RecvStream, BusSendStream as SendStream, TopicId},
+    stun::NatBehavior,
+};
 
 use self::{
     choke::Choker,
@@ -93,12 +96,6 @@ use tokio::{
     time::Duration,
 };
 use tracing::{Instrument, Span};
-
-/// Stream for sending raw bytes to a peer.
-pub type RawSendStream = net::bus::BusSendStream;
-
-/// Stream for receiving raw bytes from a peer.
-pub type RawRecvStream = net::bus::BusRecvStream;
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -396,12 +393,12 @@ impl Network {
         }
     }
 
-    /// Returns a side channel for the underlying IPv4 UDP socket, or `None` if IPv4 QUIC stack
-    /// isn't configured.
+    /// Opens a side channel for the underlying IPv4 UDP socket, or `None` if IPv4 QUIC stack isn't
+    /// configured.
     ///
     /// The side channel is used to send/receive raw UDP datagrams on the same socket that the sync
     /// protocol uses.
-    pub fn udp_side_channel_v4(&self) -> Option<quic::SideChannel> {
+    pub fn open_udp_side_channel_v4(&self) -> Option<quic::SideChannel> {
         self.inner
             .gateway
             .udp_side_channel_maker_v4()
@@ -409,12 +406,12 @@ impl Network {
             .map(|m| m.make())
     }
 
-    /// Returns a side channel for the underlying IPv6 UDP socket, or `None` if IPv6 QUIC stack
-    /// isn't configured.
+    /// Opens a side channel for the underlying IPv6 UDP socket, or `None` if IPv6 QUIC stack isn't
+    /// configured.
     ///
     /// The side channel is used to send/receive raw UDP datagrams on the same socket that the sync
     /// protocol uses.
-    pub fn udp_side_channel_v6(&self) -> Option<quic::SideChannel> {
+    pub fn open_udp_side_channel_v6(&self) -> Option<quic::SideChannel> {
         self.inner
             .gateway
             .udp_side_channel_maker_v4()
@@ -426,11 +423,11 @@ impl Network {
     /// send/recv arbitrary data to the peer, outside of the ouisync protocol.
     ///
     /// Returns `None` if no active connection to the peer exists.
-    pub fn open_raw_stream(
+    pub fn open_stream(
         &self,
         addr: PeerAddr,
-        topic: &[u8],
-    ) -> Option<(RawSendStream, RawRecvStream)> {
+        topic_id: TopicId,
+    ) -> Option<(SendStream, RecvStream)> {
         let key = self.inner.connections.get_peer_key(addr)?;
         Some(
             self.inner
@@ -440,7 +437,7 @@ impl Network {
                 .peers
                 .as_ref()?
                 .get(key)?
-                .open_raw_stream(topic),
+                .open_stream(topic_id),
         )
     }
 

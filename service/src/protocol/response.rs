@@ -2,6 +2,7 @@ use crate::{
     file::FileHandle,
     repository::RepositoryHandle,
     socket::{SocketHandle, SocketRecv},
+    stream::StreamHandle,
 };
 use ouisync::{
     AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress,

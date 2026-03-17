@@ -160,13 +160,11 @@ impl MessageBroker {
     }
 
     /// Opens raw byte streams on the underlying connection, bound to the given topic.
-    pub fn open_raw_stream(
+    pub fn open_stream(
         &self,
-        topic: &[u8],
+        topic_id: TopicId,
     ) -> (net::bus::BusSendStream, net::bus::BusRecvStream) {
-        self.dispatcher
-            .bus()
-            .create_topic(TopicId::from_slice_lossy(topic))
+        self.dispatcher.bus().create_topic(topic_id)
     }
 
     pub async fn shutdown(self) {

@@ -1,6 +1,9 @@
-use crate::{file::FileHandle, repository::RepositoryHandle, socket::SocketHandle};
+use crate::{
+    file::FileHandle, repository::RepositoryHandle, socket::SocketHandle, stream::StreamHandle,
+};
 use ouisync::{
     AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
+    TopicId,
     crypto::{Password, PasswordSalt},
 };
 use ouisync_macros::api;

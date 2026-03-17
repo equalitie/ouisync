@@ -1,9 +1,10 @@
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct TopicId([u8; Self::SIZE]);
+pub struct TopicId(#[serde(with = "serde_bytes")] [u8; Self::SIZE]);
 
 impl TopicId {
     pub const SIZE: usize = 32;

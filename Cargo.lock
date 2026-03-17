@@ -2937,6 +2937,7 @@ dependencies = [
  "rand 0.8.5",
  "rcgen",
  "serde",
+ "serde_bytes",
  "similar-asserts",
  "slab",
  "socket2 0.6.2",
