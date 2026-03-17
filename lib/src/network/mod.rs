@@ -94,6 +94,12 @@ use tokio::{
 };
 use tracing::{Instrument, Span};
 
+/// Stream for sending raw bytes to a peer.
+pub type RawSendStream = net::bus::BusSendStream;
+
+/// Stream for receiving raw bytes from a peer.
+pub type RawRecvStream = net::bus::BusRecvStream;
+
 pub struct Network {
     inner: Arc<Inner>,
     // We keep tasks here instead of in Inner because we want them to be
@@ -414,6 +420,28 @@ impl Network {
             .udp_side_channel_maker_v4()
             .as_ref()
             .map(|m| m.make())
+    }
+
+    /// Opens raw byte stream to the given peer, bound to the given topic. This can be used to
+    /// send/recv arbitrary data to the peer, outside of the ouisync protocol.
+    ///
+    /// Returns `None` if no active connection to the peer exists.
+    pub fn open_raw_stream(
+        &self,
+        addr: PeerAddr,
+        topic: &[u8],
+    ) -> Option<(RawSendStream, RawRecvStream)> {
+        let key = self.inner.connections.get_peer_key(addr)?;
+        Some(
+            self.inner
+                .registry
+                .lock()
+                .unwrap()
+                .peers
+                .as_ref()?
+                .get(key)?
+                .open_raw_stream(topic),
+        )
     }
 
     /// Performs explicit DHT lookup or announce for the given infohash.
@@ -899,9 +927,6 @@ impl Inner {
             return false;
         }
 
-        permit.mark_as_active(that_runtime_id);
-        monitor.mark_as_active(that_runtime_id);
-
         let closed = connection.closed();
 
         let key = {
@@ -947,6 +972,9 @@ impl Inner {
 
             peers.insert(peer)
         };
+
+        permit.mark_as_active(that_runtime_id, key);
+        monitor.mark_as_active(that_runtime_id);
 
         // Wait until the connection gets closed, then remove the `MessageBroker` instance. Using a
         // RAII to also remove it in case this function gets cancelled.

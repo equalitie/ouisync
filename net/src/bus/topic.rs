@@ -19,6 +19,17 @@ impl TopicId {
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_slice()
     }
+
+    /// Creates topic id from the given byte slice. If the slice is longer than [`Self::SIZE`], it's
+    /// truncated. If it's shorter, it's filled in with zeroes.
+    pub fn from_slice_lossy(slice: &[u8]) -> Self {
+        let mut array = [0; Self::SIZE];
+        let n = slice.len().min(Self::SIZE);
+
+        array.copy_from_slice(&slice[..n]);
+
+        Self(array)
+    }
 }
 
 impl From<[u8; Self::SIZE]> for TopicId {

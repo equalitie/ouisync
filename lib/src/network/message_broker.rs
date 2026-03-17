@@ -77,7 +77,7 @@ impl MessageBroker {
         }
     }
 
-    /// Try to establish a link between a local repository and a remote repository. The remote
+    /// Tries to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
     pub fn create_link(
@@ -153,10 +153,20 @@ impl MessageBroker {
         task::spawn(task);
     }
 
-    /// Destroy the link between a local repository with the specified id hash and its remote
+    /// Destroys the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
     pub fn destroy_link(&mut self, id: &RepositoryId) {
         self.links.remove(id);
+    }
+
+    /// Opens raw byte streams on the underlying connection, bound to the given topic.
+    pub fn open_raw_stream(
+        &self,
+        topic: &[u8],
+    ) -> (net::bus::BusSendStream, net::bus::BusRecvStream) {
+        self.dispatcher
+            .bus()
+            .create_topic(TopicId::from_slice_lossy(topic))
     }
 
     pub async fn shutdown(self) {

@@ -47,7 +47,7 @@ impl ConnectionSet {
 
                     entry.insert(ConnectionData {
                         id,
-                        state: PeerState::Known,
+                        state: InnerPeerState::Known,
                         source,
                         stats_tracker: StatsTracker::default(),
                         on_release: DropAwaitable::new(),
@@ -82,6 +82,23 @@ impl ConnectionSet {
     }
 
     pub fn get_peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
+        self.with(addr, |data| data.peer_info(addr))
+    }
+
+    pub fn get_peer_key(&self, addr: PeerAddr) -> Option<usize> {
+        self.with(addr, |data| match data.state {
+            InnerPeerState::Active { peer_key, .. } => Some(peer_key),
+            InnerPeerState::Known | InnerPeerState::Connecting | InnerPeerState::Handshaking => {
+                None
+            }
+        })
+        .flatten()
+    }
+
+    fn with<F, R>(&self, addr: PeerAddr, f: F) -> Option<R>
+    where
+        F: FnOnce(&ConnectionData) -> R,
+    {
         let connections = self.connections.borrow();
 
         connections
@@ -95,7 +112,7 @@ impl ConnectionSet {
                     dir: ConnectionDirection::Outgoing,
                 })
             })
-            .map(|data| data.peer_info(addr))
+            .map(f)
     }
 
     pub fn subscribe(&self) -> watch::Receiver<HashMap<ConnectionKey, ConnectionData>> {
@@ -152,21 +169,22 @@ pub(super) struct ConnectionPermit {
 
 impl ConnectionPermit {
     pub fn mark_as_connecting(&self) {
-        self.set_state(PeerState::Connecting);
+        self.set_state(InnerPeerState::Connecting);
     }
 
     pub fn mark_as_handshaking(&self) {
-        self.set_state(PeerState::Handshaking);
+        self.set_state(InnerPeerState::Handshaking);
     }
 
-    pub fn mark_as_active(&self, runtime_id: PublicRuntimeId) {
-        self.set_state(PeerState::Active {
+    pub fn mark_as_active(&self, runtime_id: PublicRuntimeId, peer_key: usize) {
+        self.set_state(InnerPeerState::Active {
             id: runtime_id,
             since: SystemTime::now(),
+            peer_key,
         });
     }
 
-    fn set_state(&self, new_state: PeerState) {
+    fn set_state(&self, new_state: InnerPeerState) {
         self.connections.send_if_modified(|connections| {
             // unwrap is ok because if `self` exists then the entry should exists as well.
             let peer = connections.get_mut(&self.key).unwrap();
@@ -182,10 +200,7 @@ impl ConnectionPermit {
 
     /// Returns a `AwaitDrop` that gets notified when this permit gets released.
     pub fn released(&self) -> AwaitDrop {
-        // We can't use unwrap here because this method is used in `ConnectionPermitHalf` which can
-        // outlive the entry if the other half gets dropped.
         self.with(|data| data.on_release.subscribe())
-            .unwrap_or_else(|| DropAwaitable::new().subscribe())
     }
 
     pub fn addr(&self) -> PeerAddr {
@@ -197,20 +212,19 @@ impl ConnectionPermit {
     }
 
     pub fn source(&self) -> PeerSource {
-        // unwrap is ok because if `self` exists then the entry should exists as well.
-        self.with(|data| data.source).unwrap()
+        self.with(|data| data.source)
     }
 
     pub fn byte_counters(&self) -> Arc<ByteCounters> {
         self.with(|data| data.stats_tracker.bytes.clone())
-            .unwrap_or_default()
     }
 
-    fn with<F, R>(&self, f: F) -> Option<R>
+    fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&ConnectionData) -> R,
     {
-        self.connections.borrow().get(&self.key).map(f)
+        // unwrap is ok because if `self` exists then the entry exists as well.
+        f(self.connections.borrow().get(&self.key).unwrap())
     }
 }
 
@@ -248,7 +262,7 @@ pub(super) struct ConnectionKey {
 
 pub(super) struct ConnectionData {
     id: ConnectionId,
-    state: PeerState,
+    state: InnerPeerState,
     source: PeerSource,
     stats_tracker: StatsTracker,
     on_release: DropAwaitable,
@@ -261,8 +275,34 @@ impl ConnectionData {
         PeerInfo {
             addr,
             source: self.source,
-            state: self.state,
+            state: self.state.to_peer_state(),
             stats,
+        }
+    }
+}
+
+#[derive(Eq, PartialEq)]
+enum InnerPeerState {
+    Known,
+    Connecting,
+    Handshaking,
+    Active {
+        id: PublicRuntimeId,
+        since: SystemTime,
+        peer_key: usize,
+    },
+}
+
+impl InnerPeerState {
+    fn to_peer_state(&self) -> PeerState {
+        match self {
+            Self::Known => PeerState::Known,
+            Self::Connecting => PeerState::Connecting,
+            Self::Handshaking => PeerState::Handshaking,
+            Self::Active { id, since, .. } => PeerState::Active {
+                id: *id,
+                since: *since,
+            },
         }
     }
 }
