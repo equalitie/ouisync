@@ -534,13 +534,6 @@ impl Lookup {
         announce: bool,
         event_tx: mpsc::UnboundedSender<DhtEvent>,
     ) {
-        // FIXME: don't send the already found peers
-        for peer in self.seen_peers.collect() {
-            event_tx.send(DhtEvent::PeerFound(peer.clone())).ok();
-        }
-
-        event_tx.send(DhtEvent::RoundEnded).ok();
-
         self.requests
             .lock()
             .unwrap()
