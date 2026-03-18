@@ -43,6 +43,7 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
+use dht_discovery::DhtEvent;
 pub use net::{
     bus::{BusRecvStream as RecvStream, BusSendStream as SendStream, TopicId},
     stun::NatBehavior,
@@ -441,7 +442,8 @@ impl Network {
         )
     }
 
-    /// Performs explicit DHT lookup or announce for the given infohash.
+    /// Performs explicit DHT lookup or announce for the given infohash and returns a stream of the
+    /// discovered peer addresses. It will not automatically connect to them.
     pub fn dht_lookup(&self, info_hash: InfoHash, announce: bool) -> DhtLookup {
         DhtLookup::start(&self.inner.dht_discovery, info_hash, announce)
     }
@@ -538,7 +540,7 @@ struct Inner {
     port_forwarder_state: BlockingMutex<ComponentState<PortMappings>>,
     local_discovery_state: BlockingMutex<ComponentState<ScopedAbortHandle>>,
     dht_discovery: DhtDiscovery,
-    dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
+    dht_discovery_tx: mpsc::UnboundedSender<DhtEvent>,
     pex_discovery: PexDiscovery,
     stun_clients: StunClients,
     connections: ConnectionSet,
@@ -722,13 +724,18 @@ impl Inner {
             .start_lookup(info_hash, true, self.dht_discovery_tx.clone())
     }
 
-    async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {
-        while let Some(seen_peer) = discovery_rx.recv().await {
+    async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<DhtEvent>) {
+        while let Some(event) = discovery_rx.recv().await {
             if self.is_shutdown() {
                 break;
             }
 
-            self.spawn(self.clone().handle_peer_found(seen_peer, PeerSource::Dht));
+            let peer = match event {
+                DhtEvent::PeerFound(peer) => peer,
+                DhtEvent::RoundEnded => continue,
+            };
+
+            self.spawn(self.clone().handle_peer_found(peer, PeerSource::Dht));
         }
     }
 

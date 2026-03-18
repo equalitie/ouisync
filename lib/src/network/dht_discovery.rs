@@ -12,10 +12,11 @@ use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use state_monitor::StateMonitor;
 use std::{
-    collections::{HashMap, HashSet, hash_map},
+    collections::{HashMap, HashSet},
     future::pending,
     io,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
+    pin::pin,
     sync::{
         Arc, OnceLock, Weak,
         atomic::{AtomicU64, Ordering},
@@ -51,6 +52,11 @@ pub trait DhtContactsStoreTrait: Sync + Send + 'static {
     async fn load_v6(&self) -> io::Result<HashSet<SocketAddrV6>>;
     async fn store_v4(&self, contacts: HashSet<SocketAddrV4>) -> io::Result<()>;
     async fn store_v6(&self, contacts: HashSet<SocketAddrV6>) -> io::Result<()>;
+}
+
+pub(super) enum DhtEvent {
+    PeerFound(SeenPeer),
+    RoundEnded,
 }
 
 pub(super) struct DhtDiscovery {
@@ -126,21 +132,15 @@ impl DhtDiscovery {
         &self,
         info_hash: InfoHash,
         announce: bool,
-        found_peers_tx: mpsc::UnboundedSender<SeenPeer>,
+        event_tx: mpsc::UnboundedSender<DhtEvent>,
     ) -> LookupRequest {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
-        let request = LookupRequest {
-            id,
-            info_hash,
-            lookups: Arc::downgrade(&self.lookups),
-        };
-
-        let mut lookups = self.lookups.lock().unwrap();
-
-        match lookups.entry(info_hash) {
-            hash_map::Entry::Occupied(mut entry) => entry.get_mut().add_request(id, found_peers_tx),
-            hash_map::Entry::Vacant(entry) => {
+        self.lookups
+            .lock()
+            .unwrap()
+            .entry(info_hash)
+            .or_insert_with(|| {
                 let dht_v4 = self
                     .v4
                     .lock()
@@ -153,20 +153,15 @@ impl DhtDiscovery {
                     .unwrap()
                     .fetch(&self.main_monitor, &self.span);
 
-                entry
-                    .insert(Lookup::start(
-                        dht_v4,
-                        dht_v6,
-                        info_hash,
-                        announce,
-                        &self.lookups_monitor,
-                        &self.span,
-                    ))
-                    .add_request(id, found_peers_tx);
-            }
-        }
+                Lookup::start(dht_v4, dht_v6, info_hash, &self.lookups_monitor, &self.span)
+            })
+            .add_request(id, announce, event_tx);
 
-        request
+        LookupRequest {
+            id,
+            info_hash,
+            lookups: Arc::downgrade(&self.lookups),
+        }
     }
 }
 
@@ -201,7 +196,6 @@ impl RestartableDht {
         } else if let Some(maker) = &self.socket_maker {
             let socket = maker.make();
             let dht = MonitoredDht::start(socket, monitor, span, self.contacts_store.clone());
-
             let dht = Arc::new(Some(dht));
 
             self.dht = Arc::downgrade(&dht);
@@ -455,11 +449,15 @@ impl Drop for LookupRequest {
 }
 
 struct Lookup {
-    announce: bool,
     seen_peers: Arc<SeenPeers>,
-    requests: Arc<BlockingMutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
+    requests: Arc<BlockingMutex<HashMap<RequestId, RequestData>>>,
     wake_up_tx: watch::Sender<()>,
     task: Option<ScopedJoinHandle<()>>,
+}
+
+struct RequestData {
+    event_tx: mpsc::UnboundedSender<DhtEvent>,
+    announce: bool,
 }
 
 impl Lookup {
@@ -467,7 +465,6 @@ impl Lookup {
         dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
         dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
-        announce: bool,
         monitor: &StateMonitor,
         span: &Span,
     ) -> Self {
@@ -484,7 +481,6 @@ impl Lookup {
                 dht_v4,
                 dht_v6,
                 info_hash,
-                announce,
                 seen_peers.clone(),
                 requests.clone(),
                 wake_up_rx,
@@ -496,7 +492,6 @@ impl Lookup {
         };
 
         Self {
-            announce,
             seen_peers,
             requests,
             wake_up_tx,
@@ -522,7 +517,6 @@ impl Lookup {
             dht_v4,
             dht_v6,
             info_hash,
-            self.announce,
             self.seen_peers.clone(),
             self.requests.clone(),
             self.wake_up_tx.subscribe(),
@@ -534,12 +528,23 @@ impl Lookup {
         self.wake_up_tx.send(()).ok();
     }
 
-    fn add_request(&mut self, id: RequestId, tx: mpsc::UnboundedSender<SeenPeer>) {
+    fn add_request(
+        &mut self,
+        id: RequestId,
+        announce: bool,
+        event_tx: mpsc::UnboundedSender<DhtEvent>,
+    ) {
+        // FIXME: don't send the already found peers
         for peer in self.seen_peers.collect() {
-            tx.send(peer.clone()).unwrap_or(());
+            event_tx.send(DhtEvent::PeerFound(peer.clone())).ok();
         }
 
-        self.requests.lock().unwrap().insert(id, tx);
+        event_tx.send(DhtEvent::RoundEnded).ok();
+
+        self.requests
+            .lock()
+            .unwrap()
+            .insert(id, RequestData { event_tx, announce });
         // `unwrap_or` because if the network is down, there should be no tasks that listen to this
         // wake up request.
         self.wake_up_tx.send(()).unwrap_or(());
@@ -550,9 +555,8 @@ impl Lookup {
         dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
         dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
-        announce: bool,
         seen_peers: Arc<SeenPeers>,
-        requests: Arc<BlockingMutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
+        requests: Arc<BlockingMutex<HashMap<RequestId, RequestData>>>,
         mut wake_up: watch::Receiver<()>,
         lookups_monitor: &StateMonitor,
         span: &Span,
@@ -581,10 +585,16 @@ impl Lookup {
                 tracing::debug!(?info_hash, "starting search");
                 *state.get() = "making request";
 
-                // find peers for the repo and also announce that we have it.
-                let dhts = dht_v4.iter().chain(dht_v6.iter());
+                // If at least one request wants to announce, we do announce. Otherwise we do only
+                // lookup.
+                let announce = requests
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .any(|request| request.announce);
 
-                let mut peers = Box::pin(stream::iter(dhts).flat_map(|dht| {
+                let dhts = dht_v4.iter().chain(dht_v6.iter());
+                let peers = stream::iter(dhts).flat_map(|dht| {
                     stream::once(async {
                         timeout(Duration::from_secs(10), dht.dht.bootstrapped())
                             .await
@@ -592,16 +602,24 @@ impl Lookup {
                         dht.dht.search(info_hash, announce)
                     })
                     .flatten()
-                }));
+                });
+                let mut peers = pin!(peers);
 
                 *state.get() = "awaiting results";
 
                 while let Some(addr) = peers.next().await {
                     if let Some(peer) = seen_peers.insert(PeerAddr::Quic(addr)) {
-                        for tx in requests.lock().unwrap().values() {
-                            tx.send(peer.clone()).unwrap_or(());
+                        for request in requests.lock().unwrap().values() {
+                            request
+                                .event_tx
+                                .send(DhtEvent::PeerFound(peer.clone()))
+                                .ok();
                         }
                     }
+                }
+
+                for request in requests.lock().unwrap().values() {
+                    request.event_tx.send(DhtEvent::RoundEnded).ok();
                 }
 
                 // sleep a random duration before the next search, but wake up if there is a new
