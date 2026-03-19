@@ -27,6 +27,24 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::FileWrite>(&variant) != nullptr) {
         return std::string_view("FileWrite");
     }
+    if (std::get_if<Request::NetworkSocketClose>(&variant) != nullptr) {
+        return std::string_view("NetworkSocketClose");
+    }
+    if (std::get_if<Request::NetworkSocketRecvFrom>(&variant) != nullptr) {
+        return std::string_view("NetworkSocketRecvFrom");
+    }
+    if (std::get_if<Request::NetworkSocketSendTo>(&variant) != nullptr) {
+        return std::string_view("NetworkSocketSendTo");
+    }
+    if (std::get_if<Request::NetworkStreamClose>(&variant) != nullptr) {
+        return std::string_view("NetworkStreamClose");
+    }
+    if (std::get_if<Request::NetworkStreamReadExact>(&variant) != nullptr) {
+        return std::string_view("NetworkStreamReadExact");
+    }
+    if (std::get_if<Request::NetworkStreamWriteAll>(&variant) != nullptr) {
+        return std::string_view("NetworkStreamWriteAll");
+    }
     if (std::get_if<Request::RepositoryClose>(&variant) != nullptr) {
         return std::string_view("RepositoryClose");
     }
@@ -288,6 +306,15 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionMirrorExists>(&variant) != nullptr) {
         return std::string_view("SessionMirrorExists");
     }
+    if (std::get_if<Request::SessionOpenNetworkSocketV4>(&variant) != nullptr) {
+        return std::string_view("SessionOpenNetworkSocketV4");
+    }
+    if (std::get_if<Request::SessionOpenNetworkSocketV6>(&variant) != nullptr) {
+        return std::string_view("SessionOpenNetworkSocketV6");
+    }
+    if (std::get_if<Request::SessionOpenNetworkStream>(&variant) != nullptr) {
+        return std::string_view("SessionOpenNetworkStream");
+    }
     if (std::get_if<Request::SessionOpenRepository>(&variant) != nullptr) {
         return std::string_view("SessionOpenRepository");
     }
@@ -324,6 +351,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionSetStoreDirs>(&variant) != nullptr) {
         return std::string_view("SessionSetStoreDirs");
     }
+    if (std::get_if<Request::SessionSubscribeToDhtLookup>(&variant) != nullptr) {
+        return std::string_view("SessionSubscribeToDhtLookup");
+    }
     if (std::get_if<Request::SessionSubscribeToNetwork>(&variant) != nullptr) {
         return std::string_view("SessionSubscribeToNetwork");
     }
@@ -349,6 +379,9 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     if (std::get_if<Response::Bytes>(&variant) != nullptr) {
         return std::string_view("Bytes");
     }
+    if (std::get_if<Response::Datagram>(&variant) != nullptr) {
+        return std::string_view("Datagram");
+    }
     if (std::get_if<Response::DirectoryEntries>(&variant) != nullptr) {
         return std::string_view("DirectoryEntries");
     }
@@ -367,6 +400,12 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     if (std::get_if<Response::NetworkEvent>(&variant) != nullptr) {
         return std::string_view("NetworkEvent");
     }
+    if (std::get_if<Response::NetworkSocket>(&variant) != nullptr) {
+        return std::string_view("NetworkSocket");
+    }
+    if (std::get_if<Response::NetworkStream>(&variant) != nullptr) {
+        return std::string_view("NetworkStream");
+    }
     if (std::get_if<Response::None>(&variant) != nullptr) {
         return std::string_view("None");
     }
@@ -378,6 +417,9 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     }
     if (std::get_if<Response::Paths>(&variant) != nullptr) {
         return std::string_view("Paths");
+    }
+    if (std::get_if<Response::PeerAddr>(&variant) != nullptr) {
+        return std::string_view("PeerAddr");
     }
     if (std::get_if<Response::PeerAddrs>(&variant) != nullptr) {
         return std::string_view("PeerAddrs");
@@ -400,9 +442,6 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     if (std::get_if<Response::Repository>(&variant) != nullptr) {
         return std::string_view("Repository");
     }
-    if (std::get_if<Response::RepositoryEvent>(&variant) != nullptr) {
-        return std::string_view("RepositoryEvent");
-    }
     if (std::get_if<Response::SecretKey>(&variant) != nullptr) {
         return std::string_view("SecretKey");
     }
@@ -414,9 +453,6 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     }
     if (std::get_if<Response::StateMonitor>(&variant) != nullptr) {
         return std::string_view("StateMonitor");
-    }
-    if (std::get_if<Response::StateMonitorEvent>(&variant) != nullptr) {
-        return std::string_view("StateMonitorEvent");
     }
     if (std::get_if<Response::Stats>(&variant) != nullptr) {
         return std::string_view("Stats");

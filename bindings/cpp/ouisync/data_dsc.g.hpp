@@ -322,6 +322,14 @@ template<> struct describe::Struct<Progress> : std::true_type {
     }
 };
 
+template<> struct describe::Struct<TopicId> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer& o, TopicId& v) {
+        o.field(v.value);
+    }
+};
+
 template<> struct describe::Enum<NatBehavior> : std::true_type {
     static bool is_valid(uint8_t v) {
         static const uint8_t values[] = {
@@ -369,10 +377,9 @@ template<> struct describe::Enum<error::Service> : std::true_type {
             static_cast<uint16_t>(error::Service::service_already_running),
             static_cast<uint16_t>(error::Service::store_dir_unspecified),
             static_cast<uint16_t>(error::Service::mount_dir_unspecified),
-            static_cast<uint16_t>(error::Service::no_vfs),
             static_cast<uint16_t>(error::Service::other),
         };
-        for (size_t i = 0; i != 32; ++i) {
+        for (size_t i = 0; i != 31; ++i) {
             if (v == values[i]) return true;
         }
         return false;
@@ -453,6 +460,31 @@ template<> struct describe::Struct<RepositoryHandle> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
     static void describe(Observer& o, RepositoryHandle& v) {
+        o.field(v.value);
+    }
+};
+
+template<> struct describe::Struct<Datagram> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Datagram& v) {
+        o.field(v.data);
+        o.field(v.addr);
+    }
+};
+
+template<> struct describe::Struct<NetworkSocketHandle> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer& o, NetworkSocketHandle& v) {
+        o.field(v.value);
+    }
+};
+
+template<> struct describe::Struct<NetworkStreamHandle> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer& o, NetworkStreamHandle& v) {
         o.field(v.value);
     }
 };

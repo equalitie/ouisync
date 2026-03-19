@@ -910,6 +910,141 @@ public:
 
 };
 
+class NetworkSocket {
+private:
+    friend class File;
+    friend class Repository;
+    friend class Session;
+    friend class RepositorySubscription;
+    template<class, class> friend struct detail::ConvertResponse;
+
+    std::shared_ptr<Client> client;
+    NetworkSocketHandle handle;
+
+    explicit NetworkSocket(std::shared_ptr<Client> client, NetworkSocketHandle handle) :
+        client(std::move(client)),
+        handle(std::move(handle))
+    {}
+
+public:
+    NetworkSocket() {}
+
+public:
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
+    >
+    auto close(
+        CompletionToken completion_token
+    ) {
+        auto request = Request::NetworkSocketClose{
+            handle,
+        };
+        return client->invoke<Response::None, void>(std::move(request), std::move(completion_token));
+    }
+
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<Datagram>::type> CompletionToken
+    >
+    auto recv_from(
+        uint64_t len,
+        CompletionToken completion_token
+    ) {
+        auto request = Request::NetworkSocketRecvFrom{
+            handle,
+            len,
+        };
+        return client->invoke<Response::Datagram, Datagram>(std::move(request), std::move(completion_token));
+    }
+
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<uint64_t>::type> CompletionToken
+    >
+    auto send_to(
+        const std::vector<uint8_t>& data,
+        const std::string& addr,
+        CompletionToken completion_token
+    ) {
+        auto request = Request::NetworkSocketSendTo{
+            handle,
+            data,
+            addr,
+        };
+        return client->invoke<Response::U64, uint64_t>(std::move(request), std::move(completion_token));
+    }
+
+};
+
+class NetworkStream {
+private:
+    friend class File;
+    friend class Repository;
+    friend class Session;
+    friend class RepositorySubscription;
+    template<class, class> friend struct detail::ConvertResponse;
+
+    std::shared_ptr<Client> client;
+    NetworkStreamHandle handle;
+
+    explicit NetworkStream(std::shared_ptr<Client> client, NetworkStreamHandle handle) :
+        client(std::move(client)),
+        handle(std::move(handle))
+    {}
+
+public:
+    NetworkStream() {}
+
+public:
+    /**
+     * Gracefully closes the given raw byte stream.
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
+    >
+    auto close(
+        CompletionToken completion_token
+    ) {
+        auto request = Request::NetworkStreamClose{
+            handle,
+        };
+        return client->invoke<Response::None, void>(std::move(request), std::move(completion_token));
+    }
+
+    /**
+     * Reads exactly the given number of bytes from the given raw byte stream.
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<std::vector<uint8_t>>::type> CompletionToken
+    >
+    auto read_exact(
+        uint64_t len,
+        CompletionToken completion_token
+    ) {
+        auto request = Request::NetworkStreamReadExact{
+            handle,
+            len,
+        };
+        return client->invoke<Response::Bytes, std::vector<uint8_t>>(std::move(request), std::move(completion_token));
+    }
+
+    /**
+     * Writes the whole buffer to the given raw byte stream.
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
+    >
+    auto write_all(
+        const std::vector<uint8_t>& buf,
+        CompletionToken completion_token
+    ) {
+        auto request = Request::NetworkStreamWriteAll{
+            handle,
+            buf,
+        };
+        return client->invoke<Response::None, void>(std::move(request), std::move(completion_token));
+    }
+
+};
+
 class Session {
 private:
     friend class File;
@@ -1532,6 +1667,58 @@ public:
             host,
         };
         return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+    }
+
+    /**
+     * Opens a side channel to the underlying IPv4 UDP socket. The side channel is used to
+     * send/receive raw UDP datagrams on the same socket that the sync protocol uses. This is
+     * useful to share the socket between different protocols for hole punching.
+     *
+     * Returns `None` if QUIC IPv4 endpoint isn't bound (see [Self::session_bind_network]).
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<std::optional<NetworkSocket>>::type> CompletionToken
+    >
+    auto open_network_socket_v4(
+        CompletionToken completion_token
+    ) {
+        auto request = Request::SessionOpenNetworkSocketV4();
+        return client->invoke<Response::NetworkSocket, std::optional<NetworkSocket>>(std::move(request), std::move(completion_token));
+    }
+
+    /**
+     * Opens a side channel to the underlying IPv6 UDP socket. The side channel is used to
+     * send/receive raw UDP datagrams on the same socket that the sync protocol uses. This is
+     * useful to share the socket between different protocols for hole punching.
+     *
+     * Returns `None` if QUIC IPv6 endpoint isn't bound (see [Self::session_bind_network]).
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<std::optional<NetworkSocket>>::type> CompletionToken
+    >
+    auto open_network_socket_v6(
+        CompletionToken completion_token
+    ) {
+        auto request = Request::SessionOpenNetworkSocketV6();
+        return client->invoke<Response::NetworkSocket, std::optional<NetworkSocket>>(std::move(request), std::move(completion_token));
+    }
+
+    /**
+     * Opens a raw byte streams to the given peer, bound to the given topic.
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<NetworkStream>::type> CompletionToken
+    >
+    auto open_network_stream(
+        const std::string& addr,
+        const TopicId& topic_id,
+        CompletionToken completion_token
+    ) {
+        auto request = Request::SessionOpenNetworkStream{
+            addr,
+            topic_id,
+        };
+        return client->invoke<Response::NetworkStream, NetworkStream>(std::move(request), std::move(completion_token));
     }
 
     /**

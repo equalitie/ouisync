@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 project(Ouisync)
 
+# Auto-generate `compiler_commands.json` for clangd (C++ LSP)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 include(FetchContent)
 
 # Based on the value of this constant, this example will either create a new

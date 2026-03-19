@@ -80,25 +80,33 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
         ])
         .collect();
 
-    let mut api_items: Vec<ApiClass> = [
+    let mut api_items = [
         ApiClass {
             name: "Session",
-            inner: None,
+            handle: false,
             variants: &ctx.request.variants,
         },
         ApiClass {
             name: "Repository",
-            inner: Some(("handle", "RepositoryHandle")),
+            handle: true,
             variants: &ctx.request.variants,
         },
         ApiClass {
             name: "File",
-            inner: Some(("handle", "FileHandle")),
+            handle: true,
             variants: &ctx.request.variants,
         },
-    ]
-    .into_iter()
-    .collect();
+        ApiClass {
+            name: "NetworkSocket",
+            handle: true,
+            variants: &ctx.request.variants,
+        },
+        ApiClass {
+            name: "NetworkStream",
+            handle: true,
+            variants: &ctx.request.variants,
+        },
+    ];
 
     reorder(&mut data_items);
     reorder(&mut api_items);
@@ -223,7 +231,7 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
     writeln!(out_hpp)?;
 
     for item in &api_items {
-        write_api_class(out_hpp, item.name, item.inner, item.variants)?;
+        write_api_class(out_hpp, item.name, item.handle, item.variants)?;
     }
 
     writeln!(out_hpp, "}} // namespace {NAMESPACE}")?;
@@ -446,17 +454,17 @@ fn write_complex_enum(
         {I}{name}({name}&&) = default;
         {I}{name}& operator=({name}&&) = default;
         {I}{name}({name} const&) = default;
-        
+
         {I}template<class T>
         {I}requires(!std::same_as<std::remove_cvref_t<T>, {name}>)
         {I}{name}(T&& v)
         {I}{I}: value(std::forward<T>(v)) {{}}
-        
+
         {I}template<class T>
         {I}T& get() {{
         {I}{I}return std::get<T>(value);
         {I}}}
-        
+
         {I}template<class T>
         {I}T* get_if() {{
         {I}{I}return std::get_if<T>(&value);
@@ -565,7 +573,7 @@ fn write_service_error_code(
 fn write_api_class(
     out_hpp: &mut dyn Write,
     name: &str,
-    inner: Option<(&str, &str)>,
+    handle: bool,
     request_variants: &[(String, RequestVariant)],
 ) -> Result<()> {
     writeln!(out_hpp, "class {name} {{")?;
@@ -586,24 +594,24 @@ fn write_api_class(
     // Members
     writeln!(out_hpp, "{I}std::shared_ptr<Client> client;")?;
 
-    if let Some((name, ty)) = inner {
-        writeln!(out_hpp, "{I}{ty} {name};")?;
+    if handle {
+        writeln!(out_hpp, "{I}{name}Handle handle;")?;
     }
     writeln!(out_hpp)?;
 
     // constructor
     write!(out_hpp, "{I}explicit {name}(std::shared_ptr<Client> client")?;
 
-    if let Some((name, ty)) = inner {
-        write!(out_hpp, ", {ty} {name}")?;
+    if handle {
+        write!(out_hpp, ", {name}Handle handle")?;
     }
 
     writeln!(out_hpp, ") :")?;
     write!(out_hpp, "{I}{I}client(std::move(client))")?;
 
-    if let Some((name, _ty)) = inner {
+    if handle {
         writeln!(out_hpp, ",")?;
-        writeln!(out_hpp, "{I}{I}{name}(std::move({name}))")?;
+        writeln!(out_hpp, "{I}{I}handle(std::move(handle))")?;
     } else {
         writeln!(out_hpp)?;
     }
@@ -646,8 +654,12 @@ fn write_api_class(
     let prefix = format!("{}_", AsSnakeCase(name));
 
     for (variant_name, variant) in request_variants {
-        // Event subscription / unsubscription is handled manually
-        if variant_name.contains("subscribe") {
+        if variant.skip {
+            continue;
+        }
+
+        // Stream methods are currently handled manually
+        if variant.ret_stream_item.is_some() {
             continue;
         }
 
@@ -678,7 +690,7 @@ fn write_api_class(
             &ret_cpp_type,
             op_name,
             &variant.fields,
-            inner.is_some(),
+            handle,
         )?;
 
         writeln!(out_hpp, " {{")?;
@@ -693,15 +705,11 @@ fn write_api_class(
         if !variant.fields.is_empty() {
             writeln!(out_hpp, "{{")?;
 
-            let inner_name = inner.map(|(name, _)| AsSnakeCase(name));
-
             for (index, (arg_name, _)) in variant.fields.iter().enumerate() {
                 let arg_name = AsSnakeCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
 
-                if index == 0
-                    && let Some(inner_name) = &inner_name
-                {
-                    writeln!(out_hpp, "{I}{I}{I}{inner_name},")?;
+                if index == 0 && handle {
+                    writeln!(out_hpp, "{I}{I}{I}handle,")?;
                     continue;
                 }
 
@@ -776,7 +784,7 @@ fn declare_function(
     ret_type: &CppType,
     op_name: &str,
     fields: &Fields,
-    has_inner: bool,
+    handle: bool,
 ) -> io::Result<()> {
     // These are C++ keywords, so can't be used as function names
     let op_rename: HashMap<&str, &str> = [
@@ -798,7 +806,7 @@ fn declare_function(
     "
     )?;
 
-    let fields = function_params(has_inner, fields);
+    let fields = function_params(handle, fields);
 
     for (i, (name, field)) in fields.iter().enumerate() {
         write!(out, "{indent}{I}{} {}", &field.modify(true, false), name,)?;
@@ -832,7 +840,7 @@ fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> io::Result<()> 
 #[derive(Debug, Clone)]
 struct ApiClass<'a> {
     name: &'a str,
-    inner: Option<(&'a str, &'a str)>,
+    handle: bool,
     variants: &'a Vec<(String, RequestVariant)>,
 }
 

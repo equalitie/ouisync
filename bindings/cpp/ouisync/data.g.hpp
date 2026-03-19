@@ -342,6 +342,16 @@ struct Progress {
     uint64_t total;
 };
 
+/**
+ * Identified of a network stream topic.
+ *
+ * When two connected peers open a stream with the same topic id, they can communicate over it with
+ * each other.
+ */
+struct TopicId {
+    std::vector<uint8_t> value;
+};
+
 enum class NatBehavior : uint8_t {
     endpoint_independent = 0,
     address_dependent = 1,
@@ -472,10 +482,6 @@ enum class Service : uint16_t {
      */
     mount_dir_unspecified = 4108,
     /**
-     * Ouisync compiled without VFS
-     */
-    no_vfs = 4109,
-    /**
      * Unspecified error
      */
     other = 65535,
@@ -531,6 +537,19 @@ struct FileHandle {
 };
 
 struct RepositoryHandle {
+    size_t value;
+};
+
+struct Datagram {
+    std::vector<uint8_t> data;
+    std::string addr;
+};
+
+struct NetworkSocketHandle {
+    size_t value;
+};
+
+struct NetworkStreamHandle {
     size_t value;
 };
 

@@ -12,9 +12,9 @@ struct ResponseResult {
         error::Service code;
         std::string message;
         std::vector<std::string> sources;
-    
+
         Failure() = default;
-    
+
         Failure(
             error::Service code,
             std::string message,

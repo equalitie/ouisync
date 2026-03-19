@@ -67,6 +67,59 @@ template<> struct describe::Struct<Request::FileWrite> : std::true_type {
     }
 };
 
+template<> struct describe::Struct<Request::NetworkSocketClose> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::NetworkSocketClose& v) {
+        o.field(v.socket);
+    }
+};
+
+template<> struct describe::Struct<Request::NetworkSocketRecvFrom> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::NetworkSocketRecvFrom& v) {
+        o.field(v.socket);
+        o.field(v.len);
+    }
+};
+
+template<> struct describe::Struct<Request::NetworkSocketSendTo> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::NetworkSocketSendTo& v) {
+        o.field(v.socket);
+        o.field(v.data);
+        o.field(v.addr);
+    }
+};
+
+template<> struct describe::Struct<Request::NetworkStreamClose> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::NetworkStreamClose& v) {
+        o.field(v.stream);
+    }
+};
+
+template<> struct describe::Struct<Request::NetworkStreamReadExact> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::NetworkStreamReadExact& v) {
+        o.field(v.stream);
+        o.field(v.len);
+    }
+};
+
+template<> struct describe::Struct<Request::NetworkStreamWriteAll> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::NetworkStreamWriteAll& v) {
+        o.field(v.stream);
+        o.field(v.buf);
+    }
+};
+
 template<> struct describe::Struct<Request::RepositoryClose> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
@@ -782,6 +835,29 @@ template<> struct describe::Struct<Request::SessionMirrorExists> : std::true_typ
     }
 };
 
+template<> struct describe::Struct<Request::SessionOpenNetworkSocketV4> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer&, Request::SessionOpenNetworkSocketV4&) {
+    }
+};
+
+template<> struct describe::Struct<Request::SessionOpenNetworkSocketV6> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer&, Request::SessionOpenNetworkSocketV6&) {
+    }
+};
+
+template<> struct describe::Struct<Request::SessionOpenNetworkStream> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::SessionOpenNetworkStream& v) {
+        o.field(v.addr);
+        o.field(v.topic_id);
+    }
+};
+
 template<> struct describe::Struct<Request::SessionOpenRepository> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
@@ -879,6 +955,15 @@ template<> struct describe::Struct<Request::SessionSetStoreDirs> : std::true_typ
     }
 };
 
+template<> struct describe::Struct<Request::SessionSubscribeToDhtLookup> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::SessionSubscribeToDhtLookup& v) {
+        o.field(v.info_hash);
+        o.field(v.announce);
+    }
+};
+
 template<> struct describe::Struct<Request::SessionSubscribeToNetwork> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
@@ -941,6 +1026,24 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "FileWrite") {
             return builder.template build<Request::FileWrite>();
+        }
+        if (name == "NetworkSocketClose") {
+            return builder.template build<Request::NetworkSocketClose>();
+        }
+        if (name == "NetworkSocketRecvFrom") {
+            return builder.template build<Request::NetworkSocketRecvFrom>();
+        }
+        if (name == "NetworkSocketSendTo") {
+            return builder.template build<Request::NetworkSocketSendTo>();
+        }
+        if (name == "NetworkStreamClose") {
+            return builder.template build<Request::NetworkStreamClose>();
+        }
+        if (name == "NetworkStreamReadExact") {
+            return builder.template build<Request::NetworkStreamReadExact>();
+        }
+        if (name == "NetworkStreamWriteAll") {
+            return builder.template build<Request::NetworkStreamWriteAll>();
         }
         if (name == "RepositoryClose") {
             return builder.template build<Request::RepositoryClose>();
@@ -1203,6 +1306,15 @@ template<> struct VariantBuilder<Request::Alternatives> {
         if (name == "SessionMirrorExists") {
             return builder.template build<Request::SessionMirrorExists>();
         }
+        if (name == "SessionOpenNetworkSocketV4") {
+            return builder.template build<Request::SessionOpenNetworkSocketV4>();
+        }
+        if (name == "SessionOpenNetworkSocketV6") {
+            return builder.template build<Request::SessionOpenNetworkSocketV6>();
+        }
+        if (name == "SessionOpenNetworkStream") {
+            return builder.template build<Request::SessionOpenNetworkStream>();
+        }
         if (name == "SessionOpenRepository") {
             return builder.template build<Request::SessionOpenRepository>();
         }
@@ -1238,6 +1350,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "SessionSetStoreDirs") {
             return builder.template build<Request::SessionSetStoreDirs>();
+        }
+        if (name == "SessionSubscribeToDhtLookup") {
+            return builder.template build<Request::SessionSubscribeToDhtLookup>();
         }
         if (name == "SessionSubscribeToNetwork") {
             return builder.template build<Request::SessionSubscribeToNetwork>();
@@ -1278,6 +1393,14 @@ template<> struct describe::Struct<Response::Bytes> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
     static void describe(Observer& o, Response::Bytes& v) {
+        o.field(v.value);
+    }
+};
+
+template<> struct describe::Struct<Response::Datagram> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer& o, Response::Datagram& v) {
         o.field(v.value);
     }
 };
@@ -1330,6 +1453,22 @@ template<> struct describe::Struct<Response::NetworkEvent> : std::true_type {
     }
 };
 
+template<> struct describe::Struct<Response::NetworkSocket> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer& o, Response::NetworkSocket& v) {
+        o.field(v.value);
+    }
+};
+
+template<> struct describe::Struct<Response::NetworkStream> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer& o, Response::NetworkStream& v) {
+        o.field(v.value);
+    }
+};
+
 template<> struct describe::Struct<Response::None> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
@@ -1357,6 +1496,14 @@ template<> struct describe::Struct<Response::Paths> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
     static void describe(Observer& o, Response::Paths& v) {
+        o.field(v.value);
+    }
+};
+
+template<> struct describe::Struct<Response::PeerAddr> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer& o, Response::PeerAddr& v) {
         o.field(v.value);
     }
 };
@@ -1417,13 +1564,6 @@ template<> struct describe::Struct<Response::Repository> : std::true_type {
     }
 };
 
-template<> struct describe::Struct<Response::RepositoryEvent> : std::true_type {
-    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
-    template<class Observer>
-    static void describe(Observer&, Response::RepositoryEvent&) {
-    }
-};
-
 template<> struct describe::Struct<Response::SecretKey> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
@@ -1453,13 +1593,6 @@ template<> struct describe::Struct<Response::StateMonitor> : std::true_type {
     template<class Observer>
     static void describe(Observer& o, Response::StateMonitor& v) {
         o.field(v.value);
-    }
-};
-
-template<> struct describe::Struct<Response::StateMonitorEvent> : std::true_type {
-    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
-    template<class Observer>
-    static void describe(Observer&, Response::StateMonitorEvent&) {
     }
 };
 
@@ -1523,6 +1656,9 @@ template<> struct VariantBuilder<Response::Alternatives> {
         if (name == "Bytes") {
             return builder.template build<Response::Bytes>();
         }
+        if (name == "Datagram") {
+            return builder.template build<Response::Datagram>();
+        }
         if (name == "DirectoryEntries") {
             return builder.template build<Response::DirectoryEntries>();
         }
@@ -1541,6 +1677,12 @@ template<> struct VariantBuilder<Response::Alternatives> {
         if (name == "NetworkEvent") {
             return builder.template build<Response::NetworkEvent>();
         }
+        if (name == "NetworkSocket") {
+            return builder.template build<Response::NetworkSocket>();
+        }
+        if (name == "NetworkStream") {
+            return builder.template build<Response::NetworkStream>();
+        }
         if (name == "None") {
             return builder.template build<Response::None>();
         }
@@ -1552,6 +1694,9 @@ template<> struct VariantBuilder<Response::Alternatives> {
         }
         if (name == "Paths") {
             return builder.template build<Response::Paths>();
+        }
+        if (name == "PeerAddr") {
+            return builder.template build<Response::PeerAddr>();
         }
         if (name == "PeerAddrs") {
             return builder.template build<Response::PeerAddrs>();
@@ -1574,9 +1719,6 @@ template<> struct VariantBuilder<Response::Alternatives> {
         if (name == "Repository") {
             return builder.template build<Response::Repository>();
         }
-        if (name == "RepositoryEvent") {
-            return builder.template build<Response::RepositoryEvent>();
-        }
         if (name == "SecretKey") {
             return builder.template build<Response::SecretKey>();
         }
@@ -1588,9 +1730,6 @@ template<> struct VariantBuilder<Response::Alternatives> {
         }
         if (name == "StateMonitor") {
             return builder.template build<Response::StateMonitor>();
-        }
-        if (name == "StateMonitorEvent") {
-            return builder.template build<Response::StateMonitorEvent>();
         }
         if (name == "Stats") {
             return builder.template build<Response::Stats>();

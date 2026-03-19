@@ -18,6 +18,7 @@ namespace detail {
     template<typename T> struct IsApiClass             : std::false_type {};
     template<>           struct IsApiClass<File>       : std::true_type  {};
     template<>           struct IsApiClass<Repository> : std::true_type  {};
+    template<typename T> struct IsApiClass<std::map<std::string, T>> : IsApiClass<T> {};
 
     template<typename T> concept ApiClass = IsApiClass<T>::value;
 
@@ -96,8 +97,35 @@ namespace detail {
             handler(ec, RetType(std::move(client), std::move(rsp->value)));
         }
     };
+
+    template<
+        typename Variant,
+        ApiClass ValueType
+    >
+    struct ConvertResponse<Variant, std::map<std::string, ValueType>> {
+        template<class ClientPtr, class Handler>
+        static void apply(Handler&& handler, boost::system::error_code ec, Response&& response, ClientPtr client) {
+            using RetType = std::map<std::string, ValueType>;
+
+            if (ec) {
+                handler(ec, RetType{});
+                return;
+            }
+            auto* rsp = response.template get_if<Variant>();
+            if (rsp == nullptr) {
+                handler(error::protocol, RetType{});
+                return;
+            }
+            RetType ret;
+            for (auto& [key, val] : rsp->value) {
+                ret.emplace(std::move(key), ValueType(client, std::move(val)));
+            }
+            handler(ec, std::move(ret));
+        }
+    };
+
 } // detail namespace
- 
+
 class Client : public std::enable_shared_from_this<Client> {
 public:
     struct State;

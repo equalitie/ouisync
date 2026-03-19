@@ -40,6 +40,35 @@ struct Request {
         const std::vector<uint8_t>& data;
     };
 
+    struct NetworkSocketClose {
+        const ouisync::NetworkSocketHandle& socket;
+    };
+
+    struct NetworkSocketRecvFrom {
+        const ouisync::NetworkSocketHandle& socket;
+        uint64_t len;
+    };
+
+    struct NetworkSocketSendTo {
+        const ouisync::NetworkSocketHandle& socket;
+        const std::vector<uint8_t>& data;
+        const std::string& addr;
+    };
+
+    struct NetworkStreamClose {
+        const ouisync::NetworkStreamHandle& stream;
+    };
+
+    struct NetworkStreamReadExact {
+        const ouisync::NetworkStreamHandle& stream;
+        uint64_t len;
+    };
+
+    struct NetworkStreamWriteAll {
+        const ouisync::NetworkStreamHandle& stream;
+        const std::vector<uint8_t>& buf;
+    };
+
     struct RepositoryClose {
         const ouisync::RepositoryHandle& repo;
     };
@@ -407,6 +436,17 @@ struct Request {
         const std::string& host;
     };
 
+    struct SessionOpenNetworkSocketV4 {
+    };
+
+    struct SessionOpenNetworkSocketV6 {
+    };
+
+    struct SessionOpenNetworkStream {
+        const std::string& addr;
+        const ouisync::TopicId& topic_id;
+    };
+
     struct SessionOpenRepository {
         const std::string& path;
         const std::optional<ouisync::LocalSecret>& local_secret;
@@ -456,6 +496,11 @@ struct Request {
         const std::vector<std::string>& paths;
     };
 
+    struct SessionSubscribeToDhtLookup {
+        const std::string& info_hash;
+        bool announce;
+    };
+
     struct SessionSubscribeToNetwork {
     };
 
@@ -479,6 +524,12 @@ struct Request {
         FileRead,
         FileTruncate,
         FileWrite,
+        NetworkSocketClose,
+        NetworkSocketRecvFrom,
+        NetworkSocketSendTo,
+        NetworkStreamClose,
+        NetworkStreamReadExact,
+        NetworkStreamWriteAll,
         RepositoryClose,
         RepositoryCreateDirectory,
         RepositoryCreateFile,
@@ -566,6 +617,9 @@ struct Request {
         SessionIsPortForwardingEnabled,
         SessionListRepositories,
         SessionMirrorExists,
+        SessionOpenNetworkSocketV4,
+        SessionOpenNetworkSocketV6,
+        SessionOpenNetworkStream,
         SessionOpenRepository,
         SessionRemoveStoreDirs,
         SessionRemoveUserProvidedPeers,
@@ -578,6 +632,7 @@ struct Request {
         SessionSetPexSendEnabled,
         SessionSetPortForwardingEnabled,
         SessionSetStoreDirs,
+        SessionSubscribeToDhtLookup,
         SessionSubscribeToNetwork,
         SessionSubscribeToStateMonitor,
         SessionUnsubscribe,
@@ -620,6 +675,10 @@ struct Response {
         std::vector<uint8_t> value;
     };
 
+    struct Datagram {
+        ouisync::Datagram value;
+    };
+
     struct DirectoryEntries {
         std::vector<ouisync::DirectoryEntry> value;
     };
@@ -644,6 +703,14 @@ struct Response {
         ouisync::NetworkEvent value;
     };
 
+    struct NetworkSocket {
+        ouisync::NetworkSocketHandle value;
+    };
+
+    struct NetworkStream {
+        ouisync::NetworkStreamHandle value;
+    };
+
     struct None {
     };
 
@@ -657,6 +724,10 @@ struct Response {
 
     struct Paths {
         std::vector<std::string> value;
+    };
+
+    struct PeerAddr {
+        std::string value;
     };
 
     struct PeerAddrs {
@@ -687,9 +758,6 @@ struct Response {
         ouisync::RepositoryHandle value;
     };
 
-    struct RepositoryEvent {
-    };
-
     struct SecretKey {
         ouisync::SecretKey value;
     };
@@ -704,9 +772,6 @@ struct Response {
 
     struct StateMonitor {
         ouisync::StateMonitorNode value;
-    };
-
-    struct StateMonitorEvent {
     };
 
     struct Stats {
@@ -733,16 +798,20 @@ struct Response {
         AccessMode,
         Bool,
         Bytes,
+        Datagram,
         DirectoryEntries,
         Duration,
         EntryType,
         File,
         NatBehavior,
         NetworkEvent,
+        NetworkSocket,
+        NetworkStream,
         None,
         PasswordSalt,
         Path,
         Paths,
+        PeerAddr,
         PeerAddrs,
         PeerInfos,
         Progress,
@@ -750,12 +819,10 @@ struct Response {
         QuotaInfo,
         Repositories,
         Repository,
-        RepositoryEvent,
         SecretKey,
         ShareToken,
         SocketAddr,
         StateMonitor,
-        StateMonitorEvent,
         Stats,
         StorageSize,
         String,
