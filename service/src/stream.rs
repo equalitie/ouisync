@@ -18,13 +18,13 @@ use crate::coop_rw_lock::CoopRwLock;
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
 #[serde(transparent)]
 #[api]
-pub struct StreamHandle(usize);
+pub struct NetworkStreamHandle(usize);
 
-pub(crate) struct StreamSet {
+pub(crate) struct NetworkStreamSet {
     inner: CoopRwLock<Inner>,
 }
 
-impl StreamSet {
+impl NetworkStreamSet {
     pub fn new() -> Self {
         Self {
             inner: CoopRwLock::new(Inner::default()),
@@ -37,7 +37,7 @@ impl StreamSet {
         network: &Network,
         addr: PeerAddr,
         topic_id: TopicId,
-    ) -> io::Result<StreamHandle> {
+    ) -> io::Result<NetworkStreamHandle> {
         let mut inner = self.inner.write().await;
         let inner = &mut *inner;
 
@@ -61,14 +61,14 @@ impl StreamSet {
                 let handle = inner.streams.insert(StreamHolder { key, send, recv });
                 entry.insert(handle);
 
-                Ok(StreamHandle(handle))
+                Ok(NetworkStreamHandle(handle))
             }
         }
     }
 
     /// Read bytes from the recv stream corresponding to `handle` into `buf`. Returns the number of bytes
     /// actually read.
-    pub async fn read(&self, handle: StreamHandle, buf: &mut [u8]) -> io::Result<usize> {
+    pub async fn read(&self, handle: NetworkStreamHandle, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let (inner, wants_write) = self.inner.read().await;
             let mut stream = inner
@@ -87,7 +87,11 @@ impl StreamSet {
     }
 
     /// Reads the exact number of bytes to fill `buf` from the recv stream corresponding to `handle`.
-    pub async fn read_exact(&self, handle: StreamHandle, buf: &mut [u8]) -> io::Result<usize> {
+    pub async fn read_exact(
+        &self,
+        handle: NetworkStreamHandle,
+        buf: &mut [u8],
+    ) -> io::Result<usize> {
         let mut offset = 0;
 
         while offset < buf.len() {
@@ -105,7 +109,7 @@ impl StreamSet {
 
     /// Write bytes from `buf` to the send stream corresponding to `handle`. Returns the number of
     /// bytes actually written.
-    pub async fn write(&self, handle: StreamHandle, buf: &[u8]) -> io::Result<usize> {
+    pub async fn write(&self, handle: NetworkStreamHandle, buf: &[u8]) -> io::Result<usize> {
         loop {
             let (inner, wants_write) = self.inner.read().await;
             let mut stream = inner
@@ -124,7 +128,7 @@ impl StreamSet {
     }
 
     /// Writes the entire `buf` to the send stream corresponding to `handle`.
-    pub async fn write_all(&self, handle: StreamHandle, buf: &[u8]) -> io::Result<()> {
+    pub async fn write_all(&self, handle: NetworkStreamHandle, buf: &[u8]) -> io::Result<()> {
         let mut offset = 0;
 
         while offset < buf.len() {
@@ -141,7 +145,7 @@ impl StreamSet {
     }
 
     /// Close the send and recv streams corresponding to `handle`.
-    pub async fn close(&self, handle: StreamHandle) -> io::Result<()> {
+    pub async fn close(&self, handle: NetworkStreamHandle) -> io::Result<()> {
         let stream = {
             let mut inner = self.inner.write().await;
 

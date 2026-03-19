@@ -26,19 +26,11 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     write_complex_enum(out, "Request", &ctx.request.to_enum(), true, false)?;
     write_complex_enum(out, "Response", &ctx.response.to_enum(), false, true)?;
 
-    write_api_class(out, "Session", None, &ctx.request.variants)?;
-    write_api_class(
-        out,
-        "Repository",
-        Some(("handle", "RepositoryHandle")),
-        &ctx.request.variants,
-    )?;
-    write_api_class(
-        out,
-        "File",
-        Some(("handle", "FileHandle")),
-        &ctx.request.variants,
-    )?;
+    write_api_class(out, "Session", false, &ctx.request.variants)?;
+    write_api_class(out, "Repository", true, &ctx.request.variants)?;
+    write_api_class(out, "File", true, &ctx.request.variants)?;
+    write_api_class(out, "NetworkSocket", true, &ctx.request.variants)?;
+    write_api_class(out, "NetworkStream", true, &ctx.request.variants)?;
 
     Ok(())
 }
@@ -530,7 +522,7 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
 fn write_api_class(
     out: &mut dyn Write,
     name: &str,
-    inner: Option<(&str, &str)>,
+    handle: bool,
     request_variants: &[(String, RequestVariant)],
 ) -> Result<()> {
     writeln!(out, "class {name} {{")?;
@@ -538,8 +530,8 @@ fn write_api_class(
     // fields
     writeln!(out, "{I}final Client client;")?;
 
-    if let Some((name, ty)) = inner {
-        writeln!(out, "{I}final {ty} {name};")?;
+    if handle {
+        writeln!(out, "{I}final {name}Handle handle;")?;
     }
 
     writeln!(out)?;
@@ -547,8 +539,8 @@ fn write_api_class(
     // constructor
     write!(out, "{I}{name}(this.client")?;
 
-    if let Some((name, _)) = inner {
-        write!(out, ", this.{name}")?;
+    if handle {
+        write!(out, ", this.handle")?;
     }
 
     writeln!(out, ");")?;
@@ -597,7 +589,7 @@ fn write_api_class(
         }
 
         for (index, (arg_name, field)) in variant.fields.iter().enumerate() {
-            if index == 0 && inner.is_some() {
+            if index == 0 && handle {
                 continue;
             }
 
@@ -637,15 +629,11 @@ fn write_api_class(
             AsPascalCase(variant_name)
         )?;
 
-        let inner_name = inner.map(|(name, _)| AsLowerCamelCase(name));
-
         for (index, (arg_name, _)) in variant.fields.iter().enumerate() {
             let arg_name = AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
 
-            if index == 0
-                && let Some(inner_name) = &inner_name
-            {
-                writeln!(out, "{I}{I}{I}{arg_name}: {inner_name},",)?;
+            if index == 0 && handle {
+                writeln!(out, "{I}{I}{I}{arg_name}: handle,",)?;
                 continue;
             }
 
@@ -703,29 +691,23 @@ fn write_api_class(
         writeln!(out)?;
     }
 
-    if let Some((inner_name, _)) = inner {
+    if handle {
         // operator ==
         writeln!(out, "{I}@override")?;
         writeln!(out, "{I}bool operator ==(Object other) =>")?;
         writeln!(out, "{I}{I}{I}other is {name} &&")?;
         writeln!(out, "{I}{I}{I}other.client == client &&")?;
-        writeln!(out, "{I}{I}{I}other.{inner_name} == {inner_name};")?;
+        writeln!(out, "{I}{I}{I}other.handle == handle;")?;
         writeln!(out)?;
 
         // hashCode
         writeln!(out, "{I}@override")?;
-        writeln!(
-            out,
-            "{I}int get hashCode => Object.hash(client, {inner_name});"
-        )?;
+        writeln!(out, "{I}int get hashCode => Object.hash(client, handle);")?;
         writeln!(out)?;
 
         // toString
         writeln!(out, "{I}@override")?;
-        writeln!(
-            out,
-            "{I}String toString() => '$runtimeType(${inner_name})';"
-        )?;
+        writeln!(out, "{I}String toString() => '$runtimeType($handle)';")?;
         writeln!(out)?;
     }
 

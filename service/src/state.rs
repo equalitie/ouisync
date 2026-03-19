@@ -19,8 +19,8 @@ use crate::{
     network::{self, PexConfig},
     protocol::{DirectoryEntry, MessageId, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{self, RepositoryHandle, RepositoryHolder, RepositorySet},
-    socket::{SocketHandle, SocketRecv, SocketSet},
-    stream::{StreamHandle, StreamSet},
+    socket::{Datagram, NetworkSocketHandle, NetworkSocketSet},
+    stream::{NetworkStreamHandle, NetworkStreamSet},
     tls::TlsConfig,
     transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
 };
@@ -77,8 +77,8 @@ pub(crate) struct State {
     mounter: Mutex<Option<Arc<MultiRepoVFS>>>,
     repos: RepositorySet,
     files: FileSet,
-    sockets: SocketSet,
-    streams: StreamSet,
+    network_sockets: NetworkSocketSet,
+    network_streams: NetworkStreamSet,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
     remote_server: Mutex<Option<Arc<RemoteServer>>>,
@@ -154,8 +154,8 @@ impl State {
             repos_monitor,
             repos: RepositorySet::new(),
             files: FileSet::new(),
-            sockets: SocketSet::new(),
-            streams: StreamSet::new(),
+            network_sockets: NetworkSocketSet::new(),
+            network_streams: NetworkStreamSet::new(),
             remote_server: Mutex::new(remote_server.map(Arc::new)),
             metrics_server,
         };
@@ -1966,9 +1966,9 @@ impl State {
     ///
     /// Returns `None` if QUIC IPv4 endpoint isn't bound (see [Self::session_bind_network]).
     #[api]
-    pub async fn session_open_socket_v4(&self) -> Option<SocketHandle> {
+    pub async fn session_open_network_socket_v4(&self) -> Option<NetworkSocketHandle> {
         let socket = self.network.open_udp_side_channel_v4()?;
-        Some(self.sockets.insert(socket).await)
+        Some(self.network_sockets.insert(socket).await)
     }
 
     /// Opens a side channel to the underlying IPv6 UDP socket. The side channel is used to
@@ -1977,58 +1977,61 @@ impl State {
     ///
     /// Returns `None` if QUIC IPv6 endpoint isn't bound (see [Self::session_bind_network]).
     #[api]
-    pub async fn session_open_socket_v6(&self) -> Option<SocketHandle> {
+    pub async fn session_open_network_socket_v6(&self) -> Option<NetworkSocketHandle> {
         let socket = self.network.open_udp_side_channel_v6()?;
-        Some(self.sockets.insert(socket).await)
+        Some(self.network_sockets.insert(socket).await)
     }
 
     #[api]
-    pub async fn socket_send_to(
+    pub async fn network_socket_send_to(
         &self,
-        socket: SocketHandle,
+        socket: NetworkSocketHandle,
         data: Vec<u8>,
         addr: SocketAddr,
     ) -> Result<u64, Error> {
-        Ok(self.sockets.send_to(socket, &data, addr).await? as u64)
+        Ok(self.network_sockets.send_to(socket, &data, addr).await? as u64)
     }
 
     #[api]
-    pub async fn socket_recv_from(
+    pub async fn network_socket_recv_from(
         &self,
-        socket: SocketHandle,
+        socket: NetworkSocketHandle,
         len: u64,
-    ) -> Result<SocketRecv, Error> {
+    ) -> Result<Datagram, Error> {
         let mut data = vec![0; len as usize];
-        let (len, addr) = self.sockets.recv_from(socket, &mut data).await?;
+        let (len, addr) = self.network_sockets.recv_from(socket, &mut data).await?;
         data.truncate(len);
 
-        Ok(SocketRecv { data, addr })
+        Ok(Datagram { data, addr })
     }
 
     #[api]
-    pub async fn socket_close(&self, socket: SocketHandle) {
-        self.sockets.remove(socket).await;
+    pub async fn network_socket_close(&self, socket: NetworkSocketHandle) {
+        self.network_sockets.remove(socket).await;
     }
 
     #[api]
     /// Opens a raw byte streams to the given peer, bound to the given topic.
-    pub async fn session_open_stream(
+    pub async fn session_open_network_stream(
         &self,
         addr: PeerAddr,
         topic_id: TopicId,
-    ) -> Result<StreamHandle, Error> {
-        Ok(self.streams.insert(&self.network, addr, topic_id).await?)
+    ) -> Result<NetworkStreamHandle, Error> {
+        Ok(self
+            .network_streams
+            .insert(&self.network, addr, topic_id)
+            .await?)
     }
 
     /// Reads exactly the given number of bytes from the given raw byte stream.
     #[api]
-    pub async fn stream_read_exact(
+    pub async fn network_stream_read_exact(
         &self,
-        stream: StreamHandle,
+        stream: NetworkStreamHandle,
         len: u64,
     ) -> Result<Vec<u8>, Error> {
         let mut buf = vec![0; len as usize];
-        let len = self.streams.read_exact(stream, &mut buf).await?;
+        let len = self.network_streams.read_exact(stream, &mut buf).await?;
         buf.truncate(len);
 
         Ok(buf)
@@ -2036,14 +2039,18 @@ impl State {
 
     /// Writes the whole buffer to the given raw byte stream.
     #[api]
-    pub async fn stream_write_all(&self, stream: StreamHandle, buf: Vec<u8>) -> Result<(), Error> {
-        Ok(self.streams.write_all(stream, &buf).await?)
+    pub async fn network_stream_write_all(
+        &self,
+        stream: NetworkStreamHandle,
+        buf: Vec<u8>,
+    ) -> Result<(), Error> {
+        Ok(self.network_streams.write_all(stream, &buf).await?)
     }
 
     /// Gracefully closes the given raw byte stream.
     #[api]
-    pub async fn stream_close(&self, stream: StreamHandle) -> Result<(), Error> {
-        Ok(self.streams.close(stream).await?)
+    pub async fn network_stream_close(&self, stream: NetworkStreamHandle) -> Result<(), Error> {
+        Ok(self.network_streams.close(stream).await?)
     }
 
     pub async fn set_all_repositories_sync_enabled(&self, enabled: bool) -> Result<(), Error> {

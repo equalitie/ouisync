@@ -1,5 +1,6 @@
 use crate::{
-    file::FileHandle, repository::RepositoryHandle, socket::SocketHandle, stream::StreamHandle,
+    file::FileHandle, repository::RepositoryHandle, socket::NetworkSocketHandle,
+    stream::NetworkStreamHandle,
 };
 use ouisync::{
     AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize,

@@ -11,7 +11,7 @@ use crate::coop_rw_lock::CoopRwLock;
 // The api parser doesn't support raw tuples so we need to use actual named structs.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 #[api]
-pub struct SocketRecv {
+pub struct Datagram {
     pub data: Vec<u8>,
     pub addr: SocketAddr,
 }
@@ -19,33 +19,33 @@ pub struct SocketRecv {
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
 #[serde(transparent)]
 #[api]
-pub struct SocketHandle(usize);
+pub struct NetworkSocketHandle(usize);
 
-pub(crate) struct SocketSet {
+pub(crate) struct NetworkSocketSet {
     inner: CoopRwLock<Slab<UdpSocket>>,
 }
 
-impl SocketSet {
+impl NetworkSocketSet {
     pub fn new() -> Self {
         Self {
             inner: CoopRwLock::new(Slab::new()),
         }
     }
 
-    pub async fn insert(&self, socket: UdpSocket) -> SocketHandle {
+    pub async fn insert(&self, socket: UdpSocket) -> NetworkSocketHandle {
         // Note this isn't actually blocking because any existing readers are immediately
         // interrupted and the writers don't block while holding the write lock.
         let handle = self.inner.write().await.insert(socket);
-        SocketHandle(handle)
+        NetworkSocketHandle(handle)
     }
 
-    pub async fn remove(&self, handle: SocketHandle) {
+    pub async fn remove(&self, handle: NetworkSocketHandle) {
         self.inner.write().await.try_remove(handle.0);
     }
 
     pub async fn send_to(
         &self,
-        handle: SocketHandle,
+        handle: NetworkSocketHandle,
         buf: &[u8],
         target: SocketAddr,
     ) -> io::Result<usize> {
@@ -62,7 +62,7 @@ impl SocketSet {
 
     pub async fn recv_from(
         &self,
-        handle: SocketHandle,
+        handle: NetworkSocketHandle,
         buf: &mut [u8],
     ) -> io::Result<(usize, SocketAddr)> {
         loop {

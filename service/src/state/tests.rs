@@ -632,7 +632,7 @@ async fn metrics() {
 }
 
 #[tokio::test]
-async fn sockets() {
+async fn network_sockets() {
     let (_temp_dir, state) = setup().await;
 
     let peer_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
@@ -648,14 +648,14 @@ async fn sockets() {
         .unwrap()
         .socket_addr();
 
-    let socket_handle = state.session_open_socket_v4().await.unwrap();
+    let socket_handle = state.session_open_network_socket_v4().await.unwrap();
 
     // From us to the peer
     let message = b"ping";
 
     let writer = async {
         state
-            .socket_send_to(socket_handle, message.to_vec(), peer_addr)
+            .network_socket_send_to(socket_handle, message.to_vec(), peer_addr)
             .await
             .unwrap();
     };
@@ -683,7 +683,7 @@ async fn sockets() {
 
     let reader = async {
         let recv = state
-            .socket_recv_from(socket_handle, message.len() as u64)
+            .network_socket_recv_from(socket_handle, message.len() as u64)
             .await
             .unwrap();
 
@@ -695,7 +695,7 @@ async fn sockets() {
 }
 
 #[tokio::test]
-async fn streams() {
+async fn network_streams() {
     let temp_dir = TempDir::new().unwrap();
 
     let state_a = State::init(ConfigStore::new(temp_dir.path().join("config-a")))
@@ -727,12 +727,12 @@ async fn streams() {
 
     let topic_id = TopicId::from_slice_lossy(b"pingpong");
 
-    async fn open_stream(state: &State, addr: PeerAddr, topic_id: TopicId) -> StreamHandle {
+    async fn open_stream(state: &State, addr: PeerAddr, topic_id: TopicId) -> NetworkStreamHandle {
         let mut events_rx = state.session_subscribe_to_network();
 
         time::timeout(Duration::from_secs(1), async {
             loop {
-                match state.session_open_stream(addr, topic_id).await {
+                match state.session_open_network_stream(addr, topic_id).await {
                     Ok(handle) => break handle,
                     Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotConnected => (),
                     Err(error) => panic!("unexpected error: {error:?}"),
@@ -750,26 +750,32 @@ async fn streams() {
 
     let ping = async {
         state_a
-            .stream_write_all(stream_a_to_b, b"ping".to_vec())
+            .network_stream_write_all(stream_a_to_b, b"ping".to_vec())
             .await
             .unwrap();
-        let res = state_a.stream_read_exact(stream_a_to_b, 4).await.unwrap();
+        let res = state_a
+            .network_stream_read_exact(stream_a_to_b, 4)
+            .await
+            .unwrap();
         assert_eq!(res, b"pong");
     };
 
     let pong = async {
-        let req = state_b.stream_read_exact(stream_b_to_a, 4).await.unwrap();
+        let req = state_b
+            .network_stream_read_exact(stream_b_to_a, 4)
+            .await
+            .unwrap();
         assert_eq!(req, b"ping");
         state_b
-            .stream_write_all(stream_b_to_a, b"pong".to_vec())
+            .network_stream_write_all(stream_b_to_a, b"pong".to_vec())
             .await
             .unwrap();
     };
 
     join(ping, pong).await;
 
-    state_a.stream_close(stream_a_to_b).await.unwrap();
-    state_b.stream_close(stream_b_to_a).await.unwrap();
+    state_a.network_stream_close(stream_a_to_b).await.unwrap();
+    state_b.network_stream_close(stream_b_to_a).await.unwrap();
 }
 
 async fn setup() -> (TempDir, State) {

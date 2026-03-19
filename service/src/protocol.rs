@@ -7,7 +7,7 @@ mod metadata;
 mod request;
 mod response;
 
-pub use crate::{repository::RepositoryHandle, socket::SocketHandle};
+pub use crate::{repository::RepositoryHandle, socket::NetworkSocketHandle};
 pub use error::ProtocolError;
 pub use error_code::ErrorCode;
 pub use log::LogLevel;
