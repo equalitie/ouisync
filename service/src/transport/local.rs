@@ -325,10 +325,7 @@ mod tests {
 
         let message = client.next().await.unwrap();
         assert_eq!(message.id, sub_id);
-        assert_matches!(
-            message.payload,
-            ResponseResult::Success(Response::RepositoryEvent)
-        );
+        assert_matches!(message.payload, ResponseResult::Success(Response::None));
 
         // Unsubscribe
         let () = client
@@ -342,10 +339,7 @@ mod tests {
         // Drain any other notification events sent before the unsubscribe.
         while let Some(message) = client.unsolicited_responses.pop_front() {
             assert_eq!(message.id, sub_id);
-            assert_matches!(
-                message.payload,
-                ResponseResult::Success(Response::RepositoryEvent)
-            );
+            assert_matches!(message.payload, ResponseResult::Success(Response::None));
         }
 
         // Modify the repo to trigger another notification. Because we've unsubscribed, we should
@@ -517,10 +511,7 @@ mod tests {
         // B syncs with A and observes notifications
         let message = client_b.next().await.unwrap();
         assert_eq!(message.id, sub_id_b);
-        assert_matches!(
-            message.payload,
-            ResponseResult::Success(Response::RepositoryEvent)
-        );
+        assert_matches!(message.payload, ResponseResult::Success(Response::None));
 
         runner_a.stop().await.close().await;
         runner_b.stop().await.close().await;

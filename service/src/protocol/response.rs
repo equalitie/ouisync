@@ -190,11 +190,6 @@ mod tests {
                 write_uint(&mut out, 1).unwrap();
                 out
             }),
-            (Response::RepositoryEvent, {
-                let mut out = Vec::new();
-                write_str(&mut out, "RepositoryEvent").unwrap();
-                out
-            }),
             (Response::Path(PathBuf::from("/home/alice/ouisync")), {
                 let mut out = Vec::new();
                 write_map_len(&mut out, 1).unwrap();

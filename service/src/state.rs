@@ -241,7 +241,7 @@ impl State {
         network::bind_with_reuse_ports(&self.network, &self.config, &addrs).await;
     }
 
-    #[api]
+    #[api(stream(NetworkEvent))]
     pub fn session_subscribe_to_network(&self) -> NetworkEventReceiver {
         self.network.subscribe()
     }
@@ -1242,7 +1242,7 @@ impl State {
         Err(Error::NoVFS)
     }
 
-    #[api]
+    #[api(stream(()))]
     pub fn repository_subscribe(
         &self,
         repo: RepositoryHandle,
@@ -1935,7 +1935,7 @@ impl State {
         self.root_monitor.locate(path)
     }
 
-    #[api]
+    #[api(stream(()))]
     pub async fn session_subscribe_to_state_monitor(
         &self,
         path: Vec<MonitorId>,
@@ -1958,7 +1958,7 @@ impl State {
     ///
     /// Note: Currently this doesn't automatically connnect to the discovered peers but this might
     /// change in the future.
-    #[api]
+    #[api(stream(PeerAddr))]
     pub fn session_subscribe_to_dht_lookup(&self, info_hash: String, announce: bool) -> DhtLookup {
         let mut buffer = [0; INFO_HASH_LEN];
 

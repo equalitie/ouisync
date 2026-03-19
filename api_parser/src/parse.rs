@@ -161,6 +161,7 @@ fn parse_request_variant(attrs: &[Attribute], sig: &Signature) -> Result<(String
     let ec = || format!("failed to parse request variant `{}`", AsPascalCase(&name));
 
     let docs = parse_docs(attrs).with_context(ec)?;
+    let api_attrs = parse_api_attrs(attrs).with_context(ec)?;
 
     let mut fields = Vec::new();
 
@@ -198,6 +199,8 @@ fn parse_request_variant(attrs: &[Attribute], sig: &Signature) -> Result<(String
         ReturnType::Type(_, ty) => parse_type(ty).with_context(ec)?,
     };
 
+    let skip = name == "session_unsubscribe";
+
     Ok((
         name,
         RequestVariant {
@@ -205,6 +208,8 @@ fn parse_request_variant(attrs: &[Attribute], sig: &Signature) -> Result<(String
             is_async: sig.asyncness.is_some(),
             fields,
             ret,
+            ret_stream_item: api_attrs.stream,
+            skip,
         },
     ))
 }
@@ -449,17 +454,15 @@ fn parse_api_attrs(attrs: &[Attribute]) -> Result<Attrs> {
             _ => continue,
         };
 
-        let mut repr_ty = None;
+        let mut repr: Option<syn::Type> = None;
         let mut secret = false;
+        let mut stream: Option<syn::Type> = None;
 
         list.parse_nested_meta(|meta| {
             if meta.path.is_ident("repr") {
-                if meta.input.peek(syn::token::Paren) {
-                    let content;
-                    parenthesized!(content in meta.input);
-                    let ty: syn::Type = content.parse()?;
-                    repr_ty = Some(ty);
-                }
+                let content;
+                parenthesized!(content in meta.input);
+                repr = Some(content.parse()?);
 
                 return Ok(());
             }
@@ -469,12 +472,23 @@ fn parse_api_attrs(attrs: &[Attribute]) -> Result<Attrs> {
                 return Ok(());
             }
 
+            if meta.path.is_ident("stream") {
+                let content;
+                parenthesized!(content in meta.input);
+                stream = Some(content.parse()?);
+            }
+
             Ok(())
         })?;
 
-        let repr = repr_ty.map(|ty| parse_type(&ty)).transpose()?;
+        let repr = repr.as_ref().map(parse_type).transpose()?;
+        let stream = stream.as_ref().map(parse_type).transpose()?;
 
-        return Ok(Attrs { repr, secret });
+        return Ok(Attrs {
+            repr,
+            secret,
+            stream,
+        });
     }
 
     Ok(Attrs::default())
@@ -484,6 +498,7 @@ fn parse_api_attrs(attrs: &[Attribute]) -> Result<Attrs> {
 struct Attrs {
     repr: Option<Type>,
     secret: bool,
+    stream: Option<Type>,
 }
 
 fn into_complex_variant(v: SimpleVariant) -> ComplexVariant {
@@ -775,7 +790,8 @@ mod tests {
             parse_api_attrs(&attrs),
             Ok(Attrs {
                 repr: None,
-                secret: false
+                secret: false,
+                stream: None,
             })
         );
 
@@ -786,7 +802,8 @@ mod tests {
             parse_api_attrs(&attrs),
             Ok(Attrs {
                 repr: None,
-                secret: false
+                secret: false,
+                stream: None,
             })
         );
 
@@ -795,7 +812,11 @@ mod tests {
         };
         assert_matches!(
             parse_api_attrs(&attrs),
-            Ok(Attrs { repr: Some(Type::Scalar(name)), secret: false }) if name == "u32"
+            Ok(Attrs {
+                repr: Some(Type::Scalar(name)),
+                secret: false,
+                stream: None,
+            }) if name == "u32"
         );
 
         let attrs: Vec<Attribute> = parse_quote! {
@@ -805,7 +826,8 @@ mod tests {
             parse_api_attrs(&attrs),
             Ok(Attrs {
                 repr: None,
-                secret: true
+                secret: true,
+                stream: None,
             })
         );
 
@@ -814,7 +836,23 @@ mod tests {
         };
         assert_matches!(
             parse_api_attrs(&attrs),
-            Ok(Attrs { repr: Some(Type::Scalar(name)), secret: true }) if name == "String"
+            Ok(Attrs {
+                repr: Some(Type::Scalar(name)),
+                secret: true,
+                stream: None,
+            }) if name == "String"
+        );
+
+        let attrs: Vec<Attribute> = parse_quote! {
+            #[api(stream(Event))]
+        };
+        assert_matches!(
+            parse_api_attrs(&attrs),
+            Ok(Attrs {
+                repr: None,
+                secret: false,
+                stream: Some(Type::Scalar(name)),
+            }) if name == "Event"
         );
     }
 
@@ -836,6 +874,18 @@ mod tests {
                 #[api]
                 async fn baz(&self, a: String, b: Vec<u8>) -> Result<(), Error> {
                 }
+
+                #[api(stream(()))]
+                fn stream_of_units() -> StreamOfUnits {
+                }
+
+                #[api(stream(Event))]
+                fn stream_of_events() -> StreamOfEvents {
+                }
+
+                #[api]
+                fn session_unsubscribe() {
+                }
             }
         };
 
@@ -849,7 +899,9 @@ mod tests {
                         docs: Docs::default(),
                         fields: Fields::Unit,
                         ret: Type::Unit,
+                        ret_stream_item: None,
                         is_async: false,
+                        skip: false,
                     },
                 ),
                 (
@@ -867,7 +919,9 @@ mod tests {
                             Box::new(Type::Scalar("bool".to_owned())),
                             "Error".to_string(),
                         ),
+                        ret_stream_item: None,
                         is_async: false,
+                        skip: false,
                     },
                 ),
                 (
@@ -893,7 +947,42 @@ mod tests {
                             ),
                         ]),
                         ret: Type::Result(Box::new(Type::Unit), "Error".to_string()),
+                        ret_stream_item: None,
                         is_async: true,
+                        skip: false,
+                    },
+                ),
+                (
+                    "stream_of_units".to_owned(),
+                    RequestVariant {
+                        docs: Docs::default(),
+                        fields: Fields::Unit,
+                        ret: Type::Scalar("StreamOfUnits".to_owned()),
+                        ret_stream_item: Some(Type::Unit),
+                        is_async: false,
+                        skip: false,
+                    },
+                ),
+                (
+                    "stream_of_events".to_owned(),
+                    RequestVariant {
+                        docs: Docs::default(),
+                        fields: Fields::Unit,
+                        ret: Type::Scalar("StreamOfEvents".to_owned()),
+                        ret_stream_item: Some(Type::Scalar("Event".to_owned())),
+                        is_async: false,
+                        skip: false,
+                    },
+                ),
+                (
+                    "session_unsubscribe".to_owned(),
+                    RequestVariant {
+                        docs: Docs::default(),
+                        fields: Fields::Unit,
+                        ret: Type::Unit,
+                        ret_stream_item: None,
+                        is_async: false,
+                        skip: true,
                     },
                 ),
             ],

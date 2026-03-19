@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.mapNotNull
  */
 fun Repository.subscribe(): Flow<Unit> = client.subscribe(Request.RepositorySubscribe(handle)).mapNotNull {
     when (it) {
-        is Response.RepositoryEvent -> Unit
         is Response.None -> Unit
         else -> null
     }

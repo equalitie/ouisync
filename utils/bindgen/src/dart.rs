@@ -549,8 +549,12 @@ fn write_api_class(
     let prefix = format!("{}_", name.to_snake_case());
 
     for (variant_name, variant) in request_variants {
-        // Event subscription / unsubscription is handled manually
-        if variant_name.contains("subscribe") {
+        if variant.skip {
+            continue;
+        }
+
+        // Streams are currently handled manually
+        if variant.ret_stream_item.is_some() {
             continue;
         }
 

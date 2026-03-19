@@ -66,10 +66,21 @@ impl Request {
 pub struct RequestVariant {
     pub docs: Docs,
     pub fields: Fields,
+
     /// The return type of the handler for this variant
     pub ret: Type,
+
+    /// If the handler returns a stream, the `Item` type of that stream. Otherwise `None`.
+    ///
+    /// Note: this can't be automatically infered from the handler's return type because the parser
+    /// operates on raw tokens and doesn't have access to type information.
+    pub ret_stream_item: Option<Type>,
+
     /// Whether the handler for this variant is async
     pub is_async: bool,
+
+    /// Skip generating response variant and handler for this variant.
+    pub skip: bool,
 }
 
 #[derive(Default, Debug)]
@@ -112,8 +123,14 @@ impl<'a> From<&'a Request> for Response {
         let types: HashSet<_> = request
             .variants
             .iter()
-            .filter(|(name, _)| !name.contains("subscribe"))
-            .map(|(_, variant)| variant.ret.unwrap())
+            .filter(|(_, variant)| !variant.skip)
+            .map(|(_, variant)| {
+                variant
+                    .ret_stream_item
+                    .as_ref()
+                    .unwrap_or(&variant.ret)
+                    .unwrap()
+            })
             .collect();
 
         let mut variants: Vec<_> = types
@@ -122,15 +139,6 @@ impl<'a> From<&'a Request> for Response {
                 let name = ty.to_response_variant_name();
                 (name, ty)
             })
-            .chain([
-                ("RepositoryEvent".to_owned(), Type::Unit),
-                (
-                    "NetworkEvent".to_owned(),
-                    Type::Scalar("NetworkEvent".to_owned()),
-                ),
-                ("StateMonitorEvent".to_owned(), Type::Unit),
-                ("PeerAddr".to_owned(), Type::Scalar("PeerAddr".to_owned())),
-            ])
             .collect();
         variants.sort_by(|(a, _), (b, _)| a.cmp(b));
 
