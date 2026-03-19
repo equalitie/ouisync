@@ -63,5 +63,5 @@ pub use self::{
     store::{DATA_VERSION, Error as StoreError},
     version_vector::VersionVector,
 };
-
+pub use btdht::{INFO_HASH_LEN, InfoHash};
 pub use net::{quic::SideChannel as UdpSocket, udp::DatagramSocket};

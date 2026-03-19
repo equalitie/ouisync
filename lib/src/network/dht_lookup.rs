@@ -29,6 +29,14 @@ impl DhtLookup {
             event_rx: UnboundedReceiverStream::new(peer_rx),
         }
     }
+
+    /// Create DHT lookup that yields no peer.
+    pub fn empty() -> Self {
+        Self {
+            request: None,
+            event_rx: UnboundedReceiverStream::new(mpsc::unbounded_channel().1),
+        }
+    }
 }
 
 impl Stream for DhtLookup {

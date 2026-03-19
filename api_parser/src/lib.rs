@@ -129,6 +129,7 @@ impl<'a> From<&'a Request> for Response {
                     Type::Scalar("NetworkEvent".to_owned()),
                 ),
                 ("StateMonitorEvent".to_owned(), Type::Unit),
+                ("PeerAddr".to_owned(), Type::Scalar("PeerAddr".to_owned())),
             ])
             .collect();
         variants.sort_by(|(a, _), (b, _)| a.cmp(b));

@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use futures_util::{SinkExt, stream::FuturesUnordered};
-use ouisync::NetworkEventReceiver;
+use ouisync::{DhtLookup, NetworkEventReceiver};
 use tokio::select;
 use tokio_stream::{StreamExt, StreamMap};
 use tracing::{Span, field};
@@ -183,20 +183,26 @@ where
 }
 
 impl From<RepositorySubscription> for Action<Response> {
-    fn from(rx: RepositorySubscription) -> Self {
-        Self::Subscribe(rx.into())
+    fn from(stream: RepositorySubscription) -> Self {
+        Self::Subscribe(stream.into())
     }
 }
 
 impl From<NetworkEventReceiver> for Action<Response> {
-    fn from(rx: NetworkEventReceiver) -> Self {
-        Self::Subscribe(rx.into())
+    fn from(stream: NetworkEventReceiver) -> Self {
+        Self::Subscribe(stream.into())
     }
 }
 
 impl From<StateMonitorSubscription> for Action<Response> {
-    fn from(rx: StateMonitorSubscription) -> Self {
-        Self::Subscribe(rx.into())
+    fn from(stream: StateMonitorSubscription) -> Self {
+        Self::Subscribe(stream.into())
+    }
+}
+
+impl From<DhtLookup> for Action<Response> {
+    fn from(stream: DhtLookup) -> Self {
+        Self::Subscribe(stream.into())
     }
 }
 

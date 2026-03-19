@@ -26,10 +26,10 @@ use crate::{
 };
 use futures_util::stream::FuturesUnordered;
 use ouisync::{
-    Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
-    NatBehavior, Network, NetworkEventReceiver, PeerAddr, PeerInfo, Progress, PublicRuntimeId,
-    Registration, Repository, RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize,
-    TopicId,
+    Access, AccessChange, AccessMode, AccessSecrets, Credentials, DhtLookup, EntryType, Event,
+    INFO_HASH_LEN, InfoHash, LocalSecret, NatBehavior, Network, NetworkEventReceiver, PeerAddr,
+    PeerInfo, Progress, PublicRuntimeId, Registration, Repository, RepositoryParams,
+    SetLocalSecret, ShareToken, Stats, StorageSize, TopicId,
     crypto::{Password, PasswordSalt, cipher::SecretKey},
 };
 use ouisync_macros::api;
@@ -1952,13 +1952,22 @@ impl State {
         Unsubscribe(id)
     }
 
-    // TODO:
-    // #[api]
-    // pub fn session_dht_lookup(&self, info_hash: String, announce: bool) -> DhtLookup {
-    //     todo!()
-    //     // let info_hash = InfoHash::
-    //     // self.network.dht_lookup(info_hash, announce)
-    // }
+    /// Starts a DHT lookup for the given info-hash (formated as hex string). Returns a stream of
+    /// discovered peer addresses. If `announce` is true, also announces us as having the content
+    /// corresponding to the info-hash.
+    ///
+    /// Note: Currently this doesn't automatically connnect to the discovered peers but this might
+    /// change in the future.
+    #[api]
+    pub fn session_subscribe_to_dht_lookup(&self, info_hash: String, announce: bool) -> DhtLookup {
+        let mut buffer = [0; INFO_HASH_LEN];
+
+        if hex::decode_to_slice(&info_hash, &mut buffer).is_ok() {
+            self.network.dht_lookup(InfoHash::from(buffer), announce)
+        } else {
+            DhtLookup::empty()
+        }
+    }
 
     /// Opens a side channel to the underlying IPv4 UDP socket. The side channel is used to
     /// send/receive raw UDP datagrams on the same socket that the sync protocol uses. This is
@@ -2258,7 +2267,7 @@ impl State {
     }
 }
 
-// These definitions are only needed to make the api parser's job easier:
+// These definitions are only needed to work around limitations of the api parser:
 pub(crate) struct Unsubscribe(pub MessageId);
 pub(crate) type RepositorySubscription = broadcast::Receiver<Event>;
 pub(crate) type StateMonitorSubscription = watch::Receiver<()>;
