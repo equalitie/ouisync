@@ -1,7 +1,11 @@
 add_executable(test_subscriptions test_subscriptions.cpp)
 target_link_libraries(test_subscriptions PRIVATE cpp_ouisync_client)
-add_test(NAME OuisyncTests COMMAND test_subscriptions)
+add_test(NAME subscriptions COMMAND test_subscriptions)
 
 add_executable(test_copy test_copy.cpp)
 target_link_libraries(test_copy PRIVATE cpp_ouisync_client cpp_ouisync_service)
-add_test(NAME OuisyncCopyTests COMMAND test_copy)
+add_test(NAME copy COMMAND test_copy)
+
+add_executable(test_network_sockets test_network_sockets.cpp)
+target_link_libraries(test_network_sockets PRIVATE cpp_ouisync_client cpp_ouisync_service)
+add_test(NAME network_sockets COMMAND test_network_sockets)

@@ -1,24 +1,31 @@
 #pragma once
 
+#include <optional>
+#include <type_traits>
 #include <boost/asio/spawn.hpp> // yield_context
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/filesystem/path.hpp>
-#include <ouisync/subscriber_id.hpp>
+
+#include <ouisync/error.hpp>
 #include <ouisync/handler.hpp>
+#include <ouisync/subscriber_id.hpp>
 
 namespace ouisync {
 
 class File;
+class NetworkSocket;
 class Repository;
 
 namespace detail {
     template<typename T> struct InvokeSig       { using type = void(boost::system::error_code, T); };
     template<>           struct InvokeSig<void> { using type = void(boost::system::error_code);    };
 
-    template<typename T> struct IsApiClass             : std::false_type {};
-    template<>           struct IsApiClass<File>       : std::true_type  {};
-    template<>           struct IsApiClass<Repository> : std::true_type  {};
-    template<typename T> struct IsApiClass<std::map<std::string, T>> : IsApiClass<T> {};
+    template<typename T> struct IsApiClass                              : std::false_type {};
+    template<>           struct IsApiClass<File>                        : std::true_type  {};
+    template<>           struct IsApiClass<Repository>                  : std::true_type  {};
+    template<>           struct IsApiClass<NetworkSocket>               : std::true_type  {};
+    template<typename T> struct IsApiClass<std::optional<T>>            : IsApiClass<T>   {};
+    template<typename T> struct IsApiClass<std::map<std::string, T>>    : IsApiClass<T>   {};
 
     template<typename T> concept ApiClass = IsApiClass<T>::value;
 
@@ -65,7 +72,7 @@ namespace detail {
                 handler(ec, {});
                 return;
             }
-            if (response.template get_if<Response::None>() == nullptr) {
+            if (response.template get_if<Response::None>() != nullptr) {
                 handler(ec, {});
                 return;
             }
@@ -95,6 +102,33 @@ namespace detail {
                 return;
             }
             handler(ec, RetType(std::move(client), std::move(rsp->value)));
+        }
+    };
+
+    template<
+        typename Variant,
+        ApiClass ValueType
+    >
+    struct ConvertResponse<Variant, std::optional<ValueType>> {
+        template<class ClientPtr, class Handler>
+        static void apply(Handler&& handler, boost::system::error_code ec, Response&& response, ClientPtr client) {
+            if (ec) {
+                handler(ec, {});
+                return;
+            }
+
+            if (response.template get_if<Response::None>() != nullptr) {
+                handler(ec, {});
+                return;
+            }
+
+            auto *rsp = response.template get_if<Variant>();
+            if (rsp == nullptr) {
+                handler(error::protocol, {});
+                return;
+            }
+
+            handler(ec, ValueType(std::move(client), std::move(rsp->value)));
         }
     };
 

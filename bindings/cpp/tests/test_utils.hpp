@@ -1,5 +1,7 @@
 #pragma once
 
+#include <boost/filesystem/operations.hpp>
+#include <boost/test/unit_test.hpp>
 #include <ouisync/message.hpp>
 #include <unordered_map>
 #include <unordered_set>
@@ -15,13 +17,13 @@ namespace tests::print {
 } // namespace tests::print
 
 namespace std {
-    ostream& operator<<(ostream& os, const ouisync::MessageId& m) {
-        return os << "MessageId{" << m.value << "}\n"; 
+    inline ostream& operator<<(ostream& os, const ouisync::MessageId& m) {
+        return os << "MessageId{" << m.value << "}\n";
     }
     template<class T>
     ostream& operator<<(ostream& os, const std::optional<T>& o) {
         if (o) return os << "Some{" << *o << "}";
-        else return os << "None"; 
+        else return os << "None";
     }
     template<class Collection>
     ostream& operator<<(ostream& os, const tests::print::List<Collection>& l) {
@@ -46,8 +48,39 @@ namespace std {
 } // namespace std
 
 namespace ouisync {
-    bool operator==(const MessageId& m1, const MessageId& m2) {
+    inline bool operator==(const MessageId& m1, const MessageId& m2) {
         return m1.value == m2.value;
     }
 } // ouisync namespace
 
+// Temporary directory that auto-deletes itself on destruction.
+class TempDir {
+private:
+    boost::filesystem::path _path;
+
+public:
+
+    TempDir() :
+        _path(
+            boost::filesystem::temp_directory_path() /
+            "ouisync-cpp-tests" /
+            boost::unit_test::framework::current_test_case().p_name /
+            boost::filesystem::unique_path()
+        )
+    {
+        boost::filesystem::create_directories(_path);
+    }
+
+    ~TempDir() {
+        boost::filesystem::remove_all(_path);
+    }
+
+    TempDir(const TempDir&) = delete;
+    TempDir(TempDir&&) = delete;
+    TempDir& operator=(const TempDir&) = delete;
+    TempDir& operator=(TempDir&&) = delete;
+
+    const boost::filesystem::path& path() const {
+        return _path;
+    }
+};

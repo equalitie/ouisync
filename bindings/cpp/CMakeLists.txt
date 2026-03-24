@@ -132,6 +132,8 @@ install(TARGETS ouisync_service DESTINATION ${CMAKE_INSTALL_PREFIX})
 
 add_library(cpp_ouisync_service
     STATIC
+        ouisync/data.g.cpp
+        ouisync/error.cpp
         ouisync/service.cpp
 )
 

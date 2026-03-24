@@ -40,4 +40,6 @@ private:
     std::shared_ptr<State> _state;
 };
 
+void init_log();
+
 } // namespace ouisync
