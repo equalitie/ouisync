@@ -5,11 +5,61 @@
 
 #include <msgpack.hpp>
 #include <chrono>
+#include "debug.hpp"
 
 //
 // C++ concepts
 //
 namespace ouisync {
+
+struct DeserializeError : std::exception {
+    const msgpack::object from;
+    const std::string into;
+    std::exception_ptr prev;
+
+    DeserializeError(msgpack::object from, std::string into, std::exception_ptr prev)
+        : from(std::move(from)), into(std::move(into)), prev(std::move(prev))
+    {}
+
+    template<typename Into>
+    static
+    DeserializeError create(msgpack::object const& from, std::exception_ptr prev) {
+        std::stringstream s;
+        s << printer::type<Into>();
+
+        return DeserializeError(
+            from, s.str(), std::move(prev)
+        );
+    }
+
+    const char* what() const noexcept {
+        try {
+            if (prev) std::rethrow_exception(prev);
+            return "unspecified";
+        }
+        catch (std::exception const& e) {
+            return e.what();
+        }
+        catch (...) {
+            return "unknown";
+        }
+    }
+
+    void explain(std::ostream& os) const noexcept {
+        os << "When parsing\n";
+        os << "  from: " << printer::display(from) << "\n";
+        os << "  into: " << into << "\n";
+        try {
+            if (prev) std::rethrow_exception(prev);
+        }
+        catch (DeserializeError const& e) {
+            e.explain(os);
+        }
+        catch (std::exception const& e) {
+            os << "Error: " << e.what() << "\n";
+        }
+    }
+};
 
 // Concept which tells whether a struct is described
 template<class T> concept is_described_struct = describe::Struct<std::decay_t<T>>::value;
@@ -95,7 +145,12 @@ struct UnpackObserver {
             if (parsed > 0) {
                 throw_error(error::deserialize, "wrong description");
             }
-            member_out = obj.as<M>();
+            try {
+                member_out = obj.as<M>();
+            }
+            catch (...) {
+                throw DeserializeError::create<M>(obj, std::current_exception());
+            }
             ++parsed;
         }
         else if (dsc.type == describe::FieldsType::ARRAY) {
@@ -105,7 +160,14 @@ struct UnpackObserver {
                 }
                 array_checked = true;
             }
-            member_out = obj.via.array.ptr[parsed++].as<M>();
+            auto& item = obj.via.array.ptr[parsed];
+            try {
+                member_out = item.as<M>();
+            }
+            catch (...) {
+                throw DeserializeError::create<M>(item, std::current_exception());
+            }
+            ++parsed;
         }
         else {
             throw_error(error::logic, "unreachable");
@@ -296,7 +358,14 @@ ResponseResult deserialize(const std::vector<char>& buffer) {
     // Debug
     //std::cout << "<<<d " << printer::display(obj) << "\n";
 
-    return obj.as<ResponseResult>();
+    try {
+        return obj.as<ResponseResult>();
+    }
+    catch (DeserializeError const& e) {
+        std::cerr << "Failed to deserialie message from Ouisync service:\n";
+        e.explain(std::cerr);
+        throw;
+    }
 }
 
 } // namespace ouisync
