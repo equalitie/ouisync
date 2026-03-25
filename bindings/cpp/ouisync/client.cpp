@@ -201,7 +201,7 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
         ec = e.code();
     }
     catch (...) {
-        ec = with_location(error::logic);
+        ec = error::logic;
     }
 
     auto pending = std::move(state->pending);
@@ -311,11 +311,11 @@ void Client::invoke_impl(
                 },
                 [&](ResponseHandler&) {
                     // Handler already set
-                    apply_result(std::move(handler), HandlerResult{with_location(error::logic)});
+                    apply_result(std::move(handler), HandlerResult{system::error_code(error::logic)});
                 },
                 [&](Subscription&) {
                     // Response/subscription mismatch
-                    apply_result(std::move(handler), HandlerResult{with_location(error::logic)});
+                    apply_result(std::move(handler), HandlerResult{system::error_code(error::logic)});
                 },
             },
             entry);

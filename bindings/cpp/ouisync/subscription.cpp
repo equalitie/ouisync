@@ -120,7 +120,7 @@ void RepositorySubscription::state_changed(boost::asio::yield_context yield) {
     asio::async_initiate<decltype(yield), void(boost::system::error_code)>(
         [impl = _impl](auto handler) {
             if (!impl) {
-                handler(with_location(error::not_subscribed));
+                handler(error::not_subscribed);
                 return;
             }
 
@@ -143,7 +143,7 @@ void RepositorySubscription::state_changed(boost::asio::yield_context yield) {
                     std::move(result));
                 },
                 [&](Handler&) {
-                    handler(with_location(error::Client::already_subscribed));
+                    handler(error::Client::already_subscribed);
                 }
             },
             impl->state);
