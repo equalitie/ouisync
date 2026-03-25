@@ -33,7 +33,7 @@ mod upnp;
 
 pub use self::{
     connection::PeerInfoCollector,
-    dht_discovery::{DHT_ROUTERS, DhtContactsStoreTrait},
+    dht_discovery::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtOptions},
     dht_lookup::DhtLookup,
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
@@ -108,7 +108,7 @@ pub struct Network {
 impl Network {
     pub fn new(
         monitor: StateMonitor,
-        dht_contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
+        dht_options: DhtOptions,
         this_runtime_id: Option<SecretRuntimeId>,
     ) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
@@ -120,7 +120,7 @@ impl Network {
         // TODO: There are ways to address this: e.g. we could try both, or we could include
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
-        let dht_discovery = DhtDiscovery::new(None, None, dht_contacts, monitor.make_child("DHT"));
+        let dht_discovery = DhtDiscovery::new(None, None, dht_options, monitor.make_child("DHT"));
         // TODO: do we need unbounded channel here?
         let (dht_discovery_tx, dht_discovery_rx) = mpsc::unbounded_channel();
 

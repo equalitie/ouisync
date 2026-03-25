@@ -31,8 +31,7 @@ use tokio::{
 use tracing::{Span, instrument::Instrument};
 
 // Hardcoded DHT routers to bootstrap the DHT against.
-// TODO: add this to `NetworkOptions` so it can be overriden by the user.
-pub const DHT_ROUTERS: &[&str] = &[
+pub const DEFAULT_DHT_ROUTERS: &[&str] = &[
     "dht.ouisync.net:6881",
     "router.bittorrent.com:6881",
     "dht.transmissionbt.com:6881",
@@ -46,6 +45,9 @@ pub const DHT_ROUTERS: &[&str] = &[
 const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
 const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
 
+/// Persistent store for DHT contacts. It is periodically updated with the
+/// current DHT contacts and persisted. It is then used to provide additional
+/// nodes to bootstrap against on the next DHT discovery startup.
 #[async_trait]
 pub trait DhtContactsStoreTrait: Sync + Send + 'static {
     async fn load_v4(&self) -> io::Result<HashSet<SocketAddrV4>>;
@@ -57,6 +59,27 @@ pub trait DhtContactsStoreTrait: Sync + Send + 'static {
 pub(super) enum DhtEvent {
     PeerFound(SeenPeer),
     RoundEnded,
+}
+
+#[derive(Clone)]
+pub struct DhtOptions {
+    /// DHT bootstrap nodes
+    pub routers: HashSet<String>,
+    /// Additional DHT contacts
+    pub contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
+}
+
+impl Default for DhtOptions {
+    fn default() -> Self {
+        Self {
+            routers: DEFAULT_DHT_ROUTERS
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+            contacts: None,
+        }
+    }
 }
 
 pub(super) struct DhtDiscovery {
@@ -73,11 +96,11 @@ impl DhtDiscovery {
     pub fn new(
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
-        contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
+        options: DhtOptions,
         monitor: StateMonitor,
     ) -> Self {
-        let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4, contacts_store.clone()));
-        let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6, contacts_store));
+        let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4, options.clone()));
+        let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6, options));
 
         let lookups = Arc::new(BlockingMutex::new(HashMap::default()));
 
@@ -169,18 +192,15 @@ impl DhtDiscovery {
 struct RestartableDht {
     socket_maker: Option<quic::SideChannelMaker>,
     dht: Weak<Option<TaskOrResult<MonitoredDht>>>,
-    contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
+    options: DhtOptions,
 }
 
 impl RestartableDht {
-    fn new(
-        socket_maker: Option<quic::SideChannelMaker>,
-        contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
-    ) -> Self {
+    fn new(socket_maker: Option<quic::SideChannelMaker>, options: DhtOptions) -> Self {
         Self {
             socket_maker,
             dht: Weak::new(),
-            contacts_store,
+            options,
         }
     }
 
@@ -195,7 +215,7 @@ impl RestartableDht {
             dht
         } else if let Some(maker) = &self.socket_maker {
             let socket = maker.make();
-            let dht = MonitoredDht::start(socket, monitor, span, self.contacts_store.clone());
+            let dht = MonitoredDht::start(socket, self.options.clone(), monitor, span);
             let dht = Arc::new(Some(dht));
 
             self.dht = Arc::downgrade(&dht);
@@ -222,9 +242,9 @@ struct MonitoredDht {
 impl MonitoredDht {
     fn start(
         socket: quic::SideChannel,
+        options: DhtOptions,
         parent_monitor: &StateMonitor,
         span: &Span,
-        contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
     ) -> TaskOrResult<Self> {
         // TODO: Unwrap
         let local_addr = socket.local_addr().unwrap();
@@ -237,27 +257,23 @@ impl MonitoredDht {
         let monitor = parent_monitor.make_child(monitor_name);
 
         TaskOrResult::new(scoped_task::spawn(MonitoredDht::create(
-            is_v4,
-            socket,
-            monitor,
-            span,
-            contacts_store,
+            is_v4, socket, options, monitor, span,
         )))
     }
 
     async fn create(
         is_v4: bool,
         socket: quic::SideChannel,
+        options: DhtOptions,
         monitor: StateMonitor,
         span: Span,
-        contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
     ) -> Self {
         // TODO: load the DHT state from a previous save if it exists.
         let mut builder = MainlineDht::builder()
-            .add_routers(DHT_ROUTERS.iter().copied())
+            .add_routers(options.routers)
             .set_read_only(false);
 
-        if let Some(contacts_store) = &contacts_store {
+        if let Some(contacts_store) = &options.contacts {
             let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts_store).await;
 
             for contact in initial_contacts {
@@ -322,7 +338,7 @@ impl MonitoredDht {
         let monitoring_task = monitoring_task.instrument(span.clone());
         let monitoring_task = scoped_task::spawn(monitoring_task);
 
-        let _periodic_dht_node_load_task = contacts_store.map(|contacts_store| {
+        let _periodic_dht_node_load_task = options.contacts.map(|contacts_store| {
             scoped_task::spawn(
                 Self::keep_reading_contacts(is_v4, dht.clone(), contacts_store).instrument(span),
             )

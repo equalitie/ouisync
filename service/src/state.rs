@@ -26,9 +26,9 @@ use crate::{
 };
 use futures_util::stream::FuturesUnordered;
 use ouisync::{
-    Access, AccessChange, AccessMode, AccessSecrets, Credentials, DhtLookup, EntryType, Event,
-    INFO_HASH_LEN, InfoHash, LocalSecret, NatBehavior, Network, NetworkEventReceiver, PeerAddr,
-    PeerInfo, Progress, PublicRuntimeId, Registration, Repository, RepositoryParams,
+    Access, AccessChange, AccessMode, AccessSecrets, Credentials, DhtLookup, DhtOptions, EntryType,
+    Event, INFO_HASH_LEN, InfoHash, LocalSecret, NatBehavior, Network, NetworkEventReceiver,
+    PeerAddr, PeerInfo, Progress, PublicRuntimeId, Registration, Repository, RepositoryParams,
     SetLocalSecret, ShareToken, Stats, StorageSize, TopicId,
     crypto::{Password, PasswordSalt, cipher::SecretKey},
 };
@@ -92,7 +92,10 @@ impl State {
 
         let network = Network::new(
             root_monitor.make_child("Network"),
-            Some(Arc::new(dht_contacts_store)),
+            DhtOptions {
+                contacts: Some(Arc::new(dht_contacts_store)),
+                ..Default::default()
+            },
             None,
         );
 

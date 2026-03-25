@@ -125,7 +125,7 @@ pub(crate) mod actor {
     use metrics::Key;
     use metrics_ext::Pair;
     use ouisync::{
-        AccessMode, RepositoryParams,
+        AccessMode, DhtOptions, RepositoryParams,
         crypto::{Hash, Hashable, sign::Keypair},
     };
     use state_monitor::StateMonitor;
@@ -142,7 +142,11 @@ pub(crate) mod actor {
             .unwrap()
             .into();
 
-        Network::new(StateMonitor::make_root(), None, Some(runtime_id))
+        Network::new(
+            StateMonitor::make_root(),
+            DhtOptions::default(),
+            Some(runtime_id),
+        )
     }
 
     pub(crate) async fn create_network(proto: Proto) -> Network {

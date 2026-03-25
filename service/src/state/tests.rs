@@ -5,7 +5,9 @@ use crate::test_utils;
 use super::*;
 use assert_matches::assert_matches;
 use futures_util::{TryStreamExt, future::join};
-use ouisync::{Access, AccessSecrets, File, Repository, RepositoryParams, WriteSecrets};
+use ouisync::{
+    Access, AccessSecrets, DhtOptions, File, Repository, RepositoryParams, WriteSecrets,
+};
 use tempfile::TempDir;
 use tokio::{net::UdpSocket, select, sync::broadcast::error::RecvError, time};
 use tokio_stream::wrappers::ReadDirStream;
@@ -438,7 +440,7 @@ async fn move_repository_during_sync() {
         .await
         .unwrap();
 
-        let network = Network::new(monitor, None, None);
+        let network = Network::new(monitor, DhtOptions::default(), None);
         network
             .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
             .await;
@@ -814,7 +816,7 @@ async fn create_remote_repository(root_dir: &Path) -> (Network, Repository, Regi
     .await
     .unwrap();
 
-    let network = Network::new(monitor, None, None);
+    let network = Network::new(monitor, DhtOptions::default(), None);
     network
         .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;
