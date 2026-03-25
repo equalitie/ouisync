@@ -8,14 +8,6 @@ use tokio::select;
 
 use crate::coop_rw_lock::CoopRwLock;
 
-// The api parser doesn't support raw tuples so we need to use actual named structs.
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
-#[api]
-pub struct Datagram {
-    pub data: Vec<u8>,
-    pub addr: SocketAddr,
-}
-
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
 #[serde(transparent)]
 #[api]

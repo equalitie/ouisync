@@ -63,40 +63,41 @@ BOOST_AUTO_TEST_CASE(test_ping) {
         ouisync::Service service(yield.get_executor());
         service.start(tempdir.path(), nullptr, yield);
 
-        auto session = ouisync::Session::connect(tempdir.path(), yield);
-        session.bind_network({"quic/127.0.0.1:0"}, yield);
+        auto alice_session = ouisync::Session::connect(tempdir.path(), yield);
+        alice_session.bind_network({"quic/127.0.0.1:0"}, yield);
 
-        auto peer_socket = asio::ip::udp::socket(
+        auto bob_socket = asio::ip::udp::socket(
             yield.get_executor(),
             asio::ip::udp::endpoint(asio::ip::make_address_v4("127.0.0.1"), 0)
         );
-        auto peer_endpoint = peer_socket.local_endpoint();
+        auto bob_endpoint = bob_socket.local_endpoint();
 
-        auto session_socket = session.open_network_socket_v4(yield);
+        auto alice_socket = alice_session.open_network_socket_v4(yield);
 
         // Send PING
         {
-            auto sent_len = session_socket->send_to(to_bytes("ping"), to_string(peer_endpoint), yield);
+            auto sent_len = alice_socket->send_to(to_bytes("ping"), to_string(bob_endpoint), yield);
             BOOST_REQUIRE_EQUAL(sent_len, 4);
         }
 
         // Receive PING, send PONG
         {
-            asio::ip::udp::endpoint sender_endpoint;
-            std::string recv_data(4, ' ');
-            auto recv_len = peer_socket.async_receive_from(asio::buffer(recv_data), sender_endpoint, yield);
-            BOOST_REQUIRE_EQUAL(recv_len, 4);
-            BOOST_REQUIRE_EQUAL(recv_data, "ping");
+            asio::ip::udp::endpoint endpoint;
+            std::string data("****");
+            auto len = bob_socket.async_receive_from(asio::buffer(data), endpoint, yield);
+            BOOST_REQUIRE_EQUAL(len, 4);
+            BOOST_REQUIRE_EQUAL(data, "ping");
 
-            std::string pong = "pong";
-            auto sent_len = peer_socket.async_send_to(asio::buffer(pong), sender_endpoint, yield);
-            BOOST_REQUIRE_EQUAL(sent_len, 4);
+            data = std::string("pong");
+            len = bob_socket.async_send_to(asio::buffer(data), endpoint, yield);
+            BOOST_REQUIRE_EQUAL(len, 4);
         }
 
         // Receive PONG
         {
-            auto datagram = session_socket->recv_from(4, yield);
+            auto datagram = alice_socket->recv_from(4, yield);
             BOOST_REQUIRE_EQUAL(from_bytes(datagram.data), "pong");
+            BOOST_REQUIRE_EQUAL(datagram.addr, to_string(bob_endpoint));
         }
 
         service.stop(yield);

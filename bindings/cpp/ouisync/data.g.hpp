@@ -532,17 +532,17 @@ struct QuotaInfo {
     StorageSize size;
 };
 
+struct Datagram {
+    std::vector<uint8_t> data;
+    std::string addr;
+};
+
 struct FileHandle {
     size_t value;
 };
 
 struct RepositoryHandle {
     size_t value;
-};
-
-struct Datagram {
-    std::vector<uint8_t> data;
-    std::string addr;
 };
 
 struct NetworkSocketHandle {

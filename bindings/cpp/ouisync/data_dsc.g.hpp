@@ -448,6 +448,15 @@ template<> struct describe::Struct<QuotaInfo> : std::true_type {
     }
 };
 
+template<> struct describe::Struct<Datagram> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Datagram& v) {
+        o.field(v.data);
+        o.field(v.addr);
+    }
+};
+
 template<> struct describe::Struct<FileHandle> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
@@ -461,15 +470,6 @@ template<> struct describe::Struct<RepositoryHandle> : std::true_type {
     template<class Observer>
     static void describe(Observer& o, RepositoryHandle& v) {
         o.field(v.value);
-    }
-};
-
-template<> struct describe::Struct<Datagram> : std::true_type {
-    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
-    template<class Observer>
-    static void describe(Observer& o, Datagram& v) {
-        o.field(v.data);
-        o.field(v.addr);
     }
 };
 

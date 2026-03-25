@@ -1,7 +1,5 @@
 use crate::{
-    file::FileHandle,
-    repository::RepositoryHandle,
-    socket::{Datagram, NetworkSocketHandle},
+    file::FileHandle, repository::RepositoryHandle, socket::NetworkSocketHandle,
     stream::NetworkStreamHandle,
 };
 use ouisync::{
@@ -128,6 +126,15 @@ pub struct DirectoryEntry {
 pub struct QuotaInfo {
     pub quota: Option<StorageSize>,
     pub size: StorageSize,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
+#[api]
+pub struct Datagram {
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,
+    #[serde(with = "helpers::str")]
+    pub addr: SocketAddr,
 }
 
 #[cfg(test)]
@@ -303,11 +310,31 @@ mod tests {
                 write_uint(&mut out, 12345678).unwrap();
                 out
             }),
+            (
+                Response::Datagram(Datagram {
+                    data: b"hello world".to_vec(),
+                    addr: ([10, 0, 0, 120], 34567).into(),
+                }),
+                {
+                    let mut out = Vec::new();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "Datagram").unwrap();
+                    write_array_len(&mut out, 2).unwrap();
+                    write_bin(&mut out, b"hello world").unwrap();
+                    write_str(&mut out, "10.0.0.120:34567").unwrap();
+                    out
+                },
+            ),
         ];
 
         for (input, expected) in test_vectors {
             let s = rmp_serde::to_vec(&input).unwrap();
-            assert_eq!(s, expected);
+
+            similar_asserts::assert_eq!(
+                expected: rmpv::decode::read_value(&mut expected.as_slice()).unwrap(),
+                actual: rmpv::decode::read_value(&mut s.as_slice()).unwrap(),
+                "unexpected serialization of `{input:?}`"
+            );
 
             let d: Response = rmp_serde::from_slice(&s).unwrap();
             assert_eq!(d, input);
