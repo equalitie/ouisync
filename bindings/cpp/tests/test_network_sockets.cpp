@@ -88,7 +88,8 @@ BOOST_AUTO_TEST_CASE(test_ping) {
             BOOST_REQUIRE_EQUAL(recv_len, 4);
             BOOST_REQUIRE_EQUAL(recv_data, "ping");
 
-            auto sent_len = peer_socket.async_send_to(asio::buffer(std::string("pong")), sender_endpoint, yield);
+            std::string pong = "pong";
+            auto sent_len = peer_socket.async_send_to(asio::buffer(pong), sender_endpoint, yield);
             BOOST_REQUIRE_EQUAL(sent_len, 4);
         }
 
