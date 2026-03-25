@@ -6,8 +6,8 @@ mod common;
 use common::{dump, sync_watch};
 use futures_util::future;
 use ouisync::{
-    Access, AccessMode, AccessSecrets, DATA_VERSION, DIRECTORY_VERSION, DhtOptions, Network,
-    PeerAddr, Repository, RepositoryParams, SCHEMA_VERSION,
+    Access, AccessMode, AccessSecrets, DATA_VERSION, DIRECTORY_VERSION, Network, PeerAddr,
+    Repository, RepositoryParams, SCHEMA_VERSION,
 };
 use rand::{
     Rng, SeedableRng,
@@ -15,7 +15,6 @@ use rand::{
     prelude::Distribution,
     rngs::StdRng,
 };
-use state_monitor::StateMonitor;
 use std::{
     env,
     ffi::OsString,
@@ -173,7 +172,7 @@ async fn test_sync(work_dir: &Path, input_dump: &Path) {
 }
 
 async fn create_network() -> Network {
-    let network = Network::new(StateMonitor::make_root(), DhtOptions::default(), None);
+    let network = Network::new();
     network
         .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;

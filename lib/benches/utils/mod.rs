@@ -6,7 +6,7 @@ use camino::Utf8Path;
 use common::sync_watch;
 use futures_util::future;
 use ouisync::{
-    Access, DhtOptions, Network, PeerAddr, Registration, Repository, RepositoryParams, WriteSecrets,
+    Access, Network, PeerAddr, Registration, Repository, RepositoryParams, WriteSecrets,
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use state_monitor::StateMonitor;
@@ -128,7 +128,7 @@ impl Actor {
     pub(crate) async fn new(rng: &mut StdRng, base_dir: &Path) -> Self {
         let monitor = StateMonitor::make_root();
 
-        let network = Network::new(monitor.clone(), DhtOptions::default(), None);
+        let network = Network::builder().monitor(monitor.clone()).build();
         network
             .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
             .await;

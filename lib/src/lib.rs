@@ -51,7 +51,7 @@ pub use self::{
     joint_entry::JointEntry,
     network::{
         DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtLookup, DhtOptions, NatBehavior, Network,
-        NetworkEvent, NetworkEventReceiver, NetworkEventStream, PeerAddr, PeerInfo,
+        NetworkBuilder, NetworkEvent, NetworkEventReceiver, NetworkEventStream, PeerAddr, PeerInfo,
         PeerInfoCollector, PeerSource, PeerState, PublicRuntimeId, RecvStream, Registration,
         SecretRuntimeId, SendStream, Stats, TopicId, repository_info_hash,
     },

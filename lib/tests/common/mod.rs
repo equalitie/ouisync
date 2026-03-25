@@ -142,11 +142,7 @@ pub(crate) mod actor {
             .unwrap()
             .into();
 
-        Network::new(
-            StateMonitor::make_root(),
-            DhtOptions::default(),
-            Some(runtime_id),
-        )
+        Network::builder().runtime_id(runtime_id).build()
     }
 
     pub(crate) async fn create_network(proto: Proto) -> Network {

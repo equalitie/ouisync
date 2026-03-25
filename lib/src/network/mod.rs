@@ -98,21 +98,57 @@ use tokio::{
 };
 use tracing::{Instrument, Span};
 
-pub struct Network {
-    inner: Arc<Inner>,
-    // We keep tasks here instead of in Inner because we want them to be
-    // destroyed when Network is Dropped.
-    _tasks: Arc<BlockingMutex<JoinSet<()>>>,
+#[derive(Default)]
+pub struct NetworkBuilder {
+    dht: DhtOptions,
+    monitor: Option<StateMonitor>,
+    runtime_id: Option<SecretRuntimeId>,
 }
 
-impl Network {
-    pub fn new(
-        monitor: StateMonitor,
-        dht_options: DhtOptions,
-        this_runtime_id: Option<SecretRuntimeId>,
-    ) -> Self {
+impl NetworkBuilder {
+    pub fn dht_routers<I>(self, routers: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<String>,
+    {
+        Self {
+            dht: DhtOptions {
+                routers: routers.into_iter().map(Into::into).collect(),
+                ..self.dht
+            },
+            ..self
+        }
+    }
+
+    pub fn dht_contacts(self, contacts: Arc<dyn DhtContactsStoreTrait>) -> Self {
+        Self {
+            dht: DhtOptions {
+                contacts: Some(contacts),
+                ..self.dht
+            },
+            ..self
+        }
+    }
+
+    pub fn monitor(self, monitor: StateMonitor) -> Self {
+        Self {
+            monitor: Some(monitor),
+            ..self
+        }
+    }
+
+    pub fn runtime_id(self, runtime_id: SecretRuntimeId) -> Self {
+        Self {
+            runtime_id: Some(runtime_id),
+            ..self
+        }
+    }
+
+    pub fn build(self) -> Network {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(incoming_tx);
+
+        let monitor = self.monitor.unwrap_or_else(StateMonitor::make_root);
 
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
@@ -120,7 +156,7 @@ impl Network {
         // TODO: There are ways to address this: e.g. we could try both, or we could include
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
-        let dht_discovery = DhtDiscovery::new(None, None, dht_options, monitor.make_child("DHT"));
+        let dht_discovery = DhtDiscovery::new(None, None, self.dht, monitor.make_child("DHT"));
         // TODO: do we need unbounded channel here?
         let (dht_discovery_tx, dht_discovery_rx) = mpsc::unbounded_channel();
 
@@ -131,7 +167,7 @@ impl Network {
 
         let user_provided_peers = SeenPeers::new();
 
-        let this_runtime_id = this_runtime_id.unwrap_or_else(SecretRuntimeId::random);
+        let this_runtime_id = self.runtime_id.unwrap_or_else(SecretRuntimeId::random);
         let this_runtime_id_public = this_runtime_id.public();
 
         let connections_monitor = monitor.make_child("Connections");
@@ -175,10 +211,29 @@ impl Network {
 
         tracing::debug!(this_runtime_id = ?this_runtime_id_public.as_public_key(), "Network created");
 
-        Self {
+        Network {
             inner,
             _tasks: tasks,
         }
+    }
+}
+
+pub struct Network {
+    inner: Arc<Inner>,
+    // We keep tasks here instead of in Inner because we want them to be
+    // destroyed when Network is Dropped.
+    _tasks: Arc<BlockingMutex<JoinSet<()>>>,
+}
+
+impl Network {
+    /// Returns builder to create `Network` with custom options.
+    pub fn builder() -> NetworkBuilder {
+        NetworkBuilder::default()
+    }
+
+    /// Create network with default options. Equal to `Self::builder().build()`.
+    pub fn new() -> Self {
+        Self::builder().build()
     }
 
     /// Binds the network to the specified addresses.
@@ -446,6 +501,12 @@ impl Network {
     /// discovered peer addresses. It will not automatically connect to them.
     pub fn dht_lookup(&self, info_hash: InfoHash, announce: bool) -> DhtLookup {
         DhtLookup::start(&self.inner.dht_discovery, info_hash, announce)
+    }
+}
+
+impl Default for Network {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
