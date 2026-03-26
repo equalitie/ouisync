@@ -281,8 +281,8 @@ impl MonitoredDht {
             }
         }
 
-        let dht = builder
-            .start(Socket(socket))
+        let dht = span
+            .in_scope(|| builder.start(Socket(socket)))
             // TODO: `start` only fails if the socket has been closed. That shouldn't be the case
             // there but better check.
             .unwrap();
@@ -309,8 +309,8 @@ impl MonitoredDht {
                     *first_bootstrap.get() = "failed";
                     tracing::error!("bootstrap failed");
 
-                    // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
-                    // is preserved for the user to see.
+                    // Don't `return`, instead halt here so that the `first_bootstrap` monitored
+                    // value is preserved for the user to see.
                     pending::<()>().await;
                 }
 

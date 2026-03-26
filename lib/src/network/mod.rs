@@ -107,14 +107,10 @@ pub struct NetworkBuilder {
 }
 
 impl NetworkBuilder {
-    pub fn dht_routers<I>(self, routers: I) -> Self
-    where
-        I: IntoIterator,
-        I::Item: Into<String>,
-    {
+    pub fn dht_routers(self, routers: HashSet<String>) -> Self {
         Self {
             dht: DhtOptions {
-                routers: routers.into_iter().map(Into::into).collect(),
+                routers,
                 ..self.dht
             },
             ..self

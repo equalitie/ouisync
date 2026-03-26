@@ -441,12 +441,11 @@ dependencies = [
 [[package]]
 name = "btdht"
 version = "1.0.1"
-source = "git+https://github.com/equalitie/btdht.git?rev=14d03cd95a409aad69704bdedffc6ece3857a946#14d03cd95a409aad69704bdedffc6ece3857a946"
+source = "git+https://github.com/equalitie/btdht.git?rev=ad423e21faeb6a4549397f8c6050cb8e4470b77e#ad423e21faeb6a4549397f8c6050cb8e4470b77e"
 dependencies = [
  "async-trait",
  "crc32c",
  "futures-util",
- "log",
  "rand 0.8.5",
  "serde",
  "serde_bytes",
@@ -454,6 +453,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "torrust-serde-bencode",
+ "tracing",
 ]
 
 [[package]]

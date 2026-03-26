@@ -4,9 +4,20 @@
 mod common;
 
 use self::common::{DEFAULT_REPO, Env, Proto, TEST_TIMEOUT, actor};
-use ouisync::{Network, PeerState};
-use std::sync::Arc;
-use tokio::{sync::Barrier, time};
+use assert_matches::assert_matches;
+use async_trait::async_trait;
+use ouisync::{DhtContactsStoreTrait, Network, PeerInfo, PeerSource, PeerState};
+use std::{
+    collections::HashSet,
+    io,
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+    sync::{Arc, Mutex},
+};
+use tokio::{
+    net::UdpSocket,
+    sync::{Barrier, watch},
+    time,
+};
 
 #[test]
 fn peer_exchange_basics() {
@@ -171,6 +182,79 @@ fn dht_toggle() {
 }
 
 #[test]
+fn dht_discovery() {
+    let mut env = Env::new();
+    let proto = Proto::Quic;
+
+    let actors = ["alice", "bob"];
+
+    let bootstrap_addr = watch::Sender::new(None);
+    let pause_barrier = Arc::new(Barrier::new(2));
+    let stop_barrier = Arc::new(Barrier::new(actors.len() + 1));
+
+    env.actor("bootstrap", {
+        let bootstrap_addr = bootstrap_addr.clone();
+        let stop_barrier = stop_barrier.clone();
+
+        async move {
+            let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+
+            bootstrap_addr.send_replace(Some(socket.local_addr().unwrap()));
+
+            let _dht = btdht::MainlineDht::builder()
+                .set_read_only(false)
+                .start(socket)
+                .unwrap();
+
+            stop_barrier.wait().await;
+        }
+    });
+
+    for actor in actors {
+        env.actor(actor, {
+            let mut bootstrap_addr = bootstrap_addr.subscribe();
+            let pause_barrier = pause_barrier.clone();
+            let stop_barrier = stop_barrier.clone();
+
+            async move {
+                let bootstrap_addr = bootstrap_addr
+                    .wait_for(|addr| addr.is_some())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let dht_contacts = TestDhtContacts::new([bootstrap_addr]);
+
+                let network = Network::builder()
+                    .runtime_id(actor::runtime_id())
+                    .dht_contacts(Arc::new(dht_contacts))
+                    .dht_routers(HashSet::new())
+                    .allow_local_peers_on_dht()
+                    .build();
+                actor::bind(&network, proto).await;
+
+                let (_repo, reg) = actor::create_linked_repo(DEFAULT_REPO, &network).await;
+                reg.set_dht_enabled(true);
+
+                if pause_barrier.wait().await.is_leader() {
+                    time::pause();
+                }
+
+                for peer in actors {
+                    if peer == actor {
+                        continue;
+                    }
+
+                    let info = expect_peer_active(&network, peer).await;
+                    assert_matches!(info.source, PeerSource::Dht | PeerSource::Listener);
+                }
+
+                stop_barrier.wait().await;
+            }
+        });
+    }
+}
+
+#[test]
 fn local_discovery() {
     let mut env = Env::new();
     let proto = Proto::Quic;
@@ -232,18 +316,18 @@ fn add_peer_before_bind() {
     });
 }
 
-async fn expect_peer_known(network: &Network, peer_name: &str) {
+async fn expect_peer_known(network: &Network, peer_name: &str) -> PeerInfo {
     expect_peer_state(network, peer_name, |_| true).await
 }
 
-async fn expect_peer_active(network: &Network, peer_name: &str) {
+async fn expect_peer_active(network: &Network, peer_name: &str) -> PeerInfo {
     expect_peer_state(network, peer_name, |state| {
         matches!(state, PeerState::Active { .. })
     })
     .await
 }
 
-async fn expect_peer_state<F>(network: &Network, peer_name: &str, expected_state_fn: F)
+async fn expect_peer_state<F>(network: &Network, peer_name: &str, expected_state_fn: F) -> PeerInfo
 where
     F: Fn(&PeerState) -> bool,
 {
@@ -255,7 +339,7 @@ where
             if let Some(info) = network.peer_info(peer_addr)
                 && expected_state_fn(&info.state)
             {
-                break;
+                break info;
             }
 
             rx.recv().await.unwrap();
@@ -291,5 +375,50 @@ async fn expect_peer_not_known(network: &Network, peer_name: &str) {
     if let Some(info) = network.peer_info(peer_addr) {
         error!("unexpected known peer {peer_name}: {info:?}");
         panic!("unexpected known peer {peer_name}: {info:?}");
+    }
+}
+
+struct TestDhtContacts {
+    v4: Mutex<HashSet<SocketAddrV4>>,
+    v6: Mutex<HashSet<SocketAddrV6>>,
+}
+
+impl TestDhtContacts {
+    fn new(contacts: impl IntoIterator<Item = SocketAddr>) -> Self {
+        let mut v4 = HashSet::new();
+        let mut v6 = HashSet::new();
+
+        for addr in contacts {
+            match addr {
+                SocketAddr::V4(addr) => v4.insert(addr),
+                SocketAddr::V6(addr) => v6.insert(addr),
+            };
+        }
+
+        Self {
+            v4: Mutex::new(v4),
+            v6: Mutex::new(v6),
+        }
+    }
+}
+
+#[async_trait]
+impl DhtContactsStoreTrait for TestDhtContacts {
+    async fn load_v4(&self) -> io::Result<HashSet<SocketAddrV4>> {
+        Ok(self.v4.lock().unwrap().clone())
+    }
+
+    async fn load_v6(&self) -> io::Result<HashSet<SocketAddrV6>> {
+        Ok(self.v6.lock().unwrap().clone())
+    }
+
+    async fn store_v4(&self, contacts: HashSet<SocketAddrV4>) -> io::Result<()> {
+        *self.v4.lock().unwrap() = contacts;
+        Ok(())
+    }
+
+    async fn store_v6(&self, contacts: HashSet<SocketAddrV6>) -> io::Result<()> {
+        *self.v6.lock().unwrap() = contacts;
+        Ok(())
     }
 }

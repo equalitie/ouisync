@@ -125,7 +125,7 @@ pub(crate) mod actor {
     use metrics::Key;
     use metrics_ext::Pair;
     use ouisync::{
-        AccessMode, DhtOptions, RepositoryParams,
+        AccessMode, RepositoryParams, SecretRuntimeId,
         crypto::{Hash, Hashable, sign::Keypair},
     };
     use state_monitor::StateMonitor;
@@ -135,14 +135,16 @@ pub(crate) mod actor {
         ACTOR.with(|actor| actor.name.clone())
     }
 
-    pub(crate) fn create_unbound_network() -> Network {
-        // Derive runtime id from the actor name so that the runtime ids don't change across
-        // multiple test invocation. This simplifies debugging.
-        let runtime_id = Keypair::try_from(name().as_bytes().hash().as_ref())
+    // Derive runtime id from the actor name so that the runtime ids don't
+    // change across multiple test invocation. This simplifies debugging.
+    pub(crate) fn runtime_id() -> SecretRuntimeId {
+        Keypair::try_from(name().as_bytes().hash().as_ref())
             .unwrap()
-            .into();
+            .into()
+    }
 
-        Network::builder().runtime_id(runtime_id).build()
+    pub(crate) fn create_unbound_network() -> Network {
+        Network::builder().runtime_id(runtime_id()).build()
     }
 
     pub(crate) async fn create_network(proto: Proto) -> Network {
