@@ -61,27 +61,6 @@ pub(super) enum DhtEvent {
     RoundEnded,
 }
 
-#[derive(Clone)]
-pub struct DhtOptions {
-    /// DHT bootstrap nodes
-    pub routers: HashSet<String>,
-    /// Additional DHT contacts
-    pub contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
-}
-
-impl Default for DhtOptions {
-    fn default() -> Self {
-        Self {
-            routers: DEFAULT_DHT_ROUTERS
-                .iter()
-                .copied()
-                .map(Into::into)
-                .collect(),
-            contacts: None,
-        }
-    }
-}
-
 pub(super) struct DhtDiscovery {
     v4: BlockingMutex<RestartableDht>,
     v6: BlockingMutex<RestartableDht>,
@@ -96,19 +75,28 @@ impl DhtDiscovery {
     pub fn new(
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
-        options: DhtOptions,
+        contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
         monitor: StateMonitor,
     ) -> Self {
-        let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4, options.clone()));
-        let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6, options));
+        let routers: HashSet<String> = DEFAULT_DHT_ROUTERS
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect();
+
+        let mut v4 = RestartableDht::new(socket_maker_v4, contacts.clone());
+        v4.set_routers(routers.clone());
+
+        let mut v6 = RestartableDht::new(socket_maker_v6, contacts);
+        v6.set_routers(routers);
 
         let lookups = Arc::new(BlockingMutex::new(HashMap::default()));
 
         let lookups_monitor = monitor.make_child("lookups");
 
         Self {
-            v4,
-            v6,
+            v4: BlockingMutex::new(v4),
+            v6: BlockingMutex::new(v6),
             lookups,
             next_id: AtomicU64::new(0),
             span: Span::current(),
@@ -117,38 +105,37 @@ impl DhtDiscovery {
         }
     }
 
-    // Bind new sockets to the DHT instances. If there are any ongoing lookups, the current DHTs
-    // are terminated, new DHTs with the new sockets are created and the lookups are restarted on
-    // those new DHTs.
+    /// Binds new sockets to the DHT instances, rebootstraps the DHTs and restarts any ongoing
+    /// lookups.
     pub fn rebind(
         &self,
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
     ) {
-        let mut v4 = self.v4.lock().unwrap();
-        let mut v6 = self.v6.lock().unwrap();
+        self.reset(|v4, v6| {
+            v4.rebind(socket_maker_v4);
+            v6.rebind(socket_maker_v6);
+        })
+    }
 
-        v4.rebind(socket_maker_v4);
-        v6.rebind(socket_maker_v6);
+    /// Changes the DHT routers, rebootstraps the DHTs and restart any ongoing lookups.
+    pub fn set_routers(&self, routers: HashSet<String>) {
+        self.reset(|v4, v6| {
+            v4.set_routers(routers.clone());
+            v6.set_routers(routers);
+        })
+    }
 
-        let mut lookups = self.lookups.lock().unwrap();
-
-        if lookups.is_empty() {
-            return;
-        }
-
-        let dht_v4 = v4.fetch(&self.main_monitor, &self.span);
-        let dht_v6 = v6.fetch(&self.main_monitor, &self.span);
-
-        for (info_hash, lookup) in &mut *lookups {
-            lookup.restart(
-                dht_v4.clone(),
-                dht_v6.clone(),
-                *info_hash,
-                &self.lookups_monitor,
-                &self.span,
-            );
-        }
+    /// Returns the current DHT routers.
+    pub fn routers(&self) -> HashSet<String> {
+        self.v4
+            .lock()
+            .unwrap()
+            .routers
+            .iter()
+            .chain(&self.v6.lock().unwrap().routers)
+            .cloned()
+            .collect()
     }
 
     pub fn start_lookup(
@@ -186,21 +173,55 @@ impl DhtDiscovery {
             lookups: Arc::downgrade(&self.lookups),
         }
     }
+
+    fn reset<F>(&self, f: F)
+    where
+        F: FnOnce(&mut RestartableDht, &mut RestartableDht),
+    {
+        let mut v4 = self.v4.lock().unwrap();
+        let mut v6 = self.v6.lock().unwrap();
+
+        f(&mut v4, &mut v6);
+
+        let mut lookups = self.lookups.lock().unwrap();
+
+        if lookups.is_empty() {
+            return;
+        }
+
+        let dht_v4 = v4.fetch(&self.main_monitor, &self.span);
+        let dht_v6 = v6.fetch(&self.main_monitor, &self.span);
+
+        for (info_hash, lookup) in &mut *lookups {
+            lookup.restart(
+                dht_v4.clone(),
+                dht_v6.clone(),
+                *info_hash,
+                &self.lookups_monitor,
+                &self.span,
+            );
+        }
+    }
 }
 
 // Wrapper for a DHT instance that can be stopped and restarted at any point.
 struct RestartableDht {
     socket_maker: Option<quic::SideChannelMaker>,
     dht: Weak<Option<TaskOrResult<MonitoredDht>>>,
-    options: DhtOptions,
+    routers: HashSet<String>,
+    contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
 }
 
 impl RestartableDht {
-    fn new(socket_maker: Option<quic::SideChannelMaker>, options: DhtOptions) -> Self {
+    fn new(
+        socket_maker: Option<quic::SideChannelMaker>,
+        contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
+    ) -> Self {
         Self {
             socket_maker,
             dht: Weak::new(),
-            options,
+            routers: HashSet::new(),
+            contacts,
         }
     }
 
@@ -215,7 +236,13 @@ impl RestartableDht {
             dht
         } else if let Some(maker) = &self.socket_maker {
             let socket = maker.make();
-            let dht = MonitoredDht::start(socket, self.options.clone(), monitor, span);
+            let dht = MonitoredDht::start(
+                socket,
+                self.routers.clone(),
+                self.contacts.clone(),
+                monitor,
+                span,
+            );
             let dht = Arc::new(Some(dht));
 
             self.dht = Arc::downgrade(&dht);
@@ -230,6 +257,11 @@ impl RestartableDht {
         self.socket_maker = socket_maker;
         self.dht = Weak::new();
     }
+
+    fn set_routers(&mut self, routers: HashSet<String>) {
+        self.routers = routers;
+        self.dht = Weak::new();
+    }
 }
 
 // Wrapper for a DHT instance that periodically outputs it's state to the provided StateMonitor.
@@ -242,7 +274,8 @@ struct MonitoredDht {
 impl MonitoredDht {
     fn start(
         socket: quic::SideChannel,
-        options: DhtOptions,
+        routers: HashSet<String>,
+        contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
         parent_monitor: &StateMonitor,
         span: &Span,
     ) -> TaskOrResult<Self> {
@@ -257,24 +290,25 @@ impl MonitoredDht {
         let monitor = parent_monitor.make_child(monitor_name);
 
         TaskOrResult::new(scoped_task::spawn(MonitoredDht::create(
-            is_v4, socket, options, monitor, span,
+            is_v4, socket, routers, contacts, monitor, span,
         )))
     }
 
     async fn create(
         is_v4: bool,
         socket: quic::SideChannel,
-        options: DhtOptions,
+        routers: HashSet<String>,
+        contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
         monitor: StateMonitor,
         span: Span,
     ) -> Self {
         // TODO: load the DHT state from a previous save if it exists.
         let mut builder = MainlineDht::builder()
-            .add_routers(options.routers)
+            .add_routers(routers)
             .set_read_only(false);
 
-        if let Some(contacts_store) = &options.contacts {
-            let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts_store).await;
+        if let Some(contacts) = &contacts {
+            let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts).await;
 
             for contact in initial_contacts {
                 builder = builder.add_node(contact);
@@ -338,9 +372,9 @@ impl MonitoredDht {
         let monitoring_task = monitoring_task.instrument(span.clone());
         let monitoring_task = scoped_task::spawn(monitoring_task);
 
-        let _periodic_dht_node_load_task = options.contacts.map(|contacts_store| {
+        let _periodic_dht_node_load_task = contacts.map(|contacts| {
             scoped_task::spawn(
-                Self::keep_reading_contacts(is_v4, dht.clone(), contacts_store).instrument(span),
+                Self::keep_reading_contacts(is_v4, dht.clone(), contacts).instrument(span),
             )
         });
 

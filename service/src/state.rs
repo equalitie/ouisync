@@ -1951,6 +1951,21 @@ impl State {
         Unsubscribe(id)
     }
 
+    /// Changes the DHT routers (bootstrap nodes), rebootstraps the DHTs and restart any ongoing
+    /// lookups. If this is not called, a default set of routers is used. Each router is specified
+    /// as hostname + port or ip address + port.
+    #[api]
+    pub fn session_set_dht_routers(&self, routers: Vec<String>) {
+        self.network.set_dht_routers(routers.into_iter().collect());
+    }
+
+    /// Returns the current DHT routers (bootstrap nodes). If the routers haven't been changed by
+    /// the user yet, returns the default routers.
+    #[api]
+    pub fn session_get_dht_routers(&self) -> Vec<String> {
+        self.network.dht_routers().into_iter().collect()
+    }
+
     /// Starts a DHT lookup for the given info-hash (formated as hex string). Returns a stream of
     /// discovered peer addresses. If `announce` is true, also announces us as having the content
     /// corresponding to the info-hash.

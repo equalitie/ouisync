@@ -33,7 +33,7 @@ mod upnp;
 
 pub use self::{
     connection::PeerInfoCollector,
-    dht_discovery::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtOptions},
+    dht_discovery::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait},
     dht_lookup::DhtLookup,
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
@@ -100,29 +100,16 @@ use tracing::{Instrument, Span};
 
 #[derive(Default)]
 pub struct NetworkBuilder {
-    dht: DhtOptions,
+    dht_contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
     monitor: Option<StateMonitor>,
     runtime_id: Option<SecretRuntimeId>,
     allow_local_peers_on_dht: bool,
 }
 
 impl NetworkBuilder {
-    pub fn dht_routers(self, routers: HashSet<String>) -> Self {
-        Self {
-            dht: DhtOptions {
-                routers,
-                ..self.dht
-            },
-            ..self
-        }
-    }
-
     pub fn dht_contacts(self, contacts: Arc<dyn DhtContactsStoreTrait>) -> Self {
         Self {
-            dht: DhtOptions {
-                contacts: Some(contacts),
-                ..self.dht
-            },
+            dht_contacts: Some(contacts),
             ..self
         }
     }
@@ -172,7 +159,8 @@ impl NetworkBuilder {
         // TODO: There are ways to address this: e.g. we could try both, or we could include
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
-        let dht_discovery = DhtDiscovery::new(None, None, self.dht, monitor.make_child("DHT"));
+        let dht_discovery =
+            DhtDiscovery::new(None, None, self.dht_contacts, monitor.make_child("DHT"));
         // TODO: do we need unbounded channel here?
         let (dht_discovery_tx, dht_discovery_rx) = mpsc::unbounded_channel();
 
@@ -511,6 +499,17 @@ impl Network {
                 .get(key)?
                 .open_stream(topic_id),
         )
+    }
+
+    /// Changes the DHT routers (boostrap nodes), rebootstraps the DHTs and restarts any ongoing
+    /// lookups.
+    pub fn set_dht_routers(&self, routers: HashSet<String>) {
+        self.inner.dht_discovery.set_routers(routers);
+    }
+
+    /// Returns the current DHT routers (bootstrap nodes).
+    pub fn dht_routers(&self) -> HashSet<String> {
+        self.inner.dht_discovery.routers()
     }
 
     /// Performs explicit DHT lookup or announce for the given infohash and returns a stream of the

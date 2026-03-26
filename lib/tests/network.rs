@@ -227,9 +227,9 @@ fn dht_discovery() {
                 let network = Network::builder()
                     .runtime_id(actor::runtime_id())
                     .dht_contacts(Arc::new(dht_contacts))
-                    .dht_routers(HashSet::new())
                     .allow_local_peers_on_dht()
                     .build();
+                network.set_dht_routers(HashSet::new());
                 actor::bind(&network, proto).await;
 
                 let (_repo, reg) = actor::create_linked_repo(DEFAULT_REPO, &network).await;
