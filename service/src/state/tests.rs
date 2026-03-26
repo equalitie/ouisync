@@ -1,10 +1,13 @@
 use std::{future, net::Ipv4Addr};
 
-use crate::test_utils;
+use crate::{config_keys::ALLOW_LOCAL_DHT, test_utils};
 
 use super::*;
 use assert_matches::assert_matches;
-use futures_util::{TryStreamExt, future::join};
+use futures_util::{
+    StreamExt, TryStreamExt,
+    future::{join, join_all},
+};
 use ouisync::{Access, AccessSecrets, File, Repository, RepositoryParams, WriteSecrets};
 use tempfile::TempDir;
 use tokio::{net::UdpSocket, select, sync::broadcast::error::RecvError, time};
@@ -776,6 +779,94 @@ async fn network_streams() {
 
     state_a.network_stream_close(stream_a_to_b).await.unwrap();
     state_b.network_stream_close(stream_b_to_a).await.unwrap();
+}
+
+#[tokio::test]
+async fn dht_lookup() {
+    test_utils::init_log();
+
+    let temp_dir = TempDir::new().unwrap();
+
+    // Bootstrap
+    let bootstrap_dir = temp_dir.path().join("bootstrap");
+    fs::create_dir_all(&bootstrap_dir).await.unwrap();
+
+    let config = ConfigStore::new(bootstrap_dir.join("config"));
+    config.entry(ALLOW_LOCAL_DHT).set(&true).await.unwrap();
+    let bootstrap_state = State::init(config)
+        .instrument(tracing::info_span!("bootstrap"))
+        .await
+        .unwrap();
+    bootstrap_state.session_set_dht_routers(Vec::new()); // prevent connecting to the mainline
+    bootstrap_state
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+    bootstrap_state
+        .session_set_store_dirs(vec![bootstrap_dir.join("repos")])
+        .await
+        .unwrap();
+    // We need one repo with DHT enabled so the node becomes DHT node
+    bootstrap_state
+        .session_create_repository("repo".into(), None, None, None, true, true, false)
+        .await
+        .unwrap();
+
+    let bootstrap_addr = *bootstrap_state
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap()
+        .socket_addr();
+
+    let info_hash = InfoHash::sha1(b"hello");
+    let info_hash = format!("{info_hash:x}");
+
+    let peers = join_all(["a", "b"].map(async |name| {
+        let dir = temp_dir.path().join(name);
+        let config_dir = dir.join("config");
+        fs::create_dir_all(&config_dir).await.unwrap();
+
+        fs::write(
+            config_dir.join(dht_contacts::FILE_NAME_V4),
+            format!("{bootstrap_addr}\n"),
+        )
+        .await
+        .unwrap();
+
+        let config = ConfigStore::new(config_dir);
+        config.entry(ALLOW_LOCAL_DHT).set(&true).await.unwrap();
+        let state = State::init(config)
+            .instrument(tracing::info_span!("peer", message = name))
+            .await
+            .unwrap();
+        state.session_set_dht_routers(Vec::new());
+        state
+            .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+            .await;
+
+        state
+    }))
+    .await;
+
+    let addr_0 = peers[0]
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    let _: Vec<_> = peers[0]
+        .session_dht_lookup(info_hash.clone(), true)
+        .collect()
+        .await;
+
+    let addrs: Vec<_> = peers[1]
+        .session_dht_lookup(info_hash, false)
+        .collect()
+        .await;
+    assert!(
+        addrs.contains(&addr_0),
+        "`{addrs:?}` expected to contain `{addr_0:?}`"
+    );
 }
 
 async fn setup() -> (TempDir, State) {

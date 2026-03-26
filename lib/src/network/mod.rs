@@ -103,7 +103,7 @@ pub struct NetworkBuilder {
     dht_contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
     monitor: Option<StateMonitor>,
     runtime_id: Option<SecretRuntimeId>,
-    allow_local_peers_on_dht: bool,
+    allow_local_dht: bool,
 }
 
 impl NetworkBuilder {
@@ -128,29 +128,22 @@ impl NetworkBuilder {
         }
     }
 
-    /// Allow (that is, connect to) peers on the local network or localhost found on the DHT. By
-    /// default this is `false` because DHT is a global discovery mechanism and finding a local peer
-    /// on it is unexpected (and could indicate malice). However, is some situations it's still
-    /// useful to enable it (typically for testing, e.g., when running DHT nodes on the local
-    /// network/localhost).
+    /// Allow DHT on the local network or localhost. By default this is `false` because DHT is a
+    /// global discovery mechanism and finding a local peer on it is unexpected (and could indicate
+    /// malice). However, is some situations it's still useful to allow it (typically for testing).
     ///
-    /// Note: this option is experimental and unstable (semver extempt). It's possible it will be
-    /// removed in the future.
-    pub fn allow_local_peers_on_dht(self) -> Self {
+    /// Note: this option is currently experimental and unstable (semver extempt). It's possible it
+    /// will be removed in the future.
+    pub fn allow_local_dht(self, allow: bool) -> Self {
         Self {
-            allow_local_peers_on_dht: true,
+            allow_local_dht: allow,
             ..self
         }
     }
 
     pub fn build(self) -> Network {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
-
-        let mut gateway = Gateway::new(incoming_tx);
-        if self.allow_local_peers_on_dht {
-            gateway.set_allow_local_peers_on_dht(true);
-        }
-
+        let gateway = Gateway::new(incoming_tx);
         let monitor = self.monitor.unwrap_or_else(StateMonitor::make_root);
 
         // Note that we're now only using quic for the transport discovered over the dht.
@@ -199,6 +192,7 @@ impl NetworkBuilder {
             )),
             dht_discovery,
             dht_discovery_tx,
+            allow_local_dht: self.allow_local_dht,
             pex_discovery,
             stun_clients: StunClients::new(),
             connections: ConnectionSet::new(),
@@ -515,7 +509,12 @@ impl Network {
     /// Performs explicit DHT lookup or announce for the given infohash and returns a stream of the
     /// discovered peer addresses. It will not automatically connect to them.
     pub fn dht_lookup(&self, info_hash: InfoHash, announce: bool) -> DhtLookup {
-        DhtLookup::start(&self.inner.dht_discovery, info_hash, announce)
+        DhtLookup::start(
+            &self.inner.dht_discovery,
+            info_hash,
+            announce,
+            self.inner.allow_local_dht,
+        )
     }
 }
 
@@ -617,6 +616,7 @@ struct Inner {
     local_discovery_state: BlockingMutex<ComponentState<ScopedAbortHandle>>,
     dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<DhtEvent>,
+    allow_local_dht: bool,
     pex_discovery: PexDiscovery,
     stun_clients: StunClients,
     connections: ConnectionSet,
@@ -677,23 +677,23 @@ impl Inner {
 
         let conn = self.gateway.connectivity();
 
-        let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
-            Connectivity::Full => (
+        // STUN
+        match conn {
+            Connectivity::Full => self.stun_clients.rebind(
+                self.gateway.udp_side_channel_maker_v4().map(|m| m.make()),
+                self.gateway.udp_side_channel_maker_v6().map(|m| m.make()),
+            ),
+            Connectivity::LocalOnly | Connectivity::Disabled => (),
+        }
+
+        // DHT
+        match (conn, self.allow_local_dht) {
+            (Connectivity::Full, _) | (Connectivity::LocalOnly, true) => self.dht_discovery.rebind(
                 self.gateway.udp_side_channel_maker_v4(),
                 self.gateway.udp_side_channel_maker_v6(),
             ),
-            Connectivity::LocalOnly | Connectivity::Disabled => (None, None),
-        };
-
-        // STUN
-        self.stun_clients.rebind(
-            side_channel_maker_v4.as_ref().map(|m| m.make()),
-            side_channel_maker_v6.as_ref().map(|m| m.make()),
-        );
-
-        // DHT
-        self.dht_discovery
-            .rebind(side_channel_maker_v4, side_channel_maker_v6);
+            (Connectivity::LocalOnly, false) | (Connectivity::Disabled, _) => (),
+        }
 
         // Port forwarding
         match conn {
@@ -810,6 +810,10 @@ impl Inner {
                 DhtEvent::PeerFound(peer) => peer,
                 DhtEvent::RoundEnded => continue,
             };
+
+            if !self.allow_local_dht && peer.initial_addr().is_local() {
+                continue;
+            }
 
             self.spawn(self.clone().handle_peer_found(peer, PeerSource::Dht));
         }
@@ -948,7 +952,7 @@ impl Inner {
 
             let socket = match self
                 .gateway
-                .connect_with_retries(&peer, source)
+                .connect_with_retries(&peer)
                 .instrument(monitor.span().clone())
                 .await
             {

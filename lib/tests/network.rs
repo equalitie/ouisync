@@ -227,7 +227,7 @@ fn dht_discovery() {
                 let network = Network::builder()
                     .runtime_id(actor::runtime_id())
                     .dht_contacts(Arc::new(dht_contacts))
-                    .allow_local_peers_on_dht()
+                    .allow_local_dht(true)
                     .build();
                 network.set_dht_routers(HashSet::new());
                 actor::bind(&network, proto).await;

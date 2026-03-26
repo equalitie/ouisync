@@ -7,7 +7,7 @@ use crate::config_keys::MOUNT_DIR_KEY;
 use crate::{
     any_entry::{self, AnyEntry},
     config_keys::{
-        BIND_KEY, DEFAULT_BLOCK_EXPIRATION_MILLIS, DEFAULT_QUOTA_KEY,
+        ALLOW_LOCAL_DHT, BIND_KEY, DEFAULT_BLOCK_EXPIRATION_MILLIS, DEFAULT_QUOTA_KEY,
         DEFAULT_REPOSITORY_EXPIRATION_KEY, LOCAL_DISCOVERY_ENABLED_KEY, PEERS_KEY, PEX_KEY,
         PORT_FORWARDING_ENABLED_KEY, STORE_DIRS_KEY,
     },
@@ -90,9 +90,16 @@ impl State {
         let root_monitor = StateMonitor::make_root();
         let dht_contacts_store = dht_contacts::Store::new(config.dir());
 
+        let allow_local_dht = match config.entry(ALLOW_LOCAL_DHT).get().await {
+            Ok(value) => value,
+            Err(ConfigError::NotFound) => false,
+            Err(error) => return Err(error.into()),
+        };
+
         let network = Network::builder()
             .monitor(root_monitor.make_child("Network"))
             .dht_contacts(Arc::new(dht_contacts_store))
+            .allow_local_dht(allow_local_dht)
             .build();
 
         let store_dirs = match config.entry(STORE_DIRS_KEY).get().await {
@@ -1973,7 +1980,7 @@ impl State {
     /// Note: Currently this doesn't automatically connnect to the discovered peers but this might
     /// change in the future.
     #[api(stream(PeerAddr))]
-    pub fn session_subscribe_to_dht_lookup(&self, info_hash: String, announce: bool) -> DhtLookup {
+    pub fn session_dht_lookup(&self, info_hash: String, announce: bool) -> DhtLookup {
         let mut buffer = [0; INFO_HASH_LEN];
 
         if hex::decode_to_slice(&info_hash, &mut buffer).is_ok() {

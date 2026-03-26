@@ -83,3 +83,9 @@ pub(crate) const DEFAULT_REPOSITORY_EXPIRATION_KEY: ConfigKey<u64> = ConfigKey::
     "default_repository_expiration",
     "Default time in milliseconds after repository is deleted if all its blocks expired",
 );
+
+pub(crate) const ALLOW_LOCAL_DHT: ConfigKey<bool> = ConfigKey::new(
+    "allow_local_dht",
+    "Whether to run DHT when bound to only to the local network and whether to \
+     connect to local peers discovered on the DHT",
+);

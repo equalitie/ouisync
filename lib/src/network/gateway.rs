@@ -1,4 +1,4 @@
-use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, seen_peers::SeenPeer};
+use super::{ip, peer_addr::PeerAddr, seen_peers::SeenPeer};
 use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use futures_util::future::Either;
 use net::{
@@ -20,7 +20,6 @@ use tracing::{Instrument, Span, field};
 pub(super) struct Gateway {
     stacks: watch::Sender<Stacks>,
     incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
-    allow_local_peers_on_dht: bool,
 }
 
 impl Gateway {
@@ -34,15 +33,7 @@ impl Gateway {
         Self {
             stacks,
             incoming_tx,
-            allow_local_peers_on_dht: false,
         }
-    }
-
-    /// Set whether peers on the local network or localhost found on the dht are allowed (that is,
-    /// we attempt to connect to them). By default, this is `false` which is the safer option but in
-    /// some cases (e.g., for testing) it makes sense to enable it.
-    pub fn set_allow_local_peers_on_dht(&mut self, allow: bool) {
-        self.allow_local_peers_on_dht = allow;
     }
 
     pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
@@ -111,12 +102,8 @@ impl Gateway {
         self.stacks.borrow().connectivity()
     }
 
-    pub async fn connect_with_retries(
-        &self,
-        peer: &SeenPeer,
-        source: PeerSource,
-    ) -> Option<Connection> {
-        if !self.ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
+    pub async fn connect_with_retries(&self, peer: &SeenPeer) -> Option<Connection> {
+        if !self.ok_to_connect(peer.addr_if_seen()?.socket_addr()) {
             tracing::debug!("Invalid peer address - discarding");
             return None;
         }
@@ -237,7 +224,7 @@ impl Gateway {
     }
 
     // Filter out invalid addresses. We don't want to connect to those.
-    fn ok_to_connect(&self, addr: &SocketAddr, source: PeerSource) -> bool {
+    fn ok_to_connect(&self, addr: &SocketAddr) -> bool {
         if addr.port() == 0 || addr.port() == 1 {
             return false;
         }
@@ -255,13 +242,6 @@ impl Gateway {
                 {
                     return false;
                 }
-
-                if !self.allow_local_peers_on_dht
-                    && source == PeerSource::Dht
-                    && (ip_addr.is_private() || ip_addr.is_loopback() || ip_addr.is_link_local())
-                {
-                    return false;
-                }
             }
             SocketAddr::V6(addr) => {
                 let ip_addr = addr.ip();
@@ -269,15 +249,6 @@ impl Gateway {
                 if ip_addr.is_multicast()
                     || ip_addr.is_unspecified()
                     || ip::is_documentation(ip_addr)
-                {
-                    return false;
-                }
-
-                if !self.allow_local_peers_on_dht
-                    && source == PeerSource::Dht
-                    && (ip_addr.is_loopback()
-                        || ip_addr.is_unicast_link_local()
-                        || ip_addr.is_unique_local())
                 {
                     return false;
                 }
