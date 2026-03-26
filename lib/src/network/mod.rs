@@ -103,6 +103,7 @@ pub struct NetworkBuilder {
     dht: DhtOptions,
     monitor: Option<StateMonitor>,
     runtime_id: Option<SecretRuntimeId>,
+    allow_local_peers_on_dht: bool,
 }
 
 impl NetworkBuilder {
@@ -144,9 +145,28 @@ impl NetworkBuilder {
         }
     }
 
+    /// Allow (that is, connect to) peers on the local network or localhost found on the DHT. By
+    /// default this is `false` because DHT is a global discovery mechanism and finding a local peer
+    /// on it is unexpected (and could indicate malice). However, is some situations it's still
+    /// useful to enable it (typically for testing, e.g., when running DHT nodes on the local
+    /// network/localhost).
+    ///
+    /// Note: this option is experimental and unstable (semver extempt). It's possible it will be
+    /// removed in the future.
+    pub fn allow_local_peers_on_dht(self) -> Self {
+        Self {
+            allow_local_peers_on_dht: true,
+            ..self
+        }
+    }
+
     pub fn build(self) -> Network {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
-        let gateway = Gateway::new(incoming_tx);
+
+        let mut gateway = Gateway::new(incoming_tx);
+        if self.allow_local_peers_on_dht {
+            gateway.set_allow_local_peers_on_dht(true);
+        }
 
         let monitor = self.monitor.unwrap_or_else(StateMonitor::make_root);
 
