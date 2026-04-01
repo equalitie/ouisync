@@ -1,6 +1,6 @@
 use std::{future, net::Ipv4Addr};
 
-use crate::{config_keys::ALLOW_LOCAL_DHT, test_utils};
+use crate::test_utils;
 
 use super::*;
 use assert_matches::assert_matches;
@@ -791,13 +791,12 @@ async fn dht_lookup() {
     let bootstrap_dir = temp_dir.path().join("bootstrap");
     fs::create_dir_all(&bootstrap_dir).await.unwrap();
 
-    let config = ConfigStore::new(bootstrap_dir.join("config"));
-    config.entry(ALLOW_LOCAL_DHT).set(&true).await.unwrap();
-    let bootstrap_state = State::init(config)
+    let bootstrap_state = State::init(ConfigStore::new(bootstrap_dir.join("config")))
         .instrument(tracing::info_span!("bootstrap"))
         .await
         .unwrap();
     bootstrap_state.session_set_dht_routers(Vec::new()); // prevent connecting to the mainline
+    bootstrap_state.session_set_local_dht_enabled(true);
     bootstrap_state
         .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;
@@ -833,13 +832,12 @@ async fn dht_lookup() {
         .await
         .unwrap();
 
-        let config = ConfigStore::new(config_dir);
-        config.entry(ALLOW_LOCAL_DHT).set(&true).await.unwrap();
-        let state = State::init(config)
+        let state = State::init(ConfigStore::new(config_dir))
             .instrument(tracing::info_span!("peer", message = name))
             .await
             .unwrap();
         state.session_set_dht_routers(Vec::new());
+        state.session_set_local_dht_enabled(true);
         state
             .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
             .await;

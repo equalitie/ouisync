@@ -7,7 +7,7 @@ use crate::config_keys::MOUNT_DIR_KEY;
 use crate::{
     any_entry::{self, AnyEntry},
     config_keys::{
-        ALLOW_LOCAL_DHT, BIND_KEY, DEFAULT_BLOCK_EXPIRATION_MILLIS, DEFAULT_QUOTA_KEY,
+        BIND_KEY, DEFAULT_BLOCK_EXPIRATION_MILLIS, DEFAULT_QUOTA_KEY,
         DEFAULT_REPOSITORY_EXPIRATION_KEY, LOCAL_DISCOVERY_ENABLED_KEY, PEERS_KEY, PEX_KEY,
         PORT_FORWARDING_ENABLED_KEY, STORE_DIRS_KEY,
     },
@@ -90,16 +90,9 @@ impl State {
         let root_monitor = StateMonitor::make_root();
         let dht_contacts_store = dht_contacts::Store::new(config.dir());
 
-        let allow_local_dht = match config.entry(ALLOW_LOCAL_DHT).get().await {
-            Ok(value) => value,
-            Err(ConfigError::NotFound) => false,
-            Err(error) => return Err(error.into()),
-        };
-
         let network = Network::builder()
             .monitor(root_monitor.make_child("Network"))
             .dht_contacts(Arc::new(dht_contacts_store))
-            .allow_local_dht(allow_local_dht)
             .build();
 
         let store_dirs = match config.entry(STORE_DIRS_KEY).get().await {
@@ -1971,6 +1964,24 @@ impl State {
     #[api]
     pub fn session_get_dht_routers(&self) -> Vec<String> {
         self.network.dht_routers().into_iter().collect()
+    }
+
+    /// Set whether DHT on the local network or localhost is allowed. By default this is `false`
+    /// because DHT is a global discovery mechanism and finding a local peer on it is unexpected
+    /// (and could indicate malice). However, is some situations it's still useful to enable it
+    /// (typically for testing).
+    ///
+    /// Note: this option is currently experimental and unstable (semver extempt). It's possible it
+    /// will be removed in the future.
+    #[api]
+    pub fn session_set_local_dht_enabled(&self, enabled: bool) {
+        self.network.set_local_dht_enabled(enabled);
+    }
+
+    /// Checks whether local DHT is enabled.
+    #[api]
+    pub fn session_is_local_dht_enabled(&self) -> bool {
+        self.network.is_local_dht_enabled()
     }
 
     /// Starts a DHT lookup for the given info-hash (formated as hex string). Returns a stream of
