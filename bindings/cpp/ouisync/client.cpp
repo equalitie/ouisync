@@ -93,7 +93,9 @@ struct Client::State : std::enable_shared_from_this<Client::State> {
                         state->send_buffer_data.prepare(rq_id, rq);
                         asio::async_write(state->socket, state->send_buffer_data.to_buffers(),
                             [ permit = std::move(permit),
-                              handler = std::move(handler)
+                              handler = std::move(handler),
+                              // ensure `state->send_buffer_data` is alive until the write completes.
+                              state
                             ] (system::error_code ec, size_t) mutable {
                                 handler(ec);
                             });
@@ -221,7 +223,7 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
 }
 
 Client::Client(std::shared_ptr<State>&& state)
-    : _state(state)
+    : _state(std::move(state))
 {
     // Start the receiving job
     asio::spawn(

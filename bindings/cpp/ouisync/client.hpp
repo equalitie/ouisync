@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ouisync/message.hpp"
+#include <boost/asio/experimental/channel_error.hpp>
 #include <type_traits>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/experimental/channel.hpp>
