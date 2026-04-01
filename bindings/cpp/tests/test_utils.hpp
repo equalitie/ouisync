@@ -83,4 +83,10 @@ public:
     const boost::filesystem::path& path() const {
         return _path;
     }
+
 };
+
+void check_exception(std::exception_ptr e);
+
+// Creates a subdirectory at the given path and returns it.
+boost::filesystem::path mkdir(const boost::filesystem::path& path);

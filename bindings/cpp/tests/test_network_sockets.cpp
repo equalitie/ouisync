@@ -13,18 +13,6 @@
 
 namespace asio = boost::asio;
 
-static void check_exception(std::exception_ptr e) {
-    try {
-        if (e) {
-            std::rethrow_exception(e);
-        }
-    } catch (const std::exception& e) {
-        BOOST_FAIL("Test failed with exception: " << e.what());
-    } catch (...) {
-        BOOST_FAIL("Test failed with unknown exception");
-    }
-}
-
 template<typename T>
 std::string to_string(const T& value) {
     std::ostringstream stream;

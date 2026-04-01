@@ -15,23 +15,6 @@ using namespace boost::asio::ip;
 namespace asio = boost::asio;
 namespace fs = boost::filesystem;
 
-static void check_exception(std::exception_ptr e) {
-    try {
-        if (e) {
-            std::rethrow_exception(e);
-        }
-    } catch (const std::exception& e) {
-        BOOST_FAIL("Test failed with exception: " << e.what());
-    } catch (...) {
-        BOOST_FAIL("Test failed with unknown exception");
-    }
-}
-
-static fs::path mkdir(fs::path path) {
-    fs::create_directories(path);
-    return path;
-}
-
 // We also have similar test in Rust, but this one was crashing with
 // stack-verflow because the stack allocated by `asio::spawn` is too small.
 BOOST_AUTO_TEST_CASE(copy_dirs) {

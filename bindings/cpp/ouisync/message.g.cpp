@@ -207,6 +207,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionDeriveSecretKey>(&variant) != nullptr) {
         return std::string_view("SessionDeriveSecretKey");
     }
+    if (std::get_if<Request::SessionDhtLookup>(&variant) != nullptr) {
+        return std::string_view("SessionDhtLookup");
+    }
     if (std::get_if<Request::SessionFindRepository>(&variant) != nullptr) {
         return std::string_view("SessionFindRepository");
     }
@@ -227,6 +230,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     }
     if (std::get_if<Request::SessionGetDefaultRepositoryExpiration>(&variant) != nullptr) {
         return std::string_view("SessionGetDefaultRepositoryExpiration");
+    }
+    if (std::get_if<Request::SessionGetDhtRouters>(&variant) != nullptr) {
+        return std::string_view("SessionGetDhtRouters");
     }
     if (std::get_if<Request::SessionGetExternalAddrV4>(&variant) != nullptr) {
         return std::string_view("SessionGetExternalAddrV4");
@@ -333,6 +339,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionSetDefaultRepositoryExpiration>(&variant) != nullptr) {
         return std::string_view("SessionSetDefaultRepositoryExpiration");
     }
+    if (std::get_if<Request::SessionSetDhtRouters>(&variant) != nullptr) {
+        return std::string_view("SessionSetDhtRouters");
+    }
     if (std::get_if<Request::SessionSetLocalDiscoveryEnabled>(&variant) != nullptr) {
         return std::string_view("SessionSetLocalDiscoveryEnabled");
     }
@@ -350,9 +359,6 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     }
     if (std::get_if<Request::SessionSetStoreDirs>(&variant) != nullptr) {
         return std::string_view("SessionSetStoreDirs");
-    }
-    if (std::get_if<Request::SessionSubscribeToDhtLookup>(&variant) != nullptr) {
-        return std::string_view("SessionSubscribeToDhtLookup");
     }
     if (std::get_if<Request::SessionSubscribeToNetwork>(&variant) != nullptr) {
         return std::string_view("SessionSubscribeToNetwork");
@@ -462,6 +468,9 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     }
     if (std::get_if<Response::String>(&variant) != nullptr) {
         return std::string_view("String");
+    }
+    if (std::get_if<Response::Strings>(&variant) != nullptr) {
+        return std::string_view("Strings");
     }
     if (std::get_if<Response::U16>(&variant) != nullptr) {
         return std::string_view("U16");

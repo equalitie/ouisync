@@ -327,6 +327,11 @@ struct Request {
         const ouisync::PasswordSalt& salt;
     };
 
+    struct SessionDhtLookup {
+        const std::string& info_hash;
+        bool announce;
+    };
+
     struct SessionFindRepository {
         const std::string& name;
     };
@@ -347,6 +352,9 @@ struct Request {
     };
 
     struct SessionGetDefaultRepositoryExpiration {
+    };
+
+    struct SessionGetDhtRouters {
     };
 
     struct SessionGetExternalAddrV4 {
@@ -472,6 +480,10 @@ struct Request {
         const std::optional<std::chrono::milliseconds>& value;
     };
 
+    struct SessionSetDhtRouters {
+        const std::vector<std::string>& routers;
+    };
+
     struct SessionSetLocalDiscoveryEnabled {
         bool enabled;
     };
@@ -494,11 +506,6 @@ struct Request {
 
     struct SessionSetStoreDirs {
         const std::vector<std::string>& paths;
-    };
-
-    struct SessionSubscribeToDhtLookup {
-        const std::string& info_hash;
-        bool announce;
     };
 
     struct SessionSubscribeToNetwork {
@@ -584,6 +591,7 @@ struct Request {
         SessionCreateRepository,
         SessionDeleteRepositoryByName,
         SessionDeriveSecretKey,
+        SessionDhtLookup,
         SessionFindRepository,
         SessionGeneratePasswordSalt,
         SessionGenerateSecretKey,
@@ -591,6 +599,7 @@ struct Request {
         SessionGetDefaultBlockExpiration,
         SessionGetDefaultQuota,
         SessionGetDefaultRepositoryExpiration,
+        SessionGetDhtRouters,
         SessionGetExternalAddrV4,
         SessionGetExternalAddrV6,
         SessionGetHighestSeenProtocolVersion,
@@ -626,13 +635,13 @@ struct Request {
         SessionSetDefaultBlockExpiration,
         SessionSetDefaultQuota,
         SessionSetDefaultRepositoryExpiration,
+        SessionSetDhtRouters,
         SessionSetLocalDiscoveryEnabled,
         SessionSetMountRoot,
         SessionSetPexRecvEnabled,
         SessionSetPexSendEnabled,
         SessionSetPortForwardingEnabled,
         SessionSetStoreDirs,
-        SessionSubscribeToDhtLookup,
         SessionSubscribeToNetwork,
         SessionSubscribeToStateMonitor,
         SessionUnsubscribe,
@@ -786,6 +795,10 @@ struct Response {
         std::string value;
     };
 
+    struct Strings {
+        std::vector<std::string> value;
+    };
+
     struct U16 {
         uint16_t value;
     };
@@ -826,6 +839,7 @@ struct Response {
         Stats,
         StorageSize,
         String,
+        Strings,
         U16,
         U64
     >;

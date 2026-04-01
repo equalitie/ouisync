@@ -1332,6 +1332,20 @@ public:
         return client->invoke<Response::Duration, std::optional<std::chrono::milliseconds>>(std::move(request), std::move(completion_token));
     }
 
+    /**
+     * Returns the current DHT routers (bootstrap nodes). If the routers haven't been changed by
+     * the user yet, returns the default routers.
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<std::vector<std::string>>::type> CompletionToken
+    >
+    auto get_dht_routers(
+        CompletionToken completion_token
+    ) {
+        auto request = Request::SessionGetDhtRouters();
+        return client->invoke<Response::Strings, std::vector<std::string>>(std::move(request), std::move(completion_token));
+    }
+
     template<
         boost::asio::completion_token_for<typename detail::InvokeSig<std::optional<std::string>>::type> CompletionToken
     >
@@ -1811,6 +1825,24 @@ public:
     ) {
         auto request = Request::SessionSetDefaultRepositoryExpiration{
             value,
+        };
+        return client->invoke<Response::None, void>(std::move(request), std::move(completion_token));
+    }
+
+    /**
+     * Changes the DHT routers (bootstrap nodes), rebootstraps the DHTs and restart any ongoing
+     * lookups. If this is not called, a default set of routers is used. Each router is specified
+     * as hostname + port or ip address + port.
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
+    >
+    auto set_dht_routers(
+        const std::vector<std::string>& routers,
+        CompletionToken completion_token
+    ) {
+        auto request = Request::SessionSetDhtRouters{
+            routers,
         };
         return client->invoke<Response::None, void>(std::move(request), std::move(completion_token));
     }

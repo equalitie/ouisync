@@ -594,6 +594,15 @@ template<> struct describe::Struct<Request::SessionDeriveSecretKey> : std::true_
     }
 };
 
+template<> struct describe::Struct<Request::SessionDhtLookup> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::SessionDhtLookup& v) {
+        o.field(v.info_hash);
+        o.field(v.announce);
+    }
+};
+
 template<> struct describe::Struct<Request::SessionFindRepository> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
@@ -641,6 +650,13 @@ template<> struct describe::Struct<Request::SessionGetDefaultRepositoryExpiratio
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
     static void describe(Observer&, Request::SessionGetDefaultRepositoryExpiration&) {
+    }
+};
+
+template<> struct describe::Struct<Request::SessionGetDhtRouters> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer&, Request::SessionGetDhtRouters&) {
     }
 };
 
@@ -907,6 +923,14 @@ template<> struct describe::Struct<Request::SessionSetDefaultRepositoryExpiratio
     }
 };
 
+template<> struct describe::Struct<Request::SessionSetDhtRouters> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::SessionSetDhtRouters& v) {
+        o.field(v.routers);
+    }
+};
+
 template<> struct describe::Struct<Request::SessionSetLocalDiscoveryEnabled> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
@@ -952,15 +976,6 @@ template<> struct describe::Struct<Request::SessionSetStoreDirs> : std::true_typ
     template<class Observer>
     static void describe(Observer& o, Request::SessionSetStoreDirs& v) {
         o.field(v.paths);
-    }
-};
-
-template<> struct describe::Struct<Request::SessionSubscribeToDhtLookup> : std::true_type {
-    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
-    template<class Observer>
-    static void describe(Observer& o, Request::SessionSubscribeToDhtLookup& v) {
-        o.field(v.info_hash);
-        o.field(v.announce);
     }
 };
 
@@ -1207,6 +1222,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         if (name == "SessionDeriveSecretKey") {
             return builder.template build<Request::SessionDeriveSecretKey>();
         }
+        if (name == "SessionDhtLookup") {
+            return builder.template build<Request::SessionDhtLookup>();
+        }
         if (name == "SessionFindRepository") {
             return builder.template build<Request::SessionFindRepository>();
         }
@@ -1227,6 +1245,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "SessionGetDefaultRepositoryExpiration") {
             return builder.template build<Request::SessionGetDefaultRepositoryExpiration>();
+        }
+        if (name == "SessionGetDhtRouters") {
+            return builder.template build<Request::SessionGetDhtRouters>();
         }
         if (name == "SessionGetExternalAddrV4") {
             return builder.template build<Request::SessionGetExternalAddrV4>();
@@ -1333,6 +1354,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         if (name == "SessionSetDefaultRepositoryExpiration") {
             return builder.template build<Request::SessionSetDefaultRepositoryExpiration>();
         }
+        if (name == "SessionSetDhtRouters") {
+            return builder.template build<Request::SessionSetDhtRouters>();
+        }
         if (name == "SessionSetLocalDiscoveryEnabled") {
             return builder.template build<Request::SessionSetLocalDiscoveryEnabled>();
         }
@@ -1350,9 +1374,6 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "SessionSetStoreDirs") {
             return builder.template build<Request::SessionSetStoreDirs>();
-        }
-        if (name == "SessionSubscribeToDhtLookup") {
-            return builder.template build<Request::SessionSubscribeToDhtLookup>();
         }
         if (name == "SessionSubscribeToNetwork") {
             return builder.template build<Request::SessionSubscribeToNetwork>();
@@ -1620,6 +1641,14 @@ template<> struct describe::Struct<Response::String> : std::true_type {
     }
 };
 
+template<> struct describe::Struct<Response::Strings> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer& o, Response::Strings& v) {
+        o.field(v.value);
+    }
+};
+
 template<> struct describe::Struct<Response::U16> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
@@ -1739,6 +1768,9 @@ template<> struct VariantBuilder<Response::Alternatives> {
         }
         if (name == "String") {
             return builder.template build<Response::String>();
+        }
+        if (name == "Strings") {
+            return builder.template build<Response::Strings>();
         }
         if (name == "U16") {
             return builder.template build<Response::U16>();
