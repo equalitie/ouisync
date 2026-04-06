@@ -32,7 +32,7 @@ suspend fun Session.close() {
 fun Session.subscribeToNetworkEvents(): Flow<NetworkEvent> = client.subscribe(Request.SessionSubscribeToNetwork).mapNotNull {
     when (it) {
         is Response.NetworkEvent -> it.value
-        is Response.None -> NetworkEvent.PEER_SET_CHANGE
+        is Response.Unit -> NetworkEvent.PEER_SET_CHANGE
         else -> null
     }
 }

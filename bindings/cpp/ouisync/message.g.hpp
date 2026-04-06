@@ -807,6 +807,9 @@ struct Response {
         uint64_t value;
     };
 
+    struct Unit {
+    };
+
     using Alternatives = std::variant<
         AccessMode,
         Bool,
@@ -841,7 +844,8 @@ struct Response {
         String,
         Strings,
         U16,
-        U64
+        U64,
+        Unit
     >;
 
     Alternatives value;

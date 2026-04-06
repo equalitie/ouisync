@@ -53,7 +53,7 @@ impl From<ResponseResult> for Result<Response, ProtocolError> {
 
 impl From<()> for Response {
     fn from(_: ()) -> Self {
-        Self::None
+        Self::Unit
     }
 }
 
@@ -62,7 +62,7 @@ impl TryFrom<Response> for () {
 
     fn try_from(response: Response) -> Result<Self, Self::Error> {
         match response {
-            Response::None => Ok(()),
+            Response::Unit => Ok(()),
             _ => Err(UnexpectedResponse),
         }
     }

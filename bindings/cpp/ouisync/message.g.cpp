@@ -478,6 +478,9 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     if (std::get_if<Response::U64>(&variant) != nullptr) {
         return std::string_view("U64");
     }
+    if (std::get_if<Response::Unit>(&variant) != nullptr) {
+        return std::string_view("Unit");
+    }
     throw std::bad_cast();
 }
 

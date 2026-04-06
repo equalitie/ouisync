@@ -34,7 +34,7 @@ extension RepositoryExtension on Repository {
   Stream<void> get events =>
       client.subscribe(RequestRepositorySubscribe(repo: handle)).map(
             (r) => switch (r) {
-              ResponseNone() => null,
+              ResponseUnit() => null,
               _ => throw InvalidData('unexpected event type'),
             },
           );

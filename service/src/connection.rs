@@ -122,11 +122,11 @@ impl Connection {
             Action::Reply(payload) => payload,
             Action::Subscribe(subscription) => {
                 self.subscriptions.insert(id, subscription);
-                ResponseResult::Success(Response::None)
+                ResponseResult::Success(Response::Unit)
             }
             Action::Unsubscribe(id) => {
                 self.subscriptions.remove(&id);
-                ResponseResult::Success(Response::None)
+                ResponseResult::Success(Response::Unit)
             }
         };
 

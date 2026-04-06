@@ -50,14 +50,14 @@ namespace detail {
     };
 
     template<>
-    struct ConvertResponse<Response::None, void> {
+    struct ConvertResponse<Response::Unit, void> {
         template<class Handler>
         static void apply(Handler&& handler, boost::system::error_code ec, Response&& response) {
             if (ec) {
                 handler(ec);
                 return;
             }
-            if (response.template get_if<Response::None>() == nullptr) {
+            if (response.template get_if<Response::Unit>() == nullptr) {
                 ec = error::protocol;
             }
             handler(ec);

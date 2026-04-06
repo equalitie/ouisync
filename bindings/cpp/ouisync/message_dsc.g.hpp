@@ -1665,6 +1665,13 @@ template<> struct describe::Struct<Response::U64> : std::true_type {
     }
 };
 
+template<> struct describe::Struct<Response::Unit> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer&, Response::Unit&) {
+    }
+};
+
 template<> struct describe::Struct<Response> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
@@ -1777,6 +1784,9 @@ template<> struct VariantBuilder<Response::Alternatives> {
         }
         if (name == "U64") {
             return builder.template build<Response::U64>();
+        }
+        if (name == "Unit") {
+            return builder.template build<Response::Unit>();
         }
 
         throw std::runtime_error("invalid variant name for Response");

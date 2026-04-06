@@ -50,10 +50,10 @@ impl Stream for SubscriptionStream {
                 Poll::Ready(ready!(stream.poll_next_unpin(cx)).map(Response::NetworkEvent))
             }
             Self::Repository(stream) => {
-                Poll::Ready(ready!(stream.poll_next_unpin(cx)).map(|_| Response::None))
+                Poll::Ready(ready!(stream.poll_next_unpin(cx)).map(|_| Response::Unit))
             }
             Self::StateMonitor(stream) => {
-                Poll::Ready(ready!(stream.poll_next_unpin(cx)).map(|_| Response::None))
+                Poll::Ready(ready!(stream.poll_next_unpin(cx)).map(|_| Response::Unit))
             }
             Self::DhtLookup(stream) => {
                 Poll::Ready(ready!(stream.poll_next_unpin(cx)).map(Response::PeerAddr))

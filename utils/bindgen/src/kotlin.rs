@@ -427,7 +427,7 @@ fn write_api_class(
         writeln!(out, "{I}{I}when (response) {{")?;
 
         match ret {
-            Type::Unit => writeln!(out, "{I}{I}{I}is Response.None -> return")?,
+            Type::Unit => writeln!(out, "{I}{I}{I}is Response.Unit -> return")?,
             Type::Option(_) => {
                 write!(
                     out,

@@ -650,7 +650,7 @@ fn write_api_class(
         writeln!(out, "{I}{I}switch (response) {{")?;
 
         match ret {
-            DartType::Void => writeln!(out, "{I}{I}{I}case ResponseNone(): return;")?,
+            DartType::Void => writeln!(out, "{I}{I}{I}case ResponseUnit(): return;")?,
             DartType::Nullable(_) => {
                 write!(
                     out,

@@ -140,6 +140,7 @@ impl<'a> From<&'a Request> for Response {
                 (name, ty)
             })
             .collect();
+        variants.push(("None".to_owned(), Type::Unit));
         variants.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         Response { variants }
@@ -153,7 +154,7 @@ pub trait ToResponseVariantName {
 impl ToResponseVariantName for Type {
     fn to_response_variant_name(&self) -> String {
         match self {
-            Type::Unit => "None".to_owned(),
+            Type::Unit => "Unit".to_owned(),
             Type::Scalar(s) => s.to_response_variant_name(),
             Type::Vec(s) => pluralize(&s.to_response_variant_name()),
             Type::Map(_, v) => pluralize(&v.to_response_variant_name()),
