@@ -658,9 +658,7 @@ fn write_api_class(
                 )?;
 
                 match ret_stripped {
-                    Some(DartType::Nullable(w)) => {
-                        write!(out, "value != null ? {w}(client, value) : null")?;
-                    }
+                    Some(DartType::Nullable(w)) => write!(out, "{w}(client, value)")?,
                     Some(_) => unreachable!(),
                     None => write!(out, "value")?,
                 }
