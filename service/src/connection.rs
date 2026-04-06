@@ -3,7 +3,7 @@ use std::time::Instant;
 use futures_util::{SinkExt, stream::FuturesUnordered};
 use ouisync::{DhtLookup, NetworkEventReceiver};
 use tokio::select;
-use tokio_stream::{StreamExt, StreamMap};
+use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use tracing::{Span, field};
 
 use crate::{
@@ -18,7 +18,7 @@ use crate::{
 pub(crate) struct Connection {
     reader: ServerReader,
     writer: ServerWriter,
-    subscriptions: StreamMap<MessageId, SubscriptionStream>,
+    subscriptions: StreamMap<MessageId, StreamNotifyClose<SubscriptionStream>>,
 }
 
 impl Connection {
@@ -50,7 +50,7 @@ impl Connection {
                 Some((id, payload)) = self.subscriptions.next() => {
                     self.send_response(Message {
                         id,
-                        payload: ResponseResult::Success(payload),
+                        payload: ResponseResult::Success(payload.unwrap_or(Response::None)),
                     }).await
                 }
                 // request handler completed
@@ -121,7 +121,8 @@ impl Connection {
         let payload = match action {
             Action::Reply(payload) => payload,
             Action::Subscribe(subscription) => {
-                self.subscriptions.insert(id, subscription);
+                self.subscriptions
+                    .insert(id, StreamNotifyClose::new(subscription));
                 ResponseResult::Success(Response::Unit)
             }
             Action::Unsubscribe(id) => {

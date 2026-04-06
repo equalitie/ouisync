@@ -312,7 +312,13 @@ private sealed class Completer {
     }
 
     class Channel(val channel: SendChannel<ResponseResult>) : Completer() {
-        override suspend fun complete(value: ResponseResult) = channel.send(value)
+        override suspend fun complete(value: ResponseResult) {
+            if (value is ResponseResult.Success && value.value is Response.None) {
+                channel.close()
+            } else {
+                channel.send(value)
+            }
+        }
     }
 
     abstract suspend fun complete(value: ResponseResult)

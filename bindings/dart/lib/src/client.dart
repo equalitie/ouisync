@@ -14,6 +14,7 @@ import '../generated/api.g.dart'
         PermissionDenied,
         Request,
         Response,
+        ResponseNone,
         RequestSessionUnsubscribe;
 import 'length_delimited_codec.dart';
 import 'message_codec.dart';
@@ -172,9 +173,17 @@ class Client {
           return;
         }
 
-        final sink = _notifications[message.id];
-        if (sink != null) {
-          sink.add(message.payload);
+        if (message.payload is ResponseNone) {
+          // Stream closed by the service.
+          final sink = _notifications.remove(message.id);
+          if (sink != null) {
+            sink.close();
+          }
+        } else {
+          final sink = _notifications[message.id];
+          if (sink != null) {
+            sink.add(message.payload);
+          }
         }
 
       case MessageFailure():
