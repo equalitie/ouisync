@@ -807,6 +807,13 @@ template<> struct describe::Struct<Request::SessionInsertStoreDirs> : std::true_
     }
 };
 
+template<> struct describe::Struct<Request::SessionIsLocalDhtEnabled> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer&, Request::SessionIsLocalDhtEnabled&) {
+    }
+};
+
 template<> struct describe::Struct<Request::SessionIsLocalDiscoveryEnabled> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
     template<class Observer>
@@ -928,6 +935,14 @@ template<> struct describe::Struct<Request::SessionSetDhtRouters> : std::true_ty
     template<class Observer>
     static void describe(Observer& o, Request::SessionSetDhtRouters& v) {
         o.field(v.routers);
+    }
+};
+
+template<> struct describe::Struct<Request::SessionSetLocalDhtEnabled> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::SessionSetLocalDhtEnabled& v) {
+        o.field(v.enabled);
     }
 };
 
@@ -1309,6 +1324,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         if (name == "SessionInsertStoreDirs") {
             return builder.template build<Request::SessionInsertStoreDirs>();
         }
+        if (name == "SessionIsLocalDhtEnabled") {
+            return builder.template build<Request::SessionIsLocalDhtEnabled>();
+        }
         if (name == "SessionIsLocalDiscoveryEnabled") {
             return builder.template build<Request::SessionIsLocalDiscoveryEnabled>();
         }
@@ -1356,6 +1374,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "SessionSetDhtRouters") {
             return builder.template build<Request::SessionSetDhtRouters>();
+        }
+        if (name == "SessionSetLocalDhtEnabled") {
+            return builder.template build<Request::SessionSetLocalDhtEnabled>();
         }
         if (name == "SessionSetLocalDiscoveryEnabled") {
             return builder.template build<Request::SessionSetLocalDiscoveryEnabled>();

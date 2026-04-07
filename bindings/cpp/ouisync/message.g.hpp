@@ -2,9 +2,19 @@
 
 #pragma once
 
-#include <string_view>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+#include <ouisync/data.hpp>
 
 namespace ouisync {
+class Client;
+class File;
+class Repository;
+class NetworkSocket;
+class NetworkStream;
+class Session;
 
 struct Request {
     struct FileClose {
@@ -424,6 +434,9 @@ struct Request {
         const std::vector<std::string>& paths;
     };
 
+    struct SessionIsLocalDhtEnabled {
+    };
+
     struct SessionIsLocalDiscoveryEnabled {
     };
 
@@ -482,6 +495,10 @@ struct Request {
 
     struct SessionSetDhtRouters {
         const std::vector<std::string>& routers;
+    };
+
+    struct SessionSetLocalDhtEnabled {
+        bool enabled;
     };
 
     struct SessionSetLocalDiscoveryEnabled {
@@ -620,6 +637,7 @@ struct Request {
         SessionGetUserProvidedPeers,
         SessionInitNetwork,
         SessionInsertStoreDirs,
+        SessionIsLocalDhtEnabled,
         SessionIsLocalDiscoveryEnabled,
         SessionIsPexRecvEnabled,
         SessionIsPexSendEnabled,
@@ -636,6 +654,7 @@ struct Request {
         SessionSetDefaultQuota,
         SessionSetDefaultRepositoryExpiration,
         SessionSetDhtRouters,
+        SessionSetLocalDhtEnabled,
         SessionSetLocalDiscoveryEnabled,
         SessionSetMountRoot,
         SessionSetPexRecvEnabled,
@@ -673,141 +692,176 @@ struct Request {
 
 struct Response {
     struct AccessMode {
+        using type = ouisync::AccessMode;
         ouisync::AccessMode value;
     };
 
     struct Bool {
+        using type = bool;
         bool value;
     };
 
     struct Bytes {
+        using type = std::vector<uint8_t>;
         std::vector<uint8_t> value;
     };
 
     struct Datagram {
+        using type = ouisync::Datagram;
         ouisync::Datagram value;
     };
 
     struct DirectoryEntries {
+        using type = std::vector<ouisync::DirectoryEntry>;
         std::vector<ouisync::DirectoryEntry> value;
     };
 
     struct Duration {
+        using type = std::chrono::milliseconds;
         std::chrono::milliseconds value;
     };
 
     struct EntryType {
+        using type = ouisync::EntryType;
         ouisync::EntryType value;
     };
 
     struct File {
+        using type = ouisync::File;
         ouisync::FileHandle value;
     };
 
     struct NatBehavior {
+        using type = ouisync::NatBehavior;
         ouisync::NatBehavior value;
     };
 
     struct NetworkEvent {
+        using type = ouisync::NetworkEvent;
         ouisync::NetworkEvent value;
     };
 
     struct NetworkSocket {
+        using type = ouisync::NetworkSocket;
         ouisync::NetworkSocketHandle value;
     };
 
     struct NetworkStream {
+        using type = ouisync::NetworkStream;
         ouisync::NetworkStreamHandle value;
     };
 
     struct None {
+        using type = std::nullopt_t;
     };
 
     struct PasswordSalt {
+        using type = ouisync::PasswordSalt;
         ouisync::PasswordSalt value;
     };
 
     struct Path {
+        using type = std::string;
         std::string value;
     };
 
     struct Paths {
+        using type = std::vector<std::string>;
         std::vector<std::string> value;
     };
 
     struct PeerAddr {
+        using type = std::string;
         std::string value;
     };
 
     struct PeerAddrs {
+        using type = std::vector<std::string>;
         std::vector<std::string> value;
     };
 
     struct PeerInfos {
+        using type = std::vector<ouisync::PeerInfo>;
         std::vector<ouisync::PeerInfo> value;
     };
 
     struct Progress {
+        using type = ouisync::Progress;
         ouisync::Progress value;
     };
 
     struct PublicRuntimeId {
+        using type = ouisync::PublicRuntimeId;
         ouisync::PublicRuntimeId value;
     };
 
     struct QuotaInfo {
+        using type = ouisync::QuotaInfo;
         ouisync::QuotaInfo value;
     };
 
     struct Repositories {
+        using type = std::map<std::string, ouisync::Repository>;
         std::map<std::string, ouisync::RepositoryHandle> value;
     };
 
     struct Repository {
+        using type = ouisync::Repository;
         ouisync::RepositoryHandle value;
     };
 
     struct SecretKey {
+        using type = ouisync::SecretKey;
         ouisync::SecretKey value;
     };
 
     struct ShareToken {
+        using type = ouisync::ShareToken;
         ouisync::ShareToken value;
     };
 
     struct SocketAddr {
+        using type = std::string;
         std::string value;
     };
 
     struct StateMonitor {
+        using type = ouisync::StateMonitorNode;
         ouisync::StateMonitorNode value;
     };
 
     struct Stats {
+        using type = ouisync::Stats;
         ouisync::Stats value;
     };
 
     struct StorageSize {
+        using type = ouisync::StorageSize;
         ouisync::StorageSize value;
     };
 
     struct String {
+        using type = std::string;
         std::string value;
     };
 
     struct Strings {
+        using type = std::vector<std::string>;
         std::vector<std::string> value;
     };
 
     struct U16 {
+        using type = uint16_t;
         uint16_t value;
     };
 
     struct U64 {
+        using type = uint64_t;
         uint64_t value;
     };
 
     struct Unit {
+        using type = void;
     };
 
     using Alternatives = std::variant<

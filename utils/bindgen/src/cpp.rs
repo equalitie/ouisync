@@ -134,10 +134,7 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
     writeln!(data_hpp, "#pragma once")?;
     writeln!(data_hpp)?;
     writeln!(data_hpp, "#include <cstdint>")?;
-    writeln!(data_hpp, "#include <list>")?;
     writeln!(data_hpp, "#include <optional>")?;
-    writeln!(data_hpp, "#include <memory>")?;
-    writeln!(data_hpp, "#include <sstream>")?;
     writeln!(data_hpp, "#include <chrono>")?;
     writeln!(data_hpp, "#include <variant>")?;
     writeln!(data_hpp)?;
@@ -169,9 +166,20 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
     writeln!(msg_hpp)?;
     writeln!(msg_hpp, "#pragma once")?;
     writeln!(msg_hpp)?;
-    writeln!(msg_hpp, "#include <string_view>")?;
+    writeln!(msg_hpp, "#include <cstdint>")?;
+    writeln!(msg_hpp, "#include <optional>")?;
+    writeln!(msg_hpp, "#include <string>")?;
+    writeln!(msg_hpp, "#include <vector>")?;
+    writeln!(msg_hpp, "#include <ouisync/data.hpp>")?;
     writeln!(msg_hpp)?;
     writeln!(msg_hpp, "namespace {NAMESPACE} {{")?;
+
+    // Forward decls
+    writeln!(msg_hpp, "class Client;")?;
+    for api_item in &api_items {
+        writeln!(msg_hpp, "class {};", api_item.name)?;
+    }
+
     writeln!(msg_hpp)?;
 
     writeln!(msg_cpp, "{}", DO_NOT_EDIT_MESSAGE)?;
@@ -221,6 +229,8 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
     let out_hpp = &mut hpp_file;
 
     writeln!(out_hpp, "{}", DO_NOT_EDIT_MESSAGE)?;
+    writeln!(out_hpp)?;
+    writeln!(out_hpp, "#pragma once")?;
     writeln!(out_hpp)?;
     writeln!(out_hpp, "#include <ouisync/data.hpp>")?;
     writeln!(out_hpp, "#include <ouisync/client.hpp>")?;
@@ -412,6 +422,30 @@ fn write_complex_enum(
         write_docs(out.hpp, I, &variant.docs)?;
         writeln!(out.hpp, "{I}struct {variant_name} {{")?;
 
+        // Response traits
+        if matches!(item_type, ItemType::Message(MessageType::Response)) {
+            let ty = match &variant.fields {
+                Fields::Unnamed(field) => Some(&field.ty),
+                Fields::Unit => Some(&Type::Unit),
+                Fields::Named(_) => None,
+            };
+
+            if let Some(ty) = ty {
+                let api_ty = ty.strip_suffix("Handle");
+                let cpp_ty = if variant_name == "None" {
+                    CppType::Scalar(CppScalar::Local("std::nullopt_t".to_owned()))
+                } else {
+                    api_ty
+                        .as_ref()
+                        .map(CppType::new)
+                        .unwrap_or_else(|| CppType::new(ty))
+                        .modify(false, true)
+                };
+
+                writeln!(out.hpp, "{I}{I}using type = {cpp_ty};")?;
+            }
+        }
+
         // Member variables
         for (name, field) in &variant.fields {
             let ty = CppType::new(&field.ty);
@@ -579,6 +613,7 @@ fn write_api_class(
     writeln!(out_hpp, "class {name} {{")?;
     writeln!(out_hpp, "private:")?;
 
+    // TODO: consider making the constructor public instead of declaring these friends
     for friend in ["File", "Repository", "Session", "RepositorySubscription"]
         .into_iter()
         .filter(|friend| *friend != name)
@@ -587,7 +622,7 @@ fn write_api_class(
     }
     writeln!(
         out_hpp,
-        "{I}template<class, class> friend struct detail::ConvertResponse;"
+        "{I}template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);"
     )?;
     writeln!(out_hpp)?;
 
@@ -621,6 +656,10 @@ fn write_api_class(
     writeln!(out_hpp)?;
     writeln!(out_hpp, "public:")?;
     writeln!(out_hpp, "{I}{name}() {{}}")?;
+    writeln!(out_hpp, "{I}{name}(const {name}&) = delete;")?;
+    writeln!(out_hpp, "{I}{name}({name}&&) = default;")?;
+    writeln!(out_hpp, "{I}{name}& operator = (const {name}&) = delete;")?;
+    writeln!(out_hpp, "{I}{name}& operator = ({name}&&) = default;")?;
     writeln!(out_hpp)?;
     writeln!(out_hpp, "public:")?;
 
@@ -725,7 +764,7 @@ fn write_api_class(
         writedoc!(
             out_hpp,
             "
-            {I}{I}return client->invoke<{response_variant_name}, {ret_cpp_type}>(std::move(request), std::move(completion_token));
+            {I}{I}return client->invoke<{response_variant_name}>(std::move(request), std::move(completion_token));
             {I}}}
             "
         )?;

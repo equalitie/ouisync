@@ -1,6 +1,6 @@
 #pragma once
 
-#include <optional>
+#include <boost/system/detail/error_code.hpp>
 #include <type_traits>
 #include <boost/asio/spawn.hpp> // yield_context
 #include <boost/asio/any_completion_handler.hpp>
@@ -19,145 +19,6 @@ class Repository;
 namespace detail {
     template<typename T> struct InvokeSig       { using type = void(boost::system::error_code, T); };
     template<>           struct InvokeSig<void> { using type = void(boost::system::error_code);    };
-
-    template<typename T> struct IsApiClass                              : std::false_type {};
-    template<>           struct IsApiClass<File>                        : std::true_type  {};
-    template<>           struct IsApiClass<Repository>                  : std::true_type  {};
-    template<>           struct IsApiClass<NetworkSocket>               : std::true_type  {};
-    template<typename T> struct IsApiClass<std::optional<T>>            : IsApiClass<T>   {};
-    template<typename T> struct IsApiClass<std::map<std::string, T>>    : IsApiClass<T>   {};
-
-    template<typename T> concept ApiClass = IsApiClass<T>::value;
-
-    /*
-     * Converts from `Response` variant to `RetType` and applies it to the handler.
-     */
-    template<typename Variant, typename RetType>
-    struct ConvertResponse {
-        template<class Handler>
-        static void apply(Handler&& handler, boost::system::error_code ec, Response&& response) {
-            if (ec) {
-                handler(ec, RetType{});
-                return;
-            }
-            Variant* rsp = response.template get_if<Variant>();
-            if (rsp == nullptr) {
-                handler(error::protocol, RetType{});
-                return;
-            }
-            handler(ec, std::move(rsp->value));
-        }
-    };
-
-    template<>
-    struct ConvertResponse<Response::Unit, void> {
-        template<class Handler>
-        static void apply(Handler&& handler, boost::system::error_code ec, Response&& response) {
-            if (ec) {
-                handler(ec);
-                return;
-            }
-            if (response.template get_if<Response::Unit>() == nullptr) {
-                ec = error::protocol;
-            }
-            handler(ec);
-        }
-    };
-
-    template<typename Variant, typename RetType>
-    struct ConvertResponse<Variant, std::optional<RetType>> {
-        template<class Handler>
-        static void apply(Handler&& handler, boost::system::error_code ec, Response&& response) {
-            if (ec) {
-                handler(ec, {});
-                return;
-            }
-            if (response.template get_if<Response::None>() != nullptr) {
-                handler(ec, {});
-                return;
-            }
-            auto rsp = response.template get_if<Variant>();
-            if (rsp == nullptr) {
-                handler(error::protocol, {});
-                return;
-            }
-            handler(ec, std::move(rsp->value));
-        }
-    };
-
-    template<
-        typename Variant,
-        ApiClass RetType
-    >
-    struct ConvertResponse<Variant, RetType> {
-        template<class ClientPtr, class Handler>
-        static void apply(Handler&& handler, boost::system::error_code ec, Response&& response, ClientPtr client) {
-            if (ec) {
-                handler(ec, {});
-                return;
-            }
-            Variant* rsp = response.template get_if<Variant>();
-            if (rsp == nullptr) {
-                handler(error::protocol, {});
-                return;
-            }
-            handler(ec, RetType(std::move(client), std::move(rsp->value)));
-        }
-    };
-
-    template<
-        typename Variant,
-        ApiClass ValueType
-    >
-    struct ConvertResponse<Variant, std::optional<ValueType>> {
-        template<class ClientPtr, class Handler>
-        static void apply(Handler&& handler, boost::system::error_code ec, Response&& response, ClientPtr client) {
-            if (ec) {
-                handler(ec, {});
-                return;
-            }
-
-            if (response.template get_if<Response::None>() != nullptr) {
-                handler(ec, {});
-                return;
-            }
-
-            auto *rsp = response.template get_if<Variant>();
-            if (rsp == nullptr) {
-                handler(error::protocol, {});
-                return;
-            }
-
-            handler(ec, ValueType(std::move(client), std::move(rsp->value)));
-        }
-    };
-
-    template<
-        typename Variant,
-        ApiClass ValueType
-    >
-    struct ConvertResponse<Variant, std::map<std::string, ValueType>> {
-        template<class ClientPtr, class Handler>
-        static void apply(Handler&& handler, boost::system::error_code ec, Response&& response, ClientPtr client) {
-            using RetType = std::map<std::string, ValueType>;
-
-            if (ec) {
-                handler(ec, RetType{});
-                return;
-            }
-            auto* rsp = response.template get_if<Variant>();
-            if (rsp == nullptr) {
-                handler(error::protocol, RetType{});
-                return;
-            }
-            RetType ret;
-            for (auto& [key, val] : rsp->value) {
-                ret.emplace(std::move(key), ValueType(client, std::move(val)));
-            }
-            handler(ec, std::move(ret));
-        }
-    };
-
 } // detail namespace
 
 class Client : public std::enable_shared_from_this<Client> {
@@ -184,11 +45,13 @@ public:
      *      if error was thrown from the underlying TCP socket
      */
     template<
-        class Variant, // expected `Response` variant type
-        class RetType, // return type
-        boost::asio::completion_token_for<typename detail::InvokeSig<RetType>::type> CompletionToken
+        class Variant,
+        boost::asio::completion_token_for<
+            typename detail::InvokeSig<typename Variant::type>::type
+        > CompletionToken
     >
     auto invoke(Request request, CompletionToken token) {
+        using RetType = Variant::type;
         auto self = shared_from_this();
 
         return boost::asio::async_initiate<CompletionToken, typename detail::InvokeSig<RetType>::type>(
@@ -206,13 +69,22 @@ public:
                       work_guard = boost::asio::make_work_guard(std::move(exec))
                     ]
                     (boost::system::error_code ec, Response response) mutable {
-                        using Convert = detail::ConvertResponse<Variant, RetType>;
-
-                        if constexpr (detail::IsApiClass<RetType>::value) {
-                            Convert::apply(std::move(handler), ec, std::move(response), std::move(client));
-                        }
-                        else {
-                            Convert::apply(std::move(handler), ec, std::move(response));
+                        if constexpr (std::is_void_v<RetType>) {
+                            if (ec) {
+                                handler(ec);
+                            } else {
+                                extract<Variant>(std::move(response), std::move(client));
+                                handler(boost::system::error_code());
+                            }
+                        } else {
+                            if (ec) {
+                                handler(ec, RetType {});
+                            } else {
+                                handler(
+                                    boost::system::error_code(),
+                                    extract<Variant>(std::move(response), std::move(client))
+                                );
+                            }
                         }
                     });
             },

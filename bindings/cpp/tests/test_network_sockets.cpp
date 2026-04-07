@@ -1,8 +1,9 @@
+#define BOOST_TEST_MODULE network_sockets
+#include <boost/test/included/unit_test.hpp>
+
 #include <algorithm>
 #include <iterator>
 #include <sstream>
-#define BOOST_TEST_MODULE network_sockets
-#include <boost/test/included/unit_test.hpp>
 
 #include <boost/asio.hpp>
 #include <boost/asio/spawn.hpp>
@@ -64,7 +65,7 @@ BOOST_AUTO_TEST_CASE(test_ping) {
 
         // Send PING
         {
-            auto sent_len = alice_socket->send_to(to_bytes("ping"), to_string(bob_endpoint), yield);
+            auto sent_len = alice_socket.send_to(to_bytes("ping"), to_string(bob_endpoint), yield);
             BOOST_REQUIRE_EQUAL(sent_len, 4);
         }
 
@@ -83,7 +84,7 @@ BOOST_AUTO_TEST_CASE(test_ping) {
 
         // Receive PONG
         {
-            auto datagram = alice_socket->recv_from(4, yield);
+            auto datagram = alice_socket.recv_from(4, yield);
             BOOST_REQUIRE_EQUAL(from_bytes(datagram.data), "pong");
             BOOST_REQUIRE_EQUAL(datagram.addr, to_string(bob_endpoint));
         }

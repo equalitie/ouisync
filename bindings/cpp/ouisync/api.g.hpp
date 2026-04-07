@@ -1,5 +1,7 @@
 // This file is auto generated. Do not edit.
 
+#pragma once
+
 #include <ouisync/data.hpp>
 #include <ouisync/client.hpp>
 #include <boost/asio/spawn.hpp>
@@ -12,7 +14,7 @@ private:
     friend class Repository;
     friend class Session;
     friend class RepositorySubscription;
-    template<class, class> friend struct detail::ConvertResponse;
+    template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
     FileHandle handle;
@@ -24,6 +26,10 @@ private:
 
 public:
     File() {}
+    File(const File&) = delete;
+    File(File&&) = default;
+    File& operator = (const File&) = delete;
+    File& operator = (File&&) = default;
 
 public:
     /**
@@ -38,7 +44,7 @@ public:
         auto request = Request::FileClose{
             handle,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -53,7 +59,7 @@ public:
         auto request = Request::FileFlush{
             handle,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -68,7 +74,7 @@ public:
         auto request = Request::FileGetLength{
             handle,
         };
-        return client->invoke<Response::U64, uint64_t>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::U64>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -88,7 +94,7 @@ public:
         auto request = Request::FileGetProgress{
             handle,
         };
-        return client->invoke<Response::U64, uint64_t>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::U64>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -107,7 +113,7 @@ public:
             offset,
             size,
         };
-        return client->invoke<Response::Bytes, std::vector<uint8_t>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bytes>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -124,7 +130,7 @@ public:
             handle,
             len,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -143,7 +149,7 @@ public:
             offset,
             data,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
 };
@@ -153,7 +159,7 @@ private:
     friend class File;
     friend class Session;
     friend class RepositorySubscription;
-    template<class, class> friend struct detail::ConvertResponse;
+    template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
     RepositoryHandle handle;
@@ -165,6 +171,10 @@ private:
 
 public:
     Repository() {}
+    Repository(const Repository&) = delete;
+    Repository(Repository&&) = default;
+    Repository& operator = (const Repository&) = delete;
+    Repository& operator = (Repository&&) = default;
 
 public:
     /**
@@ -179,7 +189,7 @@ public:
         auto request = Request::RepositoryClose{
             handle,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -196,7 +206,7 @@ public:
             handle,
             path,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -213,7 +223,7 @@ public:
             handle,
             path,
         };
-        return client->invoke<Response::File, File>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::File>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -237,7 +247,7 @@ public:
             handle,
             host,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -252,7 +262,7 @@ public:
         auto request = Request::RepositoryDelete{
             handle,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -271,7 +281,7 @@ public:
             handle,
             host,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -288,7 +298,7 @@ public:
             handle,
             output_path,
         };
-        return client->invoke<Response::Path, std::string>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Path>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -302,7 +312,7 @@ public:
             handle,
             path,
         };
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -317,7 +327,7 @@ public:
         auto request = Request::RepositoryGetAccessMode{
             handle,
         };
-        return client->invoke<Response::AccessMode, AccessMode>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::AccessMode>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -329,7 +339,7 @@ public:
         auto request = Request::RepositoryGetBlockExpiration{
             handle,
         };
-        return client->invoke<Response::Duration, std::optional<std::chrono::milliseconds>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Duration>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -345,7 +355,7 @@ public:
         auto request = Request::RepositoryGetCredentials{
             handle,
         };
-        return client->invoke<Response::Bytes, std::vector<uint8_t>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bytes>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -363,7 +373,7 @@ public:
             handle,
             path,
         };
-        return client->invoke<Response::EntryType, std::optional<EntryType>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::EntryType>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -375,7 +385,7 @@ public:
         auto request = Request::RepositoryGetExpiration{
             handle,
         };
-        return client->invoke<Response::Duration, std::optional<std::chrono::milliseconds>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Duration>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -391,7 +401,7 @@ public:
         auto request = Request::RepositoryGetInfoHash{
             handle,
         };
-        return client->invoke<Response::String, std::string>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::String>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -405,7 +415,7 @@ public:
             handle,
             key,
         };
-        return client->invoke<Response::String, std::optional<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::String>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -417,7 +427,7 @@ public:
         auto request = Request::RepositoryGetMountPoint{
             handle,
         };
-        return client->invoke<Response::Path, std::optional<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Path>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -429,7 +439,7 @@ public:
         auto request = Request::RepositoryGetPath{
             handle,
         };
-        return client->invoke<Response::Path, std::string>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Path>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -441,7 +451,7 @@ public:
         auto request = Request::RepositoryGetQuota{
             handle,
         };
-        return client->invoke<Response::QuotaInfo, QuotaInfo>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::QuotaInfo>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -453,7 +463,7 @@ public:
         auto request = Request::RepositoryGetShortName{
             handle,
         };
-        return client->invoke<Response::String, std::string>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::String>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -465,7 +475,7 @@ public:
         auto request = Request::RepositoryGetStats{
             handle,
         };
-        return client->invoke<Response::Stats, Stats>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Stats>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -481,7 +491,7 @@ public:
         auto request = Request::RepositoryGetSyncProgress{
             handle,
         };
-        return client->invoke<Response::Progress, Progress>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Progress>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -496,7 +506,7 @@ public:
         auto request = Request::RepositoryIsDhtEnabled{
             handle,
         };
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -511,7 +521,7 @@ public:
         auto request = Request::RepositoryIsPexEnabled{
             handle,
         };
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -526,7 +536,7 @@ public:
         auto request = Request::RepositoryIsSyncEnabled{
             handle,
         };
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -543,7 +553,7 @@ public:
             handle,
             host,
         };
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -555,7 +565,7 @@ public:
         auto request = Request::RepositoryMount{
             handle,
         };
-        return client->invoke<Response::Path, std::string>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Path>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -569,7 +579,7 @@ public:
             handle,
             dst,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -588,7 +598,7 @@ public:
             src,
             dst,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -605,7 +615,7 @@ public:
             handle,
             path,
         };
-        return client->invoke<Response::File, File>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::File>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -622,7 +632,7 @@ public:
             handle,
             path,
         };
-        return client->invoke<Response::DirectoryEntries, std::vector<DirectoryEntry>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::DirectoryEntries>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -642,7 +652,7 @@ public:
             path,
             recursive,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -659,7 +669,7 @@ public:
             handle,
             path,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -673,7 +683,7 @@ public:
             handle,
             token,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -715,7 +725,7 @@ public:
             read,
             write,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -738,7 +748,7 @@ public:
             access_mode,
             local_secret,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -752,7 +762,7 @@ public:
             handle,
             value,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -769,7 +779,7 @@ public:
             handle,
             credentials,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -786,7 +796,7 @@ public:
             handle,
             enabled,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -800,7 +810,7 @@ public:
             handle,
             value,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -814,7 +824,7 @@ public:
             handle,
             edits,
         };
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -831,7 +841,7 @@ public:
             handle,
             enabled,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -845,7 +855,7 @@ public:
             handle,
             value,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -864,7 +874,7 @@ public:
             handle,
             enabled,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -893,7 +903,7 @@ public:
             access_mode,
             local_secret,
         };
-        return client->invoke<Response::ShareToken, ShareToken>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::ShareToken>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -905,7 +915,7 @@ public:
         auto request = Request::RepositoryUnmount{
             handle,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
 };
@@ -916,7 +926,7 @@ private:
     friend class Repository;
     friend class Session;
     friend class RepositorySubscription;
-    template<class, class> friend struct detail::ConvertResponse;
+    template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
     NetworkSocketHandle handle;
@@ -928,6 +938,10 @@ private:
 
 public:
     NetworkSocket() {}
+    NetworkSocket(const NetworkSocket&) = delete;
+    NetworkSocket(NetworkSocket&&) = default;
+    NetworkSocket& operator = (const NetworkSocket&) = delete;
+    NetworkSocket& operator = (NetworkSocket&&) = default;
 
 public:
     template<
@@ -939,7 +953,7 @@ public:
         auto request = Request::NetworkSocketClose{
             handle,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -953,7 +967,7 @@ public:
             handle,
             len,
         };
-        return client->invoke<Response::Datagram, Datagram>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Datagram>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -969,7 +983,7 @@ public:
             data,
             addr,
         };
-        return client->invoke<Response::U64, uint64_t>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::U64>(std::move(request), std::move(completion_token));
     }
 
 };
@@ -980,7 +994,7 @@ private:
     friend class Repository;
     friend class Session;
     friend class RepositorySubscription;
-    template<class, class> friend struct detail::ConvertResponse;
+    template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
     NetworkStreamHandle handle;
@@ -992,6 +1006,10 @@ private:
 
 public:
     NetworkStream() {}
+    NetworkStream(const NetworkStream&) = delete;
+    NetworkStream(NetworkStream&&) = default;
+    NetworkStream& operator = (const NetworkStream&) = delete;
+    NetworkStream& operator = (NetworkStream&&) = default;
 
 public:
     /**
@@ -1006,7 +1024,7 @@ public:
         auto request = Request::NetworkStreamClose{
             handle,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1023,7 +1041,7 @@ public:
             handle,
             len,
         };
-        return client->invoke<Response::Bytes, std::vector<uint8_t>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bytes>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1040,7 +1058,7 @@ public:
             handle,
             buf,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
 };
@@ -1050,7 +1068,7 @@ private:
     friend class File;
     friend class Repository;
     friend class RepositorySubscription;
-    template<class, class> friend struct detail::ConvertResponse;
+    template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
 
@@ -1060,6 +1078,10 @@ private:
 
 public:
     Session() {}
+    Session(const Session&) = delete;
+    Session(Session&&) = default;
+    Session& operator = (const Session&) = delete;
+    Session& operator = (Session&&) = default;
 
 public:
     /**
@@ -1096,7 +1118,7 @@ public:
         auto request = Request::SessionAddUserProvidedPeers{
             addrs,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1109,7 +1131,7 @@ public:
         auto request = Request::SessionBindMetrics{
             addr,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1132,7 +1154,7 @@ public:
         auto request = Request::SessionBindNetwork{
             addrs,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1145,7 +1167,7 @@ public:
         auto request = Request::SessionBindRemoteControl{
             addr,
         };
-        return client->invoke<Response::U16, uint16_t>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::U16>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1174,7 +1196,7 @@ public:
             dst_repo,
             dst_path,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1217,7 +1239,7 @@ public:
             dht_enabled,
             pex_enabled,
         };
-        return client->invoke<Response::Repository, Repository>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Repository>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1233,7 +1255,7 @@ public:
         auto request = Request::SessionDeleteRepositoryByName{
             name,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1248,7 +1270,7 @@ public:
             password,
             salt,
         };
-        return client->invoke<Response::SecretKey, SecretKey>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::SecretKey>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1261,7 +1283,7 @@ public:
         auto request = Request::SessionFindRepository{
             name,
         };
-        return client->invoke<Response::Repository, Repository>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Repository>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1271,7 +1293,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGeneratePasswordSalt();
-        return client->invoke<Response::PasswordSalt, PasswordSalt>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::PasswordSalt>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1281,7 +1303,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGenerateSecretKey();
-        return client->invoke<Response::SecretKey, SecretKey>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::SecretKey>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1299,7 +1321,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetCurrentProtocolVersion();
-        return client->invoke<Response::U64, uint64_t>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::U64>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1309,7 +1331,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetDefaultBlockExpiration();
-        return client->invoke<Response::Duration, std::optional<std::chrono::milliseconds>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Duration>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1319,7 +1341,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetDefaultQuota();
-        return client->invoke<Response::StorageSize, std::optional<StorageSize>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::StorageSize>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1329,7 +1351,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetDefaultRepositoryExpiration();
-        return client->invoke<Response::Duration, std::optional<std::chrono::milliseconds>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Duration>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1343,7 +1365,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetDhtRouters();
-        return client->invoke<Response::Strings, std::vector<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Strings>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1353,7 +1375,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetExternalAddrV4();
-        return client->invoke<Response::SocketAddr, std::optional<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::SocketAddr>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1363,7 +1385,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetExternalAddrV6();
-        return client->invoke<Response::SocketAddr, std::optional<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::SocketAddr>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1380,7 +1402,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetHighestSeenProtocolVersion();
-        return client->invoke<Response::U64, uint64_t>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::U64>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1393,7 +1415,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetLocalListenerAddrs();
-        return client->invoke<Response::PeerAddrs, std::vector<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::PeerAddrs>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1403,7 +1425,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetMetricsListenerAddr();
-        return client->invoke<Response::SocketAddr, std::optional<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::SocketAddr>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1413,7 +1435,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetMountRoot();
-        return client->invoke<Response::Path, std::optional<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Path>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1423,7 +1445,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetNatBehavior();
-        return client->invoke<Response::NatBehavior, std::optional<NatBehavior>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::NatBehavior>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1433,7 +1455,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetNetworkStats();
-        return client->invoke<Response::Stats, Stats>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Stats>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1449,7 +1471,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetPeers();
-        return client->invoke<Response::PeerInfos, std::vector<PeerInfo>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::PeerInfos>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1459,7 +1481,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetRemoteControlListenerAddr();
-        return client->invoke<Response::SocketAddr, std::optional<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::SocketAddr>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1476,7 +1498,7 @@ public:
         auto request = Request::SessionGetRemoteListenerAddrs{
             host,
         };
-        return client->invoke<Response::PeerAddrs, std::vector<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::PeerAddrs>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1492,7 +1514,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetRuntimeId();
-        return client->invoke<Response::PublicRuntimeId, PublicRuntimeId>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::PublicRuntimeId>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1508,7 +1530,7 @@ public:
         auto request = Request::SessionGetShareTokenAccessMode{
             token,
         };
-        return client->invoke<Response::AccessMode, AccessMode>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::AccessMode>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1527,7 +1549,7 @@ public:
         auto request = Request::SessionGetShareTokenInfoHash{
             token,
         };
-        return client->invoke<Response::String, std::string>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::String>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1543,7 +1565,7 @@ public:
         auto request = Request::SessionGetShareTokenSuggestedName{
             token,
         };
-        return client->invoke<Response::String, std::string>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::String>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1556,7 +1578,7 @@ public:
         auto request = Request::SessionGetStateMonitor{
             path,
         };
-        return client->invoke<Response::StateMonitor, std::optional<StateMonitorNode>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::StateMonitor>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1566,7 +1588,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetStoreDirs();
-        return client->invoke<Response::Paths, std::vector<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Paths>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1576,7 +1598,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionGetUserProvidedPeers();
-        return client->invoke<Response::PeerAddrs, std::vector<std::string>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::PeerAddrs>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1593,7 +1615,7 @@ public:
         auto request = Request::SessionInitNetwork{
             defaults,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1606,7 +1628,20 @@ public:
         auto request = Request::SessionInsertStoreDirs{
             paths,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
+    }
+
+    /**
+     * Checks whether local DHT is enabled.
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<bool>::type> CompletionToken
+    >
+    auto is_local_dht_enabled(
+        CompletionToken completion_token
+    ) {
+        auto request = Request::SessionIsLocalDhtEnabled();
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1619,7 +1654,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionIsLocalDiscoveryEnabled();
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1632,7 +1667,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionIsPexRecvEnabled();
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1642,7 +1677,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionIsPexSendEnabled();
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1655,7 +1690,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionIsPortForwardingEnabled();
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1665,7 +1700,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionListRepositories();
-        return client->invoke<Response::Repositories, std::map<std::string, Repository>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Repositories>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1680,7 +1715,7 @@ public:
             token,
             host,
         };
-        return client->invoke<Response::Bool, bool>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Bool>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1697,7 +1732,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionOpenNetworkSocketV4();
-        return client->invoke<Response::NetworkSocket, std::optional<NetworkSocket>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::NetworkSocket>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1714,7 +1749,7 @@ public:
         CompletionToken completion_token
     ) {
         auto request = Request::SessionOpenNetworkSocketV6();
-        return client->invoke<Response::NetworkSocket, std::optional<NetworkSocket>>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::NetworkSocket>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1732,7 +1767,7 @@ public:
             addr,
             topic_id,
         };
-        return client->invoke<Response::NetworkStream, NetworkStream>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::NetworkStream>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1758,7 +1793,7 @@ public:
             path,
             local_secret,
         };
-        return client->invoke<Response::Repository, Repository>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Repository>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1771,7 +1806,7 @@ public:
         auto request = Request::SessionRemoveStoreDirs{
             paths,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1787,7 +1822,7 @@ public:
         auto request = Request::SessionRemoveUserProvidedPeers{
             addrs,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1800,7 +1835,7 @@ public:
         auto request = Request::SessionSetDefaultBlockExpiration{
             value,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1813,7 +1848,7 @@ public:
         auto request = Request::SessionSetDefaultQuota{
             value,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1826,7 +1861,7 @@ public:
         auto request = Request::SessionSetDefaultRepositoryExpiration{
             value,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1844,7 +1879,7 @@ public:
         auto request = Request::SessionSetDhtRouters{
             routers,
         };
-        return client->invoke<Response::None, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1866,7 +1901,7 @@ public:
         auto request = Request::SessionSetLocalDhtEnabled{
             enabled,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1882,7 +1917,7 @@ public:
         auto request = Request::SessionSetLocalDiscoveryEnabled{
             enabled,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1895,7 +1930,7 @@ public:
         auto request = Request::SessionSetMountRoot{
             path,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1908,7 +1943,7 @@ public:
         auto request = Request::SessionSetPexRecvEnabled{
             enabled,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1921,7 +1956,7 @@ public:
         auto request = Request::SessionSetPexSendEnabled{
             enabled,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1937,7 +1972,7 @@ public:
         auto request = Request::SessionSetPortForwardingEnabled{
             enabled,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     template<
@@ -1950,7 +1985,7 @@ public:
         auto request = Request::SessionSetStoreDirs{
             paths,
         };
-        return client->invoke<Response::Unit, void>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**
@@ -1966,7 +2001,7 @@ public:
         auto request = Request::SessionValidateShareToken{
             token,
         };
-        return client->invoke<Response::ShareToken, ShareToken>(std::move(request), std::move(completion_token));
+        return client->invoke<Response::ShareToken>(std::move(request), std::move(completion_token));
     }
 
 };

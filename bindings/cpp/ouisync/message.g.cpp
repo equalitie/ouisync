@@ -294,6 +294,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionInsertStoreDirs>(&variant) != nullptr) {
         return std::string_view("SessionInsertStoreDirs");
     }
+    if (std::get_if<Request::SessionIsLocalDhtEnabled>(&variant) != nullptr) {
+        return std::string_view("SessionIsLocalDhtEnabled");
+    }
     if (std::get_if<Request::SessionIsLocalDiscoveryEnabled>(&variant) != nullptr) {
         return std::string_view("SessionIsLocalDiscoveryEnabled");
     }
@@ -341,6 +344,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     }
     if (std::get_if<Request::SessionSetDhtRouters>(&variant) != nullptr) {
         return std::string_view("SessionSetDhtRouters");
+    }
+    if (std::get_if<Request::SessionSetLocalDhtEnabled>(&variant) != nullptr) {
+        return std::string_view("SessionSetLocalDhtEnabled");
     }
     if (std::get_if<Request::SessionSetLocalDiscoveryEnabled>(&variant) != nullptr) {
         return std::string_view("SessionSetLocalDiscoveryEnabled");
