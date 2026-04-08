@@ -296,6 +296,7 @@ fn write_simple_enum(out: &mut OutFiles<'_>, name: &str, item: &SimpleEnum) -> R
 
     if is_error {
         writeln!(out.hpp, "namespace error {{")?;
+        writeln!(out.cpp, "namespace error {{")?;
     }
 
     write_docs(out.hpp, "", &item.docs)?;
@@ -312,12 +313,39 @@ fn write_simple_enum(out: &mut OutFiles<'_>, name: &str, item: &SimpleEnum) -> R
     }
 
     writeln!(out.hpp, "}};")?;
+    writeln!(out.hpp)?;
+
+    // operator <<
+    writeln!(
+        out.hpp,
+        "std::ostream& operator << (std::ostream&, const {name}&);"
+    )?;
+
+    writeln!(
+        out.cpp,
+        "std::ostream& operator << (std::ostream& os, const {name}& e) {{"
+    )?;
+    writeln!(out.cpp, "{I}switch (e) {{")?;
+
+    for (variant_name, _variant) in &item.variants {
+        writeln!(
+            out.cpp,
+            "{I}{I}case {name}::{0}: os << \"{0}\"; break;",
+            AsSnakeCase(variant_name)
+        )?;
+    }
+
+    writeln!(out.cpp, "{I}}}")?;
+    writeln!(out.cpp, "{I}return os;")?;
+    writeln!(out.cpp, "}}")?;
 
     if is_error {
         writeln!(out.hpp, "}} // namespace error")?;
+        writeln!(out.cpp, "}} // namespace error")?;
     }
 
     writeln!(out.hpp)?;
+    writeln!(out.cpp)?;
 
     if is_error {
         write_service_error_code(name, out.hpp, out.cpp, item)?;

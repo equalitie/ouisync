@@ -94,6 +94,8 @@ enum class AccessMode : uint8_t {
     write = 2,
 };
 
+std::ostream& operator << (std::ostream&, const AccessMode&);
+
 
 /**
  * Type of secret to unlock a repository.
@@ -319,6 +321,8 @@ enum class EntryType : uint8_t {
     directory = 2,
 };
 
+std::ostream& operator << (std::ostream&, const EntryType&);
+
 
 /**
  * Network notification event.
@@ -334,6 +338,8 @@ enum class NetworkEvent : uint8_t {
      */
     peer_set_change = 1,
 };
+
+std::ostream& operator << (std::ostream&, const NetworkEvent&);
 
 
 /**
@@ -361,6 +367,8 @@ enum class PeerSource : uint8_t {
      */
     peer_exchange = 4,
 };
+
+std::ostream& operator << (std::ostream&, const PeerSource&);
 
 
 struct PublicRuntimeId {
@@ -535,6 +543,8 @@ enum class NatBehavior : uint8_t {
     address_and_port_dependent = 2,
 };
 
+std::ostream& operator << (std::ostream&, const NatBehavior&);
+
 
 namespace error {
 enum class Service : uint16_t {
@@ -663,6 +673,8 @@ enum class Service : uint16_t {
      */
     other = 65535,
 };
+
+std::ostream& operator << (std::ostream&, const Service&);
 } // namespace error
 
 const char* error_message(error::Service ec) noexcept;
@@ -675,6 +687,8 @@ enum class LogLevel : uint8_t {
     debug = 4,
     trace = 5,
 };
+
+std::ostream& operator << (std::ostream&, const LogLevel&);
 
 
 struct MessageId {

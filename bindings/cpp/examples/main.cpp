@@ -1,3 +1,4 @@
+#include "ouisync/data.g.hpp"
 #include <ouisync.hpp>
 #include <ouisync/service.hpp>
 
@@ -15,19 +16,22 @@ struct I /* indent */ {
     uint8_t size;
 };
 
-namespace std {
-    ostream& operator<<(ostream& os, ouisync::EntryType type) {
-        switch (type) {
-            case ouisync::EntryType::file: return os << "📄";
-            case ouisync::EntryType::directory: return os << "📁";
-            default: return os;
-        }
+std::ostream& operator<<(std::ostream& os, I indent) {
+    for (auto i = 0; i < indent.size; ++i) os << "  ";
+    return os;
+}
+
+struct Icon {
+    ouisync::EntryType& type;
+};
+
+std::ostream& operator<<(std::ostream& os, Icon icon) {
+    switch (icon.type) {
+        case ouisync::EntryType::file: return os << "📄";
+        case ouisync::EntryType::directory: return os << "📁";
+        default: return os;
     }
-    ostream& operator<<(ostream& os, I indent) {
-        for (auto i = 0; i < indent.size; ++i) os << "  ";
-        return os;
-    }
-} // namespace std
+}
 
 void async_main(asio::yield_context yield) {
 #if USE_BUILT_IN_SERVICE
@@ -44,11 +48,11 @@ void async_main(asio::yield_context yield) {
 
     std::cout << "Attempting to connect to a Ouisync app running on this PC\n";
 #endif
-    
+
     auto session = ouisync::Session::connect(service_dir, yield);
-    
+
     auto repos = session.list_repositories(yield);
-    
+
     std::cout << "Found " << repos.size() << " repositories\n";
 
     // List content of the root directory of each repository
@@ -56,7 +60,7 @@ void async_main(asio::yield_context yield) {
         std::cout << I{1} << name << "\n";
 
         for (auto& entry : repo.read_directory("/", yield)) {
-            std::cout << I{2} << entry.entry_type << " " << entry.name << "\n";
+            std::cout << I{2} << Icon { entry.entry_type } << " " << entry.name << "\n";
         }
     }
 
