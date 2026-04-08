@@ -1114,7 +1114,7 @@ impl Inner {
         // doing it would cause memory leak.
         while tasks.try_join_next().is_some() {}
 
-        tasks.spawn(f)
+        tasks.spawn(f.instrument(Span::current()))
     }
 }
 

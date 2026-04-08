@@ -20,11 +20,17 @@ namespace std {
     inline ostream& operator<<(ostream& os, const ouisync::MessageId& m) {
         return os << "MessageId{" << m.value << "}\n";
     }
+
+    inline ostream& operator<<(ostream& os, const ouisync::PeerInfo& i) {
+        return os << "PeerInfo { addr=" << i.addr << ", .. }";
+    }
+
     template<class T>
     ostream& operator<<(ostream& os, const std::optional<T>& o) {
         if (o) return os << "Some{" << *o << "}";
         else return os << "None";
     }
+
     template<class Collection>
     ostream& operator<<(ostream& os, const tests::print::List<Collection>& l) {
         for (auto i = l.collection.begin(); i != l.collection.end(); ++i) {
@@ -33,19 +39,24 @@ namespace std {
         }
         return os;
     }
+
     template<class T1, class T2>
     ostream& operator<<(ostream& os, const std::pair<T1, T2>& p) {
         return os << "(" << p.first << ", " << p.second << ")";
     }
+
     template<class K, class V>
     ostream& operator<<(ostream& os, const std::unordered_map<K, V>& m) {
         return os << "Map{" << tests::print::list(m) << "}";
     }
+
     template<class V>
     ostream& operator<<(ostream& os, const std::unordered_set<V>& s) {
         return os << "Set{" << tests::print::list(s) << "}";
     }
 } // namespace std
+
+
 
 // Temporary directory that auto-deletes itself on destruction.
 class TempDir {

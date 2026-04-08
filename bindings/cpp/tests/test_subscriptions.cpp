@@ -1,111 +1,88 @@
 #define BOOST_TEST_MODULE Subscriptions
 #include <boost/test/included/unit_test.hpp>
 
-// Gain access to private members
-#define OUISYNC_TESTING
+#include <boost/asio.hpp>
+#include <boost/asio/spawn.hpp>
+#include <ouisync.hpp>
+#include <ouisync/service.hpp>
+#include "tests/test_utils.hpp"
 
-#include <ouisync/subscriptions.hpp>
-#include "test_utils.hpp"
+namespace asio = boost::asio;
 
-using namespace ouisync;
+BOOST_AUTO_TEST_CASE(network_events) {
+    asio::io_context ctx;
+    TempDir tempdir;
 
-namespace std {
-    ostream& operator<<(ostream& os, const Subscriptions& subs) {
-        return os
-            << "MessageId -> Set<SubscriberId>\n"
-            << "  " << subs.by_message_id << "\n"
-            << "SubscriberId -> (MessageId, Handler)\n"
-            << "  " << subs.by_subscriber_id << "\n"
-            << "RepoHandle -> MessageId\n"
-            << "  " << subs.by_repo_handle;
-    }
-    template<class Sig>
-    ostream& operator<<(ostream& os, const std::function<Sig>&) {
-        return os << "fn(...)";
-    }
-} // namespace std
+    auto a_dir = mkdir(tempdir.path() / "a");
+    auto b_dir = mkdir(tempdir.path() / "b");
 
-using RawMessageId = Subscriptions::RawMessageId;
+    asio::spawn(ctx, [&] (asio::yield_context yield) {
+        ouisync::init_log();
 
-BOOST_AUTO_TEST_CASE(test_subscribe_unsubscribe) {
-    Subscriptions subs;
+        ouisync::Service a_service(yield.get_executor());
+        a_service.start(a_dir, "a", yield);
+        auto a_session = ouisync::Session::connect(a_dir, yield);
+        a_session.bind_network({"quic/127.0.0.1:0"}, yield);
 
-    RawMessageId next_message_id = 0;
-    auto repo_handle = RepositoryHandle{0};
-    SubscriberId subscriber_id = 0;
-    uint64_t notify_counter = 0;
+        ouisync::Service b_service(yield.get_executor());
+        b_service.start(b_dir, "b", yield);
+        auto b_session = ouisync::Session::connect(b_dir, yield);
+        b_session.bind_network({"quic/127.0.0.1:0"}, yield);
 
-    auto rq_msg_id = subs.subscribe(
-            repo_handle,
-            subscriber_id,
-            [&] (HandlerResult) { notify_counter++; },
-            next_message_id
+        auto b_addr = b_session.get_local_listener_addrs(yield)[0];
+
+        auto subscription = a_session.subscribe_to_network();
+        a_session.add_user_provided_peers({ b_addr }, yield);
+
+        // Known
+        BOOST_REQUIRE_EQUAL(subscription.async_receive(yield), ouisync::NetworkEvent::peer_set_change);
+        auto p0 = a_session.get_peers(yield)[0];
+        BOOST_REQUIRE_EQUAL(p0.addr, b_addr);
+        BOOST_REQUIRE(
+            p0.state.get_if<ouisync::PeerState::Known>() != nullptr ||
+            p0.state.get_if<ouisync::PeerState::Connecting>() != nullptr ||
+            p0.state.get_if<ouisync::PeerState::Handshaking>() != nullptr ||
+            p0.state.get_if<ouisync::PeerState::Active>() != nullptr
         );
-    
-    BOOST_TEST(rq_msg_id == MessageId{0});
-    BOOST_TEST(notify_counter == 0);
-    BOOST_TEST(subs.is_subscribed(subscriber_id));
 
-    auto rs_msg_id = subs.unsubscribe(repo_handle, subscriber_id);
-
-    BOOST_TEST(rs_msg_id == MessageId{0});
-    BOOST_TEST(notify_counter == 0);
-    BOOST_TEST(!subs.is_subscribed(subscriber_id));
-
-    BOOST_TEST(subs.by_message_id.empty());
-    BOOST_TEST(subs.by_subscriber_id.empty());
-    BOOST_TEST(subs.by_repo_handle.empty());
-}
-
-BOOST_AUTO_TEST_CASE(test_subscribe_unsubscribe_2x_same_repo) {
-    Subscriptions subs;
-
-    RawMessageId next_message_id = 0;
-    auto repo_handle = RepositoryHandle{0};
-    SubscriberId subscriber1_id = 0;
-    SubscriberId subscriber2_id = 1;
-    uint64_t notify_counter = 0;
-
-    auto rq1_msg_id = subs.subscribe(
-            repo_handle,
-            subscriber1_id,
-            [&] (HandlerResult) { notify_counter++; },
-            next_message_id
+        // Connecting
+        BOOST_REQUIRE_EQUAL(subscription.async_receive(yield), ouisync::NetworkEvent::peer_set_change);
+        auto p1 = a_session.get_peers(yield)[0];
+        BOOST_REQUIRE_EQUAL(p1.addr, b_addr);
+        BOOST_REQUIRE(
+            p1.state.get_if<ouisync::PeerState::Connecting>() != nullptr ||
+            p1.state.get_if<ouisync::PeerState::Handshaking>() != nullptr ||
+            p1.state.get_if<ouisync::PeerState::Active>() != nullptr
         );
-    
-    BOOST_TEST(rq1_msg_id == MessageId{0});
-    BOOST_TEST(notify_counter == 0);
-    BOOST_TEST(subs.is_subscribed(subscriber1_id));
 
-    auto rq2_msg_id = subs.subscribe(
-            repo_handle,
-            subscriber2_id,
-            [&] (HandlerResult) { notify_counter++; },
-            next_message_id
+        // Handshaking
+        BOOST_REQUIRE_EQUAL(subscription.async_receive(yield), ouisync::NetworkEvent::peer_set_change);
+        auto p2 = a_session.get_peers(yield)[0];
+        BOOST_REQUIRE_EQUAL(p2.addr, b_addr);
+        BOOST_REQUIRE(
+            p1.state.get_if<ouisync::PeerState::Handshaking>() != nullptr ||
+            p1.state.get_if<ouisync::PeerState::Active>() != nullptr
         );
-    
-    BOOST_TEST(rq2_msg_id == std::optional<MessageId>());
-    BOOST_TEST(notify_counter == 0);
-    BOOST_TEST(subs.is_subscribed(subscriber2_id));
 
-    auto rs1_msg_id = subs.unsubscribe(repo_handle, subscriber1_id);
+        // Active
+        BOOST_REQUIRE_EQUAL(subscription.async_receive(yield), ouisync::NetworkEvent::peer_set_change);
 
-    BOOST_TEST(rs1_msg_id == std::optional<MessageId>());
-    BOOST_TEST(notify_counter == 0);
-    BOOST_TEST(!subs.is_subscribed(subscriber1_id));
-    BOOST_TEST(subs.is_subscribed(subscriber2_id));
+        auto p3 = a_session.get_peers(yield)[0];
+        BOOST_REQUIRE_EQUAL(p2.addr, b_addr);
+        BOOST_REQUIRE(
+            p1.state.get_if<ouisync::PeerState::Active>() != nullptr
+        );
 
-    BOOST_TEST(!subs.by_message_id.empty());
-    BOOST_TEST(!subs.by_subscriber_id.empty());
-    BOOST_TEST(!subs.by_repo_handle.empty());
+        a_session.remove_user_provided_peers({ b_addr }, yield);
+        b_service.stop(yield);
 
-    auto rs2_msg_id = subs.unsubscribe(repo_handle, subscriber2_id);
+        // Peer disconnected
+        BOOST_REQUIRE_EQUAL(subscription.async_receive(yield), ouisync::NetworkEvent::peer_set_change);
+        auto ps = a_session.get_peers(yield);
+        BOOST_REQUIRE(ps.empty());
 
-    BOOST_TEST(rs2_msg_id == MessageId{0});
-    BOOST_TEST(notify_counter == 0);
-    BOOST_TEST(!subs.is_subscribed(subscriber2_id));
+        a_service.stop(yield);
+    }, check_exception);
 
-    BOOST_TEST(subs.by_message_id.empty());
-    BOOST_TEST(subs.by_subscriber_id.empty());
-    BOOST_TEST(subs.by_repo_handle.empty());
+    ctx.run();
 }

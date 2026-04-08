@@ -906,6 +906,16 @@ public:
         return client->invoke<Response::ShareToken>(std::move(request), std::move(completion_token));
     }
 
+
+    Subscription<Response::Unit> subscribe(
+
+    ) {
+        auto request = Request::RepositorySubscribe{
+            handle,
+        };
+        return client->subscribe<Response::Unit>(std::move(request));
+    }
+
     template<
         boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
     >
@@ -1271,6 +1281,26 @@ public:
             salt,
         };
         return client->invoke<Response::SecretKey>(std::move(request), std::move(completion_token));
+    }
+
+    /**
+     * Starts a DHT lookup for the given info-hash (formated as hex string). Returns a stream of
+     * discovered peer addresses. If `announce` is true, also announces us as having the content
+     * corresponding to the info-hash.
+     *
+     * Note: Currently this doesn't automatically connnect to the discovered peers but this might
+     * change in the future.
+     */
+
+    Subscription<Response::PeerAddr> dht_lookup(
+        const std::string& info_hash,
+        bool announce
+    ) {
+        auto request = Request::SessionDhtLookup{
+            info_hash,
+            announce,
+        };
+        return client->subscribe<Response::PeerAddr>(std::move(request));
     }
 
     template<
@@ -1986,6 +2016,24 @@ public:
             paths,
         };
         return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
+    }
+
+
+    Subscription<Response::NetworkEvent> subscribe_to_network(
+
+    ) {
+        auto request = Request::SessionSubscribeToNetwork();
+        return client->subscribe<Response::NetworkEvent>(std::move(request));
+    }
+
+
+    Subscription<Response::Unit> subscribe_to_state_monitor(
+        const std::vector<MonitorId>& path
+    ) {
+        auto request = Request::SessionSubscribeToStateMonitor{
+            path,
+        };
+        return client->subscribe<Response::Unit>(std::move(request));
     }
 
     /**

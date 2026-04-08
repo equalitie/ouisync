@@ -1,13 +1,19 @@
+#include "ouisync/data.g.hpp"
+#include "ouisync/message.g.hpp"
+#include <boost/asio/detached.hpp>
+#include <boost/asio/spawn.hpp>
+#include <boost/system/detail/error_code.hpp>
+#include <exception>
 #include <ouisync/client.hpp>
 #include <ouisync/serialize.hpp>
 #include <ouisync/debug.hpp> // debug
 #include <ouisync/error.hpp>
 #include <ouisync/utils.hpp>
-#include <ouisync/subscriptions.hpp>
 #include <ouisync/semaphore.hpp>
 
 #include <boost/json.hpp>
 #include <boost/hash2/sha2.hpp>
+#include <boost/asio/experimental/channel.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/asio/read.hpp>
@@ -18,6 +24,7 @@
 #include <random>
 
 #include <unordered_map>
+#include <variant>
 
 namespace ouisync {
 
@@ -28,22 +35,6 @@ namespace endian = boost::endian;
 using Socket = asio::ip::tcp::socket;
 using ResponseHandler = asio::any_completion_handler<HandlerSig>;
 using RawMessageId = decltype(MessageId::value);
-using RawRepositoryHandle = decltype(RepositoryHandle::value);
-
-// Marker to signify this pending entry correponds to a subscription
-struct Subscription {};
-
-using Pending = std::variant<
-    // std::monostate is used when no handler has yet been set and no response has
-    // arrived. This is needed because we get an async handler from
-    // asio::async_initiate only once the operation starts to await, but we
-    // need to "register" an entry beforehand in case that a response arrives
-    // in the mean time.
-    std::monostate,
-    HandlerResult,
-    ResponseHandler,
-    Subscription
->;
 
 // Data whose lifetime needs to be preserved while sending operation takes
 // place.
@@ -71,11 +62,10 @@ struct SendBufferData {
 
 struct Client::State : std::enable_shared_from_this<Client::State> {
     Socket socket;
-    std::unordered_map<RawMessageId, Pending> pending;
-    Subscriptions subscriptions;
+    std::unordered_map<RawMessageId, ResponseHandler> responses;
+    std::unordered_map<RawMessageId, std::shared_ptr<detail::SubscriptionChannel>> subscriptions;
 
-    RawMessageId next_request_id = 0;
-    SubscriberId next_subscriber_id = 0;
+    RawMessageId next_message_id = 0;
     bool disconnected = false;
 
     // Ensures only one socket write happens at a time
@@ -165,73 +155,67 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
 
     try {
         while (state->socket.is_open()) {
-            auto [rs_id, rs] = receive(state->socket, yield);
+            auto [res_id, res] = receive(state->socket, yield);
 
-            auto entry_i = state->pending.find(rs_id.value);
-            if (entry_i == state->pending.end()) {
+            auto res_i = state->responses.find(res_id.value);
+            if (res_i != state->responses.end()) {
+                auto& handler = res_i->second;
+                auto bound_handler = [
+                    handler = std::move(handler),
+                    res = std::move(res)
+                ] () mutable {
+                    apply_result(std::move(handler), std::move(res));
+                };
+
+                state->responses.erase(res_i);
+
+                asio::post(yield.get_executor(), std::move(bound_handler));
+
                 continue;
             }
-            auto& entry = entry_i->second;
 
-            std::visit(overloaded {
-                [&](std::monostate) {
-                    entry.emplace<HandlerResult>(std::move(rs));
-                },
-                [&](const HandlerResult&) {
-                    std::cout << "Warning: response received more than once (ignored)\n";
-                },
-                [&](ResponseHandler& handler) {
-                    auto h = [
-                        handler = std::move(handler),
-                        rs = std::move(rs)
-                    ] () mutable {
-                        apply_result(std::move(handler), std::move(rs));
-                    };
-                    state->pending.erase(entry_i);
-                    asio::post(yield.get_executor(), std::move(h));
-                },
-                [&](Subscription&) {
-                    state->subscriptions.handle(yield.get_executor(), rs_id, rs);
-                }
-            },
-            entry);
+            auto sub_i = state->subscriptions.find(res_id.value);
+            if (sub_i != state->subscriptions.end()) {
+                auto& sub = sub_i->second;
+
+                std::visit(overloaded {
+                    [&](Response res) {
+                        if (res.get_if<Response::None>() == nullptr) {
+                            sub->async_send(boost::system::error_code(), res, yield);
+                        } else {
+                            sub->close();
+                            state->subscriptions.erase(sub_i);
+                        }
+                    },
+                    [&](boost::system::error_code ec) {
+                        sub->async_send(ec, Response {}, yield);
+                    },
+                }, res);
+            }
         }
-    }
-    catch (boost::system::system_error const& e) {
+    } catch (boost::system::system_error const& e) {
         ec = e.code();
-    }
-    catch (...) {
+    } catch (...) {
         ec = error::logic;
     }
 
-    auto pending = std::move(state->pending);
+    auto responses = std::move(state->responses);
     auto subscriptions = std::move(state->subscriptions);
 
-    for (auto& [rq_id, entry] : pending) {
-        std::visit(overloaded {
-            [&](std::monostate) {
-                entry.emplace<HandlerResult>(ec);
-            },
-            [&](const HandlerResult&) {
-                // Ignored, user will receive original response
-            },
-            [&](ResponseHandler& handler) {
-                auto h = [
-                    handler = std::move(handler),
-                    ec
-                ] () mutable {
-                    apply_result(std::move(handler), ec);
-                };
-                asio::post(yield.get_executor(), std::move(h));
-            },
-            [&](Subscription&) {
-                // Subscriptions are handled below
-            }
-        },
-        entry);
+    for (auto& [res_id, handler] : responses) {
+        auto bound_handler = [
+            handler = std::move(handler),
+            ec
+        ] () mutable {
+            apply_result(std::move(handler), ec);
+        };
+
+        asio::post(yield.get_executor(), std::move(bound_handler));
     }
 
-    subscriptions.handle_all(yield.get_executor(), ec);
+    for (auto& [msg_id, sub] : subscriptions) {
+        sub->close();
+    }
 
     state->disconnected = true;
 }
@@ -252,11 +236,11 @@ Client::Client(std::shared_ptr<State>&& state)
                 if (e) std::rethrow_exception(e);
             }
             catch (const std::exception& e) {
-                std::cout << "Uncaught exception: " << e.what() << "\n";
+                std::cerr << "Uncaught exception: " << e.what() << std::endl;
                 std::terminate();
             }
             catch (...) {
-                std::cout << "Uncaught exception: unknown\n";
+                std::cerr << "Uncaught exception: unknown" << std::endl;
                 std::terminate();
             }
         }
@@ -278,48 +262,88 @@ Client::~Client() {
 /* static */
 void Client::invoke_impl(
         std::shared_ptr<State> state,
+        MessageId msg_id,
         Request request,
         asio::any_completion_handler<HandlerSig> handler)
 {
-    auto rq_id = state->next_request_id++;
+    // Set up response handler *before* we send the request.
+    state->responses.emplace(std::pair(msg_id.value, std::move(handler)));
 
-    // Set up pending request *before* we send the request.
-    state->pending.emplace(std::pair(rq_id, std::monostate()));
-
-    state->send(MessageId{rq_id}, std::move(request),
-        [ handler = std::move(handler),
-          state,
-          rq_id
-        ](system::error_code ec) mutable {
+    state->send(
+        msg_id,
+        std::move(request),
+        [state, msg_id](system::error_code ec) mutable {
             if (ec) {
-                handler(ec, Response{});
+                auto i = state->responses.find(msg_id.value);
+                if (i != state->responses.end()) {
+                    (i->second)(ec, Response {});
+                }
+            }
+        }
+    );
+}
+
+void Client::subscribe_impl(MessageId subscribe_id, Request request, std::shared_ptr<detail::SubscriptionChannel> channel) {
+    _state->subscriptions.emplace(std::pair(subscribe_id.value, std::move(channel)));
+
+    Client::invoke_impl(
+        _state,
+        subscribe_id,
+        request,
+        [state = _state, subscribe_id](boost::system::error_code ec, Response res) {
+            if (!ec && res.get_if<Response::Unit>() == nullptr) {
+                ec = error::protocol;
+            }
+
+            if (!ec) {
                 return;
             }
 
-            auto entry_i = state->pending.find(rq_id);
-            assert(entry_i != state->pending.end());
+            // Failed to create the subscription - unregister the channel, send the error on it and
+            // close it.
+            auto i = state->subscriptions.find(subscribe_id.value);
+            if (i == state->subscriptions.end()) {
+                return;
+            }
 
-            auto& entry = entry_i->second;
-            std::visit(overloaded {
-                [&](std::monostate) {
-                    entry.emplace<ResponseHandler>(std::move(handler));
+            auto channel = std::move(i->second);
+            state->subscriptions.erase(i);
+
+            asio::spawn(
+                state->socket.get_executor(),
+                [channel = std::move(channel), ec](asio::yield_context yield) {
+                    channel->async_send(ec, Response {}, yield);
+                    channel->close();
                 },
-                [&](HandlerResult& rs) {
-                    auto rs_ = std::move(rs);
-                    state->pending.erase(entry_i);
-                    apply_result(std::move(handler), std::move(rs_));
-                },
-                [&](ResponseHandler&) {
-                    // Handler already set
-                    apply_result(std::move(handler), HandlerResult{system::error_code(error::logic)});
-                },
-                [&](Subscription&) {
-                    // Response/subscription mismatch
-                    apply_result(std::move(handler), HandlerResult{system::error_code(error::logic)});
-                },
-            },
-            entry);
-        });
+                asio::detached
+            );
+        }
+    );
+}
+
+void Client::unsubscribe_impl(MessageId subscribe_id) {
+    auto i = _state->subscriptions.find(subscribe_id.value);
+    if (i != _state->subscriptions.end()) {
+        _state->subscriptions.erase(i);
+    }
+
+    auto unsubscribe_id = next_message_id();
+
+    Client::invoke_impl(
+        _state,
+        unsubscribe_id,
+        Request::SessionUnsubscribe { subscribe_id },
+        [](boost::system::error_code ec, Response res) {
+            if (ec) {
+                std::cerr << "failed to unsubscribe: " << ec << std::endl;
+                return;
+            }
+
+            if (res.get_if<Response::Unit>() == nullptr) {
+                std::cerr << "failed to unsubscribe: unexpected response" << std::endl;
+            }
+        }
+    );
 }
 
 bool Client::is_connected() const noexcept {
@@ -333,47 +357,8 @@ asio::any_io_executor Client::get_executor() const {
     return _state->socket.get_executor();
 }
 
-SubscriberId Client::new_subscriber_id() {
-    return _state->next_subscriber_id++;
-}
-
-void Client::subscribe(
-    const RepositoryHandle& repo_handle,
-    SubscriberId subscriber_id,
-    std::function<InnerHandlerSig> handler,
-    asio::yield_context yield)
-{
-    if (!is_connected()) {
-        throw_error(error::not_connected);
-    }
-
-    auto message_id = _state->subscriptions.subscribe(repo_handle, subscriber_id, std::move(handler), _state->next_request_id);
-
-    if (message_id) {
-        _state->pending.emplace(std::pair(message_id->value, Subscription{}));
-
-        auto request = Request::RepositorySubscribe {
-            repo_handle,
-        };
-
-        _state->send(*message_id, request, yield);
-    }
-}
-
-void Client::unsubscribe(const RepositoryHandle& repo_handle, SubscriberId subscriber_id, asio::yield_context yield) {
-    if (!is_connected()) {
-        throw_error(error::not_connected);
-    }
-
-    auto message_id = _state->subscriptions.unsubscribe(repo_handle, subscriber_id);
-
-    if (message_id) {
-        auto request = Request::SessionUnsubscribe {
-            MessageId{message_id->value}
-        };
-
-        invoke<Response::Unit>(request, yield);
-    }
+MessageId Client::next_message_id() {
+    return MessageId { _state->next_message_id++ };
 }
 
 /**

@@ -1,5 +1,5 @@
-add_executable(test_subscriptions test_subscriptions.cpp)
-target_link_libraries(test_subscriptions PRIVATE cpp_ouisync_client)
+add_executable(test_subscriptions test_subscriptions.cpp test_utils.cpp)
+target_link_libraries(test_subscriptions PRIVATE cpp_ouisync_client cpp_ouisync_service)
 add_test(NAME subscriptions COMMAND test_subscriptions)
 
 add_executable(test_copy test_copy.cpp test_utils.cpp)

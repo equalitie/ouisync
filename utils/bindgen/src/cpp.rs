@@ -732,6 +732,12 @@ fn write_api_class(
         )?;
     }
 
+    // These are C++ keywords, so can't be used as function names
+    let op_rename = HashMap::from([
+        ("delete", "delete_repository"),
+        ("export", "export_repository"),
+    ]);
+
     let prefix = format!("{}_", AsSnakeCase(name));
 
     for (variant_name, variant) in request_variants {
@@ -739,42 +745,81 @@ fn write_api_class(
             continue;
         }
 
-        // Stream methods are currently handled manually
-        if variant.ret_stream_item.is_some() {
-            continue;
-        }
-
         let Some(op_name) = variant_name.strip_prefix(&prefix) else {
             continue;
         };
 
-        // Return type
-        let ret = match &variant.ret {
-            Type::Result(ty, _) => ty,
-            ty => ty,
-        };
-        // Return type with the "Handle" suffix stripped. Useful for mapping handles to their target
-        // types (e.g., `RepositoryHandle` -> `Repository`).
-        let ret_stripped = ret.strip_suffix("Handle");
-        let response_variant_name = format!("Response::{}", ret.to_response_variant_name());
+        let op_name = AsSnakeCase(*op_rename.get(&op_name).unwrap_or(&op_name));
 
         write_docs(out_hpp, I, &variant.docs)?;
 
-        let ret_cpp_type = ret_stripped
-            .as_ref()
-            .map(CppType::new)
-            .unwrap_or(CppType::new(ret));
+        let ret = if let Some(ty) = &variant.ret_stream_item {
+            ty
+        } else {
+            &variant.ret
+        };
+        let ret = match ret {
+            Type::Result(ty, _) => ty,
+            ty => ty,
+        };
 
-        declare_function(
-            out_hpp,
-            Indent(1),
-            &ret_cpp_type,
-            op_name,
-            &variant.fields,
-            handle,
-        )?;
+        if variant.ret_stream_item.is_some() {
+            writeln!(out_hpp)?;
+            writeln!(
+                out_hpp,
+                "{I}Subscription<Response::{}> {op_name}(",
+                ret.to_response_variant_name()
+            )?;
+        } else {
+            // Return type
+            // Return type with the "Handle" suffix stripped. Useful for mapping handles to their target
+            // types (e.g., `RepositoryHandle` -> `Repository`).
+            let ret_stripped = ret.strip_suffix("Handle");
+            let ret_cpp = ret_stripped
+                .as_ref()
+                .map(CppType::new)
+                .unwrap_or_else(|| CppType::new(ret));
 
-        writeln!(out_hpp, " {{")?;
+            writedoc!(
+                out_hpp,
+                "
+                {I}template<
+                {I}    boost::asio::completion_token_for<typename detail::InvokeSig<{ret_cpp}>::type> CompletionToken
+                {I}>
+                {I}auto {op_name}(
+                "
+            )?;
+        }
+
+        let fields = variant
+            .fields
+            .iter()
+            .skip(if handle { 1 } else { 0 })
+            .map(|(opt_name, field)| {
+                (
+                    format!("{}", AsSnakeCase(opt_name.unwrap_or(DEFAULT_FIELD_NAME))),
+                    CppType::new(&field.ty),
+                )
+            })
+            .chain(if variant.ret_stream_item.is_some() {
+                None
+            } else {
+                Some((
+                    "completion_token".into(),
+                    CppType::Scalar(CppScalar::CompletionToken),
+                ))
+            });
+
+        for (i, (name, field)) in fields.enumerate() {
+            if i > 0 {
+                writeln!(out_hpp, ",")?;
+            }
+
+            write!(out_hpp, "{I}{I}{} {}", &field.modify(true, false), name,)?;
+        }
+
+        writeln!(out_hpp)?;
+        writeln!(out_hpp, "{I}) {{")?;
 
         // request
         write!(
@@ -803,14 +848,21 @@ fn write_api_class(
         }
 
         // response
-        writedoc!(
-            out_hpp,
-            "
-            {I}{I}return client->invoke<{response_variant_name}>(std::move(request), std::move(completion_token));
-            {I}}}
-            "
-        )?;
+        if variant.ret_stream_item.is_some() {
+            writeln!(
+                out_hpp,
+                "{I}{I}return client->subscribe<Response::{}>(std::move(request));",
+                ret.to_response_variant_name()
+            )?;
+        } else {
+            writeln!(
+                out_hpp,
+                "{I}{I}return client->invoke<Response::{}>(std::move(request), std::move(completion_token));",
+                ret.to_response_variant_name(),
+            )?;
+        }
 
+        writeln!(out_hpp, "{I}}}")?;
         writeln!(out_hpp)?;
     }
 
@@ -840,66 +892,6 @@ fn write_api_class(
     writeln!(out_hpp)?;
 
     Ok(())
-}
-
-fn function_params(skip_first: bool, fields: &Fields) -> Vec<(String, CppType)> {
-    fields
-        .iter()
-        .skip(if skip_first { 1 } else { 0 })
-        .map(|(opt_name, field)| {
-            (
-                format!("{}", AsSnakeCase(opt_name.unwrap_or(DEFAULT_FIELD_NAME))),
-                CppType::new(&field.ty),
-            )
-        })
-        .chain([(
-            "completion_token".into(),
-            CppType::Scalar(CppScalar::CompletionToken),
-        )])
-        .collect()
-}
-
-fn declare_function(
-    out: &mut dyn Write,
-    indent: Indent,
-    ret_type: &CppType,
-    op_name: &str,
-    fields: &Fields,
-    handle: bool,
-) -> io::Result<()> {
-    // These are C++ keywords, so can't be used as function names
-    let op_rename: HashMap<&str, &str> = [
-        ("delete", "delete_repository"),
-        ("export", "export_repository"),
-    ]
-    .into_iter()
-    .collect();
-
-    let op_name = AsSnakeCase(*op_rename.get(&op_name).unwrap_or(&op_name));
-
-    writedoc!(
-        out,
-        "
-        {indent}template<
-        {indent}    boost::asio::completion_token_for<typename detail::InvokeSig<{ret_type}>::type> CompletionToken
-        {indent}>
-        {indent}auto {op_name}(
-    "
-    )?;
-
-    let fields = function_params(handle, fields);
-
-    for (i, (name, field)) in fields.iter().enumerate() {
-        write!(out, "{indent}{I}{} {}", &field.modify(true, false), name,)?;
-
-        if i == fields.len() - 1 {
-            writeln!(out)?;
-        } else {
-            writeln!(out, ",")?;
-        }
-    }
-
-    write!(out, "{indent})")
 }
 
 fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> io::Result<()> {
