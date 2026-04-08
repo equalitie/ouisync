@@ -47,12 +47,6 @@ namespace std {
     }
 } // namespace std
 
-namespace ouisync {
-    inline bool operator==(const MessageId& m1, const MessageId& m2) {
-        return m1.value == m2.value;
-    }
-} // ouisync namespace
-
 // Temporary directory that auto-deletes itself on destruction.
 class TempDir {
 private:

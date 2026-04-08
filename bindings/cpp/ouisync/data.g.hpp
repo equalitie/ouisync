@@ -25,6 +25,14 @@ struct SecretKey {
     std::vector<uint8_t> value;
 };
 
+inline bool operator == (const SecretKey& lhs, const SecretKey& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const SecretKey& lhs, const SecretKey& rhs) {
+    return !(lhs == rhs);
+}
+
 /**
  * A simple wrapper over String to avoid certain kinds of attack. For more elaboration please see
  * the documentation for the SecretKey structure.
@@ -33,9 +41,25 @@ struct Password {
     std::string value;
 };
 
+inline bool operator == (const Password& lhs, const Password& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const Password& lhs, const Password& rhs) {
+    return !(lhs == rhs);
+}
+
 struct PasswordSalt {
     std::vector<uint8_t> value;
 };
+
+inline bool operator == (const PasswordSalt& lhs, const PasswordSalt& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const PasswordSalt& lhs, const PasswordSalt& rhs) {
+    return !(lhs == rhs);
+}
 
 /**
  * Strongly typed storage size.
@@ -43,6 +67,14 @@ struct PasswordSalt {
 struct StorageSize {
     uint64_t bytes;
 };
+
+inline bool operator == (const StorageSize& lhs, const StorageSize& rhs) {
+    return lhs.bytes == rhs.bytes;
+}
+
+inline bool operator != (const StorageSize& lhs, const StorageSize& rhs) {
+    return !(lhs == rhs);
+}
 
 /**
  * Access mode of a repository.
@@ -109,6 +141,26 @@ struct LocalSecret {
     }
 };
 
+inline bool operator == (const LocalSecret::Password& lhs, const LocalSecret::Password& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const LocalSecret::Password& lhs, const LocalSecret::Password& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const LocalSecret::SecretKey& lhs, const LocalSecret::SecretKey& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const LocalSecret::SecretKey& lhs, const LocalSecret::SecretKey& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const LocalSecret& lhs, const LocalSecret& rhs) {
+    return lhs.value == rhs.value;
+}
+
 /**
  * Used to set or change the read or write local secret of a repository.
  */
@@ -157,6 +209,26 @@ struct SetLocalSecret {
     }
 };
 
+inline bool operator == (const SetLocalSecret::Password& lhs, const SetLocalSecret::Password& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const SetLocalSecret::Password& lhs, const SetLocalSecret::Password& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const SetLocalSecret::KeyAndSalt& lhs, const SetLocalSecret::KeyAndSalt& rhs) {
+    return lhs.key == rhs.key && lhs.salt == rhs.salt;
+}
+
+inline bool operator != (const SetLocalSecret::KeyAndSalt& lhs, const SetLocalSecret::KeyAndSalt& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const SetLocalSecret& lhs, const SetLocalSecret& rhs) {
+    return lhs.value == rhs.value;
+}
+
 /**
  * Token to share a repository. It can be encoded as a URL-formatted string and transmitted to
  * other replicas.
@@ -164,6 +236,14 @@ struct SetLocalSecret {
 struct ShareToken {
     std::string value;
 };
+
+inline bool operator == (const ShareToken& lhs, const ShareToken& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const ShareToken& lhs, const ShareToken& rhs) {
+    return !(lhs == rhs);
+}
 
 /**
  * How to change access to a repository.
@@ -209,6 +289,27 @@ struct AccessChange {
         return std::get_if<T>(&value);
     }
 };
+
+inline bool operator == (const AccessChange::Enable& lhs, const AccessChange::Enable& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const AccessChange::Enable& lhs, const AccessChange::Enable& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const AccessChange::Disable& lhs, const AccessChange::Disable& rhs) {
+    (void) lhs; (void) rhs;
+    return true;
+}
+
+inline bool operator != (const AccessChange::Disable& lhs, const AccessChange::Disable& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const AccessChange& lhs, const AccessChange& rhs) {
+    return lhs.value == rhs.value;
+}
 
 /**
  * Type of filesystem entry.
@@ -266,6 +367,14 @@ struct PublicRuntimeId {
     std::vector<uint8_t> value;
 };
 
+inline bool operator == (const PublicRuntimeId& lhs, const PublicRuntimeId& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const PublicRuntimeId& lhs, const PublicRuntimeId& rhs) {
+    return !(lhs == rhs);
+}
+
 struct PeerState {
     struct Known {
     };
@@ -311,6 +420,45 @@ struct PeerState {
     }
 };
 
+inline bool operator == (const PeerState::Known& lhs, const PeerState::Known& rhs) {
+    (void) lhs; (void) rhs;
+    return true;
+}
+
+inline bool operator != (const PeerState::Known& lhs, const PeerState::Known& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const PeerState::Connecting& lhs, const PeerState::Connecting& rhs) {
+    (void) lhs; (void) rhs;
+    return true;
+}
+
+inline bool operator != (const PeerState::Connecting& lhs, const PeerState::Connecting& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const PeerState::Handshaking& lhs, const PeerState::Handshaking& rhs) {
+    (void) lhs; (void) rhs;
+    return true;
+}
+
+inline bool operator != (const PeerState::Handshaking& lhs, const PeerState::Handshaking& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const PeerState::Active& lhs, const PeerState::Active& rhs) {
+    return lhs.id == rhs.id && lhs.since == rhs.since;
+}
+
+inline bool operator != (const PeerState::Active& lhs, const PeerState::Active& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const PeerState& lhs, const PeerState& rhs) {
+    return lhs.value == rhs.value;
+}
+
 /**
  * Network traffic statistics.
  */
@@ -320,6 +468,14 @@ struct Stats {
     uint64_t throughput_tx;
     uint64_t throughput_rx;
 };
+
+inline bool operator == (const Stats& lhs, const Stats& rhs) {
+    return lhs.bytes_tx == rhs.bytes_tx && lhs.bytes_rx == rhs.bytes_rx && lhs.throughput_tx == rhs.throughput_tx && lhs.throughput_rx == rhs.throughput_rx;
+}
+
+inline bool operator != (const Stats& lhs, const Stats& rhs) {
+    return !(lhs == rhs);
+}
 
 /**
  * Information about a peer.
@@ -331,6 +487,14 @@ struct PeerInfo {
     Stats stats;
 };
 
+inline bool operator == (const PeerInfo& lhs, const PeerInfo& rhs) {
+    return lhs.addr == rhs.addr && lhs.source == rhs.source && lhs.state == rhs.state && lhs.stats == rhs.stats;
+}
+
+inline bool operator != (const PeerInfo& lhs, const PeerInfo& rhs) {
+    return !(lhs == rhs);
+}
+
 /**
  * Progress of a task.
  */
@@ -338,6 +502,14 @@ struct Progress {
     uint64_t value;
     uint64_t total;
 };
+
+inline bool operator == (const Progress& lhs, const Progress& rhs) {
+    return lhs.value == rhs.value && lhs.total == rhs.total;
+}
+
+inline bool operator != (const Progress& lhs, const Progress& rhs) {
+    return !(lhs == rhs);
+}
 
 /**
  * Identified of a network stream topic.
@@ -348,6 +520,14 @@ struct Progress {
 struct TopicId {
     std::vector<uint8_t> value;
 };
+
+inline bool operator == (const TopicId& lhs, const TopicId& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const TopicId& lhs, const TopicId& rhs) {
+    return !(lhs == rhs);
+}
 
 enum class NatBehavior : uint8_t {
     endpoint_independent = 0,
@@ -501,6 +681,14 @@ struct MessageId {
     uint64_t value;
 };
 
+inline bool operator == (const MessageId& lhs, const MessageId& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const MessageId& lhs, const MessageId& rhs) {
+    return !(lhs == rhs);
+}
+
 /**
  * Edit of a single metadata entry.
  */
@@ -509,6 +697,14 @@ struct MetadataEdit {
     std::optional<std::string> old_value;
     std::optional<std::string> new_value;
 };
+
+inline bool operator == (const MetadataEdit& lhs, const MetadataEdit& rhs) {
+    return lhs.key == rhs.key && lhs.old_value == rhs.old_value && lhs.new_value == rhs.new_value;
+}
+
+inline bool operator != (const MetadataEdit& lhs, const MetadataEdit& rhs) {
+    return !(lhs == rhs);
+}
 
 /**
  * Default network parameters
@@ -519,35 +715,99 @@ struct NetworkDefaults {
     bool local_discovery_enabled;
 };
 
+inline bool operator == (const NetworkDefaults& lhs, const NetworkDefaults& rhs) {
+    return lhs.bind == rhs.bind && lhs.port_forwarding_enabled == rhs.port_forwarding_enabled && lhs.local_discovery_enabled == rhs.local_discovery_enabled;
+}
+
+inline bool operator != (const NetworkDefaults& lhs, const NetworkDefaults& rhs) {
+    return !(lhs == rhs);
+}
+
 struct DirectoryEntry {
     std::string name;
     EntryType entry_type;
 };
+
+inline bool operator == (const DirectoryEntry& lhs, const DirectoryEntry& rhs) {
+    return lhs.name == rhs.name && lhs.entry_type == rhs.entry_type;
+}
+
+inline bool operator != (const DirectoryEntry& lhs, const DirectoryEntry& rhs) {
+    return !(lhs == rhs);
+}
 
 struct QuotaInfo {
     std::optional<StorageSize> quota;
     StorageSize size;
 };
 
+inline bool operator == (const QuotaInfo& lhs, const QuotaInfo& rhs) {
+    return lhs.quota == rhs.quota && lhs.size == rhs.size;
+}
+
+inline bool operator != (const QuotaInfo& lhs, const QuotaInfo& rhs) {
+    return !(lhs == rhs);
+}
+
 struct Datagram {
     std::vector<uint8_t> data;
     std::string addr;
 };
 
+inline bool operator == (const Datagram& lhs, const Datagram& rhs) {
+    return lhs.data == rhs.data && lhs.addr == rhs.addr;
+}
+
+inline bool operator != (const Datagram& lhs, const Datagram& rhs) {
+    return !(lhs == rhs);
+}
+
 struct FileHandle {
     size_t value;
 };
+
+inline bool operator == (const FileHandle& lhs, const FileHandle& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const FileHandle& lhs, const FileHandle& rhs) {
+    return !(lhs == rhs);
+}
 
 struct RepositoryHandle {
     size_t value;
 };
 
+inline bool operator == (const RepositoryHandle& lhs, const RepositoryHandle& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const RepositoryHandle& lhs, const RepositoryHandle& rhs) {
+    return !(lhs == rhs);
+}
+
 struct NetworkSocketHandle {
     size_t value;
 };
 
+inline bool operator == (const NetworkSocketHandle& lhs, const NetworkSocketHandle& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const NetworkSocketHandle& lhs, const NetworkSocketHandle& rhs) {
+    return !(lhs == rhs);
+}
+
 struct NetworkStreamHandle {
     size_t value;
 };
+
+inline bool operator == (const NetworkStreamHandle& lhs, const NetworkStreamHandle& rhs) {
+    return lhs.value == rhs.value;
+}
+
+inline bool operator != (const NetworkStreamHandle& lhs, const NetworkStreamHandle& rhs) {
+    return !(lhs == rhs);
+}
 
 } // namespace ouisync

@@ -508,6 +508,18 @@ fn write_complex_enum(
     )?;
     writeln!(out.hpp)?;
 
+    for (variant_name, variant) in &item.variants {
+        write_operators(out.hpp, &format!("{name}::{variant_name}"), &variant.fields)?;
+    }
+
+    writeln!(
+        out.hpp,
+        "inline bool operator == (const {name}& lhs, const {name}& rhs) {{"
+    )?;
+    writeln!(out.hpp, "{I}return lhs.value == rhs.value;")?;
+    writeln!(out.hpp, "}}")?;
+    writeln!(out.hpp)?;
+
     describe_struct(
         out.dsc,
         name,
@@ -561,6 +573,8 @@ fn write_struct(out: &mut OutFiles<'_>, name: &str, item: &Struct) -> Result<()>
 
     writeln!(out.hpp, "}};")?; // struct end
     writeln!(out.hpp)?;
+
+    write_operators(out.hpp, name, &item.fields)?;
 
     describe_struct(
         out.dsc,
@@ -872,6 +886,46 @@ fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> io::Result<()> 
     }
 
     writeln!(out, "{prefix} */")?;
+
+    Ok(())
+}
+
+fn write_operators(out: &mut dyn Write, name: &str, fields: &Fields) -> io::Result<()> {
+    writeln!(
+        out,
+        "inline bool operator == (const {name}& lhs, const {name}& rhs) {{"
+    )?;
+
+    if fields.is_empty() {
+        // suppress unused warnings
+        writeln!(out, "{I}(void) lhs; (void) rhs;")?;
+        writeln!(out, "{I}return true;")?;
+    } else {
+        write!(out, "{I}return ")?;
+
+        for (i, (field_name, _)) in fields.iter().enumerate() {
+            let field_name = AsSnakeCase(field_name.unwrap_or(DEFAULT_FIELD_NAME));
+
+            if i > 0 {
+                write!(out, " && ")?;
+            }
+
+            write!(out, "lhs.{} == rhs.{}", field_name, field_name)?;
+        }
+
+        writeln!(out, ";")?;
+    }
+
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    writeln!(
+        out,
+        "inline bool operator != (const {name}& lhs, const {name}& rhs) {{"
+    )?;
+    writeln!(out, "{I}return !(lhs == rhs);")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
 
     Ok(())
 }
