@@ -36,42 +36,48 @@ BOOST_AUTO_TEST_CASE(network_events) {
 
         // Known
         BOOST_REQUIRE_EQUAL(subscription.async_receive(yield), ouisync::NetworkEvent::peer_set_change);
-        auto p0 = a_session.get_peers(yield)[0];
-        BOOST_REQUIRE_EQUAL(p0.addr, b_addr);
-        BOOST_REQUIRE(
-            p0.state.get_if<ouisync::PeerState::Known>() != nullptr ||
-            p0.state.get_if<ouisync::PeerState::Connecting>() != nullptr ||
-            p0.state.get_if<ouisync::PeerState::Handshaking>() != nullptr ||
-            p0.state.get_if<ouisync::PeerState::Active>() != nullptr
-        );
+        {
+            auto p = a_session.get_peers(yield)[0];
+            BOOST_REQUIRE_EQUAL(p.addr, b_addr);
+            BOOST_REQUIRE(
+                p.state.get_if<ouisync::PeerState::Known>() != nullptr ||
+                p.state.get_if<ouisync::PeerState::Connecting>() != nullptr ||
+                p.state.get_if<ouisync::PeerState::Handshaking>() != nullptr ||
+                p.state.get_if<ouisync::PeerState::Active>() != nullptr
+            );
+        }
 
         // Connecting
         BOOST_REQUIRE_EQUAL(subscription.async_receive(yield), ouisync::NetworkEvent::peer_set_change);
-        auto p1 = a_session.get_peers(yield)[0];
-        BOOST_REQUIRE_EQUAL(p1.addr, b_addr);
-        BOOST_REQUIRE(
-            p1.state.get_if<ouisync::PeerState::Connecting>() != nullptr ||
-            p1.state.get_if<ouisync::PeerState::Handshaking>() != nullptr ||
-            p1.state.get_if<ouisync::PeerState::Active>() != nullptr
-        );
+        {
+            auto p = a_session.get_peers(yield)[0];
+            BOOST_REQUIRE_EQUAL(p.addr, b_addr);
+            BOOST_REQUIRE(
+                p.state.get_if<ouisync::PeerState::Connecting>() != nullptr ||
+                p.state.get_if<ouisync::PeerState::Handshaking>() != nullptr ||
+                p.state.get_if<ouisync::PeerState::Active>() != nullptr
+            );
+        }
 
         // Handshaking
         BOOST_REQUIRE_EQUAL(subscription.async_receive(yield), ouisync::NetworkEvent::peer_set_change);
-        auto p2 = a_session.get_peers(yield)[0];
-        BOOST_REQUIRE_EQUAL(p2.addr, b_addr);
-        BOOST_REQUIRE(
-            p1.state.get_if<ouisync::PeerState::Handshaking>() != nullptr ||
-            p1.state.get_if<ouisync::PeerState::Active>() != nullptr
-        );
+        {
+            auto p = a_session.get_peers(yield)[0];
+            BOOST_REQUIRE_EQUAL(p.addr, b_addr);
+            BOOST_REQUIRE(
+                p.state.get_if<ouisync::PeerState::Handshaking>() != nullptr ||
+                p.state.get_if<ouisync::PeerState::Active>() != nullptr
+            );
+        }
 
         // Active
         BOOST_REQUIRE_EQUAL(subscription.async_receive(yield), ouisync::NetworkEvent::peer_set_change);
 
-        auto p3 = a_session.get_peers(yield)[0];
-        BOOST_REQUIRE_EQUAL(p2.addr, b_addr);
-        BOOST_REQUIRE(
-            p1.state.get_if<ouisync::PeerState::Active>() != nullptr
-        );
+        {
+            auto p = a_session.get_peers(yield)[0];
+            BOOST_REQUIRE_EQUAL(p.addr, b_addr);
+            BOOST_REQUIRE(p.state.get_if<ouisync::PeerState::Active>() != nullptr);
+        }
 
         a_session.remove_user_provided_peers({ b_addr }, yield);
         b_service.stop(yield);
@@ -86,3 +92,5 @@ BOOST_AUTO_TEST_CASE(network_events) {
 
     ctx.run();
 }
+
+// TODO: test repository events

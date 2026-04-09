@@ -1,10 +1,12 @@
+// #include <chrono>
+
+#include <msgpack.hpp>
+
 #include <ouisync/serialize.hpp>
 #include <ouisync/data_dsc.hpp>
 #include <ouisync/message_dsc.hpp>
 #include <ouisync/error.hpp>
 
-#include <msgpack.hpp>
-#include <chrono>
 #include "debug.hpp"
 
 //
@@ -146,7 +148,7 @@ struct UnpackObserver {
                 throw_error(error::deserialize, "wrong description");
             }
             try {
-                member_out = obj.as<M>();
+                obj.convert(member_out);
             }
             catch (...) {
                 throw DeserializeError::create<M>(obj, std::current_exception());
@@ -162,7 +164,7 @@ struct UnpackObserver {
             }
             auto& item = obj.via.array.ptr[parsed];
             try {
-                member_out = item.as<M>();
+                item.convert(member_out);
             }
             catch (...) {
                 throw DeserializeError::create<M>(item, std::current_exception());
@@ -206,6 +208,36 @@ struct pack<std::chrono::milliseconds> {
     template <typename Stream>
     packer<Stream>& operator()(msgpack::packer<Stream>& pk, std::chrono::milliseconds const& millis) const {
         pk.pack(static_cast<uint64_t>(millis.count()));
+        return pk;
+    }
+};
+
+//
+// Serialize std::chrono::time_point
+//
+using TimePoint = std::chrono::time_point<std::chrono::system_clock>;
+
+template<>
+struct convert<TimePoint> {
+    msgpack::object const& operator()(msgpack::object const& obj, TimePoint& out) const {
+        uint64_t ms = obj.as<uint64_t>();
+        auto duration = std::chrono::milliseconds(ms);
+        out = TimePoint(duration);
+        return obj;
+    }
+};
+
+template<>
+struct pack<TimePoint> {
+    template<typename Stream>
+    packer<Stream>& operator()(msgpack::packer<Stream>& pk, TimePoint const& time_point) const {
+        pk.pack(
+            static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    time_point.time_since_epoch()
+                ).count()
+            )
+        );
         return pk;
     }
 };
@@ -352,11 +384,8 @@ std::stringstream serialize(const Request& request) {
 
 ResponseResult deserialize(const std::vector<char>& buffer) {
     msgpack::unpacked msgpack_result;
-    msgpack::unpack(msgpack_result, buffer.data(), buffer.size()); 
+    msgpack::unpack(msgpack_result, buffer.data(), buffer.size());
     msgpack::object obj = msgpack_result.get();
-
-    // Debug
-    //std::cout << "<<<d " << printer::display(obj) << "\n";
 
     try {
         return obj.as<ResponseResult>();
