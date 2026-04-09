@@ -93,4 +93,41 @@ BOOST_AUTO_TEST_CASE(network_events) {
     ctx.run();
 }
 
-// TODO: test repository events
+BOOST_AUTO_TEST_CASE(repository_events) {
+    asio::io_context ctx;
+    TempDir tempdir;
+
+    auto config_dir = mkdir(tempdir.path() / "config");
+    auto store_dir = mkdir(tempdir.path() / "repos");
+
+    asio::spawn(ctx, [&] (asio::yield_context yield) {
+        ouisync::init_log();
+
+        ouisync::Service service(yield.get_executor());
+        service.start(config_dir, nullptr, yield);
+
+        auto session = ouisync::Session::connect(config_dir, yield);
+        session.set_store_dirs({ store_dir.string() }, yield);
+
+        auto repo = session.create_repository(
+            "sample-repo",
+            std::nullopt, // read secret
+            std::nullopt, // write secret
+            std::nullopt, // token
+            false,        // enable sync
+            false,        // enable dht
+            false,        // enable pex
+            yield
+        );
+
+        auto subscription = repo.subscribe();
+
+        repo.create_directory("etc", yield);
+
+        subscription.async_receive(yield);
+
+        BOOST_REQUIRE(true); // just to check we got here
+    }, check_exception);
+
+    ctx.run();
+}

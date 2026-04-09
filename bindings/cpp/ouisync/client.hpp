@@ -178,10 +178,19 @@ public:
             [&](auto handler) {
                 channel->async_receive(
                     [&, handler = std::move(handler)](boost::system::error_code ec, Response response) mutable {
-                        if (ec) {
-                            handler(ec, Type {});
+                        if constexpr (std::is_void_v<Type>) {
+                            if (ec) {
+                                handler(ec);
+                            } else {
+                                extract<Variant>(std::move(response), client);
+                                handler(boost::system::error_code());
+                            }
                         } else {
-                            handler(ec, extract<Variant>(std::move(response), client));
+                            if (ec) {
+                                handler(ec, Type {});
+                            } else {
+                                handler(ec, extract<Variant>(std::move(response), client));
+                            }
                         }
                     }
                 );
