@@ -1104,8 +1104,7 @@ public:
         const boost::filesystem::path& config_dir,
         boost::asio::yield_context yield
     ) {
-        auto client = ouisync::Client::connect(config_dir, yield);
-        return Session(std::make_shared<Client>(std::move(client)));
+        return Session(ouisync::Client::connect(config_dir, yield));
     }
 
     /**

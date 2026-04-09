@@ -445,7 +445,7 @@ void authenticate(Socket& socket, const std::vector<uint8_t>& auth_key, asio::yi
 }
 
 // static
-Client Client::connect(
+std::shared_ptr<Client> Client::connect(
     const boost::filesystem::path& config_dir_path,
     asio::yield_context yield
 ) {
@@ -463,7 +463,7 @@ Client Client::connect(
 
     authenticate(socket, ep.auth_key, yield);
 
-    return Client(std::make_shared<State>(std::move(socket)));
+    return std::make_shared<Client>(std::make_shared<State>(std::move(socket)));
 }
 
 } // namespace ouisync

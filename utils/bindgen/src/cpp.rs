@@ -724,8 +724,7 @@ fn write_api_class(
             {I}{I}const boost::filesystem::path& config_dir,
             {I}{I}boost::asio::yield_context yield
             {I}) {{
-            {I}{I}auto client = ouisync::Client::connect(config_dir, yield);
-            {I}{I}return Session(std::make_shared<Client>(std::move(client)));
+            {I}{I}return Session(ouisync::Client::connect(config_dir, yield));
             {I}}}
 
             "

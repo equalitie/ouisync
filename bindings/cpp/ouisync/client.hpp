@@ -31,11 +31,15 @@ class Client : public std::enable_shared_from_this<Client> {
 public:
     struct State;
 
-    Client(Client&&) = default;
+    explicit Client(std::shared_ptr<State>&&);
+
+    Client() = delete;
     Client(const Client&) = delete;
+    Client(Client&&) = delete;
+
     ~Client();
 
-    static Client connect(
+    static std::shared_ptr<Client> connect(
         const boost::filesystem::path& config_dir_path,
         boost::asio::yield_context
     );
@@ -116,8 +120,6 @@ public:
     boost::asio::any_io_executor get_executor() const;
 
 private:
-    Client(std::shared_ptr<State>&&);
-
     MessageId next_message_id();
 
     static
@@ -135,6 +137,8 @@ private:
     void unsubscribe_impl(MessageId);
 
 private:
+    // TODO: given that Client is already in shared_ptr (via enable_shared_from_this), maybe this
+    // doesn't need to be?
     std::shared_ptr<State> _state;
 
     template<typename> friend class Subscription;
