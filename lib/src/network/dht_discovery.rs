@@ -207,7 +207,7 @@ impl DhtDiscovery {
 // Wrapper for a DHT instance that can be stopped and restarted at any point.
 struct RestartableDht {
     socket_maker: Option<quic::SideChannelMaker>,
-    dht: Weak<Option<TaskOrResult<MonitoredDht>>>,
+    dht: Weak<TaskOrResult<MonitoredDht>>,
     routers: HashSet<String>,
     contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
 }
@@ -231,9 +231,9 @@ impl RestartableDht {
         &mut self,
         monitor: &StateMonitor,
         span: &Span,
-    ) -> Arc<Option<TaskOrResult<MonitoredDht>>> {
+    ) -> Option<Arc<TaskOrResult<MonitoredDht>>> {
         if let Some(dht) = self.dht.upgrade() {
-            dht
+            Some(dht)
         } else if let Some(maker) = &self.socket_maker {
             let socket = maker.make();
             let dht = MonitoredDht::start(
@@ -243,13 +243,13 @@ impl RestartableDht {
                 monitor,
                 span,
             );
-            let dht = Arc::new(Some(dht));
+            let dht = Arc::new(dht);
 
             self.dht = Arc::downgrade(&dht);
 
-            dht
+            Some(dht)
         } else {
-            Arc::new(None)
+            None
         }
     }
 
@@ -512,8 +512,8 @@ struct RequestData {
 
 impl Lookup {
     fn start(
-        dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
-        dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
+        dht_v4: Option<Arc<TaskOrResult<MonitoredDht>>>,
+        dht_v6: Option<Arc<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
         monitor: &StateMonitor,
         span: &Span,
@@ -552,8 +552,8 @@ impl Lookup {
     // Start this same lookup on different DHT instances
     fn restart(
         &mut self,
-        dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
-        dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
+        dht_v4: Option<Arc<TaskOrResult<MonitoredDht>>>,
+        dht_v6: Option<Arc<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
         monitor: &StateMonitor,
         span: &Span,
@@ -595,8 +595,8 @@ impl Lookup {
 
     #[allow(clippy::too_many_arguments)]
     fn start_task(
-        dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
-        dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
+        dht_v4: Option<Arc<TaskOrResult<MonitoredDht>>>,
+        dht_v6: Option<Arc<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
         seen_peers: Arc<SeenPeers>,
         requests: Arc<BlockingMutex<HashMap<RequestId, RequestData>>>,
@@ -609,12 +609,12 @@ impl Lookup {
         let next = monitor.make_value("next", SystemTime::now().into());
 
         let task = async move {
-            let dht_v4 = match &*dht_v4 {
+            let dht_v4 = match &dht_v4 {
                 Some(dht) => Some(dht.result().await),
                 None => None,
             };
 
-            let dht_v6 = match &*dht_v6 {
+            let dht_v6 = match &dht_v6 {
                 Some(dht) => Some(dht.result().await),
                 None => None,
             };
