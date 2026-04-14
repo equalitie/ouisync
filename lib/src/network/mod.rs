@@ -32,8 +32,7 @@ mod upnp;
 
 pub use self::{
     connection::PeerInfoCollector,
-    dht::DhtLookupStream,
-    dht::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait},
+    dht::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtLookupStream, DhtPin},
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
@@ -525,6 +524,19 @@ impl Network {
 
     pub fn is_local_dht_enabled(&self) -> bool {
         self.inner.local_dht_enabled.load(Ordering::Acquire)
+    }
+
+    /// Creates a "pin" which keeps the DHT instances running once they have been started. This
+    /// prevents the DHTs to shut down even when there are no more ongoing lookups. This is useful
+    /// if one wants to avoid having to rebootstrap the DHT when doing another lookup in the future.
+    ///
+    /// Note pinning the DHT doesn't bootstrap it by itself - it happens lazyly on the first lookup.
+    ///
+    /// Note also that DHT is automatically started and kept running when there is at least one
+    /// repository with DHT enabled. Thus, pinning the DHT while having DHT-enabled repos is useless
+    /// (but harmless).
+    pub fn pin_dht(&self) -> DhtPin {
+        self.inner.dht_discovery.pin()
     }
 }
 

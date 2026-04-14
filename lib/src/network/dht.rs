@@ -137,6 +137,8 @@ impl DhtDiscovery {
             .collect()
     }
 
+    /// Starts a DHT lookup/announce for the given infohash. Sends the found peer addresses into the
+    /// given sender.
     pub fn start_lookup(
         &self,
         info_hash: InfoHash,
@@ -159,6 +161,18 @@ impl DhtDiscovery {
             lookups: Arc::downgrade(&self.lookups),
             info_hash,
             key,
+        }
+    }
+
+    /// Creates a "pin" which keeps the DHT instances running once they have been started. This
+    /// prevents the DHTs to shut down even when there are no more ongoing lookups. This is useful
+    /// if one wants to avoid having to rebootstrap the DHT when doing another lookup in the future.
+    ///
+    /// Note pinning the DHT doesn't bootstrap it by itself - it happens lazyly on the first lookup.
+    pub fn pin(&self) -> DhtPin {
+        DhtPin {
+            _v4: self.v4.observe(),
+            _v6: self.v6.observe(),
         }
     }
 }
@@ -340,6 +354,13 @@ impl Lookup {
 }
 
 type LookupMap = HashMap<InfoHash, Lookup>;
+
+/// Ensures the DHT instances, once started, remain running until the pin is in scope. See
+/// [DhtDiscovery::pin] for more info.
+pub struct DhtPin {
+    _v4: ObservableDht,
+    _v6: ObservableDht,
+}
 
 /// Returns when the channel gets closed (all senders get closed).
 async fn closed<T>(rx: &mut watch::Receiver<T>) {
