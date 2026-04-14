@@ -12,10 +12,10 @@ use super::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use async_trait::async_trait;
-use btdht::InfoHash;
+use btdht::{InfoHash, MainlineDht};
 use chrono::{DateTime, offset::Local};
 use deadlock::BlockingMutex;
-use futures_util::{StreamExt, stream};
+use futures_util::{Stream, StreamExt, future, stream};
 use net::quic;
 use rand::Rng;
 use restartable::RestartableDht;
@@ -23,7 +23,7 @@ use state_monitor::StateMonitor;
 use std::{
     collections::{HashMap, HashSet},
     io,
-    net::{SocketAddrV4, SocketAddrV6},
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     pin::pin,
     sync::{Arc, Weak},
     time::{Duration, SystemTime},
@@ -49,6 +49,9 @@ pub const DEFAULT_DHT_ROUTERS: &[&str] = &[
 // other nodes to put us on a blacklist.
 const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
 const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
+
+// Max time to wait for the DHT to bootstrap before starting a lookup on it.
+const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Persistent store for DHT contacts. It is periodically updated with the
 /// current DHT contacts and persisted. It is then used to provide additional
@@ -240,15 +243,26 @@ impl Lookup {
                 return;
             }
 
-            // Wait until at least one of the DHT instances has been started, but try to also get
-            // the other one in case it's been started as well. Cancel if the lookup gets dropped.
+            // Wait until at least one DHT has been enabled and all enabled DHTs have been started.
+            let dhts = async {
+                loop {
+                    select! {
+                        _ = dht_v4.enabled() => (),
+                        _ = dht_v6.enabled() => (),
+                    }
+
+                    let (v4, v6) =
+                        future::join(dht_v4.started_or_disabled(), dht_v6.started_or_disabled())
+                            .await;
+
+                    if v4.is_some() || v6.is_some() {
+                        break (v4, v6);
+                    }
+                }
+            };
+
             let (dht_v4, dht_v6) = select! {
-                dht_v4 = dht_v4.get() => {
-                    (Some(dht_v4), dht_v6.try_get())
-                }
-                dht_v6 = dht_v6.get() => {
-                    (dht_v4.try_get(), Some(dht_v6))
-                }
+                dhts = dhts => dhts,
                 _ = closed(&mut requests_rx) => return,
             };
 
@@ -268,22 +282,15 @@ impl Lookup {
                 .iter()
                 .any(|(_, request)| request.announce);
 
-            let dhts = dht_v4.iter().chain(&dht_v6);
-            let mut search = pin!(stream::iter(dhts).flat_map(|dht| {
-                stream::once(async {
-                    time::timeout(Duration::from_secs(10), dht.bootstrapped())
-                        .await
-                        .ok();
-                    dht.search(info_hash, announce)
-                })
-                .flatten()
-            }));
+            let peers_v4 = search(dht_v4.as_ref(), info_hash, announce);
+            let peers_v6 = search(dht_v6.as_ref(), info_hash, announce);
+            let mut peers = pin!(stream::select(peers_v4, peers_v6));
 
             *state.get() = "awaiting results";
 
             loop {
                 let addr = select! {
-                    addr = search.next() => {
+                    addr = peers.next() => {
                         if let Some(addr) = addr {
                             addr
                         } else {
@@ -337,4 +344,22 @@ type LookupMap = HashMap<InfoHash, Lookup>;
 /// Returns when the channel gets closed (all senders get closed).
 async fn closed<T>(rx: &mut watch::Receiver<T>) {
     while rx.changed().await.is_ok() {}
+}
+
+/// Waits until the dht bootstraps then perform a lookup or announce on it for the given infohash.
+/// If `dht` is `None`, returns empty stream.
+fn search<'a>(
+    dht: Option<&'a MainlineDht>,
+    info_hash: InfoHash,
+    announce: bool,
+) -> impl Stream<Item = SocketAddr> + 'a {
+    stream::iter(dht)
+        .then(move |dht| async move {
+            time::timeout(BOOTSTRAP_TIMEOUT, dht.bootstrapped())
+                .await
+                .ok();
+
+            dht.search(info_hash, announce)
+        })
+        .flatten()
 }

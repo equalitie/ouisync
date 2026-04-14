@@ -28,7 +28,7 @@ impl RestartableDht {
                 span: Span::current(),
                 inner: Mutex::new(Inner {
                     observer_count: 0,
-                    state: State::Disabled,
+                    state: State::Stopped,
                     socket_maker: None,
                     routers: HashSet::new(),
                 }),
@@ -74,13 +74,8 @@ impl RestartableDht {
 
         f(&mut inner);
 
-        match inner.state {
-            State::Enabled(_) | State::Enabling => {
-                inner.state = State::Enabling;
-                self.shared.notify.notify_waiters();
-            }
-            State::Disabled => (),
-        }
+        inner.state = State::Stopped;
+        self.shared.notify.notify_waiters();
     }
 }
 
@@ -89,23 +84,25 @@ pub(super) struct ObservableDht {
 }
 
 impl ObservableDht {
-    pub async fn get(&self) -> MainlineDht {
+    /// Waits until the DHT has been started (returns `Some`) or disabled (returns `None`).
+    pub async fn started_or_disabled(&self) -> Option<MainlineDht> {
         loop {
             let notified = self.shared.notify.notified();
 
             let (socket, routers) = {
-                let inner = self.shared.inner.lock().unwrap();
+                let mut inner = self.shared.inner.lock().unwrap();
 
                 match &inner.state {
-                    State::Enabled(dht) => return dht.dht.clone(),
-                    State::Enabling => (None, HashSet::new()),
-                    State::Disabled => {
-                        if let Some(maker) = &inner.socket_maker {
-                            (Some(maker.make()), inner.routers.clone())
+                    State::Stopped => {
+                        if let Some(socket) = inner.socket_maker.as_ref().map(|m| m.make()) {
+                            inner.state = State::Starting;
+                            (Some(socket), inner.routers.clone())
                         } else {
-                            (None, HashSet::new())
+                            return None;
                         }
                     }
+                    State::Started(dht) => return Some(dht.dht.clone()),
+                    State::Starting => (None, HashSet::new()),
                 }
             };
 
@@ -124,7 +121,7 @@ impl ObservableDht {
                 select! {
                     dht = start => {
                         let mut inner = self.shared.inner.lock().unwrap();
-                        inner.state = State::Enabled(dht);
+                        inner.state = State::Started(dht);
                         self.shared.notify.notify_waiters();
                     }
                     _ = notified => (),
@@ -135,10 +132,17 @@ impl ObservableDht {
         }
     }
 
-    pub fn try_get(&self) -> Option<MainlineDht> {
-        match &self.shared.inner.lock().unwrap().state {
-            State::Enabled(dht) => Some(dht.dht.clone()),
-            State::Enabling | State::Disabled => None,
+    /// Waits until the DHT becomes enabled. Note: calling `started_or_diabled` afterwards might
+    /// still return `None` if the DHT has been disabled in the meantime.
+    pub async fn enabled(&self) {
+        loop {
+            let notified = self.shared.notify.notified();
+
+            if self.shared.inner.lock().unwrap().socket_maker.is_some() {
+                break;
+            }
+
+            notified.await;
         }
     }
 }
@@ -153,7 +157,7 @@ impl Drop for ObservableDht {
 
         if inner.observer_count == 0 {
             // We are the last observer - destroy the dht
-            inner.state = State::Disabled;
+            inner.state = State::Stopped;
         }
     }
 }
@@ -174,7 +178,7 @@ struct Inner {
 }
 
 enum State {
-    Disabled,
-    Enabling,
-    Enabled(MonitoredDht),
+    Stopped,
+    Starting,
+    Started(MonitoredDht),
 }
