@@ -8,7 +8,7 @@ use state_monitor::StateMonitor;
 use tokio::time;
 use tracing::{Instrument, Span};
 
-use super::{DhtContactsStoreTrait, TaskOrResult};
+use super::DhtContactsStoreTrait;
 
 // Wrapper for a DHT instance that periodically outputs it's state to the provided StateMonitor.
 pub(super) struct MonitoredDht {
@@ -18,13 +18,13 @@ pub(super) struct MonitoredDht {
 }
 
 impl MonitoredDht {
-    pub fn start(
+    pub async fn start(
         socket: quic::SideChannel,
         routers: HashSet<String>,
         contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
         parent_monitor: &StateMonitor,
         span: &Span,
-    ) -> TaskOrResult<Self> {
+    ) -> Self {
         // TODO: Unwrap
         let local_addr = socket.local_addr().unwrap();
 
@@ -35,19 +35,6 @@ impl MonitoredDht {
 
         let monitor = parent_monitor.make_child(monitor_name);
 
-        TaskOrResult::new(scoped_task::spawn(MonitoredDht::create(
-            is_v4, socket, routers, contacts, monitor, span,
-        )))
-    }
-
-    async fn create(
-        is_v4: bool,
-        socket: quic::SideChannel,
-        routers: HashSet<String>,
-        contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
-        monitor: StateMonitor,
-        span: Span,
-    ) -> Self {
         // TODO: load the DHT state from a previous save if it exists.
         let mut builder = MainlineDht::builder()
             .add_routers(routers)
