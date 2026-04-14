@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures_util::{Stream, StreamExt};
-use ouisync::{DhtLookup, Event, NetworkEventReceiver, NetworkEventStream};
+use ouisync::{DhtLookupStream, Event, NetworkEventReceiver, NetworkEventStream};
 use tokio::sync::{broadcast, watch};
 use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 
@@ -14,7 +14,7 @@ pub(crate) enum SubscriptionStream {
     Network(NetworkEventStream),
     Repository(BroadcastStream<Event>),
     StateMonitor(WatchStream<()>),
-    DhtLookup(DhtLookup),
+    DhtLookup(DhtLookupStream),
 }
 
 impl From<broadcast::Receiver<Event>> for SubscriptionStream {
@@ -35,8 +35,8 @@ impl From<watch::Receiver<()>> for SubscriptionStream {
     }
 }
 
-impl From<DhtLookup> for SubscriptionStream {
-    fn from(stream: DhtLookup) -> Self {
+impl From<DhtLookupStream> for SubscriptionStream {
+    fn from(stream: DhtLookupStream) -> Self {
         Self::DhtLookup(stream)
     }
 }

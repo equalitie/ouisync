@@ -26,9 +26,9 @@ use crate::{
 };
 use futures_util::stream::FuturesUnordered;
 use ouisync::{
-    Access, AccessChange, AccessMode, AccessSecrets, Credentials, DhtLookup, EntryType, Event,
-    INFO_HASH_LEN, InfoHash, LocalSecret, NatBehavior, Network, NetworkEventReceiver, PeerAddr,
-    PeerInfo, Progress, PublicRuntimeId, Registration, Repository, RepositoryParams,
+    Access, AccessChange, AccessMode, AccessSecrets, Credentials, DhtLookupStream, EntryType,
+    Event, INFO_HASH_LEN, InfoHash, LocalSecret, NatBehavior, Network, NetworkEventReceiver,
+    PeerAddr, PeerInfo, Progress, PublicRuntimeId, Registration, Repository, RepositoryParams,
     SetLocalSecret, ShareToken, Stats, StorageSize, TopicId,
     crypto::{Password, PasswordSalt, cipher::SecretKey},
 };
@@ -1991,13 +1991,13 @@ impl State {
     /// Note: Currently this doesn't automatically connnect to the discovered peers but this might
     /// change in the future.
     #[api(stream(PeerAddr))]
-    pub fn session_dht_lookup(&self, info_hash: String, announce: bool) -> DhtLookup {
+    pub fn session_dht_lookup(&self, info_hash: String, announce: bool) -> DhtLookupStream {
         let mut buffer = [0; INFO_HASH_LEN];
 
         if hex::decode_to_slice(&info_hash, &mut buffer).is_ok() {
             self.network.dht_lookup(InfoHash::from(buffer), announce)
         } else {
-            DhtLookup::empty()
+            DhtLookupStream::empty()
         }
     }
 

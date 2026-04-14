@@ -5,8 +5,7 @@ mod connection_monitor;
 mod constants;
 mod crypto;
 mod debug_payload;
-mod dht_discovery;
-mod dht_lookup;
+mod dht;
 mod event;
 mod gateway;
 mod ip;
@@ -33,8 +32,8 @@ mod upnp;
 
 pub use self::{
     connection::PeerInfoCollector,
-    dht_discovery::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait},
-    dht_lookup::DhtLookup,
+    dht::DhtLookupStream,
+    dht::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait},
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
@@ -43,7 +42,7 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
-use dht_discovery::DhtEvent;
+use dht::DhtEvent;
 pub use net::{
     bus::{BusRecvStream as RecvStream, BusSendStream as SendStream, TopicId},
     stun::NatBehavior,
@@ -54,7 +53,7 @@ use self::{
     connection::{ConnectionPermit, ConnectionSet, ReserveResult},
     connection_monitor::ConnectionMonitor,
     constants::REQUEST_TIMEOUT,
-    dht_discovery::DhtDiscovery,
+    dht::DhtDiscovery,
     event::ProtocolVersions,
     gateway::{Connectivity, Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
@@ -497,8 +496,8 @@ impl Network {
 
     /// Performs explicit DHT lookup or announce for the given infohash and returns a stream of the
     /// discovered peer addresses. It will not automatically connect to them.
-    pub fn dht_lookup(&self, info_hash: InfoHash, announce: bool) -> DhtLookup {
-        DhtLookup::start(
+    pub fn dht_lookup(&self, info_hash: InfoHash, announce: bool) -> DhtLookupStream {
+        DhtLookupStream::start(
             &self.inner.dht_discovery,
             info_hash,
             announce,
@@ -607,7 +606,7 @@ impl Drop for Registration {
 
 struct RegistrationHolder {
     vault: Vault,
-    dht: Option<dht_discovery::LookupRequest>,
+    dht: Option<dht::LookupRequest>,
     pex: PexRepository,
     request_tracker: RequestTracker,
     choker: Choker,
@@ -800,7 +799,7 @@ impl Inner {
         }
     }
 
-    fn start_dht_lookup(&self, info_hash: InfoHash) -> dht_discovery::LookupRequest {
+    fn start_dht_lookup(&self, info_hash: InfoHash) -> dht::LookupRequest {
         self.dht_discovery
             .start_lookup(info_hash, true, self.dht_discovery_tx.clone())
     }

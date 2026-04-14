@@ -8,20 +8,17 @@ use futures_util::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use super::{
-    DhtDiscovery, PeerAddr,
-    dht_discovery::{DhtEvent, LookupRequest},
-};
+use super::{super::PeerAddr, DhtDiscovery, DhtEvent, LookupRequest};
 
 /// Stream returned from [`Network::dht_lookup`].
-pub struct DhtLookup {
+pub struct DhtLookupStream {
     request: Option<LookupRequest>,
     event_rx: UnboundedReceiverStream<DhtEvent>,
     allow_local: bool,
 }
 
-impl DhtLookup {
-    pub(super) fn start(
+impl DhtLookupStream {
+    pub(in super::super) fn start(
         dht: &DhtDiscovery,
         info_hash: InfoHash,
         announce: bool,
@@ -47,7 +44,7 @@ impl DhtLookup {
     }
 }
 
-impl Stream for DhtLookup {
+impl Stream for DhtLookupStream {
     type Item = PeerAddr;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

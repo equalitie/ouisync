@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use futures_util::{SinkExt, stream::FuturesUnordered};
-use ouisync::{DhtLookup, NetworkEventReceiver};
+use ouisync::{DhtLookupStream, NetworkEventReceiver};
 use tokio::select;
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 use tracing::{Span, field};
@@ -201,8 +201,8 @@ impl From<StateMonitorSubscription> for Action<Response> {
     }
 }
 
-impl From<DhtLookup> for Action<Response> {
-    fn from(stream: DhtLookup) -> Self {
+impl From<DhtLookupStream> for Action<Response> {
+    fn from(stream: DhtLookupStream) -> Self {
         Self::Subscribe(stream.into())
     }
 }
