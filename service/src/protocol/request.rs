@@ -1,6 +1,10 @@
-use crate::{file::FileHandle, repository::RepositoryHandle};
+use crate::{
+    file::FileHandle, repository::RepositoryHandle, socket::NetworkSocketHandle,
+    stream::NetworkStreamHandle,
+};
 use ouisync::{
     AccessChange, AccessMode, LocalSecret, PeerAddr, SetLocalSecret, ShareToken, StorageSize,
+    TopicId,
     crypto::{Password, PasswordSalt},
 };
 use ouisync_macros::api;
@@ -116,7 +120,12 @@ mod tests {
 
         for (input, expected) in test_vectors {
             let s = rmp_serde::to_vec(&input).unwrap();
-            assert_eq!(s, expected, "{input:?}");
+
+            similar_asserts::assert_eq!(
+                expected: rmpv::decode::read_value(&mut expected.as_slice()).unwrap(),
+                actual: rmpv::decode::read_value(&mut s.as_slice()).unwrap(),
+                "unexpected serialization of `{input:?}`"
+            );
 
             let d: Request = rmp_serde::from_slice(&s).unwrap();
             assert_eq!(d, input, "{input:?}");

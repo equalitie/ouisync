@@ -60,6 +60,15 @@ impl PeerAddr {
             Self::Quic(_) => false,
         }
     }
+
+    pub fn is_local(&self) -> bool {
+        match self.socket_addr().ip() {
+            IpAddr::V4(addr) => addr.is_private() || addr.is_loopback() || addr.is_link_local(),
+            IpAddr::V6(addr) => {
+                addr.is_loopback() || addr.is_unicast_link_local() || addr.is_unique_local()
+            }
+        }
+    }
 }
 
 impl FromStr for PeerAddr {

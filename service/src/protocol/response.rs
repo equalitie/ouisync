@@ -1,4 +1,7 @@
-use crate::{file::FileHandle, repository::RepositoryHandle};
+use crate::{
+    file::FileHandle, repository::RepositoryHandle, socket::NetworkSocketHandle,
+    stream::NetworkStreamHandle,
+};
 use ouisync::{
     AccessMode, EntryType, NatBehavior, NetworkEvent, PeerAddr, PeerInfo, Progress,
     PublicRuntimeId, ShareToken, Stats, StorageSize,
@@ -50,7 +53,7 @@ impl From<ResponseResult> for Result<Response, ProtocolError> {
 
 impl From<()> for Response {
     fn from(_: ()) -> Self {
-        Self::None
+        Self::Unit
     }
 }
 
@@ -59,7 +62,7 @@ impl TryFrom<Response> for () {
 
     fn try_from(response: Response) -> Result<Self, Self::Error> {
         match response {
-            Response::None => Ok(()),
+            Response::Unit => Ok(()),
             _ => Err(UnexpectedResponse),
         }
     }
@@ -125,11 +128,20 @@ pub struct QuotaInfo {
     pub size: StorageSize,
 }
 
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
+#[api]
+pub struct Datagram {
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,
+    #[serde(with = "helpers::str")]
+    pub addr: SocketAddr,
+}
+
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
+    use std::{net::Ipv4Addr, time::SystemTime};
 
-    use ouisync::{AccessSecrets, PeerSource, PeerState, Stats, WriteSecrets};
+    use ouisync::{AccessSecrets, PeerSource, PeerState, SecretRuntimeId, Stats, WriteSecrets};
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
@@ -140,6 +152,8 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(0);
         let token = ShareToken::from(AccessSecrets::Write(WriteSecrets::generate(&mut rng)));
+
+        let runtime_id = SecretRuntimeId::generate(&mut rng).public();
 
         let test_vectors = [
             (Response::None, {
@@ -185,11 +199,6 @@ mod tests {
                 write_uint(&mut out, 1).unwrap();
                 out
             }),
-            (Response::RepositoryEvent, {
-                let mut out = Vec::new();
-                write_str(&mut out, "RepositoryEvent").unwrap();
-                out
-            }),
             (Response::Path(PathBuf::from("/home/alice/ouisync")), {
                 let mut out = Vec::new();
                 write_map_len(&mut out, 1).unwrap();
@@ -225,24 +234,41 @@ mod tests {
                 },
             ),
             (
-                Response::PeerInfos(vec![PeerInfo {
-                    addr: PeerAddr::Quic((Ipv4Addr::LOCALHOST, 12345).into()),
-                    source: PeerSource::Listener,
-                    state: PeerState::Connecting,
-                    stats: Stats {
-                        bytes_tx: 0,
-                        bytes_rx: 0,
-                        throughput_tx: 0,
-                        throughput_rx: 0,
+                Response::PeerInfos(vec![
+                    PeerInfo {
+                        addr: PeerAddr::Quic((Ipv4Addr::LOCALHOST, 1234).into()),
+                        source: PeerSource::Listener,
+                        state: PeerState::Connecting,
+                        stats: Stats {
+                            bytes_tx: 0,
+                            bytes_rx: 0,
+                            throughput_tx: 0,
+                            throughput_rx: 0,
+                        },
                     },
-                }]),
+                    PeerInfo {
+                        addr: PeerAddr::Quic((Ipv4Addr::LOCALHOST, 2468).into()),
+                        source: PeerSource::UserProvided,
+                        state: PeerState::Active {
+                            id: runtime_id,
+                            since: SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+                        },
+                        stats: Stats {
+                            bytes_tx: 0,
+                            bytes_rx: 0,
+                            throughput_tx: 0,
+                            throughput_rx: 0,
+                        },
+                    },
+                ]),
                 {
                     let mut out = Vec::new();
                     write_map_len(&mut out, 1).unwrap();
                     write_str(&mut out, "PeerInfos").unwrap();
-                    write_array_len(&mut out, 1).unwrap();
+                    write_array_len(&mut out, 2).unwrap();
+
                     write_array_len(&mut out, 4).unwrap();
-                    write_str(&mut out, "quic/127.0.0.1:12345").unwrap();
+                    write_str(&mut out, "quic/127.0.0.1:1234").unwrap();
                     write_uint(&mut out, 1).unwrap();
                     write_str(&mut out, "Connecting").unwrap();
                     write_array_len(&mut out, 4).unwrap();
@@ -250,6 +276,21 @@ mod tests {
                     write_uint(&mut out, 0).unwrap();
                     write_uint(&mut out, 0).unwrap();
                     write_uint(&mut out, 0).unwrap();
+
+                    write_array_len(&mut out, 4).unwrap();
+                    write_str(&mut out, "quic/127.0.0.1:2468").unwrap();
+                    write_uint(&mut out, 0).unwrap();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "Active").unwrap();
+                    write_array_len(&mut out, 2).unwrap();
+                    write_bin(&mut out, runtime_id.as_ref()).unwrap();
+                    write_uint(&mut out, 10_000).unwrap();
+                    write_array_len(&mut out, 4).unwrap();
+                    write_uint(&mut out, 0).unwrap();
+                    write_uint(&mut out, 0).unwrap();
+                    write_uint(&mut out, 0).unwrap();
+                    write_uint(&mut out, 0).unwrap();
+
                     out
                 },
             ),
@@ -303,11 +344,31 @@ mod tests {
                 write_uint(&mut out, 12345678).unwrap();
                 out
             }),
+            (
+                Response::Datagram(Datagram {
+                    data: b"hello world".to_vec(),
+                    addr: ([10, 0, 0, 120], 34567).into(),
+                }),
+                {
+                    let mut out = Vec::new();
+                    write_map_len(&mut out, 1).unwrap();
+                    write_str(&mut out, "Datagram").unwrap();
+                    write_array_len(&mut out, 2).unwrap();
+                    write_bin(&mut out, b"hello world").unwrap();
+                    write_str(&mut out, "10.0.0.120:34567").unwrap();
+                    out
+                },
+            ),
         ];
 
         for (input, expected) in test_vectors {
             let s = rmp_serde::to_vec(&input).unwrap();
-            assert_eq!(s, expected);
+
+            similar_asserts::assert_eq!(
+                expected: rmpv::decode::read_value(&mut expected.as_slice()).map_err(|e| e.to_string()),
+                actual: rmpv::decode::read_value(&mut s.as_slice()).map_err(|e| e.to_string()),
+                "unexpected serialization of `{input:?}`"
+            );
 
             let d: Response = rmp_serde::from_slice(&s).unwrap();
             assert_eq!(d, input);

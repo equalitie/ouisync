@@ -19,6 +19,8 @@ use tokio::{
 };
 
 const MAX_STORE_SIZE: usize = 2000;
+pub(crate) const FILE_NAME_V4: &str = "dht_contacts_v4.txt";
+pub(crate) const FILE_NAME_V6: &str = "dht_contacts_v6.txt";
 
 pub struct Store {
     store_v4: AsyncMutex<AddrStore<SocketAddrV4>>,
@@ -28,12 +30,8 @@ pub struct Store {
 impl Store {
     pub fn new<P: AsRef<Path>>(store_dir: P) -> Self {
         Self {
-            store_v4: AsyncMutex::new(AddrStore::new(
-                store_dir.as_ref().join("dht_contacts_v4.txt"),
-            )),
-            store_v6: AsyncMutex::new(AddrStore::new(
-                store_dir.as_ref().join("dht_contacts_v6.txt"),
-            )),
+            store_v4: AsyncMutex::new(AddrStore::new(store_dir.as_ref().join(FILE_NAME_V4))),
+            store_v6: AsyncMutex::new(AddrStore::new(store_dir.as_ref().join(FILE_NAME_V6))),
         }
     }
 }

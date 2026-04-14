@@ -28,6 +28,12 @@ impl MessageDispatcher {
         }
     }
 
+    /// Returns the underlying connection bus. This can be used to open streams for
+    /// sending/receiving raw, unstructured data.
+    pub fn bus(&self) -> &net::bus::Bus {
+        &self.bus
+    }
+
     /// Opens a sink and a stream for communication on the given topic.
     pub fn open(
         &self,

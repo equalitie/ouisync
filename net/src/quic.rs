@@ -482,6 +482,7 @@ impl<MakeFut, Fut> fmt::Debug for UdpPollHelper<MakeFut, Fut> {
 //------------------------------------------------------------------------------
 
 /// Makes new `SideChannel`s.
+#[derive(Clone)]
 pub struct SideChannelMaker {
     socket: Arc<CustomUdpSocket>,
 }
@@ -495,15 +496,17 @@ impl SideChannelMaker {
     }
 }
 
+/// Side channel for the underlying UDP socket which allows sending and receiving raw UDP
+/// datagrams.
 pub struct SideChannel {
     socket: Arc<CustomUdpSocket>,
     packet_rx: AsyncMutex<broadcast::Receiver<Packet>>,
 }
 
 impl SideChannel {
-    pub fn sender(&self) -> SideChannelSender {
+    pub fn into_sender(self) -> SideChannelSender {
         SideChannelSender {
-            socket: self.socket.clone(),
+            socket: self.socket,
         }
     }
 }

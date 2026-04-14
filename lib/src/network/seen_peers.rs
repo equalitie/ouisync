@@ -43,10 +43,6 @@ impl SeenPeers {
     pub(crate) fn remove(&self, peer: &PeerAddr) {
         self.inner.write().unwrap().remove(peer)
     }
-
-    pub(crate) fn collect(&self) -> Vec<SeenPeer> {
-        self.inner.write().unwrap().collect(&self.inner)
-    }
 }
 
 type RoundId = u64;
@@ -149,33 +145,6 @@ impl SeenPeersInner {
         });
 
         self.peers.remove(addr);
-    }
-
-    fn collect(&mut self, ext: &Arc<BlockingRwLock<SeenPeersInner>>) -> Vec<SeenPeer> {
-        self.peers
-            .iter_mut()
-            .filter_map(
-                |(
-                    addr,
-                    PeerEntry {
-                        ref_count: rc,
-                        rounds,
-                        is_seen_tx,
-                    },
-                )| {
-                    if rounds.is_empty() {
-                        None
-                    } else {
-                        *rc += 1;
-                        Some(SeenPeer {
-                            addr: *addr,
-                            seen_peers: ext.clone(),
-                            is_seen_rx: is_seen_tx.subscribe(),
-                        })
-                    }
-                },
-            )
-            .collect()
     }
 }
 

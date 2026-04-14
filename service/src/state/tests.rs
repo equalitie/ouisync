@@ -4,10 +4,13 @@ use crate::test_utils;
 
 use super::*;
 use assert_matches::assert_matches;
-use futures_util::TryStreamExt;
+use futures_util::{
+    StreamExt, TryStreamExt,
+    future::{join, join_all},
+};
 use ouisync::{Access, AccessSecrets, File, Repository, RepositoryParams, WriteSecrets};
 use tempfile::TempDir;
-use tokio::{sync::broadcast::error::RecvError, time};
+use tokio::{net::UdpSocket, select, sync::broadcast::error::RecvError, time};
 use tokio_stream::wrappers::ReadDirStream;
 use tracing::Instrument;
 
@@ -438,7 +441,7 @@ async fn move_repository_during_sync() {
         .await
         .unwrap();
 
-        let network = Network::new(monitor, None, None);
+        let network = Network::builder().monitor(monitor).build();
         network
             .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
             .await;
@@ -631,6 +634,237 @@ async fn metrics() {
     assert!(response.content_length().unwrap() > 0);
 }
 
+#[tokio::test]
+async fn network_sockets() {
+    let (_temp_dir, state) = setup().await;
+
+    let peer_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let peer_addr = peer_socket.local_addr().unwrap();
+
+    state
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+    let our_addr = *state
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap()
+        .socket_addr();
+
+    let socket_handle = state.session_open_network_socket_v4().await.unwrap();
+
+    // From us to the peer
+    let message = b"ping";
+
+    let writer = async {
+        state
+            .network_socket_send_to(socket_handle, message.to_vec(), peer_addr)
+            .await
+            .unwrap();
+    };
+
+    let reader = async {
+        let mut buffer = vec![0; message.len()];
+        let (n, sender_addr) = peer_socket.recv_from(&mut buffer).await.unwrap();
+        buffer.truncate(n);
+
+        assert_eq!(buffer, message);
+        assert_eq!(sender_addr, our_addr);
+    };
+
+    select! {
+        _ = reader => (),
+        _ = writer => (),
+    }
+
+    // From the peer to us
+    let message = b"pong";
+
+    let writer = async {
+        peer_socket.send_to(message, our_addr).await.unwrap();
+    };
+
+    let reader = async {
+        let recv = state
+            .network_socket_recv_from(socket_handle, message.len() as u64)
+            .await
+            .unwrap();
+
+        assert_eq!(recv.data, message);
+        assert_eq!(recv.addr, peer_addr);
+    };
+
+    join(reader, writer).await;
+}
+
+#[tokio::test]
+async fn network_streams() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let state_a = State::init(ConfigStore::new(temp_dir.path().join("config-a")))
+        .await
+        .unwrap();
+    let state_b = State::init(ConfigStore::new(temp_dir.path().join("config-b")))
+        .await
+        .unwrap();
+
+    state_a
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+    let addr_a = state_a
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    state_b
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+    let addr_b = state_b
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    state_a.session_add_user_provided_peers(vec![addr_b]).await;
+
+    let topic_id = TopicId::from_slice_lossy(b"pingpong");
+
+    async fn open_stream(state: &State, addr: PeerAddr, topic_id: TopicId) -> NetworkStreamHandle {
+        let mut events_rx = state.session_subscribe_to_network();
+
+        time::timeout(Duration::from_secs(1), async {
+            loop {
+                match state.session_open_network_stream(addr, topic_id).await {
+                    Ok(handle) => break handle,
+                    Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotConnected => (),
+                    Err(error) => panic!("unexpected error: {error:?}"),
+                }
+
+                events_rx.recv().await.unwrap();
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    let stream_a_to_b = open_stream(&state_a, addr_b, topic_id).await;
+    let stream_b_to_a = open_stream(&state_b, addr_a, topic_id).await;
+
+    let ping = async {
+        state_a
+            .network_stream_write_all(stream_a_to_b, b"ping".to_vec())
+            .await
+            .unwrap();
+        let res = state_a
+            .network_stream_read_exact(stream_a_to_b, 4)
+            .await
+            .unwrap();
+        assert_eq!(res, b"pong");
+    };
+
+    let pong = async {
+        let req = state_b
+            .network_stream_read_exact(stream_b_to_a, 4)
+            .await
+            .unwrap();
+        assert_eq!(req, b"ping");
+        state_b
+            .network_stream_write_all(stream_b_to_a, b"pong".to_vec())
+            .await
+            .unwrap();
+    };
+
+    join(ping, pong).await;
+
+    state_a.network_stream_close(stream_a_to_b).await.unwrap();
+    state_b.network_stream_close(stream_b_to_a).await.unwrap();
+}
+
+#[tokio::test]
+async fn dht_lookup() {
+    test_utils::init_log();
+
+    let temp_dir = TempDir::new().unwrap();
+
+    // Bootstrap
+    let bootstrap_dir = temp_dir.path().join("bootstrap");
+    fs::create_dir_all(&bootstrap_dir).await.unwrap();
+
+    let bootstrap_state = State::init(ConfigStore::new(bootstrap_dir.join("config")))
+        .instrument(tracing::info_span!("bootstrap"))
+        .await
+        .unwrap();
+    bootstrap_state.session_set_dht_routers(Vec::new()); // prevent connecting to the mainline
+    bootstrap_state.session_set_local_dht_enabled(true);
+    bootstrap_state
+        .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+        .await;
+    bootstrap_state
+        .session_set_store_dirs(vec![bootstrap_dir.join("repos")])
+        .await
+        .unwrap();
+
+    // Pin the DHT to ensure it's running
+    bootstrap_state.session_pin_dht().await;
+
+    let bootstrap_addr = *bootstrap_state
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap()
+        .socket_addr();
+
+    let info_hash = InfoHash::sha1(b"hello");
+    let info_hash = format!("{info_hash:x}");
+
+    let peers = join_all(["a", "b"].map(async |name| {
+        let dir = temp_dir.path().join(name);
+        let config_dir = dir.join("config");
+        fs::create_dir_all(&config_dir).await.unwrap();
+
+        fs::write(
+            config_dir.join(dht::FILE_NAME_V4),
+            format!("{bootstrap_addr}\n"),
+        )
+        .await
+        .unwrap();
+
+        let state = State::init(ConfigStore::new(config_dir))
+            .instrument(tracing::info_span!("peer", message = name))
+            .await
+            .unwrap();
+        state.session_set_dht_routers(Vec::new());
+        state.session_set_local_dht_enabled(true);
+        state
+            .session_bind_network(vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+            .await;
+
+        state
+    }))
+    .await;
+
+    let addr_0 = peers[0]
+        .session_get_local_listener_addrs()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    let _: Vec<_> = peers[0]
+        .session_dht_lookup(info_hash.clone(), true)
+        .collect()
+        .await;
+
+    let addrs: Vec<_> = peers[1]
+        .session_dht_lookup(info_hash, false)
+        .collect()
+        .await;
+    assert!(
+        addrs.contains(&addr_0),
+        "`{addrs:?}` expected to contain `{addr_0:?}`"
+    );
+}
+
 async fn setup() -> (TempDir, State) {
     let temp_dir = TempDir::new().unwrap();
     let state = State::init(ConfigStore::new(temp_dir.path().join("config")))
@@ -667,7 +901,7 @@ async fn create_remote_repository(root_dir: &Path) -> (Network, Repository, Regi
     .await
     .unwrap();
 
-    let network = Network::new(monitor, None, None);
+    let network = Network::builder().monitor(monitor).build();
     network
         .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;

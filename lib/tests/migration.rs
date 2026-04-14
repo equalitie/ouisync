@@ -6,16 +6,15 @@ mod common;
 use common::{dump, sync_watch};
 use futures_util::future;
 use ouisync::{
-    Access, AccessMode, AccessSecrets, Network, PeerAddr, Repository, RepositoryParams,
-    DATA_VERSION, DIRECTORY_VERSION, SCHEMA_VERSION,
+    Access, AccessMode, AccessSecrets, DATA_VERSION, DIRECTORY_VERSION, Network, PeerAddr,
+    Repository, RepositoryParams, SCHEMA_VERSION,
 };
 use rand::{
+    Rng, SeedableRng,
     distributions::{Alphanumeric, DistString, Standard},
     prelude::Distribution,
     rngs::StdRng,
-    Rng, SeedableRng,
 };
-use state_monitor::StateMonitor;
 use std::{
     env,
     ffi::OsString,
@@ -27,7 +26,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::{fs, process::Command};
-use tracing::{instrument, Instrument};
+use tracing::{Instrument, instrument};
 
 const DB_EXTENSION: &str = "db";
 const DB_DUMP_EXTENSION: &str = "db.dump";
@@ -173,7 +172,7 @@ async fn test_sync(work_dir: &Path, input_dump: &Path) {
 }
 
 async fn create_network() -> Network {
-    let network = Network::new(StateMonitor::make_root(), None, None);
+    let network = Network::new();
     network
         .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
         .await;

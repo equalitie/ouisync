@@ -42,19 +42,11 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     write_complex_enum(out, "Request", &ctx.request.to_enum())?;
     write_complex_enum(out, "Response", &ctx.response.to_enum())?;
 
-    write_api_class(out, "Session", None, &ctx.request.variants)?;
-    write_api_class(
-        out,
-        "Repository",
-        Some(("handle", "RepositoryHandle")),
-        &ctx.request.variants,
-    )?;
-    write_api_class(
-        out,
-        "File",
-        Some(("handle", "FileHandle")),
-        &ctx.request.variants,
-    )?;
+    write_api_class(out, "Session", false, &ctx.request.variants)?;
+    write_api_class(out, "Repository", true, &ctx.request.variants)?;
+    write_api_class(out, "File", true, &ctx.request.variants)?;
+    write_api_class(out, "NetworkSocket", true, &ctx.request.variants)?;
+    write_api_class(out, "NetworkStream", true, &ctx.request.variants)?;
 
     writeln!(
         out,
@@ -314,7 +306,7 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
 fn write_api_class(
     out: &mut dyn Write,
     name: &str,
-    inner: Option<(&str, &str)>,
+    handle: bool,
     request_variants: &[(String, RequestVariant)],
 ) -> Result<()> {
     write!(
@@ -322,8 +314,8 @@ fn write_api_class(
         "open class {name} internal constructor (internal val client: Client"
     )?;
 
-    if let Some((name, ty)) = inner {
-        write!(out, ", internal val {name}: {ty}")?;
+    if handle {
+        write!(out, ", internal val handle: {name}Handle")?;
     }
 
     writeln!(out, ") {{")?;
@@ -334,8 +326,12 @@ fn write_api_class(
     let prefix = format!("{}_", AsSnakeCase(name));
 
     for (variant_name, variant) in request_variants {
-        // Event subscription / unsubscription is handled manually
-        if variant_name.contains("subscribe") {
+        if variant.skip {
+            continue;
+        }
+
+        // Streams are currently handled manually
+        if variant.ret_stream_item.is_some() {
             continue;
         }
 
@@ -357,14 +353,14 @@ fn write_api_class(
         let use_default_args = variant
             .fields
             .iter()
-            .skip(if inner.is_some() { 1 } else { 0 })
+            .skip(if handle { 1 } else { 0 })
             .any(|(_, field)| KotlinType(&field.ty).default().is_none());
 
         write_docs(out, I, &variant.docs)?;
         writeln!(out, "{I}suspend fun {}(", AsLowerCamelCase(op_name))?;
 
         for (index, (arg_name, field)) in variant.fields.iter().enumerate() {
-            if index == 0 && inner.is_some() {
+            if index == 0 && handle {
                 continue;
             }
 
@@ -410,15 +406,11 @@ fn write_api_class(
         if !variant.fields.is_empty() {
             writeln!(out, "(")?;
 
-            let inner_name = inner.map(|(name, _)| AsLowerCamelCase(name));
-
             for (index, (arg_name, _)) in variant.fields.iter().enumerate() {
                 let arg_name = AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
 
-                if index == 0
-                    && let Some(inner_name) = &inner_name
-                {
-                    writeln!(out, "{I}{I}{I}{inner_name},")?;
+                if index == 0 && handle {
+                    writeln!(out, "{I}{I}{I}handle,")?;
                     continue;
                 }
 
@@ -435,7 +427,7 @@ fn write_api_class(
         writeln!(out, "{I}{I}when (response) {{")?;
 
         match ret {
-            Type::Unit => writeln!(out, "{I}{I}{I}is Response.None -> return")?,
+            Type::Unit => writeln!(out, "{I}{I}{I}is Response.Unit -> return")?,
             Type::Option(_) => {
                 write!(
                     out,
@@ -444,10 +436,7 @@ fn write_api_class(
 
                 match ret_stripped {
                     Some(Type::Option(w)) => {
-                        write!(
-                            out,
-                            "if (response.value != null) {w}(client, response.value) else null"
-                        )?;
+                        write!(out, "{w}(client, response.value)")?;
                     }
                     Some(_) => unreachable!(),
                     None => write!(out, "response.value")?,
@@ -484,23 +473,23 @@ fn write_api_class(
     }
 
     // equals + hashCode + toString
-    if let Some((inner_name, _)) = inner {
+    if handle {
         writeln!(out, "{I}override fun equals(other: Any?): Boolean =")?;
         writeln!(
             out,
-            "{I}{I}other is {name} && client == other.client && {inner_name} == other.{inner_name}"
+            "{I}{I}other is {name} && client == other.client && handle == other.handle"
         )?;
 
         writeln!(out)?;
         writeln!(
             out,
-            "{I}override fun hashCode(): Int = Objects.hash(client, {inner_name})"
+            "{I}override fun hashCode(): Int = Objects.hash(client, handle)"
         )?;
 
         writeln!(out)?;
         writeln!(
             out,
-            "{I}override fun toString(): String = \"${{this::class.simpleName}}(${inner_name})\""
+            "{I}override fun toString(): String = \"${{this::class.simpleName}}($handle)\""
         )?;
     }
 

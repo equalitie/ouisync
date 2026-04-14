@@ -27,6 +27,24 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::FileWrite>(&variant) != nullptr) {
         return std::string_view("FileWrite");
     }
+    if (std::get_if<Request::NetworkSocketClose>(&variant) != nullptr) {
+        return std::string_view("NetworkSocketClose");
+    }
+    if (std::get_if<Request::NetworkSocketRecvFrom>(&variant) != nullptr) {
+        return std::string_view("NetworkSocketRecvFrom");
+    }
+    if (std::get_if<Request::NetworkSocketSendTo>(&variant) != nullptr) {
+        return std::string_view("NetworkSocketSendTo");
+    }
+    if (std::get_if<Request::NetworkStreamClose>(&variant) != nullptr) {
+        return std::string_view("NetworkStreamClose");
+    }
+    if (std::get_if<Request::NetworkStreamReadExact>(&variant) != nullptr) {
+        return std::string_view("NetworkStreamReadExact");
+    }
+    if (std::get_if<Request::NetworkStreamWriteAll>(&variant) != nullptr) {
+        return std::string_view("NetworkStreamWriteAll");
+    }
     if (std::get_if<Request::RepositoryClose>(&variant) != nullptr) {
         return std::string_view("RepositoryClose");
     }
@@ -189,6 +207,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionDeriveSecretKey>(&variant) != nullptr) {
         return std::string_view("SessionDeriveSecretKey");
     }
+    if (std::get_if<Request::SessionDhtLookup>(&variant) != nullptr) {
+        return std::string_view("SessionDhtLookup");
+    }
     if (std::get_if<Request::SessionFindRepository>(&variant) != nullptr) {
         return std::string_view("SessionFindRepository");
     }
@@ -209,6 +230,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     }
     if (std::get_if<Request::SessionGetDefaultRepositoryExpiration>(&variant) != nullptr) {
         return std::string_view("SessionGetDefaultRepositoryExpiration");
+    }
+    if (std::get_if<Request::SessionGetDhtRouters>(&variant) != nullptr) {
+        return std::string_view("SessionGetDhtRouters");
     }
     if (std::get_if<Request::SessionGetExternalAddrV4>(&variant) != nullptr) {
         return std::string_view("SessionGetExternalAddrV4");
@@ -270,6 +294,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionInsertStoreDirs>(&variant) != nullptr) {
         return std::string_view("SessionInsertStoreDirs");
     }
+    if (std::get_if<Request::SessionIsLocalDhtEnabled>(&variant) != nullptr) {
+        return std::string_view("SessionIsLocalDhtEnabled");
+    }
     if (std::get_if<Request::SessionIsLocalDiscoveryEnabled>(&variant) != nullptr) {
         return std::string_view("SessionIsLocalDiscoveryEnabled");
     }
@@ -288,8 +315,20 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionMirrorExists>(&variant) != nullptr) {
         return std::string_view("SessionMirrorExists");
     }
+    if (std::get_if<Request::SessionOpenNetworkSocketV4>(&variant) != nullptr) {
+        return std::string_view("SessionOpenNetworkSocketV4");
+    }
+    if (std::get_if<Request::SessionOpenNetworkSocketV6>(&variant) != nullptr) {
+        return std::string_view("SessionOpenNetworkSocketV6");
+    }
+    if (std::get_if<Request::SessionOpenNetworkStream>(&variant) != nullptr) {
+        return std::string_view("SessionOpenNetworkStream");
+    }
     if (std::get_if<Request::SessionOpenRepository>(&variant) != nullptr) {
         return std::string_view("SessionOpenRepository");
+    }
+    if (std::get_if<Request::SessionPinDht>(&variant) != nullptr) {
+        return std::string_view("SessionPinDht");
     }
     if (std::get_if<Request::SessionRemoveStoreDirs>(&variant) != nullptr) {
         return std::string_view("SessionRemoveStoreDirs");
@@ -305,6 +344,12 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     }
     if (std::get_if<Request::SessionSetDefaultRepositoryExpiration>(&variant) != nullptr) {
         return std::string_view("SessionSetDefaultRepositoryExpiration");
+    }
+    if (std::get_if<Request::SessionSetDhtRouters>(&variant) != nullptr) {
+        return std::string_view("SessionSetDhtRouters");
+    }
+    if (std::get_if<Request::SessionSetLocalDhtEnabled>(&variant) != nullptr) {
+        return std::string_view("SessionSetLocalDhtEnabled");
     }
     if (std::get_if<Request::SessionSetLocalDiscoveryEnabled>(&variant) != nullptr) {
         return std::string_view("SessionSetLocalDiscoveryEnabled");
@@ -330,6 +375,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionSubscribeToStateMonitor>(&variant) != nullptr) {
         return std::string_view("SessionSubscribeToStateMonitor");
     }
+    if (std::get_if<Request::SessionUnpinDht>(&variant) != nullptr) {
+        return std::string_view("SessionUnpinDht");
+    }
     if (std::get_if<Request::SessionUnsubscribe>(&variant) != nullptr) {
         return std::string_view("SessionUnsubscribe");
     }
@@ -349,6 +397,9 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     if (std::get_if<Response::Bytes>(&variant) != nullptr) {
         return std::string_view("Bytes");
     }
+    if (std::get_if<Response::Datagram>(&variant) != nullptr) {
+        return std::string_view("Datagram");
+    }
     if (std::get_if<Response::DirectoryEntries>(&variant) != nullptr) {
         return std::string_view("DirectoryEntries");
     }
@@ -367,6 +418,12 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     if (std::get_if<Response::NetworkEvent>(&variant) != nullptr) {
         return std::string_view("NetworkEvent");
     }
+    if (std::get_if<Response::NetworkSocket>(&variant) != nullptr) {
+        return std::string_view("NetworkSocket");
+    }
+    if (std::get_if<Response::NetworkStream>(&variant) != nullptr) {
+        return std::string_view("NetworkStream");
+    }
     if (std::get_if<Response::None>(&variant) != nullptr) {
         return std::string_view("None");
     }
@@ -378,6 +435,9 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     }
     if (std::get_if<Response::Paths>(&variant) != nullptr) {
         return std::string_view("Paths");
+    }
+    if (std::get_if<Response::PeerAddr>(&variant) != nullptr) {
+        return std::string_view("PeerAddr");
     }
     if (std::get_if<Response::PeerAddrs>(&variant) != nullptr) {
         return std::string_view("PeerAddrs");
@@ -400,9 +460,6 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     if (std::get_if<Response::Repository>(&variant) != nullptr) {
         return std::string_view("Repository");
     }
-    if (std::get_if<Response::RepositoryEvent>(&variant) != nullptr) {
-        return std::string_view("RepositoryEvent");
-    }
     if (std::get_if<Response::SecretKey>(&variant) != nullptr) {
         return std::string_view("SecretKey");
     }
@@ -415,9 +472,6 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     if (std::get_if<Response::StateMonitor>(&variant) != nullptr) {
         return std::string_view("StateMonitor");
     }
-    if (std::get_if<Response::StateMonitorEvent>(&variant) != nullptr) {
-        return std::string_view("StateMonitorEvent");
-    }
     if (std::get_if<Response::Stats>(&variant) != nullptr) {
         return std::string_view("Stats");
     }
@@ -427,11 +481,17 @@ std::string_view variant_name(const Response::Alternatives& variant) {
     if (std::get_if<Response::String>(&variant) != nullptr) {
         return std::string_view("String");
     }
+    if (std::get_if<Response::Strings>(&variant) != nullptr) {
+        return std::string_view("Strings");
+    }
     if (std::get_if<Response::U16>(&variant) != nullptr) {
         return std::string_view("U16");
     }
     if (std::get_if<Response::U64>(&variant) != nullptr) {
         return std::string_view("U64");
+    }
+    if (std::get_if<Response::Unit>(&variant) != nullptr) {
+        return std::string_view("Unit");
     }
     throw std::bad_cast();
 }

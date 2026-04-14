@@ -1,23 +1,43 @@
+use ouisync_macros::api;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+/// Identified of a network stream topic.
+///
+/// When two connected peers open a stream with the same topic id, they can communicate over it with
+/// each other.
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct TopicId([u8; Self::SIZE]);
+#[api(repr(Bytes))]
+pub struct TopicId(#[serde(with = "serde_bytes")] [u8; Self::SIZE]);
 
 impl TopicId {
     pub const SIZE: usize = 32;
 
+    /// Generates random topic id using the provided RNG.
     pub fn generate<R: Rng>(rng: &mut R) -> Self {
         Self(rng.r#gen())
     }
 
+    /// Generates random topic id using [`rand::thread_rng()`].
     pub fn random() -> Self {
         Self::generate(&mut rand::thread_rng())
     }
 
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_slice()
+    }
+
+    /// Creates topic id from the given byte slice. If the slice is longer than [`Self::SIZE`], it's
+    /// truncated. If it's shorter, it's filled in with zeroes.
+    pub fn from_slice_lossy(slice: &[u8]) -> Self {
+        let mut array = [0; Self::SIZE];
+        let n = slice.len().min(Self::SIZE);
+
+        array[..n].copy_from_slice(&slice[..n]);
+
+        Self(array)
     }
 }
 

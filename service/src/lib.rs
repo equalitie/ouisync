@@ -4,18 +4,22 @@ pub mod logger;
 pub mod protocol;
 pub mod transport;
 
+mod async_counter;
 mod config_keys;
 mod config_migration;
 mod config_store;
 mod connection;
+mod coop_rw_lock;
 mod device_id;
-mod dht_contacts;
+mod dht;
 mod error;
 mod file;
 mod metrics;
 mod network;
 mod repository;
+mod socket;
 mod state;
+mod stream;
 mod subscription;
 mod tls;
 

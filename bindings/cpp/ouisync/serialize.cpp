@@ -1,15 +1,67 @@
+// #include <chrono>
+
+#include <msgpack.hpp>
+
 #include <ouisync/serialize.hpp>
 #include <ouisync/data_dsc.hpp>
 #include <ouisync/message_dsc.hpp>
 #include <ouisync/error.hpp>
 
-#include <msgpack.hpp>
-#include <chrono>
+#include "debug.hpp"
 
 //
 // C++ concepts
 //
 namespace ouisync {
+
+struct DeserializeError : std::exception {
+    const msgpack::object from;
+    const std::string into;
+    std::exception_ptr prev;
+
+    DeserializeError(msgpack::object from, std::string into, std::exception_ptr prev)
+        : from(std::move(from)), into(std::move(into)), prev(std::move(prev))
+    {}
+
+    template<typename Into>
+    static
+    DeserializeError create(msgpack::object const& from, std::exception_ptr prev) {
+        std::stringstream s;
+        s << printer::type<Into>();
+
+        return DeserializeError(
+            from, s.str(), std::move(prev)
+        );
+    }
+
+    const char* what() const noexcept {
+        try {
+            if (prev) std::rethrow_exception(prev);
+            return "unspecified";
+        }
+        catch (std::exception const& e) {
+            return e.what();
+        }
+        catch (...) {
+            return "unknown";
+        }
+    }
+
+    void explain(std::ostream& os) const noexcept {
+        os << "When parsing\n";
+        os << "  from: " << printer::display(from) << "\n";
+        os << "  into: " << into << "\n";
+        try {
+            if (prev) std::rethrow_exception(prev);
+        }
+        catch (DeserializeError const& e) {
+            e.explain(os);
+        }
+        catch (std::exception const& e) {
+            os << "Error: " << e.what() << "\n";
+        }
+    }
+};
 
 // Concept which tells whether a struct is described
 template<class T> concept is_described_struct = describe::Struct<std::decay_t<T>>::value;
@@ -95,7 +147,12 @@ struct UnpackObserver {
             if (parsed > 0) {
                 throw_error(error::deserialize, "wrong description");
             }
-            member_out = obj.as<M>();
+            try {
+                obj.convert(member_out);
+            }
+            catch (...) {
+                throw DeserializeError::create<M>(obj, std::current_exception());
+            }
             ++parsed;
         }
         else if (dsc.type == describe::FieldsType::ARRAY) {
@@ -105,7 +162,14 @@ struct UnpackObserver {
                 }
                 array_checked = true;
             }
-            member_out = obj.via.array.ptr[parsed++].as<M>();
+            auto& item = obj.via.array.ptr[parsed];
+            try {
+                item.convert(member_out);
+            }
+            catch (...) {
+                throw DeserializeError::create<M>(item, std::current_exception());
+            }
+            ++parsed;
         }
         else {
             throw_error(error::logic, "unreachable");
@@ -144,6 +208,36 @@ struct pack<std::chrono::milliseconds> {
     template <typename Stream>
     packer<Stream>& operator()(msgpack::packer<Stream>& pk, std::chrono::milliseconds const& millis) const {
         pk.pack(static_cast<uint64_t>(millis.count()));
+        return pk;
+    }
+};
+
+//
+// Serialize std::chrono::time_point
+//
+using TimePoint = std::chrono::time_point<std::chrono::system_clock>;
+
+template<>
+struct convert<TimePoint> {
+    msgpack::object const& operator()(msgpack::object const& obj, TimePoint& out) const {
+        uint64_t ms = obj.as<uint64_t>();
+        auto duration = std::chrono::milliseconds(ms);
+        out = TimePoint(duration);
+        return obj;
+    }
+};
+
+template<>
+struct pack<TimePoint> {
+    template<typename Stream>
+    packer<Stream>& operator()(msgpack::packer<Stream>& pk, TimePoint const& time_point) const {
+        pk.pack(
+            static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    time_point.time_since_epoch()
+                ).count()
+            )
+        );
         return pk;
     }
 };
@@ -290,13 +384,17 @@ std::stringstream serialize(const Request& request) {
 
 ResponseResult deserialize(const std::vector<char>& buffer) {
     msgpack::unpacked msgpack_result;
-    msgpack::unpack(msgpack_result, buffer.data(), buffer.size()); 
+    msgpack::unpack(msgpack_result, buffer.data(), buffer.size());
     msgpack::object obj = msgpack_result.get();
 
-    // Debug
-    //std::cout << "<<<d " << printer::display(obj) << "\n";
-
-    return obj.as<ResponseResult>();
+    try {
+        return obj.as<ResponseResult>();
+    }
+    catch (DeserializeError const& e) {
+        std::cerr << "Failed to deserialie message from Ouisync service:\n";
+        e.explain(std::cerr);
+        throw;
+    }
 }
 
 } // namespace ouisync

@@ -26,6 +26,9 @@ extern "C" void stop_service(
     const void* context
 );
 
+// Defined in Rust code
+extern "C" void init_log();
+
 namespace ouisync {
 
 namespace asio = boost::asio;
@@ -217,6 +220,10 @@ Service::~Service() {
 
 bool Service::is_running() const {
     return _state && _state->stop_handle;
+}
+
+void init_log() {
+    ::init_log();
 }
 
 } // namespace ouisync

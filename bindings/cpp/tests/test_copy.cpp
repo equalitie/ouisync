@@ -4,50 +4,25 @@
 #include <boost/asio.hpp>
 #include <boost/asio/spawn.hpp>
 #include <boost/filesystem.hpp>
-#include <iostream>
 #include <ouisync.hpp>
 #include <ouisync/service.hpp>
+
+#include "tests/test_utils.hpp"
 
 using namespace std;
 using namespace std::chrono_literals;
 using namespace boost::asio::ip;
 namespace asio = boost::asio;
 namespace fs = boost::filesystem;
-namespace sys = boost::system;
-
-void check_exception(std::exception_ptr e) {
-    try {
-        if (e) {
-            std::rethrow_exception(e);
-        }
-    } catch (const std::exception& e) {
-        BOOST_FAIL("Test failed with exception: " << e.what());
-    } catch (...) {
-        BOOST_FAIL("Test failed with unknown exception");
-    }
-}
-
-static auto const& current_test_case() {
-    return boost::unit_test::framework::current_test_case();
-}
-
-static std::string test_name() {
-    return current_test_case().p_name;
-}
-
-static fs::path mkdir(fs::path path) {
-    fs::create_directories(path);
-    return path;
-}
 
 // We also have similar test in Rust, but this one was crashing with
 // stack-verflow because the stack allocated by `asio::spawn` is too small.
 BOOST_AUTO_TEST_CASE(copy_dirs) {
     asio::io_context ctx;
 
-    fs::path tempdir = mkdir(fs::temp_directory_path() / "ouisync-cpp-tests" / test_name() / fs::unique_path());
-    fs::path service_dir = mkdir(tempdir / "ouisync");
-    fs::path first_dir = mkdir(tempdir / "dir1");
+    auto tempdir = TempDir();
+    fs::path service_dir = mkdir(tempdir.path() / "ouisync");
+    fs::path first_dir = mkdir(tempdir.path() / "dir1");
     fs::path dirs = mkdir(first_dir / "dir2" / "dir3");
 
     auto repo_name = "my_repo";
@@ -82,4 +57,3 @@ BOOST_AUTO_TEST_CASE(copy_dirs) {
 
     ctx.run();
 }
-

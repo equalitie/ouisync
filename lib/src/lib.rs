@@ -50,10 +50,10 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
     network::{
-        DHT_ROUTERS, DhtContactsStoreTrait, NatBehavior, Network, NetworkEvent,
-        NetworkEventReceiver, NetworkEventStream, PeerAddr, PeerInfo, PeerInfoCollector,
-        PeerSource, PeerState, PublicRuntimeId, Registration, SecretRuntimeId, Stats,
-        repository_info_hash,
+        DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtLookupStream, DhtPin, NatBehavior, Network,
+        NetworkBuilder, NetworkEvent, NetworkEventReceiver, NetworkEventStream, PeerAddr, PeerInfo,
+        PeerInfoCollector, PeerSource, PeerState, PublicRuntimeId, RecvStream, Registration,
+        SecretRuntimeId, SendStream, Stats, TopicId, repository_info_hash,
     },
     progress::Progress,
     protocol::{BLOCK_SIZE, RepositoryId, StorageSize},
@@ -63,3 +63,5 @@ pub use self::{
     store::{DATA_VERSION, Error as StoreError},
     version_vector::VersionVector,
 };
+pub use btdht::{INFO_HASH_LEN, InfoHash};
+pub use net::{quic::SideChannel as UdpSocket, udp::DatagramSocket};

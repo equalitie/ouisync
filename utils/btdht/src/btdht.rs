@@ -1,7 +1,7 @@
 use btdht::{InfoHash, MainlineDht};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
-use ouisync_lib::{self, DHT_ROUTERS, ShareToken};
+use ouisync_lib::{self, DEFAULT_DHT_ROUTERS, ShareToken};
 use std::{
     collections::HashSet,
     io,
@@ -80,7 +80,7 @@ async fn main() -> io::Result<()> {
 
     let dht_v4 = socket_v4.map(|socket| {
         MainlineDht::builder()
-            .add_routers(DHT_ROUTERS.iter().copied())
+            .add_routers(DEFAULT_DHT_ROUTERS.iter().copied())
             .set_read_only(true)
             .start(socket)
             .unwrap()
@@ -88,7 +88,7 @@ async fn main() -> io::Result<()> {
 
     let dht_v6 = socket_v6.map(|socket| {
         MainlineDht::builder()
-            .add_routers(DHT_ROUTERS.iter().copied())
+            .add_routers(DEFAULT_DHT_ROUTERS.iter().copied())
             .set_read_only(true)
             .start(socket)
             .unwrap()

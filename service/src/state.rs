@@ -12,21 +12,24 @@ use crate::{
         PORT_FORWARDING_ENABLED_KEY, STORE_DIRS_KEY,
     },
     config_store::{ConfigError, ConfigKey, ConfigStore},
-    device_id, dht_contacts,
+    device_id, dht,
     error::Error,
     file::{FileHandle, FileHolder, FileSet},
     metrics::MetricsServer,
     network::{self, PexConfig},
-    protocol::{DirectoryEntry, MessageId, MetadataEdit, NetworkDefaults, QuotaInfo},
+    protocol::{Datagram, DirectoryEntry, MessageId, MetadataEdit, NetworkDefaults, QuotaInfo},
     repository::{self, RepositoryHandle, RepositoryHolder, RepositorySet},
+    socket::{NetworkSocketHandle, NetworkSocketSet},
+    stream::{NetworkStreamHandle, NetworkStreamSet},
     tls::TlsConfig,
     transport::remote::{AcceptedRemoteConnection, RemoteClient, RemoteServer},
 };
 use futures_util::stream::FuturesUnordered;
 use ouisync::{
-    Access, AccessChange, AccessMode, AccessSecrets, Credentials, EntryType, Event, LocalSecret,
-    NatBehavior, Network, NetworkEventReceiver, PeerAddr, PeerInfo, Progress, PublicRuntimeId,
-    Registration, Repository, RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize,
+    Access, AccessChange, AccessMode, AccessSecrets, Credentials, DhtLookupStream, DhtPin,
+    EntryType, Event, INFO_HASH_LEN, InfoHash, LocalSecret, NatBehavior, Network,
+    NetworkEventReceiver, PeerAddr, PeerInfo, Progress, PublicRuntimeId, Registration, Repository,
+    RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize, TopicId,
     crypto::{Password, PasswordSalt, cipher::SecretKey},
 };
 use ouisync_macros::api;
@@ -74,6 +77,9 @@ pub(crate) struct State {
     mounter: Mutex<Option<Arc<MultiRepoVFS>>>,
     repos: RepositorySet,
     files: FileSet,
+    network_sockets: NetworkSocketSet,
+    network_streams: NetworkStreamSet,
+    dht_pin: Mutex<Option<DhtPin>>,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
     remote_server: Mutex<Option<Arc<RemoteServer>>>,
@@ -83,13 +89,12 @@ pub(crate) struct State {
 impl State {
     pub async fn init(config: ConfigStore) -> Result<Self, Error> {
         let root_monitor = StateMonitor::make_root();
-        let dht_contacts_store = dht_contacts::Store::new(config.dir());
+        let dht_contacts_store = dht::Store::new(config.dir());
 
-        let network = Network::new(
-            root_monitor.make_child("Network"),
-            Some(Arc::new(dht_contacts_store)),
-            None,
-        );
+        let network = Network::builder()
+            .monitor(root_monitor.make_child("Network"))
+            .dht_contacts(Arc::new(dht_contacts_store))
+            .build();
 
         let store_dirs = match config.entry(STORE_DIRS_KEY).get().await {
             Ok(dirs) => dirs,
@@ -149,6 +154,9 @@ impl State {
             repos_monitor,
             repos: RepositorySet::new(),
             files: FileSet::new(),
+            network_sockets: NetworkSocketSet::new(),
+            network_streams: NetworkStreamSet::new(),
+            dht_pin: Mutex::new(None),
             remote_server: Mutex::new(remote_server.map(Arc::new)),
             metrics_server,
         };
@@ -234,7 +242,7 @@ impl State {
         network::bind_with_reuse_ports(&self.network, &self.config, &addrs).await;
     }
 
-    #[api]
+    #[api(stream(NetworkEvent))]
     pub fn session_subscribe_to_network(&self) -> NetworkEventReceiver {
         self.network.subscribe()
     }
@@ -1235,7 +1243,7 @@ impl State {
         Err(Error::NoVFS)
     }
 
-    #[api]
+    #[api(stream(()))]
     pub fn repository_subscribe(
         &self,
         repo: RepositoryHandle,
@@ -1928,7 +1936,7 @@ impl State {
         self.root_monitor.locate(path)
     }
 
-    #[api]
+    #[api(stream(()))]
     pub async fn session_subscribe_to_state_monitor(
         &self,
         path: Vec<MonitorId>,
@@ -1943,6 +1951,164 @@ impl State {
     #[api]
     pub async fn session_unsubscribe(&self, id: MessageId) -> Unsubscribe {
         Unsubscribe(id)
+    }
+
+    /// Changes the DHT routers (bootstrap nodes), rebootstraps the DHTs and restart any ongoing
+    /// lookups. If this is not called, a default set of routers is used. Each router is specified
+    /// as hostname + port or ip address + port.
+    #[api]
+    pub fn session_set_dht_routers(&self, routers: Vec<String>) {
+        self.network.set_dht_routers(routers.into_iter().collect());
+    }
+
+    /// Returns the current DHT routers (bootstrap nodes). If the routers haven't been changed by
+    /// the user yet, returns the default routers.
+    #[api]
+    pub fn session_get_dht_routers(&self) -> Vec<String> {
+        self.network.dht_routers().into_iter().collect()
+    }
+
+    /// Set whether DHT on the local network or localhost is allowed. By default this is `false`
+    /// because DHT is a global discovery mechanism and finding a local peer on it is unexpected
+    /// (and could indicate malice). However, is some situations it's still useful to enable it
+    /// (typically for testing).
+    ///
+    /// Note: this option is currently experimental and unstable (semver extempt). It's possible it
+    /// will be removed in the future.
+    #[api]
+    pub fn session_set_local_dht_enabled(&self, enabled: bool) {
+        self.network.set_local_dht_enabled(enabled);
+    }
+
+    /// Checks whether local DHT is enabled.
+    #[api]
+    pub fn session_is_local_dht_enabled(&self) -> bool {
+        self.network.is_local_dht_enabled()
+    }
+
+    /// Starts a DHT lookup for the given info-hash (formated as hex string). Returns a stream of
+    /// discovered peer addresses. If `announce` is true, also announces us as having the content
+    /// corresponding to the info-hash.
+    ///
+    /// Note: Currently this doesn't automatically connnect to the discovered peers but this might
+    /// change in the future.
+    #[api(stream(PeerAddr))]
+    pub fn session_dht_lookup(&self, info_hash: String, announce: bool) -> DhtLookupStream {
+        let mut buffer = [0; INFO_HASH_LEN];
+
+        if hex::decode_to_slice(&info_hash, &mut buffer).is_ok() {
+            self.network.dht_lookup(InfoHash::from(buffer), announce)
+        } else {
+            DhtLookupStream::empty()
+        }
+    }
+
+    /// Pin the DHT to ensure it starts and remains running even when there are no active DHT
+    /// lookups and no DHT-enabled repositories. This is useful to prevent the DHT restarting
+    /// between the lookups (which could be slow).
+    #[api]
+    pub async fn session_pin_dht(&self) {
+        *self.dht_pin.lock().unwrap() = Some(self.network.pin_dht().await);
+    }
+
+    /// Unpin the DHT. If the DHT is not pinned and there are no more active DHT lookups and no
+    /// DHT-enabled repositories, the DHT shuts down.
+    #[api]
+    pub fn session_unpin_dht(&self) {
+        self.dht_pin.lock().unwrap().take();
+    }
+
+    /// Opens a side channel to the underlying IPv4 UDP socket. The side channel is used to
+    /// send/receive raw UDP datagrams on the same socket that the sync protocol uses. This is
+    /// useful to share the socket between different protocols for hole punching.
+    ///
+    /// Returns `None` if QUIC IPv4 endpoint isn't bound (see [Self::session_bind_network]).
+    #[api]
+    pub async fn session_open_network_socket_v4(&self) -> Option<NetworkSocketHandle> {
+        let socket = self.network.open_udp_side_channel_v4()?;
+        Some(self.network_sockets.insert(socket).await)
+    }
+
+    /// Opens a side channel to the underlying IPv6 UDP socket. The side channel is used to
+    /// send/receive raw UDP datagrams on the same socket that the sync protocol uses. This is
+    /// useful to share the socket between different protocols for hole punching.
+    ///
+    /// Returns `None` if QUIC IPv6 endpoint isn't bound (see [Self::session_bind_network]).
+    #[api]
+    pub async fn session_open_network_socket_v6(&self) -> Option<NetworkSocketHandle> {
+        let socket = self.network.open_udp_side_channel_v6()?;
+        Some(self.network_sockets.insert(socket).await)
+    }
+
+    #[api]
+    pub async fn network_socket_send_to(
+        &self,
+        socket: NetworkSocketHandle,
+        data: Vec<u8>,
+        addr: SocketAddr,
+    ) -> Result<u64, Error> {
+        Ok(self.network_sockets.send_to(socket, &data, addr).await? as u64)
+    }
+
+    #[api]
+    pub async fn network_socket_recv_from(
+        &self,
+        socket: NetworkSocketHandle,
+        len: u64,
+    ) -> Result<Datagram, Error> {
+        let mut data = vec![0; len as usize];
+        let (len, addr) = self.network_sockets.recv_from(socket, &mut data).await?;
+        data.truncate(len);
+
+        Ok(Datagram { data, addr })
+    }
+
+    #[api]
+    pub async fn network_socket_close(&self, socket: NetworkSocketHandle) {
+        self.network_sockets.remove(socket).await;
+    }
+
+    #[api]
+    /// Opens a raw byte streams to the given peer, bound to the given topic.
+    pub async fn session_open_network_stream(
+        &self,
+        addr: PeerAddr,
+        topic_id: TopicId,
+    ) -> Result<NetworkStreamHandle, Error> {
+        Ok(self
+            .network_streams
+            .insert(&self.network, addr, topic_id)
+            .await?)
+    }
+
+    /// Reads exactly the given number of bytes from the given raw byte stream.
+    #[api]
+    pub async fn network_stream_read_exact(
+        &self,
+        stream: NetworkStreamHandle,
+        len: u64,
+    ) -> Result<Vec<u8>, Error> {
+        let mut buf = vec![0; len as usize];
+        let len = self.network_streams.read_exact(stream, &mut buf).await?;
+        buf.truncate(len);
+
+        Ok(buf)
+    }
+
+    /// Writes the whole buffer to the given raw byte stream.
+    #[api]
+    pub async fn network_stream_write_all(
+        &self,
+        stream: NetworkStreamHandle,
+        buf: Vec<u8>,
+    ) -> Result<(), Error> {
+        Ok(self.network_streams.write_all(stream, &buf).await?)
+    }
+
+    /// Gracefully closes the given raw byte stream.
+    #[api]
+    pub async fn network_stream_close(&self, stream: NetworkStreamHandle) -> Result<(), Error> {
+        Ok(self.network_streams.close(stream).await?)
     }
 
     pub async fn set_all_repositories_sync_enabled(&self, enabled: bool) -> Result<(), Error> {
@@ -2150,7 +2316,7 @@ impl State {
     }
 }
 
-// These definitions are only needed to make the api parser's job easier:
+// These definitions are only needed to work around limitations of the api parser:
 pub(crate) struct Unsubscribe(pub MessageId);
 pub(crate) type RepositorySubscription = broadcast::Receiver<Event>;
 pub(crate) type StateMonitorSubscription = watch::Receiver<()>;

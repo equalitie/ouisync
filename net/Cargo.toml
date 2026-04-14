@@ -19,6 +19,7 @@ quinn              = "0.11.9"
 rand               = { workspace = true }
 rcgen              = { workspace = true }
 serde              = { workspace = true }
+serde_bytes        = { workspace = true }
 slab               = { workspace = true }
 socket2            = "0.6.1" # To be able to setsockopts before a socket is bound
 stun_codec         = "0.3.4"

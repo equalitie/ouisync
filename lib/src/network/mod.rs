@@ -5,7 +5,7 @@ mod connection_monitor;
 mod constants;
 mod crypto;
 mod debug_payload;
-mod dht_discovery;
+mod dht;
 mod event;
 mod gateway;
 mod ip;
@@ -32,7 +32,7 @@ mod upnp;
 
 pub use self::{
     connection::PeerInfoCollector,
-    dht_discovery::{DHT_ROUTERS, DhtContactsStoreTrait},
+    dht::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtLookupStream, DhtPin},
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
     peer_addr::PeerAddr,
     peer_info::PeerInfo,
@@ -41,14 +41,18 @@ pub use self::{
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     stats::Stats,
 };
-pub use net::stun::NatBehavior;
+use dht::DhtEvent;
+pub use net::{
+    bus::{BusRecvStream as RecvStream, BusSendStream as SendStream, TopicId},
+    stun::NatBehavior,
+};
 
 use self::{
     choke::Choker,
     connection::{ConnectionPermit, ConnectionSet, ReserveResult},
     connection_monitor::ConnectionMonitor,
     constants::REQUEST_TIMEOUT,
-    dht_discovery::DhtDiscovery,
+    dht::DhtDiscovery,
     event::ProtocolVersions,
     gateway::{Connectivity, Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
@@ -70,7 +74,10 @@ use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use btdht::{self, INFO_HASH_LEN, InfoHash};
 use deadlock::BlockingMutex;
 use futures_util::future;
-use net::unified::{Connection, ConnectionError};
+use net::{
+    quic,
+    unified::{Connection, ConnectionError},
+};
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;
@@ -78,7 +85,10 @@ use std::{
     collections::HashSet,
     io, mem,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use thiserror::Error;
 use tokio::{
@@ -89,21 +99,39 @@ use tokio::{
 };
 use tracing::{Instrument, Span};
 
-pub struct Network {
-    inner: Arc<Inner>,
-    // We keep tasks here instead of in Inner because we want them to be
-    // destroyed when Network is Dropped.
-    _tasks: Arc<BlockingMutex<JoinSet<()>>>,
+#[derive(Default)]
+pub struct NetworkBuilder {
+    dht_contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
+    monitor: Option<StateMonitor>,
+    runtime_id: Option<SecretRuntimeId>,
 }
 
-impl Network {
-    pub fn new(
-        monitor: StateMonitor,
-        dht_contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
-        this_runtime_id: Option<SecretRuntimeId>,
-    ) -> Self {
+impl NetworkBuilder {
+    pub fn dht_contacts(self, contacts: Arc<dyn DhtContactsStoreTrait>) -> Self {
+        Self {
+            dht_contacts: Some(contacts),
+            ..self
+        }
+    }
+
+    pub fn monitor(self, monitor: StateMonitor) -> Self {
+        Self {
+            monitor: Some(monitor),
+            ..self
+        }
+    }
+
+    pub fn runtime_id(self, runtime_id: SecretRuntimeId) -> Self {
+        Self {
+            runtime_id: Some(runtime_id),
+            ..self
+        }
+    }
+
+    pub fn build(self) -> Network {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(incoming_tx);
+        let monitor = self.monitor.unwrap_or_else(StateMonitor::make_root);
 
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
@@ -111,7 +139,8 @@ impl Network {
         // TODO: There are ways to address this: e.g. we could try both, or we could include
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
-        let dht_discovery = DhtDiscovery::new(None, None, dht_contacts, monitor.make_child("DHT"));
+        let dht_discovery =
+            DhtDiscovery::new(None, None, self.dht_contacts, monitor.make_child("DHT"));
         // TODO: do we need unbounded channel here?
         let (dht_discovery_tx, dht_discovery_rx) = mpsc::unbounded_channel();
 
@@ -122,7 +151,7 @@ impl Network {
 
         let user_provided_peers = SeenPeers::new();
 
-        let this_runtime_id = this_runtime_id.unwrap_or_else(SecretRuntimeId::random);
+        let this_runtime_id = self.runtime_id.unwrap_or_else(SecretRuntimeId::random);
         let this_runtime_id_public = this_runtime_id.public();
 
         let connections_monitor = monitor.make_child("Connections");
@@ -150,6 +179,7 @@ impl Network {
             )),
             dht_discovery,
             dht_discovery_tx,
+            local_dht_enabled: AtomicBool::new(false),
             pex_discovery,
             stun_clients: StunClients::new(),
             connections: ConnectionSet::new(),
@@ -166,10 +196,29 @@ impl Network {
 
         tracing::debug!(this_runtime_id = ?this_runtime_id_public.as_public_key(), "Network created");
 
-        Self {
+        Network {
             inner,
             _tasks: tasks,
         }
+    }
+}
+
+pub struct Network {
+    inner: Arc<Inner>,
+    // We keep tasks here instead of in Inner because we want them to be
+    // destroyed when Network is Dropped.
+    _tasks: Arc<BlockingMutex<JoinSet<()>>>,
+}
+
+impl Network {
+    /// Returns builder to create `Network` with custom options.
+    pub fn builder() -> NetworkBuilder {
+        NetworkBuilder::default()
+    }
+
+    /// Create network with default options. Equal to `Self::builder().build()`.
+    pub fn new() -> Self {
+        Self::builder().build()
     }
 
     /// Binds the network to the specified addresses.
@@ -384,6 +433,115 @@ impl Network {
             holder.request_tracker.set_timeout(timeout);
         }
     }
+
+    /// Opens a side channel for the underlying IPv4 UDP socket, or `None` if IPv4 QUIC stack isn't
+    /// configured.
+    ///
+    /// The side channel is used to send/receive raw UDP datagrams on the same socket that the sync
+    /// protocol uses.
+    pub fn open_udp_side_channel_v4(&self) -> Option<quic::SideChannel> {
+        self.inner
+            .gateway
+            .udp_side_channel_maker_v4()
+            .as_ref()
+            .map(|m| m.make())
+    }
+
+    /// Opens a side channel for the underlying IPv6 UDP socket, or `None` if IPv6 QUIC stack isn't
+    /// configured.
+    ///
+    /// The side channel is used to send/receive raw UDP datagrams on the same socket that the sync
+    /// protocol uses.
+    pub fn open_udp_side_channel_v6(&self) -> Option<quic::SideChannel> {
+        self.inner
+            .gateway
+            .udp_side_channel_maker_v4()
+            .as_ref()
+            .map(|m| m.make())
+    }
+
+    /// Opens raw byte stream to the given peer, bound to the given topic. This can be used to
+    /// send/recv arbitrary data to the peer, outside of the ouisync protocol.
+    ///
+    /// Returns `None` if no active connection to the peer exists.
+    pub fn open_stream(
+        &self,
+        addr: PeerAddr,
+        topic_id: TopicId,
+    ) -> Option<(SendStream, RecvStream)> {
+        let key = self.inner.connections.get_peer_key(addr)?;
+        Some(
+            self.inner
+                .registry
+                .lock()
+                .unwrap()
+                .peers
+                .as_ref()?
+                .get(key)?
+                .open_stream(topic_id),
+        )
+    }
+
+    /// Changes the DHT routers (boostrap nodes), rebootstraps the DHTs and restarts any ongoing
+    /// lookups.
+    pub fn set_dht_routers(&self, routers: HashSet<String>) {
+        self.inner.dht_discovery.set_routers(routers);
+    }
+
+    /// Returns the current DHT routers (bootstrap nodes).
+    pub fn dht_routers(&self) -> HashSet<String> {
+        self.inner.dht_discovery.routers()
+    }
+
+    /// Performs explicit DHT lookup or announce for the given infohash and returns a stream of the
+    /// discovered peer addresses. It will not automatically connect to them.
+    pub fn dht_lookup(&self, info_hash: InfoHash, announce: bool) -> DhtLookupStream {
+        DhtLookupStream::start(
+            &self.inner.dht_discovery,
+            info_hash,
+            announce,
+            self.is_local_dht_enabled(),
+        )
+    }
+
+    /// Set whether DHT on the local network (or localhost) is enabled. By default this is `false`
+    /// because DHT is a global discovery mechanism and finding a local peer on it is unexpected
+    /// (and could indicate malice). However, is some situations it's still useful to enable it
+    /// (typically for testing).
+    ///
+    /// Note: this option is currently experimental and unstable (semver extempt). It's possible it
+    /// will be removed in the future.
+    pub fn set_local_dht_enabled(&self, enabled: bool) {
+        let prev = self
+            .inner
+            .local_dht_enabled
+            .swap(enabled, Ordering::Release);
+
+        if prev != enabled {
+            self.inner.rebind_dht(self.inner.gateway.connectivity());
+        }
+    }
+
+    pub fn is_local_dht_enabled(&self) -> bool {
+        self.inner.local_dht_enabled.load(Ordering::Acquire)
+    }
+
+    /// Creates a "pin" which starts the DHT instances and keeps them running. This prevents the
+    /// DHTs to shut down even when there are no more ongoing lookups. This is useful if one wants
+    /// to avoid having to rebootstrap the DHT when doing another lookup in the future.
+    ///
+    /// Note that DHT is automatically started and kept running when there is at least one
+    /// repository with DHT enabled. Thus, pinning the DHT while having DHT-enabled repos is
+    /// unnecessary (but harmless).
+    pub async fn pin_dht(&self) -> DhtPin {
+        self.inner.dht_discovery.pin().await
+    }
+}
+
+impl Default for Network {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct Registration {
@@ -458,7 +616,7 @@ impl Drop for Registration {
 
 struct RegistrationHolder {
     vault: Vault,
-    dht: Option<dht_discovery::LookupRequest>,
+    dht: Option<dht::LookupRequest>,
     pex: PexRepository,
     request_tracker: RequestTracker,
     choker: Choker,
@@ -477,7 +635,8 @@ struct Inner {
     port_forwarder_state: BlockingMutex<ComponentState<PortMappings>>,
     local_discovery_state: BlockingMutex<ComponentState<ScopedAbortHandle>>,
     dht_discovery: DhtDiscovery,
-    dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
+    dht_discovery_tx: mpsc::UnboundedSender<DhtEvent>,
+    local_dht_enabled: AtomicBool,
     pex_discovery: PexDiscovery,
     stun_clients: StunClients,
     connections: ConnectionSet,
@@ -534,24 +693,21 @@ impl Inner {
         }
 
         // Gateway
-        let side_channel_makers = self.span.in_scope(|| self.gateway.bind(&bind));
+        self.span.in_scope(|| self.gateway.bind(&bind));
 
         let conn = self.gateway.connectivity();
 
-        let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
-            Connectivity::Full => side_channel_makers,
-            Connectivity::LocalOnly | Connectivity::Disabled => (None, None),
-        };
-
         // STUN
-        self.stun_clients.rebind(
-            side_channel_maker_v4.as_ref().map(|m| m.make()),
-            side_channel_maker_v6.as_ref().map(|m| m.make()),
-        );
+        match conn {
+            Connectivity::Full => self.stun_clients.rebind(
+                self.gateway.udp_side_channel_maker_v4().map(|m| m.make()),
+                self.gateway.udp_side_channel_maker_v6().map(|m| m.make()),
+            ),
+            Connectivity::LocalOnly | Connectivity::Disabled => (),
+        }
 
         // DHT
-        self.dht_discovery
-            .rebind(side_channel_maker_v4, side_channel_maker_v6);
+        self.rebind_dht(conn);
 
         // Port forwarding
         match conn {
@@ -653,18 +809,39 @@ impl Inner {
         }
     }
 
-    fn start_dht_lookup(&self, info_hash: InfoHash) -> dht_discovery::LookupRequest {
+    fn start_dht_lookup(&self, info_hash: InfoHash) -> dht::LookupRequest {
         self.dht_discovery
-            .start_lookup(info_hash, self.dht_discovery_tx.clone())
+            .start_lookup(info_hash, true, self.dht_discovery_tx.clone())
     }
 
-    async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {
-        while let Some(seen_peer) = discovery_rx.recv().await {
+    fn rebind_dht(&self, conn: Connectivity) {
+        match (conn, self.local_dht_enabled.load(Ordering::Acquire)) {
+            (Connectivity::Full, _) | (Connectivity::LocalOnly, true) => self.dht_discovery.rebind(
+                self.gateway.udp_side_channel_maker_v4(),
+                self.gateway.udp_side_channel_maker_v6(),
+            ),
+            (Connectivity::LocalOnly, false) | (Connectivity::Disabled, _) => {
+                self.dht_discovery.rebind(None, None)
+            }
+        }
+    }
+
+    async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<DhtEvent>) {
+        while let Some(event) = discovery_rx.recv().await {
             if self.is_shutdown() {
                 break;
             }
 
-            self.spawn(self.clone().handle_peer_found(seen_peer, PeerSource::Dht));
+            let peer = match event {
+                DhtEvent::PeerFound(peer) => peer,
+                DhtEvent::RoundEnded => continue,
+            };
+
+            if !self.local_dht_enabled.load(Ordering::Acquire) && peer.initial_addr().is_local() {
+                continue;
+            }
+
+            self.spawn(self.clone().handle_peer_found(peer, PeerSource::Dht));
         }
     }
 
@@ -801,7 +978,7 @@ impl Inner {
 
             let socket = match self
                 .gateway
-                .connect_with_retries(&peer, source)
+                .connect_with_retries(&peer)
                 .instrument(monitor.span().clone())
                 .await
             {
@@ -860,9 +1037,6 @@ impl Inner {
             return false;
         }
 
-        permit.mark_as_active(that_runtime_id);
-        monitor.mark_as_active(that_runtime_id);
-
         let closed = connection.closed();
 
         let key = {
@@ -909,6 +1083,9 @@ impl Inner {
             peers.insert(peer)
         };
 
+        permit.mark_as_active(that_runtime_id, key);
+        monitor.mark_as_active(that_runtime_id);
+
         // Wait until the connection gets closed, then remove the `MessageBroker` instance. Using a
         // RAII to also remove it in case this function gets cancelled.
         let _guard = PeerGuard {
@@ -946,7 +1123,7 @@ impl Inner {
         // doing it would cause memory leak.
         while tasks.try_join_next().is_some() {}
 
-        tasks.spawn(f)
+        tasks.spawn(f.instrument(Span::current()))
     }
 }
 

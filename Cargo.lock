@@ -441,12 +441,11 @@ dependencies = [
 [[package]]
 name = "btdht"
 version = "1.0.1"
-source = "git+https://github.com/equalitie/btdht.git?rev=14d03cd95a409aad69704bdedffc6ece3857a946#14d03cd95a409aad69704bdedffc6ece3857a946"
+source = "git+https://github.com/equalitie/btdht.git?rev=ad423e21faeb6a4549397f8c6050cb8e4470b77e#ad423e21faeb6a4549397f8c6050cb8e4470b77e"
 dependencies = [
  "async-trait",
  "crc32c",
  "futures-util",
- "log",
  "rand 0.8.5",
  "serde",
  "serde_bytes",
@@ -454,6 +453,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "torrust-serde-bencode",
+ "tracing",
 ]
 
 [[package]]
@@ -2937,6 +2937,7 @@ dependencies = [
  "rand 0.8.5",
  "rcgen",
  "serde",
+ "serde_bytes",
  "similar-asserts",
  "slab",
  "socket2 0.6.2",
@@ -3007,16 +3008,19 @@ dependencies = [
  "ouisync-vfs",
  "paranoid-android",
  "pem",
+ "pin-project-lite",
  "rand 0.8.5",
  "rcgen",
  "reqwest",
  "rmp",
  "rmp-serde",
+ "rmpv",
  "scoped_task",
  "serde",
  "serde_bytes",
  "serde_json",
  "sha2",
+ "similar-asserts",
  "slab",
  "state_monitor",
  "tempfile",
@@ -3725,6 +3729,15 @@ checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
 dependencies = [
  "rmp",
  "serde",
+]
+
+[[package]]
+name = "rmpv"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a4e1d4b9b938a26d2996af33229f0ca0956c652c1375067f0b45291c1df8417"
+dependencies = [
+ "rmp",
 ]
 
 [[package]]
