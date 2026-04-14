@@ -890,6 +890,13 @@ template<> struct describe::Struct<Request::SessionOpenRepository> : std::true_t
     }
 };
 
+template<> struct describe::Struct<Request::SessionPinDht> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer&, Request::SessionPinDht&) {
+    }
+};
+
 template<> struct describe::Struct<Request::SessionRemoveStoreDirs> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
@@ -1006,6 +1013,13 @@ template<> struct describe::Struct<Request::SessionSubscribeToStateMonitor> : st
     template<class Observer>
     static void describe(Observer& o, Request::SessionSubscribeToStateMonitor& v) {
         o.field(v.path);
+    }
+};
+
+template<> struct describe::Struct<Request::SessionUnpinDht> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::DIRECT;
+    template<class Observer>
+    static void describe(Observer&, Request::SessionUnpinDht&) {
     }
 };
 
@@ -1357,6 +1371,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         if (name == "SessionOpenRepository") {
             return builder.template build<Request::SessionOpenRepository>();
         }
+        if (name == "SessionPinDht") {
+            return builder.template build<Request::SessionPinDht>();
+        }
         if (name == "SessionRemoveStoreDirs") {
             return builder.template build<Request::SessionRemoveStoreDirs>();
         }
@@ -1401,6 +1418,9 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "SessionSubscribeToStateMonitor") {
             return builder.template build<Request::SessionSubscribeToStateMonitor>();
+        }
+        if (name == "SessionUnpinDht") {
+            return builder.template build<Request::SessionUnpinDht>();
         }
         if (name == "SessionUnsubscribe") {
             return builder.template build<Request::SessionUnsubscribe>();

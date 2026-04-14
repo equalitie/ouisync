@@ -68,17 +68,8 @@ BOOST_AUTO_TEST_CASE(test_dht) {
         // strip the 'quic/' prefix to obtain plain socket address.
         auto bootstrap_addr = bootstrap.session.get_local_listener_addrs(yield)[0].substr(5);
 
-        // Need to create a repo to keep the DHT instance up
-        bootstrap.session.set_store_dirs({ (tempdir.path() / "bootstrap" / "repos").string() }, yield);
-        auto bootstrap_repo = bootstrap.session.create_repository(
-            "repo-with-dht",
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            true,  // sync
-            true,  // dht
-            false, // pex
-            yield);
+        // Pin the DHT to ensure it's running
+        bootstrap.session.pin_dht(yield);
 
         auto alice = Peer::create_with_dht_contacts(
             tempdir.path() / "alice",

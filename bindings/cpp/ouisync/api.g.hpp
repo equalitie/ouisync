@@ -1825,6 +1825,21 @@ public:
         return client->invoke<Response::Repository>(std::move(request), std::move(completion_token));
     }
 
+    /**
+     * Pin the DHT to ensure it starts and remains running even when there are no active DHT
+     * lookups and no DHT-enabled repositories. This is useful to prevent the DHT restarting
+     * between the lookups (which could be slow).
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
+    >
+    auto pin_dht(
+        CompletionToken completion_token
+    ) {
+        auto request = Request::SessionPinDht();
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
+    }
+
     template<
         boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
     >
@@ -2033,6 +2048,20 @@ public:
             path,
         };
         return client->subscribe<Response::Unit>(std::move(request));
+    }
+
+    /**
+     * Unpin the DHT. If the DHT is not pinned and there are no more active DHT lookups and no
+     * DHT-enabled repositories, the DHT shuts down.
+     */
+    template<
+        boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
+    >
+    auto unpin_dht(
+        CompletionToken completion_token
+    ) {
+        auto request = Request::SessionUnpinDht();
+        return client->invoke<Response::Unit>(std::move(request), std::move(completion_token));
     }
 
     /**

@@ -12,7 +12,7 @@ use crate::{
         PORT_FORWARDING_ENABLED_KEY, STORE_DIRS_KEY,
     },
     config_store::{ConfigError, ConfigKey, ConfigStore},
-    device_id, dht_contacts,
+    device_id, dht,
     error::Error,
     file::{FileHandle, FileHolder, FileSet},
     metrics::MetricsServer,
@@ -26,10 +26,10 @@ use crate::{
 };
 use futures_util::stream::FuturesUnordered;
 use ouisync::{
-    Access, AccessChange, AccessMode, AccessSecrets, Credentials, DhtLookupStream, EntryType,
-    Event, INFO_HASH_LEN, InfoHash, LocalSecret, NatBehavior, Network, NetworkEventReceiver,
-    PeerAddr, PeerInfo, Progress, PublicRuntimeId, Registration, Repository, RepositoryParams,
-    SetLocalSecret, ShareToken, Stats, StorageSize, TopicId,
+    Access, AccessChange, AccessMode, AccessSecrets, Credentials, DhtLookupStream, DhtPin,
+    EntryType, Event, INFO_HASH_LEN, InfoHash, LocalSecret, NatBehavior, Network,
+    NetworkEventReceiver, PeerAddr, PeerInfo, Progress, PublicRuntimeId, Registration, Repository,
+    RepositoryParams, SetLocalSecret, ShareToken, Stats, StorageSize, TopicId,
     crypto::{Password, PasswordSalt, cipher::SecretKey},
 };
 use ouisync_macros::api;
@@ -79,6 +79,7 @@ pub(crate) struct State {
     files: FileSet,
     network_sockets: NetworkSocketSet,
     network_streams: NetworkStreamSet,
+    dht_pin: Mutex<Option<DhtPin>>,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
     remote_server: Mutex<Option<Arc<RemoteServer>>>,
@@ -88,7 +89,7 @@ pub(crate) struct State {
 impl State {
     pub async fn init(config: ConfigStore) -> Result<Self, Error> {
         let root_monitor = StateMonitor::make_root();
-        let dht_contacts_store = dht_contacts::Store::new(config.dir());
+        let dht_contacts_store = dht::Store::new(config.dir());
 
         let network = Network::builder()
             .monitor(root_monitor.make_child("Network"))
@@ -155,6 +156,7 @@ impl State {
             files: FileSet::new(),
             network_sockets: NetworkSocketSet::new(),
             network_streams: NetworkStreamSet::new(),
+            dht_pin: Mutex::new(None),
             remote_server: Mutex::new(remote_server.map(Arc::new)),
             metrics_server,
         };
@@ -1999,6 +2001,21 @@ impl State {
         } else {
             DhtLookupStream::empty()
         }
+    }
+
+    /// Pin the DHT to ensure it starts and remains running even when there are no active DHT
+    /// lookups and no DHT-enabled repositories. This is useful to prevent the DHT restarting
+    /// between the lookups (which could be slow).
+    #[api]
+    pub async fn session_pin_dht(&self) {
+        *self.dht_pin.lock().unwrap() = Some(self.network.pin_dht().await);
+    }
+
+    /// Unpin the DHT. If the DHT is not pinned and there are no more active DHT lookups and no
+    /// DHT-enabled repositories, the DHT shuts down.
+    #[api]
+    pub fn session_unpin_dht(&self) {
+        self.dht_pin.lock().unwrap().take();
     }
 
     /// Opens a side channel to the underlying IPv4 UDP socket. The side channel is used to

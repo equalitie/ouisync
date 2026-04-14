@@ -804,11 +804,9 @@ async fn dht_lookup() {
         .session_set_store_dirs(vec![bootstrap_dir.join("repos")])
         .await
         .unwrap();
-    // We need one repo with DHT enabled so the node becomes DHT node
-    bootstrap_state
-        .session_create_repository("repo".into(), None, None, None, true, true, false)
-        .await
-        .unwrap();
+
+    // Pin the DHT to ensure it's running
+    bootstrap_state.session_pin_dht().await;
 
     let bootstrap_addr = *bootstrap_state
         .session_get_local_listener_addrs()
@@ -826,7 +824,7 @@ async fn dht_lookup() {
         fs::create_dir_all(&config_dir).await.unwrap();
 
         fs::write(
-            config_dir.join(dht_contacts::FILE_NAME_V4),
+            config_dir.join(dht::FILE_NAME_V4),
             format!("{bootstrap_addr}\n"),
         )
         .await

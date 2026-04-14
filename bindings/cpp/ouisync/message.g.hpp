@@ -473,6 +473,9 @@ struct Request {
         const std::optional<ouisync::LocalSecret>& local_secret;
     };
 
+    struct SessionPinDht {
+    };
+
     struct SessionRemoveStoreDirs {
         const std::vector<std::string>& paths;
     };
@@ -530,6 +533,9 @@ struct Request {
 
     struct SessionSubscribeToStateMonitor {
         const std::vector<ouisync::MonitorId>& path;
+    };
+
+    struct SessionUnpinDht {
     };
 
     struct SessionUnsubscribe {
@@ -648,6 +654,7 @@ struct Request {
         SessionOpenNetworkSocketV6,
         SessionOpenNetworkStream,
         SessionOpenRepository,
+        SessionPinDht,
         SessionRemoveStoreDirs,
         SessionRemoveUserProvidedPeers,
         SessionSetDefaultBlockExpiration,
@@ -663,6 +670,7 @@ struct Request {
         SessionSetStoreDirs,
         SessionSubscribeToNetwork,
         SessionSubscribeToStateMonitor,
+        SessionUnpinDht,
         SessionUnsubscribe,
         SessionValidateShareToken
     >;
@@ -1574,6 +1582,15 @@ inline bool operator != (const Request::SessionOpenRepository& lhs, const Reques
     return !(lhs == rhs);
 }
 
+inline bool operator == (const Request::SessionPinDht& lhs, const Request::SessionPinDht& rhs) {
+    (void) lhs; (void) rhs;
+    return true;
+}
+
+inline bool operator != (const Request::SessionPinDht& lhs, const Request::SessionPinDht& rhs) {
+    return !(lhs == rhs);
+}
+
 inline bool operator == (const Request::SessionRemoveStoreDirs& lhs, const Request::SessionRemoveStoreDirs& rhs) {
     return lhs.paths == rhs.paths;
 }
@@ -1692,6 +1709,15 @@ inline bool operator == (const Request::SessionSubscribeToStateMonitor& lhs, con
 }
 
 inline bool operator != (const Request::SessionSubscribeToStateMonitor& lhs, const Request::SessionSubscribeToStateMonitor& rhs) {
+    return !(lhs == rhs);
+}
+
+inline bool operator == (const Request::SessionUnpinDht& lhs, const Request::SessionUnpinDht& rhs) {
+    (void) lhs; (void) rhs;
+    return true;
+}
+
+inline bool operator != (const Request::SessionUnpinDht& lhs, const Request::SessionUnpinDht& rhs) {
     return !(lhs == rhs);
 }
 

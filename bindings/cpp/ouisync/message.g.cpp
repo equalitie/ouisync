@@ -327,6 +327,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     if (std::get_if<Request::SessionOpenRepository>(&variant) != nullptr) {
         return std::string_view("SessionOpenRepository");
     }
+    if (std::get_if<Request::SessionPinDht>(&variant) != nullptr) {
+        return std::string_view("SessionPinDht");
+    }
     if (std::get_if<Request::SessionRemoveStoreDirs>(&variant) != nullptr) {
         return std::string_view("SessionRemoveStoreDirs");
     }
@@ -371,6 +374,9 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     }
     if (std::get_if<Request::SessionSubscribeToStateMonitor>(&variant) != nullptr) {
         return std::string_view("SessionSubscribeToStateMonitor");
+    }
+    if (std::get_if<Request::SessionUnpinDht>(&variant) != nullptr) {
+        return std::string_view("SessionUnpinDht");
     }
     if (std::get_if<Request::SessionUnsubscribe>(&variant) != nullptr) {
         return std::string_view("SessionUnsubscribe");

@@ -164,16 +164,16 @@ impl DhtDiscovery {
         }
     }
 
-    /// Creates a "pin" which keeps the DHT instances running once they have been started. This
+    /// Creates a "pin" which ensures the DHT instances have been started and remain running. This
     /// prevents the DHTs to shut down even when there are no more ongoing lookups. This is useful
     /// if one wants to avoid having to rebootstrap the DHT when doing another lookup in the future.
-    ///
-    /// Note pinning the DHT doesn't bootstrap it by itself - it happens lazyly on the first lookup.
-    pub fn pin(&self) -> DhtPin {
-        DhtPin {
-            _v4: self.v4.observe(),
-            _v6: self.v6.observe(),
-        }
+    pub async fn pin(&self) -> DhtPin {
+        let v4 = self.v4.observe();
+        let v6 = self.v6.observe();
+
+        future::join(v4.started_or_disabled(), v6.started_or_disabled()).await;
+
+        DhtPin { _v4: v4, _v6: v6 }
     }
 }
 
@@ -355,7 +355,7 @@ impl Lookup {
 
 type LookupMap = HashMap<InfoHash, Lookup>;
 
-/// Ensures the DHT instances, once started, remain running until the pin is in scope. See
+/// Ensures the DHT instances have been started and remain running until the pin is in scope. See
 /// [DhtDiscovery::pin] for more info.
 pub struct DhtPin {
     _v4: ObservableDht,

@@ -11,7 +11,7 @@ mod config_store;
 mod connection;
 mod coop_rw_lock;
 mod device_id;
-mod dht_contacts;
+mod dht;
 mod error;
 mod file;
 mod metrics;
