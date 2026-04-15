@@ -1,15 +1,13 @@
 #pragma once
 
-#include "ouisync/message.hpp"
-#include <boost/asio/experimental/channel_error.hpp>
 #include <type_traits>
+#include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/experimental/channel.hpp>
+#include <boost/asio/experimental/channel_error.hpp>
 #include <boost/asio/spawn.hpp> // yield_context
-#include <boost/asio/any_completion_handler.hpp>
 #include <boost/filesystem/path.hpp>
 #include <boost/system/detail/error_code.hpp>
-
 #include <ouisync/error.hpp>
 #include <ouisync/handler.hpp>
 
