@@ -20,18 +20,18 @@ option(OUISYNC_WITH_VFS "Compile with Virtual File System support" OFF)
 
 # Show compilation times
 if (OUISYNC_MEASURE_BUILD_TIME)
-  set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
-  set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_CURRENT_SOURCE_DIR}/cmake/measure_build_time.sh")
 endif()
 
 # Enable compilation warnings for all targets
 if (MSVC)
-  add_compile_options(/W4 /WX)
+    add_compile_options(/W4 /WX)
 else()
-  add_compile_options(-Wall -Wextra -Wpedantic)
-  if (WARNING_IS_ERROR)
-    add_compile_options(-Werror)
-  endif()
+    add_compile_options(-Wall -Wextra -Wpedantic)
+    if (WARNING_IS_ERROR)
+        add_compile_options(-Werror)
+    endif()
 endif()
 
 ###########################################################
@@ -108,12 +108,12 @@ set(OUISYNC_SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../)
 set(OUISYNC_SERVICE_PRIVATE_LIBS)
 
 if (WIN32)
-  list(APPEND OUISYNC_SERVICE_PRIVATE_LIBS netio iphlpapi propsys mincore)
+    list(APPEND OUISYNC_SERVICE_PRIVATE_LIBS netio iphlpapi propsys mincore)
 endif()
 
 if (OUISYNC_WITH_VFS)
-  set(OUISYNC_CARGO_FEATURES "vfs")
-  list(APPEND OUISYNC_SERVICE_PRIVATE_LIBS fuse3) # TODO: Windows uses Dokan
+    set(OUISYNC_CARGO_FEATURES "vfs")
+    list(APPEND OUISYNC_SERVICE_PRIVATE_LIBS fuse3) # TODO: Windows uses Dokan
 endif()
 
 # This creates the 'ouisync_service' library target whose sources are written in Rust
@@ -157,7 +157,7 @@ target_include_directories(cpp_ouisync_service
 )
 
 if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
-  target_compile_definitions(cpp_ouisync_service PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
+    target_compile_definitions(cpp_ouisync_service PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
 endif()
 
 ###########################################################
@@ -225,25 +225,25 @@ target_compile_features(cpp_ouisync_client PUBLIC cxx_std_20)
 target_compile_features(cpp_ouisync_service PUBLIC cxx_std_20)
 
 if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
-  target_compile_definitions(cpp_ouisync_client PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
+    target_compile_definitions(cpp_ouisync_client PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
 endif()
 
 if (NOT OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
-  ############################
-  # Example
-  ############################
-  add_executable(example examples/main.cpp)
+    ############################
+    # Example
+    ############################
+    add_executable(example examples/main.cpp)
 
-  if(EXAMPLE_USE_BUILT_IN_SERVICE)
-    target_compile_definitions(example PUBLIC USE_BUILT_IN_SERVICE)
-    target_link_libraries(example PUBLIC cpp_ouisync_client cpp_ouisync_service)
-  else()
-    target_link_libraries(example PUBLIC cpp_ouisync_client)
-  endif()
+    if(EXAMPLE_USE_BUILT_IN_SERVICE)
+        target_compile_definitions(example PUBLIC USE_BUILT_IN_SERVICE)
+        target_link_libraries(example PUBLIC cpp_ouisync_client cpp_ouisync_service)
+    else()
+        target_link_libraries(example PUBLIC cpp_ouisync_client)
+    endif()
 
-  ############################
-  # Tests
-  ############################
-  enable_testing()
-  add_subdirectory(tests)
+    ############################
+    # Tests
+    ############################
+    enable_testing()
+    add_subdirectory(tests)
 endif()
