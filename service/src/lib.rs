@@ -14,6 +14,7 @@ mod device_id;
 mod dht;
 mod error;
 mod file;
+mod futures_map;
 mod metrics;
 mod network;
 mod repository;

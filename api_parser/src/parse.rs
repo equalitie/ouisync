@@ -199,7 +199,7 @@ fn parse_request_variant(attrs: &[Attribute], sig: &Signature) -> Result<(String
         ReturnType::Type(_, ty) => parse_type(ty).with_context(ec)?,
     };
 
-    let skip = name == "session_unsubscribe";
+    let skip = name == "cancel";
 
     Ok((
         name,
@@ -884,7 +884,7 @@ mod tests {
                 }
 
                 #[api]
-                fn session_unsubscribe() {
+                fn cancel(id: MessageId) {
                 }
             }
         };
@@ -894,7 +894,7 @@ mod tests {
         let expected = Request {
             variants: vec![
                 (
-                    "foo".to_owned(),
+                    "foo".into(),
                     RequestVariant {
                         docs: Docs::default(),
                         fields: Fields::Unit,
@@ -905,36 +905,33 @@ mod tests {
                     },
                 ),
                 (
-                    "bar".to_owned(),
+                    "bar".into(),
                     RequestVariant {
                         docs: Docs::default(),
                         fields: Fields::Named(vec![(
-                            "arg".to_owned(),
+                            "arg".into(),
                             Field {
-                                ty: Type::Scalar("u32".to_owned()),
+                                ty: Type::Scalar("u32".into()),
                                 docs: Docs::default(),
                             },
                         )]),
-                        ret: Type::Result(
-                            Box::new(Type::Scalar("bool".to_owned())),
-                            "Error".to_string(),
-                        ),
+                        ret: Type::Result(Box::new(Type::Scalar("bool".into())), "Error".into()),
                         ret_stream_item: None,
                         is_async: false,
                         skip: false,
                     },
                 ),
                 (
-                    "baz".to_owned(),
+                    "baz".into(),
                     RequestVariant {
                         docs: Docs {
-                            lines: vec![" baz all the things".to_owned()],
+                            lines: vec![" baz all the things".into()],
                         },
                         fields: Fields::Named(vec![
                             (
-                                "a".to_owned(),
+                                "a".into(),
                                 Field {
-                                    ty: Type::Scalar("String".to_owned()),
+                                    ty: Type::Scalar("String".into()),
                                     docs: Docs::default(),
                                 },
                             ),
@@ -946,39 +943,45 @@ mod tests {
                                 },
                             ),
                         ]),
-                        ret: Type::Result(Box::new(Type::Unit), "Error".to_string()),
+                        ret: Type::Result(Box::new(Type::Unit), "Error".into()),
                         ret_stream_item: None,
                         is_async: true,
                         skip: false,
                     },
                 ),
                 (
-                    "stream_of_units".to_owned(),
+                    "stream_of_units".into(),
                     RequestVariant {
                         docs: Docs::default(),
                         fields: Fields::Unit,
-                        ret: Type::Scalar("StreamOfUnits".to_owned()),
+                        ret: Type::Scalar("StreamOfUnits".into()),
                         ret_stream_item: Some(Type::Unit),
                         is_async: false,
                         skip: false,
                     },
                 ),
                 (
-                    "stream_of_events".to_owned(),
+                    "stream_of_events".into(),
                     RequestVariant {
                         docs: Docs::default(),
                         fields: Fields::Unit,
-                        ret: Type::Scalar("StreamOfEvents".to_owned()),
-                        ret_stream_item: Some(Type::Scalar("Event".to_owned())),
+                        ret: Type::Scalar("StreamOfEvents".into()),
+                        ret_stream_item: Some(Type::Scalar("Event".into())),
                         is_async: false,
                         skip: false,
                     },
                 ),
                 (
-                    "session_unsubscribe".to_owned(),
+                    "cancel".to_owned(),
                     RequestVariant {
                         docs: Docs::default(),
-                        fields: Fields::Unit,
+                        fields: Fields::Named(vec![(
+                            "id".into(),
+                            Field {
+                                docs: Docs::default(),
+                                ty: Type::Scalar("MessageId".into()),
+                            },
+                        )]),
                         ret: Type::Unit,
                         ret_stream_item: None,
                         is_async: false,

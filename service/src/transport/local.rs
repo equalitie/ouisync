@@ -328,13 +328,11 @@ mod tests {
         assert_matches!(message.payload, ResponseResult::Success(Response::Unit));
 
         // Unsubscribe
-        let () = client
-            .invoke(
-                MessageId::next(),
-                Request::SessionUnsubscribe { id: sub_id },
-            )
+        let response: bool = client
+            .invoke(MessageId::next(), Request::Cancel { id: sub_id })
             .await
             .unwrap();
+        assert!(response);
 
         // Drain any other notification events sent before the unsubscribe.
         while let Some(message) = client.unsolicited_responses.pop_front() {
