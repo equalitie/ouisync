@@ -6,6 +6,9 @@
 namespace ouisync {
 
 std::string_view variant_name(const Request::Alternatives& variant) {
+    if (std::get_if<Request::Cancel>(&variant) != nullptr) {
+        return std::string_view("Cancel");
+    }
     if (std::get_if<Request::FileClose>(&variant) != nullptr) {
         return std::string_view("FileClose");
     }
@@ -377,9 +380,6 @@ std::string_view variant_name(const Request::Alternatives& variant) {
     }
     if (std::get_if<Request::SessionUnpinDht>(&variant) != nullptr) {
         return std::string_view("SessionUnpinDht");
-    }
-    if (std::get_if<Request::SessionUnsubscribe>(&variant) != nullptr) {
-        return std::string_view("SessionUnsubscribe");
     }
     if (std::get_if<Request::SessionValidateShareToken>(&variant) != nullptr) {
         return std::string_view("SessionValidateShareToken");

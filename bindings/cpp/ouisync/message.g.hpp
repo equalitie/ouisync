@@ -17,6 +17,10 @@ class NetworkStream;
 class Session;
 
 struct Request {
+    struct Cancel {
+        const ouisync::MessageId& id;
+    };
+
     struct FileClose {
         const ouisync::FileHandle& file;
     };
@@ -538,15 +542,12 @@ struct Request {
     struct SessionUnpinDht {
     };
 
-    struct SessionUnsubscribe {
-        const ouisync::MessageId& id;
-    };
-
     struct SessionValidateShareToken {
         const std::string& token;
     };
 
     using Alternatives = std::variant<
+        Cancel,
         FileClose,
         FileFlush,
         FileGetLength,
@@ -671,7 +672,6 @@ struct Request {
         SessionSubscribeToNetwork,
         SessionSubscribeToStateMonitor,
         SessionUnpinDht,
-        SessionUnsubscribe,
         SessionValidateShareToken
     >;
 
@@ -697,6 +697,14 @@ struct Request {
         return std::get_if<T>(&value);
     }
 };
+
+inline bool operator == (const Request::Cancel& lhs, const Request::Cancel& rhs) {
+    return lhs.id == rhs.id;
+}
+
+inline bool operator != (const Request::Cancel& lhs, const Request::Cancel& rhs) {
+    return !(lhs == rhs);
+}
 
 inline bool operator == (const Request::FileClose& lhs, const Request::FileClose& rhs) {
     return lhs.file == rhs.file;
@@ -1718,14 +1726,6 @@ inline bool operator == (const Request::SessionUnpinDht& lhs, const Request::Ses
 }
 
 inline bool operator != (const Request::SessionUnpinDht& lhs, const Request::SessionUnpinDht& rhs) {
-    return !(lhs == rhs);
-}
-
-inline bool operator == (const Request::SessionUnsubscribe& lhs, const Request::SessionUnsubscribe& rhs) {
-    return lhs.id == rhs.id;
-}
-
-inline bool operator != (const Request::SessionUnsubscribe& lhs, const Request::SessionUnsubscribe& rhs) {
     return !(lhs == rhs);
 }
 

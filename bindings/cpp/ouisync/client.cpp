@@ -1,6 +1,9 @@
 #include "ouisync/data.g.hpp"
 #include "ouisync/message.g.hpp"
+#include <boost/asio/associated_cancellation_slot.hpp>
+#include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/detached.hpp>
+#include <boost/asio/error.hpp>
 #include <boost/asio/spawn.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <exception>
@@ -268,6 +271,47 @@ void Client::invoke_impl(
         Request request,
         asio::any_completion_handler<HandlerSig> handler)
 {
+    // Handle cancellation
+    auto cancellation_slot = handler.get_cancellation_slot();
+    if (cancellation_slot.is_connected()) {
+        cancellation_slot.assign([state, msg_id](asio::cancellation_type) {
+            auto i = state->responses.find(msg_id.value);
+            if (i == state->responses.end()) {
+                return;
+            }
+
+            auto handler = std::move(i->second);
+            state->responses.erase(i);
+
+            Client::invoke_impl(
+                state,
+                MessageId { state->next_message_id++ },
+                Request::Cancel { msg_id },
+                [handler = std::move(handler)](system::error_code ec, Response response) mutable {
+                    // If the `Cancel` request itself failed, then invoke the handler with that
+                    // error.
+                    if (ec) {
+                        handler(ec, Response {});
+                        return;
+                    }
+
+                    // `response` should be a boolean indicating whether the operation was actually
+                    // cancelled or whether it already completed before the cancel request has been
+                    // processed. We return `operation_aborted` error in both case because we
+                    // already deregistered the completion handler and so there is no way to observe
+                    // the result of the operation anyway. We just verify the response is the
+                    // correct type.
+                    if (response.get_if<Response::Bool>() == nullptr) {
+                        handler(error::protocol, Response {});
+                        return;
+                    }
+
+                    handler(asio::error::operation_aborted, Response {});
+                }
+            );
+        });
+    }
+
     // Set up response handler *before* we send the request.
     state->responses.emplace(std::pair(msg_id.value, std::move(handler)));
 
@@ -334,14 +378,14 @@ void Client::unsubscribe_impl(MessageId subscribe_id) {
     Client::invoke_impl(
         _state,
         unsubscribe_id,
-        Request::SessionUnsubscribe { subscribe_id },
+        Request::Cancel { subscribe_id },
         [](boost::system::error_code ec, Response res) {
             if (ec) {
                 std::cerr << "failed to unsubscribe: " << ec << std::endl;
                 return;
             }
 
-            if (res.get_if<Response::Unit>() == nullptr) {
+            if (res.get_if<Response::Bool>() == nullptr) {
                 std::cerr << "failed to unsubscribe: unexpected response" << std::endl;
             }
         }

@@ -6,6 +6,14 @@
 
 namespace ouisync {
 
+template<> struct describe::Struct<Request::Cancel> : std::true_type {
+    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
+    template<class Observer>
+    static void describe(Observer& o, Request::Cancel& v) {
+        o.field(v.id);
+    }
+};
+
 template<> struct describe::Struct<Request::FileClose> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
@@ -1023,14 +1031,6 @@ template<> struct describe::Struct<Request::SessionUnpinDht> : std::true_type {
     }
 };
 
-template<> struct describe::Struct<Request::SessionUnsubscribe> : std::true_type {
-    static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
-    template<class Observer>
-    static void describe(Observer& o, Request::SessionUnsubscribe& v) {
-        o.field(v.id);
-    }
-};
-
 template<> struct describe::Struct<Request::SessionValidateShareToken> : std::true_type {
     static const describe::FieldsType fields_type = describe::FieldsType::ARRAY;
     template<class Observer>
@@ -1050,6 +1050,9 @@ template<> struct describe::Struct<Request> : std::true_type {
 template<> struct VariantBuilder<Request::Alternatives> {
     template<class AltBuilder>
     static Request::Alternatives build(std::string_view name, const AltBuilder& builder) {
+        if (name == "Cancel") {
+            return builder.template build<Request::Cancel>();
+        }
         if (name == "FileClose") {
             return builder.template build<Request::FileClose>();
         }
@@ -1421,9 +1424,6 @@ template<> struct VariantBuilder<Request::Alternatives> {
         }
         if (name == "SessionUnpinDht") {
             return builder.template build<Request::SessionUnpinDht>();
-        }
-        if (name == "SessionUnsubscribe") {
-            return builder.template build<Request::SessionUnsubscribe>();
         }
         if (name == "SessionValidateShareToken") {
             return builder.template build<Request::SessionValidateShareToken>();

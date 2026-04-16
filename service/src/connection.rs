@@ -86,7 +86,7 @@ impl<'state> Connection<'state> {
                     .await?;
                 } else {
                     // Invoke request handler
-                    if self.handlers.insert(
+                    if !self.handlers.insert(
                         message.id,
                         Box::pin(dispatch_request(state, message.payload)),
                     ) {

@@ -1,3 +1,7 @@
+add_executable(test_cancellation test_cancellation.cpp test_utils.cpp)
+target_link_libraries(test_cancellation PRIVATE cpp_ouisync_client cpp_ouisync_service)
+add_test(NAME cancellation COMMAND test_cancellation)
+
 add_executable(test_copy test_copy.cpp test_utils.cpp)
 target_link_libraries(test_copy PRIVATE cpp_ouisync_client cpp_ouisync_service)
 add_test(NAME copy COMMAND test_copy)
