@@ -6,6 +6,7 @@
 #include <optional>
 #include <chrono>
 #include <variant>
+#include <vector>
 
 namespace ouisync {
 

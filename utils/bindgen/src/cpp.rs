@@ -137,6 +137,7 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
     writeln!(data_hpp, "#include <optional>")?;
     writeln!(data_hpp, "#include <chrono>")?;
     writeln!(data_hpp, "#include <variant>")?;
+    writeln!(data_hpp, "#include <vector>")?;
     writeln!(data_hpp)?;
     writeln!(data_hpp, "namespace {NAMESPACE} {{")?;
     writeln!(data_hpp)?;
