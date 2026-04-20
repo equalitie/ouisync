@@ -1,6 +1,10 @@
 package org.equalitie.ouisync.session
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.produce
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
@@ -8,7 +12,9 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -130,6 +136,24 @@ class SessionTest {
             assertArrayEquals(session.getRuntimeId().value, other.getRuntimeId().value)
         } finally {
             other.close()
+        }
+    }
+
+    @Test
+    fun cancellation() = runBlocking {
+        session.bindNetwork(listOf("quic/127.0.0.1:0"))
+
+        val socket = session.openNetworkSocketV4()!!
+        val job = async { socket.recvFrom(1024) }
+
+        delay(1)
+
+        job.cancel()
+
+        try {
+            job.await()
+            fail("unexpected success: expected CancellationException")
+        } catch (e: CancellationException) {
         }
     }
 }
