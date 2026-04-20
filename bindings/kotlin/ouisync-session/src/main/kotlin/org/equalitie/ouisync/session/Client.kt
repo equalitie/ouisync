@@ -130,7 +130,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             awaitClose()
         } finally {
             messageMatcher.deregister(id)
-            invoke(Request.SessionUnsubscribe(MessageId(id)))
+            invoke(Request.Cancel(MessageId(id)))
         }
     }
         .buffer(onBufferOverflow = BufferOverflow.DROP_OLDEST)
