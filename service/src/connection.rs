@@ -76,19 +76,22 @@ impl<'state> Connection<'state> {
                     // Cancel existing request or subscription
                     let handler_removed = self.handlers.remove(id);
                     let subscription_removed = self.subscriptions.remove(id).is_some();
+                    let removed = handler_removed || subscription_removed;
+                    let payload = ResponseResult::Success(Response::Bool(removed));
+
+                    tracing::trace_span!("request", message = ?message.payload, id = ?message.id)
+                        .in_scope(|| tracing::trace!(response = ?payload));
 
                     self.send_response(Message {
                         id: message.id,
-                        payload: ResponseResult::Success(Response::Bool(
-                            handler_removed || subscription_removed,
-                        )),
+                        payload,
                     })
                     .await?;
                 } else {
                     // Invoke request handler
                     if !self.handlers.insert(
                         message.id,
-                        Box::pin(dispatch_request(state, message.payload)),
+                        Box::pin(dispatch_request(state, message.payload, message.id)),
                     ) {
                         tracing::warn!(message_id = ?message.id, "message id not unique");
                     }
@@ -184,8 +187,12 @@ impl<'state> Connection<'state> {
     }
 }
 
-async fn dispatch_request(state: &State, request: Request) -> (Action<ResponseResult>, Span) {
-    let span = tracing::trace_span!("request", message = ?request, elapsed = field::Empty);
+async fn dispatch_request(
+    state: &State,
+    request: Request,
+    id: MessageId,
+) -> (Action<ResponseResult>, Span) {
+    let span = tracing::trace_span!("request", message = ?request, ?id, elapsed = field::Empty);
     let start = Instant::now();
 
     let action = match dispatch(state, request).await {
