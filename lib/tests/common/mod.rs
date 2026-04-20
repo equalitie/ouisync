@@ -45,18 +45,32 @@ use tracing_subscriber::{
 
 pub(crate) const DEFAULT_REPO: &str = "default";
 
-// Timeout for waiting for an event. Can be overwritten using "TEST_EVENT_TIMEOUT" env variable
-// (in seconds).
-pub(crate) static EVENT_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| {
-    Duration::from_secs(
-        std::env::var("TEST_EVENT_TIMEOUT")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(60),
-    )
-});
+/// Timeout when waiting for various test conditions. Can be overriden with the `TEST_TIMEOUT` env
+/// variable or the `with_test_timeout` method (if both are used, the env variable has precedence).
+pub(crate) fn test_timeout() -> Duration {
+    std::env::var("TEST_TIMEOUT")
+        .ok()
+        .map(|value| match value.parse() {
+            Ok(value) => Duration::from_secs(value),
+            Err(_) => panic!("invalid value of env variable TEST_TIMEOUT: {:?}", value),
+        })
+        .or_else(|| TEST_TIMEOUT.try_get().ok())
+        .unwrap_or(DEFAULT_TEST_TIMEOUT)
+}
 
-pub(crate) static TEST_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| 4 * *EVENT_TIMEOUT);
+/// Override test timeout for the given future.
+pub(crate) fn with_test_timeout<F: Future>(
+    timeout: Duration,
+    f: F,
+) -> impl Future<Output = F::Output> {
+    TEST_TIMEOUT.scope(timeout, f)
+}
+
+task_local! {
+    static TEST_TIMEOUT: Duration;
+}
+
+pub(crate) const DEFAULT_TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(crate) mod env {
     use super::*;
@@ -402,7 +416,7 @@ where
 {
     let mut rx = repo.subscribe();
 
-    time::timeout(*TEST_TIMEOUT, async {
+    time::timeout(test_timeout(), async {
         loop {
             if f().await {
                 break;
@@ -417,7 +431,7 @@ where
 
 /// Waits for an event to be received and returns it. Returns `None` if the received lagged.
 pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) -> Option<Payload> {
-    match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
+    match time::timeout(test_timeout(), rx.recv()).await {
         Ok(event) => {
             debug!(?event);
 

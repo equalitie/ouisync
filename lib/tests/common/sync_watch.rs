@@ -1,6 +1,6 @@
 //! Wait until replica(s) fully synchronize with another replica.
 
-use super::EVENT_TIMEOUT;
+use super::test_timeout;
 use ouisync::{Repository, VersionVector};
 use tokio::{
     select,
@@ -86,7 +86,7 @@ impl Receiver {
 
                     continue;
                 }
-                _ = time::sleep(*EVENT_TIMEOUT) => panic!("timeout waiting for notification"),
+                _ = time::sleep(test_timeout()) => panic!("timeout waiting for notification"),
             }
         }
     }

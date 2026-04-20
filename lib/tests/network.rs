@@ -3,7 +3,7 @@
 #[macro_use]
 mod common;
 
-use self::common::{DEFAULT_REPO, Env, Proto, TEST_TIMEOUT, actor};
+use self::common::{DEFAULT_REPO, Env, Proto, actor, test_timeout, with_test_timeout};
 use assert_matches::assert_matches;
 use async_trait::async_trait;
 use ouisync::{DhtContactsStoreTrait, Network, PeerInfo, PeerSource, PeerState};
@@ -12,6 +12,7 @@ use std::{
     io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use tokio::{
     net::UdpSocket,
@@ -244,7 +245,14 @@ fn dht_discovery() {
                         continue;
                     }
 
-                    let info = expect_peer_active(&network, peer).await;
+                    // Make sure to sufficiently increase the test timeout so it doesn't expire
+                    // before the DHT announce delay interval ends. We are using simulated time here
+                    // so this doesn't affect the test runtime.
+                    let info = with_test_timeout(
+                        Duration::from_hours(1),
+                        expect_peer_active(&network, peer),
+                    )
+                    .await;
                     assert_matches!(info.source, PeerSource::Dht | PeerSource::Listener);
                 }
 
@@ -331,7 +339,7 @@ async fn expect_peer_state<F>(network: &Network, peer_name: &str, expected_state
 where
     F: Fn(&PeerState) -> bool,
 {
-    time::timeout(*TEST_TIMEOUT, async move {
+    time::timeout(test_timeout(), async move {
         let mut rx = network.subscribe();
         let peer_addr = actor::lookup_addr(peer_name).await;
 
@@ -352,7 +360,7 @@ where
 async fn expect_knows_port(network: &Network, peer_port: u16) {
     let collector = network.peer_info_collector();
 
-    time::timeout(*TEST_TIMEOUT, async move {
+    time::timeout(test_timeout(), async move {
         let mut rx = network.subscribe();
 
         loop {
