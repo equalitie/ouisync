@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <exception>
+#include <iterator>
 
 #include "test_utils.hpp"
 
@@ -19,4 +21,25 @@ void check_exception(std::exception_ptr e) {
 fs::path mkdir(const fs::path& path) {
     fs::create_directories(path);
     return path;
+}
+
+std::vector<uint8_t> to_bytes(const std::string& str) {
+    std::vector<uint8_t> out(str.size());
+
+    std::transform(str.begin(), str.end(), out.begin(), [](char c) {
+        return (uint8_t) c;
+    });
+
+    return out;
+}
+
+std::string from_bytes(const std::vector<uint8_t>& bytes) {
+    std::string out;
+    out.reserve(bytes.size());
+
+    std::transform(bytes.begin(), bytes.end(), std::back_inserter(out), [](uint8_t b) {
+        return (char) b;
+    });
+
+    return out;
 }

@@ -95,3 +95,9 @@ void check_exception(std::exception_ptr e);
 
 // Creates a subdirectory at the given path and returns it.
 boost::filesystem::path mkdir(const boost::filesystem::path& path);
+
+// Converts string to vector of bytes
+std::vector<uint8_t> to_bytes(const std::string& str);
+
+// Converts vector of bytes to string
+std::string from_bytes(const std::vector<uint8_t>& bytes);

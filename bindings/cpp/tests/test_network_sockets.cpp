@@ -1,8 +1,6 @@
 #define BOOST_TEST_MODULE network_sockets
 #include <boost/test/included/unit_test.hpp>
 
-#include <algorithm>
-#include <iterator>
 #include <sstream>
 
 #include <boost/asio.hpp>
@@ -19,27 +17,6 @@ std::string to_string(const T& value) {
     std::ostringstream stream;
     stream << value;
     return stream.str();
-}
-
-std::vector<uint8_t> to_bytes(const std::string& str) {
-    std::vector<uint8_t> out(str.size());
-
-    std::transform(str.begin(), str.end(), out.begin(), [](char c) {
-        return (uint8_t) c;
-    });
-
-    return out;
-}
-
-std::string from_bytes(const std::vector<uint8_t>& bytes) {
-    std::string out;
-    out.reserve(bytes.size());
-
-    std::transform(bytes.begin(), bytes.end(), std::back_inserter(out), [](uint8_t b) {
-        return (char) b;
-    });
-
-    return out;
 }
 
 BOOST_AUTO_TEST_CASE(test_ping) {

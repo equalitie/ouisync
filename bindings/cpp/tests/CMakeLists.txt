@@ -1,6 +1,7 @@
 set(tests cancellation
           copy
           dht
+          file
           network_sockets
           serialize
           subscriptions)
