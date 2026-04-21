@@ -697,6 +697,14 @@ fn write_api_class(
     writeln!(out_hpp, "{I}{name}& operator = (const {name}&) = delete;")?;
     writeln!(out_hpp, "{I}{name}& operator = ({name}&&) = default;")?;
     writeln!(out_hpp)?;
+
+    // `operator bool` to check whether the object is in valid state (e.g., not default-constructed,
+    // or moved-from).
+    writeln!(out_hpp, "{I}explicit operator bool() const noexcept {{")?;
+    writeln!(out_hpp, "{I}{I}return (bool) client;")?;
+    writeln!(out_hpp, "{I}}}")?;
+    writeln!(out_hpp)?;
+
     writeln!(out_hpp, "public:")?;
 
     if name == "Session" {

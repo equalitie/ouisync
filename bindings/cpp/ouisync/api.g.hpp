@@ -28,6 +28,10 @@ public:
     File& operator = (const File&) = delete;
     File& operator = (File&&) = default;
 
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
+
 public:
     /**
      * Closes the file.
@@ -169,6 +173,10 @@ public:
     Repository(Repository&&) = default;
     Repository& operator = (const Repository&) = delete;
     Repository& operator = (Repository&&) = default;
+
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
 
 public:
     /**
@@ -943,6 +951,10 @@ public:
     NetworkSocket& operator = (const NetworkSocket&) = delete;
     NetworkSocket& operator = (NetworkSocket&&) = default;
 
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
+
 public:
     template<
         boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
@@ -1006,6 +1018,10 @@ public:
     NetworkStream(NetworkStream&&) = default;
     NetworkStream& operator = (const NetworkStream&) = delete;
     NetworkStream& operator = (NetworkStream&&) = default;
+
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
 
 public:
     /**
@@ -1075,6 +1091,10 @@ public:
     Session(Session&&) = default;
     Session& operator = (const Session&) = delete;
     Session& operator = (Session&&) = default;
+
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
 
 public:
     /**
