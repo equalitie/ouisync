@@ -656,13 +656,6 @@ fn write_api_class(
     writeln!(out_hpp, "class {name} {{")?;
     writeln!(out_hpp, "private:")?;
 
-    // TODO: consider making the constructor public instead of declaring these friends
-    for friend in ["File", "Repository", "Session", "RepositorySubscription"]
-        .into_iter()
-        .filter(|friend| *friend != name)
-    {
-        writeln!(out_hpp, "{I}friend class {friend};")?;
-    }
     writeln!(
         out_hpp,
         "{I}template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);"

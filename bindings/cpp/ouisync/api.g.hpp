@@ -11,9 +11,6 @@ namespace ouisync {
 
 class File {
 private:
-    friend class Repository;
-    friend class Session;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
@@ -156,9 +153,6 @@ public:
 
 class Repository {
 private:
-    friend class File;
-    friend class Session;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
@@ -932,10 +926,6 @@ public:
 
 class NetworkSocket {
 private:
-    friend class File;
-    friend class Repository;
-    friend class Session;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
@@ -1000,10 +990,6 @@ public:
 
 class NetworkStream {
 private:
-    friend class File;
-    friend class Repository;
-    friend class Session;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
@@ -1075,9 +1061,6 @@ public:
 
 class Session {
 private:
-    friend class File;
-    friend class Repository;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
