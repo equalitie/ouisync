@@ -15,7 +15,7 @@ import '../generated/api.g.dart'
         Request,
         Response,
         ResponseNone,
-        RequestSessionUnsubscribe;
+        RequestCancel;
 import 'length_delimited_codec.dart';
 import 'message_codec.dart';
 
@@ -262,7 +262,7 @@ class Client {
         case _Transitioning():
           await state.future;
         case _Connected():
-          await invoke(RequestSessionUnsubscribe(id: MessageId(id)));
+          await invoke(RequestCancel(id: MessageId(id)));
           return;
         case _Closed():
         case _Disconnected():

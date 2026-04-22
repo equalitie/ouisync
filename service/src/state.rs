@@ -190,6 +190,13 @@ impl State {
         }
     }
 
+    // Dummy method which exists only to generate the `Request::Cancel` variant. Ignored when
+    // generating bindings.
+    #[api]
+    pub async fn cancel(&self, #[expect(unused_variables)] id: MessageId) {
+        unreachable!()
+    }
+
     /// Initializes the network according to the stored configuration. If a particular network
     /// parameter is not yet configured, falls back to the given defaults.
     #[api]
@@ -1948,11 +1955,6 @@ impl State {
             .subscribe())
     }
 
-    #[api]
-    pub async fn session_unsubscribe(&self, id: MessageId) -> Unsubscribe {
-        Unsubscribe(id)
-    }
-
     /// Changes the DHT routers (bootstrap nodes), rebootstraps the DHTs and restart any ongoing
     /// lookups. If this is not called, a default set of routers is used. Each router is specified
     /// as hostname + port or ip address + port.
@@ -2317,7 +2319,6 @@ impl State {
 }
 
 // These definitions are only needed to work around limitations of the api parser:
-pub(crate) struct Unsubscribe(pub MessageId);
 pub(crate) type RepositorySubscription = broadcast::Receiver<Event>;
 pub(crate) type StateMonitorSubscription = watch::Receiver<()>;
 

@@ -3,9 +3,11 @@
 package org.equalitie.ouisync.session
 
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -111,9 +113,16 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         val deferred = CompletableDeferred<ResponseResult>()
         messageMatcher.register(id, deferred)
 
-        send(id, request)
+        val response = try {
+            send(id, request)
+            deferred.await()
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                invoke(Request.Cancel(MessageId(id)))
+            }
 
-        val response = deferred.await()
+            throw e
+        }
 
         when (response) {
             is ResponseResult.Success -> return response.value
@@ -130,7 +139,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             awaitClose()
         } finally {
             messageMatcher.deregister(id)
-            invoke(Request.SessionUnsubscribe(MessageId(id)))
+            invoke(Request.Cancel(MessageId(id)))
         }
     }
         .buffer(onBufferOverflow = BufferOverflow.DROP_OLDEST)

@@ -11,9 +11,6 @@ namespace ouisync {
 
 class File {
 private:
-    friend class Repository;
-    friend class Session;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
@@ -30,6 +27,16 @@ public:
     File(File&&) = default;
     File& operator = (const File&) = delete;
     File& operator = (File&&) = default;
+
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
+
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
+    }
 
 public:
     /**
@@ -156,9 +163,6 @@ public:
 
 class Repository {
 private:
-    friend class File;
-    friend class Session;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
@@ -175,6 +179,16 @@ public:
     Repository(Repository&&) = default;
     Repository& operator = (const Repository&) = delete;
     Repository& operator = (Repository&&) = default;
+
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
+
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
+    }
 
 public:
     /**
@@ -932,10 +946,6 @@ public:
 
 class NetworkSocket {
 private:
-    friend class File;
-    friend class Repository;
-    friend class Session;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
@@ -952,6 +962,16 @@ public:
     NetworkSocket(NetworkSocket&&) = default;
     NetworkSocket& operator = (const NetworkSocket&) = delete;
     NetworkSocket& operator = (NetworkSocket&&) = default;
+
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
+
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
+    }
 
 public:
     template<
@@ -1000,10 +1020,6 @@ public:
 
 class NetworkStream {
 private:
-    friend class File;
-    friend class Repository;
-    friend class Session;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
@@ -1020,6 +1036,16 @@ public:
     NetworkStream(NetworkStream&&) = default;
     NetworkStream& operator = (const NetworkStream&) = delete;
     NetworkStream& operator = (NetworkStream&&) = default;
+
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
+
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
+    }
 
 public:
     /**
@@ -1075,9 +1101,6 @@ public:
 
 class Session {
 private:
-    friend class File;
-    friend class Repository;
-    friend class RepositorySubscription;
     template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);
 
     std::shared_ptr<Client> client;
@@ -1092,6 +1115,16 @@ public:
     Session(Session&&) = default;
     Session& operator = (const Session&) = delete;
     Session& operator = (Session&&) = default;
+
+    explicit operator bool() const noexcept {
+        return (bool) client;
+    }
+
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
+    }
 
 public:
     /**

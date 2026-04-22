@@ -1,5 +1,8 @@
 #pragma once
 
+#include <boost/asio/associated_cancellation_slot.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
+#include <iostream>
 #include <type_traits>
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/async_result.hpp>
@@ -72,32 +75,41 @@ public:
                 auto exec = client->get_executor();
                 auto state = client->_state;
 
+                auto cancellation_slot = boost::asio::get_associated_cancellation_slot(handler);
+
+                auto outer_handler = [
+                    handler = std::move(handler),
+                    client = std::move(client),
+                    work_guard = boost::asio::make_work_guard(std::move(exec))
+                ] (boost::system::error_code ec, Response response) mutable {
+                    if constexpr (std::is_void_v<RetType>) {
+                        if (ec) {
+                            handler(ec);
+                        } else {
+                            extract<Variant>(std::move(response), std::move(client));
+                            handler(boost::system::error_code());
+                        }
+                    } else {
+                        if (ec) {
+                            handler(ec, RetType {});
+                        } else {
+                            handler(
+                                boost::system::error_code(),
+                                extract<Variant>(std::move(response), std::move(client))
+                            );
+                        }
+                    }
+                };
+
                 Client::invoke_impl(
                     std::move(state),
                     msg_id,
                     std::move(request),
-                    [ handler = std::move(handler),
-                      client = std::move(client),
-                      work_guard = boost::asio::make_work_guard(std::move(exec))
-                    ] (boost::system::error_code ec, Response response) mutable {
-                        if constexpr (std::is_void_v<RetType>) {
-                            if (ec) {
-                                handler(ec);
-                            } else {
-                                extract<Variant>(std::move(response), std::move(client));
-                                handler(boost::system::error_code());
-                            }
-                        } else {
-                            if (ec) {
-                                handler(ec, RetType {});
-                            } else {
-                                handler(
-                                    boost::system::error_code(),
-                                    extract<Variant>(std::move(response), std::move(client))
-                                );
-                            }
-                        }
-                    });
+                    boost::asio::bind_cancellation_slot(
+                        std::move(cancellation_slot),
+                        std::move(outer_handler)
+                    )
+                );
             },
             token
         );

@@ -656,13 +656,6 @@ fn write_api_class(
     writeln!(out_hpp, "class {name} {{")?;
     writeln!(out_hpp, "private:")?;
 
-    // TODO: consider making the constructor public instead of declaring these friends
-    for friend in ["File", "Repository", "Session", "RepositorySubscription"]
-        .into_iter()
-        .filter(|friend| *friend != name)
-    {
-        writeln!(out_hpp, "{I}friend class {friend};")?;
-    }
     writeln!(
         out_hpp,
         "{I}template<typename Variant> friend Variant::type extract(Response, std::shared_ptr<Client>);"
@@ -704,6 +697,28 @@ fn write_api_class(
     writeln!(out_hpp, "{I}{name}& operator = (const {name}&) = delete;")?;
     writeln!(out_hpp, "{I}{name}& operator = ({name}&&) = default;")?;
     writeln!(out_hpp)?;
+
+    // `operator bool` to check whether the object is in valid state (e.g., not default-constructed,
+    // or moved-from).
+    writeln!(out_hpp, "{I}explicit operator bool() const noexcept {{")?;
+    writeln!(out_hpp, "{I}{I}return (bool) client;")?;
+    writeln!(out_hpp, "{I}}}")?;
+    writeln!(out_hpp)?;
+
+    // get_executor
+    writeln!(
+        out_hpp,
+        "{I}using executor_type = boost::asio::any_io_executor;"
+    )?;
+    writeln!(out_hpp)?;
+    writeln!(out_hpp, "{I}executor_type get_executor() {{")?;
+    writeln!(
+        out_hpp,
+        "{I}{I}return client ? client->get_executor() : executor_type{{}};"
+    )?;
+    writeln!(out_hpp, "{I}}}")?;
+    writeln!(out_hpp)?;
+
     writeln!(out_hpp, "public:")?;
 
     if name == "Session" {

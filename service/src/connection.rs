@@ -1,6 +1,6 @@
-use std::time::Instant;
+use std::{pin::Pin, time::Instant};
 
-use futures_util::{SinkExt, stream::FuturesUnordered};
+use futures_util::SinkExt;
 use ouisync::{DhtLookupStream, NetworkEventReceiver};
 use tokio::select;
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
@@ -8,53 +8,46 @@ use tracing::{Span, field};
 
 use crate::{
     State,
+    futures_map::FuturesMap,
     protocol::{DecodeError, Message, MessageId, ProtocolError, Request, Response, ResponseResult},
-    state::{RepositorySubscription, StateMonitorSubscription, Unsubscribe},
+    state::{RepositorySubscription, StateMonitorSubscription},
     subscription::SubscriptionStream,
     transport::{ReadError, ServerReader, ServerWriter},
 };
 
 /// Connection to a client.
-pub(crate) struct Connection {
+pub(crate) struct Connection<'state> {
     reader: ServerReader,
     writer: ServerWriter,
+    handlers: FuturesMap<MessageId, Pin<Box<Handler<'state>>>>,
     subscriptions: StreamMap<MessageId, StreamNotifyClose<SubscriptionStream>>,
 }
 
-impl Connection {
+type Handler<'state> = dyn Future<Output = (Action<ResponseResult>, Span)> + Send + 'state;
+
+impl<'state> Connection<'state> {
     pub fn new(reader: ServerReader, writer: ServerWriter) -> Self {
         Self {
             reader,
             writer,
+            handlers: FuturesMap::new(),
             subscriptions: StreamMap::new(),
         }
     }
 
-    pub async fn run(&mut self, state: &State) {
-        let mut handlers = FuturesUnordered::new();
-
+    pub async fn run(&mut self, state: &'state State) {
         loop {
             let result = select! {
                 // request received
                 result = self.reader.next() => {
-                    match self.preprocess_request(result).await {
-                        Ok(Some(message)) => {
-                            handlers.push(handle_request(state, message));
-                            Ok(())
-                        }
-                        Ok(None) => Ok(()),
-                        Err(error) => Err(error),
-                    }
+                    self.handle_request(state, result).await
                 }
                 // event emitted
                 Some((id, payload)) = self.subscriptions.next() => {
-                    self.send_response(Message {
-                        id,
-                        payload: ResponseResult::Success(payload.unwrap_or(Response::None)),
-                    }).await
+                    self.handle_event(id, payload).await
                 }
                 // request handler completed
-                Some((id, action, span)) = handlers.next() => {
+                Some((id, (action, span))) = self.handlers.next() => {
                     self.handle_action(id, action, span).await
                 }
             };
@@ -70,6 +63,57 @@ impl Connection {
         if let Err(error) = self.writer.close().await {
             tracing::error!(?error, "failed to close connection");
         }
+    }
+
+    async fn handle_request(
+        &mut self,
+        state: &'state State,
+        request: Option<Result<Message<Request>, ReadError>>,
+    ) -> Result<(), Terminate> {
+        match self.preprocess_request(request).await {
+            Ok(Some(message)) => {
+                if let Request::Cancel { id } = &message.payload {
+                    // Cancel existing request or subscription
+                    let handler_removed = self.handlers.remove(id);
+                    let subscription_removed = self.subscriptions.remove(id).is_some();
+                    let removed = handler_removed || subscription_removed;
+                    let payload = ResponseResult::Success(Response::Bool(removed));
+
+                    tracing::trace_span!("request", message = ?message.payload, id = ?message.id)
+                        .in_scope(|| tracing::trace!(response = ?payload));
+
+                    self.send_response(Message {
+                        id: message.id,
+                        payload,
+                    })
+                    .await?;
+                } else {
+                    // Invoke request handler
+                    if !self.handlers.insert(
+                        message.id,
+                        Box::pin(dispatch_request(state, message.payload, message.id)),
+                    ) {
+                        tracing::warn!(message_id = ?message.id, "message id not unique");
+                    }
+                }
+
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn handle_event(
+        &mut self,
+        id: MessageId,
+        payload: Option<Response>,
+    ) -> Result<(), Terminate> {
+        self.send_response(Message {
+            id,
+            payload: ResponseResult::Success(payload.unwrap_or(Response::None)),
+        })
+        .await
     }
 
     async fn preprocess_request(
@@ -125,10 +169,6 @@ impl Connection {
                     .insert(id, StreamNotifyClose::new(subscription));
                 ResponseResult::Success(Response::Unit)
             }
-            Action::Unsubscribe(id) => {
-                self.subscriptions.remove(&id);
-                ResponseResult::Success(Response::Unit)
-            }
         };
 
         span.in_scope(|| tracing::trace!(response = ?payload));
@@ -147,23 +187,23 @@ impl Connection {
     }
 }
 
-async fn handle_request(
+async fn dispatch_request(
     state: &State,
-    message: Message<Request>,
-) -> (MessageId, Action<ResponseResult>, Span) {
-    let span = tracing::trace_span!("request", message = ?message.payload, elapsed = field::Empty);
+    request: Request,
+    id: MessageId,
+) -> (Action<ResponseResult>, Span) {
+    let span = tracing::trace_span!("request", message = ?request, ?id, elapsed = field::Empty);
     let start = Instant::now();
 
-    let action = match dispatch(state, message.payload).await {
+    let action = match dispatch(state, request).await {
         Ok(Action::Reply(response)) => Action::Reply(ResponseResult::Success(response)),
         Ok(Action::Subscribe(sub)) => Action::Subscribe(sub),
-        Ok(Action::Unsubscribe(id)) => Action::Unsubscribe(id),
         Err(error) => Action::Reply(ResponseResult::Failure(error)),
     };
 
     span.record("elapsed", field::debug(start.elapsed()));
 
-    (message.id, action, span)
+    (action, span)
 }
 
 struct Terminate;
@@ -171,7 +211,6 @@ struct Terminate;
 enum Action<T> {
     Reply(T),
     Subscribe(SubscriptionStream),
-    Unsubscribe(MessageId),
 }
 
 impl<T> From<T> for Action<Response>
@@ -204,12 +243,6 @@ impl From<StateMonitorSubscription> for Action<Response> {
 impl From<DhtLookupStream> for Action<Response> {
     fn from(stream: DhtLookupStream) -> Self {
         Self::Subscribe(stream.into())
-    }
-}
-
-impl From<Unsubscribe> for Action<Response> {
-    fn from(unsub: Unsubscribe) -> Self {
-        Self::Unsubscribe(unsub.0)
     }
 }
 

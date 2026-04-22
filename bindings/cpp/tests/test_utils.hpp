@@ -77,21 +77,28 @@ public:
     }
 
     ~TempDir() {
-        boost::filesystem::remove_all(_path);
+        if (!_path.empty()) {
+            boost::filesystem::remove_all(_path);
+        }
     }
 
     TempDir(const TempDir&) = delete;
-    TempDir(TempDir&&) = delete;
+    TempDir(TempDir&&) = default;
     TempDir& operator=(const TempDir&) = delete;
-    TempDir& operator=(TempDir&&) = delete;
+    TempDir& operator=(TempDir&&) = default;
 
     const boost::filesystem::path& path() const {
         return _path;
     }
-
 };
 
 void check_exception(std::exception_ptr e);
 
 // Creates a subdirectory at the given path and returns it.
 boost::filesystem::path mkdir(const boost::filesystem::path& path);
+
+// Converts string to vector of bytes
+std::vector<uint8_t> to_bytes(const std::string& str);
+
+// Converts vector of bytes to string
+std::string from_bytes(const std::vector<uint8_t>& bytes);
