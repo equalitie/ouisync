@@ -1,14 +1,48 @@
 #define BOOST_TEST_MODULE file
 #include <boost/test/included/unit_test.hpp>
 
+#include <boost/asio.hpp>
 #include <ouisync.hpp>
 #include <ouisync/service.hpp>
+#include <ouisync/file_stream.hpp>
 
 #include "tests/test_utils.hpp"
 
 namespace asio = boost::asio;
 
-BOOST_AUTO_TEST_CASE(test_basic_operations) {
+std::tuple<TempDir, ouisync::Service, ouisync::Session, ouisync::Repository>
+setup(asio::yield_context yield) {
+    auto tempdir = TempDir();
+    auto config_dir = mkdir(tempdir.path() / "config");
+    auto store_dir = mkdir(tempdir.path() / "store");
+
+    ouisync::init_log();
+    ouisync::Service service(yield.get_executor());
+    service.start(config_dir, nullptr, yield);
+
+    auto session = ouisync::Session::connect(config_dir, yield);
+    session.set_store_dirs({ store_dir.string() }, yield);
+
+    auto repo = session.create_repository(
+        "my-repo",
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        false,
+        false,
+        false,
+        yield
+    );
+
+    return std::make_tuple(
+        std::move(tempdir),
+        std::move(service),
+        std::move(session),
+        std::move(repo)
+    );
+}
+
+BOOST_AUTO_TEST_CASE(test_file) {
     asio::io_context ctx;
 
     auto tempdir = TempDir();
@@ -16,23 +50,7 @@ BOOST_AUTO_TEST_CASE(test_basic_operations) {
     auto store_dir = mkdir(tempdir.path() / "store");
 
     asio::spawn(ctx, [&] (asio::yield_context yield) {
-        ouisync::init_log();
-        ouisync::Service service(yield.get_executor());
-        service.start(config_dir, nullptr, yield);
-
-        auto session = ouisync::Session::connect(config_dir, yield);
-        session.set_store_dirs({ store_dir.string() }, yield);
-
-        auto repo = session.create_repository(
-            "my-repo",
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            false,
-            false,
-            false,
-            yield
-        );
+        auto [tempdir, service, session, repo] = setup(yield);
 
         auto file_w = repo.create_file("test.txt", yield);
         file_w.write(0, to_bytes("hello world"), yield);
@@ -45,8 +63,32 @@ BOOST_AUTO_TEST_CASE(test_basic_operations) {
         BOOST_REQUIRE_EQUAL(content, "hello world");
 
         service.stop(yield);
-        // ...
     }, check_exception);
 
     ctx.run();
+}
+
+BOOST_AUTO_TEST_CASE(test_file_stream) {
+    asio::io_context ctx;
+
+    asio::spawn(ctx, [&] (asio::yield_context yield) {
+        auto [tempdir, service, session, repo] = setup(yield);
+
+        auto file_w = repo.create_file("test.txt", yield);
+        file_w.write(0, to_bytes("hello world"), yield);
+        file_w.close(yield);
+
+        auto file_r = repo.open_file("test.txt", yield);
+        auto stream = ouisync::FileStream::init(std::move(file_r), yield);
+
+        std::vector<uint8_t> buffer(11);
+        auto n = asio::async_read(stream, asio::buffer(buffer), yield);
+        BOOST_REQUIRE_EQUAL(n, 11);
+
+        stream.close(yield);
+        service.stop(yield);
+    }, check_exception);
+
+    ctx.run();
+
 }

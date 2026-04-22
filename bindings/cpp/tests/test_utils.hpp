@@ -77,18 +77,19 @@ public:
     }
 
     ~TempDir() {
-        boost::filesystem::remove_all(_path);
+        if (!_path.empty()) {
+            boost::filesystem::remove_all(_path);
+        }
     }
 
     TempDir(const TempDir&) = delete;
-    TempDir(TempDir&&) = delete;
+    TempDir(TempDir&&) = default;
     TempDir& operator=(const TempDir&) = delete;
-    TempDir& operator=(TempDir&&) = delete;
+    TempDir& operator=(TempDir&&) = default;
 
     const boost::filesystem::path& path() const {
         return _path;
     }
-
 };
 
 void check_exception(std::exception_ptr e);

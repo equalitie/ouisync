@@ -202,6 +202,7 @@ add_library(cpp_ouisync_client
         ouisync/client.cpp
         ouisync/serialize.cpp
         ouisync/error.cpp
+        ouisync/file_stream.cpp
         ${GENERATED_CPP_FILES}
 )
 
