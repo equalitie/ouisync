@@ -1,6 +1,8 @@
 #pragma once
 
 #include <boost/asio/associated_executor.hpp>
+#include <boost/asio/buffers_iterator.hpp>
+#include <boost/asio/error.hpp>
 #include <boost/system/detail/error_code.hpp>
 #include <memory>
 #include <boost/asio.hpp>
@@ -134,9 +136,9 @@ public:
         return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
             [ state = state, buffers = std::move(buffers) ]
             (auto handler) mutable {
-                size_t to_read = boost::asio::buffer_size(buffers);
+                size_t n = boost::asio::buffer_size(buffers);
 
-                if (to_read == 0) {
+                if (n == 0) {
                     return handler({}, 0);
                 }
 
@@ -150,7 +152,7 @@ public:
 
                 state->file.read(
                     state->offset,
-                    to_read,
+                    n,
                     [ state,
                       handler = std::move(handler),
                       buffers = std::move(buffers) ]
@@ -159,14 +161,60 @@ public:
                             return handler(ec, data.size());
                         }
 
-                        auto copied = boost::asio::buffer_copy(buffers, boost::asio::buffer(data));
-                        state->offset += copied;
+                        auto n = boost::asio::buffer_copy(buffers, boost::asio::buffer(data));
+                        state->offset += n;
 
-                        handler(ec, copied);
+                        return handler(ec, n);
                     }
                 );
           },
           token
+        );
+    }
+
+    /// Writes data from the provided buffers to the file. Returns the number of byte actually
+    /// written.
+    template<
+        class ConstBufferSequence,
+        boost::asio::completion_token_for<
+            void(boost::system::error_code, size_t)
+        > CompletionToken
+    >
+    auto async_write_some(const ConstBufferSequence& buffers, CompletionToken token) {
+        return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, size_t)>(
+            [ state = state, buffers = std::move(buffers) ]
+            (auto handler) mutable {
+                size_t n = boost::asio::buffer_size(buffers);
+
+                if (n == 0) {
+                    return handler({}, 0);
+                }
+
+                if (!state) {
+                    return handler(boost::asio::error::not_connected, 0);
+                }
+
+                std::vector<uint8_t> data(
+                    boost::asio::buffers_begin(buffers),
+                    boost::asio::buffers_end(buffers)
+                );
+
+                state->file.write(
+                    state->offset,
+                    data,
+                    [ state, n, handler = std::move(handler) ]
+                    (boost::system::error_code ec) mutable {
+                        if (ec) {
+                            return handler(ec, 0);
+                        }
+
+                        state->offset += n;
+
+                        return handler(ec, n);
+                    }
+                );
+            },
+            token
         );
     }
 

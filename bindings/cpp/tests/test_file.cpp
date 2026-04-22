@@ -75,17 +75,22 @@ BOOST_AUTO_TEST_CASE(test_file_stream) {
         auto [tempdir, service, session, repo] = setup(yield);
 
         auto file_w = repo.create_file("test.txt", yield);
-        file_w.write(0, to_bytes("hello world"), yield);
-        file_w.close(yield);
+        auto stream_w = ouisync::FileStream::init(std::move(file_w), yield);
+        auto n_w = asio::async_write(stream_w, asio::buffer(std::string("hello world")), yield);
+        BOOST_REQUIRE_EQUAL(n_w, 11);
+
+        stream_w.close(yield);
 
         auto file_r = repo.open_file("test.txt", yield);
-        auto stream = ouisync::FileStream::init(std::move(file_r), yield);
+        auto stream_r = ouisync::FileStream::init(std::move(file_r), yield);
 
         std::vector<uint8_t> buffer(11);
-        auto n = asio::async_read(stream, asio::buffer(buffer), yield);
-        BOOST_REQUIRE_EQUAL(n, 11);
+        auto n_r = asio::async_read(stream_r, asio::buffer(buffer), yield);
+        BOOST_REQUIRE_EQUAL(n_r, 11);
+        BOOST_REQUIRE_EQUAL(from_bytes(buffer), "hello world");
 
-        stream.close(yield);
+        stream_r.close(yield);
+
         service.stop(yield);
     }, check_exception);
 
