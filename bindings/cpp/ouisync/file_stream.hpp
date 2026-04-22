@@ -35,7 +35,7 @@ public:
     ~FileStream();
 
     executor_type get_executor() {
-        return executor;
+        return state ? state->file.get_executor() : executor_type{};
     }
 
     /// Construct a new stream wrapping the given file.
@@ -48,14 +48,12 @@ public:
         auto state = std::make_shared<State>();
         state->file = std::move(file);
 
-        auto executor = boost::asio::get_associated_executor(token);
-
         return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code, FileStream)>(
-            [state = std::move(state), executor = std::move(executor)]
+            [state = std::move(state)]
             (auto handler) mutable
             {
                 state->file.get_length(
-                    [state, executor = std::move(executor), handler = std::move(handler)]
+                    [state, handler = std::move(handler)]
                     (boost::system::error_code ec, size_t size) mutable
                     {
                         if (ec) {
@@ -66,7 +64,7 @@ public:
 
                         return handler(
                             boost::system::error_code{},
-                            FileStream(std::move(state), std::move(executor))
+                            FileStream(std::move(state))
                         );
                     }
                 );
@@ -174,13 +172,11 @@ public:
 
 private:
 
-    explicit FileStream(std::shared_ptr<State> state, executor_type executor)
+    explicit FileStream(std::shared_ptr<State> state)
         : state(std::move(state))
-        , executor(std::move(executor))
     {}
 
     std::shared_ptr<State> state;
-    executor_type executor;
 };
 
 } // namespace ouisync

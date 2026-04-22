@@ -32,6 +32,12 @@ public:
         return (bool) client;
     }
 
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
+    }
+
 public:
     /**
      * Closes the file.
@@ -176,6 +182,12 @@ public:
 
     explicit operator bool() const noexcept {
         return (bool) client;
+    }
+
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
     }
 
 public:
@@ -955,6 +967,12 @@ public:
         return (bool) client;
     }
 
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
+    }
+
 public:
     template<
         boost::asio::completion_token_for<typename detail::InvokeSig<void>::type> CompletionToken
@@ -1021,6 +1039,12 @@ public:
 
     explicit operator bool() const noexcept {
         return (bool) client;
+    }
+
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
     }
 
 public:
@@ -1094,6 +1118,12 @@ public:
 
     explicit operator bool() const noexcept {
         return (bool) client;
+    }
+
+    using executor_type = boost::asio::any_io_executor;
+
+    executor_type get_executor() {
+        return client ? client->get_executor() : executor_type{};
     }
 
 public:

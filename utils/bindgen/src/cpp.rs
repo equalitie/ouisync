@@ -705,6 +705,20 @@ fn write_api_class(
     writeln!(out_hpp, "{I}}}")?;
     writeln!(out_hpp)?;
 
+    // get_executor
+    writeln!(
+        out_hpp,
+        "{I}using executor_type = boost::asio::any_io_executor;"
+    )?;
+    writeln!(out_hpp)?;
+    writeln!(out_hpp, "{I}executor_type get_executor() {{")?;
+    writeln!(
+        out_hpp,
+        "{I}{I}return client ? client->get_executor() : executor_type{{}};"
+    )?;
+    writeln!(out_hpp, "{I}}}")?;
+    writeln!(out_hpp)?;
+
     writeln!(out_hpp, "public:")?;
 
     if name == "Session" {
