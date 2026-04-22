@@ -94,6 +94,11 @@ public:
         );
     }
 
+    /// Close without waiting for the operation to complete
+    void close() {
+        close(boost::asio::detached);
+    }
+
     bool is_open() const {
         return state != nullptr;
     }
@@ -139,7 +144,7 @@ public:
                 size_t n = boost::asio::buffer_size(buffers);
 
                 if (n == 0) {
-                    return handler({}, 0);
+                    return handler(boost::system::error_code{}, 0);
                 }
 
                 if (!state) {
