@@ -52,54 +52,28 @@ find_package(Boost
     COMPONENTS context filesystem
 )
 
-FetchContent_Declare(
-    Corrosion
-    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.5.2
-)
 
 ###########################################################
 # msgpack - for serializing messages between C++ and Rust
 ###########################################################
 
-file(WRITE ${CMAKE_BINARY_DIR}/msgpack/download/CMakeLists.txt
-    "cmake_minimum_required(VERSION 3.10)\n"
-    "project(msgpack-download NONE)\n"
-    ""
-    "include(ExternalProject)\n"
-    "externalproject_add(msgpack\n"
-    "  GIT_REPOSITORY    https://github.com/msgpack/msgpack-c\n"
-    "  # Use commit from the `cpp_master` which contains the msgpack-cxx C++ version\n"
-    "  GIT_TAG           092bc69b6e815980bce7808595c914dd3a29f905\n"
-    "  SOURCE_DIR        ${CMAKE_BINARY_DIR}/msgpack/src\n"
-    "  BINARY_DIR        ${CMAKE_BINARY_DIR}/msgpack/build\n"
-    "  # No building, that's done outside of this externalproject_add\n"
-    "  CONFIGURE_COMMAND \"\"\n"
-    "  BUILD_COMMAND     \"\"\n"
-    "  INSTALL_COMMAND   \"\"\n"
-    "  TEST_COMMAND      \"\"\n"
-    ")"
+FetchContent_Declare(
+    msgpack
+    GIT_REPOSITORY "https://github.com/msgpack/msgpack-c"
+    # Use commit from the `cpp_master` which contains the msgpack-cxx C++ version
+    GIT_TAG        "092bc69b6e815980bce7808595c914dd3a29f905"
 )
-
-# Configure
-execute_process(
-    COMMAND "${CMAKE_COMMAND}" -G "${CMAKE_GENERATOR}" .
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/msgpack/download"
-)
-
-# Build
-execute_process(
-    COMMAND "${CMAKE_COMMAND}" --build .
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/msgpack/download"
-)
-
-# Import targets
-add_subdirectory("${CMAKE_BINARY_DIR}/msgpack/src" "msgpack" EXCLUDE_FROM_ALL)
+FetchContent_MakeAvailable(msgpack)
 
 ###########################################################
 # Ouisync Rust code
 ###########################################################
 
+FetchContent_Declare(
+    Corrosion
+    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+    GIT_TAG v0.5.2
+)
 FetchContent_MakeAvailable(Corrosion)
 
 # CMAKE_CURRENT_SOURCE_DIR points to the dir path of this CMakeLists.txt file
