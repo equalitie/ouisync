@@ -367,11 +367,7 @@ fn make_commands(runner: Option<String>, exes: Vec<String>, args: Vec<String>) -
         let mut test_args = Vec::new();
         let mut args_iter = args.iter().map(|s| s.as_str());
 
-        loop {
-            let Some(arg) = args_iter.next() else {
-                break;
-            };
-
+        while let Some(arg) = args_iter.next() {
             // collect args without values
             if arg == "--no-capture"
                 || arg == "--nocapture"
