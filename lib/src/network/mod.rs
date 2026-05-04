@@ -1,3 +1,4 @@
+mod addr_filter;
 mod choke;
 mod client;
 mod connection;
@@ -31,6 +32,7 @@ mod tests;
 mod upnp;
 
 pub use self::{
+    addr_filter::AddrFilter,
     connection::PeerInfoCollector,
     dht::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtLookupStream, DhtPin},
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
@@ -104,6 +106,7 @@ pub struct NetworkBuilder {
     dht_contacts: Option<Arc<dyn DhtContactsStoreTrait>>,
     monitor: Option<StateMonitor>,
     runtime_id: Option<SecretRuntimeId>,
+    addr_filter: AddrFilter,
 }
 
 impl NetworkBuilder {
@@ -124,6 +127,13 @@ impl NetworkBuilder {
     pub fn runtime_id(self, runtime_id: SecretRuntimeId) -> Self {
         Self {
             runtime_id: Some(runtime_id),
+            ..self
+        }
+    }
+
+    pub fn addr_filter(self, addr_filter: AddrFilter) -> Self {
+        Self {
+            addr_filter,
             ..self
         }
     }
@@ -188,6 +198,7 @@ impl NetworkBuilder {
             protocol_versions: watch::Sender::new(ProtocolVersions::new()),
             our_addresses: BlockingMutex::new(HashSet::default()),
             stats_tracker: StatsTracker::default(),
+            addr_filter: self.addr_filter,
         });
 
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
@@ -648,6 +659,7 @@ struct Inner {
     // Used to prevent repeatedly connecting to self.
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
     stats_tracker: StatsTracker,
+    addr_filter: AddrFilter,
 }
 
 struct Registry {
@@ -975,6 +987,14 @@ impl Inner {
             permit.mark_as_connecting();
             monitor.mark_as_connecting(permit.id());
             tracing::trace!(parent: monitor.span(), "Connecting");
+
+            let Some(addr) = peer.addr_if_seen() else {
+                break;
+            };
+
+            if !self.addr_filter.apply(addr.socket_addr()) {
+                break;
+            }
 
             let socket = match self
                 .gateway
