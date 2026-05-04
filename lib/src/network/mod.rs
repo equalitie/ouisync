@@ -993,6 +993,7 @@ impl Inner {
             };
 
             if !self.addr_filter.apply(addr.socket_addr()) {
+                tracing::debug!("Invalid peer address - discarding");
                 break;
             }
 

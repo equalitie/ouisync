@@ -9,11 +9,20 @@ use super::ip;
 /// [patchbay](https://crates.io/crates/patchbay) which allocates IPs from the "benchmarking"
 /// range).
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct AddrFilter {
     /// Whether
     /// [benchmarking](https://doc.rust-lang.org/beta/std/net/struct.Ipv4Addr.html#method.is_benchmarking)
     /// IPv4 addresses are allowed. Default is `false`.
     pub allow_benchmarking_v4: bool,
+}
+
+impl AddrFilter {
+    pub fn allow_benchmarking_v4(self) -> Self {
+        Self {
+            allow_benchmarking_v4: true,
+        }
+    }
 }
 
 #[expect(clippy::derivable_impls)] // we want to be explicit here

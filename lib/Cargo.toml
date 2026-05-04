@@ -80,9 +80,11 @@ zeroize = "1.6.0"
 assert_matches = { workspace = true }
 clap = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
+ctor = "1.0.0"
 hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"] }
 metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
+patchbay = "0.5.0"
 proptest = { workspace = true }
 rmp = { workspace = true }
 rmp-serde = { workspace = true }

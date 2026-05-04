@@ -1,4 +1,4 @@
-//! Networking tests
+//! Basic networking tests
 
 #[macro_use]
 mod common;
