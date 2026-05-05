@@ -86,7 +86,7 @@ async fn cgnat_to_home() {
     case(&lab, &[device_0, device_1], 1).await;
 }
 
-// FIXME: this doesn't work, find out why (possibly something to do with hairpinning?)
+// FIXME: this doesn't work, find out why (possibly something to do with hair-pinning?)
 #[ignore]
 #[tokio::test]
 async fn cgnat_to_same_cgnat() {
@@ -261,14 +261,20 @@ impl TestDht {
         let bootstrap_port = 50001;
         let bootstrap_addr = SocketAddr::from((bootstrap_ip, bootstrap_port));
 
+        let bootstrap_barrier = Arc::new(Barrier::new(devices.len() + 1));
+
         let handles: Vec<_> = devices
             .iter()
             .map(|device| {
+                let bootstrap_barrier = bootstrap_barrier.clone();
                 device
-                    .spawn(move |device| run_dht_node(device, bootstrap_addr))
+                    .spawn(move |device| run_dht_node(device, bootstrap_addr, bootstrap_barrier))
                     .unwrap()
             })
             .collect();
+
+        // Wait until everyone bootstraps
+        bootstrap_barrier.wait().await;
 
         Self {
             bootstrap_addr: (bootstrap_ip, bootstrap_port).into(),
@@ -287,7 +293,7 @@ impl Drop for TestDht {
 }
 
 #[instrument(name = "node", skip_all, fields(message = device.name()), target = "ouisync-test")]
-async fn run_dht_node(device: Device, bootstrap_addr: SocketAddr) {
+async fn run_dht_node(device: Device, bootstrap_addr: SocketAddr, bootstrap_barrier: Arc<Barrier>) {
     let builder = btdht::MainlineDht::builder().set_read_only(false);
 
     let (builder, socket) = if device.ip().map(IpAddr::V4) == Some(bootstrap_addr.ip()) {
@@ -301,7 +307,10 @@ async fn run_dht_node(device: Device, bootstrap_addr: SocketAddr) {
         (builder, socket)
     };
 
-    let _dht = builder.start(socket);
+    let dht = builder.start(socket).unwrap();
+    dht.bootstrapped().await;
+
+    bootstrap_barrier.wait().await;
 
     future::pending::<()>().await;
 }
@@ -322,10 +331,10 @@ async fn run_node(
         .build();
 
     network.set_dht_routers(HashSet::new());
-    network.set_local_discovery_enabled(true);
     network
         .bind(&[PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into())])
         .await;
+    network.set_local_discovery_enabled(true);
 
     let _dht = network.pin_dht().await;
 
