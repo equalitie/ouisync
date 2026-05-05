@@ -13,7 +13,7 @@ use std::{
 use btdht::{INFO_HASH_LEN, InfoHash};
 use futures_util::{StreamExt, future};
 use ouisync::{AddrFilter, Network, PeerAddr, PeerState, PublicRuntimeId, SecretRuntimeId};
-use patchbay::{Device, Lab, RouterPreset};
+use patchbay::{Device, Lab, Nat, NatConfig, NatFiltering, NatMapping, Router, RouterPreset};
 use tokio::{
     net::UdpSocket,
     select,
@@ -26,41 +26,159 @@ use common::{dht::TestDhtContacts, runtime_id_for, test_timeout};
 use tracing::instrument;
 
 #[tokio::test]
+async fn lan() {
+    let lab = setup().await;
+
+    let router = make_router(&lab, "home", RouterPreset::Home).await;
+    let device_0 = make_device(&lab, "alice", &router).await;
+    let device_1 = make_device(&lab, "bob", &router).await;
+
+    case(&lab, &[device_0, device_1], 0).await;
+}
+
+#[tokio::test]
 async fn public_to_public() {
     let lab = setup().await;
 
-    let router_0 = lab
-        .add_router("alice.router")
-        .preset(RouterPreset::Public)
-        .build()
-        .await
-        .unwrap();
-    let device_0 = lab
-        .add_device("alice")
-        .iface("eth0", router_0.id())
-        .build()
-        .await
-        .unwrap();
-
-    let router_1 = lab
-        .add_router("bob.router")
-        .preset(RouterPreset::Public)
-        .build()
-        .await
-        .unwrap();
-    let device_1 = lab
-        .add_device("bob")
-        .iface("eth0", router_1.id())
-        .build()
-        .await
-        .unwrap();
+    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::Public).await;
+    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Public).await;
 
     case(&lab, &[device_0, device_1], 1).await;
 }
 
+#[tokio::test]
+async fn home_to_public() {
+    let lab = setup().await;
+
+    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::Home).await;
+    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Public).await;
+
+    case(&lab, &[device_0, device_1], 1).await;
+}
+
+#[tokio::test]
+async fn home_to_home() {
+    let lab = setup().await;
+
+    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::Home).await;
+    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Home).await;
+
+    case(&lab, &[device_0, device_1], 1).await;
+}
+
+#[tokio::test]
+async fn cgnat_to_public() {
+    let lab = setup().await;
+
+    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::IspCgnat).await;
+    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Public).await;
+
+    case(&lab, &[device_0, device_1], 1).await;
+}
+
+#[tokio::test]
+async fn cgnat_to_home() {
+    let lab = setup().await;
+
+    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::IspCgnat).await;
+    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Home).await;
+
+    case(&lab, &[device_0, device_1], 1).await;
+}
+
+// FIXME: this doesn't work, find out why (possibly something to do with hairpinning?)
+#[ignore]
+#[tokio::test]
+async fn cgnat_to_same_cgnat() {
+    let lab = setup().await;
+
+    let router = lab
+        .add_router("isp")
+        .preset(RouterPreset::IspCgnat)
+        .build()
+        .await
+        .unwrap();
+    let device_0 = make_device(&lab, "alice", &router).await;
+    let device_1 = make_device(&lab, "bob", &router).await;
+
+    case(&lab, &[device_0, device_1], 1).await;
+}
+
+#[tokio::test]
+async fn cgnat_to_other_cgnat() {
+    let lab = setup().await;
+
+    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::IspCgnat).await;
+    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::IspCgnat).await;
+
+    case(&lab, &[device_0, device_1], 1).await;
+}
+
+#[tokio::test]
+async fn endpoint_dependent_to_public() {
+    let lab = setup().await;
+    let router_0 = make_router_with_endpoint_dependent_nat(&lab, "alice.router").await;
+    let device_0 = make_device(&lab, "alice", &router_0).await;
+
+    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Public).await;
+
+    case(&lab, &[device_0, device_1], 1).await;
+}
+
+// FIXME: this case currently doesn't work. The usual way to solve this is using relay, but another
+// option could be the "birthday paradox" approach as described in
+// https://tailscale.com/blog/how-nat-traversal-works.
+#[ignore]
+#[tokio::test]
+async fn endpoint_dependent_to_home() {
+    let lab = setup().await;
+    let router_0 = make_router_with_endpoint_dependent_nat(&lab, "alice.router").await;
+    let device_0 = make_device(&lab, "alice", &router_0).await;
+
+    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Home).await;
+
+    case(&lab, &[device_0, device_1], 1).await;
+}
+
+// -------------------------------------------------------------------------------------------------
+// Utilities
+
 async fn setup() -> Lab {
     common::init_log();
     Lab::new().await.unwrap()
+}
+
+async fn make_device(lab: &Lab, name: &str, router: &Router) -> Device {
+    lab.add_device(name)
+        .iface("eth0", router.id())
+        .build()
+        .await
+        .unwrap()
+}
+
+async fn make_router(lab: &Lab, name: &str, preset: RouterPreset) -> Router {
+    lab.add_router(name).preset(preset).build().await.unwrap()
+}
+
+async fn make_router_with_endpoint_dependent_nat(lab: &Lab, name: &str) -> Router {
+    lab.add_router(name)
+        .preset(RouterPreset::Home)
+        .nat(Nat::Custom(
+            NatConfig::builder()
+                .mapping(NatMapping::EndpointDependent)
+                .filtering(NatFiltering::AddressAndPortDependent)
+                .build(),
+        ))
+        .build()
+        .await
+        .unwrap()
+}
+
+async fn make_router_and_device(lab: &Lab, name: &str, preset: RouterPreset) -> (Router, Device) {
+    let router = make_router(lab, &format!("{name}.router"), preset).await;
+    let device = make_device(lab, name, &router).await;
+
+    (router, device)
 }
 
 async fn case(lab: &Lab, devices: &[Device], num_dht_nodes: usize) {
@@ -204,7 +322,7 @@ async fn run_node(
         .build();
 
     network.set_dht_routers(HashSet::new());
-
+    network.set_local_discovery_enabled(true);
     network
         .bind(&[PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into())])
         .await;
