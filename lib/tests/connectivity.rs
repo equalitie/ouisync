@@ -40,8 +40,8 @@ async fn lan() {
 async fn public_to_public() {
     let lab = setup().await;
 
-    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::Public).await;
-    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Public).await;
+    let device_0 = make_device_with_router(&lab, "alice", RouterPreset::Public).await;
+    let device_1 = make_device_with_router(&lab, "bob", RouterPreset::Public).await;
 
     case(&lab, &[device_0, device_1], 1).await;
 }
@@ -50,8 +50,8 @@ async fn public_to_public() {
 async fn home_to_public() {
     let lab = setup().await;
 
-    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::Home).await;
-    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Public).await;
+    let device_0 = make_device_with_router(&lab, "alice", RouterPreset::Home).await;
+    let device_1 = make_device_with_router(&lab, "bob", RouterPreset::Public).await;
 
     case(&lab, &[device_0, device_1], 1).await;
 }
@@ -60,8 +60,8 @@ async fn home_to_public() {
 async fn home_to_home() {
     let lab = setup().await;
 
-    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::Home).await;
-    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Home).await;
+    let device_0 = make_device_with_router(&lab, "alice", RouterPreset::Home).await;
+    let device_1 = make_device_with_router(&lab, "bob", RouterPreset::Home).await;
 
     case(&lab, &[device_0, device_1], 1).await;
 }
@@ -70,8 +70,8 @@ async fn home_to_home() {
 async fn cgnat_to_public() {
     let lab = setup().await;
 
-    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::IspCgnat).await;
-    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Public).await;
+    let device_0 = make_device_with_router(&lab, "alice", RouterPreset::IspCgnat).await;
+    let device_1 = make_device_with_router(&lab, "bob", RouterPreset::Public).await;
 
     case(&lab, &[device_0, device_1], 1).await;
 }
@@ -80,14 +80,17 @@ async fn cgnat_to_public() {
 async fn cgnat_to_home() {
     let lab = setup().await;
 
-    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::IspCgnat).await;
-    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Home).await;
+    let device_0 = make_device_with_router(&lab, "alice", RouterPreset::IspCgnat).await;
+    let device_1 = make_device_with_router(&lab, "bob", RouterPreset::Home).await;
 
     case(&lab, &[device_0, device_1], 1).await;
 }
 
-// FIXME: this doesn't work, find out why (possibly something to do with hair-pinning?)
-#[ignore]
+// TODO: The cgnat router has disabled hair-pinning. The nodes currently still connect via local
+// discovery but that might not be realistic. Not sure local discovery would work in a real-world
+// scenario where two devices are behind the same CGNAT (e.g., two cell phones on the same
+// carrier?). We can simulate that by disabling local discovery in this test but would connection
+// even be possible in that case?
 #[tokio::test]
 async fn cgnat_to_same_cgnat() {
     let lab = setup().await;
@@ -108,8 +111,8 @@ async fn cgnat_to_same_cgnat() {
 async fn cgnat_to_other_cgnat() {
     let lab = setup().await;
 
-    let (_router_0, device_0) = make_router_and_device(&lab, "alice", RouterPreset::IspCgnat).await;
-    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::IspCgnat).await;
+    let device_0 = make_device_with_router(&lab, "alice", RouterPreset::IspCgnat).await;
+    let device_1 = make_device_with_router(&lab, "bob", RouterPreset::IspCgnat).await;
 
     case(&lab, &[device_0, device_1], 1).await;
 }
@@ -120,7 +123,7 @@ async fn endpoint_dependent_to_public() {
     let router_0 = make_router_with_endpoint_dependent_nat(&lab, "alice.router").await;
     let device_0 = make_device(&lab, "alice", &router_0).await;
 
-    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Public).await;
+    let device_1 = make_device_with_router(&lab, "bob", RouterPreset::Public).await;
 
     case(&lab, &[device_0, device_1], 1).await;
 }
@@ -135,7 +138,7 @@ async fn endpoint_dependent_to_home() {
     let router_0 = make_router_with_endpoint_dependent_nat(&lab, "alice.router").await;
     let device_0 = make_device(&lab, "alice", &router_0).await;
 
-    let (_router_1, device_1) = make_router_and_device(&lab, "bob", RouterPreset::Home).await;
+    let device_1 = make_device_with_router(&lab, "bob", RouterPreset::Home).await;
 
     case(&lab, &[device_0, device_1], 1).await;
 }
@@ -174,11 +177,9 @@ async fn make_router_with_endpoint_dependent_nat(lab: &Lab, name: &str) -> Route
         .unwrap()
 }
 
-async fn make_router_and_device(lab: &Lab, name: &str, preset: RouterPreset) -> (Router, Device) {
+async fn make_device_with_router(lab: &Lab, name: &str, preset: RouterPreset) -> Device {
     let router = make_router(lab, &format!("{name}.router"), preset).await;
-    let device = make_device(lab, name, &router).await;
-
-    (router, device)
+    make_device(lab, name, &router).await
 }
 
 async fn case(lab: &Lab, devices: &[Device], num_dht_nodes: usize) {
