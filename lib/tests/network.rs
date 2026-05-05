@@ -1,19 +1,14 @@
-//! Basic networking tests
+//! Networking tests
 
 #[macro_use]
 mod common;
 
-use self::common::{DEFAULT_REPO, Env, Proto, actor, test_timeout, with_test_timeout};
-use assert_matches::assert_matches;
-use async_trait::async_trait;
-use ouisync::{DhtContactsStoreTrait, Network, PeerInfo, PeerSource, PeerState};
-use std::{
-    collections::HashSet,
-    io,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
-    sync::{Arc, Mutex},
-    time::Duration,
+use self::common::{
+    DEFAULT_REPO, Env, Proto, actor, dht::TestDhtContacts, test_timeout, with_test_timeout,
 };
+use assert_matches::assert_matches;
+use ouisync::{Network, PeerInfo, PeerSource, PeerState};
+use std::{collections::HashSet, net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::{
     net::UdpSocket,
     sync::{Barrier, watch},
@@ -383,50 +378,5 @@ async fn expect_peer_not_known(network: &Network, peer_name: &str) {
     if let Some(info) = network.peer_info(peer_addr) {
         error!("unexpected known peer {peer_name}: {info:?}");
         panic!("unexpected known peer {peer_name}: {info:?}");
-    }
-}
-
-struct TestDhtContacts {
-    v4: Mutex<HashSet<SocketAddrV4>>,
-    v6: Mutex<HashSet<SocketAddrV6>>,
-}
-
-impl TestDhtContacts {
-    fn new(contacts: impl IntoIterator<Item = SocketAddr>) -> Self {
-        let mut v4 = HashSet::new();
-        let mut v6 = HashSet::new();
-
-        for addr in contacts {
-            match addr {
-                SocketAddr::V4(addr) => v4.insert(addr),
-                SocketAddr::V6(addr) => v6.insert(addr),
-            };
-        }
-
-        Self {
-            v4: Mutex::new(v4),
-            v6: Mutex::new(v6),
-        }
-    }
-}
-
-#[async_trait]
-impl DhtContactsStoreTrait for TestDhtContacts {
-    async fn load_v4(&self) -> io::Result<HashSet<SocketAddrV4>> {
-        Ok(self.v4.lock().unwrap().clone())
-    }
-
-    async fn load_v6(&self) -> io::Result<HashSet<SocketAddrV6>> {
-        Ok(self.v6.lock().unwrap().clone())
-    }
-
-    async fn store_v4(&self, contacts: HashSet<SocketAddrV4>) -> io::Result<()> {
-        *self.v4.lock().unwrap() = contacts;
-        Ok(())
-    }
-
-    async fn store_v6(&self, contacts: HashSet<SocketAddrV6>) -> io::Result<()> {
-        *self.v6.lock().unwrap() = contacts;
-        Ok(())
     }
 }

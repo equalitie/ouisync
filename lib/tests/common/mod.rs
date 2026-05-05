@@ -3,6 +3,7 @@
 #[macro_use]
 mod macros;
 
+pub(crate) mod dht;
 pub(crate) mod dump;
 pub(crate) mod progress;
 pub(crate) mod sync_watch;
