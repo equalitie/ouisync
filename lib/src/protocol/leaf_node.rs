@@ -145,7 +145,7 @@ impl FromIterator<LeafNode> for LeafNodes {
         T: IntoIterator<Item = LeafNode>,
     {
         let mut vec: Vec<_> = iter.into_iter().collect();
-        vec.sort_by(|lhs, rhs| lhs.locator.cmp(&rhs.locator));
+        vec.sort_by_key(|node| node.locator);
 
         Self(vec)
     }

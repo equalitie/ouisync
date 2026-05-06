@@ -102,11 +102,9 @@ impl Throughput {
                 .try_into()
                 .unwrap_or(u64::MAX);
 
-            if millis == 0 {
-                prev.throughput
-            } else {
-                bytes.saturating_sub(prev.bytes) * 1000 / millis
-            }
+            (bytes.saturating_sub(prev.bytes) * 1000)
+                .checked_div(millis)
+                .unwrap_or(prev.throughput)
         } else {
             0
         };
