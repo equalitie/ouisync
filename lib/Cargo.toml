@@ -84,7 +84,6 @@ ctor = "1.0.0"
 hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"] }
 metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
-patchbay = "0.5.0"
 proptest = { workspace = true }
 rmp = { workspace = true }
 rmp-serde = { workspace = true }
@@ -93,6 +92,9 @@ similar-asserts = { workspace = true }
 tempfile = { workspace = true }
 test-strategy = { workspace = true }
 tokio = { workspace = true, features = ["process", "test-util"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+patchbay = "0.5.0"
 
 [features]
 analyze-protocol = []

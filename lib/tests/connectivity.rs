@@ -1,5 +1,7 @@
 //! Test for connectivity under various network configurations and conditions
 
+#![cfg(target_os = "linux")]
+
 #[macro_use]
 mod common;
 
