@@ -3,6 +3,7 @@
 #[macro_use]
 mod macros;
 
+pub(crate) mod dht;
 pub(crate) mod dump;
 pub(crate) mod progress;
 pub(crate) mod sync_watch;
@@ -15,7 +16,11 @@ use camino::Utf8Path;
 use metrics::{Label, NoopRecorder, Recorder};
 use ouisync::{
     Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Network, Payload, PeerAddr,
-    Registration, Repository, Result, StoreError, crypto::sign::PublicKey,
+    Registration, Repository, Result, SecretRuntimeId, StoreError,
+    crypto::{
+        Hashable,
+        sign::{Keypair, PublicKey},
+    },
 };
 use ouisync_tracing_fmt::Formatter;
 use rand::Rng;
@@ -152,9 +157,7 @@ pub(crate) mod actor {
     // Derive runtime id from the actor name so that the runtime ids don't
     // change across multiple test invocation. This simplifies debugging.
     pub(crate) fn runtime_id() -> SecretRuntimeId {
-        Keypair::try_from(name().as_bytes().hash().as_ref())
-            .unwrap()
-            .into()
+        runtime_id_for(&name())
     }
 
     pub(crate) fn create_unbound_network() -> Network {
@@ -661,6 +664,13 @@ pub(crate) fn random_bytes(size: usize) -> Vec<u8> {
 
 fn to_megabytes(bytes: usize) -> usize {
     bytes / 1024 / 1024
+}
+
+// Get runtime id for a node with the given name. This function is pure - for a given name it always returns the same id.
+pub(crate) fn runtime_id_for(name: &str) -> SecretRuntimeId {
+    Keypair::try_from(name.as_bytes().hash().as_ref())
+        .unwrap()
+        .into()
 }
 
 pub(crate) fn init_log() {

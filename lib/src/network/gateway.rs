@@ -103,11 +103,6 @@ impl Gateway {
     }
 
     pub async fn connect_with_retries(&self, peer: &SeenPeer) -> Option<Connection> {
-        if !self.ok_to_connect(peer.addr_if_seen()?.socket_addr()) {
-            tracing::debug!("Invalid peer address - discarding");
-            return None;
-        }
-
         let create_backoff = || {
             ExponentialBackoffBuilder::new()
                 .with_initial_interval(Duration::from_millis(200))
@@ -221,41 +216,6 @@ impl Gateway {
             .as_ref()
             .map(|stack| &stack.side_channel_maker)
             .cloned()
-    }
-
-    // Filter out invalid addresses. We don't want to connect to those.
-    fn ok_to_connect(&self, addr: &SocketAddr) -> bool {
-        if addr.port() == 0 || addr.port() == 1 {
-            return false;
-        }
-
-        match addr {
-            SocketAddr::V4(addr) => {
-                let ip_addr = addr.ip();
-                if ip_addr.octets()[0] == 0 {
-                    return false;
-                }
-                if ip::is_benchmarking(ip_addr)
-                    || ip::is_reserved(ip_addr)
-                    || ip_addr.is_broadcast()
-                    || ip_addr.is_documentation()
-                {
-                    return false;
-                }
-            }
-            SocketAddr::V6(addr) => {
-                let ip_addr = addr.ip();
-
-                if ip_addr.is_multicast()
-                    || ip_addr.is_unspecified()
-                    || ip::is_documentation(ip_addr)
-                {
-                    return false;
-                }
-            }
-        }
-
-        true
     }
 }
 

@@ -80,6 +80,7 @@ zeroize = "1.6.0"
 assert_matches = { workspace = true }
 clap = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
+ctor = "1.0.0"
 hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"] }
 metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
@@ -91,6 +92,9 @@ similar-asserts = { workspace = true }
 tempfile = { workspace = true }
 test-strategy = { workspace = true }
 tokio = { workspace = true, features = ["process", "test-util"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+patchbay = "0.5.0"
 
 [features]
 analyze-protocol = []
