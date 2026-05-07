@@ -117,8 +117,12 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             send(id, request)
             deferred.await()
         } catch (e: CancellationException) {
-            withContext(NonCancellable) {
-                invoke(Request.Cancel(MessageId(id)))
+            try {
+                withContext(NonCancellable) {
+                    invoke(Request.Cancel(MessageId(id)))
+                }
+            } catch (cancelException: Exception) {
+                e.addSuppressed(cancelException)
             }
 
             throw e
